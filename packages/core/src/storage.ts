@@ -6,9 +6,16 @@ const APP_SESSION_STORAGE_KEYS = [
   'posProfile', 'menuCategories', 'customerGroups', 'territories', 'payment_modes',
   'ury.setup.configureState',
 ];
+const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories'];
 
 export function getOrderTabsStorageKey(user: string | undefined): string | null {
   return user && user !== 'Guest' ? `posOrderTabsData:${user}` : null;
+}
+
+export function getUserSessionStorageKey(key: string, user: string | null | undefined): string | null {
+  // Legacy entries have no session owner and must never be reused.
+  sessionStorage.removeItem(key);
+  return user && user !== 'Guest' ? `${key}:${user}` : null;
 }
 
 export function clearAppStorage(): void {
@@ -23,7 +30,10 @@ export function clearAppStorage(): void {
   }
   for (let index = sessionStorage.length - 1; index >= 0; index--) {
     const key = sessionStorage.key(index);
-    if (key && (key.startsWith('ury_rooms_') || key.startsWith('ury_room_counts_'))) {
+    if (key && (
+      USER_SESSION_STORAGE_KEYS.some((prefix) => key.startsWith(`${prefix}:`)) ||
+      key.startsWith('ury_rooms_') || key.startsWith('ury_room_counts_')
+    )) {
       sessionStorage.removeItem(key);
     }
   }
