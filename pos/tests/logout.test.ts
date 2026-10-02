@@ -32,7 +32,7 @@ function header(env: ReturnType<typeof environment>) {
     './frappe/errors': {}, './types': {}, './format': {}, './print/qz': {},
     './utils/validateField': {},
   });
-  const store = { user: { name: 'alice@example.com' }, searchQuery: '', orderSearchQuery: '' };
+  const store = { user: { name: 'alice@example.com', roles: ['URY Cashier'] }, searchQuery: '', orderSearchQuery: '' };
   const Header = loadModule(resolve('pos/src/components/Header.tsx'), env.globals, {
     react, '@ury/ui': ui, '@ury/core': core,
     '../i18n': { t: (key: string) => key },
