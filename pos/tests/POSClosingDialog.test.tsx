@@ -167,8 +167,8 @@ describe('blind cash count reconciliation', () => {
       posting_date: '2026-10-01',
       posting_time: '10:12:13',
       payment_reconciliation: [{
-        mode_of_payment: 'Cash', opening_amount: 10, expected_amount: 100,
-        closing_amount: 100, difference: 0,
+        mode_of_payment: 'Cash', opening_amount: 10, expected_amount: 110,
+        closing_amount: 100, difference: -10,
       }],
     })]);
     expect(createDoc.mock.calls[1]).toEqual(['POS Closing Entry', expect.objectContaining({
@@ -178,8 +178,8 @@ describe('blind cash count reconciliation', () => {
       posting_time: '10:12:13',
       payment_reconciliation: [
         {
-          mode_of_payment: 'Cash', opening_amount: 10, expected_amount: 100,
-          closing_amount: 100, difference: 0,
+          mode_of_payment: 'Cash', opening_amount: 10, expected_amount: 110,
+          closing_amount: 100, difference: -10,
         },
         {
           mode_of_payment: 'Card', opening_amount: 0, expected_amount: 50,
