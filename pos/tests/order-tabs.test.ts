@@ -54,3 +54,33 @@ test('an unidentified or Guest session neither restores nor saves another user c
     assert.equal(env.globals.localStorage.getItem(`posOrderTabsData:${name}`), null);
   }
 });
+
+test('Outstanding is first while the existing history filters remain available', () => {
+  const { getOrderStatusTypes } = loadModule(resolve('pos/src/data/order-types.ts'), {});
+  assert.deepEqual(Array.from(getOrderStatusTypes(1, 30), (tab: { value: string }) => tab.value),
+    ['Outstanding', 'Draft', 'Unbilled', 'Recently Paid', 'Paid', 'Consolidated', 'Return']);
+});
+
+test('the initial orders fetch and search both use Outstanding at the real API boundary', async () => {
+  const env = environment();
+  const calls: unknown[][] = [];
+  const core = loadModule(resolve('packages/core/src/storage.ts'), env.globals);
+  const api = loadModule(resolve('pos/src/lib/invoice-api.ts'), env.globals, {
+    '@ury/core': { ...core, call: { get: async (...args: unknown[]) => {
+      calls.push(args);
+      return { message: { data: [], next: false } };
+    } } },
+  });
+  const { createOrdersSlice } = loadModule(resolve('pos/src/store/slices/orders-slice.ts'), env.globals, {
+    '@ury/core': core, '../../lib/invoice-api': api,
+  });
+  const orders = create(createOrdersSlice);
+  assert.equal(orders.getState().selectedStatus, 'Outstanding');
+  await orders.getState().fetchOrders();
+  assert.equal(calls[0][0], 'ury.ury_pos.api.getPosInvoice');
+  assert.equal((calls[0][1] as { status: string }).status, 'Outstanding');
+  orders.getState().setOrderSearchQuery('POS-INV-1');
+  await orders.getState().fetchOrders();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1])),
+    ['ury.ury_pos.api.searchPosInvoice', { query: 'POS-INV-1', status: 'Outstanding' }]);
+});
