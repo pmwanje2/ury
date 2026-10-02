@@ -63,8 +63,12 @@ test('Outstanding is first while the existing history filters remain available',
 
 test('the initial orders fetch and search both use Outstanding at the real API boundary', async () => {
   const env = environment();
+  Object.assign(env.globals, { document: { cookie: 'user_id=alice%40example.com' } });
   const calls: unknown[][] = [];
   const core = loadModule(resolve('packages/core/src/storage.ts'), env.globals);
+  Object.assign(core, loadModule(resolve('packages/core/src/frappe/auth.ts'), env.globals, {
+    './client': { db: {}, auth: {} },
+  }));
   const api = loadModule(resolve('pos/src/lib/invoice-api.ts'), env.globals, {
     '@ury/core': { ...core, call: { get: async (...args: unknown[]) => {
       calls.push(args);
