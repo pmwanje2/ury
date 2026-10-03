@@ -28,11 +28,14 @@ const state = vi.hoisted(() => ({
   profile: { name: 'POS-1', print_format: 'Bill', view_all_status: 1, paid_limit: 10 },
   selectedStatus: '',
   error: null as string | null,
+  empty: false,
+  paymentModes: ['Cash'],
 }));
 
 vi.mock('../src/store/root-store', () => ({
   useRootStore: () => ({
-    orders: [state.order], selectedOrder: state.order, selectedOrderItems: state.items,
+    orders: state.empty ? [] : [state.order], selectedOrder: state.order, selectedOrderItems: state.items,
+    user: { name: 'cashier@example.com', roles: ['URY Cashier'] },
     selectedOrderTaxes: [], selectedStatus: state.selectedStatus || state.order.status,
     orderLoading: false, selectedOrderLoading: false, error: state.error, selectedOrderError: null,
     pagination: { currentPage: 1, hasNextPage: false, hasPreviousPage: false },
@@ -45,9 +48,12 @@ Object.assign(useRootStore, {
   getState: () => ({ orders: [state.order] }),
   setState: vi.fn(),
 });
-vi.mock('../src/store/pos-store', () => ({ usePOSStore: () => ({ posProfile: state.profile }) }));
+vi.mock('../src/store/pos-store', () => ({ usePOSStore: () => ({
+  posProfile: state.profile, paymentModes: state.paymentModes, fetchPaymentModes: state.fetchOrders,
+}) }));
 // Printing and Frappe calls are external boundaries; keep the page, menu and dialogs real.
 vi.mock('../src/lib/print', () => ({ printOrder: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../src/lib/realtime', () => ({ getRealtimeSocket: vi.fn().mockRejectedValue(new Error('Offline')) }));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -72,6 +78,12 @@ beforeEach(async () => {
   state.order.invoice_printed = 1;
   state.selectedStatus = '';
   state.error = null;
+  state.empty = false;
+  document.cookie = 'user_id=cashier%40example.com';
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message: [{
+    name: 'ALERT-1', for_user: 'cashier@example.com', subject: 'Food ready: Table 1 (KOT-1)',
+    creation: '2026-10-03 10:00:00', read: 0, document_type: 'URY KOT', document_name: 'KOT-1',
+  }] }) }));
   state.order.custom_split_from = '';
   state.order.custom_merged_pos_invoice = '';
   state.order.custom_merged_total = 0;
@@ -94,6 +106,7 @@ afterEach(async () => {
   container.remove();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function renderOrders() {
@@ -268,5 +281,65 @@ describe('Outstanding settlement working area', () => {
     await act(async () => root.render(<MemoryRouter><Orders /></MemoryRouter>));
     expect(container.textContent).toContain('Invoice list unavailable');
     expect(container.textContent).toContain('Bill requests: 0 waiting');
+  });
+
+  it.each(['normal', 'empty', 'error'])('shows operational notifications alongside the %s queue', async (queue) => {
+    state.empty = queue === 'empty';
+    state.error = queue === 'error' ? 'Invoice list unavailable' : null;
+    await act(async () => root.render(<MemoryRouter><Orders /></MemoryRouter>));
+    expect(container.querySelector('[aria-label="Notifications"]')?.textContent).toContain('Food ready: Table 1 (KOT-1)');
+    expect(container.textContent).toContain('Bill requests: 0 waiting');
+  });
+
+  it.each(['Split bill', 'Settle bill'])('refreshes alerts without resetting the check, filter, focus or %s dialog', async (label) => {
+    vi.useFakeTimers();
+    const row = await renderOrders();
+    await act(async () => buttonIn(row, label)!.click());
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog).not.toBeNull();
+    const input = dialog.querySelector<HTMLElement>('input,button')!;
+    input.focus();
+    const calls = state.fetchOrders.mock.calls.length;
+    await act(async () => vi.advanceTimersByTimeAsync(30000));
+    expect(container.querySelector('[aria-label="Notifications"]')?.textContent).toContain('Food ready: Table 1 (KOT-1)');
+    expect(container.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(document.activeElement).toBe(input);
+    expect(state.fetchOrders.mock.calls.length).toBe(calls);
+    expect(state.setSelectedStatus).not.toHaveBeenCalled();
+    expect(state.selectOrder).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('opens the exact permitted KOT invoice, not another check at the same table', async () => {
+    const nativeRead = vi.mocked(call.get).getMockImplementation()!;
+    vi.mocked(call.get).mockImplementation(async (method, args: any) => {
+      if (method === 'frappe.client.get' && args.doctype === 'URY KOT') return { message: { name: 'KOT-1', invoice: 'POS-OTHER' } };
+      if (method === 'frappe.client.get' && args.doctype === 'POS Invoice') return { message: { ...state.order, name: 'POS-OTHER', branch: 'Branch A' } };
+      return nativeRead(method, args);
+    });
+    await renderOrders();
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Open check');
+    expect(button, 'food-ready should offer its matching check').toBeDefined();
+    await act(async () => button!.click());
+    expect(state.selectOrder).toHaveBeenCalledWith(expect.objectContaining({ name: 'POS-OTHER' }));
+    expect(state.setSelectedStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(['denied', 'missing', 'other branch'])('keeps a native Desk fallback for a %s KOT/check', async (failure) => {
+    const nativeRead = vi.mocked(call.get).getMockImplementation()!;
+    vi.mocked(call.get).mockImplementation(async (method, args: any) => {
+      if (method === 'frappe.client.get' && args.doctype === 'URY KOT') {
+        if (failure === 'denied') throw new Error('Denied');
+        return { message: { name: 'KOT-1', invoice: failure === 'missing' ? null : 'POS-OTHER' } };
+      }
+      if (method === 'frappe.client.get' && args.doctype === 'POS Invoice') return { message: { ...state.order, branch: 'Branch B' } };
+      return nativeRead(method, args);
+    });
+    await renderOrders();
+    const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Open check');
+    expect(button).toBeDefined(); await act(async () => button!.click());
+    expect(state.selectOrder).not.toHaveBeenCalled();
+    expect(container.querySelector('a[href="/app/ury-kot/KOT-1"]')).not.toBeNull();
+    expect(container.textContent).toContain('Check unavailable');
   });
 });
