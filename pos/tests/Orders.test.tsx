@@ -53,7 +53,7 @@ vi.mock('../src/store/pos-store', () => ({ usePOSStore: () => ({
 }) }));
 // Printing and Frappe calls are external boundaries; keep the page, menu and dialogs real.
 vi.mock('../src/lib/print', () => ({ printOrder: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('../src/lib/realtime', () => ({ getRealtimeSocket: vi.fn().mockRejectedValue(new Error('Offline')) }));
+vi.mock('../src/lib/realtime', () => ({ getRealtimeSocket: async () => { throw new Error('Offline'); } }));
 
 let container: HTMLDivElement;
 let root: Root;
