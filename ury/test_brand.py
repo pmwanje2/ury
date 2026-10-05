@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import unittest
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -181,6 +182,19 @@ class TestSiteBrand(unittest.TestCase):
         boot = json.loads(json.loads(self.context("pos")["boot"]))
         self.assertEqual(boot.get("ury_brand"), SITE_BRAND)
         self.assertEqual(json.loads(json.loads(controller.get_boot())).get("ury_brand"), SITE_BRAND)
+
+    def test_boot_keeps_frappe_serialization_for_datetime_values(self):
+        self.set_brand()
+        self.framework.as_json = lambda value, **kwargs: json.dumps(value, default=lambda item: item.isoformat())
+        self.framework.website.utils.get_boot_data = lambda: {"server_time": datetime(2026, 10, 5, 12, 30)}
+        for page in ("pos", "order"):
+            with self.subTest(page=page):
+                try:
+                    boot = json.loads(json.loads(self.context(page)["boot"]))
+                except TypeError as error:
+                    self.fail(f"Page boot must retain Frappe datetime serialization: {error}")
+                self.assertEqual(boot["server_time"], "2026-10-05T12:30:00")
+                self.assertEqual(boot["ury_brand"], SITE_BRAND)
 
 
 class ScriptParser(HTMLParser):
