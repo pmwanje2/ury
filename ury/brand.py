@@ -13,9 +13,13 @@ def get_brand(surface="site"):
         "favicon": settings.favicon or None,
     }
     if surface == "staff":
-        hooks = frappe.get_hooks("ury_brand") or {}
+        # A dict hook arrives as {key: [values...]}; any other shape is ignored.
+        hooks = frappe.get_hooks("ury_brand")
+        if not isinstance(hooks, dict):
+            hooks = {}
         for key in brand:
-            if values := hooks.get(key):
+            values = hooks.get(key)
+            if isinstance(values, list) and values and values[-1]:
                 brand[key] = values[-1]
     return brand if any(brand.values()) else None
 
