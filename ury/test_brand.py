@@ -176,6 +176,16 @@ class TestSiteBrand(unittest.TestCase):
             with self.subTest(page=page):
                 self.assertEqual(self.context(page)["brand"], SITE_BRAND)
 
+    def test_malformed_staff_hook_is_ignored_not_fatal(self):
+        # Frappe returns a list for a hook declared as a plain string, and a
+        # dict of lists for a dict hook. Only the dict shape is a brand.
+        self.set_brand()
+        for hooks in (["Counter"], [], "Counter", {"name": "Counter"}, {"name": []}):
+            self.hooks = hooks
+            for page in ("pos", "urypos", "mosaic"):
+                with self.subTest(hooks=hooks, page=page):
+                    self.assertEqual(self.context(page)["brand"], SITE_BRAND)
+
     def test_order_and_default_brand_ignore_staff_hook(self):
         self.set_brand()
         self.set_staff_brand()
