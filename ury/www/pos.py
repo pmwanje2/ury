@@ -14,7 +14,7 @@ CLOSING_SCRIPT_TAG_PATTERN = re.compile(r"</script\>")
 
 
 def get_context(context):
-	context.update(get_brand_context())
+	context.update(get_brand_context(surface="staff"))
 	csrf_token = frappe.sessions.get_csrf_token()
 	# Manually commit the CSRF token here
 	frappe.db.commit()  # nosemgrep
@@ -63,7 +63,7 @@ def get_boot():
 		raise frappe.SessionBootFailed from e
 
 	boot["push_relay_server_url"] = frappe.conf.get("push_relay_server_url")
-	boot["ury_brand"] = get_brand()
+	boot["ury_brand"] = get_brand(surface="staff")
 	boot_json = json_for_script(boot)
 	boot_json = SCRIPT_TAG_PATTERN.sub("", boot_json)
 

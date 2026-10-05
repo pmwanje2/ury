@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGES = {"pos": "pos", "urypos": "urypos", "mosaic": "mosaic", "order": "self-order"}
 DEFAULT_TITLES = {"pos": "URY POS", "urypos": "URY POS", "mosaic": "Mosaic", "order": "Order"}
 SITE_BRAND = {"name": 'MAX\\MUS "</script><script>evil()</script>', "logo": '/files/logo"<&.png', "favicon": '/files/favicon"<&.ico'}
+STAFF_BRAND = {"name": 'Counter "</script><script>evil()</script>', "logo": '/files/counter"<&.png', "favicon": '/files/counter"<&.ico'}
 
 
 class PageParser(HTMLParser):
@@ -61,9 +62,11 @@ class TestSiteBrand(unittest.TestCase):
 
     def setUp(self):
         self.settings = SimpleNamespace(app_name=None, app_logo=None, favicon=None)
+        self.hooks = {}
         framework = ModuleType("frappe")
         framework.__path__ = []
         framework.get_cached_doc = lambda doctype: self.settings if doctype == "Website Settings" else self.fail(doctype)
+        framework.get_hooks = lambda hook: self.hooks if hook == "ury_brand" else self.fail(hook)
         framework.as_json = json.dumps
         framework.session = SimpleNamespace(user="Guest")
         framework.conf = {}
@@ -111,6 +114,9 @@ class TestSiteBrand(unittest.TestCase):
         self.settings.app_logo = SITE_BRAND["logo"]
         self.settings.favicon = SITE_BRAND["favicon"]
 
+    def set_staff_brand(self):
+        self.hooks = {key: ["earlier-value", value] for key, value in STAFF_BRAND.items()}
+
     def context(self, page):
         return importlib.import_module(f"ury.www.{page}").get_context({})
 
@@ -130,6 +136,76 @@ class TestSiteBrand(unittest.TestCase):
     def test_partial_settings_leave_other_fields_unset(self):
         self.settings.app_logo = "/files/tenant.png"
         self.assertEqual(self.brand_module().get_brand(), {"name": None, "logo": "/files/tenant.png", "favicon": None})
+
+    def test_staff_pages_use_last_hook_values(self):
+        self.set_brand()
+        self.set_staff_brand()
+        for page in ("pos", "urypos", "mosaic"):
+            with self.subTest(page=page):
+                context = self.context(page)
+                self.assertEqual(context["brand"], STAFF_BRAND)
+                self.assertEqual(json.loads(context["brand_json"]), STAFF_BRAND)
+                html = self.render(page, context)
+                parser = ScriptParser(html)
+                self.assertEqual(len(parser.inline), 1)
+                result = subprocess.run(["node", "-e", "global.window=global;" + parser.inline[0] + ";process.stdout.write(JSON.stringify(window.frappe.boot.ury_brand));"], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), STAFF_BRAND)
+                parsed = PageParser(html)
+                self.assertEqual(parsed.title, STAFF_BRAND["name"])
+                self.assertEqual(parsed.favicon, STAFF_BRAND["favicon"])
+
+    def test_staff_hook_works_without_website_brand(self):
+        self.set_staff_brand()
+        for page in ("pos", "urypos", "mosaic"):
+            with self.subTest(page=page):
+                self.assertEqual(self.context(page)["brand"], STAFF_BRAND)
+
+    def test_partial_staff_hook_falls_back_per_key(self):
+        self.set_brand()
+        for key, value in STAFF_BRAND.items():
+            self.hooks = {key: ["earlier-value", value]}
+            expected = {**SITE_BRAND, key: value}
+            for page in ("pos", "urypos", "mosaic"):
+                with self.subTest(key=key, page=page):
+                    self.assertEqual(self.context(page)["brand"], expected)
+
+    def test_staff_pages_without_hook_use_website_settings(self):
+        self.set_brand()
+        for page in ("pos", "urypos", "mosaic"):
+            with self.subTest(page=page):
+                self.assertEqual(self.context(page)["brand"], SITE_BRAND)
+
+    def test_malformed_staff_hook_is_ignored_not_fatal(self):
+        # Frappe returns a list for a hook declared as a plain string, and a
+        # dict of lists for a dict hook. Only the dict shape is a brand.
+        self.set_brand()
+        for hooks in (["Counter"], [], "Counter", {"name": "Counter"}, {"name": []}):
+            self.hooks = hooks
+            for page in ("pos", "urypos", "mosaic"):
+                with self.subTest(hooks=hooks, page=page):
+                    self.assertEqual(self.context(page)["brand"], SITE_BRAND)
+
+    def test_order_and_default_brand_ignore_staff_hook(self):
+        self.set_brand()
+        self.set_staff_brand()
+        self.assertEqual(self.brand_module().get_brand(), SITE_BRAND)
+        self.assertEqual(self.brand_module().get_brand_context()["brand"], SITE_BRAND)
+        context = self.context("order")
+        self.assertEqual(context["brand"], SITE_BRAND)
+        self.assertEqual(json.loads(json.loads(context["boot"]))["ury_brand"], SITE_BRAND)
+        parsed = PageParser(self.render("order", context))
+        self.assertEqual(parsed.title, SITE_BRAND["name"])
+        self.assertEqual(parsed.favicon, SITE_BRAND["favicon"])
+
+    def test_authenticated_pos_and_dev_boot_use_staff_hook(self):
+        self.set_brand()
+        self.set_staff_brand()
+        self.framework.session.user = "cashier@example.com"
+        controller = importlib.import_module("ury.www.pos")
+        for boot in (self.context("pos")["boot"], controller.get_boot()):
+            with self.subTest(boot=boot):
+                self.assertEqual(json.loads(json.loads(boot))["ury_brand"], STAFF_BRAND)
 
     def test_all_controllers_preserve_unset_brand(self):
         for page in PAGES:
