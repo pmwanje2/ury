@@ -116,7 +116,7 @@ class TestSiteBrand(unittest.TestCase):
 
     def render(self, page, context):
         template = Environment(autoescape=False).from_string((ROOT / PAGES[page] / "index.html").read_text())
-        return template.render(**context, frappe=SimpleNamespace(lang="en"))
+        return template.render(**context, app_name=self.settings.app_name or "", frappe=SimpleNamespace(lang="en"))
 
     def test_empty_settings_return_none_not_frappe_defaults(self):
         self.assertIsNone(self.brand_module().get_brand())
