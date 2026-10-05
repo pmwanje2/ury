@@ -17,7 +17,7 @@
     <script>
       window.csrf_token = "{{ csrf_token }}";
       if (!window.frappe) window.frappe = {};
-      window.app_name = "{{ app_name }}";
+      window.app_name = {{ app_name | default('') | tojson }};
       frappe.boot = JSON.parse({{ boot }});
     </script>
     <script type="module" src="/src/main.tsx"></script>
