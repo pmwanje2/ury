@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { loadModule } from './logout-harness.mjs';
+import { loadModule } from './brand-harness.mjs';
 
 const require = createRequire(new URL('../../../urypos/package.json', import.meta.url));
 const Vue = require('vue');
