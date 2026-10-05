@@ -1,7 +1,5 @@
 """Public site identity for URY pages; deliberately not an RPC endpoint."""
 
-import json
-
 import frappe
 
 DEFAULT_SOURCE_URL = "https://github.com/ury-erp/ury"
@@ -20,7 +18,7 @@ def get_brand():
 def json_for_script(value):
     """Preserve JSON values without allowing an HTML script tag to close."""
     return (
-        json.dumps(value)
+        frappe.as_json(value, indent=None, separators=(",", ":"))
         .replace("&", "\\u0026")
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
