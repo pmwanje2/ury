@@ -1,7 +1,7 @@
 <template>
   <header class="bg-white p-4 flex justify-between items-center border-b border-gray-200">
     <router-link to="/" class="flex items-center cursor-pointer">
-      <img :src="imagePath" alt="Logo" class="ml-20 w-40 h-15 mr-2">
+      <img :src="brand.logo" :alt="brand.name" class="ml-20 w-40 h-15 mr-2">
     </router-link>
     <div class="flex items-center gap-4">
       <p v-if="logoutError" role="alert" class="text-sm text-red-600">{{ logoutError }}</p>
@@ -71,6 +71,7 @@
 
 <script>
 import urimosaicImage from "@/assets/logos/mosaic.jpg";
+import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import { logoutSession } from "../../../packages/core/src/logout.ts";
 import { clearAppStorage } from "../../../packages/core/src/storage.ts";
 
@@ -78,7 +79,7 @@ export default {
   name: "Header",
   data() {
     return {
-      imagePath: urimosaicImage,
+      brand: resolveBrand({ name: "Logo", logo: urimosaicImage }),
       showUserMenu: false,
       loggingOut: false,
       logoutError: "",
