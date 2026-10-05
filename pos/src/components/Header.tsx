@@ -14,11 +14,12 @@ import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { logoutSession, clearAppStorage } from '@ury/core';
+import { logoutSession, clearAppStorage, resolveBrand } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { homePath } from '../lib/home-route';
 
 const Header = () => {
+  const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const logoutPending = useRef(false);
@@ -122,8 +123,8 @@ const Header = () => {
         <div className="flex items-center">
         <Link to={homePath(user)} className="flex items-center gap-3">
             <img
-              src="/assets/ury/pos/ury_pos.png"
-              alt="URY POS" 
+              src={brand.logo}
+              alt={brand.name}
               className="h-10 w-auto"
             />
           </Link>

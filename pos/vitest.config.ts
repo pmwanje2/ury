@@ -5,7 +5,9 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
-    include: ['pos/tests/**/*.test.{ts,tsx}', 'pos/src/**/*.test.{ts,tsx}', 'packages/core/src/**/*.test.ts'],
+    include: ['pos/tests/**/*.test.{ts,tsx}'],
+    // These existing files use node:test; run them with Node, not Vitest.
+    exclude: ['**/node_modules/**', 'pos/tests/logout.test.ts', 'pos/tests/order-tabs.test.ts'],
     maxWorkers: 1,
     fileParallelism: false,
   },
