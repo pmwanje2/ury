@@ -1886,6 +1886,21 @@ def customer_favourite_item(customer_name):
     return result
 
 
+def _cancel_reason_limit():
+    """POS Invoice.cancel_reason is Data; a blank length uses Frappe's 140."""
+    length = 0
+    try:
+        field = frappe.get_meta("POS Invoice").get_field("cancel_reason")
+        raw = getattr(field, "length", None) if field is not None else None
+        if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+            length = 0
+        else:
+            length = int(raw or 0)
+    except Exception:
+        length = 0
+    return length if length > 0 else 140
+
+
 @frappe.whitelist()
 def cancel_order(invoice_id, reason):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
@@ -1914,6 +1929,12 @@ def cancel_order(invoice_id, reason):
             title=_("Invalid void reason"),
         )
     reason = reason.strip()
+    max_length = _cancel_reason_limit()
+    if len(reason) > max_length:
+        frappe.throw(
+            _("Void reason cannot be longer than {0} characters.").format(max_length),
+            title=_("Invalid void reason"),
+        )
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:
