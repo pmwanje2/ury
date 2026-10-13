@@ -8,6 +8,7 @@ import { useNotifications } from "./Notification.js";
 import { useAlert } from "./Alert.js";
 import frappe from "./frappeSdk.js";
 import { usetoggleRecentOrder } from "./recentOrder.js";
+import { useNotificationModal } from "./NotificationModal.js";
 
 
 export const useTableStore = defineStore("table", {
@@ -389,7 +390,45 @@ export const useTableStore = defineStore("table", {
         }
       }
     },
-    async addToSelectedTables(table) {
+    cartHasUnsentItems() {
+      const cart = this.menu.cart || [];
+      const previous = Array.isArray(this.previousOrderdItem) ? this.previousOrderdItem : [];
+      const sentQty = new Map();
+      previous.forEach((row) => {
+        const code = row.item_code || row.item;
+        if (!code) return;
+        sentQty.set(code, (sentQty.get(code) || 0) + Number(row.qty || 0));
+      });
+      const cartQty = new Map();
+      cart.forEach((row) => {
+        if (!row || !row.item) return;
+        cartQty.set(row.item, (cartQty.get(row.item) || 0) + Number(row.qty || 0));
+      });
+      for (const [code, qty] of cartQty) {
+        if (qty > (sentQty.get(code) || 0)) return true;
+      }
+      for (const [code, qty] of sentQty) {
+        if ((cartQty.get(code) || 0) < qty) return true;
+      }
+      return false;
+    },
+    confirmLeaveUnsent(onLeave) {
+      if (!this.cartHasUnsentItems()) {
+        onLeave();
+        return;
+      }
+      useNotificationModal().showModal({
+        title: "Unsent items",
+        message: "You have unsent items. Leave without sending them?",
+        showCancelButton: true,
+        onConfirm: () => onLeave(),
+        onCancel: () => {},
+      });
+    },
+    addToSelectedTables(table) {
+      this.confirmLeaveUnsent(() => this.loadSelectedTable(table));
+    },
+    async loadSelectedTable(table) {
       this.selectedTable = table.name;
       this.takeAwayTable = 0;
 
@@ -499,12 +538,16 @@ export const useTableStore = defineStore("table", {
         .catch((error) => console.error(error));
     },
     routeToCart(table) {
-      this.addToSelectedTables(table);
-      router.push("/Cart");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Cart");
+      });
     },
     routeToMenu(table) {
-      this.addToSelectedTables(table);
-      router.push("/Menu");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Menu");
+      });
     },
     async invoiceNumberFetching() {
       const tableInvoiceNumber = {
