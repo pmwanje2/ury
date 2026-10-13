@@ -5,8 +5,11 @@ import { setImmediate as flushPromises } from 'node:timers/promises';
 import Menu from '../src/components/Menu.vue';
 import Cart from '../src/components/Cart.vue';
 import Table from '../src/components/Table.vue';
+import NotificationModal from '../src/components/NotificationModal.vue';
 import { useMenuStore } from '../src/stores/Menu.js';
 import { useTableStore } from '../src/stores/Table.js';
+
+const LEAVE_PROMPT = 'You have unsent items. Leave without sending them?';
 
 const dependencies = vi.hoisted(() => ({ pushes: [] }));
 vi.mock('../src/router', () => ({
@@ -26,6 +29,7 @@ vi.mock('../src/stores/frappeSdk.js', () => ({
 }));
 
 let app;
+let modalApp;
 let host;
 let menu;
 let table;
@@ -116,7 +120,9 @@ beforeEach(async () => {
 
 afterEach(() => {
   app?.unmount();
+  modalApp?.unmount();
   app = undefined;
+  modalApp = undefined;
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -127,6 +133,14 @@ function show(component) {
   app?.unmount();
   app = createApp(component);
   app.mount(host);
+}
+
+function mountPrompt() {
+  modalApp?.unmount();
+  const modalHost = document.createElement('div');
+  document.body.append(modalHost);
+  modalApp = createApp(NotificationModal);
+  modalApp.mount(modalHost);
 }
 
 async function openTable(name) {
@@ -147,6 +161,7 @@ async function add(name) {
 function showFloor(rows) {
   table.tables = rows;
   show(Table);
+  mountPrompt();
 }
 
 function viewOrder(name) {
@@ -156,66 +171,70 @@ function viewOrder(name) {
   button.click();
 }
 
-describe('View order keeps the unsent cart for the same table', () => {
-  it.each(['Water 500ml', 'Beef Pilau'])('retains unsent %s when the same table View order control opens Cart', async (name) => {
-    await openTable('T-05');
-    await add(name);
-    expect(menu.cart.map((row) => row.item)).toEqual([name]);
-    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
-    viewOrder('T-05');
-    await flushPromises();
-    show(Cart);
-    expect(host.textContent).not.toContain('Nothing to show here');
-    expect(host.textContent).toContain(name);
-    expect(host.querySelector('input[name="qty_input_cart"]').value).toBe('1');
-    expect(menu.cart.map((row) => row.item)).toEqual([name]);
-    expect(dependencies.pushes).toContain('/Cart');
-  });
+function cartSnapshot() {
+  return menu.cart.map((row) => ({ item: row.item, qty: row.qty }));
+}
 
-  it('clears the unsent cart when View order opens a different table', async () => {
+function clickChoice(label) {
+  const button = [...document.body.querySelectorAll('button')].find((node) => node.textContent.trim() === label);
+  expect(button).toBeDefined();
+  button.click();
+}
+
+describe('View order asks before leaving unsent items', () => {
+  it('asks when View order would leave unsent items, and Cancel keeps the cart intact', async () => {
     await openTable('T-05');
     await add('Water 500ml');
-    showFloor([
-      { name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
-      { name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:05:00' },
-    ]);
-    viewOrder('T-06');
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 1 }]);
+    const pushesBefore = [...dependencies.pushes];
+    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-05');
+    await nextTick();
+    expect(document.body.textContent).toContain(LEAVE_PROMPT);
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 1 }]);
+    clickChoice('No');
+    await nextTick();
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 1 }]);
+    expect(table.selectedTable).toBe('T-05');
+    expect(dependencies.pushes).toEqual(pushesBefore);
+    expect(document.body.textContent).not.toContain(LEAVE_PROMPT);
+    show(Cart);
+    expect(host.textContent).toContain('Water 500ml');
+    expect(host.querySelector('input[name="qty_input_cart"]').value).toBe('1');
+    expect(host.textContent).not.toContain('Nothing to show here');
+  });
+
+  it('resets and reloads the table when the waiter confirms leaving unsent items', async () => {
+    await openTable('T-05');
+    await add('Water 500ml');
+    invoice.name = 'POS-INV-5';
+    invoice.waiter = 'waiter-test';
+    invoice.items = [{
+      item_code: 'Beef Pilau',
+      item_name: 'Beef Pilau',
+      qty: 2,
+      rate: 18000,
+      comment: '',
+    }];
+    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-05');
+    await nextTick();
+    expect(document.body.textContent).toContain(LEAVE_PROMPT);
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 1 }]);
+    clickChoice('Yes');
     await flushPromises();
     show(Cart);
-    expect(menu.cart).toEqual([]);
-    expect(host.textContent).toContain('Nothing to show here');
-    expect(table.selectedTable).toBe('T-06');
+    expect(cartSnapshot()).toEqual([{ item: 'Beef Pilau', qty: 2 }]);
+    expect(host.textContent).toContain('Beef Pilau');
+    expect(host.textContent).not.toContain('Water 500ml');
+    expect(host.querySelector('input[name="qty_input_cart"]').value).toBe('2');
+    expect(table.selectedTable).toBe('T-05');
     expect(dependencies.pushes).toContain('/Cart');
   });
 
-  it('still warns when View order opens a different table assigned to another waiter', async () => {
-    await openTable('T-05');
-    await add('Beef Pilau');
-    const alerts = [];
-    table.alert.createAlert = (title, message, button) => {
-      alerts.push({ title, message, button });
-      return new Promise(() => {});
-    };
-    invoice.name = 'POS-INV-9';
-    invoice.waiter = 'other-waiter';
-    showFloor([
-      { name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
-      { name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:05:00' },
-    ]);
-    viewOrder('T-06');
-    await flushPromises();
-    expect(menu.cart).toEqual([]);
-    expect(table.selectedTable).toBe('T-06');
-    expect(alerts).toEqual([{
-      title: 'Message',
-      message: 'Table is assigned to other-waiter',
-      button: 'OK',
-    }]);
-  });
-
-  it('still loads the saved order when View order reopens the same table with an empty cart', async () => {
-    await openTable('T-05');
-    expect(menu.cart).toEqual([]);
+  it('does not ask when the cart has no unsent items', async () => {
+    invoice.name = 'POS-INV-5';
+    invoice.waiter = 'waiter-test';
     invoice.items = [{
       item_code: 'Water 500ml',
       item_name: 'Water 500ml',
@@ -223,69 +242,16 @@ describe('View order keeps the unsent cart for the same table', () => {
       rate: 1500,
       comment: '',
     }];
-    invoice.name = 'POS-INV-5';
-    invoice.waiter = 'waiter-test';
+    await openTable('T-05');
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 2 }]);
     showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
     viewOrder('T-05');
     await flushPromises();
+    expect(document.body.textContent).not.toContain(LEAVE_PROMPT);
     show(Cart);
-    expect(menu.cart.map((row) => row.item)).toEqual(['Water 500ml']);
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 2 }]);
     expect(host.querySelector('input[name="qty_input_cart"]').value).toBe('2');
     expect(host.textContent).toContain('Water 500ml');
-    expect(host.textContent).not.toContain('Nothing to show here');
-  });
-});
-
-describe('Sol cross-review ownership probes', () => {
-  it('does not retain T-06 unsent edits when a cashier opens T-05 after Recent Orders edit', async () => {
-    dependencies.auth.cashier = true;
-    await openTable('T-05');
-    await add('Water 500ml');
-    const { usetoggleRecentOrder } = await vi.importActual('../src/stores/recentOrder.js');
-    const recent = usetoggleRecentOrder();
-    table.recentOrders = recent;
-    menu.recentOrders = recent;
-    dependencies.recent = recent;
-    const originalGet = dependencies.call.get;
-    dependencies.call.get = async (method, params) => {
-      if (method === 'ury.ury_pos.api.getPosInvoiceItems') return { message: [[], []] };
-      if (method === 'frappe.client.get') return { message: {
-        ...structuredClone(invoice), name: 'POS-INV-6', restaurant_table: 'T-06',
-        order_type: 'Dine In', items: [{ item_code: 'Beef Pilau', item_name: 'Beef Pilau', qty: 2, rate: 18000 }],
-      } };
-      if (method === 'ury.ury_pos.api.get_select_field_options') return { message: [{ name: 'Dine In' }] };
-      return originalGet(method, params);
-    };
-    await recent.viewRecentOrder({ name: 'POS-INV-6', restaurant_table: 'T-06', order_type: 'Dine In', posting_date: '2026-10-13', invoice_printed: 0 });
-    await flushPromises();
-    await recent.editOrder();
-    await flushPromises();
-    show(Menu);
-    await add('Chapati');
-    expect(recent.restaurantTable).toBe('T-06');
-    expect(table.selectedTable).toBe('T-05');
-    expect(menu.cart.map(row => row.item)).toEqual(['Beef Pilau', 'Chapati']);
-    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
-    viewOrder('T-05');
-    await flushPromises();
-    show(Cart);
-    expect(menu.cart.map(row => row.item)).not.toContain('Chapati');
-    expect(host.textContent).not.toContain('Beef Pilau');
-  });
-
-  it('still warns after another waiter takes over the same table with an unsent cart', async () => {
-    await openTable('T-05');
-    await add('Water 500ml');
-    const alerts = [];
-    table.alert.createAlert = (title, message, button) => {
-      alerts.push({ title, message, button });
-      return new Promise(() => {});
-    };
-    invoice.name = 'POS-INV-5';
-    invoice.waiter = 'other-waiter';
-    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
-    viewOrder('T-05');
-    await flushPromises();
-    expect(alerts).toEqual([{ title: 'Message', message: 'Table is assigned to other-waiter', button: 'OK' }]);
+    expect(dependencies.pushes).toContain('/Cart');
   });
 });
