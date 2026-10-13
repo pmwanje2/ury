@@ -4,6 +4,7 @@ import colorsys
 import importlib
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import unittest
@@ -482,6 +483,51 @@ class TestSiteBrand(unittest.TestCase):
             hue, saturation, _ = tokens[f"--gray-{step}"].split()
             self.assertEqual(hue, "38.5714")
             self.assertLessEqual(float(saturation[:-1]), 25)
+
+    def test_derived_text_grays_pass_aa_on_canvas_and_white_cards(self):
+        def luminance(rgb):
+            linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
+            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        for background, text in (("#f2ede4", "#1f2a24"), ("#eef1f5", "#1f2933"),
+                                 ("#ffffff", None), ("#767676", None)):
+            self.set_theme(background_color=background, text_color=text)
+            tokens = self.theme_tokens()
+            canvas = luminance([int(background[i:i + 2], 16) / 255 for i in (1, 3, 5)])
+            for step in (500, 600, 700, 800, 900, 950):
+                h, s, l = map(float, tokens[f"--gray-{step}"].replace("%", "").split())
+                gray = luminance(colorsys.hls_to_rgb(h / 360, l / 100, s / 100))
+                for surface, value in (("canvas", canvas), ("white card", 1)):
+                    with self.subTest(background=background, step=step, surface=surface):
+                        lo, hi = sorted((gray, value))
+                        self.assertGreaterEqual((hi + 0.05) / (lo + 0.05), 4.5)
+                if step != 900 or text is None:
+                    self.assertLessEqual(s, 25)
+                    expected_hue = 38.5714 if background == "#f2ede4" else 214.2857 if background == "#eef1f5" else 0
+                    self.assertAlmostEqual(h, expected_hue, places=4)
+
+    def test_font_size_changes_body_text_not_root_rem_sizing(self):
+        for size in ("12px", "14px", "24px"):
+            with self.subTest(size=size):
+                self.set_theme(font_size=size)
+                html = self.render("pos", self.context("pos"))
+                rules = dict(re.findall(r"([^{}<>]+)\{([^{}]+)\}", html))
+                self.assertNotIn("font-size:", rules["html:root:not(.dark)"])
+                self.assertEqual(rules.get("html:root:not(.dark) body"), f"font-size:{size};")
+        self.set_theme(font_size=None)
+        self.assertNotIn("font-size:", self.context("pos")["theme_style"])
+
+    def test_light_header_subtitle_uses_the_derived_muted_gray(self):
+        self.set_theme(name="Maximus Essential", primary_color="#174a8b", text_color="#1f2933",
+                       background_color="#eef1f5", dark_color="#ffffff")
+        tokens = self.theme_tokens()
+        self.assertEqual(tokens["--header-muted"], "var(--gray-500)")
+        self.assertNotEqual(tokens["--header-muted"], tokens["--header-title"])
+        self.assertEqual(tokens["--header-title"], tokens["--header-foreground"])
+
+    def test_dark_header_keeps_white_muted_text_for_contrast(self):
+        self.set_theme()
+        self.assertEqual(self.theme_tokens()["--header-muted"], "0 0% 100%")
 
     def test_foregrounds_choose_white_or_dark_by_real_contrast(self):
         for color, foreground in (("#23664a", "0 0% 100%"), ("#174a8b", "0 0% 100%"),
