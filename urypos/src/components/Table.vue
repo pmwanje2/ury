@@ -577,7 +577,7 @@ export default {
     let requestsInterval;
     onMounted(() => {
       clockInterval = setInterval(() => { now.value = Date.now(); }, 60 * 1000);
-      requestsInterval = setInterval(() => table.fetchServiceRequests(), 30 * 1000);
+      requestsInterval = setInterval(() => table.fetchServiceRequests(), 20 * 1000);
     });
     onUnmounted(() => { clearInterval(clockInterval); clearInterval(requestsInterval); });
 
