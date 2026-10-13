@@ -496,11 +496,13 @@ class TestSiteBrand(unittest.TestCase):
             canvas = luminance([int(background[i:i + 2], 16) / 255 for i in (1, 3, 5)])
             for step in (500, 600, 700, 800, 900, 950):
                 h, s, l = map(float, tokens[f"--gray-{step}"].replace("%", "").split())
-                gray = luminance(colorsys.hls_to_rgb(h / 360, l / 100, s / 100))
-                for surface, value in (("canvas", canvas), ("white card", 1)):
-                    with self.subTest(background=background, step=step, surface=surface):
-                        lo, hi = sorted((gray, value))
-                        self.assertGreaterEqual((hi + 0.05) / (lo + 0.05), 4.5)
+                rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
+                for precision, channels in (("CSS", rgb), ("8-bit", [round(v * 255) / 255 for v in rgb])):
+                    gray = luminance(channels)
+                    for surface, value in (("canvas", canvas), ("white card", 1)):
+                        with self.subTest(background=background, step=step, surface=surface, precision=precision):
+                            lo, hi = sorted((gray, value))
+                            self.assertGreaterEqual((hi + 0.05) / (lo + 0.05), 4.5)
                 if step != 900 or text is None:
                     self.assertLessEqual(s, 25)
                     expected_hue = 38.5714 if background == "#f2ede4" else 214.2857 if background == "#eef1f5" else 0
