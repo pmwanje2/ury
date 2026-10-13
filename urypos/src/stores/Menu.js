@@ -13,7 +13,6 @@ import router from "../router";
 export const useMenuStore = defineStore("menu", {
   state: () => ({
     cart: [],
-    cartOwnerTable: null,
     item: [],
     items: [],
     course: [],
@@ -352,11 +351,6 @@ export const useMenuStore = defineStore("menu", {
     getitemQty(item) {
       item.qty = this.cart.qty;
     },
-    claimCartForSelectedTable() {
-      if (!this.cartOwnerTable && this.table.selectedTable) {
-        this.cartOwnerTable = this.table.selectedTable;
-      }
-    },
     addToCart(item) {
       const itemIndex = this.cart.findIndex((obj) => obj.item === item.item);
       const itemIndexExists = itemIndex !== -1;
@@ -365,7 +359,6 @@ export const useMenuStore = defineStore("menu", {
         item.qty = 1;
         item.comment = "";
         this.cart.push(item);
-        this.claimCartForSelectedTable();
 
         let message = `Added ${item.item} to Cart`;
         this.notification.createNotification(message);
@@ -394,7 +387,6 @@ export const useMenuStore = defineStore("menu", {
       } else {
         item.comment = "";
         this.cart.push({ item: item.item, qty: 1 });
-        this.claimCartForSelectedTable();
       }
     },
     decrementItemQuantity(item) {

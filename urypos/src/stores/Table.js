@@ -408,7 +408,6 @@ export const useTableStore = defineStore("table", {
       });
       let cart = this.menu.cart;
       cart.splice(0, cart.length);
-      this.menu.cartOwnerTable = null;
       const getPreviousOrder = {
         table: this.selectedTable,
       };
@@ -427,7 +426,23 @@ export const useTableStore = defineStore("table", {
           this.invoiceNo = this.previousOrder.name;
           this.previousWaiter = this.previousOrder.waiter;
           if (this.invoiceNo) {
-            if (!this.warnIfAnotherWaiter(this.previousOrder)) {
+            if (
+              !this.auth.hasAccess &&
+              !this.auth.cashier &&
+              this.auth.sessionUser !== this.previousOrder.waiter
+            ) {
+              this.alert
+                .createAlert(
+                  "Message",
+                  "Table is assigned to " + this.previousOrder.waiter,
+                  "OK"
+                )
+                .then(() => {
+                  router.push("/Table").then(() => {
+                    window.location.reload();
+                  });
+                });
+            } else {
               this.notification.createNotification("Past Order Fetched");
             }
           } else {
@@ -480,59 +495,13 @@ export const useTableStore = defineStore("table", {
               }
             });
           }
-          if (cart.length > 0) {
-            this.menu.cartOwnerTable = this.selectedTable;
-          }
-        })
-        .catch((error) => console.error(error));
-    },
-    warnIfAnotherWaiter(order) {
-      if (
-        order &&
-        order.name &&
-        !this.auth.hasAccess &&
-        !this.auth.cashier &&
-        this.auth.sessionUser !== order.waiter
-      ) {
-        this.alert
-          .createAlert(
-            "Message",
-            "Table is assigned to " + order.waiter,
-            "OK"
-          )
-          .then(() => {
-            router.push("/Table").then(() => {
-              window.location.reload();
-            });
-          });
-        return true;
-      }
-      return false;
-    },
-    refreshTableAssignment(table) {
-      this.call
-        .get("ury.ury.doctype.ury_order.ury_order.get_order_invoice", {
-          table: table.name,
-        })
-        .then((result) => {
-          const order = result.message;
-          if (!order) return;
-          this.previousOrder = order;
-          this.invoicePrinted = order.invoice_printed;
-          this.modifiedTime = order.modified;
-          this.invoiceNo = order.name;
-          this.previousWaiter = order.waiter;
-          this.warnIfAnotherWaiter(order);
         })
         .catch((error) => console.error(error));
     },
     routeToCart(table) {
-      const cartBelongsToTable =
-        this.menu.cartOwnerTable === table.name && this.menu.cart.length > 0;
-      if (cartBelongsToTable) {
-        this.selectedTable = table.name;
-        this.refreshTableAssignment(table);
-      } else {
+      const sameTableUnsentCart =
+        table.name === this.selectedTable && this.menu.cart.length > 0;
+      if (!sameTableUnsentCart) {
         this.addToSelectedTables(table);
       }
       router.push("/Cart");
