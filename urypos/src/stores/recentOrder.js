@@ -274,6 +274,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
       });
       let cart = this.menu.cart;
       cart.splice(0, cart.length);
+      this.menu.cartOwnerTable = null;
       const getOrderInvoice = {
         doctype: "POS Invoice",
         name: this.draftInvoice,
@@ -284,6 +285,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
           let pastOrder = result.message;
           this.mobileNumber = pastOrder.mobile_number;
           this.restaurantTable = pastOrder.restaurant_table;
+          this.menu.cartOwnerTable = pastOrder.restaurant_table || null;
           this.pastOrderdItem = pastOrder.items;
           this.recentWaiter = pastOrder.waiter;
           this.pastOrderType = pastOrder.order_type;
@@ -542,6 +544,7 @@ export const usetoggleRecentOrder = defineStore("recentOrders", {
       });
       this.selectedStatus = "Draft";
       this.menu.cart = [];
+      this.menu.cartOwnerTable = null;
       this.draftInvoice = "";
       this.customers.selectedOrderType = "";
       this.menu.selectedAggregator = "";

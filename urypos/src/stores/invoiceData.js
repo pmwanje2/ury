@@ -355,6 +355,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
       this.customers.numberOfPax = "";
       this.customers.newCustomerMobileNo=""
       this.menu.cart = [];
+      this.menu.cartOwnerTable = null;
       this.table.selectedMergedTable = "";
       this.table.mergeSourceTable = "";
       this.recentOrders.draftInvoice = "";
