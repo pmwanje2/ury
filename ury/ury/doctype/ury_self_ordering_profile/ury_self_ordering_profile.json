@@ -11,6 +11,7 @@
   "profile_info_tab",
   "profile_name",
   "restaurant",
+  "guest_display_name",
   "branch",
   "column_break_profile_info",
   "pos_profile",
@@ -58,6 +59,12 @@
    "label": "Restaurant",
    "options": "URY Restaurant",
    "reqd": 1
+  },
+  {
+   "description": "Optional guest-page name. Leave blank to keep the site brand. The guest logo uses the linked URY Restaurant image.",
+   "fieldname": "guest_display_name",
+   "fieldtype": "Data",
+   "label": "Guest Display Name"
   },
   {
    "fetch_from": "restaurant.branch",

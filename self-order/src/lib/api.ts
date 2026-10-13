@@ -170,6 +170,11 @@ export async function requestBill(session: string): Promise<{ status: string; re
   return response.message
 }
 
+export async function requestAssistance(session: string): Promise<{ status: string; request: string }> {
+  const response = await call.post<FrappeResponse<{ status: string; request: string }>>(`${M}.request_assistance`, { session })
+  return response.message
+}
+
 export async function getStatus(session: string): Promise<OrderStatus> {
   const response = await call.get<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
   return response.message

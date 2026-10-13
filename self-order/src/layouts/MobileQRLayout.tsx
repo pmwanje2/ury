@@ -1,4 +1,5 @@
-import { formatCurrency } from '@ury/core'
+import { formatCurrency, resolveBrand } from '@ury/core'
+import { t } from '../../../pos/src/i18n'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 
@@ -16,6 +17,10 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     submitting,
     error,
     billRequested,
+    requestingAssistance,
+    assistanceCooldown,
+    assistanceMessage,
+    handleRequestAssistance,
     paymentRequest,
     payingOnline,
     addToCart,
@@ -55,13 +60,20 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
   // pickup mode — set server-side by _verify_qr_token/_resolve_device, never
   // guessed from context.table being falsy.
   const isPickup = context?.source === 'QR Pickup'
+  const brand = resolveBrand({ name: '', logo: '', favicon: '' })
 
   return (
     <div className="min-h-screen pb-28">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-4 py-3 backdrop-blur">
+        <div className="min-w-0">
+          {brand.name && <div className="flex items-center gap-2 text-sm font-medium">
+            {brand.logo && <img src={brand.logo} alt="" className="h-8 w-8 shrink-0 object-contain" />}
+            <span className="break-words">{brand.name}</span>
+          </div>}
         <h1 className="text-lg font-semibold">
           {isPickup ? 'Order for Pickup' : context?.table ? `Table ${context.table}` : 'Order'}
         </h1>
+        </div>
         <button
           onClick={handleStartOver}
           className="rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground"
@@ -110,6 +122,15 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
             </p>
           )}
           {!isPickup && context?.capabilities.request_bill_enabled && !order.billed && (
+            <>
+            <button
+              className="mt-3 min-h-11 w-full rounded-md border py-2 text-sm font-medium disabled:opacity-50"
+              disabled={requestingAssistance || assistanceCooldown}
+              onClick={handleRequestAssistance}
+            >
+              {requestingAssistance ? t('Calling waiter…') : t('Call waiter')}
+            </button>
+            {assistanceMessage && <p role="status" className="mt-2 text-sm">{assistanceMessage}</p>}
             <button
               className="mt-3 w-full rounded-md border py-2 text-sm font-medium disabled:opacity-50"
               disabled={billRequested}
@@ -117,6 +138,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
             >
               {billRequested ? 'Bill requested — staff notified' : 'Request Bill'}
             </button>
+            </>
           )}
         </section>
       )}

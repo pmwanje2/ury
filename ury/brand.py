@@ -12,6 +12,20 @@ def get_brand(surface="site"):
         "logo": settings.app_logo or None,
         "favicon": settings.favicon or None,
     }
+    if surface == "guest":
+        token = getattr(frappe, "form_dict", {}).get("t")
+        if token:
+            # Never accept an unsigned restaurant/profile name from the URL.
+            from ury.ury.api.self_ordering import _verify_qr_token
+
+            try:
+                profile, _, _ = _verify_qr_token(token)
+            except frappe.PermissionError:
+                pass  # Invalid links keep site identity; the API reports the refusal.
+            else:
+                restaurant = frappe.get_cached_doc("URY Restaurant", profile.restaurant)
+                brand["name"] = getattr(profile, "guest_display_name", None) or brand["name"]
+                brand["logo"] = restaurant.image or brand["logo"]
     if surface == "staff":
         # A dict hook arrives as {key: [values...]}; any other shape is ignored.
         hooks = frappe.get_hooks("ury_brand")
