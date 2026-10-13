@@ -456,7 +456,7 @@ class TestSiteBrand(unittest.TestCase):
         self.set_theme(button_rounded_corners=0, google_font="Noto Sans 2")
         tokens = self.theme_tokens()
         self.assertEqual(tokens["--radius"], "0")
-        self.assertEqual(tokens["--font-sans"], r"Noto Sans \000032, sans-serif")
+        self.assertEqual(tokens["--font-sans"], r"Noto Sans \32 , sans-serif")
         self.assertEqual(tokens["--font-inter"], "var(--font-sans)")
         html = self.render("pos", self.context("pos"))
         self.assertIn("font-size:14px;", html)
@@ -466,13 +466,20 @@ class TestSiteBrand(unittest.TestCase):
         self.assertNotIn("--radius", self.theme_tokens())
 
     def test_valid_google_font_numeric_words_are_escaped_as_css_identifiers(self):
-        for font, css_family in (("Press Start 2P", r"Press Start \000032P"),
-                                 ("M PLUS 1p", r"M PLUS \000031p")):
+        for font, css_family in (("Press Start 2P", r"Press Start \32 P"),
+                                 ("M PLUS 1p", r"M PLUS \31 p")):
             with self.subTest(font=font):
                 self.set_theme(google_font=font)
                 html = self.render("pos", self.context("pos"))
                 self.assertIn(f"--font-sans:{css_family}, sans-serif;", html)
                 self.assertNotIn("&#", html)
+
+    def test_digit_only_font_words_preserve_the_following_word_boundary(self):
+        self.set_theme(google_font="M PLUS 1 Code")
+        html = self.render("pos", self.context("pos"))
+        # First space terminates the CSS escape; the second separates words.
+        self.assertIn(r"--font-sans:M PLUS \31  Code, sans-serif;", html)
+        self.assertIn("family=M+PLUS+1+Code:wght", html)
 
     def test_invalid_code_payload_cannot_break_out_of_pos_style_or_link(self):
         self.set_theme(primary_color="</style><script>evil()</script>", google_font='Noto\" onload=evil()',
