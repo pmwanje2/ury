@@ -164,6 +164,7 @@ export const useTableStore = defineStore("table", {
     },
     fetchTable() {
       const room = this.selectedRoom;
+      let tableListLoaded = false;
       this.serviceRequests = [];
       this.serviceRequestsLoading = true;
       ++this.serviceRequestsRead;
@@ -194,6 +195,7 @@ export const useTableStore = defineStore("table", {
         })
         .then(async (tables) => {
           if (room !== this.selectedRoom) return;
+          tableListLoaded = true;
           this.tables = tables.sort((a, b) => {
             return a.name.localeCompare(b.name, undefined, {
               numeric: true,
@@ -235,7 +237,13 @@ export const useTableStore = defineStore("table", {
             }
           }
         })
-        .catch((error) => console.error(error));
+        .catch((error) => {
+          if (!tableListLoaded && room === this.selectedRoom) {
+            this.serviceRequestsLoading = false;
+            this.serviceRequestsUnavailable = true;
+          }
+          console.error(error);
+        });
     },
     async fetchServiceRequests() {
       const room = this.selectedRoom;
