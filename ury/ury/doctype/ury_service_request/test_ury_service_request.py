@@ -82,3 +82,26 @@ class TestURYServiceRequest(unittest.TestCase):
         self.save(doc)
         self.assertIsNone(doc.resolved_by)
         self.assertIsNone(doc.resolved_at)
+
+    def test_existing_resolver_does_not_leave_empty_timestamp(self):
+        doc = self.request(
+            "Resolved",
+            "Acknowledged",
+            resolved_by="captain@example.com",
+            resolved_at=None,
+        )
+        self.save(doc)
+        self.assertEqual(doc.resolved_by, "captain@example.com")
+        self.assertEqual(doc.resolved_at, self.when)
+
+    def test_existing_timestamp_is_not_overwritten_when_resolver_is_empty(self):
+        original_at = datetime.datetime(2026, 10, 13, 9, 0, 0)
+        doc = self.request(
+            "Resolved",
+            "Acknowledged",
+            resolved_by=None,
+            resolved_at=original_at,
+        )
+        self.save(doc)
+        self.assertEqual(doc.resolved_by, self.user)
+        self.assertEqual(doc.resolved_at, original_at)
