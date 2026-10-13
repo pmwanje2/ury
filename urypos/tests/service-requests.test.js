@@ -89,6 +89,29 @@ it('uses permission-filtered native reads limited to the loaded room tables and 
   expect([...requestList().querySelectorAll('button')].some(button => /Acknowledge|Resolve/.test(button.textContent))).toBe(false);
 });
 
+it('shows a new assistance request within 20s without reloading the floor', async () => {
+  await render();
+  expect(host.textContent).toContain('Requests waiting: 2');
+  const floorReads = store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'URY Table').length;
+  const arrived = {
+    name: 'HELP-2', table: 'T-05', invoice: 'POS-9', request_type: 'Assistance', status: 'Open', requested_at: '2026-10-13 12:05:00',
+  };
+  store.db.getDocList.mockImplementation(async doctype => doctype === 'URY Service Request' ? [arrived] : []);
+  vi.advanceTimersByTime(19999);
+  await flushPromises();
+  await nextTick();
+  expect(host.textContent).toContain('Requests waiting: 2');
+  expect(host.textContent).not.toContain('HELP-2');
+  vi.advanceTimersByTime(1);
+  await flushPromises();
+  await nextTick();
+  expect(host.textContent).toContain('Requests waiting: 1');
+  expect(host.textContent).toContain('Assistance');
+  expect(host.textContent).toContain('T-05');
+  expect(host.textContent).toContain('Open');
+  expect(store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'URY Table')).toHaveLength(floorReads);
+});
+
 it('refreshes idle requests without reloading floor data and clears the polling timer on unmount', async () => {
   await render();
   const floorReads = store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'URY Table').length;
