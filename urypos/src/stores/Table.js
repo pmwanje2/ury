@@ -8,6 +8,7 @@ import { useNotifications } from "./Notification.js";
 import { useAlert } from "./Alert.js";
 import frappe from "./frappeSdk.js";
 import { usetoggleRecentOrder } from "./recentOrder.js";
+import { useNotificationModal } from "./NotificationModal.js";
 
 
 export const useTableStore = defineStore("table", {
@@ -389,7 +390,52 @@ export const useTableStore = defineStore("table", {
         }
       }
     },
-    async addToSelectedTables(table) {
+    cartHasUnsentItems() {
+      const lineKeys = (rows, codeOf) => (rows || [])
+        .map((row) => {
+          const code = row && codeOf(row);
+          if (!code) return null;
+          const comment = String(row.comment == null ? "" : row.comment).trim();
+          return code + "\0" + Number(row.qty || 0) + "\0" + comment;
+        })
+        .filter((key) => key !== null)
+        .sort();
+      const cart = this.menu.cart || [];
+      const tableSaved = Array.isArray(this.previousOrderdItem) ? this.previousOrderdItem : [];
+      const recent = this.recentOrders;
+      const recentItems = recent && recent.pastOrderdItem;
+      const recentSaved = Array.isArray(recentItems) ? recentItems : [];
+      const storedTable = recent && recent.restaurantTable;
+      const listedTable = recent && recent.selectedTable;
+      const recentTable = storedTable || listedTable;
+      const recentInvoice = recent && (recent.draftInvoice || recent.invoiceNumber);
+      const tablesAgree = Boolean(storedTable) && (!listedTable || listedTable === storedTable);
+      const openDraftBelongsToItsTable = Boolean(recent && recent.draftInvoice) && tablesAgree;
+      const sameTable = Boolean(recentTable) && recentTable === this.selectedTable;
+      const sameInvoice = Boolean(recentInvoice) && recentInvoice === this.invoiceNo && sameTable;
+      const saved = tableSaved.length ? tableSaved : ((openDraftBelongsToItsTable || sameInvoice) ? recentSaved : []);
+      const cartKeys = lineKeys(cart, (row) => row.item);
+      const savedKeys = lineKeys(saved, (row) => row.item_code || row.item);
+      if (cartKeys.length !== savedKeys.length) return true;
+      return cartKeys.some((key, index) => key !== savedKeys[index]);
+    },
+    confirmLeaveUnsent(onLeave) {
+      if (!this.cartHasUnsentItems()) {
+        onLeave();
+        return;
+      }
+      useNotificationModal().showModal({
+        title: "Unsent items",
+        message: "You have unsent items. Leave without sending them?",
+        showCancelButton: true,
+        onConfirm: () => onLeave(),
+        onCancel: () => {},
+      });
+    },
+    addToSelectedTables(table) {
+      this.confirmLeaveUnsent(() => this.loadSelectedTable(table));
+    },
+    async loadSelectedTable(table) {
       this.selectedTable = table.name;
       this.takeAwayTable = 0;
 
@@ -499,12 +545,16 @@ export const useTableStore = defineStore("table", {
         .catch((error) => console.error(error));
     },
     routeToCart(table) {
-      this.addToSelectedTables(table);
-      router.push("/Cart");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Cart");
+      });
     },
     routeToMenu(table) {
-      this.addToSelectedTables(table);
-      router.push("/Menu");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Menu");
+      });
     },
     async invoiceNumberFetching() {
       const tableInvoiceNumber = {
