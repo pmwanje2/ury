@@ -396,7 +396,7 @@ describe('floor-plan age uses the oldest open bill creation', () => {
     const store = await fetchTable(
       { name: 'Table 1', occupied: 0 }, '2026-10-03 00:10:00',
     );
-    expect(store.db.getDocList.mock.calls.map(([doctype]) => doctype)).toEqual(['URY Table']);
+    expect(store.db.getDocList.mock.calls.map(([doctype]) => doctype)).not.toContain('POS Invoice');
     expect(store.getBadgeText(store.tables[0])).toBe('Free');
   });
 

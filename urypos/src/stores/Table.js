@@ -13,6 +13,10 @@ import { usetoggleRecentOrder } from "./recentOrder.js";
 export const useTableStore = defineStore("table", {
   state: () => ({
     tables: [],
+    serviceRequests: [],
+    serviceRequestsLoading: true,
+    serviceRequestsUnavailable: false,
+    serviceRequestsRead: 0,
     selectedTable: null,
     previousOrderdItem: [],
     invoiceNo: "",
@@ -158,6 +162,10 @@ export const useTableStore = defineStore("table", {
       });
     },
     fetchTable() {
+      const room = this.selectedRoom;
+      this.serviceRequests = [];
+      this.serviceRequestsLoading = true;
+      ++this.serviceRequestsRead;
       this.call
         .get("ury.ury.api.ury_server_time.get_server_time")
         .then((result) => {
@@ -184,12 +192,14 @@ export const useTableStore = defineStore("table", {
           limit: 0,
         })
         .then(async (tables) => {
+          if (room !== this.selectedRoom) return;
           this.tables = tables.sort((a, b) => {
             return a.name.localeCompare(b.name, undefined, {
               numeric: true,
               sensitivity: "base",
             });
           });
+          this.fetchServiceRequests();
           // Publish the floor first; a pending/denied bill read must not block it.
           const occupiedTables = this.tables.filter((table) => table.occupied === 1);
           if (!occupiedTables.length) return;
@@ -224,6 +234,27 @@ export const useTableStore = defineStore("table", {
           }
         })
         .catch((error) => console.error(error));
+    },
+    async fetchServiceRequests() {
+      const room = this.selectedRoom;
+      const read = ++this.serviceRequestsRead;
+      const tableNames = this.tables.map(table => table.name);
+      try {
+        const requests = tableNames.length ? await this.db.getDocList("URY Service Request", {
+          fields: ["name", "table", "invoice", "request_type", "status", "requested_at"],
+          filters: [["table", "in", tableNames], ["request_type", "in", ["Bill", "Assistance"]], ["status", "!=", "Resolved"]],
+          orderBy: { field: "requested_at", order: "asc" }, limit: 0,
+        }) : [];
+        if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
+        this.serviceRequests = requests;
+        this.serviceRequestsUnavailable = false;
+      } catch {
+        if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
+        this.serviceRequests = [];
+        this.serviceRequestsUnavailable = true;
+      } finally {
+        if (read === this.serviceRequestsRead && room === this.selectedRoom) this.serviceRequestsLoading = false;
+      }
     },
     async getMenu() {
       const getMenuIem = {
