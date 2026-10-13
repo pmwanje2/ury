@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { applyDocumentLocale, getActiveLanguage, initI18n, subscribeGuestLanguage, t } from '../i18n'
+import { applyDocumentLocale, applyStaticGuestCopy, getActiveLanguage, initI18n, subscribeGuestLanguage, t } from '../i18n'
 import { GUEST_LANGUAGES, selectGuestLanguage } from '../i18n/resolve-language'
 
 export function useGuestLanguage(): string {
@@ -29,6 +29,7 @@ function LanguageSwitcher() {
             })
             return initI18n(language.code).then(() => {
               applyDocumentLocale()
+              applyStaticGuestCopy()
             })
           }}
         >
