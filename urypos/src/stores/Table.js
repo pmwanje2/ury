@@ -499,11 +499,7 @@ export const useTableStore = defineStore("table", {
         .catch((error) => console.error(error));
     },
     routeToCart(table) {
-      const sameTableUnsentCart =
-        table.name === this.selectedTable && this.menu.cart.length > 0;
-      if (!sameTableUnsentCart) {
-        this.addToSelectedTables(table);
-      }
+      this.addToSelectedTables(table);
       router.push("/Cart");
     },
     routeToMenu(table) {
