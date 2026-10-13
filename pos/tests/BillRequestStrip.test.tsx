@@ -68,15 +68,22 @@ async function click(label: string) {
 async function pickup() { await click('Table 1'); }
 
 describe('read-only bill-request strip', () => {
-  it('queries only unresolved Bill requests and renders count, table, time, status and native record link', async () => {
+  it('queries unresolved service requests and renders count, table, time, status and native record link', async () => {
     await render();
     expect(call.get).toHaveBeenCalledWith('frappe.client.get_list', {
       doctype: 'URY Service Request',
-      filters: [['request_type', '=', 'Bill'], ['status', '!=', 'Resolved'], ['table', 'in', ['Table 1']]],
-      fields: ['name', 'table', 'invoice', 'status', 'requested_at'], limit_page_length: 0,
+      filters: [['request_type', 'in', ['Bill', 'Assistance']], ['status', '!=', 'Resolved'], ['table', 'in', ['Table 1']]],
+      fields: ['name', 'table', 'invoice', 'request_type', 'status', 'requested_at'], limit_page_length: 0,
     });
     for (const text of ['Bill requests: 1 waiting', 'Table 1', 'Pending', '10:05']) expect(container.textContent).toContain(text);
     expect(container.querySelector('a')?.getAttribute('href')).toBe('/app/ury-service-request/REQ-1');
+  });
+  it('shows Assistance distinctly in the same native cashier queue', async () => {
+    requests[0].request_type = 'Assistance';
+    await render();
+    expect(container.textContent).toContain('Assistance');
+    await pickup();
+    expect(select).toHaveBeenCalledWith(queue[0]);
   });
   it('renders loading without a fabricated zero', async () => {
     vi.mocked(call.get).mockImplementation(() => new Promise(() => {}));

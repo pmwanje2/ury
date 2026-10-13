@@ -33,6 +33,72 @@ from ury.ury.api.self_ordering import (
 MOD = "ury.ury.api.self_ordering"
 
 
+class TestRequestAssistance(unittest.TestCase):
+    def setUp(self):
+        from ury.ury.api import self_ordering
+        self.api = self_ordering
+        self.session = MagicMock(table="Table 7", invoice="POS-1", ordering_profile="Profile A")
+        self.session.name = "SESSION-1"
+        self.profile = MagicMock(enable_request_bill=1)
+        self.resolve = self.enterContext(patch(f"{MOD}._resolve_session", return_value=self.session))
+        self.get_doc = self.enterContext(patch(f"{MOD}.frappe.get_doc"))
+        self.exists = self.enterContext(patch(f"{MOD}.frappe.db.exists", return_value=None))
+        self.user = self.enterContext(patch(f"{MOD}.frappe.set_user"))
+        self.req = MagicMock()
+        self.req.name = "REQ-ASSIST"
+        self.get_doc.side_effect = lambda doctype, name=None: self.req if isinstance(doctype, dict) else self.profile
+
+    def request(self):
+        method = getattr(self.api, "request_assistance", None)
+        self.assertTrue(callable(method), "Guests cannot request native Assistance yet")
+        return method("opaque-session")
+
+    def test_creates_native_assistance_for_verified_table_and_invoice(self):
+        result = self.request()
+        self.assertEqual(result, {"status": "Requested", "request": "REQ-ASSIST"})
+        self.resolve.assert_called_once_with("opaque-session")
+        payload = self.get_doc.call_args.args[0]
+        self.assertEqual({key: payload[key] for key in ("doctype", "request_type", "table", "invoice", "session", "status")},
+                         {"doctype": "URY Service Request", "request_type": "Assistance", "table": "Table 7",
+                          "invoice": "POS-1", "session": "SESSION-1", "status": "Open"})
+        self.req.insert.assert_called_once_with(ignore_permissions=True)
+
+    def test_unresolved_request_is_deduplicated_by_table_invoice_and_type(self):
+        self.exists.return_value = "REQ-OPEN"
+        self.assertEqual(self.request(), {"status": "Already Requested", "request": "REQ-OPEN"})
+        self.exists.assert_called_once_with("URY Service Request", {"table": "Table 7", "invoice": "POS-1",
+            "request_type": "Assistance", "status": ["!=", "Resolved"]})
+        self.req.insert.assert_not_called()
+
+    def test_disabled_service_requests_are_refused(self):
+        self.profile.enable_request_bill = 0
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.req.insert.assert_not_called()
+
+    def test_table_and_active_order_are_required(self):
+        for field in ("table", "invoice"):
+            with self.subTest(field=field):
+                old = getattr(self.session, field)
+                setattr(self.session, field, None)
+                with self.assertRaises(frappe.ValidationError):
+                    self.request()
+                setattr(self.session, field, old)
+        self.req.insert.assert_not_called()
+
+    def test_expired_or_forged_session_is_refused_before_insertion(self):
+        self.resolve.side_effect = frappe.PermissionError("Expired")
+        with self.assertRaises(frappe.PermissionError):
+            self.request()
+        self.get_doc.assert_not_called()
+
+    def test_insertion_failure_restores_guest_identity(self):
+        self.req.insert.side_effect = frappe.ValidationError("Cannot insert")
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.assertEqual(self.user.call_args.args, (frappe.session.user,))
+
+
 class TestQRTokenRoundtrip(unittest.TestCase):
     @patch(f"{MOD}.frappe.db.exists")
     @patch(f"{MOD}.frappe.get_doc")
