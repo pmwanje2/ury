@@ -26,7 +26,7 @@ const buttonVariants = cva(
         // darker step, use it; where it doesn't, `brightness-95` gets the same
         // result without inventing a colour.
         default:
-          "bg-primary text-white shadow-sm hover:bg-primary/90 active:bg-primary-600 active:shadow-none",
+          "bg-primary text-button-foreground shadow-sm hover:bg-primary/90 active:bg-primary-600 active:shadow-none",
         destructive:
           "bg-destructive text-white shadow-sm hover:bg-destructive/90 active:bg-destructive active:brightness-95 active:shadow-none",
         outline:
