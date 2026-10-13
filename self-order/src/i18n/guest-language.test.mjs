@@ -573,6 +573,44 @@ test('guest wording, waiter copy, and footer follow the catalog', async (t) => {
     assert.equal(nodes[1].textContent, 'Ensibuko')
   })
 
+  await t.test('a recovery error and a waiter confirmation are translated when shown', () => {
+    const session = readSource('hooks/useOrderingSession.ts')
+    assert.equal(
+      session.includes("setError(t("),
+      false,
+      'recovery error is frozen with t() when it is stored',
+    )
+    assert.equal(
+      session.includes('setAssistanceMessage('),
+      false,
+      'waiter confirmation is frozen with t() when it is stored',
+    )
+    for (const key of ['missing_code', 'load_menu', 'place_order', 'request_bill', 'call_waiter', 'pay_online']) {
+      assert.equal(session.includes(`t('errors.${key}')`), true, key)
+    }
+    assert.equal(session.includes("t('assistance.requested')"), true)
+    assert.equal(session.includes("t('assistance.already')"), true)
+  })
+
+  await t.test('switching language rewrites the footer already on the page', () => {
+    const html = readFileSync(join(src, '../index.html'), 'utf8')
+    assert.equal(html.includes('AGPL-3.0'), true)
+    assert.equal(html.includes('data-guest-i18n="footer.built_on"'), true)
+    assert.equal(html.includes('data-guest-i18n="footer.source"'), true)
+    assert.equal(html.includes('brand_source_url'), true)
+    const switcher = readSource('components/LanguageSwitcher.tsx')
+    const handlerStart = switcher.indexOf('onClick={() => {')
+    assert.equal(handlerStart >= 0, true)
+    const handler = switcher.slice(handlerStart, switcher.indexOf('</button>', handlerStart))
+    assert.equal(handler.includes('initI18n(language.code)'), true)
+    assert.equal(handler.includes('applyDocumentLocale()'), true)
+    assert.equal(
+      handler.includes('applyStaticGuestCopy()'),
+      true,
+      'language switch leaves the rendered footer in the previous language',
+    )
+  })
+
   await t.test('a missing ordering code and a device error still offer the language switcher', () => {
     for (const rel of [
       'layouts/MobileQRLayout.tsx',

@@ -71,6 +71,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  document.getElementById('guest-footer')?.remove()
   await initI18n('en', { setCookie() {} })
   vi.restoreAllMocks()
   vi.useRealTimers()
@@ -147,5 +148,136 @@ describe('guest language switch', () => {
     const close = container.querySelector('button[aria-label]')
     expect(close?.getAttribute('aria-label')).toBe('Funga')
     expect(close?.textContent).toContain('Funga')
+  })
+
+  it('translates a recovery error that is already on screen', async () => {
+    await render(<MobileQRLayout />)
+    expect(container.textContent).toContain('This link is missing an ordering code. Please rescan the QR code on your table.')
+    await act(async () => {
+      button('Luganda')!.click()
+    })
+    expect(container.textContent).toContain("Link eno terina koodi y'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.")
+    expect(container.textContent).not.toContain('This link is missing an ordering code')
+    await act(async () => {
+      button('Kiswahili')!.click()
+    })
+    expect(container.textContent).toContain('Kiungo hiki hakina msimbo wa oda. Tafadhali skani tena msimbo wa QR ulio mezani.')
+    expect(container.textContent).not.toContain("Link eno terina koodi y'oda")
+  })
+
+  it('translates a waiter confirmation that is already on screen', async () => {
+    await render(<MobileQRLayout initialContext={context} />)
+    await act(async () => {
+      button('Call waiter')!.click()
+    })
+    expect(container.textContent).toContain('Waiter requested — staff notified')
+    expect(button('Call waiter')?.disabled).toBe(true)
+    await act(async () => {
+      button('Kiswahili')!.click()
+    })
+    expect(container.textContent).toContain('Mhudumu ameombwa — wahudumu wamearifiwa')
+    expect(container.textContent).not.toContain('Waiter requested — staff notified')
+    expect(button('Ita mhudumu')?.disabled).toBe(true)
+    await act(async () => {
+      button('Luganda')!.click()
+    })
+    expect(container.textContent).toContain('Omuweereza asabiddwa — abaweereza bategeezeddwa')
+    expect(button('Yita omuweereza')?.disabled).toBe(true)
+  })
+
+  it('translates an already-requested waiter confirmation that is already on screen', async () => {
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'Already Requested', request: 'REQ-1' } })
+    await render(<MobileQRLayout initialContext={context} />)
+    await act(async () => {
+      button('Call waiter')!.click()
+    })
+    expect(container.textContent).toContain('Waiter already requested — staff notified')
+    await act(async () => {
+      button('Luganda')!.click()
+    })
+    expect(container.textContent).toContain('Omuweereza yali asabiddwa — abaweereza bategeezeddwa')
+    expect(container.textContent).not.toContain('Waiter already requested')
+    expect(button('Yita omuweereza')?.disabled).toBe(true)
+  })
+
+  it('translates a client order error that is already on screen and keeps the cart', async () => {
+    vi.mocked(call.post).mockRejectedValue({ httpStatus: 503 })
+    await render(<MobileQRLayout initialContext={context} />)
+    const soup = [...container.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Soup'))
+    expect(soup).toBeDefined()
+    await act(async () => {
+      soup!.click()
+    })
+    await act(async () => {
+      button('Place Order')!.click()
+    })
+    expect(container.textContent).toContain('Could not place the order. Please try again.')
+    await act(async () => {
+      button('Kiswahili')!.click()
+    })
+    expect(container.textContent).toContain('Imeshindwa kuweka oda. Tafadhali jaribu tena.')
+    expect(container.textContent).not.toContain('Could not place the order. Please try again.')
+    expect(button('Weka oda')).toBeDefined()
+  })
+
+  it('keeps the server refusal text when the language changes', async () => {
+    vi.mocked(call.post).mockRejectedValue({
+      _server_messages: JSON.stringify([
+        JSON.stringify({ message: '[SAL-QR-WAITER-OPENS-TABLE] Please ask a waiter to open your table first.' }),
+      ]),
+    })
+    await render(<MobileQRLayout initialContext={context} />)
+    const soup = [...container.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Soup'))
+    expect(soup).toBeDefined()
+    await act(async () => {
+      soup!.click()
+    })
+    await act(async () => {
+      button('Place Order')!.click()
+    })
+    expect(container.textContent).toContain('Please ask a waiter to open your table first.')
+    expect(container.textContent).not.toContain('[SAL-QR-WAITER-OPENS-TABLE]')
+    await act(async () => {
+      button('Kiswahili')!.click()
+    })
+    expect(container.textContent).toContain('Please ask a waiter to open your table first.')
+    expect(container.textContent).not.toContain('Imeshindwa kuweka oda')
+    expect(button('Weka oda')).toBeDefined()
+  })
+
+  it('updates the footer that is already rendered when the language changes', async () => {
+    const footer = document.createElement('footer')
+    footer.id = 'guest-footer'
+    footer.innerHTML = 'Salama · <span data-guest-i18n="footer.built_on">built on</span> URY (AGPL-3.0) · <a href="https://github.com/ury-erp/ury" data-guest-i18n="footer.source">Source</a>'
+    document.body.appendChild(footer)
+    await render(<MobileQRLayout initialContext={context} />)
+    expect(footer.textContent).toContain('Salama')
+    expect(footer.textContent).toContain('built on')
+    expect(footer.textContent).toContain('AGPL-3.0')
+    expect(footer.textContent).toContain('Source')
+    expect(footer.querySelector('a')?.getAttribute('href')).toBe('https://github.com/ury-erp/ury')
+    await act(async () => {
+      button('Kiswahili')!.click()
+    })
+    expect(footer.textContent).toContain('imejengwa kwa')
+    expect(footer.textContent).toContain('Chanzo')
+    expect(footer.textContent).toContain('AGPL-3.0')
+    expect(footer.textContent).toContain('Salama')
+    expect(footer.textContent).not.toContain('built on')
+    expect(footer.querySelector('a')?.getAttribute('href')).toBe('https://github.com/ury-erp/ury')
+    await act(async () => {
+      button('Luganda')!.click()
+    })
+    expect(footer.textContent).toContain('ezimbiddwa ku')
+    expect(footer.textContent).toContain('Ensibuko')
+    expect(footer.textContent).toContain('AGPL-3.0')
+    expect(footer.textContent).not.toContain('Chanzo')
+    await act(async () => {
+      button('EN')!.click()
+    })
+    expect(footer.textContent).toContain('built on')
+    expect(footer.textContent).toContain('Source')
+    expect(footer.textContent).not.toContain('ezimbiddwa ku')
+    expect(footer.querySelector('a')?.getAttribute('href')).toBe('https://github.com/ury-erp/ury')
   })
 })
