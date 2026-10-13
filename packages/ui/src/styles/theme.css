@@ -10,6 +10,7 @@
     --header-border: var(--gray-200);
     --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
     --font-inter: Inter, sans-serif;
+    --button-foreground: var(--white);
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;

@@ -8,6 +8,7 @@ export default {
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        "button-foreground": "hsl(var(--button-foreground))",
         header: {
           DEFAULT: "hsl(var(--header))",
           foreground: "hsl(var(--header-foreground))",

@@ -89,6 +89,7 @@ def theme_style(theme):
     if "primary" in theme:
         h, s, _ = hsl(theme["primary"])
         values["--ring"] = values["--primary"]
+        values["--button-foreground"] = "var(--primary-foreground)"
         for step, light in ((50, 97), (100, 94), (200, 88), (300, 80), (400, 70), (500, 61.7647),
                             (600, 55), (700, 46), (800, 37), (900, 28), (950, 18)):
             values[f"--primary-{step}"] = token(h, s, light)
@@ -96,7 +97,10 @@ def theme_style(theme):
     if theme.get("rounded") is False:
         values["--radius"] = "0"
     if "font" in theme:
-        values["--font-sans"] = f'{theme["font"]}, sans-serif'
+        # Escape a leading digit in each CSS identifier without introducing
+        # quotes that HTML escaping would turn into raw-text entities.
+        font = re.sub(r"(?<!\S)([0-9])", lambda match: f"\\{ord(match[1]):06x}", theme["font"])
+        values["--font-sans"] = f"{font}, sans-serif"
         values["--font-inter"] = "var(--font-sans)"
     if "font_size" in theme:
         values["font-size"] = theme["font_size"]
