@@ -87,12 +87,17 @@ def theme_style(theme):
             for part in ("user", "title", "muted"):
                 values[f"--header-{part}"] = token(*foreground)
     if "primary" in theme:
-        h, s, _ = hsl(theme["primary"])
+        rgb = [int(theme["primary"][i:i + 2], 16) / 255 for i in (1, 3, 5)]
         values["--ring"] = values["--primary"]
         values["--button-foreground"] = "var(--primary-foreground)"
-        for step, light in ((50, 97), (100, 94), (200, 88), (300, 80), (400, 70), (500, 61.7647),
-                            (600, 55), (700, 46), (800, 37), (900, 28), (950, 18)):
-            values[f"--blue-{step}"] = values[f"--primary-{step}"] = token(h, s, light)
+        # Anchor 600 on the owner's brand; RGB tints/shades preserve its contrast.
+        for step, target, weight in (
+            (50, 1, 0.95), (100, 1, 0.90), (200, 1, 0.75), (300, 1, 0.60),
+            (400, 1, 0.40), (500, 1, 0.20), (600, 0, 0),
+            (700, 0, 0.15), (800, 0, 0.30), (900, 0, 0.45), (950, 0, 0.60),
+        ):
+            h, l, s = colorsys.rgb_to_hls(*(channel * (1 - weight) + target * weight for channel in rgb))
+            values[f"--blue-{step}"] = values[f"--primary-{step}"] = token(h * 360, s * 100, l * 100)
         values["--header-border"] = "var(--primary)"
     if theme.get("rounded") is False:
         values["--radius"] = "0"
