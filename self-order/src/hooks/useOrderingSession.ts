@@ -51,7 +51,13 @@ function catalogError(key: CatalogErrorKey): string {
 function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = false): ShownError {
   const parsed = parseFrappeError(err, CATALOG_FALLBACK)
   if (parsed === CATALOG_FALLBACK) return { source: 'catalog', key }
-  const text = stripCodes ? parsed.replace(/\[[A-Z][A-Z0-9_-]*\]\s*/g, '') : parsed
+  // Older ERP responses contain both the refusal and a wrapped copy.
+  // Remove that legacy wrapper, not the translated reason or other errors.
+  const text = stripCodes ? [...new Set(parsed
+    .replace(/\[[A-Z][A-Z0-9_-]*\]\s*/g, '')
+    .split('\n')
+    .map(line => line.replace(/^Error while placing order:\s*/, '').trim())
+    .filter(Boolean))].join('\n') : parsed
   return { source: 'server', text }
 }
 
