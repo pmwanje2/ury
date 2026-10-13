@@ -8,10 +8,12 @@ from frappe.model.document import Document
 class URYServiceRequest(Document):
 	def validate(self):
 		# Native workflow saves change status without going through a URY API.
-		if self.status != "Resolved" or self.resolved_by:
+		if self.status != "Resolved":
 			return
 		previous = self.get_doc_before_save()
 		if previous and previous.get("status") == "Resolved":
 			return
-		self.resolved_by = frappe.session.user
-		self.resolved_at = frappe.utils.now_datetime()
+		if not self.resolved_by:
+			self.resolved_by = frappe.session.user
+		if not self.resolved_at:
+			self.resolved_at = frappe.utils.now_datetime()
