@@ -66,10 +66,10 @@ def theme_style(theme):
         for step, sat, light in ((100, 20, 97), (200, 15, 92), (300, 10, 85), (400, 8, 70),
                                  (500, 6, 50), (600, 5, 40), (700, 4, 30), (800, 3, 20), (900, 2, 10), (950, 1, 5)):
             saturation = min(s, sat, 25)
-            # Text grays must work on both the light-mode canvas and white cards.
+            # Leave a small AA margin for 8-bit rounding on canvas and white cards.
             if step >= 500:
                 while light > 0 and min(contrast((h, saturation, light), surface)
-                                       for surface in ((h, s, l), (0, 0, 100))) < 4.5:
+                                       for surface in ((h, s, l), (0, 0, 100))) < 4.55:
                     light = max(0, light - 0.5)
             values[f"--gray-{step}"] = token(h, saturation, light)
         gray950 = (h, min(s, 1), light)
