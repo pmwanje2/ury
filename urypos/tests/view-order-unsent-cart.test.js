@@ -175,6 +175,43 @@ function cartSnapshot() {
   return menu.cart.map((row) => ({ item: row.item, qty: row.qty }));
 }
 
+async function loadUnchangedRecentOrder() {
+  dependencies.auth.cashier = true;
+  const { usetoggleRecentOrder } = await vi.importActual('../src/stores/recentOrder.js');
+  const recent = usetoggleRecentOrder();
+  table.recentOrders = recent;
+  menu.recentOrders = recent;
+  dependencies.recent = recent;
+  const originalGet = dependencies.call.get;
+  dependencies.call.get = async (method) => {
+    if (method === 'ury.ury_pos.api.getPosInvoiceItems') return { message: [[], []] };
+    if (method === 'frappe.client.get') {
+      return {
+        message: {
+          ...structuredClone(invoice),
+          name: 'POS-INV-6',
+          restaurant_table: 'T-06',
+          order_type: 'Dine In',
+          items: [{ item_code: 'Beef Pilau', item_name: 'Beef Pilau', qty: 2, rate: 18000, comment: '' }],
+        },
+      };
+    }
+    if (method === 'ury.ury_pos.api.get_select_field_options') return { message: [{ name: 'Dine In' }] };
+    return originalGet(method);
+  };
+  await recent.viewRecentOrder({
+    name: 'POS-INV-6',
+    restaurant_table: 'T-06',
+    order_type: 'Dine In',
+    posting_date: '2026-10-13',
+    invoice_printed: 0,
+  });
+  await flushPromises();
+  await recent.editOrder();
+  await flushPromises();
+  return recent;
+}
+
 function clickChoice(label) {
   const button = [...document.body.querySelectorAll('button')].find((node) => node.textContent.trim() === label);
   expect(button).toBeDefined();
@@ -253,5 +290,43 @@ describe('View order asks before leaving unsent items', () => {
     expect(host.querySelector('input[name="qty_input_cart"]').value).toBe('2');
     expect(host.textContent).toContain('Water 500ml');
     expect(dependencies.pushes).toContain('/Cart');
+  });
+
+  it('does not ask when an unchanged saved order was loaded through Recent Orders', async () => {
+    await openTable('T-05');
+    const recent = await loadUnchangedRecentOrder();
+    expect(cartSnapshot()).toEqual([{ item: 'Beef Pilau', qty: 2 }]);
+    expect(table.previousOrderdItem).toEqual([]);
+    expect(recent.pastOrderdItem.map((row) => ({ item: row.item_code, qty: row.qty }))).toEqual([
+      { item: 'Beef Pilau', qty: 2 },
+    ]);
+    showFloor([{ name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-06');
+    await nextTick();
+    expect(document.body.textContent).not.toContain(LEAVE_PROMPT);
+  });
+
+  it('asks when a line comment changes and the quantity stays the same', async () => {
+    invoice.name = 'POS-INV-5';
+    invoice.items = [{
+      item_code: 'Water 500ml',
+      item_name: 'Water 500ml',
+      qty: 2,
+      rate: 1500,
+      comment: '',
+    }];
+    await openTable('T-05');
+    menu.showModal(menu.cart[0]);
+    menu.itemComments = 'No ice';
+    menu.addToCartAndUpdateQty();
+    expect(menu.cart[0].comment).toBe('No ice');
+    expect(table.previousOrderdItem[0].comment).toBe('');
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 2 }]);
+    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-05');
+    await flushPromises();
+    expect(document.body.textContent).toContain(LEAVE_PROMPT);
+    expect(menu.cart[0].comment).toBe('No ice');
+    expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 2 }]);
   });
 });
