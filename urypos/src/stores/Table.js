@@ -391,26 +391,24 @@ export const useTableStore = defineStore("table", {
       }
     },
     cartHasUnsentItems() {
+      const lineKeys = (rows, codeOf) => (rows || [])
+        .map((row) => {
+          const code = row && codeOf(row);
+          if (!code) return null;
+          const comment = String(row.comment == null ? "" : row.comment).trim();
+          return code + "\0" + Number(row.qty || 0) + "\0" + comment;
+        })
+        .filter((key) => key !== null)
+        .sort();
       const cart = this.menu.cart || [];
-      const previous = Array.isArray(this.previousOrderdItem) ? this.previousOrderdItem : [];
-      const sentQty = new Map();
-      previous.forEach((row) => {
-        const code = row.item_code || row.item;
-        if (!code) return;
-        sentQty.set(code, (sentQty.get(code) || 0) + Number(row.qty || 0));
-      });
-      const cartQty = new Map();
-      cart.forEach((row) => {
-        if (!row || !row.item) return;
-        cartQty.set(row.item, (cartQty.get(row.item) || 0) + Number(row.qty || 0));
-      });
-      for (const [code, qty] of cartQty) {
-        if (qty > (sentQty.get(code) || 0)) return true;
-      }
-      for (const [code, qty] of sentQty) {
-        if ((cartQty.get(code) || 0) < qty) return true;
-      }
-      return false;
+      const tableSaved = Array.isArray(this.previousOrderdItem) ? this.previousOrderdItem : [];
+      const recentItems = this.recentOrders && this.recentOrders.pastOrderdItem;
+      const recentSaved = Array.isArray(recentItems) ? recentItems : [];
+      const saved = tableSaved.length ? tableSaved : recentSaved;
+      const cartKeys = lineKeys(cart, (row) => row.item);
+      const savedKeys = lineKeys(saved, (row) => row.item_code || row.item);
+      if (cartKeys.length !== savedKeys.length) return true;
+      return cartKeys.some((key, index) => key !== savedKeys[index]);
     },
     confirmLeaveUnsent(onLeave) {
       if (!this.cartHasUnsentItems()) {
