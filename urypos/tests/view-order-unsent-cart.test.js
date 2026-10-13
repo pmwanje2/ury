@@ -235,3 +235,57 @@ describe('View order keeps the unsent cart for the same table', () => {
     expect(host.textContent).not.toContain('Nothing to show here');
   });
 });
+
+describe('Sol cross-review ownership probes', () => {
+  it('does not retain T-06 unsent edits when a cashier opens T-05 after Recent Orders edit', async () => {
+    dependencies.auth.cashier = true;
+    await openTable('T-05');
+    await add('Water 500ml');
+    const { usetoggleRecentOrder } = await vi.importActual('../src/stores/recentOrder.js');
+    const recent = usetoggleRecentOrder();
+    table.recentOrders = recent;
+    menu.recentOrders = recent;
+    dependencies.recent = recent;
+    const originalGet = dependencies.call.get;
+    dependencies.call.get = async (method, params) => {
+      if (method === 'ury.ury_pos.api.getPosInvoiceItems') return { message: [[], []] };
+      if (method === 'frappe.client.get') return { message: {
+        ...structuredClone(invoice), name: 'POS-INV-6', restaurant_table: 'T-06',
+        order_type: 'Dine In', items: [{ item_code: 'Beef Pilau', item_name: 'Beef Pilau', qty: 2, rate: 18000 }],
+      } };
+      if (method === 'ury.ury_pos.api.get_select_field_options') return { message: [{ name: 'Dine In' }] };
+      return originalGet(method, params);
+    };
+    await recent.viewRecentOrder({ name: 'POS-INV-6', restaurant_table: 'T-06', order_type: 'Dine In', posting_date: '2026-10-13', invoice_printed: 0 });
+    await flushPromises();
+    await recent.editOrder();
+    await flushPromises();
+    show(Menu);
+    await add('Chapati');
+    expect(recent.restaurantTable).toBe('T-06');
+    expect(table.selectedTable).toBe('T-05');
+    expect(menu.cart.map(row => row.item)).toEqual(['Beef Pilau', 'Chapati']);
+    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-05');
+    await flushPromises();
+    show(Cart);
+    expect(menu.cart.map(row => row.item)).not.toContain('Chapati');
+    expect(host.textContent).not.toContain('Beef Pilau');
+  });
+
+  it('still warns after another waiter takes over the same table with an unsent cart', async () => {
+    await openTable('T-05');
+    await add('Water 500ml');
+    const alerts = [];
+    table.alert.createAlert = (title, message, button) => {
+      alerts.push({ title, message, button });
+      return new Promise(() => {});
+    };
+    invoice.name = 'POS-INV-5';
+    invoice.waiter = 'other-waiter';
+    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-05');
+    await flushPromises();
+    expect(alerts).toEqual([{ title: 'Message', message: 'Table is assigned to other-waiter', button: 'OK' }]);
+  });
+});
