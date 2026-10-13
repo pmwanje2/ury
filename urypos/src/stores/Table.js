@@ -17,6 +17,7 @@ export const useTableStore = defineStore("table", {
     serviceRequestsLoading: true,
     serviceRequestsUnavailable: false,
     serviceRequestsRead: 0,
+    serviceRequestsRoom: null,
     selectedTable: null,
     previousOrderdItem: [],
     invoiceNo: "",
@@ -199,6 +200,7 @@ export const useTableStore = defineStore("table", {
               sensitivity: "base",
             });
           });
+          this.serviceRequestsRoom = room;
           this.fetchServiceRequests();
           // Publish the floor first; a pending/denied bill read must not block it.
           const occupiedTables = this.tables.filter((table) => table.occupied === 1);
@@ -237,6 +239,7 @@ export const useTableStore = defineStore("table", {
     },
     async fetchServiceRequests() {
       const room = this.selectedRoom;
+      if (this.serviceRequestsRoom !== room) return;
       const read = ++this.serviceRequestsRead;
       const tableNames = this.tables.map(table => table.name);
       try {
