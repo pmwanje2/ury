@@ -1,7 +1,7 @@
 import frappe
 import json
 from frappe import _
-from datetime import date, datetime
+from datetime import datetime
 from frappe.utils import nestedset, validate_phone_number
 from ury.ury.api.ury_dashboard import _business_day_bounds
 
@@ -1504,7 +1504,7 @@ def get_checklist(pos_profile, checklist_type):
         filters={
             "pos_profile": pos_profile,
             "checklist_type": checklist_type,
-            "shift_date": date.today(),
+            "shift_date": frappe.utils.getdate(),
         },
         limit=1,
     )
@@ -1557,7 +1557,7 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
         filters={
             "pos_profile": pos_profile,
             "checklist_type": checklist_type,
-            "shift_date": date.today(),
+            "shift_date": frappe.utils.getdate(),
         },
         limit=1,
     )
@@ -1569,7 +1569,7 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
         log_doc.pos_profile = pos_profile
         log_doc.branch = getBranch()
         log_doc.checklist_type = checklist_type
-        log_doc.shift_date = date.today()
+        log_doc.shift_date = frappe.utils.getdate()
 
     if pos_opening_entry:
         log_doc.pos_opening_entry = pos_opening_entry

@@ -2,7 +2,7 @@
 
 import importlib.util
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
@@ -233,3 +233,99 @@ def test_merged_settlement_attributes_both_paid_invoices_to_operator(runtime, mo
     assert target.owner == "waiter@example.com"
     assert target.waiter == "waiter@example.com"
     target.append.assert_called_once_with("payments", {"mode_of_payment": "Cash", "amount": 15000.0})
+
+
+@pytest.fixture
+def checklist(runtime, monkeypatch):
+    """Real checklist API with only the clock and persistence boundaries replaced."""
+    framework = runtime.frappe
+    framework.db.sql.return_value = [{"branch": "Salama Training"}]
+    framework.db.get_value.return_value = "Salama Training"
+    framework.db.exists.return_value = True
+    class ServerDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 10, 13)
+
+    monkeypatch.setattr(runtime.api, "date", ServerDate, raising=False)
+    framework.utils.getdate = lambda value=None: (
+        runtime.clock.now.date() if value is None
+        else date.fromisoformat(value) if isinstance(value, str) else value
+    )
+    framework.utils.now = lambda: str(runtime.clock.now)
+    configured = [SimpleNamespace(item_label="Count float", applies_to="Opening", is_mandatory=1)]
+    logs = {}
+
+    class Log(SimpleNamespace):
+        def set(self, key, value):
+            setattr(self, key, value)
+
+        def append(self, key, value):
+            getattr(self, key).append(SimpleNamespace(**value))
+
+        def save(self):
+            if not getattr(self, "name", None):
+                self.name = f"CHK-{len(logs) + 1}"
+            logs[self.name] = self
+
+    def get_all(doctype, *, fields, filters, parent_doctype=None, limit=None):
+        if doctype == "URY Checklist Item":
+            assert filters == {"parent": "Salama Training Till", "applies_to": ["in", ["Opening", "Both"]]}
+            assert parent_doctype == "POS Profile"
+            return configured
+        assert doctype == "URY POS Checklist Log"
+        return [row for row in logs.values() if all(getattr(row, key) == value for key, value in filters.items())][:limit]
+
+    framework.get_all.side_effect = get_all
+    framework.new_doc = lambda doctype: Log(items=[])
+    framework.get_doc.side_effect = lambda doctype, name: logs[name]
+    payload = '[{"item_label": "Count float", "is_checked": 1, "remarks": "Training only"}]'
+    return SimpleNamespace(**vars(runtime), logs=logs, Log=Log, payload=payload)
+
+
+@pytest.mark.parametrize("site_time,expected_date", [
+    (datetime(2026, 10, 13, 23), date(2026, 10, 13)),
+    (datetime(2026, 10, 14, 0, 19, 14), date(2026, 10, 14)),
+])
+def test_checklist_lookup_resumes_the_site_local_day(checklist, site_time, expected_date):
+    checklist.clock.now = site_time
+    checklist.logs["CHK-LOCAL"] = checklist.Log(
+        name="CHK-LOCAL", pos_profile="Salama Training Till", checklist_type="Opening",
+        shift_date=expected_date, status="In Progress", items=[],
+    )
+    result = checklist.api.get_checklist("Salama Training Till", "Opening")
+    assert result["log_name"] == "CHK-LOCAL"
+    assert result["log_status"] == "In Progress"
+
+
+@pytest.mark.parametrize("site_time,expected_date", [
+    (datetime(2026, 10, 13, 23), date(2026, 10, 13)),
+    (datetime(2026, 10, 14, 0, 19, 14), date(2026, 10, 14)),
+])
+def test_checklist_submission_persists_the_site_local_day(checklist, site_time, expected_date):
+    checklist.clock.now = site_time
+    result = checklist.api.submit_checklist("Salama Training Till", "Opening", checklist.payload)
+    assert result["status"] == "Complete"
+    saved = checklist.logs[result["name"]]
+    assert saved.shift_date == expected_date
+    assert saved.completed_by == "operator@example.com"
+    assert saved.items[0].is_checked == 1
+
+
+@pytest.mark.parametrize("site_time,expected_date", [
+    (datetime(2026, 10, 13, 23), date(2026, 10, 13)),
+    (datetime(2026, 10, 14, 0, 19, 14), date(2026, 10, 14)),
+])
+def test_checklist_submission_reuses_the_site_local_log(checklist, site_time, expected_date):
+    checklist.clock.now = site_time
+    checklist.logs["CHK-LOCAL"] = checklist.Log(
+        name="CHK-LOCAL", pos_profile="Salama Training Till", checklist_type="Opening",
+        shift_date=expected_date, status="In Progress", items=[],
+    )
+    result = checklist.api.submit_checklist("Salama Training Till", "Opening", checklist.payload)
+    assert result == {"name": "CHK-LOCAL", "status": "Complete"}
+    assert checklist.api.submit_checklist("Salama Training Till", "Opening", checklist.payload) == result
+    assert list(checklist.logs) == ["CHK-LOCAL"]
+    resumed = checklist.api.get_checklist("Salama Training Till", "Opening")
+    assert resumed["log_name"] == "CHK-LOCAL"
+    assert resumed["log_status"] == "Complete"

@@ -81,7 +81,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     try {
       await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
       clearAppStorage();
-      window.location.href = '/login';
+      window.location.href = '/login?redirect-to=%2Fpos';
     } catch {
       showToast.error(t('errors.failed_logout'));
       logoutPending.current = false;

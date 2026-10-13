@@ -14,7 +14,6 @@ actually exercised, not bypassed via Administrator.
 """
 
 import json
-from datetime import date
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -220,7 +219,7 @@ class TestP0P1EndToEndFlow(FrappeTestCase):
 
         frappe.db.delete(
             "URY POS Checklist Log",
-            {"pos_profile": TEST_POS_PROFILE, "shift_date": date.today()},
+            {"pos_profile": TEST_POS_PROFILE, "shift_date": frappe.utils.getdate()},
         )
         frappe.db.delete("URY KOT Error Log", {"pos_profile": TEST_POS_PROFILE})
 

@@ -97,11 +97,12 @@ async function logout() {
   expect(request).toHaveBeenCalledExactlyOnceWith('/api/method/logout', {
     method: 'POST', headers: { 'X-Frappe-CSRF-Token': 'fixture-csrf' },
   });
-  expect(location.href).toBe('/login');
+  expect(location.href).toBe('/login?redirect-to=%2Fpos');
 }
 
 describe('pre-session logout', () => {
   it('renders Logout on the opening checklist and uses shared CSRF logout and named storage cleanup', async () => {
+    location.href = '/pos/orders?invoice=PRIVATE-BILL';
     await render();
     expect(container.textContent).toContain('Opening Checklist');
     expect(container.textContent).toContain('Submit Checklist');
@@ -137,7 +138,7 @@ describe('pre-session logout', () => {
     expect(button('Logout').disabled).toBe(false);
     await act(async () => button('Logout').click());
     expect(request).toHaveBeenCalledTimes(2);
-    expect(location.href).toBe('/login');
+    expect(location.href).toBe('/login?redirect-to=%2Fpos');
   });
 
   it('ignores double clicks and keeps storage until logout is confirmed', async () => {
@@ -153,7 +154,7 @@ describe('pre-session logout', () => {
     expect(localStorage.getItem('posOrderTabsData')).toBe('cart');
     expect(location.href).toBe('/pos');
     await act(async () => complete({ ok: true }));
-    expect(location.href).toBe('/login');
+    expect(location.href).toBe('/login?redirect-to=%2Fpos');
   });
 
   it('preserves checked items and remarks when logout fails', async () => {
