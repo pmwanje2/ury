@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { parseFrappeError } from '@ury/core'
 import { t } from '../i18n'
+import { useGuestLanguage } from '../components/LanguageSwitcher'
 import { bootstrapDevice, type OrderingContext } from '../lib/api'
 
 // Storage keys for a provisioned kiosk/tablet device's credentials. These
@@ -9,6 +11,21 @@ import { bootstrapDevice, type OrderingContext } from '../lib/api'
 // QR scan.
 const DEVICE_ID_KEY = 'ury_device_id'
 const DEVICE_CREDENTIAL_KEY = 'ury_device_credential'
+
+// Same sentinel useOrderingSession uses so a transport failure with no ERP
+// sentence stays a catalog key. "There was an error." is the SDK placeholder,
+// which parseFrappeError already treats as "no server text".
+const CATALOG_FALLBACK = '\u0000'
+
+type ShownDeviceError =
+  | { source: 'catalog' }
+  | { source: 'server'; text: string }
+
+function shownDeviceError(err: unknown): ShownDeviceError {
+  const parsed = parseFrappeError(err, CATALOG_FALLBACK)
+  if (parsed === CATALOG_FALLBACK) return { source: 'catalog' }
+  return { source: 'server', text: parsed }
+}
 
 /**
  * On mount, checks localStorage for a stored device_id/device_credential
@@ -23,7 +40,8 @@ export function useDeviceBootstrap() {
   const [isDevice, setIsDevice] = useState(false)
   const [deviceContext, setDeviceContext] = useState<OrderingContext | null>(null)
   const [deviceLoading, setDeviceLoading] = useState(true)
-  const [deviceError, setDeviceError] = useState<string | null>(null)
+  const [shownError, setShownError] = useState<ShownDeviceError | null>(null)
+  useGuestLanguage()
 
   useEffect(() => {
     async function init() {
@@ -41,13 +59,19 @@ export function useDeviceBootstrap() {
         const context = await bootstrapDevice(deviceId, deviceCredential)
         setDeviceContext(context)
       } catch (err) {
-        setDeviceError(err instanceof Error ? err.message : t('errors.device_bootstrap'))
+        setShownError(shownDeviceError(err))
       } finally {
         setDeviceLoading(false)
       }
     }
     init()
   }, [])
+
+  const deviceError = shownError == null
+    ? null
+    : shownError.source === 'server'
+      ? shownError.text
+      : t('errors.device_bootstrap')
 
   return { isDevice, deviceContext, deviceLoading, deviceError }
 }

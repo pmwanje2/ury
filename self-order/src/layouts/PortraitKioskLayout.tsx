@@ -87,12 +87,12 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
   }
 
   const categories = useMemo(() => {
-    const seen = new Map<string, string>()
+    const seen = new Map<string, string | null>()
     for (const item of menu) {
       const key = item.course ?? ALL_CATEGORY
       if (key === ALL_CATEGORY) continue
       if (!seen.has(key)) {
-        seen.set(key, item.course_label ?? item.course ?? t('menu.other'))
+        seen.set(key, item.course_label ?? item.course ?? null)
       }
     }
     return Array.from(seen.entries()).map(([course, label]) => ({ course, label }))
@@ -201,7 +201,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
                   : 'text-foreground hover:bg-muted'
               }`}
             >
-              {category.label}
+              {category.label ?? t('menu.other')}
             </button>
           ))}
         </nav>
