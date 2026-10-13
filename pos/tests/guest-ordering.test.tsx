@@ -54,6 +54,11 @@ describe('guest service requests', () => {
     await render(); await click('Call waiter'); await click('Calling waiter…');
     expect(call.post).toHaveBeenCalledTimes(1);
   });
+  it('keeps the cooldown when Start Over starts a new ordering session', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await render(); await click('Call waiter'); await click('Start Over');
+    expect(button('Call waiter')?.disabled).toBe(true);
+  });
   it('does not confirm failed requests and allows a retry', async () => {
     vi.mocked(call.post).mockRejectedValue({ _server_messages: JSON.stringify([JSON.stringify({ message: 'Session expired. Rescan.' })]) });
     await render(); await click('Call waiter');
@@ -102,5 +107,14 @@ it('renders the guest boot brand name and logo without interpreting HTML', async
     expect(container.querySelector('header')?.textContent).toContain('Salama <script>evil()</script>');
     expect(container.querySelector('header img')?.getAttribute('src')).toBe('/files/salama.png');
     expect(container.querySelector('script')).toBeNull();
+  } finally { delete browser.frappe; }
+});
+
+it('renders an optional logo even when no display name is configured', async () => {
+  const browser = window as Window & { frappe?: { boot: object } };
+  browser.frappe = { boot: { ury_brand: { name: null, logo: '/files/logo-only.png' } } };
+  try {
+    await render();
+    expect(container.querySelector('header img')?.getAttribute('src')).toBe('/files/logo-only.png');
   } finally { delete browser.frappe; }
 });

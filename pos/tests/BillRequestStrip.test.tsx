@@ -82,6 +82,7 @@ describe('read-only bill-request strip', () => {
     requests[0].request_type = 'Assistance';
     await render();
     expect(container.textContent).toContain('Assistance');
+    expect(container.querySelector('h2')?.textContent).toContain('Service requests: 1 waiting');
     await pickup();
     expect(select).toHaveBeenCalledWith(queue[0]);
   });

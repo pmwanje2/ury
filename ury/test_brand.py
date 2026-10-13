@@ -168,6 +168,25 @@ class TestSiteBrand(unittest.TestCase):
                 self.assertFalse(fields[name].get("reqd") or fields[name].get("read_only"))
                 self.assertIn(name, schema["field_order"])
 
+    def test_unavailable_qr_profiles_keep_the_guest_page_renderable(self):
+        self.set_brand()
+        self.framework.PermissionError = type("PermissionError", (Exception,), {})
+        self.framework.ValidationError = type("ValidationError", (Exception,), {})
+        self.framework.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+        self.framework.form_dict = {"t": "disabled-or-invalid-token"}
+        api = ModuleType("ury.ury.api.self_ordering")
+        for error in (self.framework.PermissionError, self.framework.ValidationError, self.framework.DoesNotExistError):
+            with self.subTest(error=error.__name__):
+                def refuse(token):
+                    raise error("Ordering unavailable")
+                api._verify_qr_token = refuse
+                with patch.dict(sys.modules, {"ury.ury.api.self_ordering": api}):
+                    try:
+                        context = self.context("order")
+                    except Exception as failure:
+                        self.fail(f"QR refusal must not break the guest HTML: {failure}")
+                self.assertEqual(context["brand"], SITE_BRAND)
+
     def test_guest_brand_falls_back_per_field_and_ignores_unsigned_profile_names(self):
         self.set_brand()
         profile = SimpleNamespace(guest_display_name="", restaurant="Restaurant A")
