@@ -329,4 +329,62 @@ describe('View order asks before leaving unsent items', () => {
     expect(menu.cart[0].comment).toBe('No ice');
     expect(cartSnapshot()).toEqual([{ item: 'Water 500ml', qty: 2 }]);
   });
+
+  it('asks when a stale Recent Orders snapshot belongs to a different table', async () => {
+    invoice.name = 'POS-INV-5';
+    invoice.items = [{
+      item_code: 'Water 500ml',
+      item_name: 'Water 500ml',
+      qty: 1,
+      rate: 1500,
+      comment: '',
+    }];
+    await openTable('T-05');
+    const recent = await loadUnchangedRecentOrder();
+    expect(recent.restaurantTable).toBe('T-06');
+    expect(table.selectedTable).toBe('T-05');
+    expect(recent.draftInvoice).toBe('POS-INV-6');
+    const paymentGet = dependencies.call.get;
+    dependencies.call.get = async (method, params) => {
+      if (method === 'ury.ury_pos.api.getPosInvoice') return { message: { data: [], next: false } };
+      return paymentGet(method, params);
+    };
+    const paymentPost = vi.fn(async (method, params) => {
+      expect(method).toBe('ury.ury.doctype.ury_order.ury_order.make_invoice');
+      expect(params.table).toBe('T-06');
+      expect(params.invoice).toBe('POS-INV-6');
+      return { message: { name: 'POS-INV-6', status: 'Paid' } };
+    });
+    dependencies.call.post = paymentPost;
+    recent.grandTotal = 36000;
+    recent.changePaidAmount('Cash', 36000);
+    const cleanup = vi.spyOn(recent, 'clearData');
+    await recent.makePayment();
+    await flushPromises();
+    expect(paymentPost).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(menu.cart).toEqual([]);
+    expect(recent.draftInvoice).toBe('');
+    expect(table.previousOrderdItem).toEqual([]);
+    expect(table.selectedTable).toBe('T-05');
+    expect(recent.restaurantTable).toBe('T-06');
+    expect(recent.pastOrderdItem.map((row) => ({ item: row.item_code, qty: row.qty }))).toEqual([
+      { item: 'Beef Pilau', qty: 2 },
+    ]);
+    show(Menu);
+    await add('Beef Pilau');
+    menu.incrementItemQuantity(menu.cart[0]);
+    expect(cartSnapshot()).toEqual([{ item: 'Beef Pilau', qty: 2 }]);
+    const before = cartSnapshot();
+    const fetch = vi.spyOn(dependencies.call, 'get');
+    showFloor([{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }]);
+    viewOrder('T-05');
+    await flushPromises();
+    expect(document.body.textContent).toContain(LEAVE_PROMPT);
+    expect(cartSnapshot()).toEqual(before);
+    const invoiceFetches = fetch.mock.calls.filter(([method]) => (
+      method === 'ury.ury.doctype.ury_order.ury_order.get_order_invoice'
+    )).length;
+    expect(invoiceFetches).toBe(0);
+  });
 });
