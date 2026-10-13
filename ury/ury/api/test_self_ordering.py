@@ -138,6 +138,21 @@ class TestQRTokenRoundtrip(unittest.TestCase):
             _verify_qr_token("not-a-valid-token")
 
 
+class TestGuestBrandMalformedLink(unittest.TestCase):
+    def test_non_ascii_qr_signature_does_not_break_guest_page_identity(self):
+        from ury.brand import get_brand
+        token = base64.urlsafe_b64encode("Profile A|Table 7|\u00e9".encode()).decode().rstrip("=")
+        settings = frappe._dict(app_name="MAX\\MUS", app_logo=None, favicon=None)
+        with patch(f"{MOD}.frappe.get_cached_doc", return_value=settings), \
+             patch(f"{MOD}.frappe.form_dict", frappe._dict(t=token)), \
+             patch(f"{MOD}._get_profile_secret", return_value="test-secret"):
+            try:
+                brand = get_brand(surface="guest")
+            except Exception as error:
+                self.fail(f"Malformed QR signatures must not break /order rendering: {error}")
+        self.assertEqual(brand, {"name": "MAX\\MUS", "logo": None, "favicon": None})
+
+
 class TestAddCustomerItemsAppendOnly(unittest.TestCase):
     """The core Phase 3 safety guarantee: add_customer_items() only ever
     appends new rows and re-derives price server-side — it must never trust
