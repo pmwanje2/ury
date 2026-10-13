@@ -17,6 +17,7 @@ export const useTableStore = defineStore("table", {
     serviceRequests: [],
     serviceRequestsLoading: true,
     serviceRequestsUnavailable: false,
+    serviceRequestsDenied: false,
     serviceRequestsRead: 0,
     serviceRequestsRoom: null,
     selectedTable: null,
@@ -242,6 +243,7 @@ export const useTableStore = defineStore("table", {
           if (!tableListLoaded && room === this.selectedRoom) {
             this.serviceRequestsLoading = false;
             this.serviceRequestsUnavailable = true;
+            this.serviceRequestsDenied = false;
           }
           console.error(error);
         });
@@ -260,10 +262,12 @@ export const useTableStore = defineStore("table", {
         if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
         this.serviceRequests = requests;
         this.serviceRequestsUnavailable = false;
-      } catch {
+        this.serviceRequestsDenied = false;
+      } catch (error) {
         if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
         this.serviceRequests = [];
         this.serviceRequestsUnavailable = true;
+        this.serviceRequestsDenied = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
       } finally {
         if (read === this.serviceRequestsRead && room === this.selectedRoom) this.serviceRequestsLoading = false;
       }
