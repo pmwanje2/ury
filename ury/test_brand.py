@@ -413,6 +413,18 @@ class TestSiteBrand(unittest.TestCase):
             with self.subTest(step=step):
                 self.assertEqual(tokens[f"--primary-{step}"], f"154.9254 48.9051% {lightness}%")
 
+    def test_hospitality_remaps_blue_utilities_to_the_generated_primary_scale(self):
+        self.set_theme(primary_color="#23664a")
+        tokens = self.theme_tokens()
+        self.assertEqual(tokens.get("--blue-600"), "154.9254 48.9051% 55%")
+        for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950):
+            with self.subTest(step=step):
+                self.assertEqual(tokens.get(f"--blue-{step}"), tokens[f"--primary-{step}"])
+
+    def test_theme_without_a_valid_primary_preserves_stock_blue_utilities(self):
+        self.set_theme(primary_color="invalid")
+        self.assertFalse(any(key.startswith("--blue-") for key in self.theme_tokens()))
+
     def test_background_text_and_header_keep_their_own_tokens(self):
         self.set_theme()
         tokens = self.theme_tokens()
