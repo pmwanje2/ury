@@ -99,7 +99,7 @@ def theme_style(theme):
     if "font" in theme:
         # Escape a leading digit in each CSS identifier without introducing
         # quotes that HTML escaping would turn into raw-text entities.
-        font = re.sub(r"(?<!\S)([0-9])", lambda match: f"\\{ord(match[1]):06x}", theme["font"])
+        font = re.sub(r"(?<!\S)([0-9])", lambda match: f"\\{ord(match[1]):x} ", theme["font"])
         values["--font-sans"] = f"{font}, sans-serif"
         values["--font-inter"] = "var(--font-sans)"
     if "font_size" in theme:
