@@ -1,5 +1,5 @@
 <template>
-  <section aria-label="Service requests" class="mb-4 rounded border border-gray-200 bg-white p-3 text-left">
+  <section v-if="!table.serviceRequestsDenied" aria-label="Service requests" class="mb-4 rounded border border-gray-200 bg-white p-3 text-left">
     <h2 aria-live="polite" class="font-semibold">
       {{ table.serviceRequestsLoading ? 'Loading requests' : table.serviceRequestsUnavailable ? 'Requests unavailable' : `Requests waiting: ${table.serviceRequests.length}` }}
     </h2>

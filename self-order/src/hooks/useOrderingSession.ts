@@ -132,12 +132,12 @@ export function useOrderingSession(initialContext?: OrderingContext) {
           return
         }
       }
-      setContext(ctx)
       const menuResponse = await getMenu(ctx.session)
       setMenu(menuResponse.items.filter((item) => !item.disabled))
       await loadOrder(ctx.session)
+      setContext(ctx)
     } catch (err) {
-      setShownError(err instanceof Error ? { source: 'server', text: err.message } : { source: 'catalog', key: 'load_menu' })
+      setShownError(serverTextOrCatalog(err, 'load_menu'))
     } finally {
       setLoading(false)
     }
