@@ -107,9 +107,9 @@ it('refreshes idle requests without reloading floor data and clears the polling 
   expect(store.db.getDocList).toHaveBeenCalledTimes(reads);
 });
 
-it('shows unavailable rather than a false zero when native request read is denied', async () => {
+it('shows unavailable rather than a false zero when the native request read genuinely fails', async () => {
   store.db.getDocList.mockImplementation(async doctype => {
-    if (doctype === 'URY Service Request') throw Error('Denied');
+    if (doctype === 'URY Service Request') throw { httpStatus: 503, message: 'Service unavailable' };
     if (doctype === 'URY Table') return [{ name: 'T-05', occupied: 0, is_take_away: 0 }];
     return [];
   });
@@ -117,6 +117,41 @@ it('shows unavailable rather than a false zero when native request read is denie
   expect(host.textContent).toContain('Requests unavailable');
   expect(requestList()?.textContent).not.toContain('Requests waiting: 0');
   expect(host.textContent).toContain('T-05');
+});
+
+it.each([
+  { httpStatus: 403, exc_type: 'PermissionError', message: 'Not permitted' },
+  { httpStatus: 403, message: 'Not permitted' },
+  { exc_type: 'PermissionError', message: 'Not permitted' },
+])('hides the entire requests block for a native permission denial: %j', async denial => {
+  store.db.getDocList.mockImplementation(async doctype => {
+    if (doctype === 'URY Service Request') throw denial;
+    if (doctype === 'URY Table') return [{ name: 'T-05', occupied: 0, is_take_away: 0 }];
+    return [];
+  });
+  await render();
+  expect(requestList()).toBeNull();
+  expect(host.textContent).not.toContain('Requests unavailable');
+  expect(host.textContent).toContain('T-05');
+});
+
+it('clears visible requests on denial and distinguishes later genuine failure and recovery', async () => {
+  await render();
+  expect(requestList().textContent).toContain('Assistance');
+  store.db.getDocList.mockRejectedValue({ httpStatus: 403, exc_type: 'PermissionError' });
+  await store.fetchServiceRequests();
+  await nextTick();
+  expect(requestList()).toBeNull();
+  expect(host.textContent).not.toContain('Assistance');
+  store.db.getDocList.mockRejectedValue({ httpStatus: 500, exc_type: 'ValidationError' });
+  await store.fetchServiceRequests();
+  await nextTick();
+  expect(requestList().textContent).toContain('Requests unavailable');
+  store.db.getDocList.mockResolvedValue([requests[0]]);
+  await store.fetchServiceRequests();
+  await nextTick();
+  expect(requestList().textContent).toContain('Requests waiting: 1');
+  expect(requestList().textContent).toContain('Assistance');
 });
 
 it('does not publish a late request response from the previous room', async () => {

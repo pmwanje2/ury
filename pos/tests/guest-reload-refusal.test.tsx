@@ -98,6 +98,45 @@ describe('guest reload', () => {
     expect(button('Call waiter')).toBeDefined()
     expect(bootstraps).toBe(1)
   })
+
+  it.each([
+    ['en', 'expired', 'Ordering session expired. Please rescan the QR code.'],
+    ['en', 'closed', 'Ordering session expired or invalid. Please rescan the QR code.'],
+    ['sw', 'expired', 'Kipindi cha kuagiza kimeisha. Tafadhali skani tena msimbo wa QR.'],
+    ['sw', 'closed', 'Kipindi cha kuagiza kimeisha au si halali. Tafadhali skani tena msimbo wa QR.'],
+    ['lg', 'expired', 'Ekiseera ky’okulagira kiweddeko. Nsaba oskane nate koodi ya QR.'],
+    ['lg', 'closed', 'Ekiseera ky’okulagira kiweddeko oba si kituufu. Nsaba oskane nate koodi ya QR.'],
+  ])('shows the ERP sentence without cached table/order UI after a %s %s reload', async (language, _status, sentence) => {
+    await initI18n(language, { setCookie() {} })
+    await render()
+    const get = vi.mocked(call.get).getMockImplementation()!
+    vi.mocked(call.get).mockImplementation(async (path, args) => {
+      if (path.endsWith('get_customer_order')) throw {
+        httpStatus: 403, exc_type: 'PermissionError',
+        _server_messages: JSON.stringify([JSON.stringify({ message: sentence })]),
+      }
+      return get(path, args)
+    })
+    await reload()
+    expect.soft(container.textContent).toContain(sentence)
+    expect.soft(container.querySelector('header')).toBeNull()
+    expect(container.textContent).not.toContain('T-05')
+    expect(container.textContent).not.toContain('Soup')
+    expect(bootstraps).toBe(1)
+  })
+
+  it('keeps the translated transport fallback without a cached table on a failed reload', async () => {
+    await initI18n('sw', { setCookie() {} })
+    await render()
+    const get = vi.mocked(call.get).getMockImplementation()!
+    vi.mocked(call.get).mockImplementation(async (path, args) => {
+      if (path.endsWith('get_customer_order')) throw { httpStatus: 503 }
+      return get(path, args)
+    })
+    await reload()
+    expect(container.textContent).toContain('Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.')
+    expect(container.querySelector('header')).toBeNull()
+  })
 })
 
 describe('translated ERP refusals', () => {
