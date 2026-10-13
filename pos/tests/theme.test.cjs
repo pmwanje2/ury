@@ -42,3 +42,26 @@ test('light and dark primary actions keep AA text contrast and visible focus rin
     }
   }
 });
+
+test('Standard header and font defaults preserve the native light and dark look', () => {
+  for (const selector of [':root', '.dark']) {
+    assert.equal(blocks[selector]['--header'], '0 0% 100%');
+    assert.equal(blocks[selector]['--header-foreground'], 'var(--foreground)');
+    assert.equal(blocks[selector]['--header-user'], 'var(--gray-600)');
+    assert.equal(blocks[selector]['--header-title'], 'var(--gray-900)');
+    assert.equal(blocks[selector]['--header-muted'], 'var(--gray-500)');
+    assert.equal(blocks[selector]['--header-border'], 'var(--gray-200)');
+  }
+  assert.equal(blocks[':root']['--font-sans'], 'ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"');
+  assert.equal(blocks[':root']['--font-inter'], 'Inter, sans-serif');
+});
+
+test('shared Tailwind preset exposes header colours and the configurable sans font', async () => {
+  const preset = (await import('../../packages/ui/tailwind-preset.js')).default;
+  assert.deepEqual(preset.theme.extend.colors.header, {
+    DEFAULT: 'hsl(var(--header))', foreground: 'hsl(var(--header-foreground))', border: 'hsl(var(--header-border))',
+    user: 'hsl(var(--header-user))', title: 'hsl(var(--header-title))', muted: 'hsl(var(--header-muted))',
+  });
+  assert.deepEqual(preset.theme.extend.fontFamily.sans, ['var(--font-sans)']);
+  assert.deepEqual(preset.theme.extend.fontFamily.inter, ['var(--font-inter)']);
+});

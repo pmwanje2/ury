@@ -63,6 +63,12 @@ describe('POS Header site identity', () => {
       expect(logo.getAttribute('src')).toBe(brand?.logo ?? defaults.logo);
       expect(logo.getAttribute('alt')).toBe(brand?.name ?? defaults.name);
       expect(container.querySelector('script')).toBeNull();
+      const header = container.querySelector('header')!;
+      expect(header.classList.contains('bg-header')).toBe(true);
+      expect(header.classList.contains('text-header-foreground')).toBe(true);
+      expect(header.classList.contains('border-header-border')).toBe(true);
+      expect(header.classList.contains('bg-white')).toBe(false);
+      expect([...header.querySelectorAll('button')].some(button => button.classList.contains('text-header-user'))).toBe(true);
     } finally {
       await act(async () => root.unmount());
       container.remove();

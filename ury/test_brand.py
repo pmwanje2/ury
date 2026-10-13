@@ -12,7 +12,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-from jinja2 import Environment
+from jinja2 import Environment, FileSystemLoader
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +88,9 @@ class TestSiteBrand(unittest.TestCase):
         website.__path__ = []
         website_utils = ModuleType("frappe.website.utils")
         website_utils.get_boot_data = lambda: {"lang": "en"}
+        self.active_theme = None
+        theme_module = ModuleType("frappe.website.doctype.website_theme.website_theme")
+        theme_module.get_active_theme = lambda: self.active_theme
         utils = ModuleType("frappe.utils")
         utils.__path__ = []
         utils.get_build_version = lambda: "test-version"
@@ -102,6 +105,7 @@ class TestSiteBrand(unittest.TestCase):
             "frappe": framework, "frappe.sessions": sessions, "frappe.website": website,
             "frappe.website.utils": website_utils, "frappe.utils": utils,
             "frappe.utils.telemetry": telemetry,
+            "frappe.website.doctype.website_theme.website_theme": theme_module,
         }))
         for name in ["ury.brand", *(f"ury.www.{page}" for page in PAGES)]:
             sys.modules.pop(name, None)
@@ -122,7 +126,7 @@ class TestSiteBrand(unittest.TestCase):
         return importlib.import_module(f"ury.www.{page}").get_context({})
 
     def render(self, page, context):
-        template = Environment(autoescape=False).from_string((ROOT / PAGES[page] / "index.html").read_text())
+        template = Environment(autoescape=False, loader=FileSystemLoader(ROOT / "ury")).from_string((ROOT / PAGES[page] / "index.html").read_text())
         return template.render(**context, app_name=self.settings.app_name or "", frappe=SimpleNamespace(lang="en", session=self.framework.session))
 
     def test_empty_settings_return_none_not_frappe_defaults(self):
@@ -333,6 +337,160 @@ class TestSiteBrand(unittest.TestCase):
                     self.fail(f"Page boot must retain Frappe datetime serialization: {error}")
                 self.assertEqual(boot["server_time"], "2026-10-05T12:30:00")
                 self.assertEqual(boot["ury_brand"], SITE_BRAND)
+
+    def theme_module(self):
+        module = self.brand_module()
+        self.assertTrue(callable(getattr(module, "get_theme", None)), "Native Website Theme token reader is missing")
+        self.assertTrue(callable(getattr(module, "theme_style", None)), "Server-side theme renderer is missing")
+        return module
+
+    def set_theme(self, **overrides):
+        self.active_theme = SimpleNamespace(**{
+            "name": "Salama Hospitality", "primary_color": "#23664a", "text_color": "#1f2a24",
+            "background_color": "#f2ede4", "dark_color": "#23664a", "google_font": "Noto Sans",
+            "font_size": "14px", "button_rounded_corners": 1, **overrides,
+        })
+
+    def theme_tokens(self):
+        module = self.theme_module()
+        style = module.theme_style(module.get_theme())
+        self.assertTrue(style.startswith("html:root:not(.dark){"), style)
+        import re
+        return dict(re.findall(r"(--[\w-]+):\s*([^;]+);", style))
+
+    def test_no_theme_and_standard_preserve_the_existing_look(self):
+        module = self.theme_module()
+        for theme in (None, SimpleNamespace(name="Standard", primary_color="#23664a")):
+            with self.subTest(theme=theme):
+                self.active_theme = theme
+                self.assertIsNone(module.get_theme())
+                self.assertEqual(module.theme_style(module.get_theme()), "")
+                html = self.render("pos", self.context("pos"))
+                self.assertNotIn("html:root:not(.dark)", html)
+
+    def test_native_theme_emits_only_validated_public_tokens_never_code(self):
+        self.set_theme(js="evil()", custom_scss="body{display:none}", theme_scss="evil", custom_overrides="evil",
+                       font_properties="evil", theme_url="https://evil.invalid", custom_is_active=1)
+        theme = self.theme_module().get_theme()
+        self.assertEqual(theme, {"primary": "#23664a", "text": "#1f2a24", "background": "#f2ede4",
+                                 "dark": "#23664a", "font": "Noto Sans", "font_size": "14px", "rounded": True})
+        self.assertFalse(getattr(self.theme_module().get_theme, "is_whitelisted", False))
+
+    def test_invalid_hex_values_are_dropped_per_field(self):
+        module = self.theme_module()
+        for value in ("#fff", "#gggggg", "red", "#123456;evil", "#123456\n", None, 123456):
+            with self.subTest(value=value):
+                self.set_theme(primary_color=value, text_color=value, background_color=value, dark_color=value)
+                self.assertEqual(set(module.get_theme()), {"font", "font_size", "rounded"})
+        self.set_theme(primary_color="#ABCDEF")
+        self.assertEqual(module.get_theme()["primary"], "#ABCDEF")
+
+    def test_invalid_fonts_sizes_and_check_values_are_dropped(self):
+        module = self.theme_module()
+        for value in ("1Font", "Noto Sans;evil", '</style><script>evil()</script>', "A" * 41, "Noto\n", None, 14):
+            with self.subTest(font=value):
+                self.set_theme(google_font=value)
+                self.assertNotIn("font", module.get_theme())
+        for value in ("11px", "25px", "14", "14rem", "14px;evil", "14px\n", None, 14):
+            with self.subTest(size=value):
+                self.set_theme(font_size=value)
+                self.assertNotIn("font_size", module.get_theme())
+        for value in ("12px", "24px"):
+            self.set_theme(font_size=value)
+            self.assertEqual(module.get_theme()["font_size"], value)
+        for value in (None, "evil", 2):
+            self.set_theme(button_rounded_corners=value)
+            self.assertNotIn("rounded", module.get_theme())
+
+    def test_hospitality_hsl_and_primary_lightness_ladder(self):
+        self.set_theme()
+        tokens = self.theme_tokens()
+        self.assertEqual(tokens["--primary"], "154.9254 48.9051% 26.8627%")
+        self.assertEqual(tokens["--ring"], tokens["--primary"])
+        for step, lightness in ((50, 97), (100, 94), (200, 88), (300, 80), (400, 70), (500, 61.7647),
+                                (600, 55), (700, 46), (800, 37), (900, 28), (950, 18)):
+            with self.subTest(step=step):
+                self.assertEqual(tokens[f"--primary-{step}"], f"154.9254 48.9051% {lightness}%")
+
+    def test_background_text_and_header_keep_their_own_tokens(self):
+        self.set_theme()
+        tokens = self.theme_tokens()
+        self.assertEqual(tokens["--background"], "38.5714 35% 92.1569%")
+        self.assertEqual(tokens["--gray-50"], tokens["--background"])
+        self.assertEqual(tokens["--foreground"], "147.2727 15.0685% 14.3137%")
+        self.assertEqual(tokens["--gray-900"], tokens["--foreground"])
+        self.assertEqual(tokens["--header"], tokens["--primary"])
+        for step in (100, 200, 300, 400, 500, 600, 700, 800, 950):
+            hue, saturation, _ = tokens[f"--gray-{step}"].split()
+            self.assertEqual(hue, "38.5714")
+            self.assertLessEqual(float(saturation[:-1]), 25)
+
+    def test_foregrounds_choose_white_or_dark_by_real_contrast(self):
+        for color, foreground in (("#23664a", "0 0% 100%"), ("#174a8b", "0 0% 100%"),
+                                  ("#ffffff", "240 1% 5%"), ("#ffff00", "240 1% 5%")):
+            with self.subTest(color=color):
+                self.set_theme(primary_color=color, dark_color=color, background_color=None)
+                tokens = self.theme_tokens()
+                self.assertEqual(tokens["--primary-foreground"], foreground)
+                self.assertEqual(tokens["--header-foreground"], foreground)
+
+    def test_mid_gray_foregrounds_still_pass_aa_when_default_gray950_does_not(self):
+        import colorsys
+
+        def luminance(hsl):
+            h, s, l = map(float, hsl.replace("%", "").split())
+            rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
+            linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
+            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+        self.set_theme(primary_color="#777777", dark_color="#777777")
+        tokens = self.theme_tokens()
+        self.assertEqual(tokens["--primary-foreground"], tokens["--gray-950"])
+        self.assertEqual(tokens["--header-foreground"], tokens["--gray-950"])
+        for prefix in ("primary", "header"):
+            pair = sorted([luminance(tokens[f"--{prefix}"]), luminance(tokens[f"--{prefix}-foreground"])])
+            self.assertGreaterEqual((pair[1] + 0.05) / (pair[0] + 0.05), 4.5)
+
+    def test_rounded_off_and_valid_font_render_without_extra_scripts(self):
+        self.set_theme(button_rounded_corners=0, google_font="Noto Sans 2")
+        tokens = self.theme_tokens()
+        self.assertEqual(tokens["--radius"], "0")
+        self.assertEqual(tokens["--font-sans"], "Noto Sans 2, sans-serif")
+        self.assertEqual(tokens["--font-inter"], "var(--font-sans)")
+        html = self.render("pos", self.context("pos"))
+        self.assertIn("font-size:14px;", html)
+        self.assertIn("family=Noto+Sans+2:wght@400;500;600;700&amp;display=swap", html)
+        self.assertEqual(len(ScriptParser(html).inline), 1)
+        self.set_theme(button_rounded_corners=1)
+        self.assertNotIn("--radius", self.theme_tokens())
+
+    def test_invalid_code_payload_cannot_break_out_of_pos_style_or_link(self):
+        self.set_theme(primary_color="</style><script>evil()</script>", google_font='Noto\" onload=evil()',
+                       js="evil()", theme_scss="evil()")
+        html = self.render("pos", self.context("pos"))
+        self.assertNotIn("evil", html)
+        self.assertNotIn("onload", html)
+        self.assertEqual(len(ScriptParser(html).inline), 1)
+
+    def test_pos_context_injects_native_theme_before_the_app_not_into_guest_pages(self):
+        self.set_theme()
+        html = self.render("pos", self.context("pos"))
+        self.assertIn("--header:154.9254 48.9051% 26.8627%;", html)
+        self.assertLess(html.index("html:root:not(.dark)"), html.index('id="root"'))
+        self.assertNotIn("html:root:not(.dark)", self.render("order", self.context("order")))
+
+    def test_vite_build_preserves_the_server_theme_style_for_frappe(self):
+        from tempfile import TemporaryDirectory
+
+        self.set_theme()
+        with TemporaryDirectory(prefix="ury-x54-build-") as output:
+            result = subprocess.run(["node", "node_modules/vite/bin/vite.js", "build", "--outDir", output],
+                                    cwd=ROOT / "pos", text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            template = Environment(autoescape=False, loader=FileSystemLoader(ROOT / "ury")).from_string((Path(output) / "index.html").read_text())
+            html = template.render(**self.context("pos"), frappe=SimpleNamespace(lang="en"))
+            self.assertIn("<style>html:root:not(.dark){", html)
+            self.assertIn("--header:154.9254 48.9051% 26.8627%;", html)
 
 
 class ScriptParser(HTMLParser):
