@@ -151,3 +151,12 @@ it('does not poll the old room tables while the new room floor is still loading'
   expect(requestList().textContent).toContain('Loading requests');
   expect(requestList().textContent).not.toContain('T-05');
 });
+
+it('shows requests unavailable when loading the room tables is denied, not loading forever', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  store.db.getDocList.mockRejectedValue(Error('Room access denied'));
+  await render();
+  expect(host.textContent).toContain('Requests unavailable');
+  expect(host.textContent).not.toContain('Loading requests');
+  expect(store.db.getDocList.mock.calls.some(([doctype]) => doctype === 'URY Service Request')).toBe(false);
+});
