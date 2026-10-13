@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +11,19 @@ const src = join(here, '..')
 
 const en = {
   language: { chooser: 'Language' },
+  assistance: {
+    call: 'Call waiter',
+    calling: 'Calling waiter…',
+    requested: 'Waiter requested — staff notified',
+    already: 'Waiter already requested — staff notified',
+  },
+  footer: {
+    built_on: 'built on',
+    source: 'Source',
+  },
+  dialog: {
+    close: 'Close',
+  },
   header: {
     order: 'Order',
     pickup: 'Order for Pickup',
@@ -66,6 +81,7 @@ const en = {
     place_order: 'Could not place the order. Please try again.',
     request_bill: 'Could not request the bill. Please ask staff for help.',
     pay_online: 'Could not start online payment. Please pay at the counter.',
+    call_waiter: 'Could not call a waiter. Please ask staff for help.',
     device_start: 'This device could not be started. Please contact staff.',
     device_bootstrap: 'Unable to bootstrap this device.',
   },
@@ -73,6 +89,19 @@ const en = {
 
 const sw = {
   language: { chooser: 'Lugha' },
+  assistance: {
+    call: 'Ita mhudumu',
+    calling: 'Inaita mhudumu…',
+    requested: 'Mhudumu ameombwa — wahudumu wamearifiwa',
+    already: 'Mhudumu tayari ameombwa — wahudumu wamearifiwa',
+  },
+  footer: {
+    built_on: 'imejengwa kwa',
+    source: 'Chanzo',
+  },
+  dialog: {
+    close: 'Funga',
+  },
   header: {
     order: 'Oda',
     pickup: 'Oda ya kuchukua',
@@ -110,7 +139,7 @@ const sw = {
   },
   cart: {
     title: 'Kikapu',
-    empty: 'Gusa chakula ku menyu ili uweke kikapuni.',
+    empty: 'Gusa chakula kwenye menyu ili uweke kikapuni.',
     in_cart: 'Kikapuni: {{qty}}',
     remove_one: 'Ondoa moja {{name}}',
     add_one: 'Ongeza moja {{name}}',
@@ -129,7 +158,8 @@ const sw = {
     load_menu: 'Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.',
     place_order: 'Imeshindwa kuweka oda. Tafadhali jaribu tena.',
     request_bill: 'Imeshindwa kuomba bili. Tafadhali muombe mhudumu msaada.',
-    pay_online: 'Imeshindwa kuanzisha malipo mtandaoni. Tafadhali lipa kaunta.',
+    pay_online: 'Imeshindwa kuanzisha malipo mtandaoni. Tafadhali lipa kwenye kaunta.',
+    call_waiter: 'Imeshindwa kuita mhudumu. Tafadhali waombe wahudumu msaada.',
     device_start: 'Kifaa hiki hakikuweza kuanzishwa. Tafadhali wasiliana na wahudumu.',
     device_bootstrap: 'Imeshindwa kuanzisha kifaa hiki.',
   },
@@ -137,6 +167,19 @@ const sw = {
 
 const lg = {
   language: { chooser: 'Olulimi' },
+  assistance: {
+    call: 'Yita omuweereza',
+    calling: 'Nyita omuweereza…',
+    requested: 'Omuweereza asabiddwa — abaweereza bategeezeddwa',
+    already: 'Omuweereza yali asabiddwa — abaweereza bategeezeddwa',
+  },
+  footer: {
+    built_on: 'ezimbiddwa ku',
+    source: 'Ensibuko',
+  },
+  dialog: {
+    close: 'Ggalawo',
+  },
   header: {
     order: 'Oda',
     pickup: "Oda ey'okutwala",
@@ -147,8 +190,8 @@ const lg = {
     new_order: 'Oda empya',
   },
   confirm: {
-    start_over: 'Tandika buto? Ekikapu kyo kinaaggyibwamu.',
-    new_order: 'Tandika oda empya? Ekikapu ekiriwo kinaaggyibwamu.',
+    start_over: 'Tandika buto? Ebintu byonna ebiri mu kikapu kyo bijja kuggyibwamu.',
+    new_order: 'Tandika oda empya? Ebintu byonna ebiri mu kikapu ekiriwo bijja kuggyibwamu.',
   },
   status: {
     loading_menu: 'Menyu ejja…',
@@ -170,7 +213,7 @@ const lg = {
   },
   bill: {
     request: 'Saba bili',
-    requested: 'Bili esabiddwa — abawereza bategeezeddwa',
+    requested: 'Bili esabiddwa — abaweereza bategeezeddwa',
   },
   cart: {
     title: 'Ekikapu',
@@ -194,7 +237,8 @@ const lg = {
     place_order: 'Oda tetuuse kuteekebwa. Nsaba ogezeeko nate.',
     request_bill: 'Bili tesabiddwa. Nsaba obuuze omuweereza.',
     pay_online: 'Okusasula ku yintaneeti tekutandise. Nsaba osasule ku kaunta.',
-    device_start: 'Ekyuma kino tekinatandika. Nsaba owulize abawereza.',
+    device_start: 'Ekyuma kino tekinatandika. Nsaba owulize abaweereza.',
+    call_waiter: 'Omuweereza tayitiddwa. Nsaba obuuze abaweereza.',
     device_bootstrap: 'Ekyuma kino tekinatandika.',
   },
 }
@@ -435,13 +479,17 @@ test('guest ordering languages', async (t) => {
 
     const switcher = readSource('components/LanguageSwitcher.tsx')
     assert.equal(switcher.includes('selectGuestLanguage'), true)
-    assert.equal(switcher.includes('window.location.reload'), true)
+    assert.equal(switcher.includes('window.location.reload'), false)
+    assert.match(switcher, /minHeight:\s*44/)
+    assert.match(switcher, /minWidth:\s*44/)
     assert.equal(switcher.includes('role="group"'), true)
     assert.equal(switcher.includes('GUEST_LANGUAGES'), true)
 
     const loader = readSource('i18n/loader.ts')
-    assert.equal(loader.includes('locales/${lang}.json'), true)
-    assert.equal(loader.includes("type: 'json'"), true)
+    assert.equal(loader.includes("from './locales/en.json'"), true)
+    assert.equal(loader.includes("from './locales/sw.json'"), true)
+    assert.equal(loader.includes("from './locales/lg.json'"), true)
+    assert.equal(loader.includes('locales/${lang}.json'), false)
 
     const staff = readSource('layouts/PortableTabletAssignment.tsx')
     assert.equal(staff.includes('Enter staff PIN'), true)
@@ -454,3 +502,148 @@ function lessThanRender(source) {
   assert.equal(initAt >= 0 && renderAt > initAt, true)
   return renderAt
 }
+
+test('guest wording, waiter copy, and footer follow the catalog', async (t) => {
+  await t.test('swahili uses the locative and luganda names every cart item', () => {
+    const swFile = readLocale('sw')
+    const lgFile = readLocale('lg')
+    assert.equal(swFile.cart && swFile.cart.empty, 'Gusa chakula kwenye menyu ili uweke kikapuni.')
+    assert.equal(
+      swFile.errors && swFile.errors.pay_online,
+      'Imeshindwa kuanzisha malipo mtandaoni. Tafadhali lipa kwenye kaunta.',
+    )
+    assert.equal(lgFile.bill && lgFile.bill.requested, 'Bili esabiddwa — abaweereza bategeezeddwa')
+    assert.equal(
+      lgFile.errors && lgFile.errors.device_start,
+      'Ekyuma kino tekinatandika. Nsaba owulize abaweereza.',
+    )
+    assert.equal(
+      lgFile.confirm && lgFile.confirm.start_over,
+      'Tandika buto? Ebintu byonna ebiri mu kikapu kyo bijja kuggyibwamu.',
+    )
+    assert.equal(
+      lgFile.confirm && lgFile.confirm.new_order,
+      'Tandika oda empya? Ebintu byonna ebiri mu kikapu ekiriwo bijja kuggyibwamu.',
+    )
+  })
+
+  await t.test('call waiter, both confirmations, and the refusal fallback are translated', () => {
+    const swFile = readLocale('sw')
+    const lgFile = readLocale('lg')
+    assert.equal(swFile.assistance && swFile.assistance.call, 'Ita mhudumu')
+    assert.equal(swFile.assistance && swFile.assistance.calling, 'Inaita mhudumu…')
+    assert.equal(swFile.assistance && swFile.assistance.requested, 'Mhudumu ameombwa — wahudumu wamearifiwa')
+    assert.equal(swFile.assistance && swFile.assistance.already, 'Mhudumu tayari ameombwa — wahudumu wamearifiwa')
+    assert.equal(
+      swFile.errors && swFile.errors.call_waiter,
+      'Imeshindwa kuita mhudumu. Tafadhali waombe wahudumu msaada.',
+    )
+    assert.equal(lgFile.assistance && lgFile.assistance.call, 'Yita omuweereza')
+    assert.equal(lgFile.assistance && lgFile.assistance.calling, 'Nyita omuweereza…')
+    assert.equal(lgFile.assistance && lgFile.assistance.requested, 'Omuweereza asabiddwa — abaweereza bategeezeddwa')
+    assert.equal(lgFile.assistance && lgFile.assistance.already, 'Omuweereza yali asabiddwa — abaweereza bategeezeddwa')
+    assert.equal(lgFile.errors && lgFile.errors.call_waiter, 'Omuweereza tayitiddwa. Nsaba obuuze abaweereza.')
+    const mobile = readSource('layouts/MobileQRLayout.tsx')
+    const session = readSource('hooks/useOrderingSession.ts')
+    const surface = `${mobile}\n${session}`
+    for (const phrase of ['Call waiter', 'Calling waiter', 'Waiter requested', 'Waiter already requested', 'Could not call a waiter']) {
+      assert.equal(surface.includes(phrase), false, phrase)
+    }
+    for (const key of ["t('assistance.call')", "t('assistance.calling')", "t('assistance.requested')", "t('assistance.already')", "t('errors.call_waiter')"]) {
+      assert.equal(surface.includes(key), true, key)
+    }
+  })
+
+  await t.test('the visible footer words follow the guest language and keep the licence line', async () => {
+    const i18n = await loadModule('./index.ts')
+    assert.equal(typeof i18n.applyStaticGuestCopy, 'function')
+    const nodes = [
+      { key: 'footer.built_on', textContent: 'built on' },
+      { key: 'footer.source', textContent: 'Source' },
+    ]
+    for (const node of nodes) node.getAttribute = (name) => (name === 'data-guest-i18n' ? node.key : null)
+    const root = { querySelectorAll: () => nodes }
+    await i18n.initI18n('sw', { setCookie() {} })
+    i18n.applyStaticGuestCopy(root)
+    assert.equal(nodes[0].textContent, 'imejengwa kwa')
+    assert.equal(nodes[1].textContent, 'Chanzo')
+    await i18n.initI18n('lg', { setCookie() {} })
+    i18n.applyStaticGuestCopy(root)
+    assert.equal(nodes[0].textContent, 'ezimbiddwa ku')
+    assert.equal(nodes[1].textContent, 'Ensibuko')
+  })
+
+  await t.test('a missing ordering code and a device error still offer the language switcher', () => {
+    for (const rel of [
+      'layouts/MobileQRLayout.tsx',
+      'layouts/TabletLayout.tsx',
+      'layouts/LandscapeKioskLayout.tsx',
+      'layouts/PortraitKioskLayout.tsx',
+    ]) {
+      const source = readSource(rel)
+      const start = source.indexOf('if (loading)')
+      const end = source.indexOf('\n  return (', start)
+      const recovery = source.slice(start, end)
+      assert.equal(recovery.includes('<LanguageSwitcher />'), true, rel)
+    }
+    const app = readSource('App.tsx')
+    const start = app.indexOf('if (deviceLoading)')
+    const end = app.indexOf('const Layout', start)
+    assert.equal(app.slice(start, end).includes('<LanguageSwitcher />'), true)
+  })
+})
+
+function buildGuestOrder() {
+  const repo = join(here, '../../..')
+  const out = mkdtempSync(join(tmpdir(), 'ury-guest-locale-'))
+  const vite = join(repo, 'node_modules/vite/bin/vite.js')
+  const result = spawnSync(
+    process.execPath,
+    [vite, 'build', '--outDir', out, '--emptyOutDir', '--base=/assets/ury/order/'],
+    { cwd: join(src, '..'), encoding: 'utf8' },
+  )
+  assert.equal(result.status, 0, `${result.stderr || ''}\n${result.stdout || ''}`.slice(-2000))
+  const js = readdirSync(join(out, 'assets'))
+    .filter((name) => name.endsWith('.js'))
+    .map((name) => readFileSync(join(out, 'assets', name), 'utf8'))
+    .join('\n')
+  const html = readFileSync(join(out, 'index.html'), 'utf8')
+  rmSync(out, { recursive: true, force: true })
+  return { js, html }
+}
+
+test('production build ships the guest catalogs', async (t) => {
+  const built = buildGuestOrder()
+
+  await t.test('swahili and luganda are in the bundle, not fetched at runtime', () => {
+    assert.equal(built.js.includes('Weka oda'), true)
+    assert.equal(built.js.includes('Teeka oda'), true)
+    assert.equal(built.js.includes('Place Order'), true)
+    assert.equal(built.js.includes('./locales/${'), false)
+  })
+
+  await t.test('the corrected copy and waiter strings are in the bundle', () => {
+    for (const phrase of [
+      'kwenye menyu',
+      'kwenye kaunta',
+      'abaweereza',
+      'byonna',
+      'Ita mhudumu',
+      'Inaita mhudumu',
+      'Yita omuweereza',
+      'Nyita omuweereza',
+      'Funga',
+      'Ggalawo',
+    ]) {
+      assert.equal(built.js.includes(phrase), true, phrase)
+    }
+  })
+
+  await t.test('the built page keeps the AGPL line and marks built-on and Source', () => {
+    assert.equal(built.html.includes('AGPL-3.0'), true)
+    assert.equal(built.html.includes('brand_source_url'), true)
+    assert.equal(built.html.includes('data-guest-i18n="footer.built_on"'), true)
+    assert.equal(built.html.includes('data-guest-i18n="footer.source"'), true)
+    assert.equal(built.js.includes('data-guest-i18n'), true)
+  })
+})
