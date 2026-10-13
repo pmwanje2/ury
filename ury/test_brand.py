@@ -70,6 +70,7 @@ class TestSiteBrand(unittest.TestCase):
         framework.as_json = json.dumps
         framework.session = SimpleNamespace(user="Guest")
         framework.conf = {}
+        framework.form_dict = {}
         framework.db = SimpleNamespace(commit=lambda: None)
         framework._ = lambda value: value
 
@@ -136,6 +137,67 @@ class TestSiteBrand(unittest.TestCase):
     def test_partial_settings_leave_other_fields_unset(self):
         self.settings.app_logo = "/files/tenant.png"
         self.assertEqual(self.brand_module().get_brand(), {"name": None, "logo": "/files/tenant.png", "favicon": None})
+
+    def test_guest_page_uses_verified_profile_public_brand_only(self):
+        self.set_brand()
+        profile = SimpleNamespace(guest_display_name='Restaurant <img onerror="evil()">', restaurant="Restaurant A")
+        restaurant = SimpleNamespace(image="/files/restaurant.png")
+        self.framework.get_cached_doc = lambda doctype, name=None: self.settings if doctype == "Website Settings" else restaurant
+        self.framework.form_dict = {"t": "signed-token"}
+        api = ModuleType("ury.ury.api.self_ordering")
+        from unittest.mock import Mock
+        verify = Mock(return_value=(profile, "Table 7", "QR Table"))
+        api._verify_qr_token = verify
+        with patch.dict(sys.modules, {"ury.ury.api.self_ordering": api}):
+            context = self.context("order")
+        expected = {"name": profile.guest_display_name, "logo": restaurant.image, "favicon": SITE_BRAND["favicon"]}
+        self.assertEqual(context["brand"], expected)
+        verify.assert_called_once_with("signed-token")
+        self.assertEqual(json.loads(json.loads(context["boot"]))["ury_brand"], expected)
+        parsed = PageParser(self.render("order", context))
+        self.assertEqual(parsed.title, profile.guest_display_name)
+        self.assertEqual(self.brand_module().get_brand(), SITE_BRAND)
+
+    def test_guest_profile_fields_are_optional_manager_editable_configuration(self):
+        schema = json.loads((ROOT / "ury/ury/doctype/ury_self_ordering_profile/ury_self_ordering_profile.json").read_text())
+        fields = {field["fieldname"]: field for field in schema["fields"]}
+        for name, fieldtype in (("guest_display_name", "Data"),):
+            with self.subTest(field=name):
+                self.assertIn(name, fields, "Optional guest identity cannot be edited through a native profile")
+                self.assertEqual(fields[name]["fieldtype"], fieldtype)
+                self.assertFalse(fields[name].get("reqd") or fields[name].get("read_only"))
+                self.assertIn(name, schema["field_order"])
+
+    def test_unavailable_qr_profiles_keep_the_guest_page_renderable(self):
+        self.set_brand()
+        self.framework.PermissionError = type("PermissionError", (Exception,), {})
+        self.framework.ValidationError = type("ValidationError", (Exception,), {})
+        self.framework.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+        self.framework.form_dict = {"t": "disabled-or-invalid-token"}
+        api = ModuleType("ury.ury.api.self_ordering")
+        for error in (self.framework.PermissionError, self.framework.ValidationError, self.framework.DoesNotExistError):
+            with self.subTest(error=error.__name__):
+                def refuse(token):
+                    raise error("Ordering unavailable")
+                api._verify_qr_token = refuse
+                with patch.dict(sys.modules, {"ury.ury.api.self_ordering": api}):
+                    try:
+                        context = self.context("order")
+                    except Exception as failure:
+                        self.fail(f"QR refusal must not break the guest HTML: {failure}")
+                self.assertEqual(context["brand"], SITE_BRAND)
+
+    def test_guest_brand_falls_back_per_field_and_ignores_unsigned_profile_names(self):
+        self.set_brand()
+        profile = SimpleNamespace(guest_display_name="", restaurant="Restaurant A")
+        self.framework.get_cached_doc = lambda doctype, name=None: self.settings if doctype == "Website Settings" else SimpleNamespace(image=None)
+        api = ModuleType("ury.ury.api.self_ordering")
+        api._verify_qr_token = lambda token: (profile, "Table 7", "QR Table")
+        with patch.dict(sys.modules, {"ury.ury.api.self_ordering": api}):
+            self.framework.form_dict = {"t": "signed-token"}
+            self.assertEqual(self.context("order")["brand"], SITE_BRAND)
+            self.framework.form_dict = {"profile": "Restaurant B"}
+            self.assertEqual(self.context("order")["brand"], SITE_BRAND)
 
     def test_staff_pages_use_last_hook_values(self):
         self.set_brand()

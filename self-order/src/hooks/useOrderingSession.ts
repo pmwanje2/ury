@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { parseFrappeError } from '@ury/core'
+import { t } from '../../../pos/src/i18n'
 import {
   addItems,
   bootstrap,
@@ -7,6 +9,7 @@ import {
   getMenu,
   getStoredContext,
   requestBill,
+  requestAssistance,
   type CustomerOrder,
   type MenuItem,
   type OrderingContext,
@@ -48,6 +51,10 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [billRequested, setBillRequested] = useState(false)
+  const [requestingAssistance, setRequestingAssistance] = useState(false)
+  const [assistanceCooldown, setAssistanceCooldown] = useState(false)
+  const [assistanceMessage, setAssistanceMessage] = useState<string | null>(null)
+  const assistanceInFlight = useRef(false)
   const [paymentRequest, setPaymentRequest] = useState<PaymentRequestResult | null>(null)
   const [payingOnline, setPayingOnline] = useState(false)
 
@@ -96,6 +103,12 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (!assistanceCooldown) return
+    const timer = setTimeout(() => setAssistanceCooldown(false), 60000)
+    return () => clearTimeout(timer)
+  }, [assistanceCooldown])
+
   /**
    * Manual "start a fresh order" action — the MVP alternative to an
    * auto-idle-reset timer (not wired up yet). Always clears the cart and
@@ -121,6 +134,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setCart({})
     setOrder(null)
     setBillRequested(false)
+    setAssistanceMessage(null)
     setPaymentRequest(null)
     setPayingOnline(false)
     setSubmitting(false)
@@ -164,7 +178,8 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setOrder(updated)
       setCart({})
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not place the order. Please try again.')
+      setError(parseFrappeError(err, t('Could not place the order. Please try again.'))
+        .replace(/\[[A-Z][A-Z0-9_-]*\]\s*/g, ''))
     } finally {
       setSubmitting(false)
     }
@@ -177,6 +192,25 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setBillRequested(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not request the bill. Please ask staff for help.')
+    }
+  }
+
+  async function handleRequestAssistance() {
+    if (!context || assistanceInFlight.current || assistanceCooldown) return
+    assistanceInFlight.current = true
+    setRequestingAssistance(true)
+    setError(null)
+    setAssistanceMessage(null)
+    try {
+      const result = await requestAssistance(context.session)
+      setAssistanceMessage(result.status === 'Already Requested'
+        ? t('Waiter already requested — staff notified') : t('Waiter requested — staff notified'))
+      setAssistanceCooldown(true)
+    } catch (err) {
+      setError(parseFrappeError(err, t('Could not call a waiter. Please ask staff for help.')))
+    } finally {
+      assistanceInFlight.current = false
+      setRequestingAssistance(false)
     }
   }
 
@@ -208,6 +242,10 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     submitting,
     error,
     billRequested,
+    requestingAssistance,
+    assistanceCooldown,
+    assistanceMessage,
+    handleRequestAssistance,
     paymentRequest,
     payingOnline,
     addToCart,

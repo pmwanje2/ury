@@ -725,6 +725,38 @@ def request_bill(session):
     return {"status": "Requested", "request": req.name}
 
 
+@frappe.whitelist(allow_guest=True)
+def request_assistance(session):
+    session = _resolve_session(session)
+    profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
+
+    if not profile.enable_request_bill:
+        frappe.throw(_("Requesting staff assistance is not enabled"), frappe.ValidationError)
+    if not session.table or not session.invoice:
+        frappe.throw(_("No active order for this table"), frappe.ValidationError)
+
+    with _elevated():
+        existing = frappe.db.exists(
+            "URY Service Request",
+            {"table": session.table, "invoice": session.invoice, "request_type": "Assistance", "status": ["!=", "Resolved"]},
+        )
+        if existing:
+            return {"status": "Already Requested", "request": existing}
+
+        req = frappe.get_doc({
+            "doctype": "URY Service Request",
+            "request_type": "Assistance",
+            "table": session.table,
+            "invoice": session.invoice,
+            "session": session.name,
+            "status": "Open",
+            "requested_at": now_datetime(),
+        })
+        req.insert(ignore_permissions=True)
+
+    return {"status": "Requested", "request": req.name}
+
+
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
