@@ -137,3 +137,17 @@ it('does not publish a late request response from the previous room', async () =
   await flushPromises();
   expect(store.serviceRequests).toEqual([]);
 });
+
+it('does not poll the old room tables while the new room floor is still loading', async () => {
+  await render();
+  const reads = store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'URY Service Request').length;
+  store.selectedRoom = 'Terrace';
+  store.db.getDocList.mockImplementation(async doctype => doctype === 'URY Table' ? new Promise(() => {}) : [requests[0]]);
+  store.fetchTable();
+  vi.advanceTimersByTime(30000);
+  await flushPromises();
+  await nextTick();
+  expect(store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'URY Service Request')).toHaveLength(reads);
+  expect(requestList().textContent).toContain('Loading requests');
+  expect(requestList().textContent).not.toContain('T-05');
+});
