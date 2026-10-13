@@ -20,7 +20,7 @@ def get_brand(surface="site"):
 
             try:
                 profile, _, _ = _verify_qr_token(token)
-            except frappe.PermissionError:
+            except (frappe.PermissionError, frappe.ValidationError, frappe.DoesNotExistError):
                 pass  # Invalid links keep site identity; the API reports the refusal.
             else:
                 restaurant = frappe.get_cached_doc("URY Restaurant", profile.restaurant)

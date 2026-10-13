@@ -66,13 +66,13 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     <div className="min-h-screen pb-28">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-4 py-3 backdrop-blur">
         <div className="min-w-0">
-          {brand.name && <div className="flex items-center gap-2 text-sm font-medium">
+          {(brand.name || brand.logo) && <div className="flex items-center gap-2 text-sm font-medium">
             {brand.logo && <img src={brand.logo} alt="" className="h-8 w-8 shrink-0 object-contain" />}
             <span className="break-words">{brand.name}</span>
           </div>}
-        <h1 className="text-lg font-semibold">
-          {isPickup ? 'Order for Pickup' : context?.table ? `Table ${context.table}` : 'Order'}
-        </h1>
+          <h1 className="text-lg font-semibold">
+            {isPickup ? 'Order for Pickup' : context?.table ? `Table ${context.table}` : 'Order'}
+          </h1>
         </div>
         <button
           onClick={handleStartOver}

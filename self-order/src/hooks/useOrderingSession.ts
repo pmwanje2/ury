@@ -135,7 +135,6 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setOrder(null)
     setBillRequested(false)
     setAssistanceMessage(null)
-    setAssistanceCooldown(false)
     setPaymentRequest(null)
     setPayingOnline(false)
     setSubmitting(false)
