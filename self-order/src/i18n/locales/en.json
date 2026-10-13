@@ -1,0 +1,64 @@
+{
+  "language": {
+    "chooser": "Language"
+  },
+  "header": {
+    "order": "Order",
+    "pickup": "Order for Pickup",
+    "table": "Table {{table}}"
+  },
+  "actions": {
+    "start_over": "Start Over",
+    "new_order": "New Order"
+  },
+  "confirm": {
+    "start_over": "Start over? Your current cart will be cleared.",
+    "new_order": "Start a new order? Current cart will be cleared."
+  },
+  "status": {
+    "loading_menu": "Loading menu…",
+    "starting": "Starting up…"
+  },
+  "order": {
+    "so_far": "Your order so far",
+    "pickup_code": "Pickup code: {{code}}",
+    "total": "Total",
+    "place": "Place Order",
+    "placing": "Placing order…",
+    "placing_short": "Placing…"
+  },
+  "payment": {
+    "pay_online": "Pay Online",
+    "starting": "Starting payment…",
+    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment."
+  },
+  "bill": {
+    "request": "Request Bill",
+    "requested": "Bill requested — staff notified"
+  },
+  "cart": {
+    "title": "Cart",
+    "empty": "Tap a menu item to add it to your cart.",
+    "in_cart": "In cart: {{qty}}",
+    "remove_one": "Remove one {{name}}",
+    "add_one": "Add one more {{name}}",
+    "count_one": "{{count}} item",
+    "count_many": "{{count}} items",
+    "still_there": "Still there?",
+    "still_here": "I'm still here"
+  },
+  "menu": {
+    "all_items": "All Items",
+    "other": "Other",
+    "categories": "Menu categories"
+  },
+  "errors": {
+    "missing_code": "This link is missing an ordering code. Please rescan the QR code on your table.",
+    "load_menu": "Unable to load the menu. Please rescan the QR code.",
+    "place_order": "Could not place the order. Please try again.",
+    "request_bill": "Could not request the bill. Please ask staff for help.",
+    "pay_online": "Could not start online payment. Please pay at the counter.",
+    "device_start": "This device could not be started. Please contact staff.",
+    "device_bootstrap": "Unable to bootstrap this device."
+  }
+}

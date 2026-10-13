@@ -1,0 +1,64 @@
+{
+  "language": {
+    "chooser": "Olulimi"
+  },
+  "header": {
+    "order": "Oda",
+    "pickup": "Oda ey'okutwala",
+    "table": "Emmeeza {{table}}"
+  },
+  "actions": {
+    "start_over": "Tandika buto",
+    "new_order": "Oda empya"
+  },
+  "confirm": {
+    "start_over": "Tandika buto? Ekikapu kyo kinaaggyibwamu.",
+    "new_order": "Tandika oda empya? Ekikapu ekiriwo kinaaggyibwamu."
+  },
+  "status": {
+    "loading_menu": "Menyu ejja…",
+    "starting": "Kitandika…"
+  },
+  "order": {
+    "so_far": "Oda yo okutuusa kati",
+    "pickup_code": "Koodi y'okutwala: {{code}}",
+    "total": "Omugatte",
+    "place": "Teeka oda",
+    "placing": "Nteeka oda…",
+    "placing_short": "Nteeka…"
+  },
+  "payment": {
+    "pay_online": "Sasula ku yintaneeti",
+    "starting": "Ntandika okusasula…",
+    "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula."
+  },
+  "bill": {
+    "request": "Saba bili",
+    "requested": "Bili esabiddwa — abawereza bategeezeddwa"
+  },
+  "cart": {
+    "title": "Ekikapu",
+    "empty": "Nyiga ku mmere ku menyu ogiteeke mu kikapu.",
+    "in_cart": "Mu kikapu: {{qty}}",
+    "remove_one": "Gyawo emu {{name}}",
+    "add_one": "Yongerako emu {{name}}",
+    "count_one": "Ekintu {{count}}",
+    "count_many": "Ebintu {{count}}",
+    "still_there": "Okyali wano?",
+    "still_here": "Nkyali wano"
+  },
+  "menu": {
+    "all_items": "Ebintu byonna",
+    "other": "Ebirala",
+    "categories": "Ebika bya menyu"
+  },
+  "errors": {
+    "missing_code": "Link eno terina koodi y'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.",
+    "load_menu": "Menyu tetuuse. Nsaba oskane nate koodi ya QR.",
+    "place_order": "Oda tetuuse kuteekebwa. Nsaba ogezeeko nate.",
+    "request_bill": "Bili tesabiddwa. Nsaba obuuze omuweereza.",
+    "pay_online": "Okusasula ku yintaneeti tekutandise. Nsaba osasule ku kaunta.",
+    "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abawereza.",
+    "device_bootstrap": "Ekyuma kino tekinatandika."
+  }
+}
