@@ -8,6 +8,14 @@ export default {
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
+        header: {
+          DEFAULT: "hsl(var(--header))",
+          foreground: "hsl(var(--header-foreground))",
+          border: "hsl(var(--header-border))",
+          user: "hsl(var(--header-user))",
+          title: "hsl(var(--header-title))",
+          muted: "hsl(var(--header-muted))",
+        },
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -75,7 +83,8 @@ export default {
         black: "hsl(var(--black))",
       },
       fontFamily: {
-        inter: ['Inter', 'sans-serif'],
+        sans: ['var(--font-sans)'],
+        inter: ['var(--font-inter)'],
       },
       borderRadius: {
         xl: "calc(var(--radius) + 4px)",
