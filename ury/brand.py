@@ -92,7 +92,7 @@ def theme_style(theme):
         values["--button-foreground"] = "var(--primary-foreground)"
         for step, light in ((50, 97), (100, 94), (200, 88), (300, 80), (400, 70), (500, 61.7647),
                             (600, 55), (700, 46), (800, 37), (900, 28), (950, 18)):
-            values[f"--primary-{step}"] = token(h, s, light)
+            values[f"--blue-{step}"] = values[f"--primary-{step}"] = token(h, s, light)
         values["--header-border"] = "var(--primary)"
     if theme.get("rounded") is False:
         values["--radius"] = "0"
