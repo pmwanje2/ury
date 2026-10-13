@@ -65,8 +65,14 @@ def theme_style(theme):
         values["--background"] = values["--gray-50"] = token(h, s, l)
         for step, sat, light in ((100, 20, 97), (200, 15, 92), (300, 10, 85), (400, 8, 70),
                                  (500, 6, 50), (600, 5, 40), (700, 4, 30), (800, 3, 20), (900, 2, 10), (950, 1, 5)):
-            values[f"--gray-{step}"] = token(h, min(s, sat, 25), light)
-        gray950 = (h, min(s, 1), 5)
+            saturation = min(s, sat, 25)
+            # Text grays must work on both the light-mode canvas and white cards.
+            if step >= 500:
+                while light > 0 and min(contrast((h, saturation, light), surface)
+                                       for surface in ((h, s, l), (0, 0, 100))) < 4.5:
+                    light = max(0, light - 0.5)
+            values[f"--gray-{step}"] = token(h, saturation, light)
+        gray950 = (h, min(s, 1), light)
     if "text" in theme:
         values["--foreground"] = values["--gray-900"] = token(*hsl(theme["text"]))
 
@@ -86,6 +92,10 @@ def theme_style(theme):
         if target == "header":
             for part in ("user", "title", "muted"):
                 values[f"--header-{part}"] = token(*foreground)
+            if foreground == gray950 and "--gray-500" in values:
+                muted = tuple(map(float, values["--gray-500"].replace("%", "").split()))
+                if contrast(color, muted) >= 4.5:
+                    values["--header-muted"] = "var(--gray-500)"
     if "primary" in theme:
         rgb = [int(theme["primary"][i:i + 2], 16) / 255 for i in (1, 3, 5)]
         values["--ring"] = values["--primary"]
@@ -107,9 +117,10 @@ def theme_style(theme):
         font = re.sub(r"(?<!\S)([0-9])", lambda match: f"\\{ord(match[1]):x} ", theme["font"])
         values["--font-sans"] = f"{font}, sans-serif"
         values["--font-inter"] = "var(--font-sans)"
+    style = "html:root:not(.dark){" + "".join(f"{key}:{value};" for key, value in values.items()) + "}"
     if "font_size" in theme:
-        values["font-size"] = theme["font_size"]
-    return "html:root:not(.dark){" + "".join(f"{key}:{value};" for key, value in values.items()) + "}"
+        style += "html:root:not(.dark) body{font-size:" + theme["font_size"] + ";}"
+    return style
 
 
 def get_theme_context():
