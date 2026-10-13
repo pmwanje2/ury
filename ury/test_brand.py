@@ -1,5 +1,6 @@
 """Site branding contracts, runnable without a Frappe bench."""
 
+import colorsys
 import importlib
 import importlib.util
 import json
@@ -402,21 +403,65 @@ class TestSiteBrand(unittest.TestCase):
             self.set_theme(button_rounded_corners=value)
             self.assertNotIn("rounded", module.get_theme())
 
-    def test_hospitality_hsl_and_primary_lightness_ladder(self):
+    def test_hospitality_scale_mixes_brand_rgb_toward_white_and_black(self):
         self.set_theme()
         tokens = self.theme_tokens()
         self.assertEqual(tokens["--primary"], "154.9254 48.9051% 26.8627%")
         self.assertEqual(tokens["--ring"], tokens["--primary"])
         self.assertEqual(tokens["--button-foreground"], "var(--primary-foreground)")
-        for step, lightness in ((50, 97), (100, 94), (200, 88), (300, 80), (400, 70), (500, 61.7647),
-                                (600, 55), (700, 46), (800, 37), (900, 28), (950, 18)):
+        for step, expected_rgb in (
+            (50, (244, 247.35, 245.95)), (100, (233, 239.7, 236.9)),
+            (200, (200, 216.75, 209.75)), (300, (167, 193.8, 182.6)),
+            (400, (123, 163.2, 146.4)), (500, (79, 132.6, 110.2)),
+            (600, (35, 102, 74)), (700, (29.75, 86.7, 62.9)),
+            (800, (24.5, 71.4, 51.8)), (900, (19.25, 56.1, 40.7)),
+            (950, (14, 40.8, 29.6)),
+        ):
             with self.subTest(step=step):
-                self.assertEqual(tokens[f"--primary-{step}"], f"154.9254 48.9051% {lightness}%")
+                h, s, l = map(float, tokens[f"--primary-{step}"].replace("%", "").split())
+                rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
+                for actual, expected in zip(rgb, expected_rgb):
+                    self.assertAlmostEqual(actual * 255, expected, delta=0.001)
+
+    def test_primary_600_and_blue_600_keep_the_exact_owner_brand(self):
+        for color, expected in (("#23664a", "154.9254 48.9051% 26.8627%"),
+                                ("#174a8b", "213.6207 71.6049% 31.7647%"),
+                                ("#767676", "0 0% 46.2745%")):
+            with self.subTest(color=color):
+                self.set_theme(primary_color=color)
+                tokens = self.theme_tokens()
+                for name in ("--primary", "--primary-600", "--blue-600"):
+                    self.assertEqual(tokens[name], expected)
+
+    def test_brand_scale_has_near_white_50_and_darker_700(self):
+        for color in ("#23664a", "#174a8b", "#767676"):
+            with self.subTest(color=color):
+                self.set_theme(primary_color=color)
+                tokens = self.theme_tokens()
+                channels = {}
+                for step in (50, 600, 700):
+                    h, s, l = map(float, tokens[f"--primary-{step}"].replace("%", "").split())
+                    channels[step] = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
+                self.assertTrue(all(240 / 255 < channel < 1 for channel in channels[50]))
+                self.assertTrue(all(shade < base for shade, base in zip(channels[700], channels[600])))
+
+    def test_white_text_passes_aa_on_600_and_all_brand_shades(self):
+        for color in ("#23664a", "#174a8b", "#767676"):
+            self.set_theme(primary_color=color)
+            tokens = self.theme_tokens()
+            for step in (600, 700, 800, 900, 950):
+                with self.subTest(color=color, step=step):
+                    h, s, l = map(float, tokens[f"--primary-{step}"].replace("%", "").split())
+                    rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
+                    linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
+                    luminance = sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+                    self.assertGreaterEqual(1.05 / (luminance + 0.05), 4.5)
+                    self.assertEqual(tokens[f"--blue-{step}"], tokens[f"--primary-{step}"])
 
     def test_hospitality_remaps_blue_utilities_to_the_generated_primary_scale(self):
         self.set_theme(primary_color="#23664a")
         tokens = self.theme_tokens()
-        self.assertEqual(tokens.get("--blue-600"), "154.9254 48.9051% 55%")
+        self.assertEqual(tokens.get("--blue-600"), "154.9254 48.9051% 26.8627%")
         for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950):
             with self.subTest(step=step):
                 self.assertEqual(tokens.get(f"--blue-{step}"), tokens[f"--primary-{step}"])
