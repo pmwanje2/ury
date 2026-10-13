@@ -45,6 +45,7 @@ async function fetchTables(tables, serverNow, invoices = []) {
   store.db.getDocList.mockImplementation((doctype) => {
     if (doctype === 'URY Table') return Promise.resolve(tables);
     if (doctype === 'POS Invoice') return Promise.resolve(invoices);
+    if (doctype === 'URY Service Request') return Promise.resolve([]);
     throw new Error(`Unexpected doctype: ${doctype}`);
   });
   store.call.get.mockImplementation((method) => {
@@ -395,7 +396,7 @@ describe('floor-plan age uses the oldest open bill creation', () => {
     const store = await fetchTable(
       { name: 'Table 1', occupied: 0 }, '2026-10-03 00:10:00',
     );
-    expect(store.db.getDocList.mock.calls.map(([doctype]) => doctype)).toEqual(['URY Table']);
+    expect(store.db.getDocList.mock.calls.map(([doctype]) => doctype)).toEqual(['URY Table', 'URY Service Request']);
     expect(store.getBadgeText(store.tables[0])).toBe('Free');
   });
 
@@ -495,7 +496,7 @@ describe('idle floor-plan rendering', () => {
     expect(floorElement.textContent).toContain('0:16');
     expect(floorElement.textContent).toContain('Attention');
     expect(floorElement.querySelector('.bg-red-100')).not.toBeNull();
-    expect(store.db.getDocList).toHaveBeenCalledTimes(listReads);
+    expect(store.db.getDocList.mock.calls.slice(listReads).every(([doctype]) => doctype === 'URY Service Request')).toBe(true);
     expect(store.call.get).toHaveBeenCalledTimes(serverReads);
 
     floorApp.unmount();
