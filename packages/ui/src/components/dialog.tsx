@@ -196,10 +196,11 @@ export interface DialogContentProps
     VariantProps<typeof contentVariants> {
   onClose?: () => void
   showCloseButton?: boolean
+  closeLabel?: string
 }
 
 const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
-  ({ className, variant, size, onClose, showCloseButton = true, children, ...props }, ref) => (
+  ({ className, variant, size, onClose, showCloseButton = true, closeLabel = 'Close', children, ...props }, ref) => (
     <div
       ref={ref}
       className={cn(contentVariants({ variant, size, className }))}
@@ -210,14 +211,14 @@ const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close"
+          aria-label={closeLabel}
           // Was a bare 16px icon — a ~16px touch target on a tablet. Now a
           // 36px tappable square with a real hover surface, matching the
           // ghost button's interaction language.
           className="absolute top-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-accent hover:text-foreground active:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none"
         >
           <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
+          <span className="sr-only">{closeLabel}</span>
         </button>
       )}
       {children}

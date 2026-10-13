@@ -204,10 +204,10 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     try {
       const result = await requestAssistance(context.session)
       setAssistanceMessage(result.status === 'Already Requested'
-        ? t('Waiter already requested — staff notified') : t('Waiter requested — staff notified'))
+        ? t('assistance.already') : t('assistance.requested'))
       setAssistanceCooldown(true)
     } catch (err) {
-      setError(parseFrappeError(err, t('Could not call a waiter. Please ask staff for help.')))
+      setError(parseFrappeError(err, t('errors.call_waiter')))
     } finally {
       assistanceInFlight.current = false
       setRequestingAssistance(false)

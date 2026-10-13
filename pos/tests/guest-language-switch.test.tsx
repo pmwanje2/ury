@@ -71,6 +71,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  await initI18n('en', { setCookie() {} })
   vi.restoreAllMocks()
   vi.useRealTimers()
   vi.unstubAllGlobals()

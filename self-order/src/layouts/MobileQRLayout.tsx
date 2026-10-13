@@ -2,13 +2,14 @@ import { formatCurrency, resolveBrand } from '@ury/core'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
-import LanguageSwitcher from '../components/LanguageSwitcher'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 
 interface LayoutProps {
   initialContext?: OrderingContext
 }
 
 function MobileQRLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -43,7 +44,8 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+        <LanguageSwitcher />
         {t('status.loading_menu')}
       </div>
     )
@@ -51,8 +53,9 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -136,7 +139,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               disabled={requestingAssistance || assistanceCooldown}
               onClick={handleRequestAssistance}
             >
-              {requestingAssistance ? t('Calling waiter…') : t('Call waiter')}
+              {requestingAssistance ? t('assistance.calling') : t('assistance.call')}
             </button>
             {assistanceMessage && <p role="status" className="mt-2 text-sm">{assistanceMessage}</p>}
             <button

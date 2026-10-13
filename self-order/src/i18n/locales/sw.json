@@ -2,6 +2,19 @@
   "language": {
     "chooser": "Lugha"
   },
+  "assistance": {
+    "call": "Ita mhudumu",
+    "calling": "Inaita mhudumu…",
+    "requested": "Mhudumu ameombwa — wahudumu wamearifiwa",
+    "already": "Mhudumu tayari ameombwa — wahudumu wamearifiwa"
+  },
+  "footer": {
+    "built_on": "imejengwa kwa",
+    "source": "Chanzo"
+  },
+  "dialog": {
+    "close": "Funga"
+  },
   "header": {
     "order": "Oda",
     "pickup": "Oda ya kuchukua",
@@ -38,7 +51,7 @@
   },
   "cart": {
     "title": "Kikapu",
-    "empty": "Gusa chakula ku menyu ili uweke kikapuni.",
+    "empty": "Gusa chakula kwenye menyu ili uweke kikapuni.",
     "in_cart": "Kikapuni: {{qty}}",
     "remove_one": "Ondoa moja {{name}}",
     "add_one": "Ongeza moja {{name}}",
@@ -57,7 +70,8 @@
     "load_menu": "Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.",
     "place_order": "Imeshindwa kuweka oda. Tafadhali jaribu tena.",
     "request_bill": "Imeshindwa kuomba bili. Tafadhali muombe mhudumu msaada.",
-    "pay_online": "Imeshindwa kuanzisha malipo mtandaoni. Tafadhali lipa kaunta.",
+    "pay_online": "Imeshindwa kuanzisha malipo mtandaoni. Tafadhali lipa kwenye kaunta.",
+    "call_waiter": "Imeshindwa kuita mhudumu. Tafadhali waombe wahudumu msaada.",
     "device_start": "Kifaa hiki hakikuweza kuanzishwa. Tafadhali wasiliana na wahudumu.",
     "device_bootstrap": "Imeshindwa kuanzisha kifaa hiki."
   }

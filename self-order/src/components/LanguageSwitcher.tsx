@@ -1,8 +1,13 @@
-import { getActiveLanguage, t } from '../i18n'
+import { useSyncExternalStore } from 'react'
+import { applyDocumentLocale, getActiveLanguage, initI18n, subscribeGuestLanguage, t } from '../i18n'
 import { GUEST_LANGUAGES, selectGuestLanguage } from '../i18n/resolve-language'
 
+export function useGuestLanguage(): string {
+  return useSyncExternalStore(subscribeGuestLanguage, getActiveLanguage, getActiveLanguage)
+}
+
 function LanguageSwitcher() {
-  const active = getActiveLanguage()
+  const active = useGuestLanguage()
   return (
     <div role="group" aria-label={t('language.chooser')} className="flex flex-wrap gap-1">
       {GUEST_LANGUAGES.map((language) => (
@@ -10,6 +15,7 @@ function LanguageSwitcher() {
           key={language.code}
           type="button"
           aria-pressed={active === language.code}
+          style={{ minHeight: 44, minWidth: 44 }}
           className={`rounded-md border px-2 py-1 text-xs font-medium ${
             active === language.code ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'
           }`}
@@ -21,7 +27,9 @@ function LanguageSwitcher() {
                 document.cookie = value
               },
             })
-            window.location.reload()
+            return initI18n(language.code).then(() => {
+              applyDocumentLocale()
+            })
           }}
         >
           {language.label}

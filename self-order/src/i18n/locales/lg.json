@@ -2,6 +2,19 @@
   "language": {
     "chooser": "Olulimi"
   },
+  "assistance": {
+    "call": "Yita omuweereza",
+    "calling": "Nyita omuweereza…",
+    "requested": "Omuweereza asabiddwa — abaweereza bategeezeddwa",
+    "already": "Omuweereza yali asabiddwa — abaweereza bategeezeddwa"
+  },
+  "footer": {
+    "built_on": "ezimbiddwa ku",
+    "source": "Ensibuko"
+  },
+  "dialog": {
+    "close": "Ggalawo"
+  },
   "header": {
     "order": "Oda",
     "pickup": "Oda ey'okutwala",
@@ -12,8 +25,8 @@
     "new_order": "Oda empya"
   },
   "confirm": {
-    "start_over": "Tandika buto? Ekikapu kyo kinaaggyibwamu.",
-    "new_order": "Tandika oda empya? Ekikapu ekiriwo kinaaggyibwamu."
+    "start_over": "Tandika buto? Ebintu byonna ebiri mu kikapu kyo bijja kuggyibwamu.",
+    "new_order": "Tandika oda empya? Ebintu byonna ebiri mu kikapu ekiriwo bijja kuggyibwamu."
   },
   "status": {
     "loading_menu": "Menyu ejja…",
@@ -34,7 +47,7 @@
   },
   "bill": {
     "request": "Saba bili",
-    "requested": "Bili esabiddwa — abawereza bategeezeddwa"
+    "requested": "Bili esabiddwa — abaweereza bategeezeddwa"
   },
   "cart": {
     "title": "Ekikapu",
@@ -58,7 +71,8 @@
     "place_order": "Oda tetuuse kuteekebwa. Nsaba ogezeeko nate.",
     "request_bill": "Bili tesabiddwa. Nsaba obuuze omuweereza.",
     "pay_online": "Okusasula ku yintaneeti tekutandise. Nsaba osasule ku kaunta.",
-    "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abawereza.",
+    "call_waiter": "Omuweereza tayitiddwa. Nsaba obuuze abaweereza.",
+    "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abaweereza.",
     "device_bootstrap": "Ekyuma kino tekinatandika."
   }
 }

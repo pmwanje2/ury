@@ -4,7 +4,7 @@ import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
-import LanguageSwitcher from '../components/LanguageSwitcher'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
 
@@ -22,6 +22,7 @@ interface LayoutProps {
  * MobileQRLayout — always visible, no toggle).
  */
 function TabletLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -74,7 +75,8 @@ function TabletLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+        <LanguageSwitcher />
         {t('status.loading_menu')}
       </div>
     )
@@ -82,8 +84,9 @@ function TabletLayout({ initialContext }: LayoutProps) {
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -139,7 +142,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
       </div>
 
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
-        <DialogContent onClose={handleStillHere}>
+        <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
             <DialogTitle>{t('cart.still_there')}</DialogTitle>
           </DialogHeader>

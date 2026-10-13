@@ -1,4 +1,4 @@
-import { loadLocale } from './loader.ts'
+import { bundledLocales, loadLocale } from './loader.ts'
 import {
   DEFAULT_LANGUAGE,
   GUEST_LANGUAGE_STORAGE_KEY,
@@ -18,9 +18,31 @@ export interface GuestI18nEnv {
   documentElement?: { lang: string; dir: string }
 }
 
-let activeLocale: TranslationMap = {}
-let englishLocale: TranslationMap = {}
+let activeLocale: TranslationMap = bundledLocales.en
+let englishLocale: TranslationMap = bundledLocales.en
 let activeLanguage: string = DEFAULT_LANGUAGE
+const languageListeners = new Set<() => void>()
+
+export function subscribeGuestLanguage(listener: () => void): () => void {
+  languageListeners.add(listener)
+  return () => {
+    languageListeners.delete(listener)
+  }
+}
+
+function emitGuestLanguage() {
+  for (const listener of languageListeners) listener()
+}
+
+export function applyStaticGuestCopy(root?: {
+  querySelectorAll(selector: string): Iterable<{ getAttribute(name: string): string | null; textContent: string | null }>
+}): void {
+  const scope = root ?? document
+  for (const node of scope.querySelectorAll('[data-guest-i18n]')) {
+    const key = node.getAttribute('data-guest-i18n')
+    if (key) node.textContent = t(key)
+  }
+}
 
 function browserLanguages(nav: GuestI18nEnv['navigator']): string[] {
   if (!nav) return []
@@ -67,6 +89,7 @@ export async function initI18n(lang?: string, env?: GuestI18nEnv): Promise<void>
   englishLocale = english ?? locale
   activeLanguage = resolved
   ;(resolvedEnv.setCookie ?? defaultSetCookie)(preferredLanguageCookie(resolved))
+  emitGuestLanguage()
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {

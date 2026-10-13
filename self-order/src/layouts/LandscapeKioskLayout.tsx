@@ -4,7 +4,7 @@ import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
-import LanguageSwitcher from '../components/LanguageSwitcher'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
 
@@ -24,6 +24,7 @@ interface LayoutProps {
  * useOrderingSession — no table selector or device provisioning here.
  */
 function LandscapeKioskLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -76,7 +77,8 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-xl text-muted-foreground">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-xl text-muted-foreground">
+        <LanguageSwitcher />
         {t('status.loading_menu')}
       </div>
     )
@@ -84,8 +86,9 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-10 text-center text-xl text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-10 text-center text-xl">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -141,7 +144,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
       </div>
 
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
-        <DialogContent onClose={handleStillHere}>
+        <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
             <DialogTitle>{t('cart.still_there')}</DialogTitle>
           </DialogHeader>
