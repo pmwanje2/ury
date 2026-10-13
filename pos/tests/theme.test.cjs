@@ -54,6 +54,7 @@ test('Standard header and font defaults preserve the native light and dark look'
   }
   assert.equal(blocks[':root']['--font-sans'], 'ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"');
   assert.equal(blocks[':root']['--font-inter'], 'Inter, sans-serif');
+  assert.equal(blocks[':root']['--button-foreground'], 'var(--white)');
 });
 
 test('shared Tailwind preset exposes header colours and the configurable sans font', async () => {
@@ -64,4 +65,5 @@ test('shared Tailwind preset exposes header colours and the configurable sans fo
   });
   assert.deepEqual(preset.theme.extend.fontFamily.sans, ['var(--font-sans)']);
   assert.deepEqual(preset.theme.extend.fontFamily.inter, ['var(--font-inter)']);
+  assert.equal(preset.theme.extend.colors['button-foreground'], 'hsl(var(--button-foreground))');
 });

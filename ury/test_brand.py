@@ -407,6 +407,7 @@ class TestSiteBrand(unittest.TestCase):
         tokens = self.theme_tokens()
         self.assertEqual(tokens["--primary"], "154.9254 48.9051% 26.8627%")
         self.assertEqual(tokens["--ring"], tokens["--primary"])
+        self.assertEqual(tokens["--button-foreground"], "var(--primary-foreground)")
         for step, lightness in ((50, 97), (100, 94), (200, 88), (300, 80), (400, 70), (500, 61.7647),
                                 (600, 55), (700, 46), (800, 37), (900, 28), (950, 18)):
             with self.subTest(step=step):
@@ -455,7 +456,7 @@ class TestSiteBrand(unittest.TestCase):
         self.set_theme(button_rounded_corners=0, google_font="Noto Sans 2")
         tokens = self.theme_tokens()
         self.assertEqual(tokens["--radius"], "0")
-        self.assertEqual(tokens["--font-sans"], "Noto Sans 2, sans-serif")
+        self.assertEqual(tokens["--font-sans"], r"Noto Sans \000032, sans-serif")
         self.assertEqual(tokens["--font-inter"], "var(--font-sans)")
         html = self.render("pos", self.context("pos"))
         self.assertIn("font-size:14px;", html)
@@ -463,6 +464,15 @@ class TestSiteBrand(unittest.TestCase):
         self.assertEqual(len(ScriptParser(html).inline), 1)
         self.set_theme(button_rounded_corners=1)
         self.assertNotIn("--radius", self.theme_tokens())
+
+    def test_valid_google_font_numeric_words_are_escaped_as_css_identifiers(self):
+        for font, css_family in (("Press Start 2P", r"Press Start \000032P"),
+                                 ("M PLUS 1p", r"M PLUS \000031p")):
+            with self.subTest(font=font):
+                self.set_theme(google_font=font)
+                html = self.render("pos", self.context("pos"))
+                self.assertIn(f"--font-sans:{css_family}, sans-serif;", html)
+                self.assertNotIn("&#", html)
 
     def test_invalid_code_payload_cannot_break_out_of_pos_style_or_link(self):
         self.set_theme(primary_color="</style><script>evil()</script>", google_font='Noto\" onload=evil()',
