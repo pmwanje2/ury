@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseFrappeError } from '@ury/core'
-import { t } from '../../../pos/src/i18n'
 import {
   addItems,
   bootstrap,
@@ -15,6 +14,46 @@ import {
   type OrderingContext,
   type PaymentRequestResult,
 } from '../lib/api'
+import { t } from '../i18n'
+import { useGuestLanguage } from '../components/LanguageSwitcher'
+
+const CATALOG_FALLBACK = '\u0000'
+
+type CatalogErrorKey =
+  | 'missing_code'
+  | 'load_menu'
+  | 'place_order'
+  | 'request_bill'
+  | 'call_waiter'
+  | 'pay_online'
+
+type ShownError =
+  | { source: 'catalog'; key: CatalogErrorKey }
+  | { source: 'server'; text: string }
+
+function catalogError(key: CatalogErrorKey): string {
+  switch (key) {
+    case 'missing_code':
+      return t('errors.missing_code')
+    case 'load_menu':
+      return t('errors.load_menu')
+    case 'place_order':
+      return t('errors.place_order')
+    case 'request_bill':
+      return t('errors.request_bill')
+    case 'call_waiter':
+      return t('errors.call_waiter')
+    case 'pay_online':
+      return t('errors.pay_online')
+  }
+}
+
+function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = false): ShownError {
+  const parsed = parseFrappeError(err, CATALOG_FALLBACK)
+  if (parsed === CATALOG_FALLBACK) return { source: 'catalog', key }
+  const text = stripCodes ? parsed.replace(/\[[A-Z][A-Z0-9_-]*\]\s*/g, '') : parsed
+  return { source: 'server', text }
+}
 
 // Same keys api.ts uses internally for sessionStorage persistence. api.ts
 // doesn't expose a clear function (only get/store), so resetSession clears
@@ -49,11 +88,12 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   const [cart, setCart] = useState<Cart>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [shownError, setShownError] = useState<ShownError | null>(null)
   const [billRequested, setBillRequested] = useState(false)
   const [requestingAssistance, setRequestingAssistance] = useState(false)
   const [assistanceCooldown, setAssistanceCooldown] = useState(false)
-  const [assistanceMessage, setAssistanceMessage] = useState<string | null>(null)
+  const [assistanceStatus, setAssistanceStatus] = useState<string | null>(null)
+  useGuestLanguage()
   const assistanceInFlight = useRef(false)
   const [paymentRequest, setPaymentRequest] = useState<PaymentRequestResult | null>(null)
   const [payingOnline, setPayingOnline] = useState(false)
@@ -81,7 +121,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
           // actually expires.
           ctx = storedContext
         } else {
-          setError('This link is missing an ordering code. Please rescan the QR code on your table.')
+          setShownError({ source: 'catalog', key: 'missing_code' })
           setLoading(false)
           return
         }
@@ -91,7 +131,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setMenu(menuResponse.items.filter((item) => !item.disabled))
       await loadOrder(ctx.session)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load the menu. Please rescan the QR code.')
+      setShownError(err instanceof Error ? { source: 'server', text: err.message } : { source: 'catalog', key: 'load_menu' })
     } finally {
       setLoading(false)
     }
@@ -134,11 +174,11 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setCart({})
     setOrder(null)
     setBillRequested(false)
-    setAssistanceMessage(null)
+    setAssistanceStatus(null)
     setPaymentRequest(null)
     setPayingOnline(false)
     setSubmitting(false)
-    setError(null)
+    setShownError(null)
     setContext(null)
     setMenu([])
     init()
@@ -171,15 +211,14 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   async function submitCart() {
     if (!context || cartItems.length === 0) return
     setSubmitting(true)
-    setError(null)
+    setShownError(null)
     try {
       const payload = cartItems.map((entry) => ({ item: entry.item.item, qty: entry.qty }))
       const updated = await addItems(context.session, payload)
       setOrder(updated)
       setCart({})
     } catch (err) {
-      setError(parseFrappeError(err, t('Could not place the order. Please try again.'))
-        .replace(/\[[A-Z][A-Z0-9_-]*\]\s*/g, ''))
+      setShownError(serverTextOrCatalog(err, 'place_order', true))
     } finally {
       setSubmitting(false)
     }
@@ -191,7 +230,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       await requestBill(context.session)
       setBillRequested(true)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not request the bill. Please ask staff for help.')
+      setShownError(err instanceof Error ? { source: 'server', text: err.message } : { source: 'catalog', key: 'request_bill' })
     }
   }
 
@@ -199,15 +238,14 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     if (!context || assistanceInFlight.current || assistanceCooldown) return
     assistanceInFlight.current = true
     setRequestingAssistance(true)
-    setError(null)
-    setAssistanceMessage(null)
+    setShownError(null)
+    setAssistanceStatus(null)
     try {
       const result = await requestAssistance(context.session)
-      setAssistanceMessage(result.status === 'Already Requested'
-        ? t('Waiter already requested — staff notified') : t('Waiter requested — staff notified'))
+      setAssistanceStatus(result.status)
       setAssistanceCooldown(true)
     } catch (err) {
-      setError(parseFrappeError(err, t('Could not call a waiter. Please ask staff for help.')))
+      setShownError(serverTextOrCatalog(err, 'call_waiter'))
     } finally {
       assistanceInFlight.current = false
       setRequestingAssistance(false)
@@ -217,7 +255,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   async function payOnline() {
     if (!context) return
     setPayingOnline(true)
-    setError(null)
+    setShownError(null)
     try {
       const result = await createPaymentRequest(context.session)
       setPaymentRequest(result)
@@ -227,11 +265,22 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     } catch (err) {
       // Includes the graceful "online payment isn't set up yet" case from
       // the backend — surfaced as a normal error message, not a crash.
-      setError(err instanceof Error ? err.message : 'Could not start online payment. Please pay at the counter.')
+      setShownError(err instanceof Error ? { source: 'server', text: err.message } : { source: 'catalog', key: 'pay_online' })
     } finally {
       setPayingOnline(false)
     }
   }
+
+  const error = shownError == null
+    ? null
+    : shownError.source === 'server'
+      ? shownError.text
+      : catalogError(shownError.key)
+  const assistanceMessage = assistanceStatus == null
+    ? null
+    : assistanceStatus === 'Already Requested'
+      ? t('assistance.already')
+      : t('assistance.requested')
 
   return {
     context,

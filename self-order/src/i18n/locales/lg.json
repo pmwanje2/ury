@@ -1,0 +1,78 @@
+{
+  "language": {
+    "chooser": "Olulimi"
+  },
+  "assistance": {
+    "call": "Yita omuweereza",
+    "calling": "Nyita omuweereza…",
+    "requested": "Omuweereza asabiddwa — abaweereza bategeezeddwa",
+    "already": "Omuweereza yali asabiddwa — abaweereza bategeezeddwa"
+  },
+  "footer": {
+    "built_on": "ezimbiddwa ku",
+    "source": "Ensibuko"
+  },
+  "dialog": {
+    "close": "Ggalawo"
+  },
+  "header": {
+    "order": "Oda",
+    "pickup": "Oda ey'okutwala",
+    "table": "Emmeeza {{table}}"
+  },
+  "actions": {
+    "start_over": "Tandika buto",
+    "new_order": "Oda empya"
+  },
+  "confirm": {
+    "start_over": "Tandika buto? Ebintu byonna ebiri mu kikapu kyo bijja kuggyibwamu.",
+    "new_order": "Tandika oda empya? Ebintu byonna ebiri mu kikapu ekiriwo bijja kuggyibwamu."
+  },
+  "status": {
+    "loading_menu": "Menyu ejja…",
+    "starting": "Kitandika…"
+  },
+  "order": {
+    "so_far": "Oda yo okutuusa kati",
+    "pickup_code": "Koodi y'okutwala: {{code}}",
+    "total": "Omugatte",
+    "place": "Teeka oda",
+    "placing": "Nteeka oda…",
+    "placing_short": "Nteeka…"
+  },
+  "payment": {
+    "pay_online": "Sasula ku yintaneeti",
+    "starting": "Ntandika okusasula…",
+    "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula."
+  },
+  "bill": {
+    "request": "Saba bili",
+    "requested": "Bili esabiddwa — abaweereza bategeezeddwa"
+  },
+  "cart": {
+    "title": "Ekikapu",
+    "empty": "Nyiga ku mmere ku menyu ogiteeke mu kikapu.",
+    "in_cart": "Mu kikapu: {{qty}}",
+    "remove_one": "Gyawo emu {{name}}",
+    "add_one": "Yongerako emu {{name}}",
+    "count_one": "Ekintu {{count}}",
+    "count_many": "Ebintu {{count}}",
+    "still_there": "Okyali wano?",
+    "still_here": "Nkyali wano"
+  },
+  "menu": {
+    "all_items": "Ebintu byonna",
+    "other": "Ebirala",
+    "categories": "Ebika bya menyu"
+  },
+  "errors": {
+    "missing_code": "Link eno terina koodi y'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.",
+    "load_menu": "Menyu tetuuse. Nsaba oskane nate koodi ya QR.",
+    "place_order": "Oda tetuuse kuteekebwa. Nsaba ogezeeko nate.",
+    "request_bill": "Bili tesabiddwa. Nsaba obuuze omuweereza.",
+    "pay_online": "Okusasula ku yintaneeti tekutandise. Nsaba osasule ku kaunta.",
+    "call_waiter": "Omuweereza tayitiddwa. Nsaba obuuze abaweereza.",
+    "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abaweereza.",
+    "device_bootstrap": "Ekyuma kino tekinatandika."
+  }
+}

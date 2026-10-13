@@ -10,7 +10,7 @@
   <body>
     <div id="root"></div>
     <footer class="py-2 text-center text-xs text-muted-foreground">
-      {{ (brand.name if brand and brand.name else 'URY') | e }} · built on URY (AGPL-3.0) · <a href="{{ brand_source_url | e }}" class="underline">Source</a>
+      {{ (brand.name if brand and brand.name else 'URY') | e }} · <span data-guest-i18n="footer.built_on">built on</span> URY (AGPL-3.0) · <a href="{{ brand_source_url | e }}" class="underline" data-guest-i18n="footer.source">Source</a>
     </footer>
     <script>
       window.csrf_token = "{{ csrf_token }}";

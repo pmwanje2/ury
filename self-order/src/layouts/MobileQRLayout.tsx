@@ -1,13 +1,15 @@
 import { formatCurrency, resolveBrand } from '@ury/core'
-import { t } from '../../../pos/src/i18n'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
+import { t } from '../i18n'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 
 interface LayoutProps {
   initialContext?: OrderingContext
 }
 
 function MobileQRLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -35,23 +37,25 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
   } = useOrderingSession(initialContext)
 
   function handleStartOver() {
-    if (window.confirm('Start over? Your current cart will be cleared.')) {
+    if (window.confirm(t('confirm.start_over'))) {
       resetSession()
     }
   }
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        Loading menu…
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+        <LanguageSwitcher />
+        {t('status.loading_menu')}
       </div>
     )
   }
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -64,22 +68,27 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
   return (
     <div className="min-h-screen pb-28">
-      <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-4 py-3 backdrop-blur">
-        <div className="min-w-0">
-          {(brand.name || brand.logo) && <div className="flex items-center gap-2 text-sm font-medium">
-            {brand.logo && <img src={brand.logo} alt="" className="h-8 w-8 shrink-0 object-contain" />}
-            <span className="break-words">{brand.name}</span>
-          </div>}
-          <h1 className="text-lg font-semibold">
-            {isPickup ? 'Order for Pickup' : context?.table ? `Table ${context.table}` : 'Order'}
-          </h1>
+      <header className="sticky top-0 z-10 border-b bg-background/95 px-4 py-3 backdrop-blur">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            {(brand.name || brand.logo) && <div className="flex items-center gap-2 text-sm font-medium">
+              {brand.logo && <img src={brand.logo} alt="" className="h-8 w-8 shrink-0 object-contain" />}
+              <span className="break-words">{brand.name}</span>
+            </div>}
+            <h1 className="text-lg font-semibold">
+              {isPickup ? t('header.pickup') : context?.table ? t('header.table', { table: context.table }) : t('header.order')}
+            </h1>
+          </div>
+          <button
+            onClick={handleStartOver}
+            className="rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground"
+          >
+            {t('actions.start_over')}
+          </button>
         </div>
-        <button
-          onClick={handleStartOver}
-          className="rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground"
-        >
-          Start Over
-        </button>
+        <div className="mt-2">
+          <LanguageSwitcher />
+        </div>
       </header>
 
       {error && (
@@ -88,10 +97,10 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
       {order && order.items.length > 0 && (
         <section className="mx-4 mt-4 rounded-lg border p-3">
-          <h2 className="mb-2 text-sm font-medium text-muted-foreground">Your order so far</h2>
+          <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('order.so_far')}</h2>
           {isPickup && order.pickup_code && (
             <p className="mb-2 rounded-md bg-muted p-2 text-center text-sm font-semibold">
-              Pickup code: {order.pickup_code}
+              {t('order.pickup_code', { code: order.pickup_code })}
             </p>
           )}
           <ul className="space-y-1 text-sm">
@@ -103,7 +112,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
             ))}
           </ul>
           <div className="mt-2 flex justify-between border-t pt-2 text-sm font-semibold">
-            <span>Total</span>
+            <span>{t('order.total')}</span>
             <span>{order.grand_total}</span>
           </div>
           {context?.capabilities.customer_payment_enabled && !order.billed && (
@@ -112,13 +121,15 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               disabled={payingOnline}
               onClick={payOnline}
             >
-              {payingOnline ? 'Starting payment…' : 'Pay Online'}
+              {payingOnline ? t('payment.starting') : t('payment.pay_online')}
             </button>
           )}
           {paymentRequest && !paymentRequest.payment_url && (
             <p className="mt-2 text-xs text-muted-foreground">
-              Payment request created ({paymentRequest.amount} {paymentRequest.currency}) — a staff
-              member will assist with payment.
+              {t('payment.request_created', {
+                amount: paymentRequest.amount,
+                currency: paymentRequest.currency,
+              })}
             </p>
           )}
           {!isPickup && context?.capabilities.request_bill_enabled && !order.billed && (
@@ -128,7 +139,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               disabled={requestingAssistance || assistanceCooldown}
               onClick={handleRequestAssistance}
             >
-              {requestingAssistance ? t('Calling waiter…') : t('Call waiter')}
+              {requestingAssistance ? t('assistance.calling') : t('assistance.call')}
             </button>
             {assistanceMessage && <p role="status" className="mt-2 text-sm">{assistanceMessage}</p>}
             <button
@@ -136,7 +147,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               disabled={billRequested}
               onClick={handleRequestBill}
             >
-              {billRequested ? 'Bill requested — staff notified' : 'Request Bill'}
+              {billRequested ? t('bill.requested') : t('bill.request')}
             </button>
             </>
           )}
@@ -157,7 +168,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               <div className="text-sm font-medium">{item.item_name}</div>
               <div className="text-sm text-muted-foreground tabular-nums">{formatCurrency(item.rate)}</div>
               {cart[item.item] && (
-                <div className="mt-1 text-xs font-semibold text-primary">In cart: {cart[item.item].qty}</div>
+                <div className="mt-1 text-xs font-semibold text-primary">{t('cart.in_cart', { qty: cart[item.item].qty })}</div>
               )}
             </div>
           </button>
@@ -174,7 +185,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
                   <button
                     onClick={() => decrementCart(entry.item.item)}
                     className="h-6 w-6 rounded-full border text-xs leading-none"
-                    aria-label={`Remove one ${entry.item.item_name}`}
+                    aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                   >
                     −
                   </button>
@@ -182,7 +193,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
                   <button
                     onClick={() => addToCart(entry.item)}
                     className="h-6 w-6 rounded-full border text-xs leading-none"
-                    aria-label={`Add one more ${entry.item.item_name}`}
+                    aria-label={t('cart.add_one', { name: entry.item.item_name })}
                   >
                     +
                   </button>
@@ -191,7 +202,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
             ))}
           </ul>
           <div className="mb-2 flex items-center justify-between text-sm font-semibold">
-            <span>{cartCount} item{cartCount > 1 ? 's' : ''}</span>
+            <span>{t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount })}</span>
             <span className="tabular-nums">{formatCurrency(cartTotal)}</span>
           </div>
           <button
@@ -199,7 +210,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
             disabled={submitting}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
-            {submitting ? 'Placing order…' : 'Place Order'}
+            {submitting ? t('order.placing') : t('order.place')}
           </button>
         </div>
       )}

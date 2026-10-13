@@ -3,6 +3,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
+import { t } from '../i18n'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
 
@@ -22,6 +24,7 @@ interface LayoutProps {
  * useOrderingSession — no table selector or device provisioning here.
  */
 function LandscapeKioskLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -47,7 +50,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
   const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
 
   function handleReset() {
-    if (window.confirm('Start a new order? Current cart will be cleared.')) {
+    if (window.confirm(t('confirm.new_order'))) {
       resetSession()
     }
   }
@@ -74,16 +77,18 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-xl text-muted-foreground">
-        Loading menu…
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-xl text-muted-foreground">
+        <LanguageSwitcher />
+        {t('status.loading_menu')}
       </div>
     )
   }
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-10 text-center text-xl text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-10 text-center text-xl">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -92,14 +97,15 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     <div className="flex h-screen flex-col overflow-hidden text-lg">
       <header className="flex items-center justify-between border-b bg-background/95 px-10 py-6">
         <h1 className="text-3xl font-semibold">
-          {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+          {context?.table ? t('header.table', { table: context.table }) : t('header.pickup')}
         </h1>
         <button
           onClick={handleReset}
           className="rounded-md border px-4 py-2 text-base font-medium text-muted-foreground"
         >
-          New Order
+          {t('actions.new_order')}
         </button>
+        <LanguageSwitcher />
       </header>
 
       {error && (
@@ -138,16 +144,16 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
       </div>
 
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
-        <DialogContent onClose={handleStillHere}>
+        <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
-            <DialogTitle>Still there?</DialogTitle>
+            <DialogTitle>{t('cart.still_there')}</DialogTitle>
           </DialogHeader>
           <DialogFooter>
             <button
               onClick={handleStillHere}
               className="w-full rounded-md bg-primary py-3 text-base font-medium text-primary-foreground"
             >
-              I'm still here
+              {t('cart.still_here')}
             </button>
           </DialogFooter>
         </DialogContent>
