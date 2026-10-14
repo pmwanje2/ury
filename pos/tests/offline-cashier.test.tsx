@@ -150,9 +150,9 @@ test('new offline orders use the profile native walk-in customer after cart rese
     paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T4', name: 'Tea', price: 100, quantity: 1 } as any] });
   vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
   await act(async () => root.render(<OrderPanel />));
-  await act(async () => { button(/^Add New Order$/).click(); });
-  const rows = await new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! }).list();
-  expect(rows).toHaveLength(1);
+  const q = new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! });
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect(await q.list()).toHaveLength(1)); });
+  const rows = await q.list();
   expect(rows[0].order.customer).toBe('Native Walk In');
 });
 
