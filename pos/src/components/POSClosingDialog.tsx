@@ -356,9 +356,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted, logoutAction
 
   // Fix 2: submission-blocking validation. Every row must be explicitly
   // touched (not just numerically non-zero, since a blank input silently
-  // becomes 0). An all-zero total stays blocked only when some mode had
-  // expected activity (expected amount or opening). A zero float with no
-  // sales can be counted as zero and closed.
+  // becomes 0). Outside blind count, an all-zero total stays blocked only
+  // when some mode had expected activity (expected amount or opening).
+  // Blind count never consults expected amounts, so a fully entered count,
+  // including all zeros, can be submitted.
   const validation = useMemo(() => {
     if (rows.length === 0) {
       return { isValid: false, blockingMessage: null as string | null, warningMessage: null as string | null };
@@ -380,7 +381,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted, logoutAction
     let blockingMessage: string | null = null;
     if (untouchedCount > 0) {
       blockingMessage = t('pos_closing.validation_missing_rows');
-    } else if (totalClosing === 0 && hasExpectedActivity) {
+    } else if (!blindCashCount && totalClosing === 0 && hasExpectedActivity) {
       blockingMessage = t('pos_closing.validation_all_zero');
     }
 
