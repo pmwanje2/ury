@@ -53,3 +53,16 @@ test('an online session miss still leaves the till for login', async () => {
   expect(useRootStore.getState().user).toBeNull();
   expect(window.location.href).toBe('/login?redirect-to=%2Fpos');
 });
+
+test('a DevTools offline reload keeps the shell when the logged-user read fails on the network', async () => {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+  vi.mocked(auth.getLoggedInUser).mockRejectedValue(new Error('Network Error'));
+
+  await useRootStore.getState().checkAuth();
+
+  expect(useRootStore.getState().user).toMatchObject({
+    name: cashier,
+    roles: ['URY Cashier'],
+  });
+  expect(window.location.href).toBe('http://ury.localhost/pos/pos');
+});
