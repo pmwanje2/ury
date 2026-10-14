@@ -3,9 +3,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { db } from '@ury/core';
+import { call, db } from '@ury/core';
+import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import { useRootStore } from '../src/store/root-store';
+import { usePOSStore } from '../src/store/pos-store';
+import OrderPanel from '../src/components/OrderPanel';
+import { OfflineOutbox } from '../src/offline/outbox';
 import Header from '../src/components/Header';
 import { createPosClosingEntry, submitPosClosingEntry, createSubPosClosing, submitSubPosClosing } from '../src/lib/pos-closing-api';
 
@@ -20,12 +24,54 @@ beforeEach(async () => {
   await initI18n('en');
   document.cookie = 'user_id=cashier%40example.com';
   useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Cashier', roles: ['Cashier'] } });
+  usePOSStore.setState({ posProfile: { name: 'Till A', ury_offline_capture: 1,
+    role_allowed_for_billing: [{ role: 'Cashier' }], cashier: 'cashier@example.com', owner: 'cashier@example.com' } as any });
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   Object.defineProperty(navigator, 'onLine', { configurable: true, value: true }); });
 
 const button = (text: RegExp) => Array.from(document.querySelectorAll('button')).find((b) => text.test(b.textContent || ''))!;
+
+async function queued() {
+  const queue = new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user!, print: () => true });
+  await queue.capture({ pos_profile: 'Till A', customer: 'Walk In', items: [{ item: 'Tea', item_name: 'Tea', rate: 100, qty: 1 }],
+    no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away' }, 100);
+  return queue;
+}
+
+test('the real cashier submit persists offline before clearing its cart without a live sync_order', async () => {
+  usePOSStore.setState({ isInitializing: false, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: 'Take Away', selectedCustomer: { name: 'Walk In' } as any, selectedTable: null, selectedRoom: null,
+    paymentModes: ['Cash'], orderComment: '', activeOrders: [{ id: 'Tea', uniqueId: 'T1', name: 'Tea', price: 100, quantity: 1 } as any] });
+  vi.spyOn(call, 'post').mockRejectedValue(new TypeError('Network Error'));
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
+  await act(async () => root.render(<OrderPanel />));
+  await act(async () => button(/^Add New Order$/).click());
+  expect(usePOSStore.getState().activeOrders).toEqual([]);
+  expect(call.post).not.toHaveBeenCalled();
+  expect(await new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! }).list()).toHaveLength(1);
+});
+
+test('pending outbox disables till close even when the browser is online', async () => {
+  await queued(); Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network Error'); }));
+  await act(async () => root.render(<MemoryRouter><Header /></MemoryRouter>));
+  await act(async () => button(/^Cashier/).click());
+  await vi.waitFor(() => expect(button(/Close Shift/i).disabled).toBe(true));
+});
+
+test('logout with a pending outbox warns and preserves queue and caches without sending logout', async () => {
+  const q = await queued(); localStorage.setItem('pos_profile', 'cached');
+  const request = vi.fn(async () => new Response('{}', { status: 200 })); vi.stubGlobal('fetch', request);
+  const warning = vi.spyOn(showToast, 'error');
+  await act(async () => root.render(<MemoryRouter><Header /></MemoryRouter>));
+  await act(async () => button(/^Cashier/).click());
+  await act(async () => button(/^Logout$/).click());
+  expect(warning).toHaveBeenCalledWith(expect.stringMatching(/outbox|pending|review/i));
+  expect(request).not.toHaveBeenCalled(); expect(await q.list()).toHaveLength(1);
+  expect(localStorage.getItem('pos_profile')).toBe('cached');
+});
 
 test('till close is disabled offline in the real header', async () => {
   await act(async () => root.render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Header /></MemoryRouter>));
