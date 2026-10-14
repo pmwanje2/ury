@@ -66,3 +66,13 @@ test('a parked server refusal is shown as Needs review with its reason', async (
   await waitForUI(() => expect(container.textContent).toContain('1 Needs review'));
   expect(container.textContent).toContain('URY_OFFLINE_OUTSIDE_SHIFT');
 });
+
+test('denied persistent storage is visible to the cashier with a retained pending order', async () => {
+  (navigator.storage.persist as any).mockResolvedValue(false);
+  const { cashierOutbox } = await import('../src/offline/cashier');
+  await cashierOutbox(profile, user).capture({ pos_profile: profile.name, items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 100 }], no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away' }, 100);
+  const { default: Banner } = await import('../src/components/OfflineBanner');
+  await act(async () => root.render(<Banner />));
+  await waitForUI(() => expect(container.textContent).toContain('1 pending'));
+  expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/persistent storage|keep this browser/i);
+});

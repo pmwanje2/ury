@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { testLocks } from './offline-locks';
 
 const profile = { name: 'Till A', ury_offline_capture: 1, role_allowed_for_billing: [{ role: 'Cashier' }] };
 const user = { name: 'cashier@example.com', roles: ['Cashier'] };
@@ -29,9 +30,7 @@ beforeEach(() => {
   vi.stubGlobal('indexedDB', new IDBFactory());
   sends = [];
   persist = vi.fn(async () => true);
-  vi.stubGlobal('navigator', { onLine: false, storage: { persist }, locks: {
-    request: async (_name: string, callback: () => Promise<unknown>) => callback(),
-  } });
+  vi.stubGlobal('navigator', { onLine: false, storage: { persist }, locks: testLocks() });
   print = vi.fn(async () => true);
   request = vi.fn(async (url: string, init?: RequestInit) => {
     const method = url.split('/api/method/')[1]?.split('?')[0];
@@ -44,7 +43,7 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 test('captures durably in IndexedDB and requests persistent storage before acknowledging', async () => {
   const q = await outbox();
@@ -174,6 +173,34 @@ test('offline opt-in and this profile billing role are both required (no admin o
     { profile: { ...profile, role_allowed_for_billing: [] } }, { user: { name: 'Guest', roles: ['Cashier'] } }]) {
     await expect((await outbox(options)).capture(data, 100)).rejects.toThrow(/offline|billing|cashier/i);
   }
+});
+
+test('revoking the cached billing role prevents replay before any server mutation', async () => {
+  const mutable = { ...profile, role_allowed_for_billing: [{ role: 'Cashier' }] };
+  const q = await outbox({ profile: mutable }); await q.capture(data, 100);
+  mutable.role_allowed_for_billing = [];
+  await q.replay();
+  expect(sends).toEqual([]);
+  expect((await q.list())[0].state).toBe('pending');
+});
+
+test('a hung request releases Replaying after a bounded timeout without dropping the order', async () => {
+  const q = await outbox(); await q.capture(data, 100);
+  request.mockImplementationOnce((_url, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('Timed out')));
+  }));
+  vi.useFakeTimers();
+  const replay = q.replay();
+  await vi.advanceTimersByTimeAsync(11000);
+  expect(q.replaying).toBe(false);
+  vi.useRealTimers(); await replay;
+  expect((await q.list())[0].state).toBe('pending');
+});
+
+test('new extra rounds cannot rewrite the offline order customer or table', async () => {
+  const q = await outbox(); const row = await q.capture(data, 100);
+  await expect(q.capture({ ...data, customer: 'Other Guest' }, 200, row.client_order_id)).rejects.toThrow(/customer|context|change|transfer/i);
+  expect((await q.list())[0].rounds).toHaveLength(1);
 });
 
 test('manual MoMo requires a typed reference and retains it in the native order comments', async () => {

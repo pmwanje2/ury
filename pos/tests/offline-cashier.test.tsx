@@ -14,6 +14,7 @@ import { OfflineOutbox } from '../src/offline/outbox';
 import Header from '../src/components/Header';
 import POSOpeningScreen from '../src/components/POSOpeningScreen';
 import POSOpeningProvider from '../src/components/POSOpeningProvider';
+import PaymentDialog from '../src/components/PaymentDialog';
 import { createPosClosingEntry, submitPosClosingEntry, createSubPosClosing, submitSubPosClosing } from '../src/lib/pos-closing-api';
 
 let container: HTMLDivElement;
@@ -117,6 +118,29 @@ test('the cashier can submit a positive extra round to a queued order with a cum
   const stored = (await q.list())[0];
   expect(stored.client_order_id).toBe(row.client_order_id);
   expect(stored.rounds[1].expected_total).toBe(200);
+});
+
+test('an extra round uses the captured customer even after the new-order cart has been reset', async () => {
+  const q = await queued(); const row = (await q.list())[0];
+  usePOSStore.setState({ isInitializing: false, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: 'Take Away', selectedCustomer: null, selectedTable: null, selectedRoom: null,
+    paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T3', name: 'Tea', price: 100, quantity: 1 } as any] });
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
+  await act(async () => root.render(<OrderPanel />));
+  let select: HTMLSelectElement | null = null;
+  await vi.waitFor(async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); select = container.querySelector('[data-testid="offline-round-target"]'); expect(select?.options.length).toBe(2); });
+  await act(async () => { select!.value = row.client_order_id; select!.dispatchEvent(new Event('change', { bubbles: true })); });
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect((await q.list())[0].rounds).toHaveLength(2)); });
+  expect((await q.list())[0].order.customer).toBe('Walk In');
+});
+
+test('online invoice settlement and discount show an offline refusal instead of posting', async () => {
+  usePOSStore.setState({ paymentModes: ['Cash'], fetchPaymentModes: vi.fn(), posProfile: { ...usePOSStore.getState().posProfile!, enable_discount: 1 } });
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
+  await act(async () => root.render(<PaymentDialog onClose={vi.fn()} grandTotal={100} roundedTotal={100} invoice="ONLINE-1" customer="Walk In" posProfile="Till A" table={null} cashier="cashier@example.com" owner="cashier@example.com" fetchOrders={vi.fn()} clearSelectedOrder={vi.fn()} />));
+  await act(async () => button(/^Pay /).click());
+  expect(container.textContent).toMatch(/refused offline|not available offline/i);
+  expect(post).not.toHaveBeenCalled();
 });
 
 test.each([
