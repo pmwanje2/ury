@@ -78,4 +78,3 @@ getRoom: URY-BRANCH-AMBIGUOUS: Set a default Branch User Permission for an assig
 
 The POS UI displayed its existing Access Denied screen. The native Desk
 request from the same user displayed the stable refusal in a message dialog.
-
