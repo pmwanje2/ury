@@ -108,6 +108,7 @@ class URYKOT(Document):
         frappe.publish_realtime(
             kot_channel,
             {"kot": kotjson, "audio_file": audio_file, "last_kot_time": time},
+            after_commit=True,
         )
         frappe.cache().set_value(cache_key, self.time)
 
