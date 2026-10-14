@@ -122,6 +122,7 @@
           >
             Login
           </button>
+          <a href="/login#forgot" class="block text-center text-sm text-blue-600">Forgot PIN?</a>
         </form>
       </div>
     </div>

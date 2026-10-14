@@ -6673,7 +6673,7 @@
 		"fieldtype": "Int",
 		"label": "Floor Idle Sign-out Seconds",
 		"default": "0",
-		"description": "Sign out non-billing floor users after this many idle seconds. 0 disables automatic sign-out.",
+		"description": "Sign out users without a Stay Signed-in Role after this many idle seconds. 0 disables automatic sign-out.",
 		"insert_after": "custom_blind_cash_count",
 		"module": "URY",
 		"docstatus": 0
@@ -6686,8 +6686,22 @@
 		"fieldtype": "Check",
 		"label": "Floor Sign-out After Send",
 		"default": "0",
-		"description": "Sign out non-billing floor users after successfully sending an order. Billing users stay signed in.",
+		"description": "Sign out users without a Stay Signed-in Role after successfully sending an order.",
 		"insert_after": "custom_floor_idle_signout_seconds",
+		"module": "URY",
+		"docstatus": 0
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"name": "POS Profile-custom_floor_stay_signed_in_roles",
+		"fieldname": "custom_floor_stay_signed_in_roles",
+		"fieldtype": "Table MultiSelect",
+		"label": "Stay Signed-in Roles",
+		"options": "Role Permitted",
+		"permlevel": 0,
+		"description": "Staff with one of these roles stay signed in. Everyone else on the floor screen is signed out after the idle time or after each send.",
+		"insert_after": "custom_floor_signout_after_send",
 		"module": "URY",
 		"docstatus": 0
 	}

@@ -65,3 +65,37 @@ class TestFloorSignoutProfile(unittest.TestCase):
         names = next(row[2] for row in fixture["filters"] if row[:2] == ["name", "in"])
         self.assertIn("POS Profile-custom_floor_idle_signout_seconds", names)
         self.assertIn("POS Profile-custom_floor_signout_after_send", names)
+
+    def test_fixture_declares_stay_signed_in_roles_multiselect(self):
+        path = Path(__file__).resolve().parents[1] / "fixtures/custom_field.json"
+        fields = {field["name"]: field for field in json.loads(path.read_text())}
+        field = fields.get("POS Profile-custom_floor_stay_signed_in_roles", {})
+        self.assertEqual(field.get("dt"), "POS Profile")
+        self.assertEqual(field.get("fieldname"), "custom_floor_stay_signed_in_roles")
+        self.assertEqual(field.get("fieldtype"), "Table MultiSelect")
+        self.assertEqual(field.get("options"), "Role Permitted")
+        self.assertEqual(field.get("permlevel"), 0)
+        self.assertEqual(field.get("label"), "Stay Signed-in Roles")
+        self.assertEqual(field.get("insert_after"), "custom_floor_signout_after_send")
+        self.assertEqual(
+            field.get("description"),
+            "Staff with one of these roles stay signed in. Everyone else on the floor screen is signed out after the idle time or after each send.",
+        )
+
+    def test_hooks_ship_stay_signed_in_roles(self):
+        fixture = next(row for row in hooks.fixtures if row["doctype"] == "Custom Field")
+        names = next(row[2] for row in fixture["filters"] if row[:2] == ["name", "in"])
+        self.assertIn("POS Profile-custom_floor_stay_signed_in_roles", names)
+
+    def test_signout_descriptions_name_stay_roles_not_billing(self):
+        path = Path(__file__).resolve().parents[1] / "fixtures/custom_field.json"
+        fields = {field["name"]: field for field in json.loads(path.read_text())}
+        for name in (
+            "POS Profile-custom_floor_idle_signout_seconds",
+            "POS Profile-custom_floor_signout_after_send",
+        ):
+            description = fields[name].get("description", "")
+            with self.subTest(field=name):
+                self.assertIn("users without a Stay Signed-in Role", description)
+                self.assertNotIn("non-billing", description)
+                self.assertNotIn("Billing users", description)
