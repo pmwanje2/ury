@@ -125,33 +125,40 @@ def getMenuCourses():
     courses = frappe.get_all("URY Menu Course", fields=["name", "icon"])
     return [{"name": d.name, "label": _(d.name), "icon": d.icon} for d in courses]
 
-@frappe.whitelist()
-def getBranch():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch
+def _user_branch_assignments():
+    rows = frappe.db.sql("""
+        SELECT b.name AS branch, a.room
         FROM `tabURY User` AS a
         INNER JOIN `tabBranch` AS b ON a.parent = b.name
         WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
-    if not branch_array:
+    """, frappe.session.user, as_dict=True)
+    if not rows:
         frappe.throw("User is not Associated with any Branch.Please refresh Page")
 
-    branch_name = branch_array[0].get("branch")
+    branches = {row.get("branch") for row in rows}
+    if len(branches) == 1:
+        return rows
 
-    return branch_name
+    from frappe.core.doctype.user_permission.user_permission import get_user_permissions
+
+    defaults = {
+        permission.get("doc")
+        for permission in get_user_permissions().get("Branch", [])
+        if permission.get("is_default") and permission.get("doc") in branches
+    }
+    if len(defaults) != 1:
+        frappe.throw(_("URY-BRANCH-AMBIGUOUS: Set a default Branch User Permission for an assigned branch."))
+    branch = defaults.pop()
+    return [row for row in rows if row.get("branch") == branch]
+
+
+@frappe.whitelist()
+def getBranch():
+    return _user_branch_assignments()[0].get("branch")
 
 @frappe.whitelist()
 def getBranchRoom():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch , a.room
-        FROM `tabURY User` AS a
-        INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
+    branch_array = _user_branch_assignments()
     
     branch_name = branch_array[0].get("branch")
     room_name = branch_array[0].get("room")
@@ -169,14 +176,7 @@ def getBranchRoom():
 
 @frappe.whitelist()
 def getRoom():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch, a.room
-        FROM `tabURY User` AS a
-        INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
+    branch_array = _user_branch_assignments()
     
     if not branch_array:
         frappe.throw("No branch or room information found for the user. Please contact your administrator.")
