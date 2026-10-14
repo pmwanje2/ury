@@ -12,6 +12,9 @@ async function worker() {
   const router = new Router();
   const instance = createOfflineWorker({ origin: ORIGIN });
   for (const route of instance.routes) router.registerRoute(route);
+  await instance.handleMessage({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
+  // Alice's earlier read, cached while her session was bound.
+  await (await storage.open('ury-pos-reads')).put(PROFILE, new Response('Alice prior cached profile', { status: 200 }));
   return {
     instance,
     async get(href: string) {
@@ -37,8 +40,6 @@ beforeEach(async () => {
   vi.resetModules();
   storage = installWorkerGlobals();
   vi.unstubAllGlobals();
-  const cache = await storage.open('ury-pos-reads');
-  await cache.put(PROFILE, new Response('Alice prior cached profile', { status: 200 }));
 });
 
 test.each([401, 403])('a denial (%i) that arrives after 3 s is returned, not the cached profile', async (code) => {
