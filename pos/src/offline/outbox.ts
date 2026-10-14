@@ -201,6 +201,8 @@ export class OfflineOutbox {
     if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
     let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
     try { body = await response.json(); } catch { throw new NotReady('Server did not return JSON'); }
+    if (response.status === 401 || body.exc_type === 'CSRFTokenError' ||
+      response.status === 403 && /login to access/i.test([body.exception, body._server_messages].join(' '))) throw new NotReady('Server session is not ready');
     if (!response.ok || body.exc_type || body.exception) throw new Refused(body._server_messages || body.exception || body.exc_type || `HTTP ${response.status}`);
     if (typeof body.message === 'object' && body.message && 'status' in body.message && body.message.status === 'Failure') throw new Refused('Server refused the order');
     return body.message;
