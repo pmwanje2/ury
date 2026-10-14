@@ -1,10 +1,14 @@
 import { StateCreator } from 'zustand';
-import { getLoggedUser, getSessionUser, getUserRoles } from '@ury/core';
+import { readLoggedUser, getSessionUser, getUserRoles } from '@ury/core';
+import { offlineShellActive } from '../../pwa/register-offline';
 
 export interface User {
   name: string; // This stores the user ID
   roles: string[];
   full_name?: string;
+  // Kept from the cookie because the server could not be reached on an
+  // opted-in till. Revalidated on the next 'online' event.
+  provisional?: boolean;
 }
 
 export interface AuthState {
@@ -27,20 +31,27 @@ const initialState: AuthState = {
   error: null,
 };
 
-export const createAuthSlice: StateCreator<AuthSlice> = (set, _get) => ({
+export const createAuthSlice: StateCreator<AuthSlice> = (set, get) => ({
   ...initialState,
 
   checkAuth: async () => {
     try {
       set({ isLoading: true, error: null });
-      const response = await getLoggedUser();
-      // A network failure while the browser is offline is not a logout.
-      // Keep the cookie session so the cached shell can render. An online
-      // miss still goes to login. The auth request itself is not cached.
-      const sessionUser = !response && navigator.onLine === false ? getSessionUser() : null;
-      const userName = response || sessionUser;
+      const { user: serverUser, networkFailure } = await readLoggedUser();
+      let userName = serverUser;
+      let provisional = false;
+      // Only "no HTTP answer" on a till whose /pos worker is active may keep
+      // the cookie session. 401/403 are answers and always go to login.
+      if (!userName && networkFailure && offlineShellActive()) {
+        const cookieUser = getSessionUser();
+        if (cookieUser && cookieUser !== 'Guest') {
+          userName = cookieUser;
+          provisional = true;
+        }
+      }
 
       if (!userName) {
+        set({ user: null, isLoading: false });
         // If no user is logged in, redirect to login
         window.location.href = '/login?redirect-to=%2Fpos';
         return;
@@ -54,9 +65,15 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, _get) => ({
           name: userName, // Store the user ID in name field
           full_name: roles.full_name,
           roles: roles.roles,
+          ...(provisional ? { provisional: true } : {}),
         },
         isLoading: false,
       });
+      if (provisional) {
+        window.addEventListener('online', () => {
+          void get().checkAuth();
+        }, { once: true });
+      }
     } catch (error) {
       set({ 
         error: (error as Error).message,

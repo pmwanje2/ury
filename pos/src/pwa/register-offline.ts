@@ -32,3 +32,15 @@ export async function syncOfflineCapture(profile: OfflineCaptureProfile | null |
     // A failed warm-up must not block the till. The next controlled load caches the shell.
   }
 }
+
+// True when the URY POS worker controls this page. It only registers while
+// the till's ury_offline_capture flag is on; flag off unregisters it.
+export function offlineShellActive(): boolean {
+  const controller = typeof navigator !== "undefined" ? navigator.serviceWorker?.controller : null;
+  if (!controller) return false;
+  try {
+    return new URL(controller.scriptURL).pathname === SERVICE_WORKER_URL;
+  } catch {
+    return false;
+  }
+}
