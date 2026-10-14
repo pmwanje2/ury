@@ -211,8 +211,9 @@ export const useTableStore = defineStore("table", {
           const occupiedTables = this.tables.filter((table) => table.occupied === 1);
           if (!occupiedTables.length) return;
           const invoices = await this.db.getDocList("POS Invoice", {
-            fields: ["restaurant_table", "creation", "custom_merged_tables"],
+            fields: ["name", "restaurant_table", "creation", "custom_merged_tables", "waiter"],
             filters: [
+              ["branch", "=", this.invoiceData.branch],
               ["docstatus", "=", 0],
             ],
             orFilters: [
@@ -240,7 +241,7 @@ export const useTableStore = defineStore("table", {
             }
           }
           if (room === this.selectedRoom) {
-            await this.attachTableOwners(occupiedTables, room);
+            await this.attachTableOwners(occupiedTables, room, invoices);
           }
         })
         .catch((error) => {
@@ -673,21 +674,12 @@ export const useTableStore = defineStore("table", {
           });
       }
     },
-    async attachTableOwners(occupiedTables, room) {
+    async attachTableOwners(occupiedTables, room, invoices) {
       if (room !== this.selectedRoom) return;
       try {
-        const invoices = await this.db.getDocList("POS Invoice", {
-          fields: ["name", "restaurant_table", "custom_merged_tables", "waiter"],
-          filters: [["docstatus", "=", 0]],
-          orFilters: [
-            ["restaurant_table", "in", occupiedTables.map((table) => table.name)],
-            ...occupiedTables.map((table) => ["custom_merged_tables", "like", `%${table.name}%`]),
-          ],
-          limit: 0,
-        });
-        if (room !== this.selectedRoom) return;
+        const visible = new Set(occupiedTables.map((table) => table.name));
         const waiterByTable = new Map();
-        for (const bill of invoices) {
+        for (const bill of invoices || []) {
           if (!bill || !bill.waiter) continue;
           const names = [];
           if (bill.restaurant_table) names.push(bill.restaurant_table);
@@ -695,7 +687,9 @@ export const useTableStore = defineStore("table", {
             const name = partner.trim();
             if (name) names.push(name);
           }
-          for (const name of names) waiterByTable.set(name, bill.waiter);
+          for (const name of names) {
+            if (visible.has(name)) waiterByTable.set(name, bill.waiter);
+          }
         }
         const waiterIds = [...new Set(waiterByTable.values())];
         if (waiterIds.length) {
