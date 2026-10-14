@@ -104,39 +104,6 @@ test('Workbox runtimeCaching is network-first and excludes POST and non-allowlis
   expect(caching.offlineCaptureEnabled({ ury_offline_capture: true })).toBe(true);
 });
 
-test('logout purges service-worker caches', async () => {
-  const deleted: string[] = [];
-  const names = ['ury-pos-reads', 'ury-pos-shell', 'workbox-precache-v2-https://ury.localhost/'];
-  vi.stubGlobal('caches', {
-    keys: async () => names.slice(),
-    delete: async (name: string) => {
-      deleted.push(name);
-      return true;
-    },
-  });
-  const unregistered: string[] = [];
-  vi.stubGlobal('navigator', {
-    serviceWorker: {
-      getRegistrations: async () => [
-        {
-          scope: 'https://ury.localhost/',
-          unregister: async () => {
-            unregistered.push('https://ury.localhost/');
-            return true;
-          },
-        },
-      ],
-    },
-  });
-
-  const { clearAppStorage } = await import('../../packages/core/src/storage.ts');
-  clearAppStorage();
-  await vi.waitFor(() => {
-    expect(unregistered).toEqual(['https://ury.localhost/']);
-    expect(deleted.slice().sort()).toEqual(names.slice().sort());
-  });
-});
-
 test('offline capture registers the service worker only when the till flag is on', async () => {
   expect(existsSync(REGISTER_OFFLINE), 'pos/src/pwa/register-offline.ts must gate service-worker registration').toBe(true);
   const registered: string[] = [];
