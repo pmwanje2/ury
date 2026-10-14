@@ -1,4 +1,5 @@
 import { call } from '@ury/core';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 
 export interface POSInvoiceItem {
   name: string;
@@ -98,6 +99,7 @@ export interface SyncOrderRequest {
 export type SyncOrderResponse = POSInvoice | { status: 'Failure' };
 
 export const syncOrder = async (data: SyncOrderRequest) => {
+  await assertOfflineActionAllowed('online-order rounds, reductions or voids');
   return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
 };
 
@@ -116,6 +118,7 @@ export async function splitBill(
   itemsToMove: SplitBillItemMove[],
   customer?: string | null
 ): Promise<SplitBillResponse> {
+  await assertOfflineActionAllowed('split');
   const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_bill', {
     source_invoice: sourceInvoice,
     items_to_move: itemsToMove,
@@ -129,6 +132,7 @@ export async function tableTransfer(
   newTable: string,
   invoice: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
     table,
     newTable,
@@ -141,6 +145,7 @@ export async function captainTransfer(
   newCaptain: string,
   invoice: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.captain_transfer', {
     currentCaptain,
     newCaptain,

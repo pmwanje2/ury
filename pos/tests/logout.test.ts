@@ -106,6 +106,7 @@ test('POS: pending logout disables its button and sends only one request', async
   const click = render()('header.logout').props.onClick;
   const first = click();
   const second = click();
+  await new Promise((resolve) => setImmediate(resolve));
   const disabled = render()('header.logout').props.disabled;
   const requests = env.calls.length;
   complete!({ ok: true, status: 200 });
@@ -114,9 +115,9 @@ test('POS: pending logout disables its button and sends only one request', async
   assert.equal(requests, 1);
 });
 
-test('POS: Clear Cache preserves Desk storage and self-ordering credentials', () => {
+test('POS: Clear Cache preserves Desk storage and self-ordering credentials', async () => {
   const env = environment();
-  header(env)()('header.clear_cache').props.onClick();
+  await header(env)()('header.clear_cache').props.onClick();
   assert.equal(env.globals.localStorage.getItem('deskPreference'), 'keep');
   assert.equal(env.globals.localStorage.getItem('ury_device_credential'), 'keep');
   assert.equal(env.globals.sessionStorage.getItem('deskSession'), 'keep');
@@ -227,6 +228,7 @@ for (const occupied of [false, true]) {
     const click = render().props.onClick;
     const first = click();
     const second = click();
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(env.calls.length, 1);
     assert.equal(render().props.disabled, true);
     complete!({ ok: true, status: 200 });

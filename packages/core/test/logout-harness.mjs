@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -34,7 +34,8 @@ export function loadModule(file, globals, dependencies = {}) {
     if (name in dependencies) return dependencies[name];
     if (name.startsWith('.')) {
       const base = resolve(dirname(file), name);
-      const path = [base, `${base}.ts`, `${base}.js`].find((path) => existsSync(path));
+      const path = [base, `${base}.ts`, `${base}.js`, `${base}/index.ts`, `${base}/index.js`]
+        .find((path) => existsSync(path) && statSync(path).isFile());
       if (path) return loadModule(path, globals, dependencies);
     }
     return {};

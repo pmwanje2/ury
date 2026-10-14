@@ -14,9 +14,11 @@ import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { logoutSession, clearAppStorage, resolveBrand } from '@ury/core';
+import { resolveBrand } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { homePath } from '../lib/home-route';
+import { clearCashierStorage } from '../offline/cashier';
+import { useOutbox } from '../offline/use-outbox';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
@@ -27,7 +29,8 @@ const Header = () => {
   const user = useRootStore((state: RootState) => state.user);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
-  const { searchQuery, setSearchQuery, setShowVoluntaryClosing } = usePOSStore();
+  const { searchQuery, setSearchQuery, setShowVoluntaryClosing, posProfile } = usePOSStore();
+  const outbox = useOutbox(posProfile, user);
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
 
@@ -95,20 +98,18 @@ const Header = () => {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
-      await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      await clearAppStorage();
+      await clearCashierStorage(true, (window as Window & { csrf_token?: string }).csrf_token);
       window.location.href = '/login?redirect-to=%2Fpos';
     } catch (error) {
-      showToast.error(t('errors.failed_logout'));
+      showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;
       setLoggingOut(false);
     }
   };
 
   const handleClearCache = async () => {
-    await clearAppStorage();
-    // Reload the page
-    window.location.reload();
+    try { await clearCashierStorage(); window.location.reload(); }
+    catch (error) { showToast.error(error instanceof Error ? error.message : t('errors.failed_logout')); }
   };
 
   const handleCloseShift = () => {
@@ -177,6 +178,7 @@ const Header = () => {
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     onClick={handleCloseShift}
+                    disabled={outbox.offline || outbox.replaying || outbox.rows.length > 0}
                   >
                     <Lock className="w-4 h-4 me-3" />
                     {t('header.close_shift')}

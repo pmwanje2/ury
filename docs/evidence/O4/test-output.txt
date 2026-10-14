@@ -1,0 +1,516 @@
+
+=== red-clean.log (captured tail) ===
+     23|   const path = '../src/offline/outbox.ts';
+     24|   const { OfflineOutbox } = await import(/* @vite-ignore */ path);
+ ❯ pos/tests/offline-outbox.test.ts:190:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/26]⎯
+
+ FAIL  pos/tests/offline-outbox.test.ts > logout/purge stays blocked for pending AND parked records; another cashier cannot replay them
+AssertionError: durable offline capture/replay is not implemented: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ outbox pos/tests/offline-outbox.test.ts:22:113
+     20| // Fail explicitly on the missing capture behavior, rather than an imp…
+     21| async function outbox(options: Record<string, unknown> = {}) {
+     22|   expect(existsSync(resolve('pos/src/offline/outbox.ts')), 'durable of…
+       |                                                                                                                 ^
+     23|   const path = '../src/offline/outbox.ts';
+     24|   const { OfflineOutbox } = await import(/* @vite-ignore */ path);
+ ❯ pos/tests/offline-outbox.test.ts:197:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/26]⎯
+
+ FAIL  pos/tests/offline-outbox.test.ts > replay is exclusive, exposes Replaying, and prohibits capture while it is running
+AssertionError: durable offline capture/replay is not implemented: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ outbox pos/tests/offline-outbox.test.ts:22:113
+     20| // Fail explicitly on the missing capture behavior, rather than an imp…
+     21| async function outbox(options: Record<string, unknown> = {}) {
+     22|   expect(existsSync(resolve('pos/src/offline/outbox.ts')), 'durable of…
+       |                                                                                                                 ^
+     23|   const path = '../src/offline/outbox.ts';
+     24|   const { OfflineOutbox } = await import(/* @vite-ignore */ path);
+ ❯ pos/tests/offline-outbox.test.ts:210:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/26]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  26 failed (26)
+   Start at  23:14:36
+   Duration  3.57s (transform 702ms, setup 0ms, collect 1.53s, tests 222ms, environment 1.12s, prepare 210ms)
+
+
+=== close-red.log (captured tail) ===
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  pos/tests/offline-cashier.test.tsx > till close is disabled offline in the real header
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ pos/tests/offline-cashier.test.tsx:33:43
+     31|   await act(async () => root.render(<MemoryRouter future={{ v7_startTr…
+     32|   await act(async () => button(/^Cashier/).click());
+     33|   expect(button(/Close Shift/i).disabled).toBe(true);
+       |                                           ^
+     34| });
+     35|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  pos/tests/offline-cashier.test.tsx > main draft cannot bypass offline close through its API wrapper
+ FAIL  pos/tests/offline-cashier.test.tsx > main submit cannot bypass offline close through its API wrapper
+ FAIL  pos/tests/offline-cashier.test.tsx > sub draft cannot bypass offline close through its API wrapper
+ FAIL  pos/tests/offline-cashier.test.tsx > sub submit cannot bypass offline close through its API wrapper
+AssertionError: promise resolved "{ name: 'C1' }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "name": "C1",
+  }
+
+ ❯ pos/tests/offline-cashier.test.tsx:42:23
+     40|   vi.spyOn(db, 'createDoc').mockResolvedValue({ name: 'C1' });
+     41|   vi.spyOn(db, 'updateDoc').mockResolvedValue({ name: 'C1' });
+     42|   await expect(close()).rejects.toThrow(/offline|outbox/i);
+       |                       ^
+     43|   expect(db.createDoc).not.toHaveBeenCalled(); expect(db.updateDoc).no…
+     44| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  5 failed (5)
+   Start at  23:20:22
+   Duration  2.13s (transform 449ms, setup 0ms, collect 995ms, tests 179ms, environment 519ms, prepare 164ms)
+
+
+=== integration-red.log (captured tail) ===
++ ]
+
+ ❯ pos/tests/offline-cashier.test.tsx:51:47
+     49|   await act(async () => root.render(<OrderPanel />));
+     50|   await act(async () => button(/^Add New Order$/).click());
+     51|   expect(usePOSStore.getState().activeOrders).toEqual([]);
+       |                                               ^
+     52|   expect(call.post).not.toHaveBeenCalled();
+     53|   expect(await new OfflineOutbox({ profile: usePOSStore.getState().pos…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  pos/tests/offline-cashier.test.tsx > pending outbox disables till close even when the browser is online
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ pos/tests/offline-cashier.test.tsx:61:66
+     59|   await act(async () => root.render(<MemoryRouter><Header /></MemoryRo…
+     60|   await act(async () => button(/^Cashier/).click());
+     61|   await vi.waitFor(() => expect(button(/Close Shift/i).disabled).toBe(…
+       |                                                                  ^
+     62| });
+     63|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+ FAIL  pos/tests/offline-cashier.test.tsx > logout with a pending outbox warns and preserves queue and caches without sending logout
+AssertionError: expected "error" to be called with arguments: [ StringMatching{…} ]
+
+Number of calls: 0
+
+ ❯ pos/tests/offline-cashier.test.tsx:71:19
+     69|   await act(async () => button(/^Cashier/).click());
+     70|   await act(async () => button(/^Logout$/).click());
+     71|   expect(warning).toHaveBeenCalledWith(expect.stringMatching(/outbox|p…
+       |                   ^
+     72|   expect(request).not.toHaveBeenCalled(); expect(await q.list()).toHav…
+     73|   expect(localStorage.getItem('pos_profile')).toBe('cached');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯
+
+
+ Test Files  3 failed (3)
+      Tests  9 failed | 5 passed (14)
+   Start at  23:23:33
+   Duration  4.81s (transform 551ms, setup 0ms, collect 1.43s, tests 1.30s, environment 1.33s, prepare 252ms)
+
+
+=== fixture-red.log (captured tail) ===
+F
+======================================================================
+FAIL: test_profile_flag_is_exported_and_admitted_by_fixture_filter (ury.tests.unit.test_offline_capture_fixture.OfflineCaptureFixtureTest.test_profile_flag_is_exported_and_admitted_by_fixture_filter)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/paulmwanje/work/ury-o4-offline-outbox-3712/ury/tests/unit/test_offline_capture_fixture.py", line 13, in test_profile_flag_is_exported_and_admitted_by_fixture_filter
+    self.assertIsNotNone(flag, "POS Profile offline capture opt-in is not shipped")
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: unexpectedly None : POS Profile offline capture opt-in is not shipped
+
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+FAILED (failures=1)
+
+=== controls-red.log (captured tail) ===
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/25]⎯
+
+ FAIL  pos/tests/offline-refusals.test.ts > table transfer is explicitly refused offline before a live mutation
+ FAIL  pos/tests/offline-refusals.test.ts > captain transfer is explicitly refused offline before a live mutation
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ ❯ pos/tests/offline-refusals.test.ts:19:21
+     17|   const post = vi.spyOn(call, 'post').mockResolvedValue({ message: {} …
+     18|   vi.spyOn(window, 'open').mockReturnValue(null);
+     19|   await expect(run()).rejects.toThrow(/offline|refused|not available/i…
+       |                     ^
+     20|   expect(post).not.toHaveBeenCalled();
+     21| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/25]⎯
+
+ FAIL  pos/tests/offline-refusals.test.ts > fiscal print is explicitly refused offline before a live mutation
+AssertionError: promise resolved "'socket'" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+"socket"
+
+ ❯ pos/tests/offline-refusals.test.ts:19:21
+     17|   const post = vi.spyOn(call, 'post').mockResolvedValue({ message: {} …
+     18|   vi.spyOn(window, 'open').mockReturnValue(null);
+     19|   await expect(run()).rejects.toThrow(/offline|refused|not available/i…
+       |                     ^
+     20|   expect(post).not.toHaveBeenCalled();
+     21| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/25]⎯
+
+
+ Test Files  5 failed (5)
+      Tests  25 failed | 35 passed (60)
+   Start at  23:33:03
+   Duration  9.89s (transform 681ms, setup 0ms, collect 1.75s, tests 4.98s, environment 1.95s, prepare 374ms)
+
+
+=== safety-red.log (captured tail) ===
++   "phase": "order",
++   "profile": "Till A",
++   "rounds": [
++     {
++       "captured_at": "2026-10-14T21:39:56.208Z",
++       "expected_total": 100,
++       "items": [
++         {
++           "item": "Tea",
++           "item_name": "Tea",
++           "qty": 1,
++           "rate": 100,
++         },
++       ],
++       "offline_printed": 1,
++       "round_id": "a4043082-fec7-4c7d-b5f5-3b1f8b527ffb",
++     },
++     {
++       "captured_at": "2026-10-14T21:39:56.208Z",
++       "expected_total": 200,
++       "items": [
++         {
++           "item": "Tea",
++           "item_name": "Tea",
++           "qty": 1,
++           "rate": 100,
++         },
++       ],
++       "offline_printed": 1,
++       "round_id": "92a220f7-f35f-4e84-97e0-c4f0e4a6904f",
++     },
++   ],
++   "sequence": 1,
++   "state": "pending",
+  }
+
+ ❯ pos/tests/offline-outbox.test.ts:202:89
+    200| test('new extra rounds cannot rewrite the offline order customer or ta…
+    201|   const q = await outbox(); const row = await q.capture(data, 100);
+    202|   await expect(q.capture({ ...data, customer: 'Other Guest' }, 200, ro…
+       |                                                                                         ^
+    203|   expect((await q.list())[0].rounds).toHaveLength(1);
+    204| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  4 failed (4)
+      Tests  7 failed | 51 passed (58)
+   Start at  23:39:48
+   Duration  9.11s (transform 961ms, setup 0ms, collect 2.45s, tests 3.65s, environment 1.90s, prepare 338ms)
+
+
+=== continuation-red.log (captured tail) ===
+   ✓ offline pay-by-phone is refused with an operator-facing reason 0ms
+   ✓ offline efris-fdn is refused with an operator-facing reason 1ms
+   ✓ offline till-close is refused with an operator-facing reason 1ms
+   × empty-queue logout waits for the asynchronous O3 cache purge before allowing navigation 69ms
+     → expected true to be false // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  pos/tests/offline-capture.test.ts > empty-queue logout waits for the asynchronous O3 cache purge before allowing navigation
+AssertionError: expected true to be false // Object.is equality
+
+- Expected
++ Received
+
+- false
++ true
+
+ ❯ pos/tests/offline-capture.test.ts:100:31
+     98|   await new Promise((resolve) => setTimeout(resolve, 0));
+     99|   try {
+    100|     expect(navigationAllowed).toBe(false);
+       |                               ^
+    101|   } finally {
+    102|     finishPurge();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  pos/tests/offline-cashier.test.tsx > new offline orders use the profile native walk-in customer after cart reset without searching the server
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ pos/tests/offline-cashier.test.tsx:154:114
+    152|   await act(async () => root.render(<OrderPanel />));
+    153|   const q = new OfflineOutbox({ profile: usePOSStore.getState().posPro…
+    154|   await act(async () => { button(/^Add New Order$/).click(); await vi.…
+       |                                                                                                                  ^
+    155|   const rows = await q.list();
+    156|   expect(rows[0].order.customer).toBe('Native Walk In');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  2 failed | 29 passed (31)
+   Start at  23:57:49
+   Duration  5.55s (transform 877ms, setup 0ms, collect 1.74s, tests 2.19s, environment 944ms, prepare 193ms)
+
+
+=== auth-red.log (captured tail) ===
+   × transient authentication responses retain the queued order for a later retry 12ms
+     → expected 'review' to be 'pending' // Object.is equality
+   × transient authentication responses retain the queued order for a later retry 4ms
+     → expected 'review' to be 'pending' // Object.is equality
+   × transient authentication responses retain the queued order for a later retry 4ms
+     → expected 'review' to be 'pending' // Object.is equality
+   ✓ ids and captured_at survive a lost order acknowledgement and a reload 5ms
+   ✓ a lost settlement acknowledgement resumes settlement without resending earlier rounds 6ms
+   ✓ a login/Access redirect or HTML/Guest ping is not success 3ms
+   ✓ a login/Access redirect or HTML/Guest ping is not success 2ms
+   ✓ a login/Access redirect or HTML/Guest ping is not success 2ms
+   ✓ a login redirect on an action retains that order instead of parking or acknowledging 3ms
+   ✓ positive extra rounds only attach to an un-settled order from this same outage 8ms
+   ✓ offline opt-in and this profile billing role are both required (no admin or empty-role shortcut) 5ms
+   ✓ revoking the cached billing role prevents replay before any server mutation 1ms
+   ✓ a hung request releases Replaying after a bounded timeout without dropping the order 4ms
+   ✓ new extra rounds cannot rewrite the offline order customer or table 3ms
+   ✓ manual MoMo requires a typed reference and retains it in the native order comments 5ms
+   ✓ offline card tender is refused and never queued as settlement 3ms
+   ✓ offline pay-by-phone tender is refused and never queued as settlement 3ms
+   ✓ logout/purge stays blocked for pending AND parked records; another cashier cannot replay them 6ms
+   ✓ purge removes the current browser outbox only after it is empty 4ms
+   ✓ offline capture fails closed without browser cross-tab locks 2ms
+   ✓ a browser print exception retains one durable order for reprint without duplicate recapture 2ms
+   ✓ replay is exclusive, exposes Replaying, and prohibits capture while it is running 4ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  pos/tests/offline-outbox.test.ts > transient authentication responses retain the queued order for a later retry
+ FAIL  pos/tests/offline-outbox.test.ts > transient authentication responses retain the queued order for a later retry
+ FAIL  pos/tests/offline-outbox.test.ts > transient authentication responses retain the queued order for a later retry
+AssertionError: expected 'review' to be 'pending' // Object.is equality
+
+Expected: "pending"
+Received: "review"
+
+ ❯ pos/tests/offline-outbox.test.ts:112:37
+    110|   request.mockImplementationOnce(async () => json(user.name)).mockImpl…
+    111|   await q.replay();
+    112|   expect((await q.list())[0].state).toBe('pending');
+       |                                     ^
+    113| });
+    114|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 27 passed (30)
+   Start at  00:03:26
+   Duration  911ms (transform 90ms, setup 0ms, collect 102ms, tests 193ms, environment 395ms, prepare 62ms)
+
+
+=== continuation-green.log (captured tail) ===
+    at dispatchEvent (/home/paulmwanje/work/ury-o4-offline-outbox-3712/node_modules/react-dom/cjs/react-dom-client.development.js:23585:11)
+    at dispatchDiscreteEvent (/home/paulmwanje/work/ury-o4-offline-outbox-3712/node_modules/react-dom/cjs/react-dom-client.development.js:23553:11)
+
+ ✓ pos/tests/offline-cashier.test.tsx (15 tests) 1825ms
+   ✓ the real cashier submit persists offline before clearing its cart without a live sync_order  336ms
+ ✓ pos/tests/offline-capture.test.ts (16 tests) 126ms
+
+ Test Files  2 passed (2)
+      Tests  31 passed (31)
+   Start at  23:58:13
+   Duration  5.28s (transform 670ms, setup 0ms, collect 1.47s, tests 1.95s, environment 1.00s, prepare 312ms)
+
+
+=== auth-green.log (captured tail) ===
+npm notice run test:pos
+npm notice run vitest run --config pos/vitest.config.ts --no-cache pos/tests/offline-outbox.test.ts
+
+ RUN  v3.2.6 /home/paulmwanje/work/ury-o4-offline-outbox-3712
+
+ ✓ pos/tests/offline-outbox.test.ts (30 tests) 259ms
+
+ Test Files  1 passed (1)
+      Tests  30 passed (30)
+   Start at  00:03:44
+   Duration  1.06s (transform 145ms, setup 0ms, collect 136ms, tests 259ms, environment 401ms, prepare 70ms)
+
+
+=== final-vitest.log (captured tail) ===
+stderr | pos/tests/waiter-theme.test.tsx > the real mobile waiter Menu header uses the same theme and contrast tokens
+⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ ✓ pos/tests/waiter-theme.test.tsx (1 test) 166ms
+ ✓ pos/tests/offline-refusals.test.ts (6 tests) 14ms
+
+ Test Files  26 passed (26)
+      Tests  378 passed (378)
+   Start at  00:04:32
+   Duration  45.13s (transform 2.02s, setup 0ms, collect 11.12s, tests 12.85s, environment 13.02s, prepare 2.55s)
+
+
+=== node-final.log (captured tail) ===
+✔ legacy opening selection counts the holder's till without posting invoice rows (4.509856ms)
+✔ legacy manager close uses the selected opening's profile for invoice reads and the closing entry (1.662165ms)
+✔ React main close requests the whole till with the existing response contract (207.183356ms)
+✔ React sub-cashier close keeps its separate per-cashier endpoint (52.313597ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2650.939418
+
+=== fixture-final.log (captured tail) ===
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+OK
+
+=== native-o1.log (captured tail) ===
+    ✔  test_invalid_client_order_uuid_is_refused_before_creating_any_invoice  (2.61s)
+    ✔  test_next_round_updates_existing_order_not_a_new_invoice  (3.92s)
+    ✔  test_retry_keeps_existing_active_branch_permission_check  (5.96s)
+    ✔  test_settle_cannot_rebind_an_existing_client_order_id  (3.88s)
+    ✔  test_settle_client_id_cannot_target_a_different_explicit_invoice  (3.63s)
+    ✔  test_sync_cannot_rebind_an_existing_client_order_id  (3.55s)
+
+
+----------------------------------------------------------------------
+Ran 12 tests in 43.584s
+
+OK
+
+=== native-o2.log (captured tail) ===
+    ✔  test_future_capture_is_refused_with_stable_id  (2.28s)
+    ✔  test_malformed_capture_is_refused_with_stable_id  (2.58s)
+    ✔  test_matching_expected_total_uses_server_price_not_caller_rate  (3.49s)
+    ✔  test_offline_printed_kot_is_served_and_emits_no_printer_or_mosaic_output  (3.37s)
+    ✔  test_online_round_after_offline_round_still_publishes_to_mosaic  (3.23s)
+    ✔  test_utc_capture_is_normalized_to_sites_posting_timezone  (3.03s)
+
+
+----------------------------------------------------------------------
+Ran 19 tests in 61.750s
+
+OK
+
+=== build-final.log (captured tail) ===
+../ury/public/pos/assets/fr-Bw886YdT.js               20.52 kB │ gzip:   6.83 kB
+../ury/public/pos/assets/lucide-react-C-rmbj0w.js    786.79 kB │ gzip: 143.36 kB
+../ury/public/pos/assets/index-BeB5ERIl.js         1,152.06 kB │ gzip: 333.60 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 8.20s
+yarn run v1.22.22
+$ cp ../ury/public/pos/index.html ../ury/www/pos.html
+Done in 0.06s.
+
+=== native-field.log (captured tail) ===
+["POS Profile", "ury_offline_capture", "Check", "0"]
+
+=== teardown.log (captured tail) ===
+ Container ury-o4-tgmi9v-db-1 Stopped
+ Container ury-o4-tgmi9v-db-1 Removing
+ Container ury-o4-tgmi9v-redis-1 Removed
+ Container ury-o4-tgmi9v-db-1 Removed
+ Volume ury-o4-tgmi9v_sites Removing
+ Volume ury-o4-tgmi9v_db Removing
+ Volume ury-o4-tgmi9v_logs Removing
+ Network ury-o4-tgmi9v_default Removing
+ Volume ury-o4-tgmi9v_logs Removed
+ Volume ury-o4-tgmi9v_db Removed
+ Volume ury-o4-tgmi9v_sites Removed
+ Network ury-o4-tgmi9v_default Removed

@@ -89,6 +89,14 @@ async function submitReason(reason: string) {
 }
 
 describe('Orders mandatory void reason', () => {
+  it('refuses an offline void with a clear reason before calling cancel_order', async () => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+    try {
+      await submitReason('Duplicate order');
+      expect(call.post).not.toHaveBeenCalledWith(cancelMethod, expect.anything());
+      expect(showToast.error).toHaveBeenCalledWith(expect.stringMatching(/offline|refused/i));
+    } finally { Object.defineProperty(navigator, 'onLine', { configurable: true, value: true }); }
+  });
   it.each(['', ' \t\n ', 'a', 'ab', 'abc', '  abc  '])('refuses %j before posting and explains the minimum', async (reason) => {
     await submitReason(reason);
     expect(call.post).not.toHaveBeenCalledWith(cancelMethod, expect.anything());

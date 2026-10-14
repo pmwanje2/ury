@@ -1,4 +1,5 @@
 import { DOCTYPES } from '../data/doctypes';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call, db, getSessionUser, getUserSessionStorageKey } from '@ury/core';
 import { OrderStatusType, OrderType } from '../data/order-types';
 import type { Filter } from 'frappe-js-sdk/lib/db/types';
@@ -421,6 +422,7 @@ export async function mergeBills(
   primaryInvoice: string,
   secondaryInvoice: string
 ): Promise<MergeBillsResponse> {
+  await assertOfflineActionAllowed('merge');
   const response = await call.post<{ message: MergeBillsResponse }>(
     'ury.ury_pos.api.merge_bills',
     {

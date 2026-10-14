@@ -5,6 +5,7 @@ import { formatCurrency, call, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 
 
 interface PaymentDialogProps {
@@ -63,7 +64,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
 
-  const handleApplyDiscount = () => {
+  const handleApplyDiscount = async () => {
+    try { await assertOfflineActionAllowed('discount'); }
+    catch (error) { setError(error instanceof Error ? error.message : t('errors.invalid_discount')); return; }
     const value = parseFloat(discountValue);
     if (isNaN(value) || value <= 0) {
       setError(t('errors.invalid_discount'));
@@ -141,6 +144,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     setIsProcessing(true);
     setError(null);
     try {
+      await assertOfflineActionAllowed('online invoice settlement, card or pay-by-phone');
       await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
         additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
         cashier,
@@ -321,4 +325,4 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   );
 };
 
-export default PaymentDialog; 
+export default PaymentDialog;
