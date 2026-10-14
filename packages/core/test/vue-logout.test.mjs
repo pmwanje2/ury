@@ -3,6 +3,7 @@ import test from 'node:test';
 import { environment, loadVueLogout } from './logout-harness.mjs';
 
 for (const app of ['urypos', 'mosaic']) {
+  const login = app === 'urypos' ? '/urypos/login' : '/login';
   test(`${app}: logout POST includes the session CSRF token`, async () => {
     const env = environment();
     await loadVueLogout(app, env).run();
@@ -11,10 +12,10 @@ for (const app of ['urypos', 'mosaic']) {
     assert.equal(env.calls[0][1].headers?.['X-Frappe-CSRF-Token'], 'session-token');
   });
 
-  test(`${app}: successful logout clears URY state and goes to the common login`, async () => {
+  test(`${app}: successful logout clears URY state and goes to its login`, async () => {
     const env = environment();
     await loadVueLogout(app, env).run();
-    assert.equal(env.globals.window.location.href, '/login');
+    assert.equal(env.globals.window.location.href, login);
     for (const key of ['userAuth', 'selectedRoom', 'posOrderTabsData',
       'posOrderTabsData:alice@example.com', 'kot_time', 'KOT-001_item-001_strike',
       'ury_active_branch_id']) {
@@ -37,7 +38,7 @@ for (const app of ['urypos', 'mosaic']) {
     await run();
     assert.equal(disabled, true);
     assert.equal(env.calls.length, 1);
-    assert.equal(env.globals.window.location.href, '/login');
+    assert.equal(env.globals.window.location.href, login);
   });
 
   for (const failure of ['HTTP', 'network']) {
