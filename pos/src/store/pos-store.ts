@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey } from '@ury/core';
 import { syncOfflineCapture } from '../pwa/register-offline';
-import { useRootStore } from './root-store';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
 import { getMenuCourses } from '../lib/menu-course-api';
@@ -330,11 +329,6 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   initializeApp: async () => {
     try {
-      await syncOfflineCapture(useRootStore.getState().posProfile);
-    } catch (error) {
-      console.error('Offline capture setup failed', error);
-    }
-    try {
       set({ isInitializing: true, error: null });
       
       const [profileResult, menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
@@ -343,6 +337,15 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         get().fetchCategories(),
         get().fetchPaymentModes()
       ]);
+
+      try {
+        // The limited getPosProfile payload omits ury_offline_capture.
+        // The combined profile spreads the POS Profile document, which
+        // carries the flag when O4/O5 has added it. Missing stays off.
+        await syncOfflineCapture(get().posProfile);
+      } catch (error) {
+        console.error('Offline capture setup failed', error);
+      }
 
       if (profileResult.status === 'rejected' || 
           menuResult.status === 'rejected' || 
