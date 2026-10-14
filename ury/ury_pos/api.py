@@ -855,6 +855,8 @@ def getPosProfile():
         "edit_order_type":edit_order_type,
         "enable_kot_reprint":enable_kot_reprint,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
+        "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
+        "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
 
     }
 

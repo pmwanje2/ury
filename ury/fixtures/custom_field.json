@@ -6664,5 +6664,31 @@
 		"translatable": 0,
 		"unique": 0,
 		"width": null
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"name": "POS Profile-custom_floor_idle_signout_seconds",
+		"fieldname": "custom_floor_idle_signout_seconds",
+		"fieldtype": "Int",
+		"label": "Floor Idle Sign-out Seconds",
+		"default": "0",
+		"description": "Sign out non-billing floor users after this many idle seconds. 0 disables automatic sign-out.",
+		"insert_after": "custom_blind_cash_count",
+		"module": "URY",
+		"docstatus": 0
+	},
+	{
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"name": "POS Profile-custom_floor_signout_after_send",
+		"fieldname": "custom_floor_signout_after_send",
+		"fieldtype": "Check",
+		"label": "Floor Sign-out After Send",
+		"default": "0",
+		"description": "Sign out non-billing floor users after successfully sending an order. Billing users stay signed in.",
+		"insert_after": "custom_floor_idle_signout_seconds",
+		"module": "URY",
+		"docstatus": 0
 	}
 ]
