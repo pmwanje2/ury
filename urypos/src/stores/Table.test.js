@@ -504,3 +504,149 @@ describe('idle floor-plan rendering', () => {
     expect(vi.getTimerCount()).toBe(timerCount);
   });
 });
+
+describe('floor plan shows the table owner', () => {
+  const waiter = 'amina.nakato@salama.example';
+  const owner = 'Amina Nakato';
+  const draft = {
+    name: 'POS-INV-2026-00005',
+    restaurant_table: 'T-05',
+    custom_merged_tables: '',
+    waiter,
+    creation: '2026-10-14 12:00:00',
+  };
+
+  async function loadFloor(tables, invoices, users) {
+    vi.setSystemTime(new Date(2026, 9, 14, 12, 0, 0));
+    const store = useTableStore();
+    store.selectedRoom = 'Dining';
+    store.db.getDocList.mockImplementation((doctype) => {
+      if (doctype === 'URY Table') return Promise.resolve(tables);
+      if (doctype === 'POS Invoice') return Promise.resolve(invoices);
+      if (doctype === 'User') {
+        if (users instanceof Error) return Promise.reject(users);
+        return Promise.resolve(users);
+      }
+      if (doctype === 'URY Service Request') return Promise.resolve([]);
+      throw new Error(`Unexpected doctype: ${doctype}`);
+    });
+    store.call.get.mockResolvedValue({ message: '2026-10-14 12:00:00' });
+    store.fetchTable();
+    await flushPromises();
+    return store;
+  }
+
+  async function mountFloor() {
+    floorElement = document.createElement('div');
+    document.body.appendChild(floorElement);
+    floorApp = createApp(FloorPlan);
+    floorApp.use(getActivePinia());
+    floorApp.mount(floorElement);
+    await nextTick();
+  }
+
+  function cardText(name) {
+    const heading = [...floorElement.querySelectorAll('h5')].find((node) => node.textContent.includes(name));
+    return heading.closest('div.flex-col').textContent;
+  }
+
+  it('shows the owner on an occupied card', async () => {
+    const store = await loadFloor(
+      [{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }],
+      [draft],
+      [{ name: waiter, full_name: owner }],
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain(owner);
+    expect(cardText('T-05')).not.toContain(waiter);
+    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', {
+      fields: ['name', 'restaurant_table', 'custom_merged_tables', 'waiter'],
+      filters: [['docstatus', '=', 0]],
+      orFilters: [
+        ['restaurant_table', 'in', ['T-05']],
+        ['custom_merged_tables', 'like', '%T-05%'],
+      ],
+      limit: 0,
+    });
+    expect(store.db.getDocList).toHaveBeenCalledWith('User', {
+      fields: ['name', 'full_name'],
+      filters: [['name', 'in', [waiter]]],
+      limit: 1,
+    });
+  });
+
+  it('shows the same owner on a merged partner table', async () => {
+    await loadFloor(
+      [
+        { name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
+        { name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00', merged_with: 'T-05' },
+      ],
+      [{ ...draft, custom_merged_tables: ' T-06 ' }],
+      [{ name: waiter, full_name: owner }],
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain(owner);
+    expect(cardText('T-06')).toContain(owner);
+    expect(cardText('T-06')).not.toContain(waiter);
+  });
+
+  it('names the owner in the assigned-table refusal', async () => {
+    const store = await loadFloor(
+      [{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }],
+      [draft],
+      [{ name: waiter, full_name: owner }],
+    );
+    store.auth.hasAccess = false;
+    store.auth.cashier = false;
+    store.auth.sessionUser = 'betty.namuli@salama.example';
+    store.alert.createAlert = vi.fn(() => new Promise(() => {}));
+    store.tableMenu = [];
+    store.menu.cart = [];
+    store.call.get.mockImplementation((method) => {
+      if (method === 'ury.ury.doctype.ury_order.ury_order.get_order_invoice') {
+        return Promise.resolve({
+          message: {
+            name: 'POS-INV-2026-00005',
+            waiter,
+            items: [],
+            invoice_printed: 0,
+            custom_comments: '',
+            modified: '',
+            grand_total: 0,
+            mobile_number: '',
+            customer: '',
+          },
+        });
+      }
+      return Promise.resolve({ message: '2026-10-14 12:00:00' });
+    });
+
+    store.loadSelectedTable({ name: 'T-05', occupied: 1, is_take_away: 0 });
+    await flushPromises();
+
+    expect(store.alert.createAlert).toHaveBeenCalledWith(
+      'Message',
+      `Table is assigned to ${owner}`,
+      'OK',
+    );
+  });
+
+  it('falls back to the id before @ when the User read is refused', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await loadFloor(
+      [{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }],
+      [draft],
+      new Error('User read denied'),
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain('amina.nakato');
+    expect(cardText('T-05')).not.toContain(waiter);
+    expect(cardText('T-05')).not.toContain(owner);
+  });
+});
