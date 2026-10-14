@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { Button, showToast } from '@ury/ui';
-import { logoutSession, clearAppStorage, isNetworkFailure } from '@ury/core';
+import { logoutSession, clearAppStorage, isNetworkFailure, getUserSessionStorageKey } from '@ury/core';
+import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import {
   checkPOSOpening,
   parseFrappeError,
@@ -57,6 +58,16 @@ function getHttpStatus(error: unknown): number | undefined {
   return undefined;
 }
 
+function readConfirmedOpening(key: string | null): POSOpeningEntryRef | null {
+  if (!key) return null;
+  try {
+    const entry = JSON.parse(sessionStorage.getItem(key) || 'null');
+    return entry && typeof entry === 'object' && 'name' in entry ? entry as POSOpeningEntryRef : null;
+  } catch {
+    return null;
+  }
+}
+
 const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [blockingState, setBlockingState] = useState<OpeningBlockingState | null>(null);
@@ -72,7 +83,6 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   // telling them to contact a manager.
   const [showClosingDialog, setShowClosingDialog] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [allowCachedShell, setAllowCachedShell] = useState(false);
   const logoutPending = useRef(false);
 
   const handleLogout = async () => {
@@ -101,6 +111,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const { user } = useRootStore();
 
   const canAccessDesk = useMemo(() => hasDeskAccess(user), [user]);
+  const confirmedOpeningKey = getUserSessionStorageKey('ury_offline_opening', user?.name);
 
   const clearBlockingState = useCallback(() => {
     setBlockingState(null);
@@ -123,7 +134,6 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     clearBlockingState();
     setExistingEntry(null);
     setNeedsOpeningChecklist(false);
-    setAllowCachedShell(false);
 
     try {
       const response = resumeEntry
@@ -208,13 +218,22 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         }
       }
 
+      // Every gate passed online. An opted-in till remembers this opening for
+      // the tab so an offline reload can show the cached workspace.
+      if (offlineCaptureEnabled(posProfile) && confirmedOpeningKey) {
+        sessionStorage.setItem(confirmedOpeningKey, JSON.stringify(matchingEntry));
+      }
       setIsLoading(false);
     } catch (error) {
       console.error('Failed to check POS opening status:', error);
-      // The opening read is not cached. A network failure must not hide the
-      // shell; online errors still block.
-      if (isNetworkFailure(error)) {
-        setAllowCachedShell(true);
+      // The opening read is not cached. Only "no HTTP answer" on an opted-in
+      // till that confirmed this same opening online in this tab may show the
+      // workspace. HTTP errors (401/403/...) and everything else block.
+      const confirmed = isNetworkFailure(error) && offlineCaptureEnabled(posProfile)
+        ? readConfirmedOpening(confirmedOpeningKey)
+        : null;
+      if (confirmed && confirmed.pos_profile === posProfile.name && confirmed.company === posProfile.company) {
+        setExistingEntry(confirmed);
         setIsLoading(false);
         return;
       }
@@ -237,7 +256,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
 
       setIsLoading(false);
     }
-  }, [posProfile, user?.name, clearBlockingState]);
+  }, [posProfile, user?.name, clearBlockingState, confirmedOpeningKey]);
 
   const handleOpeningSuccess = useCallback(() => {
     clearBlockingState();
@@ -316,7 +335,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     );
   }
 
-  if (!existingEntry && !allowCachedShell) {
+  if (!existingEntry) {
     return (
       <POSOpeningScreen
         onSuccess={handleOpeningSuccess}
