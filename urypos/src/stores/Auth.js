@@ -10,8 +10,23 @@ import router from "../router";
 import { disconnectQzPrinter } from "./utils/PrintWithQz";
 import { logoutSession } from "../../../packages/core/src/logout.ts";
 import { clearAppStorage } from "../../../packages/core/src/storage.ts";
+import { watchIdle } from "../../../packages/core/src/idle.ts";
 
 axios.defaults.baseURL = frappe.url;
+
+const RECENT_WAITERS_KEY = "ury_recent_waiters";
+
+function readRecentWaiters() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(RECENT_WAITERS_KEY) || "[]");
+    return Array.isArray(stored)
+      ? stored.filter((waiter) => waiter && typeof waiter.username === "string" && typeof waiter.displayName === "string")
+        .map(({ username, displayName }) => ({ username, displayName })).slice(0, 6)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
 
 export const useAuthStore = defineStore("auth", {
   state: () => ({
@@ -39,6 +54,8 @@ export const useAuthStore = defineStore("auth", {
     table: useTableStore(),
     invoiceData: useInvoiceDataStore(),
     userAuth: localStorage.getItem("userAuth"),
+    idleStop: null,
+    recentWaiters: readRecentWaiters(),
   }),
   getters: {
     isAuthenticated(state) {
@@ -52,17 +69,34 @@ export const useAuthStore = defineStore("auth", {
     //Login
     async login() {
       try {
-        await this.auth.loginWithUsernamePassword({
+        const response = await this.auth.loginWithUsernamePassword({
           username: this.userId,
           password: this.currentPassword,
-          device: "mobile",
         });
+        this.rememberRecentWaiter(
+          this.userId,
+          response.full_name || this.userId
+        );
         this.userAuth = true;
         localStorage.setItem("userAuth", "true");
+        this.currentPassword = "";
         await this.fetchUserDetails();
       } catch (error) {
         this.alert.createAlert("Message", error.message, "OK");
+      } finally {
+        this.currentPassword = "";
       }
+    },
+    rememberRecentWaiter(username, displayName) {
+      if (!username) return;
+      const waiters = readRecentWaiters().filter((waiter) => waiter.username !== username);
+      waiters.unshift({ username, displayName: displayName || username });
+      this.recentWaiters = waiters.slice(0, 6);
+      localStorage.setItem(RECENT_WAITERS_KEY, JSON.stringify(this.recentWaiters));
+    },
+    selectRecentWaiter(waiter) {
+      this.userId = waiter.username;
+      this.currentPassword = "";
     },
     checkAuthState() {
       if (this.userAuth && localStorage.getItem("userAuth")) {
@@ -110,6 +144,7 @@ export const useAuthStore = defineStore("auth", {
     },
     fetchUserRole() {
       //Fetching role based on logged user
+      this.stopIdle();
       this.db
         .getDoc("User", this.sessionUser)
         .then((doc) => {
@@ -149,6 +184,13 @@ export const useAuthStore = defineStore("auth", {
               this.viewAllStatus = result.message.view_all_status;
               this.removeTableOrderItem = result.message.remove_items;
               this.viewItemImage = result.message.show_image;
+              const idleSeconds = Number(
+                result.message.custom_floor_idle_signout_seconds ??
+                0
+              );
+              if (this.cashier === false && idleSeconds > 0) {
+                this.idleStop = watchIdle(() => this.logOut(), idleSeconds * 1000);
+              }
             })
             .catch((error) => console.error(error));
         })
@@ -241,15 +283,29 @@ export const useAuthStore = defineStore("auth", {
       this.activeDropdown = false;
     },
 
+    stopIdle() {
+      if (this.idleStop) {
+        this.idleStop();
+        this.idleStop = null;
+      }
+    },
+
+    switchWaiter() {
+      return this.logOut();
+    },
+
     async logOut() {
       if (this.loggingOut) return;
       this.loggingOut = true;
+      this.stopIdle();
       try {
         await logoutSession(window.csrf_token);
         clearAppStorage();
+        this.invoiceData.clearDataAfterUpdate();
         this.userAuth = false;
+        this.currentPassword = "";
         disconnectQzPrinter();
-        window.location.href = "/login";
+        window.location.href = "/urypos/login";
       } catch (error) {
         this.alert.createAlert("Message", "Failed to logout. Please try again.", "OK");
         this.loggingOut = false;
