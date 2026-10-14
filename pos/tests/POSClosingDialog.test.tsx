@@ -294,3 +294,118 @@ describe('blind cash count zero-row warnings', () => {
     expect(warningsWithoutSales).toEqual([]);
   });
 });
+
+const ALL_ZERO_MESSAGE = "Total closing amount can't be zero. Enter the amounts you counted.";
+const MISSING_ROWS_MESSAGE = 'Enter a closing amount for every payment mode before submitting.';
+
+async function renderCountedClose({
+  blind,
+  cashSales,
+  enterCounts,
+}: {
+  blind: boolean;
+  cashSales: number;
+  enterCounts: boolean;
+}) {
+  state.profile.custom_blind_cash_count = blind ? 1 : 0;
+  state.paymentModes = ['Cash', 'Card'];
+  vi.mocked(db.getDoc).mockResolvedValue({
+    name: 'POS-OPE-1',
+    balance_details: [
+      { mode_of_payment: 'Cash', opening_amount: 0 },
+      { mode_of_payment: 'Card', opening_amount: 0 },
+    ],
+  });
+  vi.mocked(getMainCashierPosInvoices).mockResolvedValue(
+    cashSales === 0
+      ? [
+          {
+            name: 'VOID-1', grand_total: 0, net_total: 0, total_qty: 0,
+            change_amount: 0, account_for_change_amount: 'Cash', taxes: [], payments: [],
+          },
+          {
+            name: 'VOID-2', grand_total: 0, net_total: 0, total_qty: 0,
+            change_amount: 0, account_for_change_amount: 'Cash', taxes: [], payments: [],
+          },
+        ]
+      : [{
+          name: 'POS-INV-CASH', grand_total: cashSales, net_total: cashSales, total_qty: 1,
+          change_amount: 0, account_for_change_amount: 'Cash', taxes: [],
+          payments: [{ mode_of_payment: 'Cash', amount: cashSales, account: 'Cash' }],
+        }],
+  );
+  await renderClosing(`counted:${blind}:${cashSales}:${enterCounts}`);
+
+  if (enterCounts) {
+    const modes = Array.from(container.querySelectorAll('tbody tr'))
+      .map((row) => row.querySelector('td')?.textContent);
+    expect(modes).toEqual(['Cash', 'Card']);
+    for (const mode of modes) {
+      const row = Array.from(container.querySelectorAll('tbody tr'))
+        .find((candidate) => candidate.querySelector('td')?.textContent === mode);
+      const input = row?.querySelector<HTMLInputElement>('input[type="number"]');
+      expect(input).toBeTruthy();
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '0');
+        input!.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+  }
+
+  const submit = Array.from(container.querySelectorAll('button'))
+    .find((button) => button.textContent === 'Close POS');
+  expect(submit).toBeTruthy();
+  return {
+    submit: submit!,
+    messages: Array.from(container.querySelectorAll('p.text-amber-700')).map((node) => node.textContent),
+    text: container.textContent || '',
+  };
+}
+
+describe('counted zero close', () => {
+  it.each([
+    { blind: false, label: 'visible counts' },
+    { blind: true, label: 'blind count' },
+  ])('enables Close POS when every mode is opening 0, expected 0, and counted 0 ($label)', async ({ blind }) => {
+    const { submit, messages, text } = await renderCountedClose({ blind, cashSales: 0, enterCounts: true });
+
+    expect(messages).toEqual([]);
+    expect(submit.disabled).toBe(false);
+    if (blind) {
+      expect(text).not.toContain('Expected');
+      expect(text).not.toContain('Grand Total');
+      expect(text).not.toContain('₹ 40');
+    }
+  });
+
+  it.each([
+    { blind: false, label: 'visible counts' },
+    { blind: true, label: 'blind count' },
+  ])('still blocks an all-zero count when cash was expected ($label)', async ({ blind }) => {
+    const { submit, messages, text } = await renderCountedClose({ blind, cashSales: 40, enterCounts: true });
+
+    expect(submit.disabled).toBe(true);
+    expect(messages).toEqual([ALL_ZERO_MESSAGE]);
+    if (blind) {
+      expect(text).not.toContain('Expected');
+      expect(text).not.toContain('Grand Total');
+      expect(text).not.toContain('₹ 40');
+    } else {
+      expect(text).toContain('₹ 40');
+    }
+  });
+
+  it.each([
+    { blind: false, label: 'visible counts' },
+    { blind: true, label: 'blind count' },
+  ])('still blocks an untouched payment row ($label)', async ({ blind }) => {
+    const { submit, messages, text } = await renderCountedClose({ blind, cashSales: 0, enterCounts: false });
+
+    expect(submit.disabled).toBe(true);
+    expect(messages).toEqual([MISSING_ROWS_MESSAGE]);
+    if (blind) {
+      expect(text).not.toContain('Expected');
+      expect(text).not.toContain('₹ 40');
+    }
+  });
+});
