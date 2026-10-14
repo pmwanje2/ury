@@ -207,6 +207,7 @@ QZ_SIGNING_ROLES = {
     "URY Admin",
     "URY Manager",
     "URY Cashier",
+    "Restaurant Kitchen",
 }
 
 

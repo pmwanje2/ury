@@ -16,7 +16,7 @@ try {
 } catch (error) {
   if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
 }
-Object.assign(helpers, await import("./station-print.js").catch(() => ({})));
+helpers = { ...helpers, ...await import("./station-print.js").catch(() => ({})) };
 
 test("realtime QZ failure does not stop display updates and reconnect prints missed tickets once", async t => {
   assert.equal(typeof helpers.createStationPrinter, "function", "Station printing is missing");

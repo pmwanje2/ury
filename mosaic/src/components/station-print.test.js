@@ -283,7 +283,7 @@ test("QZ loads only Frappe's existing copy without a new npm dependency", async 
   const loaded = await module.loadQz({ window: browser, document });
   assert.equal(loaded, browser.qz);
   assert.equal(scripts[0].src, "/assets/frappe/node_modules/qz-tray/qz-tray.js");
-  const dependencies = JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")).dependencies;
+  const dependencies = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")).dependencies;
   assert.equal(dependencies["qz-tray"], undefined);
 });
 

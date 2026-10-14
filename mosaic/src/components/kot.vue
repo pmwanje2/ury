@@ -44,6 +44,37 @@
       {{ actionError }}
     </div>
 
+    <div v-if="failedPrints.length" role="status" class="mb-4 rounded-lg bg-red-50 border border-red-600 p-4 text-red-700 flex justify-between items-center gap-4">
+      <span>{{ failedPrints.length }} tickets not printed — Retry</span>
+      <button @click="retryFailedPrints" class="rounded bg-red-700 px-4 py-2 text-white font-semibold">Retry</button>
+    </div>
+    <p v-if="printError" role="alert" class="mb-4 rounded border border-red-600 bg-red-50 p-3 text-red-700">{{ printError }}</p>
+    <button v-if="branch" @click="openPrintSettings" class="mb-4 rounded border border-blue-600 px-4 py-2 text-blue-700 font-semibold">Manager settings</button>
+
+    <div v-if="showPrintSettings && canManagePrintSettings" class="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4 overflow-y-auto">
+      <form @submit.prevent="savePrintSettings" role="dialog" aria-modal="true" aria-labelledby="station-print-title" class="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+        <h2 id="station-print-title" class="text-xl font-bold">Manager station printing settings</h2>
+        <p class="mt-2 text-sm text-gray-600">{{ production }} · This browser only. Use one station per unit. New tickets print from the time this is enabled.</p>
+        <p v-if="stationSettingsError" role="alert" class="mt-3 text-red-700">{{ stationSettingsError }}</p>
+        <label class="mt-4 block font-semibold">Printer host
+          <input v-model="stationSettings.host" class="mt-1 w-full rounded border p-2" type="text" autocomplete="off" required>
+        </label>
+        <label class="mt-3 block font-semibold">Printer port
+          <input v-model.number="stationSettings.port" class="mt-1 w-full rounded border p-2" type="number" min="1" max="65535" required>
+        </label>
+        <label class="mt-3 block font-semibold">Print format
+          <input v-model="stationSettings.printFormat" class="mt-1 w-full rounded border p-2" type="text" required>
+        </label>
+        <label class="mt-4 flex items-center gap-2 font-semibold">
+          <input v-model="stationSettings.enabled" type="checkbox"> Enable station printing
+        </label>
+        <div class="mt-6 flex justify-end gap-3">
+          <button type="button" @click="showPrintSettings = false" class="rounded border px-4 py-2">Cancel</button>
+          <button type="submit" class="rounded bg-blue-600 px-4 py-2 text-white font-semibold">Save</button>
+        </div>
+      </form>
+    </div>
+
     <div v-if="branch" class="mb-4">
       <button @click="fetchRecentServed" :disabled="loadingServed" class="rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50">
         {{ loadingServed ? "Loading…" : "Recently served · Recall" }}
@@ -194,6 +225,7 @@
             >
               {{ kot.type === "Cancelled" || kot.type === "Partially cancelled" ? "Confirm" : "Serve" }}
             </button>
+            <button @click.stop="printKot(kot, { retry: true })" :disabled="!stationSettings.enabled || printingKots.includes(kot.name) || printedKots.includes(kot.name)" class="mt-2 w-full rounded border border-blue-600 py-2 px-6 text-blue-700 font-semibold hover:bg-blue-50 disabled:opacity-50">Print</button>
             <div v-if="pendingServes[kot.name]" class="flex justify-between items-center gap-3 text-blue-700">
               <span>{{ pendingServes[kot.name].sending ? "Serving…" : "Serving in 5 seconds…" }}</span>
               <button v-if="!pendingServes[kot.name].sending" @click.stop="undoServe(kot)" class="rounded border border-blue-600 px-3 py-1 font-semibold">Undo</button>
@@ -264,6 +296,7 @@ import { FrappeApp } from "frappe-js-sdk";
 import Masonry from "masonry-layout";
 import io from "socket.io-client";
 import { canRecallKot, isKotLate, kitchenErrorMessage, recentServedQuery, rememberKot } from "./kitchen-actions.js";
+import { createStationPrinter } from "./station-print.js";
 
 let host = window.location.hostname;
 let port = window.location.port;
@@ -349,9 +382,72 @@ export default {
       loadingServed: false,
       serverTimeOffset: 0,
       timeInterval: null,
+      stationPrinter: null,
+      stationSettings: { enabled: false, enabledAt: null, host: "", port: 9100, printFormat: "" },
+      failedPrints: [],
+      printingKots: [],
+      printedKots: [],
+      printError: "",
+      canManagePrintSettings: false,
+      showPrintSettings: false,
+      stationSettingsError: "",
     };
   },
   methods: {
+    setupStationPrinting() {
+      if (!this.stationPrinter) {
+        this.stationPrinter = createStationPrinter({
+          production: this.production, user: this.loggeduser, call: this.call,
+          now: () => Date.now() + this.serverTimeOffset,
+          onChange: state => {
+            this.failedPrints = state.failed;
+            this.printingKots = state.pending;
+            this.printedKots = state.printed;
+            if (state.error) this.printError = state.error;
+          },
+        });
+      }
+      this.stationSettings = this.stationPrinter.settings;
+    },
+    async printKot(kot, options = {}) {
+      try {
+        this.setupStationPrinting();
+        await this.stationPrinter.process(kot, options);
+        this.failedPrints = this.stationPrinter.failed();
+      } catch (error) {
+        this.printError = kitchenErrorMessage(error, "Station printing is unavailable.");
+      }
+    },
+    printTickets(tickets) {
+      tickets.forEach(kot => { this.printKot(kot); });
+    },
+    async retryFailedPrints() {
+      if (this.stationPrinter) await this.stationPrinter.retry();
+      this.failedPrints = this.stationPrinter?.failed() || [];
+    },
+    async openPrintSettings() {
+      this.printError = "";
+      try {
+        const { message } = await this.call.get("frappe.client.get", { doctype: "User", name: this.loggeduser });
+        const roles = (message.roles || []).map(row => row.role);
+        this.canManagePrintSettings = this.loggeduser === "Administrator" || roles.some(role => ["System Manager", "URY Admin", "URY Manager"].includes(role));
+        if (!this.canManagePrintSettings) throw Error("A manager must sign in to change station printing settings.");
+        this.setupStationPrinting();
+        this.stationSettingsError = "";
+        this.showPrintSettings = true;
+      } catch (error) {
+        this.printError = kitchenErrorMessage(error, "Could not open station printing settings.");
+      }
+    },
+    savePrintSettings() {
+      if (!this.canManagePrintSettings) return;
+      try {
+        this.stationSettings = this.stationPrinter.configure(this.stationSettings);
+        this.showPrintSettings = false;
+      } catch (error) {
+        this.stationSettingsError = error.message;
+      }
+    },
     playAlertSound(path) {
       var currentDomain = window.location.origin;
       var audio_path = currentDomain + path;
@@ -398,6 +494,7 @@ export default {
               this.updateQtyColorTable();
               this.updateTimeRemaining();
               this.masonryLoading();
+              this.printTickets(this.kot);
               const audioFile = result.message.audio_file || this.lastSocketAudioFile;
               if (missedTickets && this.audio_alert === 1 && audioFile) {
                 this.playAlertSound(audioFile);
@@ -741,6 +838,7 @@ export default {
             this.masonryLoading();
             this.updateQtyColorTable();
             this.updateTimeRemaining();
+            this.printKot(doc.kot);
             setTimeout(()=>{
               if (doc.kot.type === "Cancelled"){
                 this.fetchKOT().then(() => {
