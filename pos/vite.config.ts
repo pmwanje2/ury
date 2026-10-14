@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath } from 'url'
 import { dirname, resolve } from 'path'
-import { precacheModifyURLPrefix, workboxRuntimeCaching } from './src/pwa/runtime-caching'
+import { precacheModifyURLPrefix } from './src/pwa/runtime-caching'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -13,24 +13,18 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // Own worker (src/pwa/sw.ts): exact same-origin routes, session guard.
+      strategies: 'injectManifest',
+      srcDir: 'src/pwa',
+      filename: 'sw.ts',
       injectRegister: false,
-      registerType: 'autoUpdate',
-      filename: 'sw.js',
       manifest: false,
-      workbox: {
-        inlineWorkboxRuntime: true,
-        // Precache becomes ury-pos-precache-v2-<scope>; purge removes only ury-pos-*.
-        cacheId: 'ury-pos',
-        clientsClaim: true,
-        skipWaiting: true,
+      injectManifest: {
+        rollupFormat: 'iife',
         globPatterns: ['**/*.{js,css,ico,png,svg,woff2}'],
         globIgnores: ['**/index.html'],
-        // Plugin default serves precached index.html for every navigation.
-        // Only the explicit /pos shell route below may be cached.
-        navigateFallback: undefined,
         // /sw.js is outside this outDir. Root precache URLs at the asset base.
         modifyURLPrefix: precacheModifyURLPrefix(),
-        runtimeCaching: workboxRuntimeCaching(),
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
