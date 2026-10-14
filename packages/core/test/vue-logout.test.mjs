@@ -42,7 +42,7 @@ for (const app of ['urypos', 'mosaic']) {
   });
 
   for (const failure of ['HTTP', 'network']) {
-    test(`${app}: ${failure} failure preserves the session UI and displays an error`, async () => {
+    test(`${app}: ${failure} failure ${app === 'urypos' ? 'locks the tablet locally' : 'preserves the session UI and displays an error'}`, async () => {
       const env = environment();
       env.globals.fetch = async () => {
         if (failure === 'network') throw new Error('Network unavailable');
@@ -50,6 +50,15 @@ for (const app of ['urypos', 'mosaic']) {
       };
       const { instance, run } = loadVueLogout(app, env);
       await run();
+      if (app === 'urypos') {
+        assert.equal(env.globals.window.location.href, login);
+        assert.equal(env.globals.localStorage.getItem('userAuth'), null);
+        assert.equal(env.globals.sessionStorage.getItem('posProfile'), null);
+        assert.equal(instance.userAuth, false);
+        assert.equal(instance.currentPassword, '');
+        assert.equal(instance.loggingOut, true);
+        return;
+      }
       assert.equal(env.globals.window.location.href, '/current');
       assert.equal(env.globals.localStorage.getItem('userAuth'), 'true');
       assert.equal(env.globals.sessionStorage.getItem('posProfile'), 'cached');

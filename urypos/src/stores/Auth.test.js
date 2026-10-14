@@ -155,15 +155,35 @@ describe('floor tablet sign-out', () => {
     expect(JSON.parse(localStorage.getItem(recentKey))).toEqual(names);
   });
 
-  it('failed logout keeps the current session and unsent cart for retry', async () => {
-    fetch.mockResolvedValue({ ok: false });
+  it.each(['HTTP', 'network'])('%s logout failure still locks the tablet locally', async (failure) => {
+    await loadRole();
+    const names = [{ username: 'alice', displayName: 'Alice Waiter' }];
+    localStorage.setItem(recentKey, JSON.stringify(names));
+    auth.currentPassword = '82649371'; // Synthetic credential.
+    if (failure === 'network') fetch.mockRejectedValue(new Error('Offline'));
+    else fetch.mockResolvedValue({ ok: false, status: 503 });
     await auth.logOut();
-    expect(auth.userAuth).toBe(true);
-    expect(invoice.menu.cart).toHaveLength(1);
-    expect(localStorage.getItem('userAuth')).toBe('true');
-    expect(window.location.href).toBe('/urypos/Table');
-    expect(auth.loggingOut).toBe(false);
-    expect(auth.alert.createAlert).toHaveBeenCalled();
+    expect(auth.userAuth).toBe(false);
+    expect(auth.currentPassword).toBe('');
+    expect(invoice.menu.cart).toEqual([]);
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(localStorage.getItem('selectedRoom')).toBeNull();
+    expect(sessionStorage.getItem('posProfile')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(recentKey))).toEqual(names);
+    expect(window.location.href).toBe('/urypos/login');
+    expect(auth.idleStop).toBeNull();
+    await auth.logOut();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejected idle logout still discards the cart and goes to the PIN pad', async () => {
+    await loadRole();
+    fetch.mockRejectedValue(new Error('Offline'));
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(auth.userAuth).toBe(false);
+    expect(invoice.menu.cart).toEqual([]);
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(window.location.href).toBe('/urypos/login');
   });
 });
 
@@ -212,6 +232,70 @@ function nativeLogin() {
 }
 
 describe('native username and private PIN', () => {
+  it('page-load session checks do not use a server cookie without a local sign-in marker', async () => {
+    clearAppStorage();
+    setActivePinia(createPinia());
+    auth = useAuthStore();
+    const requests = [];
+    auth.auth.axios.defaults.adapter = async config => {
+      requests.push(config.url);
+      return { data: { message: 'alice@example.com' }, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    vi.spyOn(auth.invoiceData, 'fetchInvoiceDetails').mockResolvedValue(undefined);
+    vi.spyOn(auth, 'fetchUserRole').mockImplementation(() => {});
+    router.push.mockClear();
+    auth.fetchUserDetails();
+    await flushPromises();
+    expect(requests).toEqual([]);
+    expect(auth.userAuth).toBeFalsy();
+    expect(auth.sessionUser).toBe('');
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it('a surviving server session cannot resume after failed logout without a fresh PIN login', async () => {
+    fetch.mockRejectedValue(new Error('Offline'));
+    await auth.logOut();
+    // Simulate the new page while the server still recognizes the old cookie.
+    setActivePinia(createPinia());
+    auth = useAuthStore();
+    invoice = useInvoiceDataStore();
+    let serverUser = 'alice@example.com';
+    const requests = [];
+    auth.auth.axios.defaults.adapter = async config => {
+      requests.push({ url: config.url, body: config.data ? JSON.parse(config.data) : undefined });
+      if (config.url === '/api/method/login') {
+        serverUser = 'bob@example.com';
+        return { data: { message: 'Logged In', full_name: 'Bob Waiter' }, status: 200, statusText: 'OK', headers: {}, config };
+      }
+      return { data: { message: serverUser }, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    vi.spyOn(invoice, 'fetchInvoiceDetails').mockResolvedValue(undefined);
+    vi.spyOn(auth, 'fetchUserRole').mockImplementation(() => {});
+    router.push.mockClear();
+    auth.fetchUserDetails(); // App.vue's mount-time session check.
+    await flushPromises();
+    expect(requests).toEqual([]);
+    expect(auth.userAuth).toBeFalsy();
+    expect(auth.sessionUser).toBe('');
+    expect(router.push).not.toHaveBeenCalled();
+
+    mount(Login);
+    const pin = host.querySelector('input[name="currentPassword"]');
+    expect(pin.value).toBe('');
+    expect(pin.checkValidity()).toBe(false);
+    auth.userId = 'bob';
+    auth.currentPassword = '82649371'; // Synthetic credential.
+    await auth.login();
+    await flushPromises();
+    expect(requests).toEqual([
+      { url: '/api/method/login', body: { usr: 'bob', pwd: '82649371' } },
+      { url: '/api/method/frappe.auth.get_logged_user', body: undefined },
+    ]);
+    expect(auth.sessionUser).toBe('bob@example.com');
+    expect(auth.currentPassword).toBe('');
+    expect(router.push).toHaveBeenCalledWith('/Table');
+  });
+
   it('leaves validation of existing cashier passwords to native Frappe login', async () => {
     nativeLogin();
     auth.userId = 'cashier';
