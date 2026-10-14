@@ -100,6 +100,18 @@ test.each(['URY_OFFLINE_OUTSIDE_SHIFT', 'URY_OFFLINE_TOTAL_MISMATCH', 'Permissio
   expect(sends.map((s) => s.data.customer)).toEqual(['B']);
 });
 
+test.each([
+  new Response(JSON.stringify({ exc_type: 'SessionExpired' }), { status: 401, headers: { 'Content-Type': 'application/json' } }),
+  new Response(JSON.stringify({ exc_type: 'CSRFTokenError' }), { status: 400, headers: { 'Content-Type': 'application/json' } }),
+  new Response(JSON.stringify({ exc_type: 'PermissionError', exception: 'Login to access this method' }), { status: 403, headers: { 'Content-Type': 'application/json' } }),
+])('transient authentication responses retain the queued order for a later retry', async (response) => {
+  const q = await outbox();
+  await q.capture(data, 100);
+  request.mockImplementationOnce(async () => json(user.name)).mockImplementationOnce(async () => response);
+  await q.replay();
+  expect((await q.list())[0].state).toBe('pending');
+});
+
 test('ids and captured_at survive a lost order acknowledgement and a reload', async () => {
   const q = await outbox();
   const row = await q.capture(data, 100);
