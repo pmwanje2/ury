@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { Button, showToast } from '@ury/ui';
-import { logoutSession, clearAppStorage } from '@ury/core';
+import { logoutSession, clearAppStorage, isNetworkFailure } from '@ury/core';
 import {
   checkPOSOpening,
   parseFrappeError,
@@ -72,6 +72,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   // telling them to contact a manager.
   const [showClosingDialog, setShowClosingDialog] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [allowCachedShell, setAllowCachedShell] = useState(false);
   const logoutPending = useRef(false);
 
   const handleLogout = async () => {
@@ -122,6 +123,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     clearBlockingState();
     setExistingEntry(null);
     setNeedsOpeningChecklist(false);
+    setAllowCachedShell(false);
 
     try {
       const response = resumeEntry
@@ -209,6 +211,13 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
       setIsLoading(false);
     } catch (error) {
       console.error('Failed to check POS opening status:', error);
+      // The opening read is not cached. A network failure must not hide the
+      // shell; online errors still block.
+      if (isNetworkFailure(error)) {
+        setAllowCachedShell(true);
+        setIsLoading(false);
+        return;
+      }
 
       const serverMessage = parseFrappeError(error);
       const status = getHttpStatus(error);
@@ -307,7 +316,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     );
   }
 
-  if (!existingEntry) {
+  if (!existingEntry && !allowCachedShell) {
     return (
       <POSOpeningScreen
         onSuccess={handleOpeningSuccess}

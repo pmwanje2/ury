@@ -24,7 +24,7 @@ export const getSessionUser = (): LoggedUserResponse => {
   }
 };
 
-function isNetworkFailure(error: unknown): boolean {
+export function isNetworkFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const failure = error as { message?: unknown; code?: unknown };
   return failure.code === 'ERR_NETWORK'
