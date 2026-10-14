@@ -605,10 +605,11 @@ export const useTableStore = defineStore("table", {
                 "OK"
               )
               .then(() => {
-                router.push("/Table").then(() => {
+                return router.push("/Table").then(() => {
                   window.location.reload();
                 });
-              });
+              })
+              .catch((error) => console.error(error));
             return;
           }
           console.error(error);
