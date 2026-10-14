@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { call, db } from '@ury/core';
+import { testLocks } from './offline-locks';
 import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import { useRootStore } from '../src/store/root-store';
@@ -23,6 +24,7 @@ beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('indexedDB', new IDBFactory());
   Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: testLocks() });
   await initI18n('en');
   document.cookie = 'user_id=cashier%40example.com';
   useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Cashier', roles: ['Cashier'] } });
@@ -109,7 +111,7 @@ test('the cashier can submit a positive extra round to a queued order with a cum
   vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
   await act(async () => root.render(<OrderPanel />));
   let select: HTMLSelectElement | null = null;
-  await act(async () => { await vi.waitFor(() => { select = container.querySelector('[data-testid="offline-round-target"]'); expect(select).not.toBeNull(); }); });
+  await vi.waitFor(async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); select = container.querySelector('[data-testid="offline-round-target"]'); expect(select?.options.length).toBe(2); });
   await act(async () => { select!.value = row.client_order_id; select!.dispatchEvent(new Event('change', { bubbles: true })); });
   await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect((await q.list())[0].rounds).toHaveLength(2)); });
   const stored = (await q.list())[0];

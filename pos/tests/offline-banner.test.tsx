@@ -4,6 +4,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { testLocks } from './offline-locks';
 import { initI18n } from '../src/i18n';
 import { usePOSStore } from '../src/store/pos-store';
 import { useRootStore } from '../src/store/root-store';
@@ -11,15 +12,19 @@ import { useRootStore } from '../src/store/root-store';
 let root: Root; let container: HTMLDivElement;
 const profile = { name: 'Till A', ury_offline_capture: 1, role_allowed_for_billing: [{ role: 'Cashier' }] };
 const user = { name: 'cashier@example.com', roles: ['Cashier'] };
+const waitForUI = (assertion: () => void) => vi.waitFor(async () => {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); assertion();
+});
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.stubGlobal('indexedDB', new IDBFactory());
-  vi.stubGlobal('navigator', { onLine: false, storage: { persist: vi.fn(async () => true) } });
-  usePOSStore.setState({ posProfile: profile as any }); useRootStore.setState({ user: user as any });
+  vi.stubGlobal('navigator', { onLine: false, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
+  usePOSStore.setState({ posProfile: profile as any, paymentModes: ['Cash', 'Mobile Money'] }); useRootStore.setState({ user: user as any });
   await initI18n('en'); container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 test('the cashier banner exposes pending count and a Needs review reason without hiding the queue', async () => {
   const { OfflineOutbox } = await import('../src/offline/outbox');
@@ -31,7 +36,7 @@ test('the cashier banner exposes pending count and a Needs review reason without
   const path = '../src/components/OfflineBanner.tsx';
   const { default: OfflineBanner } = await import(/* @vite-ignore */ path);
   await act(async () => root.render(<OfflineBanner />));
-  await vi.waitFor(() => expect(container.textContent).toContain('1 pending'));
+  await waitForUI(() => expect(container.textContent).toContain('1 pending'));
   expect(container.textContent).toContain('Offline capture');
   expect(container.querySelector('[data-testid="offline-banner"]')).not.toBeNull();
 });
@@ -42,10 +47,9 @@ test('the cashier queue exposes a one-tap cash settlement for a provisional orde
   await queue.capture({ pos_profile: 'Till A', customer: 'Walk In', items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 100 }], no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away' }, 100);
   const { default: OfflineBanner } = await import('../src/components/OfflineBanner');
   await act(async () => root.render(<OfflineBanner />));
-  const settle = container.querySelector('[data-testid="settle-cash"]') as HTMLButtonElement | null;
-  expect(settle).not.toBeNull();
-  await act(async () => settle?.click());
-  await vi.waitFor(async () => expect((await queue.list())[0].settlement?.kind).toBe('cash'));
+  let settle: HTMLButtonElement | null = null;
+  await waitForUI(() => { settle = container.querySelector('[data-testid="settle-cash"]'); expect(settle).not.toBeNull(); });
+  await act(async () => { settle?.click(); await vi.waitFor(async () => expect((await queue.list())[0].settlement?.kind).toBe('cash')); });
 });
 
 test('a parked server refusal is shown as Needs review with its reason', async () => {
@@ -59,6 +63,6 @@ test('a parked server refusal is shown as Needs review with its reason', async (
   expect(existsSync(resolve('pos/src/components/OfflineBanner.tsx'))).toBe(true);
   const { default: Banner } = await import(/* @vite-ignore */ path);
   await act(async () => root.render(<Banner />));
-  await vi.waitFor(() => expect(container.textContent).toContain('1 Needs review'));
+  await waitForUI(() => expect(container.textContent).toContain('1 Needs review'));
   expect(container.textContent).toContain('URY_OFFLINE_OUTSIDE_SHIFT');
 });

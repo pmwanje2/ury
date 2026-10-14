@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { testLocks } from './offline-locks';
+import { initI18n } from '../src/i18n';
 
 const profile = { name: 'Till A', ury_offline_capture: 1, role_allowed_for_billing: [{ role: 'Cashier' }] };
 const user = { name: 'cashier@example.com', roles: ['Cashier'] };
@@ -9,9 +11,10 @@ const order = { pos_profile: 'Till A', customer: 'Walk In', cashier: user.name, 
   items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 100 }], no_of_pax: 1, invoice: null, last_invoice: null,
   mode_of_payment: 'Cash', order_type: 'Take Away' };
 
-beforeEach(() => {
+beforeEach(async () => {
+  await initI18n('en');
   vi.stubGlobal('indexedDB', new IDBFactory());
-  vi.stubGlobal('navigator', { onLine: false, storage: { persist: vi.fn(async () => true) } });
+  vi.stubGlobal('navigator', { onLine: false, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });
   vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write: vi.fn(), close: vi.fn() }, focus: vi.fn(), print: vi.fn() }) as any);
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
