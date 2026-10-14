@@ -21,11 +21,26 @@ function trimPlugin(cacheName: string): WorkboxPlugin {
   };
 }
 
+// A 401/403 is the server's answer for this session: drop every cached
+// read and shell so a later outage cannot serve them.
+export async function purgeSessionCaches(): Promise<void> {
+  await Promise.all([READ_CACHE, SHELL_CACHE].map((name) => self.caches.delete(name)));
+}
+
+const authPlugin: WorkboxPlugin = {
+  fetchDidSucceed: async ({ response }) => {
+    if (response.status === 401 || response.status === 403) await purgeSessionCaches();
+    return response;
+  },
+};
+
+// No networkTimeoutSeconds: a timeout would race the cache against a slow
+// 401/403 and return the cached user data. The cache is used only when the
+// fetch itself rejects (no HTTP answer).
 function strategy(cacheName: string): NetworkFirst {
   return new NetworkFirst({
     cacheName,
-    networkTimeoutSeconds: 3,
-    plugins: [trimPlugin(cacheName)],
+    plugins: [authPlugin, trimPlugin(cacheName)],
   });
 }
 
