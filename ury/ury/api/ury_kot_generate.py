@@ -1,6 +1,7 @@
 import json
 
 import frappe
+from frappe.utils import cint
 from ury.ury_pos.api import getBranch
 
 
@@ -36,6 +37,7 @@ def create_kot_doc(
     pos_profile_id,
     kot_naming_series,
     production,
+    offline_printed=0,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number
@@ -59,6 +61,9 @@ def create_kot_doc(
             "order_no":order_number
         }
     )
+    if cint(offline_printed) == 1:
+        kot_doc.ury_offline_printed = 1
+        kot_doc.order_status = "Served"
     branch = getBranch()
     if restaurant_table:
         room = frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
@@ -118,6 +123,7 @@ def process_items_for_kot(
     pos_profile_id,
     kot_naming_series,
     kot_type,
+    offline_printed=0,
 ):
     kot_items = create_order_items(items)
     pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
@@ -180,6 +186,7 @@ def process_items_for_kot(
                     pos_profile_id,
                     kot_naming_series,
                     production.name,
+                    offline_printed=offline_printed,
                 )
                 created_kot_names.append(kot_name)
     else:
@@ -340,6 +347,7 @@ def kot_execute(
     current_items=[],
     previous_items=[],
     comments=None,
+    offline_printed=0,
 ):
     from frappe import _
 
@@ -384,6 +392,7 @@ def kot_execute(
                 pos_profile_id,
                 kot_naming_series,
                 "New Order",
+                offline_printed=offline_printed,
             )
         )
     if total_cancel_items:
@@ -401,7 +410,7 @@ def kot_execute(
             )
         )
 
-    if created_kot_names:
+    if created_kot_names and cint(offline_printed) != 1:
         print_combined_waiter_order_slip(invoice_id, created_kot_names, restaurant_table)
 
 
