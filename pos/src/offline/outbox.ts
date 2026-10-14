@@ -1,0 +1,204 @@
+import { v4 as uuid } from 'uuid';
+
+export interface OfflineProfile {
+  name: string;
+  ury_offline_capture?: unknown;
+  role_allowed_for_billing?: Array<{ role: string }>;
+}
+export interface OfflineUser { name: string; roles: string[] }
+export interface OfflineRound {
+  round_id: string;
+  items: Array<{ item: string; item_name: string; qty: number; rate: number; comment?: string }>;
+  captured_at: string;
+  expected_total: number;
+  offline_printed: number;
+}
+export interface OfflineOrder {
+  pos_profile: string; customer?: string; cashier?: string; owner?: string; waiter?: string;
+  items: OfflineRound['items']; no_of_pax: number; invoice: string | null; last_invoice: string | null;
+  mode_of_payment?: string; order_type: string; table?: string; room?: string; comments?: string | null;
+}
+export interface OfflineSettlement {
+  kind: 'cash' | 'mobile-money'; mode_of_payment: string; amount: number; reference?: string;
+}
+export interface OfflineEntry {
+  sequence?: number; owner: string; profile: string; client_order_id: string; outage_id: string;
+  order: OfflineOrder; rounds: OfflineRound[]; settlement?: OfflineSettlement; bill_printed?: boolean;
+  state: 'pending' | 'review'; reason?: string; next_round: number;
+  phase: 'order' | 'print' | 'settle'; server_invoice?: string;
+}
+export type OfflinePrint = (entry: OfflineEntry, kind: 'kot' | 'bill') => boolean | Promise<boolean>;
+interface Options { profile: OfflineProfile; user: OfflineUser; request?: typeof fetch; print?: OfflinePrint }
+
+const DB = 'ury-pos-offline-capture';
+const LOCK = 'ury-pos-offline-capture';
+export const OUTBOX_CHANGED = 'ury-outbox-changed';
+const changed = () => { if (typeof window !== 'undefined') window.dispatchEvent(new Event(OUTBOX_CHANGED)); };
+
+// Resolve only on transaction COMMIT, not on individual request success.
+async function transaction<T>(stores: string[], mode: IDBTransactionMode,
+  run: (tx: IDBTransaction, result: (value: T) => void) => void): Promise<T> {
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore('orders', { keyPath: 'sequence', autoIncrement: true });
+      request.result.createObjectStore('outages');
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return new Promise<T>((resolve, reject) => {
+    const tx = database.transaction(stores, mode);
+    let value: T;
+    tx.oncomplete = () => { database.close(); resolve(value); };
+    tx.onabort = () => { database.close(); reject(tx.error || new Error('Offline storage transaction aborted')); };
+    run(tx, (result) => { value = result; });
+  });
+}
+const all = () => typeof indexedDB === 'undefined' ? Promise.resolve([] as OfflineEntry[]) :
+  transaction<OfflineEntry[]>(['orders'], 'readonly', (tx, result) => {
+    const request = tx.objectStore('orders').getAll(); request.onsuccess = () => result(request.result);
+  });
+const save = async (entry: OfflineEntry) => {
+  await transaction(['orders'], 'readwrite', (tx, result) => {
+    const request = tx.objectStore('orders').put(entry);
+    request.onsuccess = () => { entry.sequence = Number(request.result); result(undefined); };
+  }); changed();
+};
+const remove = async (entry: OfflineEntry) => {
+  await transaction(['orders'], 'readwrite', (tx, result) => { tx.objectStore('orders').delete(entry.sequence!); result(undefined); }); changed();
+};
+export async function assertOutboxEmpty(): Promise<void> {
+  if ((await all()).length) throw new Error('Offline outbox has pending or Needs review items. Reconcile them before logout or till close.');
+}
+const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
+  if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(LOCK, run);
+  return run();
+};
+export function canCaptureOffline(profile?: OfflineProfile | null, user?: OfflineUser | null): boolean {
+  return !!profile && !!user && user.name !== 'Guest' &&
+    [1, '1', true].includes(profile.ury_offline_capture as number | string | boolean) &&
+    !!profile.role_allowed_for_billing?.some((row) => user.roles.includes(row.role));
+}
+class NotReady extends Error {}
+class Refused extends Error {}
+
+export class OfflineOutbox {
+  replaying = false;
+  reachable = typeof navigator === 'undefined' || navigator.onLine !== false;
+  persistent: boolean | null = null;
+  private replayPromise?: Promise<void>;
+  private scope: string;
+  private request: typeof fetch;
+  private print: OfflinePrint;
+  constructor(private options: Options) {
+    this.scope = JSON.stringify([options.user.name, options.profile.name]);
+    this.request = options.request || ((url, init) => fetch(url, init));
+    this.print = options.print || (() => false);
+  }
+  private allowed() {
+    if (!canCaptureOffline(this.options.profile, this.options.user)) throw new Error('Offline capture requires an opted-in POS Profile and its billing role.');
+    if (this.replaying) throw new Error('The outbox is Replaying. Wait before capturing or settling.');
+  }
+  list(): Promise<OfflineEntry[]> {
+    return all().then((rows) => rows.filter((row) => row.owner === this.options.user.name && row.profile === this.options.profile.name));
+  }
+  assertEmpty = assertOutboxEmpty;
+  async capture(order: OfflineOrder, total: number, clientId?: string): Promise<OfflineEntry> {
+    this.allowed();
+    if (order.invoice || order.last_invoice) throw new Error('Rounds on online orders are refused offline.');
+    if (order.pos_profile !== this.options.profile.name) throw new Error('Offline order belongs to another profile.');
+    if (!order.items.length || order.items.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) throw new Error('Offline rounds require positive quantities; reductions are refused.');
+    if (!Number.isFinite(total) || total < 0) throw new Error('Offline total must be a finite nonnegative amount.');
+    return exclusive(async () => {
+      const outage = await transaction<string>(['outages'], 'readwrite', (tx, result) => {
+        const store = tx.objectStore('outages'); const request = store.get(this.scope);
+        request.onsuccess = () => { const id = request.result || uuid(); store.put(id, this.scope); result(id); };
+      });
+      const rows = await this.list();
+      const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;
+      if (clientId && (!previous || previous.outage_id !== outage || previous.state !== 'pending' || previous.next_round)) throw new Error('Extra rounds require an order from this same outage.');
+      if (previous?.settlement) throw new Error('This order already has a settlement.');
+      if (this.persistent === null) {
+        try { this.persistent = await navigator.storage?.persist?.() || false; } catch { this.persistent = false; }
+      }
+      const round: OfflineRound = { items: structuredClone(order.items), round_id: uuid(), captured_at: new Date().toISOString(), expected_total: total, offline_printed: 0 };
+      const entry: OfflineEntry = previous || { owner: this.options.user.name, profile: this.options.profile.name,
+        client_order_id: uuid(), outage_id: outage, order: structuredClone(order), rounds: [], state: 'pending', next_round: 0, phase: 'order' };
+      entry.rounds.push(round);
+      await save(entry);
+      if (await this.print(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
+      return entry;
+    });
+  }
+  async settle(clientId: string, tender: OfflineSettlement): Promise<OfflineEntry> {
+    this.allowed();
+    if (!['cash', 'mobile-money'].includes(tender.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
+    if (tender.kind === 'mobile-money' && !tender.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
+    return exclusive(async () => {
+      const entry = (await this.list()).find((row) => row.client_order_id === clientId);
+      if (!entry || entry.state !== 'pending' || entry.next_round) throw new Error('Only an offline order awaiting replay can be settled here.');
+      if (entry.settlement) throw new Error('This order already has a settlement.');
+      if (!Number.isFinite(tender.amount) || tender.amount < entry.rounds.at(-1)!.expected_total) throw new Error('Tender must cover the provisional bill total.');
+      entry.settlement = { ...tender, reference: tender.reference?.trim() };
+      if (tender.reference) entry.order.comments = [entry.order.comments, `Manual mobile-money reference: ${tender.reference.trim()}`].filter(Boolean).join('\n');
+      await save(entry);
+      entry.bill_printed = await this.print(entry, 'bill'); await save(entry);
+      return entry;
+    });
+  }
+  private async call(method: string, payload?: Record<string, unknown>): Promise<unknown> {
+    const response = await this.request(`/api/method/${method}`, { method: payload ? 'POST' : 'GET',
+      credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-Frappe-CSRF-Token': (window as Window & { csrf_token?: string }).csrf_token || '' },
+      body: payload ? JSON.stringify(payload) : undefined });
+    if (response.redirected || response.status === 0 || response.status >= 300 && response.status < 400 || /\/login|cloudflareaccess/i.test(response.url) || !response.headers.get('Content-Type')?.includes('application/json')) throw new NotReady('Server session is not ready');
+    if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
+    let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
+    try { body = await response.json(); } catch { throw new NotReady('Server did not return JSON'); }
+    if (!response.ok || body.exc_type || body.exception) throw new Refused(body._server_messages || body.exception || body.exc_type || `HTTP ${response.status}`);
+    if (typeof body.message === 'object' && body.message && 'status' in body.message && body.message.status === 'Failure') throw new Refused('Server refused the order');
+    return body.message;
+  }
+  async replay(): Promise<void> {
+    if (this.replayPromise) return this.replayPromise;
+    this.replaying = true; changed();
+    this.replayPromise = exclusive(async () => {
+      try {
+        const user = await this.call('frappe.auth.get_logged_user');
+        if (user !== this.options.user.name) { this.reachable = false; return; }
+        this.reachable = true;
+        await transaction(['outages'], 'readwrite', (tx, result) => { tx.objectStore('outages').delete(this.scope); result(undefined); });
+        for (const entry of await this.list()) {
+          if (entry.state !== 'pending') continue;
+          if (entry.rounds.some((round) => !round.offline_printed) || entry.settlement && !entry.bill_printed) break;
+          try {
+            while (entry.next_round < entry.rounds.length) {
+              const round = entry.rounds[entry.next_round];
+              const reply = await this.call('ury.ury.doctype.ury_order.ury_order.sync_order', { ...entry.order,
+                items: round.items, invoice: entry.server_invoice || null, last_invoice: entry.server_invoice || null,
+                client_order_id: entry.client_order_id, round_id: round.round_id, captured_at: round.captured_at,
+                expected_total: round.expected_total, offline_printed: 1, append: 1 });
+              if (!reply || typeof reply !== 'object' || !('name' in reply) || typeof reply.name !== 'string') throw new NotReady('Order acknowledgement is incomplete');
+              entry.server_invoice = reply.name; entry.next_round++; await save(entry);
+            }
+            if (!entry.settlement) { await remove(entry); continue; }
+            if (entry.phase === 'order') { entry.phase = 'print'; await save(entry); }
+            if (entry.phase === 'print') { await this.call('ury.ury.api.ury_print.qz_print_update', { invoice: entry.server_invoice }); entry.phase = 'settle'; await save(entry); }
+            const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
+              customer: entry.order.customer, cashier: entry.order.cashier, owner: entry.order.owner, table: entry.order.table || null,
+              pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
+              round_id: entry.rounds.at(-1)!.round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }], additionalDiscount: null });
+            if (!reply || typeof reply !== 'object' || !('docstatus' in reply) || reply.docstatus !== 1) throw new NotReady('Settlement acknowledgement is incomplete');
+            await remove(entry);
+          } catch (error) {
+            if (!(error instanceof Refused)) { this.reachable = false; break; }
+            entry.state = 'review'; entry.reason = error.message; await save(entry);
+          }
+        }
+      } catch { this.reachable = false; }
+    }).finally(() => { this.replaying = false; this.replayPromise = undefined; changed(); });
+    return this.replayPromise;
+  }
+}

@@ -177,6 +177,7 @@ const Header = () => {
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     onClick={handleCloseShift}
+                    disabled={navigator.onLine === false}
                   >
                     <Lock className="w-4 h-4 me-3" />
                     {t('header.close_shift')}
