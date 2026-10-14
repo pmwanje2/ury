@@ -593,7 +593,26 @@ export const useTableStore = defineStore("table", {
             });
           }
         })
-        .catch((error) => console.error(error));
+        .catch((error) => {
+          const permissionRefused = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
+          if (permissionRefused && !this.auth.hasAccess && !this.auth.cashier) {
+            const fromFloor = table && typeof table.owner_name === "string" ? table.owner_name.trim() : "";
+            const ownerName = fromFloor || this.ownerLabel(table && table.waiter) || "another waiter";
+            this.alert
+              .createAlert(
+                "Message",
+                "Table is assigned to " + ownerName,
+                "OK"
+              )
+              .then(() => {
+                router.push("/Table").then(() => {
+                  window.location.reload();
+                });
+              });
+            return;
+          }
+          console.error(error);
+        });
     },
     routeToCart(table) {
       this.confirmLeaveUnsent(() => {
