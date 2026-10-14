@@ -114,12 +114,8 @@ export const useAuthStore = defineStore("auth", {
     },
     fetchUserDetails() {
       const user = localStorage.getItem("userAuth");
-      // if (user !== "true") {
-      //   this.userAuth = false;
-      //   localStorage.removeItem("userAuth");
-      //   router.push("/login");
-      //   return
-      // }
+      // A cookie surviving failed logout must not bypass the username/PIN pad.
+      if (user !== "true") return;
       this.auth
         .getLoggedInUser()
         .then((user) => {
@@ -300,15 +296,15 @@ export const useAuthStore = defineStore("auth", {
       this.stopIdle();
       try {
         await logoutSession(window.csrf_token);
+      } catch (_error) {
+        // The server session may survive, but the shared tablet must lock locally.
+      } finally {
         clearAppStorage();
         this.invoiceData.clearDataAfterUpdate();
         this.userAuth = false;
         this.currentPassword = "";
         disconnectQzPrinter();
         window.location.href = "/urypos/login";
-      } catch (error) {
-        this.alert.createAlert("Message", "Failed to logout. Please try again.", "OK");
-        this.loggingOut = false;
       }
     },
   },
