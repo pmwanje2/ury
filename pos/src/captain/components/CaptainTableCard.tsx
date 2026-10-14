@@ -3,13 +3,15 @@ import { cn } from '@ury/ui';
 import { Badge } from '@ury/ui';
 import { formatCurrency } from '@ury/core';
 import type { Table } from '../../lib/table-api';
-import type { ActiveTableOrder } from '../lib/captain-table-api';
+import type { ActiveTableOrder, UpcomingBooking } from '../lib/captain-table-api';
+import { t } from '../../i18n';
 
 export type CaptainTableOwnership = 'free' | 'mine' | 'other' | 'occupied-unknown';
 
 export interface CaptainTableCardProps {
   table: Table;
   order?: ActiveTableOrder;
+  booking?: UpcomingBooking;
   ownership: CaptainTableOwnership;
   ownerName?: string;
   /** Names of other tables merged into this one's cluster (excludes `table.name` itself). */
@@ -44,6 +46,7 @@ const elapsedLabel = (isoTimestamp: string | null): string | null => {
 const CaptainTableCard = ({
   table,
   order,
+  booking,
   ownership,
   ownerName,
   mergePartners,
@@ -53,6 +56,14 @@ const CaptainTableCard = ({
   const isBilled = Boolean(order?.invoicePrinted);
   const hasMergePartners = Boolean(mergePartners && mergePartners.length > 0);
   const elapsed = isOccupied ? elapsedLabel(table.latest_invoice_time) : null;
+  // Both timestamps are site-local strings from the same server snapshot.
+  // Do not reinterpret them in the waiter's device timezone.
+  const showBooking = booking && !(isOccupied && booking.scheduled_time < booking.server_now);
+  const bookingLabel = booking ? [
+    `${t('common.reserved')} ${booking.scheduled_time.slice(11, 16)}`,
+    booking.party_size,
+    booking.customer_name.trim().split(/\s+/)[0],
+  ].filter(value => value !== null && value !== undefined && value !== '').join(' · ') : '';
 
   const colorClasses = isBilled
     ? 'border-slate-400 bg-slate-100 text-slate-900'
@@ -106,6 +117,12 @@ const CaptainTableCard = ({
       )}
 
       <div className="mt-2 flex flex-1 flex-col justify-end gap-1.5">
+        {showBooking && (
+          <Badge variant="secondary" size="sm" title={bookingLabel}
+            className="h-auto min-h-5 w-fit max-w-full justify-start whitespace-normal py-0.5 text-left leading-snug">
+            {bookingLabel}
+          </Badge>
+        )}
         <Badge variant={statusBadgeVariant} size="sm" className="w-fit truncate max-w-full">
           {statusLabel}
         </Badge>
