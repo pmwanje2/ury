@@ -42,6 +42,7 @@ export const useAuthStore = defineStore("auth", {
     loggingOut: false,
     cashierisPosOpen: false,
     cashier: null,
+    staySignedIn: null,
     viewItemImage: null,
     viewAllStatus: null,
     restrictTableOrder: null,
@@ -158,6 +159,12 @@ export const useAuthStore = defineStore("auth", {
               this.cashier = billingRoles.some((role) =>
                 this.userRole.includes(role)
               );
+              const stayRoles = (result.message.custom_floor_stay_signed_in_roles || []).map(
+                (role) => role.role
+              );
+              this.staySignedIn = stayRoles.some((role) =>
+                this.userRole.includes(role)
+              );
               if (this.cashier) {
                 this.menu.pickOrderType();
                 // this.menu.fetchItems();
@@ -184,7 +191,7 @@ export const useAuthStore = defineStore("auth", {
                 result.message.custom_floor_idle_signout_seconds ??
                 0
               );
-              if (this.cashier === false && idleSeconds > 0) {
+              if (this.staySignedIn === false && idleSeconds > 0) {
                 this.idleStop = watchIdle(() => this.logOut(), idleSeconds * 1000);
               }
             })

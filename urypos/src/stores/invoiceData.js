@@ -319,7 +319,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
         );
         this.table.fetchTable();
         if (
-          this.auth.cashier === false &&
+          this.auth.staySignedIn === false &&
           this.invoiceDetails.floor_signout_after_send
         ) {
           await this.auth.logOut();
