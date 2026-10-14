@@ -17,6 +17,8 @@ import type { RootState } from '../store/root-store';
 import { logoutSession, clearAppStorage, resolveBrand } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { homePath } from '../lib/home-route';
+import { assertOutboxEmpty } from '../offline/outbox';
+import { useOutbox } from '../offline/use-outbox';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
@@ -27,7 +29,8 @@ const Header = () => {
   const user = useRootStore((state: RootState) => state.user);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
-  const { searchQuery, setSearchQuery, setShowVoluntaryClosing } = usePOSStore();
+  const { searchQuery, setSearchQuery, setShowVoluntaryClosing, posProfile } = usePOSStore();
+  const outbox = useOutbox(posProfile, user);
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
 
@@ -95,11 +98,12 @@ const Header = () => {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
+      await assertOutboxEmpty();
       await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
       clearAppStorage();
       window.location.href = '/login?redirect-to=%2Fpos';
     } catch (error) {
-      showToast.error(t('errors.failed_logout'));
+      showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;
       setLoggingOut(false);
     }
@@ -177,7 +181,7 @@ const Header = () => {
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     onClick={handleCloseShift}
-                    disabled={navigator.onLine === false}
+                    disabled={outbox.offline || outbox.replaying || outbox.rows.length > 0}
                   >
                     <Lock className="w-4 h-4 me-3" />
                     {t('header.close_shift')}

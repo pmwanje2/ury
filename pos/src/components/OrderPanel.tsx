@@ -16,6 +16,7 @@ import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
 import { t } from '../i18n';
+import { submitOrderOfflineAware } from '../offline/cashier';
 
 const OrderPanel = () => {
   const { 
@@ -129,7 +130,9 @@ const OrderPanel = () => {
         comments: orderComment || undefined
       };
 
-      const result = await syncOrder(orderData);
+      const submission = await submitOrderOfflineAware({ profile: posProfile, user, order: orderData,
+        total, onlineSubmit: () => syncOrder(orderData) });
+      const result = submission.offline ? null : submission.response;
 
       // sync_order returns { status: 'Failure' } instead of throwing when the
       // write is rejected (stale last_modified_time, table already occupied,
@@ -141,7 +144,7 @@ const OrderPanel = () => {
 
       // Reset all states after successful order submission
       resetOrderState();
-      showToast.success(isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
+      showToast.success(submission.offline ? t('offline.saved') : isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
     } catch (error) {
       console.error('Failed to sync order:', error);
       showToast.error(parseFrappeError(error, t('errors.failed_process_order')));

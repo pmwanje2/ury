@@ -1,4 +1,12 @@
 {
+  "offline": {
+    "capture": "Offline capture",
+    "outbox": "Offline outbox",
+    "replaying": "Replaying",
+    "pending": "{{count}} pending",
+    "review_count": "{{count}} Needs review",
+    "saved": "Order captured offline. KOT sent to the station print window."
+  },
   "common": {
     "loading": "Loading...",
     "cancel": "Cancel",

@@ -1,4 +1,12 @@
 {
+  "offline": {
+    "capture": "Saisie hors ligne",
+    "outbox": "File hors ligne",
+    "replaying": "Synchronisation",
+    "pending": "{{count}} en attente",
+    "review_count": "{{count}} À vérifier",
+    "saved": "Commande saisie hors ligne. Ticket envoyé à la fenêtre d’impression."
+  },
   "common": {
     "loading": "Chargement...",
     "cancel": "Annuler",
