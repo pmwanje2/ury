@@ -1,0 +1,210 @@
+{
+  "source_sha": "432e778e8de5d99f248b6904734e77fef2f10743",
+  "o3_scratch_source": "fd3c448a",
+  "project": "ury-o4-tgmi9v",
+  "frappe": "16.52.0",
+  "erpnext": "16.50.0",
+  "origin": "http://ury.localhost:18794",
+  "published_ip": "127.0.0.1",
+  "cashier": "offline-bb843f65@example.com",
+  "profile": "Offline Till bb843f65",
+  "invoices": [
+    {
+      "name": "OFF-bb843f65-00001",
+      "docstatus": 1,
+      "ury_client_order_id": "c23b0fa7-0e77-4d41-9867-8eef2a792ef2",
+      "invoice_printed": 1,
+      "grand_total": 100
+    },
+    {
+      "name": "OFF-bb843f65-00002",
+      "docstatus": 0,
+      "ury_client_order_id": "ea9d7049-4e7a-4378-b812-f067427daa9c",
+      "invoice_printed": 0,
+      "grand_total": 100
+    },
+    {
+      "name": "OFF-bb843f65-00003",
+      "docstatus": 0,
+      "ury_client_order_id": "269d4328-2d37-4ccd-afb6-24033ba10d2f",
+      "invoice_printed": 0,
+      "grand_total": 100
+    }
+  ],
+  "kots": [
+    {
+      "name": "KOT-bb843f65-00001",
+      "invoice": "OFF-bb843f65-00001",
+      "order_status": "Served",
+      "ury_offline_printed": 1
+    },
+    {
+      "name": "KOT-bb843f65-00002",
+      "invoice": "OFF-bb843f65-00002",
+      "order_status": "Served",
+      "ury_offline_printed": 1
+    },
+    {
+      "name": "KOT-bb843f65-00003",
+      "invoice": "OFF-bb843f65-00003",
+      "order_status": "Served",
+      "ury_offline_printed": 1
+    }
+  ],
+  "replay_actions": [
+    {
+      "method": "ury.ury.doctype.ury_order.ury_order.sync_order",
+      "status": 200,
+      "payload": {
+        "items": [
+          {
+            "item": "Offline Tea bb843f65",
+            "item_name": "Offline Tea",
+            "rate": 100,
+            "qty": 1
+          }
+        ],
+        "no_of_pax": 1,
+        "pos_profile": "Offline Till bb843f65",
+        "order_type": "Take Away",
+        "customer": "Offline Guest bb843f65",
+        "cashier": "offline-bb843f65@example.com",
+        "owner": "offline-bb843f65@example.com",
+        "mode_of_payment": "Cash",
+        "last_invoice": null,
+        "invoice": null,
+        "waiter": "offline-bb843f65@example.com",
+        "client_order_id": "c23b0fa7-0e77-4d41-9867-8eef2a792ef2",
+        "round_id": "4872e588-57c9-4382-a449-c30a72775515",
+        "captured_at": "2026-10-14T22:05:11.624Z",
+        "expected_total": 100,
+        "offline_printed": 1,
+        "append": 1
+      },
+      "refusal": null
+    },
+    {
+      "method": "ury.ury.api.ury_print.qz_print_update",
+      "status": 200,
+      "payload": {
+        "invoice": "OFF-bb843f65-00001"
+      },
+      "refusal": null
+    },
+    {
+      "method": "ury.ury.doctype.ury_order.ury_order.make_invoice",
+      "status": 200,
+      "payload": {
+        "customer": "Offline Guest bb843f65",
+        "cashier": "offline-bb843f65@example.com",
+        "owner": "offline-bb843f65@example.com",
+        "table": null,
+        "pos_profile": "Offline Till bb843f65",
+        "invoice": "OFF-bb843f65-00001",
+        "client_order_id": "c23b0fa7-0e77-4d41-9867-8eef2a792ef2",
+        "round_id": "4872e588-57c9-4382-a449-c30a72775515",
+        "payments": [
+          {
+            "mode_of_payment": "Cash",
+            "amount": 100
+          }
+        ],
+        "additionalDiscount": null
+      },
+      "refusal": null
+    },
+    {
+      "method": "ury.ury.doctype.ury_order.ury_order.sync_order",
+      "status": 200,
+      "payload": {
+        "items": [
+          {
+            "item": "Offline Tea bb843f65",
+            "item_name": "Offline Tea",
+            "rate": 100,
+            "qty": 1
+          }
+        ],
+        "no_of_pax": 1,
+        "pos_profile": "Offline Till bb843f65",
+        "order_type": "Take Away",
+        "customer": "Offline Guest bb843f65",
+        "cashier": "offline-bb843f65@example.com",
+        "owner": "offline-bb843f65@example.com",
+        "mode_of_payment": "Cash",
+        "last_invoice": null,
+        "invoice": null,
+        "waiter": "offline-bb843f65@example.com",
+        "client_order_id": "ea9d7049-4e7a-4378-b812-f067427daa9c",
+        "round_id": "cf142b18-50ed-4b36-827e-46765563e831",
+        "captured_at": "2026-10-14T22:05:12.767Z",
+        "expected_total": 100,
+        "offline_printed": 1,
+        "append": 1
+      },
+      "refusal": null
+    },
+    {
+      "method": "ury.ury.doctype.ury_order.ury_order.sync_order",
+      "status": 200,
+      "payload": {
+        "items": [
+          {
+            "item": "Offline Tea bb843f65",
+            "item_name": "Offline Tea",
+            "rate": 100,
+            "qty": 1
+          }
+        ],
+        "no_of_pax": 1,
+        "pos_profile": "Offline Till bb843f65",
+        "order_type": "Take Away",
+        "customer": "Offline Guest bb843f65",
+        "cashier": "offline-bb843f65@example.com",
+        "owner": "offline-bb843f65@example.com",
+        "mode_of_payment": "Cash",
+        "last_invoice": null,
+        "invoice": null,
+        "waiter": "offline-bb843f65@example.com",
+        "client_order_id": "269d4328-2d37-4ccd-afb6-24033ba10d2f",
+        "round_id": "c47232cd-b7a2-44dd-96d6-b98159ab180b",
+        "captured_at": "2026-10-14T22:05:13.954Z",
+        "expected_total": 100,
+        "offline_printed": 1,
+        "append": 1
+      },
+      "refusal": null
+    },
+    {
+      "method": "ury.ury.doctype.ury_order.ury_order.sync_order",
+      "status": 417,
+      "payload": {
+        "items": [
+          {
+            "item": "Offline Tea bb843f65",
+            "item_name": "Offline Tea",
+            "rate": 100,
+            "qty": 1
+          }
+        ],
+        "no_of_pax": 1,
+        "pos_profile": "Offline Till bb843f65",
+        "order_type": "Take Away",
+        "customer": "Offline Guest bb843f65",
+        "cashier": "offline-bb843f65@example.com",
+        "owner": "offline-bb843f65@example.com",
+        "mode_of_payment": "Cash",
+        "last_invoice": null,
+        "invoice": null,
+        "waiter": "offline-bb843f65@example.com",
+        "client_order_id": "d082cbd2-c88f-46c9-818c-fab988a80441",
+        "round_id": "8365d7d6-2df6-4e9f-bff3-dcf831f4f690",
+        "captured_at": "2026-10-13T22:05:31.040Z",
+        "expected_total": 100,
+        "offline_printed": 1,
+        "append": 1
+      },
+      "refusal": "ValidationError"
+    }
+  ]
+}
