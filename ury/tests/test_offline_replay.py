@@ -181,10 +181,29 @@ class TestOfflineReplay(IntegrationTestCase):
 
     def test_expected_total_validation_does_not_reset_saved_invoice_defaults(self):
         first = self.send()
-        self.assertEqual(first.update_stock, 1)
+        frappe.set_user("Administrator")
+        original_cost_center = frappe.db.get_value(
+            "Cost Center", {"company": "URY", "is_group": 0}
+        )
+        saved = frappe.get_doc("POS Invoice", first.name)
+        saved.cost_center = original_cost_center
+        saved.items[0].cost_center = original_cost_center
+        saved.save()
+        cost_center = frappe.get_doc({
+            "doctype": "Cost Center", "cost_center_name": f"Offline Other {self.client_id}",
+            "company": "URY", "parent_cost_center": frappe.db.get_value(
+                "Cost Center", {"company": "URY", "is_group": 1}
+            ),
+        }).insert()
+        profile = frappe.get_doc("POS Profile", self.pos.profile.name)
+        profile.cost_center = cost_center.name
+        profile.save()
+        frappe.set_user(self.pos.user.name)
         added = self.send(append=1, invoice=first.name, round_id="2", expected_total=200,
                           last_invoice=first.name, last_modified_time=str(first.modified))
-        self.assertEqual(added.update_stock, 1, "Total comparison must not reapply profile defaults")
+        self.assertEqual(added.cost_center, original_cost_center,
+                         "Total comparison must not reapply profile defaults")
+        self.assertEqual(frappe.get_doc("POS Invoice", added.name).items[0].cost_center, original_cost_center)
 
     def test_offline_printed_kot_is_served_and_emits_no_printer_or_mosaic_output(self):
         # Only external output seams are intercepted; invoice/KOT writes are real.
