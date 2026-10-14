@@ -72,6 +72,17 @@ class TestOfflineReplay(IntegrationTestCase):
             self.fail(f"Adding a round is not a removal: {error}")
         self.assertEqual(added.grand_total, 300)
 
+    def test_append_without_snapshot_fields_keeps_occupied_gate_for_non_billing_user(self):
+        first = self.send()
+        frappe.set_user("Administrator")
+        profile = frappe.get_doc("POS Profile", self.pos.profile.name)
+        profile.set("role_allowed_for_billing", [])
+        profile.save()
+        frappe.set_user(self.pos.user.name)
+        refused = self.send(append=1, round_id="2", invoice=first.name)
+        self.assertEqual(refused.get("status"), "Failure")
+        self.assertEqual(frappe.db.get_value("POS Invoice", first.name, "ury_last_round_id"), "1")
+
     def test_append_refuses_negative_and_zero_quantities_without_mutation(self):
         first = self.send()
         for qty in (-1, 0):
@@ -167,6 +178,13 @@ class TestOfflineReplay(IntegrationTestCase):
         added = self.send(append=1, invoice=first.name, round_id="2", expected_total=236,
                           last_invoice=first.name, last_modified_time=str(invoice.modified))
         self.assertEqual(added.grand_total, 236)
+
+    def test_expected_total_validation_does_not_reset_saved_invoice_defaults(self):
+        first = self.send()
+        self.assertEqual(first.update_stock, 1)
+        added = self.send(append=1, invoice=first.name, round_id="2", expected_total=200,
+                          last_invoice=first.name, last_modified_time=str(first.modified))
+        self.assertEqual(added.update_stock, 1, "Total comparison must not reapply profile defaults")
 
     def test_offline_printed_kot_is_served_and_emits_no_printer_or_mosaic_output(self):
         # Only external output seams are intercepted; invoice/KOT writes are real.
