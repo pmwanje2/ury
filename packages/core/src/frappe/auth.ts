@@ -24,11 +24,26 @@ export const getSessionUser = (): LoggedUserResponse => {
   }
 };
 
+function isNetworkFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as { message?: unknown; code?: unknown };
+  return failure.code === 'ERR_NETWORK'
+    || failure.message === 'Network Error'
+    || failure.message === 'Failed to fetch';
+}
+
 export const getLoggedUser = async (): Promise<LoggedUserResponse> => {
   try {
     const response = await auth.getLoggedInUser();
     return response as LoggedUserResponse;
   } catch (error) {
+    // DevTools offline reports navigator.onLine true on the reloaded document
+    // and axios rejects with "Network Error". That is not a logout. Do not
+    // cache the auth request; reuse the cookie session for the shell only.
+    const sessionUser = getSessionUser();
+    if (sessionUser && sessionUser !== 'Guest' && isNetworkFailure(error)) {
+      return sessionUser;
+    }
     console.error('Error getting logged user:', error);
     return null;
   }
