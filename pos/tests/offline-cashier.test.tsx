@@ -11,6 +11,8 @@ import { usePOSStore } from '../src/store/pos-store';
 import OrderPanel from '../src/components/OrderPanel';
 import { OfflineOutbox } from '../src/offline/outbox';
 import Header from '../src/components/Header';
+import POSOpeningScreen from '../src/components/POSOpeningScreen';
+import POSOpeningProvider from '../src/components/POSOpeningProvider';
 import { createPosClosingEntry, submitPosClosingEntry, createSubPosClosing, submitSubPosClosing } from '../src/lib/pos-closing-api';
 
 let container: HTMLDivElement;
@@ -75,6 +77,44 @@ test('till close is disabled offline in the real header', async () => {
   await act(async () => root.render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><Header /></MemoryRouter>));
   await act(async () => button(/^Cashier/).click());
   expect(button(/Close Shift/i).disabled).toBe(true);
+});
+
+test('clear cache preserves pending orders and read caches', async () => {
+  await queued(); localStorage.setItem('pos_profile', 'cached');
+  const warning = vi.spyOn(showToast, 'error');
+  await act(async () => root.render(<MemoryRouter><Header /></MemoryRouter>));
+  await act(async () => button(/^Cashier/).click());
+  await act(async () => { button(/^Clear Cache$/).click(); });
+  await vi.waitFor(() => expect(warning).toHaveBeenCalledWith(expect.stringMatching(/outbox|pending|review/i)));
+  expect(localStorage.getItem('pos_profile')).toBe('cached');
+});
+
+test.each(['screen', 'provider'])('the %s logout path refuses a pending queue and retains caches', async (component) => {
+  await queued(); localStorage.setItem('pos_profile', 'cached');
+  vi.spyOn(call, 'get').mockRejectedValue(new Error('No open session'));
+  const request = vi.fn(async () => new Response('{}')); vi.stubGlobal('fetch', request);
+  const warning = vi.spyOn(showToast, 'error');
+  await act(async () => root.render(component === 'screen' ? <POSOpeningScreen /> : <POSOpeningProvider><div>POS</div></POSOpeningProvider>));
+  await act(async () => { button(/^Logout$/).click(); });
+  await vi.waitFor(() => expect(warning).toHaveBeenCalledWith(expect.stringMatching(/outbox|pending|review/i)));
+  expect(request).not.toHaveBeenCalled();
+  expect(localStorage.getItem('pos_profile')).toBe('cached');
+});
+
+test('the cashier can submit a positive extra round to a queued order with a cumulative total', async () => {
+  const q = await queued(); const row = (await q.list())[0];
+  usePOSStore.setState({ isInitializing: false, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: 'Take Away', selectedCustomer: { name: 'Walk In' } as any, selectedTable: null, selectedRoom: null,
+    paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T2', name: 'Tea', price: 100, quantity: 1 } as any] });
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
+  await act(async () => root.render(<OrderPanel />));
+  let select: HTMLSelectElement | null = null;
+  await act(async () => { await vi.waitFor(() => { select = container.querySelector('[data-testid="offline-round-target"]'); expect(select).not.toBeNull(); }); });
+  await act(async () => { select!.value = row.client_order_id; select!.dispatchEvent(new Event('change', { bubbles: true })); });
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect((await q.list())[0].rounds).toHaveLength(2)); });
+  const stored = (await q.list())[0];
+  expect(stored.client_order_id).toBe(row.client_order_id);
+  expect(stored.rounds[1].expected_total).toBe(200);
 });
 
 test.each([

@@ -63,3 +63,23 @@ test('station browser print escapes untrusted item names and never labels a prov
   expect(html).toContain('&lt;img'); expect(html).not.toContain('<img');
   expect(html).toContain('Provisional bill — not a fiscal receipt');
 });
+
+test('a blocked station print can be acknowledged by reprinting before replay', async () => {
+  const { OfflineOutbox } = await import('../src/offline/outbox');
+  const print = vi.fn(() => false);
+  const q = new OfflineOutbox({ profile, user, print });
+  const entry = await q.capture(order as any, 100);
+  expect(entry.rounds[0].offline_printed).toBe(0);
+  print.mockReturnValue(true);
+  expect(q.reprint, 'blocked print has no acknowledgement/reprint path').toBeTypeOf('function');
+  await q.reprint(entry.client_order_id, 'kot');
+  expect((await q.list())[0].rounds[0].offline_printed).toBe(1);
+  expect(print).toHaveBeenCalledTimes(2);
+});
+
+test.each(['void', 'reduction', 'discount', 'transfer', 'merge', 'split', 'card', 'pay-by-phone', 'efris-fdn', 'till-close'])
+  ('offline %s is refused with an operator-facing reason', async (action) => {
+    const { assertOfflineActionAllowed } = await import('../src/offline/cashier');
+    expect(assertOfflineActionAllowed, 'refused offline actions have no guard').toBeTypeOf('function');
+    await expect(assertOfflineActionAllowed(action)).rejects.toThrow(/offline|refused|not available/i);
+  });

@@ -36,6 +36,18 @@ test('the cashier banner exposes pending count and a Needs review reason without
   expect(container.querySelector('[data-testid="offline-banner"]')).not.toBeNull();
 });
 
+test('the cashier queue exposes a one-tap cash settlement for a provisional order', async () => {
+  const { OfflineOutbox } = await import('../src/offline/outbox');
+  const queue = new OfflineOutbox({ profile, user, print: async () => true });
+  await queue.capture({ pos_profile: 'Till A', customer: 'Walk In', items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 100 }], no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away' }, 100);
+  const { default: OfflineBanner } = await import('../src/components/OfflineBanner');
+  await act(async () => root.render(<OfflineBanner />));
+  const settle = container.querySelector('[data-testid="settle-cash"]') as HTMLButtonElement | null;
+  expect(settle).not.toBeNull();
+  await act(async () => settle?.click());
+  await vi.waitFor(async () => expect((await queue.list())[0].settlement?.kind).toBe('cash'));
+});
+
 test('a parked server refusal is shown as Needs review with its reason', async () => {
   const { OfflineOutbox } = await import('../src/offline/outbox');
   const q = new OfflineOutbox({ profile, user, print: () => true, request: async (url) => new Response(JSON.stringify(

@@ -206,6 +206,31 @@ test('logout/purge stays blocked for pending AND parked records; another cashier
   await expect(q.assertEmpty()).rejects.toThrow(/pending|review|outbox/i);
 });
 
+test('purge removes the current browser outbox only after it is empty', async () => {
+  const q = await outbox();
+  await q.capture(data, 100);
+  expect(q.purge, 'there is no empty-only purge path').toBeTypeOf('function');
+  await expect(q.purge()).rejects.toThrow(/pending|review|outbox/i);
+  const other = await outbox({ user: { name: 'other@example.com', roles: ['Cashier'] } });
+  await expect(other.purge()).rejects.toThrow(/pending|review|outbox/i);
+  expect(await q.list()).toHaveLength(1);
+});
+
+test('offline capture fails closed without browser cross-tab locks', async () => {
+  delete navigator.locks;
+  const q = await outbox();
+  await expect(q.capture(data, 100)).rejects.toThrow(/lock|browser|unsupported/i);
+  expect(await q.list()).toEqual([]);
+});
+
+test('a browser print exception retains one durable order for reprint without duplicate recapture', async () => {
+  print.mockImplementation(() => { throw new Error('Printer unavailable'); });
+  const q = await outbox();
+  const row = await q.capture(data, 100);
+  expect(row.rounds[0].offline_printed).toBe(0);
+  expect(await q.list()).toHaveLength(1);
+});
+
 test('replay is exclusive, exposes Replaying, and prohibits capture while it is running', async () => {
   const q = await outbox();
   await q.capture(data, 100);
