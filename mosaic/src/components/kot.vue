@@ -428,8 +428,8 @@ export default {
     async openPrintSettings() {
       this.printError = "";
       try {
-        const { message } = await this.call.get("frappe.client.get", { doctype: "User", name: this.loggeduser });
-        const roles = (message.roles || []).map(row => row.role);
+        const { message } = await this.call.get("ury.ury.doctype.ury_order.ury_order.get_captain_context", {});
+        const roles = message.roles || [];
         this.canManagePrintSettings = this.loggeduser === "Administrator" || roles.some(role => ["System Manager", "URY Admin", "URY Manager"].includes(role));
         if (!this.canManagePrintSettings) throw Error("A manager must sign in to change station printing settings.");
         this.setupStationPrinting();
