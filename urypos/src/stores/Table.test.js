@@ -39,9 +39,44 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const activeBranch = 'Salama Kampala';
+
+function activeInvoiceQuery(tableNames) {
+  return {
+    fields: ['name', 'restaurant_table', 'creation', 'custom_merged_tables', 'waiter'],
+    filters: [
+      ['branch', '=', activeBranch],
+      ['docstatus', '=', 0],
+    ],
+    orFilters: [
+      ['restaurant_table', 'in', tableNames],
+      ...tableNames.map((name) => ['custom_merged_tables', 'like', `%${name}%`]),
+    ],
+    orderBy: { field: 'creation', order: 'desc' },
+    limit: 0,
+  };
+}
+
+function invoiceMatches(row, options = {}) {
+  const filters = options.filters || [];
+  const orFilters = options.orFilters || [];
+  const andOk = filters.every(([field, operator, value]) => operator === '=' && row[field] === value);
+  if (!andOk) return false;
+  if (!orFilters.length) return true;
+  return orFilters.some(([field, operator, value]) => {
+    if (operator === 'in') return (value || []).includes(row[field]);
+    if (operator === 'like') {
+      const needle = String(value).split('%').join('');
+      return String(row[field] || '').includes(needle);
+    }
+    return false;
+  });
+}
+
 async function fetchTables(tables, serverNow, invoices = []) {
   const store = useTableStore();
   store.selectedRoom = 'Dining';
+  store.invoiceData.branch = activeBranch;
   store.db.getDocList.mockImplementation((doctype) => {
     if (doctype === 'URY Table') return Promise.resolve(tables);
     if (doctype === 'POS Invoice') return Promise.resolve(invoices);
@@ -261,19 +296,9 @@ describe('floor-plan age uses the oldest open bill creation', () => {
     expect(store.getTimeDifference(store.tables[0])).toBe('37:05');
     expect(store.getTimeDifference(store.tables[1])).toBe('0:02');
     expect(store.getBadgeText(store.tables[2])).toBe('Free');
-    // Verify the external read contract: room table names, drafts only,
-    // include merged partners, and no default 20-row pagination truncation.
-    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', {
-      fields: ['restaurant_table', 'creation', 'custom_merged_tables'],
-      filters: [['docstatus', '=', 0]],
-      orFilters: [
-        ['restaurant_table', 'in', ['Table 2', 'Table 3']],
-        ['custom_merged_tables', 'like', '%Table 2%'],
-        ['custom_merged_tables', 'like', '%Table 3%'],
-      ],
-      orderBy: { field: 'creation', order: 'desc' },
-      limit: 0,
-    });
+    // Verify the external read contract: active branch, this room's tables,
+    // drafts only, merged partners, and no default 20-row pagination truncation.
+    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', activeInvoiceQuery(['Table 2', 'Table 3']));
   });
 
   it.each(['newest first', 'reversed'])('selects the oldest open check with the list returned %s', async (order) => {
@@ -331,16 +356,7 @@ describe('floor-plan age uses the oldest open bill creation', () => {
     expect(store.getTimeDifference(store.tables[0])).toBe('37:05');
     expect(store.getBadgeText(store.tables[0])).toBe('Attention');
     expect(store.getBadgeType(store.tables[0])).toBe('red');
-    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', {
-      fields: ['restaurant_table', 'creation', 'custom_merged_tables'],
-      filters: [['docstatus', '=', 0]],
-      orFilters: [
-        ['restaurant_table', 'in', ['Table 2']],
-        ['custom_merged_tables', 'like', '%Table 2%'],
-      ],
-      orderBy: { field: 'creation', order: 'desc' },
-      limit: 0,
-    });
+    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', activeInvoiceQuery(['Table 2']));
   });
 
   it('uses the primary bill for merged partners with exact, trimmed table names', async () => {
@@ -502,5 +518,222 @@ describe('idle floor-plan rendering', () => {
     floorApp.unmount();
     floorApp = undefined;
     expect(vi.getTimerCount()).toBe(timerCount);
+  });
+});
+
+describe('floor plan shows the table owner', () => {
+  const waiter = 'amina.nakato@salama.example';
+  const owner = 'Amina Nakato';
+  const draft = {
+    name: 'POS-INV-2026-00005',
+    restaurant_table: 'T-05',
+    custom_merged_tables: '',
+    waiter,
+    creation: '2026-10-14 12:00:00',
+  };
+
+  async function loadFloor(tables, invoices, users, applyQuery = false) {
+    vi.setSystemTime(new Date(2026, 9, 14, 12, 0, 0));
+    const store = useTableStore();
+    store.selectedRoom = 'Dining';
+    store.invoiceData.branch = activeBranch;
+    store.db.getDocList.mockImplementation((doctype, options) => {
+      if (doctype === 'URY Table') return Promise.resolve(tables);
+      if (doctype === 'POS Invoice') {
+        const rows = applyQuery ? invoices.filter((row) => invoiceMatches(row, options)) : invoices;
+        return Promise.resolve(rows);
+      }
+      if (doctype === 'User') {
+        if (users instanceof Error) return Promise.reject(users);
+        return Promise.resolve(users);
+      }
+      if (doctype === 'URY Service Request') return Promise.resolve([]);
+      throw new Error(`Unexpected doctype: ${doctype}`);
+    });
+    store.call.get.mockResolvedValue({ message: '2026-10-14 12:00:00' });
+    store.fetchTable();
+    await flushPromises();
+    return store;
+  }
+
+  async function mountFloor() {
+    floorElement = document.createElement('div');
+    document.body.appendChild(floorElement);
+    floorApp = createApp(FloorPlan);
+    floorApp.use(getActivePinia());
+    floorApp.mount(floorElement);
+    await nextTick();
+  }
+
+  function cardText(name) {
+    const heading = [...floorElement.querySelectorAll('h5')].find((node) => node.textContent.includes(name));
+    return heading.closest('div.flex-col').textContent;
+  }
+
+  it('shows the owner on an occupied card', async () => {
+    const store = await loadFloor(
+      [{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }],
+      [draft],
+      [{ name: waiter, full_name: owner }],
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain(owner);
+    expect(cardText('T-05')).not.toContain(waiter);
+    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', activeInvoiceQuery(['T-05']));
+    expect(store.db.getDocList).toHaveBeenCalledWith('User', {
+      fields: ['name', 'full_name'],
+      filters: [['name', 'in', [waiter]]],
+      limit: 1,
+    });
+  });
+
+  it('shows the same owner on a merged partner table', async () => {
+    await loadFloor(
+      [
+        { name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
+        { name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00', merged_with: 'T-05' },
+      ],
+      [{ ...draft, custom_merged_tables: ' T-06 ' }],
+      [{ name: waiter, full_name: owner }],
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain(owner);
+    expect(cardText('T-06')).toContain(owner);
+    expect(cardText('T-06')).not.toContain(waiter);
+  });
+
+  it('names the owner in the assigned-table refusal', async () => {
+    const store = await loadFloor(
+      [{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }],
+      [draft],
+      [{ name: waiter, full_name: owner }],
+    );
+    store.auth.hasAccess = false;
+    store.auth.cashier = false;
+    store.auth.sessionUser = 'betty.namuli@salama.example';
+    store.alert.createAlert = vi.fn(() => new Promise(() => {}));
+    store.tableMenu = [];
+    store.menu.cart = [];
+    store.call.get.mockImplementation((method) => {
+      if (method === 'ury.ury.doctype.ury_order.ury_order.get_order_invoice') {
+        return Promise.resolve({
+          message: {
+            name: 'POS-INV-2026-00005',
+            waiter,
+            items: [],
+            invoice_printed: 0,
+            custom_comments: '',
+            modified: '',
+            grand_total: 0,
+            mobile_number: '',
+            customer: '',
+          },
+        });
+      }
+      return Promise.resolve({ message: '2026-10-14 12:00:00' });
+    });
+
+    store.loadSelectedTable({ name: 'T-05', occupied: 1, is_take_away: 0 });
+    await flushPromises();
+
+    expect(store.alert.createAlert).toHaveBeenCalledWith(
+      'Message',
+      `Table is assigned to ${owner}`,
+      'OK',
+    );
+  });
+
+  it('falls back to the id before @ when the User read is refused', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await loadFloor(
+      [{ name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' }],
+      [draft],
+      new Error('User read denied'),
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain('amina.nakato');
+    expect(cardText('T-05')).not.toContain(waiter);
+    expect(cardText('T-05')).not.toContain(owner);
+  });
+
+  it('reads POS Invoice once while refreshing several occupied tables', async () => {
+    const store = await loadFloor(
+      [
+        { name: 'T-07', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
+        { name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
+        { name: 'T-08', occupied: 0, is_take_away: 0, latest_invoice_time: '12:00:00' },
+        { name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
+      ],
+      [
+        { name: 'POS-05', restaurant_table: 'T-05', custom_merged_tables: '', waiter, creation: '2026-10-14 12:00:00' },
+        { name: 'POS-06', restaurant_table: 'T-06', custom_merged_tables: '', waiter: 'betty.namuli@salama.example', creation: '2026-10-14 11:30:00' },
+        { name: 'POS-07', restaurant_table: 'T-07', custom_merged_tables: '', waiter, creation: '2026-10-14 11:00:00' },
+      ],
+      [
+        { name: waiter, full_name: owner },
+        { name: 'betty.namuli@salama.example', full_name: 'Betty Namuli' },
+      ],
+    );
+
+    const invoiceReads = store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'POS Invoice');
+    expect(invoiceReads).toHaveLength(1);
+    expect(invoiceReads[0][1]).toEqual(activeInvoiceQuery(['T-05', 'T-06', 'T-07']));
+  });
+
+  it('does not take an owner from another branch or a lookalike table id', async () => {
+    const betty = 'betty.namuli@salama.example';
+    const foreignWaiter = 'foreign.waiter@other.example';
+    const collider = 'collider.waiter@salama.example';
+    const store = await loadFloor(
+      [
+        { name: 'T-05', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00' },
+        { name: 'T-06', occupied: 1, is_take_away: 0, latest_invoice_time: '12:00:00', merged_with: 'Patio-9' },
+      ],
+      [
+        {
+          name: 'POS-LOCAL', branch: activeBranch, docstatus: 0, restaurant_table: 'T-05',
+          custom_merged_tables: '', waiter, creation: '2026-10-14 12:00:00',
+        },
+        {
+          name: 'POS-LOOKALIKE', branch: activeBranch, docstatus: 0, restaurant_table: 'T-050',
+          custom_merged_tables: '', waiter: collider, creation: '2026-10-14 08:00:00',
+        },
+        {
+          name: 'POS-MERGED', branch: activeBranch, docstatus: 0, restaurant_table: 'Patio-9',
+          custom_merged_tables: ' T-06 ', waiter: betty, creation: '2026-10-14 11:00:00',
+        },
+        {
+          name: 'POS-FOREIGN', branch: 'Other Branch', docstatus: 0, restaurant_table: 'T-05',
+          custom_merged_tables: '', waiter: foreignWaiter, creation: '2026-10-14 12:30:00',
+        },
+      ],
+      [
+        { name: waiter, full_name: owner },
+        { name: betty, full_name: 'Betty Namuli' },
+        { name: foreignWaiter, full_name: 'Foreign Waiter' },
+        { name: collider, full_name: 'Collider Waiter' },
+      ],
+      true,
+    );
+
+    await mountFloor();
+
+    expect(cardText('T-05')).toContain(owner);
+    expect(cardText('T-05')).not.toContain('Foreign Waiter');
+    expect(cardText('T-05')).not.toContain('Collider Waiter');
+    expect(cardText('T-06')).toContain('Betty Namuli');
+    expect(store.db.getDocList).toHaveBeenCalledWith('POS Invoice', activeInvoiceQuery(['T-05', 'T-06']));
+    expect(store.db.getDocList).toHaveBeenCalledWith('User', {
+      fields: ['name', 'full_name'],
+      filters: [['name', 'in', [waiter, betty]]],
+      limit: 2,
+    });
+    expect(store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'POS Invoice')).toHaveLength(1);
   });
 });
