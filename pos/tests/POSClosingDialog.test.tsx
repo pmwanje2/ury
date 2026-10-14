@@ -378,21 +378,31 @@ describe('counted zero close', () => {
     }
   });
 
-  it.each([
-    { blind: false, label: 'visible counts' },
-    { blind: true, label: 'blind count' },
-  ])('still blocks an all-zero count when cash was expected ($label)', async ({ blind }) => {
-    const { submit, messages, text } = await renderCountedClose({ blind, cashSales: 40, enterCounts: true });
+  it('still blocks an all-zero count when cash was expected and counts are visible', async () => {
+    const { submit, messages, text } = await renderCountedClose({ blind: false, cashSales: 40, enterCounts: true });
 
     expect(submit.disabled).toBe(true);
     expect(messages).toEqual([ALL_ZERO_MESSAGE]);
-    if (blind) {
-      expect(text).not.toContain('Expected');
-      expect(text).not.toContain('Grand Total');
-      expect(text).not.toContain('₹ 40');
-    } else {
-      expect(text).toContain('₹ 40');
-    }
+    expect(text).toContain('₹ 40');
+  });
+
+  it('enables a fully entered zero count in blind mode with or without expected cash', async () => {
+    const withExpectedCash = await renderCountedClose({ blind: true, cashSales: 40, enterCounts: true });
+    const withoutExpectedCash = await renderCountedClose({ blind: true, cashSales: 0, enterCounts: true });
+
+    expect(withExpectedCash.submit.disabled).toBe(false);
+    expect(withExpectedCash.messages).toEqual([]);
+    expect(withoutExpectedCash.submit.disabled).toBe(false);
+    expect(withoutExpectedCash.messages).toEqual([]);
+    expect(withExpectedCash.submit.disabled).toBe(withoutExpectedCash.submit.disabled);
+    expect(withExpectedCash.messages).toEqual(withoutExpectedCash.messages);
+    expect(withExpectedCash.text).toBe(withoutExpectedCash.text);
+    expect(withExpectedCash.text).not.toContain('Expected');
+    expect(withExpectedCash.text).not.toContain('Grand Total');
+    expect(withExpectedCash.text).not.toContain('₹ 40');
+    expect(withExpectedCash.text).not.toContain(
+      "One or more payment modes were left at 0 despite having activity today. Double-check before submitting.",
+    );
   });
 
   it.each([
