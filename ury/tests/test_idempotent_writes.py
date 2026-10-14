@@ -95,6 +95,38 @@ class TestIdempotentWrites(IntegrationTestCase):
         self.assertEqual(saved.ury_client_order_id, self.client_order_id)
         self.assertEqual(saved.docstatus, 0)
 
+    def test_client_id_cannot_target_a_different_explicit_invoice(self):
+        first = self.send()
+        second = send_order(self.pos, client_order_id=str(uuid4()), round_id="1")
+        with self.assertRaises(frappe.ValidationError):
+            send_order(self.pos, client_order_id=self.client_order_id, invoice=second.name,
+                       last_invoice=second.name, last_modified_time=str(second.modified), round_id="2")
+        self.assertEqual(frappe.db.get_value("POS Invoice", first.name, "ury_last_round_id"), "1")
+
+    def test_settle_client_id_cannot_target_a_different_explicit_invoice(self):
+        first = self.send()
+        second = send_order(self.pos, client_order_id=str(uuid4()), round_id="1")
+        with self.assertRaises(frappe.ValidationError):
+            settle_order(self.pos, second.name, client_order_id=self.client_order_id, round_id="2")
+        self.assertEqual(frappe.db.get_value("POS Invoice", first.name, "docstatus"), 0)
+        self.assertEqual(frappe.db.get_value("POS Invoice", second.name, "docstatus"), 0)
+
+    def test_client_id_cannot_target_a_different_table(self):
+        frappe.set_user("Administrator")
+        first_table = frappe.get_doc({
+            "doctype": "URY Table", "restaurant": self.pos.restaurant.name,
+            "restaurant_room": self.pos.room.name, "branch": self.pos.branch.name,
+        }).insert()
+        second_table = frappe.get_doc({
+            "doctype": "URY Table", "restaurant": self.pos.restaurant.name,
+            "restaurant_room": self.pos.room.name, "branch": self.pos.branch.name,
+        }).insert()
+        frappe.set_user(self.pos.user.name)
+        self.send(table=first_table.name, order_type="Dine In")
+        with self.assertRaises(frappe.ValidationError):
+            send_order(self.pos, client_order_id=self.client_order_id, table=second_table.name,
+                       order_type="Dine In", round_id="2")
+
     def test_retry_keeps_existing_active_branch_permission_check(self):
         order = self.send()
         make_offline_pos()  # Another real cashier, assigned to another branch.
