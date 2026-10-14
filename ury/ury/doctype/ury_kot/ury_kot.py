@@ -10,6 +10,8 @@ from frappe.model.document import Document
 
 class URYKOT(Document):
     def on_submit(self):
+        if self.get("ury_offline_printed"):
+            return
         self.multi_print_kot()
         self.kotDisplayRealtime()
 

@@ -3,11 +3,12 @@
 
 import json
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt, get_datetime, get_system_timezone, now_datetime
 from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury.api.ury_kot_generate import kot_execute
@@ -1318,6 +1319,24 @@ def _client_order_invoice(client_order_id, invoice_name=None, table=None):
     return None
 
 
+def _offline_capture_time(captured_at, pos_profile):
+    message = _("URY_OFFLINE_OUTSIDE_SHIFT: Capture must be inside your open POS shift and not in the future.")
+    try:
+        captured = get_datetime(captured_at)
+        if captured.tzinfo:
+            captured = captured.astimezone(ZoneInfo(get_system_timezone())).replace(tzinfo=None)
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        frappe.throw(message)
+    opening = frappe.db.get_value(
+        "POS Opening Entry",
+        {"user": frappe.session.user, "pos_profile": pos_profile, "docstatus": 1, "status": "Open"},
+        "period_start_date", order_by="period_start_date desc",
+    )
+    if not opening or not get_datetime(opening) <= captured <= now_datetime():
+        frappe.throw(message)
+    return captured
+
+
 @frappe.whitelist()
 def sync_order(
     items,
@@ -1339,7 +1358,12 @@ def sync_order(
     merged_tables=None,
     client_order_id=None,
     round_id=None,
+    append=0,
+    captured_at=None,
+    offline_printed=0,
+    expected_total=None,
 ):
+    append = cint(append) == 1
     client_order_id = _validate_client_order_id(client_order_id)
     if round_id is not None and not str(round_id).strip():
         frappe.throw(_("Round ID must not be empty."))
@@ -1446,7 +1470,7 @@ def sync_order(
                     frappe.PermissionError,
                 )
 
-    if last_invoice and last_modified_time:
+    if not append and last_invoice and last_modified_time:
         lastModifiedTime = invoice.modified
         from datetime import datetime
 
@@ -1477,7 +1501,7 @@ def sync_order(
                 ),
             )
             return {"status": "Failure"}
-    else:
+    elif not append:
         if invoice.name and invoice.invoice_printed == 0 and not billing_user:
             frappe.msgprint(
                 title="Table occupied ",
@@ -1487,6 +1511,13 @@ def sync_order(
                 ),
             )
             return {"status": "Failure"}
+
+    if captured_at is not None:
+        captured = _offline_capture_time(captured_at, pos_profile)
+        invoice.ury_offline_captured_at = captured
+        invoice.set_posting_time = 1
+        invoice.posting_date = captured.date()
+        invoice.posting_time = captured.time()
 
     customer = customer or (invoice.customer if invoice.name else None) or posprofile.customer
     if not customer:
@@ -1587,10 +1618,13 @@ def sync_order(
     if isinstance(items, str):
         items = json.loads(items)
 
+    if append and any(flt(item.get("qty")) <= 0 for item in items):
+        frappe.throw(_("Append rounds must contain only positive quantities."))
+
     # Reduction/removal permission: gate any decrease in a previously-sent
     # item's quantity (including full removal) by POS Profile `remove_items`,
     # matching Phase 2's can_reduce_items/can_remove_items derivation.
-    if past_item and not bool(posprofile.remove_items):
+    if not append and past_item and not bool(posprofile.remove_items):
         requested_qty_by_item = {}
         for d in items:
             requested_qty_by_item[d.get("item")] = requested_qty_by_item.get(
@@ -1615,13 +1649,21 @@ def sync_order(
                     frappe.PermissionError,
                 )
 
-    invoice.items = []
+    if not append:
+        invoice.items = []
 
     menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
 
     priced_items = price_items_for_invoice(items, price_list, pos_profile, invoice.branch, menu)
     for item_dict in priced_items:
         invoice.append("items", item_dict)
+
+    if expected_total is not None:
+        invoice.set_missing_values()
+        invoice.calculate_taxes_and_totals()
+        precision = invoice.precision("grand_total")
+        if flt(expected_total, precision) != flt(invoice.grand_total, precision):
+            frappe.throw(_("URY_OFFLINE_TOTAL_MISMATCH: Server-priced invoice total differs from the captured total."))
 
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
@@ -1635,7 +1677,8 @@ def sync_order(
 
 
     try:
-        kot_execute(invoice.name, customer, table, items, past_item, comments)
+        kot_execute(invoice.name, customer, table, items, [] if append else past_item, comments,
+                    offline_printed=offline_printed)
 
     except Exception as e:
         # If an exception occurs (e.g., "kot" app not found), it will be caught here without affect the code execution.
