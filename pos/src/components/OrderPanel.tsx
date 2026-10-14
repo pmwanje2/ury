@@ -96,7 +96,7 @@ const OrderPanel = () => {
           showToast.error(t('errors.select_aggregator'));
           return;
         }
-      } else if (!target && !selectedCustomer?.name) {
+      } else if (!target && !selectedCustomer?.name && !(outbox.offline && posProfile.customer)) {
         showToast.error(t('errors.select_customer'));
         return;
       }
@@ -122,7 +122,7 @@ const OrderPanel = () => {
         order_type: selectedOrderType,
         table: selectedTable || undefined,
         room: selectedRoom || undefined,
-        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : selectedCustomer?.name,
+        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : selectedCustomer?.name || (outbox.offline ? posProfile.customer || undefined : undefined),
         aggregator_id: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : undefined,
         cashier: posProfile.cashier,
         owner: posProfile.owner,
