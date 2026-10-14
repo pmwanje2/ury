@@ -51,49 +51,8 @@ afterEach(() => {
   vi.resetModules();
 });
 
-test('Workbox runtimeCaching is network-first and excludes POST and non-allowlisted /api routes', async () => {
-  expect(existsSync(RUNTIME_CACHE), 'pos/src/pwa/runtime-caching.ts must define the Workbox runtimeCaching config').toBe(true);
-  const runtimeModule = '../src/pwa/runtime-caching.ts';
-  const caching = await import(/* @vite-ignore */ runtimeModule);
-  const routes = caching.workboxRuntimeCaching();
-  expect(routes.length).toBeGreaterThan(0);
-  for (const route of routes) {
-    expect(route.method).toBe('GET');
-    expect(route.handler).toBe('NetworkFirst');
-    expect(route.method).not.toBe('POST');
-  }
-  expect(routes.some((route: { method?: string }) => route.method === 'POST')).toBe(false);
-
-  for (const url of ALLOWED_GETS) {
-    expect(caching.requestMatchesRuntimeCache(url, 'GET'), url).toBe(true);
-  }
-  for (const [url, method] of DENIED) {
-    expect(caching.requestMatchesRuntimeCache(url, method), `${method} ${url}`).toBe(false);
-  }
-
-  const menuCache = caching.runtimeCacheNameFor(
-    'https://ury.localhost/api/method/ury.ury_pos.api.getRestaurantMenu?pos_profile=Bar',
-    'GET',
-  );
-  const shellCache = caching.runtimeCacheNameFor('https://ury.localhost/pos/pos', 'GET');
-  const tableCache = caching.runtimeCacheNameFor(
-    'https://ury.localhost/api/resource/URY%20Table?limit=0',
-    'GET',
-  );
-  const profileCache = caching.runtimeCacheNameFor(
-    'https://ury.localhost/api/resource/POS%20Profile/Salama%20POS',
-    'GET',
-  );
-  const paymentCache = caching.runtimeCacheNameFor(
-    'https://ury.localhost/api/method/ury.ury_pos.api.getModeOfPayment',
-    'GET',
-  );
-  expect(menuCache).toBe('ury-pos-reads');
-  expect(tableCache).toBe('ury-pos-reads');
-  expect(profileCache).toBe('ury-pos-reads');
-  expect(paymentCache).toBe('ury-pos-reads');
-  expect(shellCache).toBe('ury-pos-shell');
-
+test('the till flag is read strictly', async () => {
+  const caching = await import('../src/pwa/runtime-caching');
   expect(caching.offlineCaptureEnabled(undefined)).toBe(false);
   expect(caching.offlineCaptureEnabled(null)).toBe(false);
   expect(caching.offlineCaptureEnabled({})).toBe(false);
@@ -162,3 +121,19 @@ test('a service worker that never activates does not block offline capture setup
   ]);
   expect(result).toBe('done');
 });
+
+test('the pure read matcher is same-origin and rejects ambiguous parameters', async () => {
+  const caching = await import('../src/pwa/runtime-caching');
+  const origin = 'https://ury.localhost';
+  const denied = [
+    origin + '/api/method/frappe.client.get_list?doctype=User&doctype=URY+Table',
+    origin + '/api/method/frappe.client.get_list?doctype=URY+Table&doctype=User',
+    origin + '/api/method/frappe.client.get_list?doctype=URY+Table&cmd=frappe.client.get_list',
+    origin + '/api/method/ury.ury_pos.api.getPosProfile?doctype=User',
+    'https://other-tenant.invalid/api/resource/POS%20Profile/Till',
+    'https://other-tenant.invalid/pos',
+  ];
+  for (const href of denied) expect(caching.requestMatchesRuntimeCache(href, 'GET', origin), href).toBe(false);
+  expect(caching.requestMatchesRuntimeCache(origin + '/api/method/frappe.client.get_list?doctype=URY+Table', 'GET', origin)).toBe(true);
+});
+

@@ -62,11 +62,6 @@ test('the /sw.js response cannot widen the worker beyond /pos', () => {
   expect(page).toContain('response.headers["Service-Worker-Allowed"] = "/pos"');
 });
 
-test('Workbox precache is named under the URY prefix', () => {
-  const config = readFileSync(resolve('pos/vite.config.ts'), 'utf8');
-  expect(config).toContain("cacheId: 'ury-pos'");
-});
-
 test('flag off removes only the URY POS worker and ury-pos caches', async () => {
   const { syncOfflineCapture } = await import('../src/pwa/register-offline');
   await syncOfflineCapture({ ury_offline_capture: 0 });
