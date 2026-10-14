@@ -8,6 +8,7 @@ import { renderToString } from "@vue/server-renderer";
 
 const source = await readFile(new URL("./kot.vue", import.meta.url), "utf8");
 const stationModule = await import("./station-print.js").catch(() => null);
+const kitchenActions = await import("./kitchen-actions.js");
 
 function requireStationModule() {
   assert.ok(stationModule, "Mosaic station printing is not implemented");
@@ -185,14 +186,14 @@ function componentDefinition() {
   const module = stationModule || {};
   return new Function(
     "FrappeApp", "window", "navigator", "localStorage", "fetch", "io", "console",
-    "createStationPrinter",
+    "createStationPrinter", "kitchenErrorMessage",
     componentSource.replace(/^import .*;\s*$/gm, "").replace("export default", "return"),
   )(
     class { call() { return callDouble(); } auth() { return { getLoggedInUser: async () => "chef@example.test" }; } },
     { location: { hostname: "synthetic.test", protocol: "https:", port: "", origin: "https://synthetic.test" }, addEventListener() {}, removeEventListener() {} },
     { onLine: true }, storage(), async () => ({ json: async () => ({ message: { site_name: "synthetic.test" } }) }),
     () => ({ connected: true, on() {}, off() {} }), { log() {}, error() {} },
-    module.createStationPrinter,
+    module.createStationPrinter, kitchenActions.kitchenErrorMessage,
   );
 }
 
@@ -214,6 +215,35 @@ test("each KOT card has Print, failures show the retry banner, and managers can 
   assert.match(html, />Print</);
   assert.match(html, /Manager station printing settings/);
   assert.match(html, /Printer host/);
+});
+
+test("a URY Manager without System Manager opens settings from session roles", async () => {
+  const requests = [];
+  const call = {
+    get: async (method, args) => {
+      requests.push({ method, args });
+      if (method === "frappe.client.get") throw Object.assign(Error("User read is not permitted"), { exc_type: "PermissionError" });
+      if (method === "ury.ury.doctype.ury_order.ury_order.get_captain_context") {
+        return { message: { user: "manager@example.test", roles: ["URY Manager"] } };
+      }
+      return { message: {} };
+    },
+    post: async () => ({ message: {} }),
+  };
+  const component = componentDefinition();
+  const vm = {
+    ...component.data(), production: "Kitchen", loggeduser: "manager@example.test", call,
+    ...component.methods,
+  };
+  for (const [name, method] of Object.entries(component.methods)) vm[name] = method.bind(vm);
+
+  await vm.openPrintSettings();
+
+  assert.equal(vm.canManagePrintSettings, true);
+  assert.equal(vm.showPrintSettings, true);
+  assert.equal(vm.printError, "");
+  assert.ok(requests.some(({ method }) => method === "ury.ury.doctype.ury_order.ury_order.get_captain_context"));
+  assert.equal(requests.some(({ method }) => method === "frappe.client.get"), false);
 });
 
 test("successful jobs persist the printed set across reloads and record the KOT and unit", async () => {
