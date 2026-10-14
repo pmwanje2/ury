@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 
@@ -165,4 +165,33 @@ test('offline capture registers the service worker only when the till flag is on
   expect(registered).toEqual([]);
   await syncOfflineCapture({ ury_offline_capture: 1 });
   expect(registered).toEqual(['/sw.js']);
+});
+
+test('precache URLs are rooted at the POS asset base because /sw.js is not served from that directory', async () => {
+  const caching = await import(/* @vite-ignore */ '../src/pwa/runtime-caching.ts');
+  expect(caching.precacheURLForServiceWorker('ury_pos.png')).toBe('/assets/ury/pos/ury_pos.png');
+  expect(caching.precacheURLForServiceWorker('ury.ico')).toBe('/assets/ury/pos/ury.ico');
+  expect(caching.precacheURLForServiceWorker('assets/index.js')).toBe('/assets/ury/pos/assets/index.js');
+  expect(caching.precacheModifyURLPrefix()).toEqual({ '': '/assets/ury/pos/' });
+  const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
+  expect(viteConfig).toContain('precacheModifyURLPrefix()');
+});
+
+test('a service worker that never activates does not block offline capture setup', async () => {
+  vi.stubGlobal('navigator', {
+    serviceWorker: {
+      controller: {},
+      register: async () => ({}),
+      ready: new Promise(() => undefined),
+      addEventListener: () => undefined,
+      getRegistrations: async () => [],
+    },
+  });
+  vi.stubGlobal('caches', { keys: async () => [], delete: async () => true });
+  const { syncOfflineCapture } = await import(/* @vite-ignore */ '../src/pwa/register-offline.ts');
+  const result = await Promise.race([
+    syncOfflineCapture({ ury_offline_capture: 1 }).then(() => 'done'),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 2500)),
+  ]);
+  expect(result).toBe('done');
 });
