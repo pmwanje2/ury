@@ -9,6 +9,7 @@ import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Spinner } from '@ury/ui';
 import { Textarea } from '@ury/ui';
 import { usePOSStore } from '../store/pos-store';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 import { useNavigate } from 'react-router-dom';
 import PaymentDialog from '../components/PaymentDialog';
 import BillSplitDialog from '../components/BillSplitDialog';
@@ -193,6 +194,7 @@ export default function Orders() {
     }
     setCancelLoading(true);
     try {
+      await assertOfflineActionAllowed('void');
       await call.post('ury.ury.doctype.ury_order.ury_order.cancel_order', {
         invoice_id: selectedOrder.name,
         reason: cancelReason.trim()

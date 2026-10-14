@@ -157,6 +157,7 @@ export class OfflineOutbox {
       const rows = await this.list();
       const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;
       if (clientId && (!previous || previous.outage_id !== outage || previous.state !== 'pending' || previous.next_round)) throw new Error('Extra rounds require an order from this same outage.');
+      if (previous && (['customer', 'table', 'room', 'order_type', 'no_of_pax'] as const).some((key) => previous.order[key] !== order[key])) throw new Error('Extra rounds cannot change the order context, customer or table offline.');
       if (previous?.settlement) throw new Error('This order already has a settlement.');
       if (this.persistent === null) {
         try { this.persistent = await navigator.storage?.persist?.() || false; } catch { this.persistent = false; }
@@ -187,11 +188,15 @@ export class OfflineOutbox {
     });
   }
   private async call(method: string, payload?: Record<string, unknown>): Promise<unknown> {
-    const response = await this.request(`/api/method/${method}`, { method: payload ? 'POST' : 'GET',
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    let response: Response;
+    try { response = await this.request(`/api/method/${method}`, { method: payload ? 'POST' : 'GET', signal: controller.signal,
       credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json',
         'X-Frappe-CSRF-Token': (window as Window & { csrf_token?: string }).csrf_token || '' },
       body: payload ? JSON.stringify(payload) : undefined });
+    } finally { clearTimeout(timeout); }
     if (response.redirected || response.status === 0 || response.status >= 300 && response.status < 400 || /\/login|cloudflareaccess/i.test(response.url) || !response.headers.get('Content-Type')?.includes('application/json')) throw new NotReady('Server session is not ready');
     if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
     let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
@@ -201,6 +206,7 @@ export class OfflineOutbox {
     return body.message;
   }
   async replay(): Promise<void> {
+    if (!canCaptureOffline(this.options.profile, this.options.user)) return;
     if (this.replayPromise) return this.replayPromise;
     this.replaying = true; changed();
     this.replayPromise = exclusive(async () => {

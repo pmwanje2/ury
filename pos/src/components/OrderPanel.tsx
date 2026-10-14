@@ -91,18 +91,18 @@ const OrderPanel = () => {
       }
 
       // Validate customer/aggregator details
-      if (selectedOrderType === 'Aggregators') {
+      if (!target && selectedOrderType === 'Aggregators') {
         if (!selectedAggregator?.customer) {
           showToast.error(t('errors.select_aggregator'));
           return;
         }
-      } else if (!selectedCustomer?.name) {
+      } else if (!target && !selectedCustomer?.name) {
         showToast.error(t('errors.select_customer'));
         return;
       }
 
       // Validate table selection for dine-in orders
-      if (selectedOrderType === DINE_IN && !selectedTable) {
+      if (!target && selectedOrderType === DINE_IN && !selectedTable) {
         showToast.error(t('errors.select_table', { order_type: DINE_IN }));
         return;
       }
