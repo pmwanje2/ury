@@ -62,7 +62,7 @@ website_route_rules = [
     {"from_route": "/pos/<path:app_path>", "to_route": "pos"},
 ]
 
-# /sw.js is the POS service worker. Scope "/" needs Service-Worker-Allowed, which
+# /sw.js is the POS service worker. Scope "/pos" needs Service-Worker-Allowed, which
 # /assets cannot send. Registration stays opt-in in the POS client.
 page_renderer = ["ury.offline_sw.OfflineServiceWorkerPage"]
 
