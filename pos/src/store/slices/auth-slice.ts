@@ -1,5 +1,5 @@
 import { StateCreator } from 'zustand';
-import { getLoggedUser, getUserRoles } from '@ury/core';
+import { getLoggedUser, getSessionUser, getUserRoles } from '@ury/core';
 
 export interface User {
   name: string; // This stores the user ID
@@ -34,19 +34,24 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, _get) => ({
     try {
       set({ isLoading: true, error: null });
       const response = await getLoggedUser();
-      
-      if (!response) {
+      // A network failure while the browser is offline is not a logout.
+      // Keep the cookie session so the cached shell can render. An online
+      // miss still goes to login. The auth request itself is not cached.
+      const sessionUser = !response && navigator.onLine === false ? getSessionUser() : null;
+      const userName = response || sessionUser;
+
+      if (!userName) {
         // If no user is logged in, redirect to login
         window.location.href = '/login?redirect-to=%2Fpos';
         return;
       }
 
       // Get user roles
-      const roles = await getUserRoles(response);
+      const roles = await getUserRoles(userName);
 
       set({
         user: {
-          name: response, // Store the user ID in name field
+          name: userName, // Store the user ID in name field
           full_name: roles.full_name,
           roles: roles.roles,
         },
