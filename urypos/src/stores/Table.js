@@ -58,6 +58,7 @@ export const useTableStore = defineStore("table", {
     customers: useCustomerStore(),
     db: frappe.db(),
     serverTimeOffset: 0,
+    ownerNames: {},
     totalMinutes: null,
     invoiceNumber: null,
     modifiedTime: null,
@@ -237,6 +238,9 @@ export const useTableStore = defineStore("table", {
                 table.open_bill_creation = bill.creation;
               }
             }
+          }
+          if (room === this.selectedRoom) {
+            await this.attachTableOwners(occupiedTables, room);
           }
         })
         .catch((error) => {
@@ -526,7 +530,7 @@ export const useTableStore = defineStore("table", {
               this.alert
                 .createAlert(
                   "Message",
-                  "Table is assigned to " + this.previousOrder.waiter,
+                  "Table is assigned to " + this.ownerLabel(this.previousOrder.waiter),
                   "OK"
                 )
                 .then(() => {
@@ -668,6 +672,63 @@ export const useTableStore = defineStore("table", {
             }
           });
       }
+    },
+    async attachTableOwners(occupiedTables, room) {
+      if (room !== this.selectedRoom) return;
+      try {
+        const invoices = await this.db.getDocList("POS Invoice", {
+          fields: ["name", "restaurant_table", "custom_merged_tables", "waiter"],
+          filters: [["docstatus", "=", 0]],
+          orFilters: [
+            ["restaurant_table", "in", occupiedTables.map((table) => table.name)],
+            ...occupiedTables.map((table) => ["custom_merged_tables", "like", `%${table.name}%`]),
+          ],
+          limit: 0,
+        });
+        if (room !== this.selectedRoom) return;
+        const waiterByTable = new Map();
+        for (const bill of invoices) {
+          if (!bill || !bill.waiter) continue;
+          const names = [];
+          if (bill.restaurant_table) names.push(bill.restaurant_table);
+          for (const partner of String(bill.custom_merged_tables || "").split(",")) {
+            const name = partner.trim();
+            if (name) names.push(name);
+          }
+          for (const name of names) waiterByTable.set(name, bill.waiter);
+        }
+        const waiterIds = [...new Set(waiterByTable.values())];
+        if (waiterIds.length) {
+          try {
+            const users = await this.db.getDocList("User", {
+              fields: ["name", "full_name"],
+              filters: [["name", "in", waiterIds]],
+              limit: waiterIds.length,
+            });
+            if (room !== this.selectedRoom) return;
+            for (const user of users || []) {
+              const fullName = user && typeof user.full_name === "string" ? user.full_name.trim() : "";
+              if (user && user.name && fullName) this.ownerNames[user.name] = fullName;
+            }
+          } catch (error) {
+            console.error(error);
+          }
+        }
+        if (room !== this.selectedRoom) return;
+        for (const table of this.tables) {
+          const waiter = waiterByTable.get(table.name);
+          table.owner_name = waiter ? this.ownerLabel(waiter) : "";
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    },
+    ownerLabel(userId) {
+      if (!userId) return "";
+      const known = this.ownerNames[userId];
+      if (known) return known;
+      const at = String(userId).indexOf("@");
+      return at > 0 ? String(userId).slice(0, at) : String(userId);
     },
   },
 });

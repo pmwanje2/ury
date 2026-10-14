@@ -211,6 +211,12 @@
                   </svg>
                 </button>
               </h5>
+              <p
+                v-if="table.occupied === 1 && table.owner_name"
+                class="truncate text-sm font-medium text-gray-700 dark:text-gray-200"
+              >
+                {{ table.owner_name }}
+              </p>
               <span class="text-base font-medium tabular-nums text-gray-500 dark:text-gray-400">
                 {{
                   table.occupied === 1

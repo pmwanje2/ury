@@ -402,7 +402,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
             this.alert.createAlert(
               "Message",
               "Printing is Blocked Table is assigned to " +
-              result.message.waiter,
+              this.table.ownerLabel(result.message.waiter),
               "OK"
             );
           } else {
