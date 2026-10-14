@@ -78,7 +78,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function loadRole({ cashier = false, seconds = 60, roles, stayRoles = [] } = {}) {
+function mockRole({ cashier = false, seconds = 60, roles, stayRoles = [] } = {}) {
   const userRoles = roles || [cashier ? 'URY Cashier' : 'URY Captain'];
   auth.db.getDoc.mockResolvedValue({ name: 'alice@example.com', username: 'alice', full_name: 'Alice Waiter',
     roles: userRoles.map((role) => ({ role })) });
@@ -89,6 +89,10 @@ async function loadRole({ cashier = false, seconds = 60, roles, stayRoles = [] }
     custom_floor_idle_signout_seconds: seconds, custom_floor_signout_after_send: 1,
     view_all_status: 0, remove_items: 0, show_image: 0,
   } });
+}
+
+async function loadRole(options) {
+  mockRole(options);
   auth.fetchUserRole();
   await flushPromises();
 }
@@ -279,27 +283,139 @@ function nativeLogin() {
   return requests;
 }
 
-describe('native username and private PIN', () => {
-  it('page-load session checks do not use a server cookie without a local sign-in marker', async () => {
-    clearAppStorage();
-    setActivePinia(createPinia());
-    auth = useAuthStore();
-    const requests = [];
-    auth.auth.axios.defaults.adapter = async config => {
-      requests.push(config.url);
-      return { data: { message: 'alice@example.com' }, status: 200, statusText: 'OK', headers: {}, config };
-    };
-    vi.spyOn(auth.invoiceData, 'fetchInvoiceDetails').mockResolvedValue(undefined);
-    vi.spyOn(auth, 'fetchUserRole').mockImplementation(() => {});
-    router.push.mockClear();
+function pageSession({ roles = ['URY Manager'], stayRoles = ['URY Manager'] } = {}) {
+  clearAppStorage();
+  setActivePinia(createPinia());
+  auth = useAuthStore();
+  invoice = useInvoiceDataStore();
+  vi.spyOn(auth, 'isPosOpenChecking').mockImplementation(() => {});
+  vi.spyOn(auth, 'isPosCloseCheck').mockImplementation(() => {});
+  const requests = [];
+  auth.auth.axios.defaults.adapter = async config => {
+    requests.push(config.url);
+    return { data: { message: 'manager@example.com' }, status: 200, statusText: 'OK', headers: {}, config };
+  };
+  vi.spyOn(invoice, 'fetchInvoiceDetails').mockImplementation(async () => {
+    invoice.posProfile = 'Salama POS';
+  });
+  mockRole({ roles, stayRoles, seconds: 0 });
+  router.push.mockClear();
+  return requests;
+}
+
+describe('ERP sessions without a local PIN sign-in marker', () => {
+  it('a listed role accepts the live session and reaches /Table without the pad', async () => {
+    const requests = pageSession();
     auth.fetchUserDetails();
     await flushPromises();
-    expect(requests).toEqual([]);
-    expect(auth.userAuth).toBeFalsy();
-    expect(auth.sessionUser).toBe('');
-    expect(router.push).not.toHaveBeenCalled();
+    expect(requests).toEqual(['/api/method/frappe.auth.get_logged_user']);
+    expect(auth.db.getDoc).toHaveBeenCalledWith('User', 'manager@example.com');
+    expect(auth.call.get).toHaveBeenCalledWith('frappe.client.get', { doctype: 'POS Profile', name: 'Salama POS' });
+    expect(auth.staySignedIn).toBe(true);
+    expect(auth.userAuth).toBe(true);
+    expect(localStorage.getItem('userAuth')).toBe('true');
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(router.push).not.toHaveBeenCalledWith('/login');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('an unlisted role ends the live session and sees the PIN pad', async () => {
+    pageSession({ roles: ['URY Captain'], stayRoles: ['URY Manager'] });
+    auth.fetchUserDetails();
+    await flushPromises();
+    expect(fetch).toHaveBeenCalledWith('/api/method/logout', expect.objectContaining({ method: 'POST' }));
+    expect(auth.userAuth).toBeFalsy();
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+    expect(boundary.table.fetchRoom).not.toHaveBeenCalled();
+    expect(window.location.href).toBe('/urypos/login');
+    mount(Login);
+    expect(host.querySelector('input[name="currentPassword"]')).not.toBeNull();
+  });
+
+  it('an empty stay list ends even a manager session and shows the PIN pad', async () => {
+    pageSession({ stayRoles: [] });
+    auth.fetchUserDetails();
+    await flushPromises();
+    expect(fetch).toHaveBeenCalledWith('/api/method/logout', expect.objectContaining({ method: 'POST' }));
+    expect(auth.userAuth).toBeFalsy();
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+    expect(window.location.href).toBe('/urypos/login');
+  });
+
+  it('does not admit the session while the POS Profile role list is still loading', async () => {
+    pageSession();
+    const profile = auth.call.get.mock.results;
+    let releaseProfile;
+    auth.call.get.mockImplementationOnce(() => new Promise(resolve => { releaseProfile = resolve; }));
+    auth.fetchUserDetails();
+    await flushPromises();
+    expect(auth.call.get).toHaveBeenCalledWith('frappe.client.get', { doctype: 'POS Profile', name: 'Salama POS' });
+    expect(auth.userAuth).toBeFalsy();
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+    releaseProfile({ message: {
+      role_allowed_for_billing: [], custom_floor_stay_signed_in_roles: [{ role: 'URY Manager' }],
+      transfer_role_permissions: [], role_restricted_for_table_order: [],
+    } });
+    await flushPromises();
+    expect(auth.userAuth).toBe(true);
+    expect(router.push).toHaveBeenCalledWith('/Table');
+  });
+
+  it('a failed POS Profile lookup cannot reuse a previously listed role', async () => {
+    pageSession();
+    auth.staySignedIn = true;
+    auth.call.get.mockRejectedValue(new Error('POS Profile unavailable'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    auth.fetchUserDetails();
+    await flushPromises();
+    expect(fetch).toHaveBeenCalledWith('/api/method/logout', expect.objectContaining({ method: 'POST' }));
+    expect(auth.userAuth).toBeFalsy();
+    expect(localStorage.getItem('userAuth')).toBeNull();
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+    expect(window.location.href).toBe('/urypos/login');
+  });
+
+  it('a session bypass never adds the manager to recent waiters', async () => {
+    pageSession();
+    const names = [{ username: 'alice', displayName: 'Alice Waiter' }];
+    localStorage.setItem(recentKey, JSON.stringify(names));
+    auth.fetchUserDetails();
+    await flushPromises();
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(JSON.parse(localStorage.getItem(recentKey))).toEqual(names);
+  });
+
+  it('PIN login still admits an unlisted waiter and records their recent name', async () => {
+    const requests = pageSession({ roles: ['URY Captain'], stayRoles: ['URY Manager'] });
+    auth.auth.axios.defaults.adapter = async config => {
+      requests.push({ url: config.url, body: config.data ? JSON.parse(config.data) : undefined });
+      const data = config.url === '/api/method/login'
+        ? { message: 'Logged In', full_name: 'Alice Waiter' }
+        : { message: 'alice@example.com' };
+      return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+    auth.userId = 'alice';
+    auth.currentPassword = '82649371'; // Synthetic credential.
+    await auth.login();
+    await flushPromises();
+    expect(requests).toEqual([
+      { url: '/api/method/login', body: { usr: 'alice', pwd: '82649371' } },
+      { url: '/api/method/frappe.auth.get_logged_user', body: undefined },
+    ]);
+    expect(auth.staySignedIn).toBe(false);
+    expect(auth.userAuth).toBe(true);
+    expect(localStorage.getItem('userAuth')).toBe('true');
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(auth.currentPassword).toBe('');
+    expect(JSON.parse(localStorage.getItem(recentKey))).toEqual([{ username: 'alice', displayName: 'Alice Waiter' }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('native username and private PIN', () => {
   it('a surviving server session cannot resume after failed logout without a fresh PIN login', async () => {
     fetch.mockRejectedValue(new Error('Offline'));
     await auth.logOut();
@@ -318,13 +434,16 @@ describe('native username and private PIN', () => {
       return { data: { message: serverUser }, status: 200, statusText: 'OK', headers: {}, config };
     };
     vi.spyOn(invoice, 'fetchInvoiceDetails').mockResolvedValue(undefined);
-    vi.spyOn(auth, 'fetchUserRole').mockImplementation(() => {});
+    mockRole({ roles: ['URY Captain'], stayRoles: ['URY Manager'], seconds: 0 });
+    vi.spyOn(auth, 'isPosOpenChecking').mockImplementation(() => {});
+    vi.spyOn(auth, 'isPosCloseCheck').mockImplementation(() => {});
     router.push.mockClear();
     auth.fetchUserDetails(); // App.vue's mount-time session check.
     await flushPromises();
-    expect(requests).toEqual([]);
+    expect(requests).toEqual([{ url: '/api/method/frappe.auth.get_logged_user', body: undefined }]);
     expect(auth.userAuth).toBeFalsy();
-    expect(auth.sessionUser).toBe('');
+    expect(window.location.href).toBe('/urypos/login');
+    expect(localStorage.getItem('userAuth')).toBeNull();
     expect(router.push).not.toHaveBeenCalled();
 
     mount(Login);
@@ -336,6 +455,7 @@ describe('native username and private PIN', () => {
     await auth.login();
     await flushPromises();
     expect(requests).toEqual([
+      { url: '/api/method/frappe.auth.get_logged_user', body: undefined },
       { url: '/api/method/login', body: { usr: 'bob', pwd: '82649371' } },
       { url: '/api/method/frappe.auth.get_logged_user', body: undefined },
     ]);
