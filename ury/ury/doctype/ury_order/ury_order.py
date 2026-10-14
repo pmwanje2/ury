@@ -1294,7 +1294,7 @@ def _validate_client_order_id(client_order_id):
     return None
 
 
-def _client_order_invoice(client_order_id):
+def _client_order_invoice(client_order_id, invoice_name=None, table=None):
     if not client_order_id:
         return None
     name = frappe.db.get_value(
@@ -1308,6 +1308,12 @@ def _client_order_invoice(client_order_id):
         if invoice.branch and user_branch and invoice.branch != user_branch:
             frappe.throw(_("Not permitted to view orders outside your active branch"), frappe.PermissionError)
         _enforce_order_access(invoice)
+        if invoice_name and invoice_name != invoice.name:
+            frappe.throw(_("Client order ID does not match the requested invoice."))
+        if table and table not in _get_table_group(
+            invoice.restaurant_table, invoice.get("custom_merged_tables")
+        ):
+            frappe.throw(_("Client order ID does not match the requested table."))
         return invoice
     return None
 
@@ -1340,7 +1346,7 @@ def sync_order(
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
 
-    client_invoice = _client_order_invoice(client_order_id)
+    client_invoice = _client_order_invoice(client_order_id, invoice, table)
     
     billing_user = any(
         role.role in user_role for role in posprofile.role_allowed_for_billing
@@ -2076,7 +2082,7 @@ def make_invoice(
     client_order_id = _validate_client_order_id(client_order_id)
     if round_id is not None and not str(round_id).strip():
         frappe.throw(_("Round ID must not be empty."))
-    existing_invoice = _client_order_invoice(client_order_id)
+    existing_invoice = _client_order_invoice(client_order_id, invoice, table)
     if existing_invoice:
         if (
             existing_invoice.docstatus == 1
