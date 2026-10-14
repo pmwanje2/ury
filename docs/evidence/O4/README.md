@@ -46,7 +46,7 @@ production-only GREEN. Harness-only commits are separate from production.
 
 Captured commands/output, not inferred from tests added after implementation:
 
-[Captured RED, final verification and teardown output](test-output.txt).
+[Captured RED and teardown output](test-output.txt); [final merged verification output](merged-output.txt).
 
 ```text
 npm run test:pos -- --no-cache pos/tests/offline-cashier.test.tsx pos/tests/offline-capture.test.ts
@@ -62,17 +62,17 @@ RED a3bfb04e: Tests 3 failed | 27 passed (30)
 GREEN 432e778e: Test Files 1 passed (1); Tests 30 passed (30)
 ```
 
-## Verification at code SHA 432e778e8de5d99f248b6904734e77fef2f10743
+## Verification at final code SHA 5c7caadf800609dc8c461c5ef7506a84be28fe22
 
 | Command | Actual result |
 | --- | --- |
-| `npm run test:pos -- --no-cache` | 26 files, **378 passed**, no failed/skipped tests |
+| `npm run test:pos -- --no-cache` | 35 files, **428 passed**, no failed/skipped tests |
 | `node --test pos/tests/logout.test.ts pos/tests/order-tabs.test.ts pos/tests/till-close-api.test.mjs` | **25 passed**, 0 failed/skipped |
 | `python3 -m unittest ury.tests.unit.test_offline_capture_fixture` | **1 passed** |
 | `npm run build --workspace pos` | production build passed; existing chunk-size warning |
 | `bench --site ury.localhost run-tests --app ury --module ury.tests.test_idempotent_writes` | **12 passed** on disposable native v16 bench |
 | `bench --site ury.localhost run-tests --app ury --module ury.tests.test_offline_replay` | **19 passed** on disposable native v16 bench |
-| `npx --no-install tsc --noEmit -p pos/tsconfig.app.json` | fails with the same five pre-existing diagnostics as base `a402c6c5` |
+| `npx --no-install tsc --noEmit -p pos/tsconfig.app.json` | fails with the same eight pre-existing diagnostics as the landed O3 base `678bf9b3` |
 
 The native O1/O2 tests precede the final two-line frontend auth fix; their server
 sources did not change. Node used v24.22.0; Vitest 3.2.6; Chrome
@@ -81,10 +81,11 @@ and dependency tree. Existing errors: unused `discountType`/`showAdjustment`
 in PaymentDialog, unused ProductDialog argument, TableMergeDialog comparison,
 and unused Table import. Typecheck is not reported green.
 
-Independent `verification-specialist` (Opus) reviewed the code at `432e778e`
-against `a402c6c5`: PASS, no remaining concrete contract defect, and independently
-ran the full **378-test** suite and focused offline tests. This is code review,
-not independent native/browser acceptance. CodeRabbit could not review:
+Independent `verification-specialist` (Opus) reviewed O4 at `432e778e` against
+`a402c6c5`: PASS, and separately reviewed the O3 merge composition at the final
+head: PASS. The first review independently ran the full **378-test** suite and
+focused offline tests; the merged local run independently passed **428 tests**.
+This is code review, not independent native/browser acceptance. CodeRabbit could not review:
 `Connection failed: Invalid organization` (403).
 
 ## Disposable native browser proof
@@ -172,7 +173,8 @@ physical printer paper delivery (browser print path/window only); real Cloudflar
 Access/session expiry and mobile-money provider settlement (unit classification
 and manual tender, not provider interaction); tax-exclusive/taxed menu totals;
 and grant of browser persistent storage (Chrome returned false). Local typecheck
-remains baseline-red as described above. The transient 403 login-text fallback
+remains baseline-red as described above (8 diagnostics at both landed O3 base and
+final candidate). The transient 403 login-text fallback
 matches English; a localized Guest-denial message remains an edge qualification
 risk. Hosted CI is reported separately in the draft PR, not inferred from local
 tests. This evidence authorizes no merge or deployment.
