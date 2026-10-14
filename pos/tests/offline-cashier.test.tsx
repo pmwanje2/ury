@@ -154,6 +154,7 @@ test('new offline orders use the profile native walk-in customer after cart rese
   await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect(await q.list()).toHaveLength(1)); });
   const rows = await q.list();
   expect(rows[0].order.customer).toBe('Native Walk In');
+  expect(usePOSStore.getState().activeOrders).toEqual([]);
 });
 
 test.each([

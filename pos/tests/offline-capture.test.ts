@@ -4,6 +4,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { testLocks } from './offline-locks';
 import { initI18n } from '../src/i18n';
+import * as core from '@ury/core';
 
 const profile = { name: 'Till A', ury_offline_capture: 1, role_allowed_for_billing: [{ role: 'Cashier' }] };
 const user = { name: 'cashier@example.com', roles: ['Cashier'] };
@@ -86,3 +87,20 @@ test.each(['void', 'reduction', 'discount', 'transfer', 'merge', 'split', 'card'
     expect(assertOfflineActionAllowed, 'refused offline actions have no guard').toBeTypeOf('function');
     await expect(assertOfflineActionAllowed(action)).rejects.toThrow(/offline|refused|not available/i);
   });
+
+test('empty-queue logout waits for the asynchronous O3 cache purge before allowing navigation', async () => {
+  const { clearCashierStorage } = await captureModule();
+  let finishPurge!: () => void;
+  vi.spyOn(core, 'clearAppStorage').mockImplementation(() => new Promise<void>((resolve) => { finishPurge = resolve; }) as any);
+  let navigationAllowed = false;
+  const clearing = clearCashierStorage().then(() => { navigationAllowed = true; });
+  await vi.waitFor(() => expect(finishPurge).toBeTypeOf('function'));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    expect(navigationAllowed).toBe(false);
+  } finally {
+    finishPurge();
+    await clearing;
+  }
+  expect(navigationAllowed).toBe(true);
+});
