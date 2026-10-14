@@ -346,7 +346,6 @@ describe('ERP sessions without a local PIN sign-in marker', () => {
 
   it('does not admit the session while the POS Profile role list is still loading', async () => {
     pageSession();
-    const profile = auth.call.get.mock.results;
     let releaseProfile;
     auth.call.get.mockImplementationOnce(() => new Promise(resolve => { releaseProfile = resolve; }));
     auth.fetchUserDetails();
