@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey } from '@ury/core';
-import { syncOfflineCapture } from '../pwa/register-offline';
+import { bindOfflineUser, syncOfflineCapture } from '../pwa/register-offline';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
 import { getMenuCourses } from '../lib/menu-course-api';
@@ -330,6 +330,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   initializeApp: async () => {
     try {
       set({ isInitializing: true, error: null });
+      try {
+        await bindOfflineUser(getSessionUser());
+      } catch (error) {
+        console.error('Offline session bind failed', error);
+      }
       
       const [profileResult, menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
         get().fetchPosProfile(),
