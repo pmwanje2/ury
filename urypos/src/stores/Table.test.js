@@ -891,5 +891,30 @@ describe('refused order invoice keeps another waiter on the floor', () => {
     expect(router.push).not.toHaveBeenCalledWith('/Table');
     expect(router.push).not.toHaveBeenCalledWith('/Menu');
   });
+
+  it('still returns to the floor when the route back is rejected', async () => {
+    const rejections = [];
+    const onUnhandled = (reason) => {
+      rejections.push(reason instanceof Error ? reason.message : String(reason));
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const store = waiterStore();
+      store.call.get.mockRejectedValue(permissionError);
+      router.push.mockReset();
+      router.push.mockRejectedValueOnce(new Error('navigation rejected'));
+
+      store.loadSelectedTable(occupiedTable());
+      await flushPromises();
+      await new Promise((resolve) => process.nextTick(resolve));
+
+      expect(rejections).toEqual([]);
+      expect(router.push).toHaveBeenCalledWith('/Table');
+      expect(router.push).not.toHaveBeenCalledWith('/Menu');
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });
 
