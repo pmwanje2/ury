@@ -395,6 +395,7 @@ fixtures = [
                     "POS Profile-custom_blind_cash_count",
                     "POS Profile-custom_floor_idle_signout_seconds",
                     "POS Profile-custom_floor_signout_after_send",
+                    "POS Profile-custom_floor_stay_signed_in_roles",
                     "POS Profile-custom_checklist_items",
                     "POS Profile-paid_limit",
                     "POS Profile-table_attention_time",
