@@ -147,4 +147,11 @@ describe('shared till continuation', () => {
     expect(getPOSOpeningContext).not.toHaveBeenCalled();
     expect(getChecklist).toHaveBeenCalledWith('POS-1', 'Opening');
   });
+
+  it('renders the cached workspace when the opening check fails because the network is down', async () => {
+    vi.mocked(checkPOSOpening).mockRejectedValue(new Error('Network Error'));
+    await render();
+    expect(container.textContent).toContain('POS workspace');
+    expect(container.textContent).not.toContain('Could not open the POS session');
+  });
 });
