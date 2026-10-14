@@ -71,7 +71,7 @@ AssertionError: expected false to be true // Object.is equality
      33|   expect(button(/Close Shift/i).disabled).toBe(true);
        |                                           ^
      34| });
-     35| 
+     35|
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
 
@@ -135,7 +135,7 @@ AssertionError: expected false to be true // Object.is equality
      61|   await vi.waitFor(() => expect(button(/Close Shift/i).disabled).toBe(…
        |                                                                  ^
      62| });
-     63| 
+     63|
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
 
@@ -185,12 +185,12 @@ FAILED (failures=1)
  FAIL  pos/tests/offline-refusals.test.ts > captain transfer is explicitly refused offline before a live mutation
 AssertionError: promise resolved "undefined" instead of rejecting
 
-- Expected: 
+- Expected:
 Error {
   "message": "rejected promise",
 }
 
-+ Received: 
++ Received:
 undefined
 
  ❯ pos/tests/offline-refusals.test.ts:19:21
@@ -206,12 +206,12 @@ undefined
  FAIL  pos/tests/offline-refusals.test.ts > fiscal print is explicitly refused offline before a live mutation
 AssertionError: promise resolved "'socket'" instead of rejecting
 
-- Expected: 
+- Expected:
 Error {
   "message": "rejected promise",
 }
 
-+ Received: 
++ Received:
 "socket"
 
  ❯ pos/tests/offline-refusals.test.ts:19:21
@@ -382,7 +382,7 @@ Received: "review"
     112|   expect((await q.list())[0].state).toBe('pending');
        |                                     ^
     113| });
-    114| 
+    114|
 
 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
 
@@ -502,16 +502,16 @@ Done in 0.06s.
 ["POS Profile", "ury_offline_capture", "Check", "0"]
 
 === teardown.log (captured tail) ===
- Container ury-o4-tgmi9v-db-1 Stopped 
- Container ury-o4-tgmi9v-db-1 Removing 
- Container ury-o4-tgmi9v-redis-1 Removed 
- Container ury-o4-tgmi9v-db-1 Removed 
- Volume ury-o4-tgmi9v_sites Removing 
- Volume ury-o4-tgmi9v_db Removing 
- Volume ury-o4-tgmi9v_logs Removing 
- Network ury-o4-tgmi9v_default Removing 
- Volume ury-o4-tgmi9v_logs Removed 
- Volume ury-o4-tgmi9v_db Removed 
- Volume ury-o4-tgmi9v_sites Removed 
- Network ury-o4-tgmi9v_default Removed 
+ Container ury-o4-tgmi9v-db-1 Stopped
+ Container ury-o4-tgmi9v-db-1 Removing
+ Container ury-o4-tgmi9v-redis-1 Removed
+ Container ury-o4-tgmi9v-db-1 Removed
+ Volume ury-o4-tgmi9v_sites Removing
+ Volume ury-o4-tgmi9v_db Removing
+ Volume ury-o4-tgmi9v_logs Removing
+ Network ury-o4-tgmi9v_default Removing
+ Volume ury-o4-tgmi9v_logs Removed
+ Volume ury-o4-tgmi9v_db Removed
+ Volume ury-o4-tgmi9v_sites Removed
+ Network ury-o4-tgmi9v_default Removed
 
