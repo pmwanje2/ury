@@ -111,8 +111,8 @@ export const Header: React.FC = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  const handleClearCache = () => {
-    clearAppStorage();
+  const handleClearCache = async () => {
+    await clearAppStorage();
     // Reload the page
     window.location.reload();
   };
@@ -123,7 +123,7 @@ export const Header: React.FC = () => {
     setLoggingOut(true);
     try {
       await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      clearAppStorage();
+      await clearAppStorage();
       window.location.href = '/login';
     } catch {
       showToast.error('Failed to logout. Please try again.');

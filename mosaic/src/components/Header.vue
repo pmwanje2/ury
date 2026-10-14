@@ -104,7 +104,7 @@ export default {
       this.logoutError = "";
       try {
         await logoutSession(window.csrf_token);
-        clearAppStorage();
+        await clearAppStorage();
         window.location.href = '/login';
       } catch (e) {
         this.logoutError = 'Failed to logout. Please try again.';

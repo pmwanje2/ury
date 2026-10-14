@@ -5,6 +5,8 @@ import { initI18n } from '../src/i18n';
 import { checkPOSOpening, createPOSOpening, getPOSOpeningContext, validatePOSClose } from '../src/lib/pos-opening-api';
 import { getChecklist, submitChecklist } from '../src/lib/checklist-api';
 import POSOpeningProvider from '../src/components/POSOpeningProvider';
+import { clearAppStorage } from '../../packages/core/src/storage';
+import { realSdkHttpFailure, realSdkNetworkFailure } from './helpers/sdk-errors';
 
 const state = vi.hoisted(() => ({
   profile: { name: 'POS-1', company: 'Test Co', custom_daily_pos_close: 1 },
@@ -146,5 +148,60 @@ describe('shared till continuation', () => {
     expect(container.textContent).toContain('POS workspace');
     expect(getPOSOpeningContext).not.toHaveBeenCalled();
     expect(getChecklist).toHaveBeenCalledWith('POS-1', 'Opening');
+  });
+});
+
+describe('offline opening fallback', () => {
+  async function confirmOnline() {
+    vi.mocked(checkPOSOpening).mockResolvedValue({ message: [opening] });
+    await render();
+    expect(container.textContent).toContain('POS workspace');
+    await act(async () => root.unmount());
+    root = createRoot(container);
+  }
+
+  afterEach(() => {
+    delete (state.profile as Record<string, unknown>).ury_offline_capture;
+    sessionStorage.clear();
+  });
+
+  it('an opted-in till reloading offline keeps the opening it confirmed online', async () => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    await confirmOnline();
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkNetworkFailure());
+    await render();
+    expect(container.textContent).toContain('POS workspace');
+  });
+
+  it('a till without the flag shows the blocking error on a network failure', async () => {
+    await confirmOnline();
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkNetworkFailure());
+    await render();
+    expect(container.textContent).not.toContain('POS workspace');
+    expect(container.textContent).toContain('Could not open the POS session');
+  });
+
+  it('an opted-in till with no confirmed opening is not admitted offline', async () => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkNetworkFailure());
+    await render();
+    expect(container.textContent).not.toContain('POS workspace');
+  });
+
+  it('a real 403 on the opening check is never treated as offline', async () => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    await confirmOnline();
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkHttpFailure(403));
+    await render();
+    expect(container.textContent).not.toContain('POS workspace');
+  });
+
+  it('sign-out forgets the confirmed opening', async () => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    await confirmOnline();
+    await clearAppStorage();
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkNetworkFailure());
+    await render();
+    expect(container.textContent).not.toContain('POS workspace');
   });
 });
