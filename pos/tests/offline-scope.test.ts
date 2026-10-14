@@ -62,6 +62,15 @@ test('the /sw.js response cannot widen the worker beyond /pos', () => {
   expect(page).toContain('response.headers["Service-Worker-Allowed"] = "/pos"');
 });
 
+test('hooks.py describes the service worker scope as /pos', () => {
+  const hooks = readFileSync(resolve('ury/hooks.py'), 'utf8');
+  const start = hooks.indexOf('# /sw.js is the POS service worker.');
+  expect(start).toBeGreaterThanOrEqual(0);
+  const comment = hooks.slice(start, hooks.indexOf('page_renderer', start));
+  expect(comment).toContain('"/pos"');
+  expect(comment).not.toContain('Scope "/"');
+});
+
 test('flag off removes only the URY POS worker and ury-pos caches', async () => {
   const { syncOfflineCapture } = await import('../src/pwa/register-offline');
   await syncOfflineCapture({ ury_offline_capture: 0 });
