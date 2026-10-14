@@ -1,0 +1,32 @@
+import { purgeOfflineCaches } from "@ury/core";
+import { offlineCaptureEnabled, type OfflineCaptureProfile } from "./runtime-caching";
+
+const SERVICE_WORKER_URL = "/sw.js";
+const SERVICE_WORKER_SCOPE = "/";
+
+export async function syncOfflineCapture(profile: OfflineCaptureProfile | null | undefined): Promise<void> {
+  if (!offlineCaptureEnabled(profile)) {
+    await purgeOfflineCaches();
+    return;
+  }
+  if (typeof navigator === "undefined" || !navigator.serviceWorker?.register) return;
+
+  const serviceWorker = navigator.serviceWorker;
+  await serviceWorker.register(SERVICE_WORKER_URL, { scope: SERVICE_WORKER_SCOPE });
+  await serviceWorker.ready;
+  if (!serviceWorker.controller) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 2000);
+      serviceWorker.addEventListener("controllerchange", () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+  }
+  if (!serviceWorker.controller || typeof fetch !== "function") return;
+  try {
+    await fetch("/pos", { credentials: "same-origin", cache: "reload" });
+  } catch {
+    // A failed warm-up must not block the till. The next controlled load caches the shell.
+  }
+}

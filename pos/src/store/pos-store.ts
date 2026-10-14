@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey } from '@ury/core';
+import { syncOfflineCapture } from '../pwa/register-offline';
+import { useRootStore } from './root-store';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
 import { getMenuCourses } from '../lib/menu-course-api';
@@ -327,6 +329,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   lastModifiedTime: null,
 
   initializeApp: async () => {
+    try {
+      await syncOfflineCapture(useRootStore.getState().posProfile);
+    } catch (error) {
+      console.error('Offline capture setup failed', error);
+    }
     try {
       set({ isInitializing: true, error: null });
       

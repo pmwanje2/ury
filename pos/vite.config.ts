@@ -1,14 +1,36 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath } from 'url'
 import { dirname, resolve } from 'path'
+import { workboxRuntimeCaching } from './src/pwa/runtime-caching'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      injectRegister: false,
+      registerType: 'autoUpdate',
+      filename: 'sw.js',
+      manifest: false,
+      workbox: {
+        inlineWorkboxRuntime: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        globPatterns: ['**/*.{js,css,ico,png,svg,woff2}'],
+        globIgnores: ['**/index.html'],
+        // Plugin default serves precached index.html for every navigation.
+        // Only the explicit /pos shell route below may be cached.
+        navigateFallback: undefined,
+        runtimeCaching: workboxRuntimeCaching(),
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+      },
+    }),
+  ],
   resolve: {
     alias: {
       "@": resolve(__dirname, "./src"),

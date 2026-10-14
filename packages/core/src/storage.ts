@@ -16,6 +16,16 @@ export function getUserSessionStorageKey(key: string, user: string | null | unde
   return user && user !== 'Guest' ? `${key}:${user}` : null;
 }
 
+export async function purgeOfflineCaches(): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.serviceWorker?.getRegistrations) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((registration) => registration.unregister()));
+  }
+  if (typeof caches === "undefined" || !caches?.keys) return;
+  const names = await caches.keys();
+  await Promise.all(names.map((name) => caches.delete(name)));
+}
+
 export function clearAppStorage(): void {
   APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   APP_SESSION_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
@@ -35,6 +45,7 @@ export function clearAppStorage(): void {
       sessionStorage.removeItem(key);
     }
   }
+  void purgeOfflineCaches();
 }
 
 export const storage = {
