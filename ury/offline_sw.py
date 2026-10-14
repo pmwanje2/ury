@@ -5,10 +5,12 @@ from werkzeug.wrappers import Response
 
 
 class OfflineServiceWorkerPage:
-	"""Serve the POS service worker from /sw.js so its scope can be the whole site.
+	"""Serve the POS service worker from /sw.js for the /pos scope only.
 
-	Files under /assets cannot send Service-Worker-Allowed. Without that header
-	the worker cannot see /pos or /api, so the read cache would never run.
+	A worker under /assets/ury/pos/ could not control /pos pages. Served from
+	the root, Service-Worker-Allowed pins the maximum scope to /pos so it can
+	never control Desk, login or other apps. Controlled /pos pages still route
+	their /api and /assets/ury/pos/ fetches through it.
 	"""
 
 	def __init__(self, path, http_status_code=None):
@@ -25,6 +27,6 @@ class OfflineServiceWorkerPage:
 		with open(script, "rb") as handle:
 			body = handle.read()
 		response = Response(body, status=200, mimetype="application/javascript")
-		response.headers["Service-Worker-Allowed"] = "/"
+		response.headers["Service-Worker-Allowed"] = "/pos"
 		response.headers["Cache-Control"] = "no-cache"
 		return response

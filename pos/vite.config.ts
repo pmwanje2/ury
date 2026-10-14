@@ -19,6 +19,8 @@ export default defineConfig({
       manifest: false,
       workbox: {
         inlineWorkboxRuntime: true,
+        // Precache becomes ury-pos-precache-v2-<scope>; purge removes only ury-pos-*.
+        cacheId: 'ury-pos',
         clientsClaim: true,
         skipWaiting: true,
         globPatterns: ['**/*.{js,css,ico,png,svg,woff2}'],

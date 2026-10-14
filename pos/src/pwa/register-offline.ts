@@ -2,7 +2,7 @@ import { purgeOfflineCaches } from "@ury/core";
 import { offlineCaptureEnabled, type OfflineCaptureProfile } from "./runtime-caching";
 
 const SERVICE_WORKER_URL = "/sw.js";
-const SERVICE_WORKER_SCOPE = "/";
+const SERVICE_WORKER_SCOPE = "/pos";
 
 export async function syncOfflineCapture(profile: OfflineCaptureProfile | null | undefined): Promise<void> {
   if (!offlineCaptureEnabled(profile)) {

@@ -16,13 +16,26 @@ export function getUserSessionStorageKey(key: string, user: string | null | unde
   return user && user !== 'Guest' ? `${key}:${user}` : null;
 }
 
+// The POS offline worker owns only the /pos scope and ury-pos-* caches.
+// Desk, login and other apps' workers and caches must survive a purge.
+export const URY_POS_SCOPE = '/pos';
+export const URY_POS_CACHE_PREFIX = 'ury-pos-';
+
+export function isUryPosRegistration(registration: { scope: string }): boolean {
+  try {
+    return new URL(registration.scope).pathname === URY_POS_SCOPE;
+  } catch {
+    return false;
+  }
+}
+
 export async function purgeOfflineCaches(): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.serviceWorker?.getRegistrations) {
-    const registrations = await navigator.serviceWorker.getRegistrations();
+    const registrations = (await navigator.serviceWorker.getRegistrations()).filter(isUryPosRegistration);
     await Promise.all(registrations.map((registration) => registration.unregister()));
   }
   if (typeof caches === "undefined" || !caches?.keys) return;
-  const names = await caches.keys();
+  const names = (await caches.keys()).filter((name) => name.startsWith(URY_POS_CACHE_PREFIX));
   await Promise.all(names.map((name) => caches.delete(name)));
 }
 
