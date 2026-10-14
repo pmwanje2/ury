@@ -1,5 +1,6 @@
 export { createFrappeClient, call, db, auth } from './frappe/client';
-export { getLoggedUser, getSessionUser, getUserRoles, logout, isNetworkFailure } from './frappe/auth';
+export { getLoggedUser, readLoggedUser, getSessionUser, getUserRoles, logout, isNetworkFailure } from './frappe/auth';
+export type { LoggedUserResult } from './frappe/auth';
 export { logoutSession } from './logout';
 export { watchIdle } from './idle';
 export { resolveBrand } from './brand';

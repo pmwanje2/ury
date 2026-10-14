@@ -1,4 +1,4 @@
-import { db, auth } from './client';
+import { db, auth, NETWORK_FAILURE_MARK } from './client';
 import { clearAppStorage } from '../storage';
 
 type LoggedUserResponse = string | null;
@@ -24,30 +24,30 @@ export const getSessionUser = (): LoggedUserResponse => {
   }
 };
 
+// True only for the client's tagged "no HTTP answer" shape. 401/403 keep
+// their httpStatus; other TypeErrors and messages are not offline.
 export function isNetworkFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const failure = error as { message?: unknown; code?: unknown };
-  return failure.code === 'ERR_NETWORK'
-    || failure.message === 'Network Error'
-    || failure.message === 'Failed to fetch';
+  const failure = error as Record<string, unknown>;
+  return failure.httpStatus === 0 && failure[NETWORK_FAILURE_MARK] === true;
 }
 
-export const getLoggedUser = async (): Promise<LoggedUserResponse> => {
+export interface LoggedUserResult {
+  user: LoggedUserResponse;
+  networkFailure: boolean;
+}
+
+export const readLoggedUser = async (): Promise<LoggedUserResult> => {
   try {
     const response = await auth.getLoggedInUser();
-    return response as LoggedUserResponse;
+    return { user: (response as LoggedUserResponse) || null, networkFailure: false };
   } catch (error) {
-    // DevTools offline reports navigator.onLine true on the reloaded document
-    // and axios rejects with "Network Error". That is not a logout. Do not
-    // cache the auth request; reuse the cookie session for the shell only.
-    const sessionUser = getSessionUser();
-    if (sessionUser && sessionUser !== 'Guest' && isNetworkFailure(error)) {
-      return sessionUser;
-    }
     console.error('Error getting logged user:', error);
-    return null;
+    return { user: null, networkFailure: isNetworkFailure(error) };
   }
 };
+
+export const getLoggedUser = async (): Promise<LoggedUserResponse> => (await readLoggedUser()).user;
 
 export const getUserRoles = async (email: string): Promise<{ roles: string[]; full_name: string }> => {
   try {
