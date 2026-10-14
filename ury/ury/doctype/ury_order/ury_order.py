@@ -1501,7 +1501,7 @@ def sync_order(
                 ),
             )
             return {"status": "Failure"}
-    elif not append:
+    elif not (last_invoice and last_modified_time):
         if invoice.name and invoice.invoice_printed == 0 and not billing_user:
             frappe.msgprint(
                 title="Table occupied ",
