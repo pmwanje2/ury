@@ -92,6 +92,13 @@ test('other methods, routes, origins and ambiguous parameters are never routed',
   for (const [href, method] of DENIED) expect(cacheFor(href, method), method + ' ' + href).toBeUndefined();
 });
 
+test('an encoded /pos traversal is not a normalized shell or read path', () => {
+  expect(cacheFor(ORIGIN + '/pos%2F..%2Fsecret')).toBeUndefined();
+  expect(cacheFor(ORIGIN + '/pos%2F..%2Fapi%2Fmethod%2Fury.ury_pos.api.getPosProfile')).toBeUndefined();
+  expect(cacheFor(ORIGIN + '/pos')).toBe('ury-pos-shell');
+  expect(cacheFor(ORIGIN + '/pos/tables')).toBe('ury-pos-shell');
+});
+
 test('the worker source names its precache under the URY prefix', () => {
   const source = readFileSync(resolve('pos/src/pwa/sw.ts'), 'utf8');
   expect(source).toContain("setCacheNameDetails({ prefix: 'ury-pos'");
