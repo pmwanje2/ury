@@ -61,6 +61,9 @@ export class TestExtendableEvent extends Event {
   }
 }
 
+// Workbox checks `options instanceof FetchEvent` when a strategy is handled.
+export class TestFetchEvent extends TestExtendableEvent {}
+
 export const ORIGIN = 'https://ury.localhost';
 
 export function installWorkerGlobals() {
@@ -69,6 +72,7 @@ export function installWorkerGlobals() {
   scope.self = globalThis;
   scope.caches = storage;
   scope.ExtendableEvent = TestExtendableEvent;
+  scope.FetchEvent = TestFetchEvent;
   scope.__WB_DISABLE_DEV_LOGS = true;
   scope.location = new URL(ORIGIN + '/pos');
   return storage;
