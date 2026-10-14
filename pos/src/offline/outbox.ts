@@ -73,8 +73,22 @@ export async function assertOutboxEmpty(): Promise<void> {
 }
 const exclusive = <T,>(run: () => Promise<T>): Promise<T> => {
   if (typeof navigator !== 'undefined' && navigator.locks) return navigator.locks.request(LOCK, run);
-  return run();
+  return Promise.reject(new Error('This browser cannot lock the offline outbox across tabs. Offline capture is unavailable.'));
 };
+export async function withEmptyOutbox(run: () => Promise<void>): Promise<void> {
+  const emptyRun = async () => { await assertOutboxEmpty(); await run(); };
+  // Capture/replay fail closed without Web Locks, so an empty browser can still log out.
+  if (typeof navigator !== 'undefined' && navigator.locks) await exclusive(emptyRun);
+  else await emptyRun();
+}
+export async function purgeEmptyOutbox(): Promise<void> {
+  await assertOutboxEmpty();
+  if (typeof indexedDB === 'undefined') return;
+  await transaction(['orders', 'outages'], 'readwrite', (tx, result) => {
+    tx.objectStore('orders').clear(); tx.objectStore('outages').clear(); result(undefined);
+  });
+  changed();
+}
 export function canCaptureOffline(profile?: OfflineProfile | null, user?: OfflineUser | null): boolean {
   return !!profile && !!user && user.name !== 'Guest' &&
     [1, '1', true].includes(profile.ury_offline_capture as number | string | boolean) &&
@@ -104,6 +118,31 @@ export class OfflineOutbox {
     return all().then((rows) => rows.filter((row) => row.owner === this.options.user.name && row.profile === this.options.profile.name));
   }
   assertEmpty = assertOutboxEmpty;
+  async purge(): Promise<void> { await withEmptyOutbox(purgeEmptyOutbox); }
+  private async tryPrint(entry: OfflineEntry, kind: 'kot' | 'bill'): Promise<boolean> {
+    try { return await this.print(entry, kind); } catch { return false; }
+  }
+  async reprint(clientId: string, kind: 'kot' | 'bill'): Promise<void> {
+    this.allowed();
+    await exclusive(async () => {
+      const entry = (await this.list()).find((row) => row.client_order_id === clientId);
+      if (!entry || entry.state !== 'pending') throw new Error('Only pending offline orders can be reprinted.');
+      if (kind === 'bill') {
+        if (!entry.settlement) throw new Error('Settle the provisional bill first.');
+        entry.bill_printed = await this.tryPrint(entry, kind);
+      } else {
+        for (let index = 0; index < entry.rounds.length; index++) {
+          const round = entry.rounds[index];
+          if (round.offline_printed) continue;
+          const printEntry = { ...entry, rounds: entry.rounds.slice(0, index + 1) };
+          round.offline_printed = await this.tryPrint(printEntry, kind) ? 1 : 0;
+          await save(entry);
+          if (!round.offline_printed) break;
+        }
+      }
+      await save(entry);
+    });
+  }
   async capture(order: OfflineOrder, total: number, clientId?: string): Promise<OfflineEntry> {
     this.allowed();
     if (order.invoice || order.last_invoice) throw new Error('Rounds on online orders are refused offline.');
@@ -127,7 +166,7 @@ export class OfflineOutbox {
         client_order_id: uuid(), outage_id: outage, order: structuredClone(order), rounds: [], state: 'pending', next_round: 0, phase: 'order' };
       entry.rounds.push(round);
       await save(entry);
-      if (await this.print(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
+      if (await this.tryPrint(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
       return entry;
     });
   }
@@ -139,11 +178,11 @@ export class OfflineOutbox {
       const entry = (await this.list()).find((row) => row.client_order_id === clientId);
       if (!entry || entry.state !== 'pending' || entry.next_round) throw new Error('Only an offline order awaiting replay can be settled here.');
       if (entry.settlement) throw new Error('This order already has a settlement.');
-      if (!Number.isFinite(tender.amount) || tender.amount < entry.rounds.at(-1)!.expected_total) throw new Error('Tender must cover the provisional bill total.');
+      if (!Number.isFinite(tender.amount) || tender.amount < entry.rounds[entry.rounds.length - 1].expected_total) throw new Error('Tender must cover the provisional bill total.');
       entry.settlement = { ...tender, reference: tender.reference?.trim() };
       if (tender.reference) entry.order.comments = [entry.order.comments, `Manual mobile-money reference: ${tender.reference.trim()}`].filter(Boolean).join('\n');
       await save(entry);
-      entry.bill_printed = await this.print(entry, 'bill'); await save(entry);
+      entry.bill_printed = await this.tryPrint(entry, 'bill'); await save(entry);
       return entry;
     });
   }
@@ -189,7 +228,7 @@ export class OfflineOutbox {
             const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
               customer: entry.order.customer, cashier: entry.order.cashier, owner: entry.order.owner, table: entry.order.table || null,
               pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
-              round_id: entry.rounds.at(-1)!.round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }], additionalDiscount: null });
+              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }], additionalDiscount: null });
             if (!reply || typeof reply !== 'object' || !('docstatus' in reply) || reply.docstatus !== 1) throw new NotReady('Settlement acknowledgement is incomplete');
             await remove(entry);
           } catch (error) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { Button, showToast } from '@ury/ui';
-import { logoutSession, clearAppStorage } from '@ury/core';
+import { clearCashierStorage } from '../offline/cashier';
 import {
   checkPOSOpening,
   parseFrappeError,
@@ -79,11 +79,10 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
-      await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      clearAppStorage();
+      await clearCashierStorage(true, (window as Window & { csrf_token?: string }).csrf_token);
       window.location.href = '/login?redirect-to=%2Fpos';
-    } catch {
-      showToast.error(t('errors.failed_logout'));
+    } catch (error) {
+      showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;
       setLoggingOut(false);
     }

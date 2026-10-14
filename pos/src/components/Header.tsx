@@ -14,10 +14,10 @@ import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { logoutSession, clearAppStorage, resolveBrand } from '@ury/core';
+import { resolveBrand } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { homePath } from '../lib/home-route';
-import { assertOutboxEmpty } from '../offline/outbox';
+import { clearCashierStorage } from '../offline/cashier';
 import { useOutbox } from '../offline/use-outbox';
 
 const Header = () => {
@@ -98,9 +98,7 @@ const Header = () => {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
-      await assertOutboxEmpty();
-      await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      clearAppStorage();
+      await clearCashierStorage(true, (window as Window & { csrf_token?: string }).csrf_token);
       window.location.href = '/login?redirect-to=%2Fpos';
     } catch (error) {
       showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
@@ -109,10 +107,9 @@ const Header = () => {
     }
   };
 
-  const handleClearCache = () => {
-    clearAppStorage();
-    // Reload the page
-    window.location.reload();
+  const handleClearCache = async () => {
+    try { await clearCashierStorage(); window.location.reload(); }
+    catch (error) { showToast.error(error instanceof Error ? error.message : t('errors.failed_logout')); }
   };
 
   const handleCloseShift = () => {
