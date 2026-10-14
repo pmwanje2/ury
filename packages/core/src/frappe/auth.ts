@@ -87,8 +87,8 @@ export const getUserRoles = async (email: string): Promise<{ roles: string[]; fu
 
 export const logout = async () => {
   try {
-    return auth.logout().then((result) => {
-      clearAppStorage();
+    return auth.logout().then(async (result) => {
+      await clearAppStorage();
       return result;
     });
   }catch(e){

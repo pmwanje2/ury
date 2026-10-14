@@ -315,7 +315,7 @@ export const useAuthStore = defineStore("auth", {
       } catch (_error) {
         // The server session may survive, but the shared tablet must lock locally.
       } finally {
-        clearAppStorage();
+        await clearAppStorage();
         this.invoiceData.clearDataAfterUpdate();
         this.userAuth = false;
         this.currentPassword = "";

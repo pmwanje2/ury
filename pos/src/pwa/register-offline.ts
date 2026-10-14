@@ -1,10 +1,13 @@
-import { purgeOfflineCaches } from "@ury/core";
+import { purgeOfflineCaches, tellOfflineWorker } from "@ury/core";
 import { offlineCaptureEnabled, type OfflineCaptureProfile } from "./runtime-caching";
 
 const SERVICE_WORKER_URL = "/sw.js";
 const SERVICE_WORKER_SCOPE = "/pos";
 
-export async function syncOfflineCapture(profile: OfflineCaptureProfile | null | undefined): Promise<void> {
+export async function syncOfflineCapture(
+  profile: OfflineCaptureProfile | null | undefined,
+  user?: string | null,
+): Promise<void> {
   if (!offlineCaptureEnabled(profile)) {
     await purgeOfflineCaches();
     return;
@@ -12,7 +15,11 @@ export async function syncOfflineCapture(profile: OfflineCaptureProfile | null |
   if (typeof navigator === "undefined" || !navigator.serviceWorker?.register) return;
 
   const serviceWorker = navigator.serviceWorker;
-  await serviceWorker.register(SERVICE_WORKER_URL, { scope: SERVICE_WORKER_SCOPE });
+  const registration = await serviceWorker.register(SERVICE_WORKER_URL, { scope: SERVICE_WORKER_SCOPE });
+  // The worker stores and serves reads only for the bound user; binding a
+  // different user drops the previous user's cached reads first.
+  const target = registration?.active ?? serviceWorker.controller;
+  if (target) await tellOfflineWorker(target, { type: "URY_BIND_SESSION", user: user ?? null });
   // serviceWorker.ready never rejects, and a failed install (for example a
   // precache 404) leaves it pending. Do not wait on it or the till stays on
   // the loader. controllerchange below is already bounded.

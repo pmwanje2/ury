@@ -29,17 +29,60 @@ export function isUryPosRegistration(registration: { scope: string }): boolean {
   }
 }
 
-export async function purgeOfflineCaches(): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.serviceWorker?.getRegistrations) {
-    const registrations = (await navigator.serviceWorker.getRegistrations()).filter(isUryPosRegistration);
-    await Promise.all(registrations.map((registration) => registration.unregister()));
-  }
-  if (typeof caches === "undefined" || !caches?.keys) return;
-  const names = (await caches.keys()).filter((name) => name.startsWith(URY_POS_CACHE_PREFIX));
-  await Promise.all(names.map((name) => caches.delete(name)));
+const WORKER_ACK_TIMEOUT_MS = 2000;
+
+// Ask the URY worker to end the session and wait for its ack (bounded), so
+// in-flight reads it is still serving cannot write the old user's data back.
+export function tellOfflineWorker(worker: { postMessage(message: unknown, transfer: Transferable[]): void } | null | undefined, message: unknown): Promise<void> {
+  if (!worker || typeof MessageChannel === 'undefined') return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const channel = new MessageChannel();
+    const finish = () => {
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve();
+    };
+    const timer = setTimeout(finish, WORKER_ACK_TIMEOUT_MS);
+    channel.port1.onmessage = finish;
+    try {
+      worker.postMessage(message, [channel.port2]);
+    } catch {
+      finish();
+    }
+  });
 }
 
-export function clearAppStorage(): void {
+async function settle(step: () => Promise<unknown>): Promise<void> {
+  try {
+    await step();
+  } catch (error) {
+    console.error('Offline cache purge step failed', error);
+  }
+}
+
+// Never rejects: callers await it before leaving the page.
+export async function purgeOfflineCaches(): Promise<void> {
+  let registrations: ServiceWorkerRegistration[] = [];
+  await settle(async () => {
+    if (typeof navigator !== "undefined" && navigator.serviceWorker?.getRegistrations) {
+      registrations = (await navigator.serviceWorker.getRegistrations()).filter(isUryPosRegistration);
+    }
+  });
+  await Promise.all(registrations.map((registration) => settle(
+    () => tellOfflineWorker(registration.active, { type: 'URY_END_SESSION' }),
+  )));
+  await settle(async () => {
+    if (typeof caches === "undefined" || !caches?.keys) return;
+    const names = (await caches.keys()).filter((name) => name.startsWith(URY_POS_CACHE_PREFIX));
+    await Promise.all(names.map((name) => caches.delete(name)));
+  });
+  await Promise.all(registrations.map((registration) => settle(() => registration.unregister())));
+}
+
+// Storage is cleared synchronously; the returned promise settles once the
+// URY worker has ended the session and its caches are gone. Await it
+// before navigating away.
+export function clearAppStorage(): Promise<void> {
   APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   APP_SESSION_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
   // Walk backwards because removeItem changes the storage indices.
@@ -58,7 +101,7 @@ export function clearAppStorage(): void {
       sessionStorage.removeItem(key);
     }
   }
-  void purgeOfflineCaches();
+  return purgeOfflineCaches();
 }
 
 export const storage = {

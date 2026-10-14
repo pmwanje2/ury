@@ -342,7 +342,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         // The limited getPosProfile payload omits ury_offline_capture.
         // The combined profile spreads the POS Profile document, which
         // carries the flag when O4/O5 has added it. Missing stays off.
-        await syncOfflineCapture(get().posProfile);
+        await syncOfflineCapture(get().posProfile, getSessionUser());
       } catch (error) {
         console.error('Offline capture setup failed', error);
       }

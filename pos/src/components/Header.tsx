@@ -96,7 +96,7 @@ const Header = () => {
     setLoggingOut(true);
     try {
       await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      clearAppStorage();
+      await clearAppStorage();
       window.location.href = '/login?redirect-to=%2Fpos';
     } catch (error) {
       showToast.error(t('errors.failed_logout'));
@@ -105,8 +105,8 @@ const Header = () => {
     }
   };
 
-  const handleClearCache = () => {
-    clearAppStorage();
+  const handleClearCache = async () => {
+    await clearAppStorage();
     // Reload the page
     window.location.reload();
   };
