@@ -141,6 +141,33 @@ describe('pre-session logout', () => {
     expect(location.href).toBe('/login?redirect-to=%2Fpos');
   });
 
+  it('navigates to login only after the URY worker has ended the session', async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const active = {
+      scriptURL: 'http://localhost:3000/sw.js',
+      postMessage: (_message: unknown, ports: MessagePort[]) => {
+        void released.then(() => ports[0]?.postMessage({ ok: true }));
+      },
+    };
+    vi.stubGlobal('navigator', Object.assign(Object.create(navigator), {
+      serviceWorker: {
+        controller: active,
+        getRegistrations: async () => [{ scope: 'http://localhost:3000/pos', active, unregister: async () => true }],
+      },
+    }));
+    vi.stubGlobal('caches', { keys: async () => ['ury-pos-reads'], delete: async () => true });
+    await render();
+    await act(async () => button('Logout').click());
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(location.href).toBe('/pos');
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  });
+
   it('ignores double clicks and keeps storage until logout is confirmed', async () => {
     let complete!: (value: { ok: boolean }) => void;
     request.mockReturnValue(new Promise((resolve) => { complete = resolve; }));
