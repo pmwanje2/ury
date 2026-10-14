@@ -31,8 +31,16 @@
         <!-- User Menu Section -->
         <div
           v-if="!this.tabClick.isLoginPage"
-          class="relative ml-4 flex-shrink-0"
+          class="relative ml-4 flex flex-shrink-0 items-center gap-3"
         >
+          <button
+            type="button"
+            :disabled="this.auth.loggingOut"
+            class="min-h-[44px] rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+            @click="this.auth.switchWaiter"
+          >
+            Switch waiter
+          </button>
           <button
             type="button"
             class="flex items-center rounded-full bg-gray-100 p-1 text-sm hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
@@ -77,6 +85,12 @@
                 class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                 @click="this.auth.routeToHome()"
                 >Switch To Desk
+              </a>
+              <a
+                href="/update-password"
+                class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                Change my PIN
               </a>
               <div class="border-t border-gray-200"></div>
               <button

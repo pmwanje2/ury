@@ -318,6 +318,13 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
           selectedTables ? `Sent to kitchen · ${selectedTables}` : "Sent to kitchen"
         );
         this.table.fetchTable();
+        if (
+          this.auth.cashier === false &&
+          this.invoiceDetails.floor_signout_after_send
+        ) {
+          await this.auth.logOut();
+          return;
+        }
         if (this.auth.cashier) {
           await router.push("/recentOrder");
           this.recentOrders.viewRecentOrder(response.message);

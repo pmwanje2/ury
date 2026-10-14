@@ -81,7 +81,7 @@ export function loadVueLogout(app, env) {
     }) } },
     './Table.js': { useTableStore: () => ({}) },
     './Menu.js': { useMenuStore: () => ({}) },
-    './invoiceData.js': { useInvoiceDataStore: () => ({}) },
+    './invoiceData.js': { useInvoiceDataStore: () => ({ clearDataAfterUpdate() {} }) },
     './Alert.js': { useAlert: () => ({ createAlert: (_title, message) => {
       env.errors.push(message); return Promise.resolve();
     } }) },

@@ -390,6 +390,8 @@ fixtures = [
                     "POS Profile-show_image",
                     "POS Profile-custom_daily_pos_close",
                     "POS Profile-custom_blind_cash_count",
+                    "POS Profile-custom_floor_idle_signout_seconds",
+                    "POS Profile-custom_floor_signout_after_send",
                     "POS Profile-custom_checklist_items",
                     "POS Profile-paid_limit",
                     "POS Profile-table_attention_time",

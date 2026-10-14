@@ -23,7 +23,7 @@ for (const [file, defaultAlt, defaultLogo] of fixtures) {
       const dependencies = {
         '@/assets/logos/URY_POS.jpg': { __esModule: true, default: '/ury-pos-default.jpg' },
         '@/assets/logos/mosaic.jpg': { __esModule: true, default: '/mosaic-default.jpg' },
-        '@/stores/Auth.js': { useAuthStore: () => ({ cashier: true, sessionUser: 'test@example.com', getLoginAvatar: () => 'Test User' }) },
+        '@/stores/Auth.js': { useAuthStore: () => ({ cashier: true, sessionUser: 'test@example.com', recentWaiters: [], getLoginAvatar: () => 'Test User' }) },
         '@/stores/posOpening.js': { posOpening: () => ({}) },
         '@/stores/posClosing.js': { posClosing: () => ({}) },
         '@/stores/bottomTabs.js': { tabFunctions: () => ({ currentTab: '/Table' }) },

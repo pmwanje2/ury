@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { watchIdle } from '@ury/core'
 
 /**
  * Fires `onIdle` once after `timeoutMs` of no user interaction
@@ -11,21 +12,6 @@ export function useIdleReset(onIdle: () => void, timeoutMs = 90000) {
   onIdleRef.current = onIdle
 
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>
-
-    function reset() {
-      clearTimeout(timer)
-      timer = setTimeout(() => onIdleRef.current(), timeoutMs)
-    }
-
-    reset()
-    window.addEventListener('pointerdown', reset)
-    window.addEventListener('keydown', reset)
-
-    return () => {
-      clearTimeout(timer)
-      window.removeEventListener('pointerdown', reset)
-      window.removeEventListener('keydown', reset)
-    }
+    return watchIdle(() => onIdleRef.current(), timeoutMs)
   }, [timeoutMs])
 }

@@ -15,8 +15,10 @@
         </div>
 
         <form class="space-y-6" @submit.prevent="this.auth.login">
-          <!-- Email Input -->
-          <div class="relative">
+          <!-- Username Input -->
+          <div>
+            <label for="user_id" class="mb-2 block text-sm font-medium text-gray-700">Username</label>
+            <div class="relative">
             <div class="absolute inset-y-0 left-0 flex items-center pl-3">
               <svg
                 class="h-5 w-5 text-gray-400"
@@ -42,15 +44,20 @@
             </div>
             <input
               name="user_id"
+              id="user_id"
               v-model="this.auth.userId"
               required
+              autocomplete="username"
               class="block w-full rounded-md border border-gray-200 py-3 pl-10 text-sm placeholder-gray-400 focus:border-blue-500 focus:ring-blue-500"
-              placeholder="jane@example.com"
+              placeholder="Your username"
             />
+            </div>
           </div>
 
-          <!-- Password Input -->
-          <div class="relative">
+          <!-- PIN Input -->
+          <div>
+            <label for="currentPassword" class="mb-2 block text-sm font-medium text-gray-700">PIN</label>
+            <div class="relative">
             <div class="absolute inset-y-0 left-0 flex items-center pl-3">
               <svg
                 class="field-icon password-icon"
@@ -71,10 +78,14 @@
             <input
               :type="this.auth.showPassword ? 'text' : 'password'"
               name="currentPassword"
+              id="currentPassword"
+              ref="pinInput"
               v-model="this.auth.currentPassword"
               required
+              inputmode="numeric"
+              autocomplete="off"
               class="block w-full rounded-md border border-gray-200 py-3 pl-10 pr-16 text-sm placeholder-gray-400 focus:border-blue-500 focus:ring-blue-500"
-              placeholder="•••••"
+              placeholder="8-digit PIN"
             />
             <button
               type="button"
@@ -85,6 +96,23 @@
                 {{ this.auth.showPassword ? "Hide" : "Show" }}
               </span>
             </button>
+            </div>
+          </div>
+
+          <div v-if="this.auth.recentWaiters.length" class="space-y-2">
+            <p class="text-sm font-medium text-gray-700">Recent waiters on this tablet</p>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="waiter in this.auth.recentWaiters"
+                :key="waiter.username"
+                type="button"
+                class="rounded-full border border-gray-300 px-3 py-2 text-left text-sm hover:bg-gray-50"
+                @click="selectRecentWaiter(waiter)"
+              >
+                <span class="block font-medium">{{ waiter.displayName }}</span>
+                <span class="block text-xs text-gray-500">{{ waiter.username }}</span>
+              </button>
+            </div>
           </div>
 
           <!-- Login Button -->
@@ -114,6 +142,12 @@ export default {
     return {
       brand: resolveBrand({ name: "URY POS logo", logo: uriPosImage }),
     };
+  },
+  methods: {
+    selectRecentWaiter(waiter) {
+      this.auth.selectRecentWaiter(waiter);
+      this.$nextTick(() => this.$refs.pinInput?.focus());
+    },
   },
 };
 </script>
