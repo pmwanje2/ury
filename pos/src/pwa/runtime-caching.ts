@@ -41,6 +41,21 @@ function route(urlPattern: RegExp, cacheName: string): RuntimeCacheRoute {
   };
 }
 
+
+// The worker is served from /sw.js, outside the Vite asset directory.
+// Workbox precache paths are relative to the worker script, so they must
+// be rooted at the POS asset base or install 404s and never activates.
+export const POS_ASSET_BASE = "/assets/ury/pos/";
+
+export function precacheModifyURLPrefix(): Record<string, string> {
+  return { "": POS_ASSET_BASE };
+}
+
+export function precacheURLForServiceWorker(relativeURL: string): string {
+  if (relativeURL.startsWith("/")) return relativeURL;
+  return `${precacheModifyURLPrefix()[""]}${relativeURL}`;
+}
+
 export function workboxRuntimeCaching(): RuntimeCacheRoute[] {
   return [
     route(MENU, READ_CACHE),

@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath } from 'url'
 import { dirname, resolve } from 'path'
-import { workboxRuntimeCaching } from './src/pwa/runtime-caching'
+import { precacheModifyURLPrefix, workboxRuntimeCaching } from './src/pwa/runtime-caching'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -26,6 +26,8 @@ export default defineConfig({
         // Plugin default serves precached index.html for every navigation.
         // Only the explicit /pos shell route below may be cached.
         navigateFallback: undefined,
+        // /sw.js is outside this outDir. Root precache URLs at the asset base.
+        modifyURLPrefix: precacheModifyURLPrefix(),
         runtimeCaching: workboxRuntimeCaching(),
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },

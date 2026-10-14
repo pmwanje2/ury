@@ -173,7 +173,7 @@ test('precache URLs are rooted at the POS asset base because /sw.js is not serve
   expect(caching.precacheURLForServiceWorker('ury.ico')).toBe('/assets/ury/pos/ury.ico');
   expect(caching.precacheURLForServiceWorker('assets/index.js')).toBe('/assets/ury/pos/assets/index.js');
   expect(caching.precacheModifyURLPrefix()).toEqual({ '': '/assets/ury/pos/' });
-  const viteConfig = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
+  const viteConfig = readFileSync(resolve('pos/vite.config.ts'), 'utf8');
   expect(viteConfig).toContain('precacheModifyURLPrefix()');
 });
 

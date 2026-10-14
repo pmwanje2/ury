@@ -13,7 +13,9 @@ export async function syncOfflineCapture(profile: OfflineCaptureProfile | null |
 
   const serviceWorker = navigator.serviceWorker;
   await serviceWorker.register(SERVICE_WORKER_URL, { scope: SERVICE_WORKER_SCOPE });
-  await serviceWorker.ready;
+  // serviceWorker.ready never rejects, and a failed install (for example a
+  // precache 404) leaves it pending. Do not wait on it or the till stays on
+  // the loader. controllerchange below is already bounded.
   if (!serviceWorker.controller) {
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, 2000);
