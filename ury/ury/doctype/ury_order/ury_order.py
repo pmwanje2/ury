@@ -1659,7 +1659,7 @@ def sync_order(
         invoice.append("items", item_dict)
 
     if expected_total is not None:
-        invoice.set_missing_values()
+        invoice.set_missing_values(for_validate=True)
         invoice.calculate_taxes_and_totals()
         precision = invoice.precision("grand_total")
         if flt(expected_total, precision) != flt(invoice.grand_total, precision):
