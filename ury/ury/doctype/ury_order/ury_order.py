@@ -2,10 +2,13 @@
 # For license information, please see license.txt
 
 import json
+from uuid import UUID
+from zoneinfo import ZoneInfo
+
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt, get_datetime, get_system_timezone, now_datetime
 from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury.api.ury_kot_generate import kot_execute
@@ -1283,6 +1286,57 @@ def get_captain_context():
     }
 
 
+def _validate_client_order_id(client_order_id):
+    if client_order_id:
+        try:
+            return str(UUID(str(client_order_id)))
+        except (ValueError, TypeError, AttributeError):
+            frappe.throw(_("Client order ID must be a UUID."))
+    return None
+
+
+def _client_order_invoice(client_order_id, invoice_name=None, table=None):
+    if not client_order_id:
+        return None
+    name = frappe.db.get_value(
+        "POS Invoice", {"ury_client_order_id": client_order_id}, "name", for_update=True
+    )
+    if name:
+        invoice = frappe.get_doc("POS Invoice", name)
+        if not frappe.has_permission("POS Invoice", "read", doc=invoice):
+            frappe.throw(_("Not permitted to view this order"), frappe.PermissionError)
+        user_branch = getBranch()
+        if invoice.branch and user_branch and invoice.branch != user_branch:
+            frappe.throw(_("Not permitted to view orders outside your active branch"), frappe.PermissionError)
+        _enforce_order_access(invoice)
+        if invoice_name and invoice_name != invoice.name:
+            frappe.throw(_("Client order ID does not match the requested invoice."))
+        if table and table not in _get_table_group(
+            invoice.restaurant_table, invoice.get("custom_merged_tables")
+        ):
+            frappe.throw(_("Client order ID does not match the requested table."))
+        return invoice
+    return None
+
+
+def _offline_capture_time(captured_at, pos_profile):
+    message = _("URY_OFFLINE_OUTSIDE_SHIFT: Capture must be inside your open POS shift and not in the future.")
+    try:
+        captured = get_datetime(captured_at)
+        if captured.tzinfo:
+            captured = captured.astimezone(ZoneInfo(get_system_timezone())).replace(tzinfo=None)
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        frappe.throw(message)
+    opening = frappe.db.get_value(
+        "POS Opening Entry",
+        {"user": frappe.session.user, "pos_profile": pos_profile, "docstatus": 1, "status": "Open"},
+        "period_start_date", order_by="period_start_date desc",
+    )
+    if not opening or not get_datetime(opening) <= captured <= now_datetime():
+        frappe.throw(message)
+    return captured
+
+
 @frappe.whitelist()
 def sync_order(
     items,
@@ -1301,11 +1355,22 @@ def sync_order(
     order_type=None,
     aggregator_id=None,
     room=None,
-    merged_tables=None
+    merged_tables=None,
+    client_order_id=None,
+    round_id=None,
+    append=0,
+    captured_at=None,
+    offline_printed=0,
+    expected_total=None,
 ):
-    
+    append = cint(append) == 1
+    client_order_id = _validate_client_order_id(client_order_id)
+    if round_id is not None and not str(round_id).strip():
+        frappe.throw(_("Round ID must not be empty."))
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
+
+    client_invoice = _client_order_invoice(client_order_id, invoice, table)
     
     billing_user = any(
         role.role in user_role for role in posprofile.role_allowed_for_billing
@@ -1324,7 +1389,10 @@ def sync_order(
         )
         return {"status": "Failure"}
 
-    invoice = get_order_invoice(table, invoice,order_type)
+    invoice = client_invoice or get_order_invoice(table, invoice, order_type)
+
+    if client_order_id and invoice.get("ury_client_order_id") not in (None, "", client_order_id):
+        frappe.throw(_("Client order ID cannot be changed for an existing order."))
 
     if invoice.name and not frappe.has_permission("POS Invoice", "write", doc=invoice):
         frappe.throw(_("Not permitted to modify this order"), frappe.PermissionError)
@@ -1346,6 +1414,16 @@ def sync_order(
                 _("This order has already been billed and cannot be modified."),
                 frappe.PermissionError,
             )
+
+    if (
+        client_invoice
+        and round_id is not None
+        and str(invoice.ury_last_round_id or "") == str(round_id)
+    ):
+        return invoice.as_dict()
+
+    if client_invoice and invoice.docstatus != 0:
+        frappe.throw(_("This order is no longer open."))
 
     # role_restricted_for_table_order enforcement + requested-table
     # branch/room validation. Applies to both new and existing orders since
@@ -1392,7 +1470,7 @@ def sync_order(
                     frappe.PermissionError,
                 )
 
-    if last_invoice and last_modified_time:
+    if not append and last_invoice and last_modified_time:
         lastModifiedTime = invoice.modified
         from datetime import datetime
 
@@ -1423,7 +1501,7 @@ def sync_order(
                 ),
             )
             return {"status": "Failure"}
-    else:
+    elif not (last_invoice and last_modified_time):
         if invoice.name and invoice.invoice_printed == 0 and not billing_user:
             frappe.msgprint(
                 title="Table occupied ",
@@ -1433,6 +1511,13 @@ def sync_order(
                 ),
             )
             return {"status": "Failure"}
+
+    if captured_at is not None:
+        captured = _offline_capture_time(captured_at, pos_profile)
+        invoice.ury_offline_captured_at = captured
+        invoice.set_posting_time = 1
+        invoice.posting_date = captured.date()
+        invoice.posting_time = captured.time()
 
     customer = customer or (invoice.customer if invoice.name else None) or posprofile.customer
     if not customer:
@@ -1533,10 +1618,13 @@ def sync_order(
     if isinstance(items, str):
         items = json.loads(items)
 
+    if append and any(flt(item.get("qty")) <= 0 for item in items):
+        frappe.throw(_("Append rounds must contain only positive quantities."))
+
     # Reduction/removal permission: gate any decrease in a previously-sent
     # item's quantity (including full removal) by POS Profile `remove_items`,
     # matching Phase 2's can_reduce_items/can_remove_items derivation.
-    if past_item and not bool(posprofile.remove_items):
+    if not append and past_item and not bool(posprofile.remove_items):
         requested_qty_by_item = {}
         for d in items:
             requested_qty_by_item[d.get("item")] = requested_qty_by_item.get(
@@ -1561,13 +1649,26 @@ def sync_order(
                     frappe.PermissionError,
                 )
 
-    invoice.items = []
+    if not append:
+        invoice.items = []
 
     menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
 
     priced_items = price_items_for_invoice(items, price_list, pos_profile, invoice.branch, menu)
     for item_dict in priced_items:
         invoice.append("items", item_dict)
+
+    if expected_total is not None:
+        invoice.set_missing_values(for_validate=True)
+        invoice.calculate_taxes_and_totals()
+        precision = invoice.precision("grand_total")
+        if flt(expected_total, precision) != flt(invoice.grand_total, precision):
+            frappe.throw(_("URY_OFFLINE_TOTAL_MISMATCH: Server-priced invoice total differs from the captured total."))
+
+    if client_order_id:
+        invoice.ury_client_order_id = client_order_id
+        if round_id is not None:
+            invoice.ury_last_round_id = round_id
 
     try:
         invoice.save()
@@ -1576,7 +1677,8 @@ def sync_order(
 
 
     try:
-        kot_execute(invoice.name, customer, table, items, past_item, comments)
+        kot_execute(invoice.name, customer, table, items, [] if append else past_item, comments,
+                    offline_printed=offline_printed)
 
     except Exception as e:
         # If an exception occurs (e.g., "kot" app not found), it will be caught here without affect the code execution.
@@ -2008,11 +2110,40 @@ def _validate_additional_discount(additional_discount, pos_profile):
 
 # Method for URY POS
 @frappe.whitelist()
-def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDiscount=None, table=None, invoice=None):
+def make_invoice(
+    customer,
+    payments,
+    cashier,
+    pos_profile,
+    owner,
+    additionalDiscount=None,
+    table=None,
+    invoice=None,
+    client_order_id=None,
+    round_id=None,
+):
+    client_order_id = _validate_client_order_id(client_order_id)
+    if round_id is not None and not str(round_id).strip():
+        frappe.throw(_("Round ID must not be empty."))
+    existing_invoice = _client_order_invoice(client_order_id, invoice, table)
+    if existing_invoice:
+        if (
+            existing_invoice.docstatus == 1
+            and round_id is not None
+            and str(existing_invoice.ury_last_round_id or "") == str(round_id)
+        ):
+            return existing_invoice.as_dict()
+        if existing_invoice.docstatus != 0:
+            frappe.throw(_("This order is no longer open."))
+        invoice = existing_invoice.name
+
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
+
+    if client_order_id and invoice.get("ury_client_order_id") not in (None, "", client_order_id):
+        frappe.throw(_("Client order ID cannot be changed for an existing order."))
 
     if table:
         restaurant = get_restaurant_and_menu_name(table)
@@ -2085,13 +2216,18 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
                 "payments", dict(mode_of_payment=d["mode_of_payment"], amount=d["amount"])
             )
 
+    if client_order_id:
+        invoice.ury_client_order_id = client_order_id
+        if round_id is not None:
+            invoice.ury_last_round_id = round_id
+
     # invoice.owner = owner
     invoice.save()
     try:
         invoice.submit()
     except Exception as e:
         frappe.throw(f"Error while settling order: {e}")
-        
+
     # Free the table when no other open drafts remain on this table group
 
     release_invoice = invoice
@@ -2112,8 +2248,8 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
             release_invoice.restaurant_table,
             release_invoice.custom_merged_tables,
         )
-        
-        
+
+    return invoice.as_dict()
 
 # Cancel KOT Doc Creation
 def cancel_kot(invoice_id):

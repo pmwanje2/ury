@@ -4,6 +4,7 @@ import { createApp, nextTick } from 'vue';
 import { setImmediate as flushPromises } from 'node:timers/promises';
 import { useTableStore } from './Table.js';
 import FloorPlan from '../components/Table.vue';
+import router from '../router';
 
 vi.mock('../router', () => ({ default: { push: vi.fn() } }));
 vi.mock('./Menu.js', () => ({ useMenuStore: () => ({ fetchItems: vi.fn() }) }));
@@ -737,3 +738,183 @@ describe('floor plan shows the table owner', () => {
     expect(store.db.getDocList.mock.calls.filter(([doctype]) => doctype === 'POS Invoice')).toHaveLength(1);
   });
 });
+
+describe('refused order invoice keeps another waiter on the floor', () => {
+  const ownerName = 'Test Waiter Two';
+  const invoiceMethod = 'ury.ury.doctype.ury_order.ury_order.get_order_invoice';
+  const permissionError = {
+    httpStatus: 403,
+    exc_type: 'PermissionError',
+    exception: 'frappe.exceptions.PermissionError: Not permitted to view this order',
+    message: 'Not permitted to view this order',
+  };
+
+  function waiterStore() {
+    const store = useTableStore();
+    store.auth.hasAccess = false;
+    store.auth.cashier = false;
+    store.auth.sessionUser = 'waiter.three@salama.example';
+    store.tableMenu = [];
+    store.menu.cart = [];
+    store.alert.createAlert = vi.fn(() => Promise.resolve());
+    store.notification.createNotification = vi.fn();
+    router.push.mockReset();
+    router.push.mockImplementation(() => new Promise(() => {}));
+    return store;
+  }
+
+  function occupiedTable(extra = {}) {
+    return { name: 'T-05', occupied: 1, is_take_away: 0, owner_name: ownerName, ...extra };
+  }
+
+  it('shows the floor owner and returns to the floor when the order read is refused', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = waiterStore();
+    store.call.get.mockRejectedValue(permissionError);
+
+    store.loadSelectedTable(occupiedTable());
+    await flushPromises();
+
+    expect(store.alert.createAlert).toHaveBeenCalledWith(
+      'Message',
+      `Table is assigned to ${ownerName}`,
+      'OK',
+    );
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(router.push).not.toHaveBeenCalledWith('/Menu');
+    expect(store.menu.cart).toEqual([]);
+  });
+
+  it('uses the loaded owner label when the card has no owner name', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const waiter = 'waiter.two@salama.example';
+    const store = waiterStore();
+    store.ownerNames[waiter] = ownerName;
+    store.call.get.mockRejectedValue(permissionError);
+
+    store.loadSelectedTable(occupiedTable({ owner_name: '', waiter }));
+    await flushPromises();
+
+    expect(store.alert.createAlert).toHaveBeenCalledWith(
+      'Message',
+      `Table is assigned to ${ownerName}`,
+      'OK',
+    );
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(store.menu.cart).toEqual([]);
+  });
+
+  it('says another waiter when no owner name is known', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = waiterStore();
+    store.call.get.mockRejectedValue(permissionError);
+
+    store.loadSelectedTable(occupiedTable({ owner_name: '  ' }));
+    await flushPromises();
+
+    expect(store.alert.createAlert).toHaveBeenCalledWith(
+      'Message',
+      'Table is assigned to another waiter',
+      'OK',
+    );
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(router.push).not.toHaveBeenCalledWith('/Menu');
+    expect(store.menu.cart).toEqual([]);
+  });
+
+  it('does not show the owner alert for a non-permission error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = waiterStore();
+    store.call.get.mockRejectedValue({
+      httpStatus: 500,
+      exc_type: 'ValidationError',
+      message: 'Could not load the order',
+    });
+
+    store.loadSelectedTable(occupiedTable());
+    await flushPromises();
+
+    expect(store.alert.createAlert).not.toHaveBeenCalled();
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+    expect(router.push).not.toHaveBeenCalledWith('/Menu');
+  });
+
+  it.each([
+    ['manager', { hasAccess: true, cashier: false }],
+    ['cashier', { hasAccess: false, cashier: true }],
+  ])('does not show the owner alert when a %s is refused', async (_role, access) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const store = waiterStore();
+    Object.assign(store.auth, access);
+    store.call.get.mockRejectedValue(permissionError);
+
+    store.loadSelectedTable(occupiedTable());
+    await flushPromises();
+
+    expect(store.alert.createAlert).not.toHaveBeenCalled();
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+  });
+
+  it("still loads the signed-in waiter's own table", async () => {
+    const waiter = 'waiter.two@salama.example';
+    const store = waiterStore();
+    store.auth.sessionUser = waiter;
+    const item = { item_code: 'COFFEE', item_name: 'Coffee', qty: 1, rate: 5000, comment: '' };
+    store.tableMenu = [{ item: 'COFFEE', qty: '', comment: '' }];
+    store.call.get.mockImplementation((method) => {
+      if (method === invoiceMethod) {
+        return Promise.resolve({
+          message: {
+            name: 'POS-INV-2026-00005',
+            waiter,
+            items: [item],
+            invoice_printed: 0,
+            custom_comments: '',
+            modified: '2026-10-14 12:00:00',
+            grand_total: 5000,
+            mobile_number: '',
+            customer: '',
+          },
+        });
+      }
+      return Promise.resolve({ message: '2026-10-14 12:00:00' });
+    });
+
+    store.loadSelectedTable(occupiedTable());
+    await flushPromises();
+
+    expect(store.alert.createAlert).not.toHaveBeenCalled();
+    expect(store.invoiceNo).toBe('POS-INV-2026-00005');
+    expect(store.previousOrderdItem).toEqual([item]);
+    expect(store.notification.createNotification).toHaveBeenCalledWith('Past Order Fetched');
+    expect(store.menu.cart.map((row) => row.item)).toEqual(['COFFEE']);
+    expect(router.push).not.toHaveBeenCalledWith('/Table');
+    expect(router.push).not.toHaveBeenCalledWith('/Menu');
+  });
+
+  it('still returns to the floor when the route back is rejected', async () => {
+    const rejections = [];
+    const onUnhandled = (reason) => {
+      rejections.push(reason instanceof Error ? reason.message : String(reason));
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const store = waiterStore();
+      store.call.get.mockRejectedValue(permissionError);
+      router.push.mockReset();
+      router.push.mockRejectedValueOnce(new Error('navigation rejected'));
+
+      store.loadSelectedTable(occupiedTable());
+      await flushPromises();
+      await new Promise((resolve) => process.nextTick(resolve));
+
+      expect(rejections).toEqual([]);
+      expect(router.push).toHaveBeenCalledWith('/Table');
+      expect(router.push).not.toHaveBeenCalledWith('/Menu');
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
+

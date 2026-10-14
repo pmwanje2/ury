@@ -114,24 +114,32 @@ export const useAuthStore = defineStore("auth", {
       return this.userName;
     },
     fetchUserDetails() {
-      const user = localStorage.getItem("userAuth");
-      // A cookie surviving failed logout must not bypass the username/PIN pad.
-      if (user !== "true") return;
-      this.auth
+      const hasLocalAuth = localStorage.getItem("userAuth") === "true";
+      return this.auth
         .getLoggedInUser()
-        .then((user) => {
+        .then(async (user) => {
           this.sessionUser = user;
           if (!this.sessionUser) {
             this.userAuth = false;
             localStorage.removeItem("userAuth");
-          } else {
-            this.userAuth = true;
-            this.invoiceData.fetchInvoiceDetails().then(() => {
-              router.push("/Table");
-              this.table.fetchRoom();
-              this.fetchUserRole();
-            });
+            return;
           }
+
+          await this.invoiceData.fetchInvoiceDetails();
+          if (!hasLocalAuth) {
+            await this.fetchUserRole();
+            // A waiter's surviving cookie must still end at the PIN pad.
+            if (this.staySignedIn !== true) {
+              await this.logOut();
+              return;
+            }
+          }
+
+          this.userAuth = true;
+          localStorage.setItem("userAuth", "true");
+          router.push("/Table");
+          this.table.fetchRoom();
+          if (hasLocalAuth) this.fetchUserRole();
         })
         .catch((error) => {
           this.userAuth = false;
@@ -142,7 +150,8 @@ export const useAuthStore = defineStore("auth", {
     fetchUserRole() {
       //Fetching role based on logged user
       this.stopIdle();
-      this.db
+      this.staySignedIn = null;
+      return this.db
         .getDoc("User", this.sessionUser)
         .then((doc) => {
           this.userRole = doc.roles.map((item) => item.role);
@@ -150,7 +159,7 @@ export const useAuthStore = defineStore("auth", {
             doctype: "POS Profile",
             name: this.invoiceData.posProfile,
           };
-          this.call
+          return this.call
             .get("frappe.client.get", getPosProfile)
             .then((result) => {
               var billingRoles = result.message.role_allowed_for_billing.map(
