@@ -1,4 +1,4 @@
-import { db } from '@ury/core';
+import { call, db } from '@ury/core';
 import { DOCTYPES } from '../../data/doctypes';
 import { parseMergedWith } from '../../lib/table-utils';
 
@@ -31,6 +31,18 @@ export interface ActiveTableOrder {
   waiter: string;
   grandTotal: number;
   invoicePrinted: boolean;
+}
+
+export interface UpcomingBooking {
+  scheduled_time: string;
+  party_size: number | null;
+  customer_name: string;
+  server_now: string;
+}
+
+export async function getUpcomingBookings(branch: string): Promise<Map<string, UpcomingBooking>> {
+  const response = await call.get('ury.ury.api.ury_table_bookings.get_upcoming_bookings', { branch });
+  return new Map(Object.entries(response.message as Record<string, UpcomingBooking>));
 }
 
 interface ActiveInvoiceRow {
