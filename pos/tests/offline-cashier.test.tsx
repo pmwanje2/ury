@@ -47,8 +47,7 @@ test('the real cashier submit persists offline before clearing its cart without 
   vi.spyOn(call, 'post').mockRejectedValue(new TypeError('Network Error'));
   vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
   await act(async () => root.render(<OrderPanel />));
-  await act(async () => button(/^Add New Order$/).click());
-  expect(usePOSStore.getState().activeOrders).toEqual([]);
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(() => expect(usePOSStore.getState().activeOrders).toEqual([])); });
   expect(call.post).not.toHaveBeenCalled();
   expect(await new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! }).list()).toHaveLength(1);
 });
@@ -67,8 +66,7 @@ test('logout with a pending outbox warns and preserves queue and caches without 
   const warning = vi.spyOn(showToast, 'error');
   await act(async () => root.render(<MemoryRouter><Header /></MemoryRouter>));
   await act(async () => button(/^Cashier/).click());
-  await act(async () => button(/^Logout$/).click());
-  expect(warning).toHaveBeenCalledWith(expect.stringMatching(/outbox|pending|review/i));
+  await act(async () => { button(/^Logout$/).click(); await vi.waitFor(() => expect(warning).toHaveBeenCalledWith(expect.stringMatching(/outbox|pending|review/i))); });
   expect(request).not.toHaveBeenCalled(); expect(await q.list()).toHaveLength(1);
   expect(localStorage.getItem('pos_profile')).toBe('cached');
 });

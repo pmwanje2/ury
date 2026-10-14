@@ -1,6 +1,6 @@
 """The native fixture import must admit an opt-in, default-off profile flag."""
 import json
-import runpy
+import importlib
 import unittest
 from pathlib import Path
 
@@ -13,8 +13,8 @@ class OfflineCaptureFixtureTest(unittest.TestCase):
         self.assertIsNotNone(flag, "POS Profile offline capture opt-in is not shipped")
         self.assertEqual((flag["dt"], flag["fieldname"], flag["fieldtype"], flag["default"]),
                          ("POS Profile", "ury_offline_capture", "Check", "0"))
-        hooks = runpy.run_path(str(root / "hooks.py"))
-        filters = next(fixture["filters"] for fixture in hooks["fixtures"] if fixture["dt"] == "Custom Field")
+        fixtures = importlib.import_module("ury.hooks").fixtures
+        filters = next(fixture["filters"] for fixture in fixtures if fixture["doctype"] == "Custom Field")
         self.assertTrue(any("POS Profile-ury_offline_capture" in rule[2] for rule in filters))
 
 

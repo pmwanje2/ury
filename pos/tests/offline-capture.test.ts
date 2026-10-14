@@ -39,7 +39,7 @@ test('an online-opened order and a non-network refusal are never captured as an 
   const onlineSubmit = vi.fn(async () => { throw new Error('URY_OFFLINE_TOTAL_MISMATCH'); });
   await expect(submitOrderOfflineAware({ profile, user, order: { ...order, invoice: 'ONLINE-1' } as any, total: 100, onlineSubmit })).rejects.toThrow(/online|offline/i);
   navigator.onLine = true;
-  await expect(submitOrderOfflineAware({ profile, user, order: order as any, total: 100, onlineSubmit })).rejects.toThrow('URY_OFFLINE_TOTAL_MISMATCH');
+  await expect(submitOrderOfflineAware({ profile: { ...profile }, user, order: order as any, total: 100, onlineSubmit })).rejects.toThrow('URY_OFFLINE_TOTAL_MISMATCH');
   expect(onlineSubmit).toHaveBeenCalledTimes(1);
 });
 
