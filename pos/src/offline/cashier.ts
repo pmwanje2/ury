@@ -32,7 +32,7 @@ export async function clearCashierStorage(logout = false, token?: string): Promi
   await withEmptyOutbox(async () => {
     if (logout) await logoutSession(token);
     await purgeEmptyOutbox();
-    clearAppStorage(); // O3 owns service-worker/cache purge through this existing seam.
+    await clearAppStorage(); // O3 owns service-worker/cache purge through this existing seam.
   });
 }
 
