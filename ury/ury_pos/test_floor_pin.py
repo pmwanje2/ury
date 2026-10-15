@@ -223,6 +223,16 @@ class TestFloorPin(unittest.TestCase):
 		self.assertEqual(writes[0].args[:3], writes[1].args[:3])
 		self.assertNotEqual(writes[0].args[3], writes[1].args[3])
 
+	def test_issue_pin_does_not_reissue_the_previous_pin(self):
+		api = self.api()
+		key = hmac.digest(b"site-key", b"ury-floor-pin-v1", "sha256")
+		previous = hmac.new(key, b"0007", hashlib.sha256).hexdigest()
+		self.frappe.db.get_value.side_effect = lambda dt, user, field=None, **kw: (
+			previous if field == "custom_floor_pin_hash" else 1)
+		with patch.object(api.secrets, "randbelow", side_effect=[7, 8]):
+			self.assertEqual(api.issue_pin(self.user), {"pin": "0008"})
+		self.assertEqual(self.frappe.db.set_value.call_count, 1)
+
 	def test_issue_pin_retries_native_database_unique_violation(self):
 		# db.set_value bypasses Document's UniqueValidationError translation.
 		api = self.api()
