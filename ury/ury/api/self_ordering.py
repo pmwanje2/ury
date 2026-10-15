@@ -815,11 +815,61 @@ def create_payment_request(session):
         frappe.throw(_("No active order for this session"), frappe.ValidationError)
 
     with _elevated():
-        from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+        from erpnext.accounts.doctype.payment_request.payment_request import (
+            get_gateway_details,
+            make_payment_request,
+        )
 
         invoice = frappe.get_doc("POS Invoice", session.invoice)
         if invoice.docstatus == 1:
             frappe.throw(_("This order is already settled"), frappe.ValidationError)
+
+        # POS Invoice payment requests use the Phone payment row's account as
+        # the amount source in ERPNext v16. Select only a Phone mode that is
+        # on this profile and backed by the company's default gateway.
+        gateway_account = get_gateway_details(frappe._dict(company=invoice.company))
+        pos_profile = frappe.get_cached_doc("POS Profile", profile.pos_profile)
+        mode_of_payment = None
+        for profile_payment in pos_profile.payments if gateway_account and gateway_account.payment_channel == "Phone" else []:
+            mode_of_payment = profile_payment.mode_of_payment
+            if frappe.db.get_value("Mode of Payment", mode_of_payment, "type") != "Phone":
+                continue
+
+            payment_account = frappe.db.get_value(
+                "Mode of Payment Account",
+                {"parent": mode_of_payment, "company": invoice.company},
+                "default_account",
+            )
+            if payment_account and payment_account == gateway_account.payment_account:
+                break
+        else:
+            mode_of_payment = None
+
+        if not mode_of_payment:
+            frappe.throw(
+                _(
+                    "[URY-PAYMENT-NOT-CONFIGURED] Configure a Phone payment method "
+                    "with a Payment Gateway Account for this POS Profile."
+                ),
+                frappe.ValidationError,
+            )
+
+        outstanding_amount = (
+            invoice.get("outstanding_amount")
+            or invoice.get("rounded_total")
+            or invoice.get("grand_total")
+        )
+        phone_payment = next(
+            (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
+            None,
+        )
+        if not phone_payment:
+            phone_payment = invoice.append("payments", {})
+        phone_payment.mode_of_payment = mode_of_payment
+        phone_payment.account = payment_account
+        phone_payment.type = "Phone"
+        phone_payment.amount = outstanding_amount
+        invoice.save(ignore_permissions=True)
 
         # make_payment_request() derives its own amount from the reference
         # doc server-side (get_amount()) — the client never supplies one.
@@ -845,7 +895,8 @@ def create_payment_request(session):
                 dn=invoice.name,
                 submit_doc=1,
                 mute_email=1,
-                order_type="Shopping Cart",
+                payment_gateway_account=gateway_account.name,
+                mode_of_payment=mode_of_payment,
                 return_doc=1,
             )
         except Exception as e:
