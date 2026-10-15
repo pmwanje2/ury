@@ -45,7 +45,7 @@
     "starting": "Starting payment…",
     "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.",
     "paid": "Paid ({{amount}} {{currency}}) — thank you.",
-    "remaining": "Already paid {{paid}} {{currency}}, paying the remaining {{remaining}} {{currency}}."
+    "remaining": "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter."
   },
   "bill": {
     "request": "Request Bill",

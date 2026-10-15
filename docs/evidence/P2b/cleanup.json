@@ -1,0 +1,8 @@
+{
+  "project": "ury-p2b-qghvrng3",
+  "containers_remaining": 0,
+  "volumes_remaining": 0,
+  "networks_remaining": 0,
+  "removed_data": "Disposable lab database, synthetic users and transactions, logs and site volumes",
+  "production_touched": false
+}

@@ -1,0 +1,104 @@
+▶ guest ordering languages
+  ✔ browser language is the default and an explicit choice wins (46.85358ms)
+  ✔ switcher choice is stored and mirrored to the Frappe guest cookie (0.699486ms)
+  ✖ sw and lg catalogs cover every guest string and keep dish names out (5.666939ms)
+  ✔ initI18n activates the catalog before the page renders (4.935256ms)
+  ✔ guest surfaces wrap copy and keep ERP dish names (1.731865ms)
+✖ guest ordering languages (62.267108ms)
+▶ guest wording, waiter copy, and footer follow the catalog
+  ✔ swahili uses the locative and luganda names every cart item (0.351823ms)
+  ✔ call waiter, both confirmations, and the refusal fallback are translated (3.762069ms)
+  ✔ the visible footer words follow the guest language and keep the licence line (0.721492ms)
+  ✔ a recovery error and a waiter confirmation are translated when shown (0.40899ms)
+  ✔ switching language rewrites the footer already on the page (0.23332ms)
+  ✔ a device recovery error is translated when it is shown (0.176568ms)
+  ✔ a category label is not saved already translated (0.188305ms)
+  ✔ a missing ordering code and a device error still offer the language switcher (0.365737ms)
+✔ guest wording, waiter copy, and footer follow the catalog (7.797166ms)
+▶ production build ships the guest catalogs
+  ✔ swahili and luganda are in the bundle, not fetched at runtime (0.563574ms)
+  ✔ the corrected copy and waiter strings are in the bundle (0.179911ms)
+  ✔ the built page keeps the AGPL line and marks built-on and Source (0.182052ms)
+✔ production build ships the guest catalogs (4108.978475ms)
+▶ guest phone payment outcome
+  ✔ paid request never redirects, even with a link (1.688327ms)
+  ✖ paid phone plus growth sends the remaining balance to the counter, never checkout (1.825956ms)
+  ✔ first request redirects without a notice (0.220045ms)
+  ✔ request without a link keeps the staff-assist notice (0.240518ms)
+✖ guest phone payment outcome (46.478696ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 20
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4253.733874
+
+✖ failing tests:
+
+test at self-order/src/i18n/guest-language.test.mjs:383:11
+✖ sw and lg catalogs cover every guest string and keep dish names out (5.666939ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+
+    {
+      actions: {
+        new_order: 'New Order',
+        start_over: 'Start Over'
+      },
+  ...
+        pay_online: 'Pay Online',
+  +     remaining: 'Already paid {{paid}} {{currency}}, paying the remaining {{remaining}} {{currency}}.',
+  -     remaining: "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter.",
+        request_created: 'Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.',
+        starting: 'Starting payment…'
+      },
+      status: {
+        loading_menu: 'Loading menu…',
+
+      at TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/i18n/guest-language.test.mjs:386:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/i18n/guest-language.test.mjs:383:3)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { language: { chooser: 'Language' }, assistance: { call: 'Call waiter', calling: 'Calling waiter…', requested: 'Waiter requested — staff notified', already: 'Waiter already requested — staff notified' }, footer: { built_on: 'built on', source: 'Source' }, dialog: { close: 'Close' }, header: { order: 'Order', pickup: 'Order for Pickup', table: 'Table {{table}}' }, actions: { start_over: 'Start Over', new_order: 'New Order' }, confirm: { start_over: 'Start over? Your current cart will be cleared.', new_order: 'Start a new order? Current cart will be cleared.' }, status: { loading_menu: 'Loading menu…', starting: 'Starting up…' }, order: { so_far: 'Your order so far', pickup_code: 'Pickup code: {{code}}', total: 'Total', place: 'Place Order', placing: 'Placing order…', placing_short: 'Placing…' }, payment: { pay_online: 'Pay Online', starting: 'Starting payment…', request_created: 'Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.', paid: 'Paid ({{amount}} {{currency}}) — thank you.', remaining: 'Already paid {{paid}} {{currency}}, paying the remaining {{remaining}} {{currency}}.' }, bill: { request: 'Request Bill', requested: 'Bill requested — staff notified' }, cart: { title: 'Cart', empty: 'Tap a menu item to add it to your cart.', in_cart: 'In cart: {{qty}}', remove_one: 'Remove one {{name}}', add_one: 'Add one more {{name}}', count_one: '{{count}} item', count_many: '{{count}} items', still_there: 'Still there?', still_here: "I'm still here" }, menu: { all_items: 'All Items', other: 'Other', categories: 'Menu categories' }, errors: { missing_code: 'This link is missing an ordering code. Please rescan the QR code on your table.', load_menu: 'Unable to load the menu. Please rescan the QR code.', place_order: 'Could not place the order. Please try again.', request_bill: 'Could not request the bill. Please ask staff for help.', pay_online: 'Could not start online payment. Please pay at the counter.', call_waiter: 'Could not call a waiter. Please ask staff for help.', device_start: 'This device could not be started. Please contact staff.', device_bootstrap: 'Unable to bootstrap this device.' } },
+    expected: { language: { chooser: 'Language' }, assistance: { call: 'Call waiter', calling: 'Calling waiter…', requested: 'Waiter requested — staff notified', already: 'Waiter already requested — staff notified' }, footer: { built_on: 'built on', source: 'Source' }, dialog: { close: 'Close' }, header: { order: 'Order', pickup: 'Order for Pickup', table: 'Table {{table}}' }, actions: { start_over: 'Start Over', new_order: 'New Order' }, confirm: { start_over: 'Start over? Your current cart will be cleared.', new_order: 'Start a new order? Current cart will be cleared.' }, status: { loading_menu: 'Loading menu…', starting: 'Starting up…' }, order: { so_far: 'Your order so far', pickup_code: 'Pickup code: {{code}}', total: 'Total', place: 'Place Order', placing: 'Placing order…', placing_short: 'Placing…' }, payment: { pay_online: 'Pay Online', starting: 'Starting payment…', request_created: 'Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.', paid: 'Paid ({{amount}} {{currency}}) — thank you.', remaining: "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter." }, bill: { request: 'Request Bill', requested: 'Bill requested — staff notified' }, cart: { title: 'Cart', empty: 'Tap a menu item to add it to your cart.', in_cart: 'In cart: {{qty}}', remove_one: 'Remove one {{name}}', add_one: 'Add one more {{name}}', count_one: '{{count}} item', count_many: '{{count}} items', still_there: 'Still there?', still_here: "I'm still here" }, menu: { all_items: 'All Items', other: 'Other', categories: 'Menu categories' }, errors: { missing_code: 'This link is missing an ordering code. Please rescan the QR code on your table.', load_menu: 'Unable to load the menu. Please rescan the QR code.', place_order: 'Could not place the order. Please try again.', request_bill: 'Could not request the bill. Please ask staff for help.', pay_online: 'Could not start online payment. Please pay at the counter.', call_waiter: 'Could not call a waiter. Please ask staff for help.', device_start: 'This device could not be started. Please contact staff.', device_bootstrap: 'Unable to bootstrap this device.' } },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at self-order/src/lib/payment-outcome.test.mjs:25:11
+✖ paid phone plus growth sends the remaining balance to the counter, never checkout (1.825956ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+  +   key: 'payment.paid',
+  -   key: 'payment.remaining',
+      params: {
+  +     amount: 12000,
+        currency: 'UGX',
+  -     paid: 12000,
+  -     remaining: 3000
+      }
+    }
+
+      at TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/lib/payment-outcome.test.mjs:29:14)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at TestContext.test (node:internal/test_runner/test:400:20)
+      at TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/lib/payment-outcome.test.mjs:25:11)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { key: 'payment.paid', params: { amount: 12000, currency: 'UGX' } },
+    expected: { key: 'payment.remaining', params: { paid: 12000, remaining: 3000, currency: 'UGX' } },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

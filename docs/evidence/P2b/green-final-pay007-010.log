@@ -1,0 +1,73 @@
+Salama - POS Invoice changes only through the POS disabled=1
+test_add_customer_items_aggregates_past_item_for_repeated_item_code (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_aggregates_past_item_for_repeated_item_code)
+Live-testing finding: add_customer_items() always appends a NEW ... ok
+test_add_customer_items_appends_without_clearing_existing (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_appends_without_clearing_existing) ... ok
+test_add_customer_items_first_call_proceeds_when_table_free (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_first_call_proceeds_when_table_free)
+Same disabled-flag config, but no pre-existing invoice on the ... ok
+test_add_customer_items_rejects_item_not_on_menu (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_rejects_item_not_on_menu) ... ok
+test_add_customer_items_rejects_joining_pre_existing_table_order (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_rejects_joining_pre_existing_table_order)
+session.invoice is None on a session's first call even when the ... ok
+test_add_customer_items_rejects_when_running_table_addition_disabled (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_rejects_when_running_table_addition_disabled) ... ok
+test_add_customer_items_sets_restaurant_table_on_new_invoice (ury.ury.api.test_self_ordering.TestAddCustomerItemsAppendOnly.test_add_customer_items_sets_restaurant_table_on_new_invoice)
+_resolve_or_create_pos_invoice() never sets restaurant_table on a ... ok
+test_assign_device_table_rejects_non_selectable_device (ury.ury.api.test_self_ordering.TestAssignDeviceTable.test_assign_device_table_rejects_non_selectable_device) ... ok
+test_assign_device_table_rejects_unknown_table (ury.ury.api.test_self_ordering.TestAssignDeviceTable.test_assign_device_table_rejects_unknown_table) ... ok
+test_assign_device_table_valid_pin_opens_session (ury.ury.api.test_self_ordering.TestAssignDeviceTable.test_assign_device_table_valid_pin_opens_session) ... ok
+test_assign_device_table_wrong_pin_rejected (ury.ury.api.test_self_ordering.TestAssignDeviceTable.test_assign_device_table_wrong_pin_rejected) ... ok
+test_create_payment_request_does_not_relabel_request_errors (ury.ury.api.test_self_ordering.TestCreatePaymentRequest.test_create_payment_request_does_not_relabel_request_errors)
+Missing configuration is refused before ERPNext is called. Any ... ok
+test_create_payment_request_never_trusts_client_amount (ury.ury.api.test_self_ordering.TestCreatePaymentRequest.test_create_payment_request_never_trusts_client_amount)
+The whitelisted signature is create_payment_request(session) -- ... ok
+test_create_payment_request_rejects_already_settled_invoice (ury.ury.api.test_self_ordering.TestCreatePaymentRequest.test_create_payment_request_rejects_already_settled_invoice) ... ok
+test_create_payment_request_rejects_when_payment_disabled (ury.ury.api.test_self_ordering.TestCreatePaymentRequest.test_create_payment_request_rejects_when_payment_disabled) ... ok
+test_create_payment_request_survives_missing_gateway (ury.ury.api.test_self_ordering.TestCreatePaymentRequest.test_create_payment_request_survives_missing_gateway)
+No Payment Gateway Account configured -> get_payment_url() raises. ... ok
+test_get_payment_status_no_invoice (ury.ury.api.test_self_ordering.TestGetPaymentStatus.test_get_payment_status_no_invoice) ... ok
+test_non_ascii_qr_signature_does_not_break_guest_page_identity (ury.ury.api.test_self_ordering.TestGuestBrandMalformedLink.test_non_ascii_qr_signature_does_not_break_guest_page_identity) ... ok
+test_add_customer_items_works_without_table_for_pickup (ury.ury.api.test_self_ordering.TestQRPickup.test_add_customer_items_works_without_table_for_pickup) ... ok
+test_get_customer_order_pickup_code_present_before_order (ury.ury.api.test_self_ordering.TestQRPickup.test_get_customer_order_pickup_code_present_before_order) ... ok
+test_verify_qr_token_pickup_resolves_no_table (ury.ury.api.test_self_ordering.TestQRPickup.test_verify_qr_token_pickup_resolves_no_table) ... ok
+test_verify_qr_token_bad_signature_rejected (ury.ury.api.test_self_ordering.TestQRTokenRoundtrip.test_verify_qr_token_bad_signature_rejected) ... ok
+test_verify_qr_token_malformed_rejected (ury.ury.api.test_self_ordering.TestQRTokenRoundtrip.test_verify_qr_token_malformed_rejected) ... ok
+test_verify_qr_token_valid_table_token (ury.ury.api.test_self_ordering.TestQRTokenRoundtrip.test_verify_qr_token_valid_table_token) ... ok
+test_creates_native_assistance_for_verified_table_and_invoice (ury.ury.api.test_self_ordering.TestRequestAssistance.test_creates_native_assistance_for_verified_table_and_invoice) ... ok
+test_disabled_service_requests_are_refused (ury.ury.api.test_self_ordering.TestRequestAssistance.test_disabled_service_requests_are_refused) ... ok
+test_expired_or_forged_session_is_refused_before_insertion (ury.ury.api.test_self_ordering.TestRequestAssistance.test_expired_or_forged_session_is_refused_before_insertion) ... ok
+test_insertion_failure_restores_guest_identity (ury.ury.api.test_self_ordering.TestRequestAssistance.test_insertion_failure_restores_guest_identity) ... ok
+test_table_and_active_order_are_required (ury.ury.api.test_self_ordering.TestRequestAssistance.test_table_and_active_order_are_required) ... ok
+test_unresolved_request_is_deduplicated_by_table_invoice_and_type (ury.ury.api.test_self_ordering.TestRequestAssistance.test_unresolved_request_is_deduplicated_by_table_invoice_and_type) ... ok
+test_request_bill_creates_service_request (ury.ury.api.test_self_ordering.TestRequestBill.test_request_bill_creates_service_request) ... ok
+test_request_bill_idempotent_when_already_open (ury.ury.api.test_self_ordering.TestRequestBill.test_request_bill_idempotent_when_already_open) ... ok
+test_share_payment_link_calls_registered_provider (ury.ury.api.test_self_ordering.TestSharePaymentLink.test_share_payment_link_calls_registered_provider) ... ok
+test_share_payment_link_rejects_empty_recipient (ury.ury.api.test_self_ordering.TestSharePaymentLink.test_share_payment_link_rejects_empty_recipient) ... ok
+
+----------------------------------------------------------------------
+Ran 34 tests in 0.149s
+
+OK
+test_cashier_settlement_rebuilds_gateway_tender_and_submits (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_cashier_settlement_rebuilds_gateway_tender_and_submits) ... /home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/utils.py:1197: V16FrappeDeprecationWarning: It was marked on unknown for removal from v16 with note: Use `NumberFormat.from_string()` from `frappe.utils.number_format` instead
+  return get_number_format_info(number_format)[2]
+ok
+test_client_amount_is_ignored_by_real_dispatch (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_client_amount_is_ignored_by_real_dispatch) ... ok
+test_missing_gateway_refuses_with_stable_id_without_creating_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_missing_gateway_refuses_with_stable_id_without_creating_request) ... ok
+test_no_shopping_cart_redirect_or_automatic_sales_invoice (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_no_shopping_cart_redirect_or_automatic_sales_invoice) ... ok
+test_order_growth_after_paid_request_returns_counter_balance_without_new_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_order_growth_after_paid_request_returns_counter_balance_without_new_request) ... ok
+test_paid_phone_request_blocks_second_gateway_after_default_changes (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_paid_phone_request_blocks_second_gateway_after_default_changes) ... ok
+test_payment_status_returns_existing_payment_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_payment_status_returns_existing_payment_url) ... ok
+test_phone_paid_then_growth_settles_single_phone_plus_cash_as_cashier (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_phone_paid_then_growth_settles_single_phone_plus_cash_as_cashier) ... ok
+test_positive_invoice_outstanding_is_used_instead_of_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_positive_invoice_outstanding_is_used_instead_of_total) ... ok
+test_profile_without_gateway_phone_row_refuses_with_stable_id (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_profile_without_gateway_phone_row_refuses_with_stable_id) ... ok
+test_request_errors_are_not_reported_as_unconfigured (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_request_errors_are_not_reported_as_unconfigured) ... ok
+test_retap_after_paid_returns_paid_without_checkout_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_retap_after_paid_returns_paid_without_checkout_url) ... ok
+test_retap_returns_existing_request_and_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_retap_returns_existing_request_and_url) ... ok
+test_server_populates_phone_row_for_exact_unpaid_invoice_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_server_populates_phone_row_for_exact_unpaid_invoice_total) ... ok
+test_status_never_returns_url_for_partially_paid_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_status_never_returns_url_for_partially_paid_request) ... ok
+test_unpaid_growth_cancels_stale_request_and_replaces_full_amount (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_unpaid_growth_cancels_stale_request_and_replaces_full_amount) ... ok
+test_uses_company_default_gateway_not_first_profile_phone_mode (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_company_default_gateway_not_first_profile_phone_mode) ... ok
+test_uses_phone_row_gateway_when_company_default_is_another_gateway (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_phone_row_gateway_when_company_default_is_another_gateway) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 67.153s
+
+OK
+Salama - POS Invoice changes only through the POS disabled=0

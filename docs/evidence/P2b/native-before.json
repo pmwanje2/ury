@@ -1,0 +1,80 @@
+{
+  "apps": [
+    "frappe",
+    "erpnext",
+    "payments",
+    "ea_payments",
+    "ury"
+  ],
+  "versions": {
+    "frappe": "16.52.0",
+    "erpnext": "16.50.0",
+    "payments": "0.0.1",
+    "ea_payments": "0.1.0",
+    "ury": "3.0.0-beta.1"
+  },
+  "payment_requests": [
+    {
+      "name": "ACC-PRQ-2026-00004",
+      "reference_doctype": "POS Invoice",
+      "reference_name": "P2b-012995cb-00004",
+      "docstatus": 1,
+      "status": "Paid",
+      "grand_total": 12000.0,
+      "outstanding_amount": 0.0,
+      "mode_of_payment": "Pesapal",
+      "payment_gateway_account": "Pesapal - UGX - P2",
+      "currency": "UGX"
+    }
+  ],
+  "invoices": [
+    {
+      "name": "P2b-012995cb-00004",
+      "docstatus": 0,
+      "grand_total": 24000.0,
+      "outstanding_amount": 0.0,
+      "owner": "Administrator",
+      "modified_by": "Administrator",
+      "payments": [
+        {
+          "mode_of_payment": "Cash",
+          "amount": 0.0,
+          "type": "Cash"
+        },
+        {
+          "mode_of_payment": "Pesapal",
+          "amount": 12000.0,
+          "type": "Phone"
+        }
+      ]
+    }
+  ],
+  "scripts": [
+    {
+      "name": "SiteOps PAY-007 Gateway Payment Request - Sales Invoice",
+      "sha256": "cf55c4be32a6b5c4ee55e8f0b81a83194aa5864c08b69c38c39a517db099391d",
+      "disabled": 0,
+      "doctype": "Sales Invoice",
+      "event": "Before Submit",
+      "controls": [
+        "PAY-007",
+        "PAY-008",
+        "PAY-009",
+        "PAY-010"
+      ]
+    },
+    {
+      "name": "SiteOps PAY-007 Gateway Payment Request - POS Invoice",
+      "sha256": "cf55c4be32a6b5c4ee55e8f0b81a83194aa5864c08b69c38c39a517db099391d",
+      "disabled": 0,
+      "doctype": "POS Invoice",
+      "event": "Before Submit",
+      "controls": [
+        "PAY-007",
+        "PAY-008",
+        "PAY-009",
+        "PAY-010"
+      ]
+    }
+  ]
+}
