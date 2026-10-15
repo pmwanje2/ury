@@ -98,6 +98,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  window.Element.prototype.scrollIntoView = () => {};
   vi.stubGlobal('indexedDB', new IDBFactory());
   hits = [];
   Object.defineProperty(navigator, 'serviceWorker', {
@@ -130,7 +131,7 @@ beforeEach(async () => {
   localStorage.setItem('currencySymbol', 'USh');
   useRootStore.setState({
     user: null, isLoading: false, error: null, posProfile: null, hasAccess: false,
-    allowedRoles: [], orders: [], orderLoading: false,
+    allowedRoles: [], orders: [], orderLoading: false, ordersOffline: false,
   });
   usePOSStore.setState({ posProfile: null, isInitializing: true, error: null, paymentModes: [], loading: false } as never);
   const { OfflineOutbox } = await import('../src/offline/outbox');
@@ -164,8 +165,8 @@ async function openRoot(path: string, settled: (text: string) => boolean) {
   await act(async () => { root.render(<App />); });
   await vi.waitFor(() => {
     const text = container.textContent || '';
-    expect(settled(text), text + ' @ ' + window.location.pathname).toBe(true);
-  }, { timeout: 8000 });
+    expect(settled(text), text.slice(0, 400) + ' @ ' + window.location.pathname).toBe(true);
+  }, { timeout: 4000 });
 }
 
 test.each(['network', ...gatewayStatuses] as const)(
@@ -206,11 +207,11 @@ test.each(['network', 502] as const)(
 test.each([401, 403])('HTTP %i on the invoice list is still Access Denied', async (status) => {
   mode = 'denied';
   deniedStatus = status;
-  await openRoot('/pos/orders', (text) => text.includes('Access Denied') || text.includes('Orders are unavailable while the link is down.'));
+  await openRoot('/pos/orders', (text) => text.includes('Access Denied') && text.includes('Failed to fetch POS invoices'));
   expect(hits, hits.join('\n')).toEqual(expect.arrayContaining([expect.stringContaining('denied')]));
-  expect(hits, hits.join('\n')).toEqual(expect.arrayContaining([expect.stringContaining('getPosInvoice')]));
   const text = container.textContent || '';
-  expect(text).toContain('Access Denied');
+  expect(text, text.slice(0, 500) + ' PATH ' + window.location.pathname + '\n' + hits.join('\n')).toContain('Access Denied');
+  expect(hits, hits.join('\n')).toEqual(expect.arrayContaining([expect.stringContaining('getPosInvoice')]));
   expect(text).toContain('Failed to fetch POS invoices');
   expect(text).not.toContain('Orders are unavailable while the link is down.');
 });

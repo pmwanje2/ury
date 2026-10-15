@@ -1,6 +1,7 @@
 {
   "offline": {
     "capture": "Offline capture",
+    "orders_unavailable": "Orders are unavailable while the link is down.",
     "outbox": "Offline outbox",
     "replaying": "Replaying",
     "pending": "{{count}} pending",

@@ -1,6 +1,6 @@
 import { DOCTYPES } from '../data/doctypes';
 import { assertOfflineActionAllowed } from '../offline/cashier';
-import { call, db, getSessionUser, getUserSessionStorageKey } from '@ury/core';
+import { call, db, getSessionUser, getUserSessionStorageKey, isLinkDown } from '@ury/core';
 import { OrderStatusType, OrderType } from '../data/order-types';
 import type { Filter } from 'frappe-js-sdk/lib/db/types';
 
@@ -105,6 +105,8 @@ export async function getPOSInvoices({
       hasMore: response.message.next
     };
   } catch (error) {
+    // A down link is not an access denial. 401/403 keep today's message.
+    if (isLinkDown(error)) throw error;
     console.error('Error fetching POS invoices:', error);
     throw new Error('Failed to fetch POS invoices');
   }
