@@ -135,6 +135,48 @@ class TestGuestPhonePayment(unittest.TestCase):
         status = frappe.call(get_payment_status, session=self.token)
         self.assertEqual(status.get("payment_url"), first["payment_url"])
 
+    def mark_paid(self, name):
+        frappe.set_user("Administrator")
+        frappe.get_doc("Payment Request", name).set_as_paid()
+        frappe.set_user("Guest")
+
+    def test_retap_after_paid_returns_paid_without_checkout_url(self):
+        first = self.request()
+        self.mark_paid(first["payment_request"])
+        again = self.request()
+        self.assertEqual((again["status"], again["payment_url"]), ("Paid", None))
+        self.assertEqual((again["paid_amount"], again["remaining_amount"]), (100, 0))
+        self.assertEqual(frappe.db.count("Payment Request",
+            {"reference_name": self.invoice_name, "docstatus": 1}), 1)
+
+    def test_status_never_returns_url_for_partially_paid_request(self):
+        first = self.request()
+        frappe.db.set_value("Payment Request", first["payment_request"], "status", "Partially Paid")
+        status = frappe.call(get_payment_status, session=self.token)
+        self.assertEqual((status["status"], status["payment_url"]), ("Partially Paid", None))
+
+    def test_order_growth_after_paid_request_charges_only_remainder(self):
+        first = self.request()
+        self.mark_paid(first["payment_request"])
+        frappe.set_user("Administrator")
+        invoice = frappe.get_doc("POS Invoice", self.invoice_name)
+        invoice.items[0].qty = 2
+        invoice.save()
+        self.assertEqual(invoice.rounded_total or invoice.grand_total, 200)
+        frappe.set_user("Guest")
+
+        remainder = self.request()
+        self.assertNotEqual(remainder["payment_request"], first["payment_request"])
+        self.assertEqual((remainder["amount"], remainder["paid_amount"], remainder["remaining_amount"]),
+            (100, 100, 100))
+        self.assertTrue(remainder["payment_url"])
+        self.assertEqual(frappe.db.get_value("Payment Request", remainder["payment_request"],
+            "grand_total"), 100)
+        phone = frappe.get_all("Sales Invoice Payment", filters={"parent": self.invoice_name,
+            "parenttype": "POS Invoice", "mode_of_payment": "P2 Phone"}, pluck="amount")
+        self.assertEqual(phone, [200])
+        self.assertEqual(self.request()["payment_request"], remainder["payment_request"])
+
     def test_request_errors_are_not_reported_as_unconfigured(self):
         def refuse(**kwargs):
             frappe.throw("PAY-005: Configure native SMS Settings before requesting phone payment.")
