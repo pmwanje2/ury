@@ -160,13 +160,13 @@ export class OfflineOutbox {
   // One open check per table, same as the server. A caller-supplied client id
   // keeps the total it was given (already cumulative). Auto-bind adds the new
   // items onto the open check and does not mint another id.
-  private async appendToOpenTable(order: OfflineOrder, total: number, rows: OfflineEntry[], outage: string): Promise<OfflineEntry | undefined> {
+  private async appendToOpenTable(order: OfflineOrder, total: number, rows: OfflineEntry[], outage: string, roundId?: string): Promise<OfflineEntry | undefined> {
     if (!order.table) return undefined;
     const local = rows.find((row) => row.order.table === order.table && row.state === 'pending' && row.next_round === 0 && !row.settlement);
     if (local) {
       await this.rememberPersistence();
       const last = local.rounds[local.rounds.length - 1]?.expected_total ?? 0;
-      return this.storeRound(local, this.round(order.items, last + total));
+      return this.storeRound(local, this.round(order.items, last + total, roundId));
     }
     const known = readOpenTableCheck(this.options.user.name, order.table);
     if (!known || rows.some((row) => row.client_order_id === known.clientOrderId)) return undefined;
@@ -182,7 +182,7 @@ export class OfflineOutbox {
       outage_id: outage, order: adopted, rounds: [], state: 'pending', next_round: 0, phase: 'order',
       ...(known.invoice ? { server_invoice: known.invoice } : {}),
     };
-    return this.storeRound(entry, this.round(order.items, (known.grandTotal ?? 0) + total));
+    return this.storeRound(entry, this.round(order.items, (known.grandTotal ?? 0) + total, roundId));
   }
   async capture(order: OfflineOrder, total: number, clientId?: string,
     reserved?: { clientOrderId: string; roundId: string }): Promise<OfflineEntry> {
@@ -197,12 +197,13 @@ export class OfflineOutbox {
         request.onsuccess = () => { const id = request.result || uuid(); store.put(id, this.scope); result(id); };
       });
       const rows = await this.list();
-      if (!clientId && reserved?.clientOrderId) {
-        const same = rows.find((row) => row.client_order_id === reserved.clientOrderId);
+      // A round already queued under the reserved round id is the same round.
+      if (!clientId && reserved?.roundId) {
+        const same = rows.find((row) => row.rounds.some((round) => round.round_id === reserved.roundId));
         if (same) return same;
       }
       if (!clientId) {
-        const appended = await this.appendToOpenTable(order, total, rows, outage);
+        const appended = await this.appendToOpenTable(order, total, rows, outage, reserved?.roundId);
         if (appended) return appended;
       }
       const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;

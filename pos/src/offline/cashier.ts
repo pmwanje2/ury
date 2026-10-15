@@ -63,9 +63,8 @@ export async function submitOrderOfflineAware<T>({ profile, user, order, total, 
   } catch (error) {
     if (!ids || !gatewayStatusOf(error)) throw error;
     queue.reachable = false;
-    const entry = occupied
-      ? await queue.capture(order, total)
-      : await queue.capture(order, total, undefined, ids);
+    // Same client and round id as the live write, free or occupied table.
+    const entry = await queue.capture(order, total, undefined, ids);
     return { offline: true as const, entry };
   }
 }
