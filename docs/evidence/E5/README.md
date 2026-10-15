@@ -22,9 +22,11 @@ rounding or permissions code changed.
   `node --test pos/tests/*.test.mjs pos/tests/*.test.cjs`: **16 passed**,
   0 failed/skipped.
 - `tsc -p pos/tsconfig.app.json --noEmit`: **not green**; the same 8 existing
-  diagnostics on base and candidate. `npm run lint --workspace pos`:
-  **not green**; the same 151 errors / 56 warnings, with only three line
-  numbers moving by four lines in PaymentDialog. No lint rule/check weakened.
+  diagnostics on base and candidate. POS lint is **not green**: a pristine-base
+  replay has **147 errors / 56 warnings**, matched by the final candidate.
+  The earlier151 baseline claim was invalid: npm's workspace resolution
+  included the candidate's new test file. Four explicit-any errors in that
+  file have now been removed. No lint rule/check was weakened.
 
 Node: `/home/paulmwanje/.nvm/versions/node/v24.20.0/bin/node` (24.20.0).
 Locked dependencies installed using `npm ci --ignore-scripts`; no dependency

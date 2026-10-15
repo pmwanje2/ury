@@ -22,7 +22,7 @@ beforeEach(async () => {
     fetchPaymentModes: async () => {},
     posProfile: {
       name: 'Till A', customer: 'Walk-in Customer', allow_partial_payment: 1,
-    } as any,
+    } as NonNullable<typeof initialStore.posProfile>,
   });
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -87,7 +87,7 @@ test.each([
   ['unknown default customer', { customer: null }, 'House Account'],
   ['another profile in the store', { name: 'Till B' }, 'House Account'],
 ] as const)('short payment stays disabled for %s', async (_reason, fields, customer) => {
-  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, ...fields } as any });
+  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, ...fields } as unknown as NonNullable<typeof initialStore.posProfile> });
   const post = vi.spyOn(call, 'post');
   await render(customer);
   await enter('40');
@@ -124,7 +124,7 @@ test('an account cannot settle without a configured payment mode', async () => {
 });
 
 test.each([0, 1])('full split payment still works with partial-payment setting %s', async (flag) => {
-  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, allow_partial_payment: flag } as any });
+  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, allow_partial_payment: flag } });
   const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
   await render('Walk-in Customer');
   await enter('40');
@@ -161,7 +161,7 @@ test('a zero-total bill without tender retains the existing full-payment rule', 
 });
 
 test('a pending on-account settlement cannot be submitted twice', async () => {
-  let finish!: (value: any) => void;
+  let finish!: (value: unknown) => void;
   const post = vi.spyOn(call, 'post').mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
   await render();
   await enter('40');
