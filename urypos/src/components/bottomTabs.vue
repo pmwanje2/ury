@@ -8,7 +8,7 @@
       class="mx-auto grid h-full max-w-lg font-medium"
       :class="[
         {
-          'grid-cols-4': !auth.cashier,
+          'grid-cols-3': !auth.cashier,
           'grid-cols-5': auth.cashier,
         },
       ]"
@@ -85,6 +85,7 @@
       >
       <router-link
         :to="invoiceData.invoiceUpdating ? '#' : '/Customer'"
+        v-if="auth.cashier"
         class="group inline-flex flex-col items-center justify-center px-5 hover:bg-gray-50 dark:hover:bg-gray-800"
         @click="!this.auth.cashier && this.tabClick.checkActiveTable()"
       >
