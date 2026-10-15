@@ -1,0 +1,68 @@
+{
+  "first": {
+    "status": 200,
+    "body": {
+      "message": {
+        "payment_request": "ACC-PRQ-2026-00001",
+        "amount": 12000,
+        "currency": "UGX",
+        "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001",
+        "status": "Requested",
+        "paid_amount": 0,
+        "remaining_amount": 12000
+      },
+      "_server_messages": "[\"{\\\"message\\\":\\\"SMS sent successfully\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\"}\"]"
+    }
+  },
+  "firstNavigation": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001",
+  "firstIpn": {
+    "status": 200,
+    "body": {
+      "orderNotificationType": "IPNCHANGE",
+      "orderTrackingId": "TRACK-ACC-PRQ-2026-00001",
+      "orderMerchantReference": "ACC-PRQ-2026-00001",
+      "status": 200,
+      "message": {
+        "orderNotificationType": "IPNCHANGE",
+        "orderTrackingId": "TRACK-ACC-PRQ-2026-00001",
+        "orderMerchantReference": "ACC-PRQ-2026-00001",
+        "status": 200
+      }
+    }
+  },
+  "paidRetap": {
+    "status": 200,
+    "body": {
+      "message": {
+        "payment_request": "ACC-PRQ-2026-00001",
+        "amount": 12000,
+        "currency": "UGX",
+        "payment_url": null,
+        "status": "Paid",
+        "paid_amount": 12000,
+        "remaining_amount": 0
+      }
+    }
+  },
+  "paidRetapNavigations": 0,
+  "remainder": {
+    "status": 200,
+    "body": {
+      "message": {
+        "payment_request": "ACC-PRQ-2026-00002",
+        "amount": 12000,
+        "currency": "UGX",
+        "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00002",
+        "status": "Requested",
+        "paid_amount": 12000,
+        "remaining_amount": 12000
+      },
+      "_server_messages": "[\"{\\\"message\\\":\\\"SMS sent successfully\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\"}\"]"
+    }
+  },
+  "remainderNavigation": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00002",
+  "navigations": [
+    "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001",
+    "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00002"
+  ]
+}

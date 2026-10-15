@@ -1,0 +1,42 @@
+{
+  "order": 200,
+  "first": {
+    "status": 200,
+    "location": null,
+    "body": {
+      "message": {
+        "payment_request": "ACC-PRQ-2026-00001",
+        "amount": 12000,
+        "currency": "UGX",
+        "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001",
+        "status": "Requested"
+      },
+      "_server_messages": "[\"{\\\"message\\\":\\\"SMS sent successfully\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\"}\"]"
+    }
+  },
+  "second": {
+    "status": 200,
+    "location": null,
+    "body": {
+      "message": {
+        "payment_request": "ACC-PRQ-2026-00001",
+        "amount": 12000,
+        "currency": "UGX",
+        "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001",
+        "status": "Requested"
+      }
+    }
+  },
+  "status": {
+    "status": 200,
+    "location": null,
+    "body": {
+      "message": {
+        "payment_request": "ACC-PRQ-2026-00001",
+        "status": "Requested",
+        "amount": 12000,
+        "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001"
+      }
+    }
+  }
+}

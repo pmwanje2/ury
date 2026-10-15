@@ -33,6 +33,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
     error,
     billRequested,
     payingOnline,
+    paymentNotice,
     addToCart,
     decrementCart,
     submitCart,
@@ -132,6 +133,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
           submitting={submitting}
           billRequested={billRequested}
           payingOnline={payingOnline}
+          paymentNotice={paymentNotice}
           onIncrement={addToCart}
           onDecrement={decrementCart}
           onSubmit={submitCart}

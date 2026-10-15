@@ -44,6 +44,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     error,
     billRequested,
     payingOnline,
+    paymentNotice,
     addToCart,
     decrementCart,
     submitCart,
@@ -164,6 +165,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
               {payingOnline ? t('payment.starting') : t('payment.pay_online')}
             </button>
           )}
+          {paymentNotice && <p role="status" className="mt-2 text-sm text-muted-foreground">{paymentNotice}</p>}
           {context?.capabilities.request_bill_enabled && !order.billed && (
             <button
               className="mt-3 w-full rounded-md border py-3 text-sm font-medium disabled:opacity-50"

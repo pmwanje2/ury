@@ -1,0 +1,9 @@
+def get_gateway_details(args):  # nosemgrep
+	"""
+	Return gateway and payment account of default payment gateway
+	"""
+	gateway_account = args.get("payment_gateway_account", {"is_default": 1, "company": args.company})
+	return get_payment_gateway_account(gateway_account)
+
+
+def get_payment_gateway_account(filter):

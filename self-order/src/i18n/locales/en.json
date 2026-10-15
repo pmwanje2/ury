@@ -43,7 +43,9 @@
   "payment": {
     "pay_online": "Pay Online",
     "starting": "Starting payment…",
-    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment."
+    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.",
+    "paid": "Paid ({{amount}} {{currency}}) — thank you.",
+    "remaining": "Already paid {{paid}} {{currency}}, paying the remaining {{remaining}} {{currency}}."
   },
   "bill": {
     "request": "Request Bill",

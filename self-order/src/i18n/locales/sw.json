@@ -43,7 +43,9 @@
   "payment": {
     "pay_online": "Lipa mtandaoni",
     "starting": "Inaanzisha malipo…",
-    "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa."
+    "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.",
+    "paid": "Imelipwa ({{amount}} {{currency}}) — asante.",
+    "remaining": "Tayari umelipa {{paid}} {{currency}}, unalipa kiasi kilichobaki {{remaining}} {{currency}}."
   },
   "bill": {
     "request": "Omba bili",

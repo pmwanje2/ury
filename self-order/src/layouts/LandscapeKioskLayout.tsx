@@ -35,6 +35,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     error,
     billRequested,
     payingOnline,
+    paymentNotice,
     addToCart,
     decrementCart,
     submitCart,
@@ -134,6 +135,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
           submitting={submitting}
           billRequested={billRequested}
           payingOnline={payingOnline}
+          paymentNotice={paymentNotice}
           onIncrement={addToCart}
           onDecrement={decrementCart}
           onSubmit={submitCart}

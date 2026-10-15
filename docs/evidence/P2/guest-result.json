@@ -1,0 +1,21 @@
+{
+  "payments": [
+    {
+      "status": 200,
+      "location": null,
+      "body": {
+        "message": {
+          "payment_request": "ACC-PRQ-2026-00005",
+          "amount": 12000,
+          "currency": "UGX",
+          "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00005",
+          "status": "Requested"
+        },
+        "_server_messages": "[\"{\\\"message\\\":\\\"SMS sent successfully\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\"}\"]"
+      }
+    }
+  ],
+  "targets": [
+    "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00005"
+  ]
+}

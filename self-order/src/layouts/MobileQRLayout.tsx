@@ -23,7 +23,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     assistanceCooldown,
     assistanceMessage,
     handleRequestAssistance,
-    paymentRequest,
+    paymentNotice,
     payingOnline,
     addToCart,
     decrementCart,
@@ -124,14 +124,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               {payingOnline ? t('payment.starting') : t('payment.pay_online')}
             </button>
           )}
-          {paymentRequest && !paymentRequest.payment_url && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t('payment.request_created', {
-                amount: paymentRequest.amount,
-                currency: paymentRequest.currency,
-              })}
-            </p>
-          )}
+          {paymentNotice && <p role="status" className="mt-2 text-xs text-muted-foreground">{paymentNotice}</p>}
           {!isPickup && context?.capabilities.request_bill_enabled && !order.billed && (
             <>
             <button

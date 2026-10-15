@@ -1,0 +1,167 @@
+REV=cf87424db847f2a9192a556d606d2bface29ec25
+SELECTION=ury.tests.test_guest_phone_payment
+test_cashier_settlement_rebuilds_gateway_tender_and_submits (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_cashier_settlement_rebuilds_gateway_tender_and_submits) ... /home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/utils.py:1197: V16FrappeDeprecationWarning: It was marked on unknown for removal from v16 with note: Use `NumberFormat.from_string()` from `frappe.utils.number_format` instead
+  return get_number_format_info(number_format)[2]
+ok
+test_client_amount_is_ignored_by_real_dispatch (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_client_amount_is_ignored_by_real_dispatch) ... ok
+test_missing_gateway_refuses_with_stable_id_without_creating_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_missing_gateway_refuses_with_stable_id_without_creating_request) ... ok
+test_no_shopping_cart_redirect_or_automatic_sales_invoice (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_no_shopping_cart_redirect_or_automatic_sales_invoice) ... ok
+test_payment_status_returns_existing_payment_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_payment_status_returns_existing_payment_url) ... FAIL
+test_positive_invoice_outstanding_is_used_instead_of_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_positive_invoice_outstanding_is_used_instead_of_total) ... ok
+test_profile_without_gateway_phone_row_refuses_with_stable_id (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_profile_without_gateway_phone_row_refuses_with_stable_id) ... ok
+test_request_errors_are_not_reported_as_unconfigured (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_request_errors_are_not_reported_as_unconfigured) ... FAIL
+test_retap_returns_existing_request_and_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_retap_returns_existing_request_and_url) ... FAIL
+test_server_populates_phone_row_for_exact_unpaid_invoice_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_server_populates_phone_row_for_exact_unpaid_invoice_total) ... ok
+test_uses_company_default_gateway_not_first_profile_phone_mode (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_company_default_gateway_not_first_profile_phone_mode) ... ok
+test_uses_phone_row_gateway_when_company_default_is_another_gateway (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_phone_row_gateway_when_company_default_is_another_gateway) ... FAIL
+
+======================================================================
+FAIL: test_payment_status_returns_existing_payment_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_payment_status_returns_existing_payment_url)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 136, in test_payment_status_returns_existing_payment_url
+    self.assertEqual(status.get("payment_url"), first["payment_url"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != 'https://psp.example.test/ACC-PRQ-2026-00001'
+
+======================================================================
+FAIL: test_request_errors_are_not_reported_as_unconfigured (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_request_errors_are_not_reported_as_unconfigured)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 145, in test_request_errors_are_not_reported_as_unconfigured
+    self.assertIn("PAY-005", str(raised.exception))
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'PAY-005' not found in "Online payment isn't set up for this restaurant yet. Please pay at the counter."
+
+======================================================================
+FAIL: test_retap_returns_existing_request_and_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_retap_returns_existing_request_and_url)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 876, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<5 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 681, in make_payment_request
+    grand_total = validate_and_calculate_grand_total(grand_total, existing_payment_request_amount)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 667, in validate_and_calculate_grand_total
+    frappe.throw(_("Payment Request is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Request is already created
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 895, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 127, in test_retap_returns_existing_request_and_url
+    second = self.request()
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+======================================================================
+FAIL: test_uses_phone_row_gateway_when_company_default_is_another_gateway (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_phone_row_gateway_when_company_default_is_another_gateway)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 846, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _(
+        ^^
+    ...<3 lines>...
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: [URY-PAYMENT-NOT-CONFIGURED] Configure a Phone payment method with a Payment Gateway Account for this POS Profile.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 157, in test_uses_phone_row_gateway_when_company_default_is_another_gateway
+    result = self.request()
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: [URY-PAYMENT-NOT-CONFIGURED] Configure a Phone payment method with a Payment Gateway Account for this POS Profile.
+
+----------------------------------------------------------------------
+Ran 12 tests in 48.124s
+
+FAILED (failures=4)

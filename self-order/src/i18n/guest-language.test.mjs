@@ -54,6 +54,8 @@ const en = {
     starting: 'Starting payment…',
     request_created:
       'Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.',
+    paid: 'Paid ({{amount}} {{currency}}) — thank you.',
+    remaining: 'Already paid {{paid}} {{currency}}, paying the remaining {{remaining}} {{currency}}.',
   },
   bill: {
     request: 'Request Bill',
@@ -132,6 +134,8 @@ const sw = {
     starting: 'Inaanzisha malipo…',
     request_created:
       'Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.',
+    paid: 'Imelipwa ({{amount}} {{currency}}) — asante.',
+    remaining: 'Tayari umelipa {{paid}} {{currency}}, unalipa kiasi kilichobaki {{remaining}} {{currency}}.',
   },
   bill: {
     request: 'Omba bili',
@@ -210,6 +214,8 @@ const lg = {
     starting: 'Ntandika okusasula…',
     request_created:
       'Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.',
+    paid: 'Kusasuddwa ({{amount}} {{currency}}) — webale.',
+    remaining: 'Wasasula dda {{paid}} {{currency}}, kati osasula ebisigaddeyo {{remaining}} {{currency}}.',
   },
   bill: {
     request: 'Saba bili',
@@ -291,6 +297,7 @@ const HARDCODED_GUEST_COPY = [
   'All Items',
   'Placing order',
   'Starting payment',
+  'Already paid',
   'Bill requested',
   'Start over?',
   'Start a new order?',

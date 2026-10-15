@@ -191,12 +191,15 @@ export interface PaymentRequestResult {
   currency: string
   payment_url: string | null
   status: string
+  paid_amount?: number
+  remaining_amount?: number
 }
 
 export interface PaymentStatusResult {
   status: string | null
   payment_request?: string
   amount?: number
+  payment_url?: string | null
 }
 
 export async function createPaymentRequest(session: string): Promise<PaymentRequestResult> {
