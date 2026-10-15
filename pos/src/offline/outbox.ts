@@ -143,7 +143,8 @@ export class OfflineOutbox {
       await save(entry);
     });
   }
-  async capture(order: OfflineOrder, total: number, clientId?: string): Promise<OfflineEntry> {
+  async capture(order: OfflineOrder, total: number, clientId?: string,
+    reserved?: { clientOrderId: string; roundId: string }): Promise<OfflineEntry> {
     this.allowed();
     if (order.invoice || order.last_invoice) throw new Error('Rounds on online orders are refused offline.');
     if (order.pos_profile !== this.options.profile.name) throw new Error('Offline order belongs to another profile.');
@@ -155,6 +156,10 @@ export class OfflineOutbox {
         request.onsuccess = () => { const id = request.result || uuid(); store.put(id, this.scope); result(id); };
       });
       const rows = await this.list();
+      if (!clientId && reserved?.clientOrderId) {
+        const same = rows.find((row) => row.client_order_id === reserved.clientOrderId);
+        if (same) return same;
+      }
       const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;
       if (clientId && (!previous || previous.outage_id !== outage || previous.state !== 'pending' || previous.next_round)) throw new Error('Extra rounds require an order from this same outage.');
       if (previous && (['customer', 'table', 'room', 'order_type', 'no_of_pax'] as const).some((key) => previous.order[key] !== order[key])) throw new Error('Extra rounds cannot change the order context, customer or table offline.');
@@ -162,9 +167,9 @@ export class OfflineOutbox {
       if (this.persistent === null) {
         try { this.persistent = await navigator.storage?.persist?.() || false; } catch { this.persistent = false; }
       }
-      const round: OfflineRound = { items: structuredClone(order.items), round_id: uuid(), captured_at: new Date().toISOString(), expected_total: total, offline_printed: 0 };
+      const round: OfflineRound = { items: structuredClone(order.items), round_id: (!previous && reserved?.roundId) || uuid(), captured_at: new Date().toISOString(), expected_total: total, offline_printed: 0 };
       const entry: OfflineEntry = previous || { owner: this.options.user.name, profile: this.options.profile.name,
-        client_order_id: uuid(), outage_id: outage, order: structuredClone(order), rounds: [], state: 'pending', next_round: 0, phase: 'order' };
+        client_order_id: reserved?.clientOrderId || uuid(), outage_id: outage, order: structuredClone(order), rounds: [], state: 'pending', next_round: 0, phase: 'order' };
       entry.rounds.push(round);
       await save(entry);
       if (await this.tryPrint(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
@@ -184,6 +189,43 @@ export class OfflineOutbox {
       if (tender.reference) entry.order.comments = [entry.order.comments, `Manual mobile-money reference: ${tender.reference.trim()}`].filter(Boolean).join('\n');
       await save(entry);
       entry.bill_printed = await this.tryPrint(entry, 'bill'); await save(entry);
+      return entry;
+    });
+  }
+
+  async queueGatewaySettlement(input: {
+    clientOrderId: string; roundId: string; invoice: string; customer?: string; table?: string | null;
+    cashier?: string; owner?: string; orderType?: string; settlement: OfflineSettlement;
+  }): Promise<OfflineEntry> {
+    this.allowed();
+    if (!['cash', 'mobile-money'].includes(input.settlement.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
+    if (input.settlement.kind === 'mobile-money' && !input.settlement.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
+    if (!Number.isFinite(input.settlement.amount) || input.settlement.amount < 0) throw new Error('Offline total must be a finite nonnegative amount.');
+    return exclusive(async () => {
+      const existing = (await this.list()).find((row) => row.client_order_id === input.clientOrderId);
+      if (existing) {
+        if (!existing.settlement) {
+          existing.settlement = { ...input.settlement, reference: input.settlement.reference?.trim() };
+          existing.bill_printed = true;
+          if (input.invoice) existing.server_invoice = existing.server_invoice || input.invoice;
+          await save(existing);
+        }
+        return existing;
+      }
+      const outage = await transaction<string>(['outages'], 'readwrite', (tx, result) => {
+        const store = tx.objectStore('outages'); const request = store.get(this.scope);
+        request.onsuccess = () => { const id = request.result || uuid(); store.put(id, this.scope); result(id); };
+      });
+      const entry: OfflineEntry = {
+        owner: this.options.user.name, profile: this.options.profile.name, client_order_id: input.clientOrderId,
+        outage_id: outage, state: 'pending', next_round: 1, phase: 'settle', server_invoice: input.invoice, bill_printed: true,
+        order: { pos_profile: this.options.profile.name, customer: input.customer, cashier: input.cashier, owner: input.owner,
+          waiter: this.options.user.name, items: [], no_of_pax: 1, invoice: null, last_invoice: null,
+          order_type: input.orderType || 'Take Away', table: input.table || undefined },
+        rounds: [{ round_id: input.roundId, items: [], captured_at: new Date().toISOString(), expected_total: input.settlement.amount, offline_printed: 1 }],
+        settlement: { ...input.settlement, reference: input.settlement.reference?.trim() },
+      };
+      await save(entry);
       return entry;
     });
   }

@@ -1,6 +1,8 @@
 import { logoutSession, clearAppStorage } from '@ury/core';
 import { t } from '../i18n';
-import { OfflineOutbox, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import { v4 as uuid } from 'uuid';
+import { OfflineOutbox, canCaptureOffline, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import { gatewayStatusOf } from './gateway';
 
 const queues = new WeakMap<OfflineProfile, WeakMap<OfflineUser, OfflineOutbox>>();
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
@@ -43,14 +45,66 @@ export function cashierOutbox(profile: OfflineProfile, user: OfflineUser): Offli
 }
 
 export async function submitOrderOfflineAware<T>({ profile, user, order, total, onlineSubmit, clientOrderId }:
-  { profile: OfflineProfile; user: OfflineUser; order: OfflineOrder; total: number; onlineSubmit: () => Promise<T>; clientOrderId?: string }) {
+  { profile: OfflineProfile; user: OfflineUser; order: OfflineOrder; total: number;
+    onlineSubmit: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>; clientOrderId?: string }) {
   const queue = cashierOutbox(profile, user);
   if (typeof navigator !== 'undefined' && navigator.onLine === false || !queue.reachable || clientOrderId) {
     const entry = await queue.capture(order, total, clientOrderId);
     return { offline: true as const, entry };
   }
-  // Do not turn an ambiguous lost live acknowledgement into a new offline order.
-  return { offline: false as const, response: await onlineSubmit() };
+  // The id goes out on the live write. A gateway timeout after the ERP saved
+  // the order is replayed with the same id, so the server returns that order.
+  const queueable = canCaptureOffline(profile, user) && !order.invoice && !order.last_invoice;
+  const ids = queueable ? { clientOrderId: uuid(), roundId: uuid() } : undefined;
+  try {
+    return { offline: false as const, response: await onlineSubmit(ids) };
+  } catch (error) {
+    if (!ids || !gatewayStatusOf(error)) throw error;
+    queue.reachable = false;
+    const entry = await queue.capture(order, total, undefined, ids);
+    return { offline: true as const, entry };
+  }
+}
+
+function offlineCashOrMobile(mode: string, reference?: string): OfflineSettlement['kind'] | null {
+  if (/^cash$/i.test(mode)) return 'cash';
+  if (/mobile.?money|momo|m-?pesa/i.test(mode) && !!reference?.trim()) return 'mobile-money';
+  return null;
+}
+
+export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
+  clientOrderId, amount, modeOfPayment, reference, discount, orderType, onlineSettle }: {
+  profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
+  cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; modeOfPayment: string;
+  reference?: string; discount?: number; orderType?: string;
+  onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
+}) {
+  const queue = cashierOutbox(profile, user);
+  const kind = offlineCashOrMobile(modeOfPayment, reference);
+  const queueable = !!kind && canCaptureOffline(profile, user) && !(discount && discount > 0);
+  if (!queueable) return { offline: false as const, response: await onlineSettle() };
+  const existing = clientOrderId
+    ? (await queue.list()).find((row) => row.client_order_id === clientOrderId && row.state === 'pending')
+    : undefined;
+  const ids = {
+    clientOrderId: existing?.client_order_id || clientOrderId || uuid(),
+    roundId: existing?.rounds[existing.rounds.length - 1]?.round_id || uuid(),
+  };
+  try {
+    return { offline: false as const, response: await onlineSettle(ids) };
+  } catch (error) {
+    if (!gatewayStatusOf(error)) throw error;
+    queue.reachable = false;
+    const settlement: OfflineSettlement = { kind: kind!, mode_of_payment: modeOfPayment, amount, reference };
+    if (existing && !existing.settlement && !existing.next_round) {
+      const entry = await queue.settle(existing.client_order_id, settlement);
+      return { offline: true as const, entry };
+    }
+    const entry = await queue.queueGatewaySettlement({
+      clientOrderId: ids.clientOrderId, roundId: ids.roundId, invoice, customer, table, cashier, owner, orderType, settlement,
+    });
+    return { offline: true as const, entry };
+  }
 }
 
 export const settleOfflineOrder = ({ profile, user, clientOrderId, kind, modeOfPayment, amount, reference }:

@@ -21,6 +21,8 @@ beforeEach(async () => {
   vi.stubGlobal('indexedDB', new IDBFactory());
   vi.stubGlobal('navigator', { onLine: true, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });
   vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write: vi.fn(), close: vi.fn() }, focus: vi.fn(), print: vi.fn(), opener: null }) as any);
+  const { cashierOutbox } = await import('../src/offline/cashier');
+  cashierOutbox(profile, user).reachable = true;
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 

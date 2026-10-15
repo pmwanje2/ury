@@ -92,9 +92,10 @@ test.each([502, 503, 504, 520, 521, 522, 523, 524])(
 );
 
 test('a gateway 502 for the POS shell falls back to the cached shell', async () => {
-  await (await storage.open('ury-pos-shell')).put(ORIGIN + '/pos', ownedResponse('cached shell', 'alice@ury.com'));
   vi.stubGlobal('fetch', reply(502, 'bad gateway'));
   const { get } = await worker();
+  // Bind purges caches, so the shell entry has to be stored after it.
+  await (await storage.open('ury-pos-shell')).put(ORIGIN + '/pos', ownedResponse('cached shell', 'alice@ury.com'));
   const response = await get(ORIGIN + '/pos');
   expect(response.status).toBe(200);
   expect(await response.text()).toBe('cached shell');

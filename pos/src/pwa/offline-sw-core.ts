@@ -2,6 +2,7 @@ import { Route } from "workbox-routing";
 import { NetworkFirst } from "workbox-strategies";
 import type { WorkboxPlugin } from "workbox-core/types.js";
 import { matchOfflineRequest, READ_CACHE, SHELL_CACHE } from "./runtime-caching";
+import { isGatewayUnreachableStatus } from "../offline/gateway";
 
 export const SESSION_CACHE = "ury-pos-session";
 export const BIND_SESSION = "URY_BIND_SESSION";
@@ -109,12 +110,18 @@ export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
     fetchDidSucceed: async ({ response }) => {
       // The server answered for this session: never serve its cache again.
       if (response.status === 401 || response.status === 403) await endSession();
+      // A live proxy can answer 502/503/504/520-524 while the ERP is down.
+      // That is the same as fetch rejecting. 4xx and 500 stay the answer.
+      if (isGatewayUnreachableStatus(response.status)) {
+        throw new TypeError(`Gateway unreachable (${response.status})`);
+      }
       return response;
     },
   };
 
   // No networkTimeoutSeconds: a timeout would race the cache against a slow
-  // 401/403. The cache is used only when the fetch rejects (no HTTP answer).
+  // 401/403. The cache is used when fetch rejects, and when the proxy answers
+  // 502/503/504/520-524. Any other HTTP status is returned as-is.
   const routes = [READ_CACHE, SHELL_CACHE].map((cacheName) => new Route(
     ({ url, request }) => matchOfflineRequest(url, request.method, origin) === cacheName,
     new NetworkFirst({ cacheName, plugins: [sessionPlugin, trimPlugin(cacheName)] }),
