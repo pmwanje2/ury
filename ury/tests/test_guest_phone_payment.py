@@ -205,6 +205,64 @@ class TestGuestPhonePayment(unittest.TestCase):
         self.assertEqual([(p.mode_of_payment, p.amount) for p in saved.payments],
             [("P2 Phone", 100), ("Cash", 100)])
 
+    def integration(self, request, status):
+        frappe.set_user("Administrator")
+        doc = frappe.get_doc({"doctype": "Integration Request", "integration_request_service": "P2 Test",
+            "reference_doctype": "Payment Request", "reference_docname": request,
+            "status": status, "data": "{}"}).insert(ignore_permissions=True)
+        frappe.set_user("Guest")
+        return doc.name
+
+    def test_growth_keeps_request_whose_checkout_is_queued(self):
+        first = self.request()
+        ir = self.integration(first["payment_request"], "Queued")
+        self.grow_order()
+        again = self.request()
+        self.assertEqual((again["payment_request"], again["payment_url"], again["amount"], again["status"]),
+            (first["payment_request"], first["payment_url"], 100, "Requested"))
+        self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"],
+            ["docstatus", "status"]), (1, "Requested"))
+        self.assertEqual(frappe.db.get_value("Integration Request", ir, "status"), "Queued")
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+
+    def test_growth_replaces_request_whose_checkout_failed(self):
+        first = self.request()
+        self.integration(first["payment_request"], "Failed")
+        self.grow_order()
+        replacement = self.request()
+        self.assertEqual(replacement["amount"], 200)
+        self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"], "docstatus"), 2)
+
+    def test_processed_checkout_refuses_with_plain_guest_message(self):
+        first = self.request()
+        self.integration(first["payment_request"], "Authorized")
+        self.grow_order()
+        with self.assertRaises(frappe.ValidationError) as raised:
+            create_payment_request(self.token)
+        self.assertIn("A payment for this order is already in progress", str(raised.exception))
+        self.assertNotIn("Another Payment Request", str(raised.exception))
+        self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"], "docstatus"), 1)
+        self.assertEqual(frappe.session.user, "Guest")
+
+    def test_guest_never_cancels_cashier_pos_request(self):
+        from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+
+        frappe.set_user("Administrator")
+        invoice = frappe.get_doc("POS Invoice", self.invoice_name)
+        invoice.append("payments", {"mode_of_payment": "P2 Phone", "amount": 100})
+        invoice.save()
+        cashier = make_payment_request(dt="POS Invoice", dn=self.invoice_name, submit_doc=1,
+            payment_gateway_account=self.gateway.name, mode_of_payment="P2 Phone", return_doc=1)
+        cashier.db_set("owner", self.pos.user.name)
+        frappe.set_user("Guest")
+        self.grow_order()
+        with self.assertRaises(frappe.ValidationError) as raised:
+            create_payment_request(self.token)
+        self.assertIn("A payment for this order is already in progress", str(raised.exception))
+        self.assertEqual(frappe.db.get_value("Payment Request", cashier.name, ["docstatus", "status"]),
+            (1, "Requested"))
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+
     def test_paid_phone_request_blocks_second_gateway_after_default_changes(self):
         first = self.request()
         self.mark_paid(first["payment_request"])
