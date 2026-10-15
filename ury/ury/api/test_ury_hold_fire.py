@@ -37,12 +37,13 @@ class HoldFireTests(OrderingCases, TestCase):
         self.assertEqual(field, "items")
         row = Row(**data)
         row.name = data.get("name") or f"row-{len(self.invoice.items) + 1}"
+        row.amount = row.qty * row.rate
         self.invoice.items.append(row)
         return row
 
     def row(self, name="held-1", held=1, qty=1, note="no onions", code="Fish", course="Main"):
         row = Row(name=name, item_code=code, item_name=code, qty=qty, comment=note,
-                  ury_held=held, custom_course=course, rate=100)
+                  ury_held=held, custom_course=course, rate=100, amount=qty * 100)
         self.invoice.items.append(row)
         return row
 
@@ -211,6 +212,7 @@ class HoldFireTests(OrderingCases, TestCase):
 
     def test_guest_addition_does_not_release_existing_held_items(self):
         self.row()
+        self.framework.session.user = "Guest"
         self.add(code="Tea")
         self.assertEqual(self.ticket_lines(), [("Tea", 1, "")])
         self.assertEqual(self.invoice.items[0].ury_held, 1)
