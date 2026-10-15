@@ -60,40 +60,68 @@ browser captures below.
 
 ## Disposable native browser proof
 
-Recaptured on the owner-tag worker (`f3defd84` build) in a fresh unique
-Compose project **`ury-fu-8wgwxq`**, site `ury.localhost`, published only as
-`127.0.0.1:18842 -> 8000/tcp`, subnet `10.254.19.0/24`. Image
-`frappe/erpnext:v16.50.0`. The served `/sw.js` contained the owner header.
-Synthetic cashier users only: `offline-5879c281@example.com` (dish Alice
-Pepper Soup, profile `Offline Till 5879c281`) and
-`offline-1e9d89c7@example.com` (dish Bob House Broth). No production site was
-used.
+All images are from benches built from code `f3defd84` (the owner-tag worker).
+Each bench was a unique Compose project with site `ury.localhost`, image
+`frappe/erpnext:v16.50.0`, published only on 127.0.0.1, with synthetic cashier
+users only. No production site was used.
 
-The same Chrome profile loaded Alice's till online. The controlling worker was
-`/sw.js`. `ury-pos-reads` held `getRestaurantMenu` for her till, including
-Alice Pepper Soup. That entry and the `/pos` shell were tagged with
-`X-Ury-Pos-Owner: offline-5879c281@example.com`.
+| Image | Build | Bench | User |
+| --- | --- | --- | --- |
+| `alice-cached-menu.png` | code `f3defd84`, tree `ffab6774` | `ury-fu-akp8ym` (127.0.0.1:18843) | `offline-9453c667@example.com` |
+| `bob-offline-no-alice-menu.png` | code `f3defd84`, tree `ffab6774` | `ury-fu-akp8ym` (127.0.0.1:18843) | `offline-d61d8f48@example.com` |
+| `alice-offline-own-menu.png` | code `f3defd84` | `ury-fu-8wgwxq` (127.0.0.1:18842) | `offline-5879c281@example.com` |
+| `same-outage-extra-round.png` | code `f3defd84` | `ury-fu-8wgwxq` (127.0.0.1:18842) | `offline-5879c281@example.com` |
 
-Alice online, her dish visible:
+### Labelled Alice/Bob recapture (`ury-fu-akp8ym`)
+
+The first two screenshots in the `ury-fu-8wgwxq` run were byte-identical to the
+`318d4172` capture. Headless Chrome renders the same screen to the same bytes,
+and neither screen shows anything build- or user-specific. They were therefore
+recaptured on a fresh bench, `ury-fu-akp8ym` (subnet `10.254.20.0/24`). It was
+built from tree `ffab6774`, whose code equals `f3defd84` (only docs changed
+since). The bench served `/sw.js` with sha256
+`9b7e6b087aedf9921b3e93a2e3888fdc3e83bfc2a86b7046ec428d2898a51c3e`, matching the
+local build. Each image has a caption strip added below the unchanged
+1440x1000 app screen. The strip shows the build, bench, signed-in user,
+scenario, and UTC capture time.
+
+| Image | sha256 before (`318d4172` capture) | sha256 now |
+| --- | --- | --- |
+| `alice-cached-menu.png` | `77c10552d156c135f96286b902be5ca1f0f0d2382d568ab7b7eb620b4ebe5909` | `7ffec4111c7025cb8b5a96c41b45b41d6ccdd7ca322d34568386b399edbce117` |
+| `bob-offline-no-alice-menu.png` | `8d5073d29f5bc5e28879021cd88aba5d964011075a9c884024877e899085547f` | `0d2f2751287d92dfaa36167dbf6cdf3fd3cb114d1b01954baeb25c1a4edfef58` |
+
+Alice (`offline-9453c667@example.com`, profile `Offline Till 9453c667`) loaded
+her till online in a fresh Chrome profile. The controlling worker was `/sw.js`.
+`ury-pos-reads` held `getRestaurantMenu` for her till, including Alice Pepper
+Soup. That entry and the `/pos` shell were tagged
+`X-Ury-Pos-Owner: offline-9453c667@example.com`.
+
+Alice online, her dish cached under her owner tag (code `f3defd84`):
 
 ![Alice cached menu](alice-cached-menu.png?raw=true)
 
-With the network off, Alice reloaded and still got her own menu from her own
-cache. The owner rule does not break offline reload for the signed-in owner.
+The session cookie was then switched to Bob (`offline-d61d8f48@example.com`)
+with no client cache purge, and the browser was taken offline before reload.
+Bob's screen does not show Alice Pepper Soup. The offline session record is
+Bob. `ury-pos-reads` no longer contains Alice's dish. Every remaining read and
+the shell are tagged for Bob: his payment, POS profile, and profile document
+reads. The till itself reports that the POS session could not be opened,
+which is the offline session-status failure, not Alice's menu.
 
-![Alice offline sees her own menu](alice-offline-own-menu.png?raw=true)
-
-The session cookie was then switched to Bob with no client cache purge, and the
-browser was taken offline before reload. Bob's screen does not show Alice
-Pepper Soup. The offline session record is Bob. `ury-pos-reads` no longer
-contains Alice's dish. Every remaining read and the shell are tagged for Bob:
-his payment, POS profile, and profile document reads. The till itself reports
-that the POS session could not be opened, which is the offline session-status
-failure, not Alice's menu.
-
-Bob offline, Alice's dish absent:
+Bob offline, Alice's dish absent (code `f3defd84`):
 
 ![Bob offline does not see Alice menu](bob-offline-no-alice-menu.png?raw=true)
+
+### Owner offline reload and outage id (`ury-fu-8wgwxq`)
+
+Bench `ury-fu-8wgwxq` (127.0.0.1:18842, subnet `10.254.19.0/24`) was built from
+code `f3defd84`. Alice (`offline-5879c281@example.com`) reloaded with the network
+off and still got her own menu from her own cache. The owner rule does not
+break offline reload for the signed-in owner.
+
+Alice offline, her own menu (code `f3defd84`):
+
+![Alice offline sees her own menu](alice-offline-own-menu.png?raw=true)
 
 For the outage id, Alice captured one offline order (total 100, one pending).
 Network was restored and the in-flight `sync_order` was failed, standing in for
@@ -104,28 +132,36 @@ outage `475dd9c6-20cd-4913-9a5d-9e8dd1b1af21`, two rounds, total 200. Two
 Total 200, and "Order captured offline." It does not show a different-outage
 refusal. Chrome did not grant persistent storage; the banner says so.
 
-Same outage after the lost sync:
+Same outage after the lost sync (code `f3defd84`):
 
 ![Same outage extra round](same-outage-extra-round.png?raw=true)
 
-Trimmed capture, without cache bodies or credentials:
+Trimmed capture for both benches, without cache bodies or credentials:
 [browser-proof.json](browser-proof.json).
+
+## Operating notes (non-blocking)
+
+- The owner tag relies on Frappe's `user_id` cookie, which is not HttpOnly.
+  It prevents one user's cached POS data being shown to the next signed-in
+  user by accident. It is not a defence against script running on the device:
+  such script can read the cookie and Cache Storage directly.
+- Shared tills must sign out with POS Logout, which purges the URY caches and
+  unregisters the worker. They must run a locked-down kiosk browser profile.
+- Tills must run Chrome or Edge 87 or later. The worker reads the cookie
+  through the Cookie Store API in service workers. Without that API it fails
+  closed: it serves nothing from cache, so offline reload does not work.
 
 ## Cleanup
 
 After each capture, `docker compose -p <project> -f <lab>/compose.yaml down --volumes --remove-orphans`
 removed that project's containers, `db`/`sites`/`logs` volumes, and network,
-for the first capture `ury-fu-q4n8kd` and the recapture `ury-fu-8wgwxq`.
+for `ury-fu-q4n8kd`, `ury-fu-8wgwxq` and `ury-fu-akp8ym`.
 Exact-project container, volume, and network queries were empty. The synthetic
 databases are discarded with those volumes. Each host lab directory, including
 its Chrome profiles, was moved to the local trash as
-`ury-fu-q4n8kd-20261015` and `ury-fu-8wgwxq-20261015`. Neither is a running
-bench. No shared Docker resources were pruned.
-
-Browser note: the worker reads the `user_id` cookie through the Cookie Store
-API (Chrome 87+, the tills' browser). Where that API is missing, the worker
-serves nothing from cache, so offline reload is unavailable but isolation
-holds.
+`ury-fu-q4n8kd-20261015`, `ury-fu-8wgwxq-20261015` and
+`ury-fu-akp8ym-20261015`. None is a running bench. No shared Docker resources
+were pruned.
 
 CANNOT-VERIFY: production deployment, a physical printer, and a real Cloudflare
 or mobile-money provider. Hosted CI is reported on the draft PR, not inferred

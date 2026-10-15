@@ -1,66 +1,80 @@
 {
-  "bench": {
-    "project": "ury-fu-8wgwxq",
-    "site": "ury.localhost",
-    "publish": "127.0.0.1:18842",
-    "image": "frappe/erpnext:v16.50.0",
-    "code": "f3defd84"
-  },
-  "bind": {
-    "ok": true,
-    "aliceUser": "offline-5879c281@example.com",
+  "labelledRecapture": {
+    "bench": {
+      "project": "ury-fu-akp8ym",
+      "site": "ury.localhost",
+      "publish": "127.0.0.1:18843",
+      "image": "frappe/erpnext:v16.50.0",
+      "code": "f3defd84",
+      "tree": "ffab6774",
+      "swSha256": "9b7e6b087aedf9921b3e93a2e3888fdc3e83bfc2a86b7046ec428d2898a51c3e"
+    },
+    "images": {
+      "alice-cached-menu.png": "code f3defd84 (tree ffab6774) | bench ury-fu-akp8ym | offline-9453c667@example.com | online, menu cached with owner tag | 2026-10-15T00:34:52.283Z",
+      "bob-offline-no-alice-menu.png": "code f3defd84 (tree ffab6774) | bench ury-fu-akp8ym | offline-d61d8f48@example.com | offline reload after cookie switch, no client purge | 2026-10-15T00:34:55.626Z"
+    },
+    "aliceUser": "offline-9453c667@example.com",
     "aliceDish": "Alice Pepper Soup",
-    "aliceMenuOwner": "offline-5879c281@example.com",
-    "aliceOfflineSawOwnDish": true,
     "aliceCacheOwners": [
       {
         "cache": "ury-pos-reads",
-        "path": "/api/method/ury.ury_pos.api.getRestaurantMenu?pos_profile=Offline+Till+5879c281&order_type=Take+Away",
-        "owner": "offline-5879c281@example.com"
+        "path": "/api/method/ury.ury_pos.api.getRestaurantMenu?pos_profile=Offline+Till+9453c667&order_type=Take+Away",
+        "owner": "offline-9453c667@example.com"
       },
       {
         "cache": "ury-pos-shell",
         "path": "/pos",
-        "owner": "offline-5879c281@example.com"
+        "owner": "offline-9453c667@example.com"
       }
     ],
-    "bobUser": "offline-1e9d89c7@example.com",
+    "bobUser": "offline-d61d8f48@example.com",
     "bobScreenShowsAliceDish": false,
     "bobCacheContainsAliceDish": false,
     "bobCacheOwners": [
       {
         "cache": "ury-pos-reads",
         "path": "/api/method/ury.ury_pos.api.getModeOfPayment",
-        "owner": "offline-1e9d89c7@example.com"
+        "owner": "offline-d61d8f48@example.com"
       },
       {
         "cache": "ury-pos-reads",
         "path": "/api/method/ury.ury_pos.api.getPosProfile",
-        "owner": "offline-1e9d89c7@example.com"
+        "owner": "offline-d61d8f48@example.com"
       },
       {
         "cache": "ury-pos-reads",
-        "path": "/api/resource/POS%20Profile/Offline%20Till%201e9d89c7",
-        "owner": "offline-1e9d89c7@example.com"
+        "path": "/api/resource/POS%20Profile/Offline%20Till%20d61d8f48",
+        "owner": "offline-d61d8f48@example.com"
       },
       {
         "cache": "ury-pos-shell",
         "path": "/pos",
-        "owner": "offline-1e9d89c7@example.com"
+        "owner": "offline-d61d8f48@example.com"
       }
     ]
   },
-  "outage": {
-    "ok": true,
-    "selected": "Offline Guest 5879c281 \u00b7 fae4d4ef",
-    "syncOrderFailures": 2,
-    "row": {
-      "id": "fae4d4ef-6a98-41dd-83d0-11f0ac5f12c6",
-      "outage": "475dd9c6-20cd-4913-9a5d-9e8dd1b1af21",
-      "rounds": 2,
-      "state": "pending",
-      "total": 200
+  "ownerOfflineAndOutage": {
+    "bench": {
+      "project": "ury-fu-8wgwxq",
+      "site": "ury.localhost",
+      "publish": "127.0.0.1:18842",
+      "image": "frappe/erpnext:v16.50.0",
+      "code": "f3defd84"
     },
-    "screen": "Offline capture, 1 pending, Total 200, order captured offline"
+    "aliceOfflineSawOwnDish": true,
+    "aliceUser": "offline-5879c281@example.com",
+    "outage": {
+      "ok": true,
+      "selected": "Offline Guest 5879c281 \u00b7 fae4d4ef",
+      "syncOrderFailures": 2,
+      "row": {
+        "id": "fae4d4ef-6a98-41dd-83d0-11f0ac5f12c6",
+        "outage": "475dd9c6-20cd-4913-9a5d-9e8dd1b1af21",
+        "rounds": 2,
+        "state": "pending",
+        "total": 200
+      },
+      "screen": "Offline capture, 1 pending, Total 200, order captured offline"
+    }
   }
 }
