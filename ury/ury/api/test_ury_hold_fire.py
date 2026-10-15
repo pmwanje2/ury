@@ -69,6 +69,31 @@ class HoldFireTests(OrderingCases, TestCase):
         self.assertEqual(self.invoice.waiter, "waiter@example.com")
         self.assertEqual(self.ticket_lines(), [])
 
+    def reload_stored_pricing(self):
+        self.invoice.selling_price_list = "Stored Price List"
+        self.invoice.taxes_and_charges = "Stored Tax"
+        return self.invoice
+
+    def test_lock_reload_preserves_native_resolved_menu_price_and_tax_on_sync(self):
+        # get_order_invoice resolves current menu price/tax in memory before
+        # returning; the stored invoice can still carry the previous menu.
+        self.invoice.selling_price_list = "Resolved Menu Price List"
+        self.invoice.taxes_and_charges = "Resolved Menu Tax"
+        self.invoice.reload.side_effect = self.reload_stored_pricing
+        self.sync([self.request()])
+        price_queries = [call.kwargs["filters"]["price_list"] for call in self.framework.db.get_list.call_args_list
+                         if call.args[0] == "Item Price"]
+        self.assertEqual(price_queries, ["Resolved Menu Price List"])
+        self.assertEqual(self.invoice.taxes_and_charges, "Resolved Menu Tax")
+
+    def test_lock_reload_preserves_native_resolved_tax_for_normal_settlement(self):
+        self.row("sent", held=0)
+        self.invoice.selling_price_list = "Resolved Menu Price List"
+        self.invoice.taxes_and_charges = "Resolved Menu Tax"
+        self.invoice.reload.side_effect = self.reload_stored_pricing
+        self.order.make_invoice("Walk-in", [], "untrusted", "POS A", "untrusted", invoice=self.invoice.name)
+        self.assertEqual(self.invoice.taxes_and_charges, "Resolved Menu Tax")
+
     def test_hold_and_fire_default_off_refuses_hold(self):
         self.pos_profile.ury_enable_hold_fire = 0
         with self.assertRaisesRegex(ValueError, "URY_HOLD_DISABLED"):
