@@ -17,8 +17,9 @@ async function messageControllingWorker(user: string | null): Promise<void> {
   await tellOfflineWorker(controller, { type: "URY_BIND_SESSION", user });
 }
 
-// The controlling worker still has the previous user's reads until this ack.
-// Boot must wait before the first menu or profile read.
+// Isolation does not depend on this ack: the worker serves a cached read only
+// when its owner tag is the user in the user_id cookie. Waiting (bounded) lets
+// the first reads be stored for the new user once the worker is bound.
 export function bindOfflineUser(user?: string | null): Promise<void> {
   const key = user ?? null;
   if (binding?.user === key) return binding.promise;

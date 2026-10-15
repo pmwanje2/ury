@@ -6,6 +6,7 @@ import { matchOfflineRequest, READ_CACHE, SHELL_CACHE } from "./runtime-caching"
 export const SESSION_CACHE = "ury-pos-session";
 export const BIND_SESSION = "URY_BIND_SESSION";
 export const END_SESSION = "URY_END_SESSION";
+export const OWNER_HEADER = "X-Ury-Pos-Owner";
 
 export interface OfflineWorkerOptions {
   origin: string;
@@ -32,6 +33,24 @@ function trimPlugin(cacheName: string): WorkboxPlugin {
 
 function usableUser(value: unknown): string | null {
   return typeof value === "string" && value !== "" && value !== "Guest" ? value : null;
+}
+
+// The browser's signed-in user from Frappe's user_id cookie. Unreadable or
+// absent means no user, and then nothing is served from or stored in cache.
+async function signedInUser(): Promise<string | null> {
+  const store = (self as unknown as { cookieStore?: { get(name: string): Promise<{ value?: string } | null> } }).cookieStore;
+  try {
+    const cookie = await store?.get("user_id");
+    return cookie?.value ? usableUser(decodeURIComponent(cookie.value)) : null;
+  } catch {
+    return null;
+  }
+}
+
+function ownedBy(response: Response, owner: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set(OWNER_HEADER, owner);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
@@ -66,16 +85,22 @@ export function createOfflineWorker({ origin }: OfflineWorkerOptions) {
   const sessionPlugin: WorkboxPlugin = {
     handlerWillStart: async ({ state }) => {
       await ready;
+      const user = await signedInUser();
       if (state) {
         state.generation = session.generation;
-        state.user = session.user;
+        // Serve and store only for the signed-in user, and store only once the
+        // worker is bound to that same user. Client timing cannot widen this.
+        state.user = user;
+        state.store = user !== null && user === session.user;
       }
     },
     cachedResponseWillBeUsed: async ({ cachedResponse, state }) => (
-      state?.user && state.generation === session.generation ? cachedResponse ?? null : null
+      cachedResponse && state?.user && state.generation === session.generation
+        && cachedResponse.headers.get(OWNER_HEADER) === state.user ? cachedResponse : null
     ),
     cacheWillUpdate: async ({ response, state }) => (
-      response.status === 200 && state?.user && state.generation === session.generation ? response : null
+      response.status === 200 && state?.store && state.generation === session.generation
+        ? ownedBy(response, state.user as string) : null
     ),
     cacheDidUpdate: async ({ cacheName, state }) => {
       // Sign-out landed between the check above and the write.
