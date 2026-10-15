@@ -87,11 +87,16 @@
                 >Switch To Desk
               </a>
               <a
+                v-if="!this.auth.pinSession"
                 href="/update-password"
                 class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
               >
-                Change my PIN
+                Change my password
               </a>
+              <template v-if="canManagePins">
+                <button type="button" class="block min-h-[44px] w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100" @click="pairing = true">Pair this tablet</button>
+                <button type="button" class="block min-h-[44px] w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100" @click="staffPins = true">Staff PINs</button>
+              </template>
               <div class="border-t border-gray-200"></div>
               <button
                 type="button"
@@ -109,6 +114,17 @@
 
     <!-- Spacer for Fixed Header -->
     <div class="h-16 sm:h-20"></div>
+    <StaffPins v-if="staffPins && canManagePins" @close="staffPins = false" />
+    <div v-if="pairing && canManagePins" class="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Pair this tablet">
+      <form class="w-full max-w-md space-y-4 rounded-lg bg-white p-6 shadow-xl" @submit.prevent="pairTablet">
+        <h2 class="text-2xl font-semibold">Pair this tablet</h2>
+        <label for="tablet_label" class="block text-sm text-gray-700">Tablet label</label>
+        <input id="tablet_label" v-model="tabletLabel" name="tablet_label" required maxlength="80" class="w-full rounded-md border p-3" placeholder="Floor tablet 1" />
+        <p v-if="pairError" role="alert" class="text-sm text-red-700">{{ pairError }}</p>
+        <button type="submit" :disabled="pairBusy" class="min-h-[44px] w-full rounded-md bg-blue-600 p-3 text-white">Pair tablet</button>
+        <button type="button" class="min-h-[44px] w-full p-3" @click="pairing = false">Cancel</button>
+      </form>
+    </div>
   </div>
 </template>
 
@@ -120,9 +136,12 @@ import uriPosImage from "@/assets/logos/URY_POS.jpg";
 import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import { tabFunctions } from "@/stores/bottomTabs.js";
 import { useTableStore } from "@/stores/Table.js";
+import { useInvoiceDataStore } from "@/stores/invoiceData.js";
+import StaffPins from './StaffPins.vue';
 
 export default {
   name: "Header",
+  components: { StaffPins },
   setup() {
     const auth = useAuthStore();
     const posOpen = posOpening();
@@ -130,14 +149,36 @@ export default {
     const tabClick = tabFunctions();
     const table = useTableStore();
 
-    return { auth, posOpen, posClose, tabClick, table };
+    return { auth, posOpen, posClose, tabClick, table, invoice: useInvoiceDataStore() };
   },
   data() {
     return {
       brand: resolveBrand({ name: "URY POS logo", logo: uriPosImage }),
+      canManagePins: false, pairing: false, staffPins: false, tabletLabel: '', pairError: '', pairBusy: false,
     };
   },
+  watch: {
+    'invoice.posProfile': { immediate: true, handler: 'checkPinPermission' },
+  },
   methods: {
+    async checkPinPermission() {
+      this.canManagePins = false;
+      if (!this.invoice.posProfile) return;
+      try {
+        const { message } = await this.auth.call.get('frappe.client.has_permission', {
+          doctype: 'POS Profile', docname: this.invoice.posProfile, perm_type: 'write',
+        });
+        this.canManagePins = message.has_permission === true;
+      } catch (_error) { /* Native permission lookup fails closed. */ }
+    },
+    async pairTablet() {
+      this.pairBusy = true; this.pairError = '';
+      try {
+        await this.auth.call.post('ury.ury_pos.floor_pin.pair_device', { pos_profile: this.invoice.posProfile, label: this.tabletLabel });
+        this.pairing = false;
+      } catch (_error) { this.pairError = 'This tablet could not be paired. Check PIN sign-in is enabled.'; }
+      finally { this.pairBusy = false; }
+    },
     reload() {
       window.location.reload();
     },

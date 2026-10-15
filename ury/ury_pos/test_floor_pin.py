@@ -348,7 +348,7 @@ class TestFloorPin(unittest.TestCase):
 			page = importlib.util.module_from_spec(spec)
 			spec.loader.exec_module(page)
 			self.assertEqual(page.get_context({}).get("floor_pad"), {"paired": True, "till_open": True})
-			self.frappe.db.exists.return_value = False
+			self.frappe.db.exists.side_effect = lambda dt, filters: dt != "POS Opening Entry"
 			self.assertEqual(page.get_context({}).get("floor_pad"), {"paired": True, "till_open": False})
 			self.frappe.request.cookies.clear()
 			self.assertEqual(page.get_context({}).get("floor_pad"), {"paired": False, "till_open": False})
