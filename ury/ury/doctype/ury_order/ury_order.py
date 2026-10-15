@@ -1817,7 +1817,7 @@ def sync_order(
     menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
 
     priced_items = price_items_for_invoice(items, price_list, pos_profile, invoice.branch, menu)
-    for source, item_dict in zip(items, priced_items):
+    for source, item_dict in zip(items, priced_items, strict=True):
         if source.get("name"):
             item_dict["name"] = source["name"]
         item_dict["ury_held"] = cint(source.get("ury_held"))

@@ -307,17 +307,17 @@ def get_custom_fields():
 
 		"POS Profile": [
 			{
+				"fieldname": "restaurant_info",
+				"fieldtype": "Section Break",
+				"label": "Restaurant Info",
+				"insert_after": "company_address",
+			},
+			{
 				"fieldname": "ury_enable_hold_fire",
 				"fieldtype": "Check",
 				"label": "Enable Hold and Fire",
 				"default": "0",
 				"insert_after": "restaurant_info",
-			},
-			{
-				"fieldname": "restaurant_info",
-				"fieldtype": "Section Break",
-				"label": "Restaurant Info",
-				"insert_after": "company_address",
 			},
 			{
 				"fieldname": "restaurant",
