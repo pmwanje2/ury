@@ -196,6 +196,33 @@ describe('offline opening fallback', () => {
     expect(container.textContent).not.toContain('POS workspace');
   });
 
+
+  it.each([502, 503, 504, 520, 524])('HTTP %i on the opening check keeps the confirmed opening', async (code) => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    await confirmOnline();
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkHttpFailure(code));
+    await render();
+    expect(container.textContent).toContain('POS workspace');
+  });
+
+  it('HTTP 500 on the opening check is not treated as offline', async () => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    await confirmOnline();
+    vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkHttpFailure(500));
+    await render();
+    expect(container.textContent).not.toContain('POS workspace');
+  });
+
+  it('a gateway 502 on the opening checklist keeps the confirmed opening', async () => {
+    (state.profile as Record<string, unknown>).ury_offline_capture = 1;
+    await confirmOnline();
+    vi.mocked(checkPOSOpening).mockResolvedValue({ message: [opening] });
+    vi.mocked(getChecklist).mockRejectedValue(await realSdkHttpFailure(502));
+    await render();
+    expect(container.textContent).toContain('POS workspace');
+    expect(container.textContent).not.toContain('Please complete the checklist');
+  });
+
   it('sign-out forgets the confirmed opening', async () => {
     (state.profile as Record<string, unknown>).ury_offline_capture = 1;
     await confirmOnline();
