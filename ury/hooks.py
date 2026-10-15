@@ -203,7 +203,7 @@ doc_events = {
         },
     "URY Menu Course": {
 		"validate": "ury.ury.api.ury_menu_course_validation.validate_priority",
-	}    
+    }
 }
 
 # Scheduled Tasks
@@ -402,6 +402,10 @@ fixtures = [
                     "POS Profile-custom_floor_idle_signout_seconds",
                     "POS Profile-custom_floor_signout_after_send",
                     "POS Profile-custom_floor_stay_signed_in_roles",
+                    "User-custom_floor_pin_hash",
+                    "POS Profile-custom_floor_pin_login",
+                    "POS Profile-custom_floor_pin_roles",
+                    "POS Profile-custom_floor_device_epoch",
                     "POS Profile-custom_checklist_items",
                     "POS Profile-paid_limit",
                     "POS Profile-table_attention_time",

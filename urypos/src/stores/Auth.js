@@ -14,20 +14,6 @@ import { watchIdle } from "../../../packages/core/src/idle.ts";
 
 axios.defaults.baseURL = frappe.url;
 
-const RECENT_WAITERS_KEY = "ury_recent_waiters";
-
-function readRecentWaiters() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(RECENT_WAITERS_KEY) || "[]");
-    return Array.isArray(stored)
-      ? stored.filter((waiter) => waiter && typeof waiter.username === "string" && typeof waiter.displayName === "string")
-        .map(({ username, displayName }) => ({ username, displayName })).slice(0, 6)
-      : [];
-  } catch (_error) {
-    return [];
-  }
-}
-
 export const useAuthStore = defineStore("auth", {
   state: () => ({
     userId: "",
@@ -56,7 +42,7 @@ export const useAuthStore = defineStore("auth", {
     invoiceData: useInvoiceDataStore(),
     userAuth: localStorage.getItem("userAuth"),
     idleStop: null,
-    recentWaiters: readRecentWaiters(),
+    pinSession: sessionStorage.getItem("ury_floor_pin_session") === "true",
   }),
   getters: {
     isAuthenticated(state) {
@@ -70,14 +56,12 @@ export const useAuthStore = defineStore("auth", {
     //Login
     async login() {
       try {
-        const response = await this.auth.loginWithUsernamePassword({
+        await this.auth.loginWithUsernamePassword({
           username: this.userId,
           password: this.currentPassword,
         });
-        this.rememberRecentWaiter(
-          this.userId,
-          response.full_name || this.userId
-        );
+        this.pinSession = false;
+        sessionStorage.removeItem("ury_floor_pin_session");
         this.userAuth = true;
         localStorage.setItem("userAuth", "true");
         this.currentPassword = "";
@@ -88,16 +72,14 @@ export const useAuthStore = defineStore("auth", {
         this.currentPassword = "";
       }
     },
-    rememberRecentWaiter(username, displayName) {
-      if (!username) return;
-      const waiters = readRecentWaiters().filter((waiter) => waiter.username !== username);
-      waiters.unshift({ username, displayName: displayName || username });
-      this.recentWaiters = waiters.slice(0, 6);
-      localStorage.setItem(RECENT_WAITERS_KEY, JSON.stringify(this.recentWaiters));
-    },
-    selectRecentWaiter(waiter) {
-      this.userId = waiter.username;
-      this.currentPassword = "";
+    async pinSignIn(pin) {
+      const { message } = await this.call.post("ury.ury_pos.floor_pin.sign_in", { pin });
+      window.csrf_token = message.csrf_token;
+      this.pinSession = true;
+      sessionStorage.setItem("ury_floor_pin_session", "true");
+      this.userAuth = true;
+      localStorage.setItem("userAuth", "true");
+      await this.fetchUserDetails();
     },
     checkAuthState() {
       if (this.userAuth && localStorage.getItem("userAuth")) {
@@ -319,8 +301,10 @@ export const useAuthStore = defineStore("auth", {
         this.invoiceData.clearDataAfterUpdate();
         this.userAuth = false;
         this.currentPassword = "";
+        this.pinSession = false;
+        sessionStorage.removeItem("ury_floor_pin_session");
         disconnectQzPrinter();
-        window.location.href = "/urypos/login";
+        window.location.href = "/urypos";
       }
     },
   },

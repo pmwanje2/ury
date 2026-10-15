@@ -6768,6 +6768,29 @@
 		"docstatus": 0
 	},
 	{
+		"doctype": "Custom Field", "dt": "User", "name": "User-custom_floor_pin_hash",
+		"fieldname": "custom_floor_pin_hash", "fieldtype": "Data", "label": "Floor PIN Hash",
+		"unique": 1, "hidden": 1, "read_only": 1, "no_copy": 1, "print_hide": 1,
+		"report_hide": 1, "permlevel": 0, "module": "URY", "docstatus": 0
+	},
+	{
+		"doctype": "Custom Field", "dt": "POS Profile", "name": "POS Profile-custom_floor_pin_login",
+		"fieldname": "custom_floor_pin_login", "fieldtype": "Check", "default": "0",
+		"label": "PIN sign-in on floor tablets", "insert_after": "custom_floor_stay_signed_in_roles",
+		"module": "URY", "docstatus": 0
+	},
+	{
+		"doctype": "Custom Field", "dt": "POS Profile", "name": "POS Profile-custom_floor_pin_roles",
+		"fieldname": "custom_floor_pin_roles", "fieldtype": "Table MultiSelect", "options": "Role Permitted",
+		"label": "Floor PIN Roles", "insert_after": "custom_floor_pin_login", "module": "URY", "docstatus": 0
+	},
+	{
+		"doctype": "Custom Field", "dt": "POS Profile", "name": "POS Profile-custom_floor_device_epoch",
+		"fieldname": "custom_floor_device_epoch", "fieldtype": "Int", "default": "0",
+		"label": "Floor tablet pairing version", "insert_after": "custom_floor_pin_roles",
+		"module": "URY", "docstatus": 0
+	},
+	{
 		"alignment": "",
 		"allow_bulk_edit": 0,
 		"allow_in_quick_entry": 0,
