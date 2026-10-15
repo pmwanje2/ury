@@ -98,6 +98,12 @@ export function canCaptureOffline(profile?: OfflineProfile | null, user?: Offlin
 class NotReady extends Error {}
 class Refused extends Error {}
 
+// The table's open check until it is settled, including one that has already
+// replayed some rounds. It keeps its client id across outages.
+export function openTableRow(rows: OfflineEntry[], table: string): OfflineEntry | undefined {
+  return rows.find((row) => row.order.table === table && row.state === 'pending' && !row.settlement);
+}
+
 export class OfflineOutbox {
   replaying = false;
   reachable = typeof navigator === 'undefined' || navigator.onLine !== false;
@@ -162,7 +168,7 @@ export class OfflineOutbox {
   // items onto the open check and does not mint another id.
   private async appendToOpenTable(order: OfflineOrder, total: number, rows: OfflineEntry[], outage: string, roundId?: string): Promise<OfflineEntry | undefined> {
     if (!order.table) return undefined;
-    const local = rows.find((row) => row.order.table === order.table && row.state === 'pending' && row.next_round === 0 && !row.settlement);
+    const local = openTableRow(rows, order.table);
     if (local) {
       await this.rememberPersistence();
       const last = local.rounds[local.rounds.length - 1]?.expected_total ?? 0;

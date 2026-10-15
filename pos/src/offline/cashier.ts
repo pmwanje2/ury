@@ -1,7 +1,7 @@
 import { logoutSession, clearAppStorage } from '@ury/core';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
-import { OfflineOutbox, canCaptureOffline, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import { OfflineOutbox, canCaptureOffline, openTableRow, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
 import { gatewayStatusOf } from './gateway';
 import { readOpenTableCheck } from './open-table-checks';
 
@@ -70,7 +70,7 @@ export async function submitOrderOfflineAware<T>({ profile, user, order, total, 
 }
 
 async function openClientForTable(queue: OfflineOutbox, user: string, table: string): Promise<string | undefined> {
-  const local = (await queue.list()).find((row) => row.order.table === table && row.state === 'pending' && row.next_round === 0 && !row.settlement);
+  const local = openTableRow(await queue.list(), table);
   return local?.client_order_id || readOpenTableCheck(user, table)?.clientOrderId;
 }
 
