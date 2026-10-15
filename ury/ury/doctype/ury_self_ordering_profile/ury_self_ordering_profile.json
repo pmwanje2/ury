@@ -35,6 +35,9 @@
   "column_break_billing_payment",
   "enable_payment_link",
   "enable_pay_at_counter",
+  "feedback_section",
+  "enable_feedback",
+  "feedback_template",
   "session_section",
   "session_idle_timeout_minutes",
   "qr_signing_secret",
@@ -195,6 +198,25 @@
    "fieldname": "enable_pay_at_counter",
    "fieldtype": "Check",
    "label": "Enable Pay at Counter"
+  },
+  {
+   "fieldname": "feedback_section",
+   "fieldtype": "Section Break",
+   "label": "Feedback"
+  },
+  {
+   "default": "0",
+   "description": "Off until a Quality Feedback Template is chosen. Guests still cannot submit until the bill is printed or paid.",
+   "fieldname": "enable_feedback",
+   "fieldtype": "Check",
+   "label": "Enable Feedback"
+  },
+  {
+   "depends_on": "eval:doc.enable_feedback",
+   "fieldname": "feedback_template",
+   "fieldtype": "Link",
+   "label": "Feedback Template",
+   "options": "Quality Feedback Template"
   },
   {
    "fieldname": "session_section",
