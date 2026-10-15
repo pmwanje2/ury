@@ -2285,6 +2285,7 @@ def cancel_kot(invoice_id):
             "item_code": item.get("item", item.get("item_code")),
             "qty": item.qty,
             "item_name": item.item_name,
+            "comments": item.comment or "",
         }
         items.append(order_item)
 
