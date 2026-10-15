@@ -2,7 +2,7 @@
 // Real workbox-strategies NetworkFirst through the worker routes. The
 // sign-out race reproduces review #38 finding 1 at the worker boundary.
 import { beforeEach, expect, test, vi } from 'vitest';
-import { deferred, installWorkerGlobals, ORIGIN, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
+import { deferred, installWorkerGlobals, ORIGIN, ownedResponse, setCookieUser, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
 
 let storage: MemoryCacheStorage;
 const PROFILE = ORIGIN + '/api/method/ury.ury_pos.api.getPosProfile';
@@ -101,4 +101,69 @@ test('Guest or empty users are never bound', async () => {
   vi.stubGlobal('fetch', ok('guest page'));
   await worker.get(PROFILE);
   expect(await storage.body('ury-pos-reads', PROFILE)).toBeUndefined();
+});
+
+// Review #40 P1, race 1: the page stops waiting for the bind ack after 2 s
+// while the worker is still deleting Alice's reads, then reads offline.
+test('a bind still purging Alice when the page stops waiting serves Bob nothing from her cache', async () => {
+  const worker = await startWorker();
+  await worker.message({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
+  vi.stubGlobal('fetch', ok('Alice profile'));
+  await worker.get(PROFILE);
+  setCookieUser('bob@ury.com');
+  const purge = deferred<void>();
+  const removeCache = storage.delete.bind(storage);
+  storage.delete = async (name: string) => {
+    await purge.promise;
+    return removeCache(name);
+  };
+  const bind = worker.message({ type: 'URY_BIND_SESSION', user: 'bob@ury.com' });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  vi.stubGlobal('fetch', outage());
+  await expect(worker.get(PROFILE)).rejects.toThrow();
+  purge.resolve();
+  await bind;
+});
+
+// Review #40 P1, race 2: Bob's bind went to the redundant worker and failed;
+// the replacement restores Alice's persisted session.
+test('a replacement worker that never got Bob bind neither serves nor stores across users', async () => {
+  const first = await startWorker();
+  await first.message({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
+  vi.stubGlobal('fetch', ok('Alice profile'));
+  await first.get(PROFILE);
+  setCookieUser('bob@ury.com');
+  vi.resetModules();
+  const replacement = await startWorker();
+  vi.stubGlobal('fetch', outage());
+  await expect(replacement.get(PROFILE)).rejects.toThrow();
+  vi.stubGlobal('fetch', ok('Bob profile'));
+  expect(await (await replacement.get(PROFILE)).text()).toBe('Bob profile');
+  expect(await storage.body('ury-pos-reads', PROFILE)).toBe('Alice profile');
+});
+
+test('without a signed-in user cookie the worker serves nothing from cache', async () => {
+  const worker = await startWorker();
+  await worker.message({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
+  vi.stubGlobal('fetch', ok('Alice profile'));
+  await worker.get(PROFILE);
+  setCookieUser(null);
+  vi.stubGlobal('fetch', outage());
+  await expect(worker.get(PROFILE)).rejects.toThrow();
+});
+
+test('a cached entry without an owner tag is never served', async () => {
+  const worker = await startWorker();
+  await worker.message({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
+  await (await storage.open('ury-pos-reads')).put(PROFILE, new Response('untagged profile', { status: 200 }));
+  vi.stubGlobal('fetch', outage());
+  await expect(worker.get(PROFILE)).rejects.toThrow();
+});
+
+test('the owner tag must name the bound user', async () => {
+  const worker = await startWorker();
+  await worker.message({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
+  await (await storage.open('ury-pos-reads')).put(PROFILE, ownedResponse('Bob profile', 'bob@ury.com'));
+  vi.stubGlobal('fetch', outage());
+  await expect(worker.get(PROFILE)).rejects.toThrow();
 });

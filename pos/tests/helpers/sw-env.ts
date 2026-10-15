@@ -66,11 +66,29 @@ export class TestFetchEvent extends TestExtendableEvent {}
 
 export const ORIGIN = 'https://ury.localhost';
 
+export const OWNER_HEADER = 'X-Ury-Pos-Owner';
+
+// The browser's signed-in user, as the worker reads it from the user_id
+// cookie through the native Cookie Store API.
+let cookieUser: string | null = 'alice@ury.com';
+export function setCookieUser(user: string | null) {
+  cookieUser = user;
+}
+
+// A cached read stored for owner, the way the worker tags it.
+export function ownedResponse(body: string, owner: string) {
+  return new Response(body, { status: 200, headers: { [OWNER_HEADER]: owner } });
+}
+
 export function installWorkerGlobals() {
   const storage = new MemoryCacheStorage();
   const scope = globalThis as unknown as Record<string, unknown>;
   scope.self = globalThis;
   scope.caches = storage;
+  cookieUser = 'alice@ury.com';
+  scope.cookieStore = {
+    get: async (name: string) => (name === 'user_id' && cookieUser ? { name, value: encodeURIComponent(cookieUser) } : null),
+  };
   scope.ExtendableEvent = TestExtendableEvent;
   scope.FetchEvent = TestFetchEvent;
   scope.__WB_DISABLE_DEV_LOGS = true;
