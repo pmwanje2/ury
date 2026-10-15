@@ -40,8 +40,9 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, get) => ({
       const { user: serverUser, networkFailure } = await readLoggedUser();
       let userName = serverUser;
       let provisional = false;
-      // Only "no HTTP answer" on a till whose /pos worker is active may keep
-      // the cookie session. 401/403 are answers and always go to login.
+      // No application answer (transport failure or 502/503/504/52x) on a till
+      // whose /pos worker is active may keep the cookie session. 401/403 always
+      // go to login.
       if (!userName && networkFailure && offlineShellActive()) {
         const cookieUser = getSessionUser();
         if (cookieUser && cookieUser !== 'Guest') {

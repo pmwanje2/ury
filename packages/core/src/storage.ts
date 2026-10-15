@@ -6,7 +6,7 @@ const APP_SESSION_STORAGE_KEYS = [
   'posProfile', 'menuCategories', 'customerGroups', 'territories', 'payment_modes',
   'ury.setup.configureState',
 ];
-const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening'];
+const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session'];
 
 export function getOrderTabsStorageKey(user: string | undefined): string | null {
   return user && user !== 'Guest' ? `posOrderTabsData:${user}` : null;

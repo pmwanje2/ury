@@ -16,10 +16,19 @@ let status = 200;
 let location: { href: string };
 
 beforeAll(async () => {
+  const gatewayStatuses = new Set([502, 503, 504, 520, 521, 522, 523, 524]);
   server = http.createServer((_request, response) => {
     response.statusCode = status;
+    // nginx in front of a stopped backend answers with an HTML gateway page.
+    if (gatewayStatuses.has(status)) {
+      response.setHeader('content-type', 'text/html');
+      response.end('<html><h1>' + status + ' Bad Gateway</h1></html>');
+      return;
+    }
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify(status === 200 ? { message: cashier } : { exc_type: 'AuthenticationError' }));
+    response.end(JSON.stringify(status === 200
+      ? { message: cashier }
+      : { exc_type: status === 401 ? 'AuthenticationError' : 'PermissionError' }));
   });
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   liveBase = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
@@ -117,4 +126,32 @@ test('reconnecting with a live session clears the provisional mark', async () =>
   await vi.waitFor(() => expect(useRootStore.getState().user?.provisional).toBeFalsy());
   expect(useRootStore.getState().user?.name).toBe(cashier);
   expect(location.href).toBe('http://localhost:3000/pos/pos');
+});
+
+test.each([502, 503, 504, 520, 521, 522, 523, 524])(
+  'HTTP %i on the session check keeps the opted-in cookie session and does not go to login',
+  async (code) => {
+    transport.defaults.baseURL = liveBase;
+    status = code;
+    await useRootStore.getState().checkAuth();
+    expect(useRootStore.getState().user).toMatchObject({ name: cashier, roles: ['URY Cashier'], provisional: true });
+    expect(location.href).toBe('http://localhost:3000/pos/pos');
+  },
+);
+
+test('HTTP 500 on the session check still goes to login', async () => {
+  transport.defaults.baseURL = liveBase;
+  status = 500;
+  await useRootStore.getState().checkAuth();
+  expect(useRootStore.getState().user).toBeNull();
+  expect(location.href).toBe('/login?redirect-to=%2Fpos');
+});
+
+test('a gateway 502 on a till that has not opted in still goes to login', async () => {
+  controlledByPosWorker(false);
+  transport.defaults.baseURL = liveBase;
+  status = 502;
+  await useRootStore.getState().checkAuth();
+  expect(useRootStore.getState().user).toBeNull();
+  expect(location.href).toBe('/login?redirect-to=%2Fpos');
 });

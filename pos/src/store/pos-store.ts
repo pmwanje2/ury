@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey } from '@ury/core';
+import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey, isLinkDown } from '@ury/core';
 import { bindOfflineUser, syncOfflineCapture } from '../pwa/register-offline';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
@@ -8,6 +8,7 @@ import { getMenuCourses } from '../lib/menu-course-api';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
+import { beginOpenTableRead, forgetOpenTableCheck, openTableReadCurrent, rememberOpenTableCheck } from '../offline/open-table-checks';
 import { getPaymentModes } from '../lib/payment-api';
 
 // Constants
@@ -251,6 +252,8 @@ export const generateCartHash = (state: Partial<POSState>) => {
 
 // Frappe injects the authenticated identity before this module is loaded.
 const orderTabsStorageKey = getOrderTabsStorageKey((window as any).frappe?.boot?.user?.name);
+const sessionOwner = () => getSessionUser()
+  || (window as Window & { frappe?: { boot?: { user?: { name?: string } } } }).frappe?.boot?.user?.name;
 
 const getInitialTabsState = () => {
   try {
@@ -752,10 +755,17 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   loadTableOrder: async (table: string) => {
+    // Bind the read to the session that issued it. A response (or failure)
+    // that arrives after logout purge or a user switch is dropped before it
+    // can touch the cache or the active till.
+    const read = beginOpenTableRead(sessionOwner());
+    const stale = () => read ? !openTableReadCurrent(read, sessionOwner()) : !!sessionOwner();
     try {
       set({ orderLoading: true, error: null });
       const response = await getTableOrder(table);
+      if (stale()) return;
       const order = response.message;
+      const owner = read?.user;
       if (order && order.name && order.items && order.items.length > 0) {
         const orderItems: OrderItem[] = order.items.map(item => {
           const orderItem = {
@@ -780,6 +790,13 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           } as OrderItem;
         });
 
+        if (owner && order.ury_client_order_id) {
+          rememberOpenTableCheck(owner, {
+            table, clientOrderId: order.ury_client_order_id, invoice: order.name,
+            grandTotal: order.grand_total, customer: order.customer, orderType: order.order_type,
+            noOfPax: order.no_of_pax, room: order.custom_restaurant_room,
+          });
+        }
         set({
           tableOrder: response,
           activeOrders: orderItems,
@@ -796,6 +813,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           orderComment: order.custom_comments || '',
         });
       } else {
+        if (owner) forgetOpenTableCheck(owner, table);
         set({
           tableOrder: null,
           activeOrders: [],
@@ -808,8 +826,12 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         });
       }
     } catch (error) {
+      if (stale()) return;
+      // A down link is not a broken till. Keep the table selected with a fresh
+      // cart; offline capture appends to the cached open check.
+      const linkDown = isLinkDown(error);
       set({
-        error: 'Failed to load table order',
+        error: linkDown ? null : 'Failed to load table order',
         tableOrder: null,
         activeOrders: [],
         selectedCustomer: null,
