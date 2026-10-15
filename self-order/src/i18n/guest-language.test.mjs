@@ -77,6 +77,13 @@ const en = {
     other: 'Other',
     categories: 'Menu categories',
   },
+  item: {
+    note_label: 'Note for the kitchen',
+    note_placeholder: 'For example, no onions',
+    add: 'Add {{name}}',
+    addons: 'Add-ons',
+    addon_add: 'Add add-on {{name}}',
+  },
   errors: {
     missing_code: 'This link is missing an ordering code. Please rescan the QR code on your table.',
     load_menu: 'Unable to load the menu. Please rescan the QR code.',
@@ -157,6 +164,13 @@ const sw = {
     other: 'Nyingine',
     categories: 'Makundi ya menyu',
   },
+  item: {
+    note_label: 'Ujumbe kwa jikoni',
+    note_placeholder: 'Kwa mfano, bila vitunguu',
+    add: 'Ongeza {{name}}',
+    addons: 'Nyongeza',
+    addon_add: 'Ongeza nyongeza {{name}}',
+  },
   errors: {
     missing_code: 'Kiungo hiki hakina msimbo wa oda. Tafadhali skani tena msimbo wa QR ulio mezani.',
     load_menu: 'Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.',
@@ -236,6 +250,13 @@ const lg = {
     all_items: 'Ebintu byonna',
     other: 'Ebirala',
     categories: 'Ebika bya menyu',
+  },
+  item: {
+    note_label: "Ekiwandiiko eri mu kyumba ky'emmere",
+    note_placeholder: 'Okugeza, tewali butungulu',
+    add: 'Teekako {{name}}',
+    addons: 'Ebyongerwako',
+    addon_add: 'Yongerako ekyongerwako {{name}}',
   },
   errors: {
     missing_code: 'Link eno terina koodi y\'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.',
