@@ -102,7 +102,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
   const shortfall = finalTotal - paymentsTotal;
   const isShort = shortfall > 0.005;
-  const canPayOnAccount = isShort && storePosProfile?.name === posProfile
+  const accountPaymentMode = paymentModes
+    .map((mode: string | { id: string }) => typeof mode === 'string' ? mode : mode.id)
+    .find(Boolean);
+  const canPayOnAccount = isShort && !!accountPaymentMode && storePosProfile?.name === posProfile
     && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
     && !!customer.trim() && customer !== storePosProfile.customer;
   const paymentDisabled = isProcessing || ((payments.length === 0 || isShort) && !canPayOnAccount);
@@ -155,7 +158,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         customer,
         invoice,
         owner,
-        payments,
+        payments: payments.length === 0 && canPayOnAccount
+          ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
+          : payments,
         pos_profile: posProfile,
         table,
       });
