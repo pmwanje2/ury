@@ -192,3 +192,47 @@ test.each(['cached server check', 'local offline check'])(
     expect(result.entry.rounds.at(-1)?.round_id).toBe(sent?.roundId);
   },
 );
+
+// Sol #47 finding 4: a partly replayed, unsettled check still owns its table.
+test('partial replay then another outage appends to the same check instead of minting a second id', async () => {
+  const { initI18n } = await import('../src/i18n');
+  await initI18n('en');
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write: vi.fn(), close: vi.fn() }, focus: vi.fn(), print: vi.fn(), opener: null }) as never);
+  const server = enforcingServer();
+  let syncCalls = 0;
+  const lossy = async (url: string, init?: RequestInit) => {
+    if (String(url).endsWith('sync_order') && ++syncCalls === 2) {
+      return new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } });
+    }
+    return server.request(url, init);
+  };
+  const queue = await outbox(lossy as typeof fetch);
+  const first = await queue.capture(dine('T-01', { item: 'Tea', item_name: 'Tea', qty: 1, rate: 1000 }), 1000);
+  await queue.capture(dine('T-01', { item: 'Coffee', item_name: 'Coffee', qty: 1, rate: 2000 }), 2000);
+  await queue.replay();
+  const partial = await queue.list();
+  expect(partial).toHaveLength(1);
+  expect(partial[0].next_round).toBe(1);
+
+  const third = await queue.capture(dine('T-01', { item: 'Chips', item_name: 'Chips', qty: 1, rate: 3000 }), 3000);
+  expect(third.client_order_id).toBe(first.client_order_id);
+
+  vi.stubGlobal('navigator', { onLine: true, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });
+  const { cashierOutbox, submitOrderOfflineAware } = await import('../src/offline/cashier');
+  cashierOutbox(profile, user).reachable = true;
+  let sent: { clientOrderId: string; roundId: string } | undefined;
+  const fourth = await submitOrderOfflineAware({
+    profile, user, order: dine('T-01', { item: 'Water', item_name: 'Water', qty: 1, rate: 1000 }) as never, total: 1000,
+    onlineSubmit: async (ids?: { clientOrderId: string; roundId: string }) => { sent = ids; throw { httpStatus: 502, message: 'gateway' }; },
+  });
+  expect(sent?.clientOrderId).toBe(first.client_order_id);
+  expect(fourth.offline && fourth.entry.client_order_id).toBe(first.client_order_id);
+
+  const rows = await queue.list();
+  expect(rows.map((row) => row.client_order_id)).toEqual([first.client_order_id]);
+  expect(rows[0].rounds.map((round) => round.expected_total)).toEqual([1000, 3000, 6000, 7000]);
+  await queue.replay();
+  expect(await queue.list()).toEqual([]);
+  expect(server.invoices.size).toBe(1);
+  expect(server.invoices.get(first.client_order_id)).toMatchObject({ total: 7000, rounds: 4, docstatus: 0 });
+});
