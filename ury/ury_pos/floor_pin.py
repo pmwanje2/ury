@@ -99,10 +99,14 @@ def issue_pin(user):
 			break
 	else:
 		_refuse("URY_FLOOR_PIN_NOT_PERMITTED", "A manager must issue a PIN to eligible floor staff.")
+	previous = frappe.db.get_value("User", user, "custom_floor_pin_hash")
 	for _ in range(20):
 		pin = f"{secrets.randbelow(10000):04d}"
+		pin_hash = _digest("ury-floor-pin-v1", pin)
+		if pin_hash == previous:
+			continue
 		try:
-			frappe.db.set_value("User", user, "custom_floor_pin_hash", _digest("ury-floor-pin-v1", pin), update_modified=False)
+			frappe.db.set_value("User", user, "custom_floor_pin_hash", pin_hash, update_modified=False)
 		except Exception as error:
 			if isinstance(error, frappe.UniqueValidationError) or frappe.db.is_unique_key_violation(error):
 				continue
