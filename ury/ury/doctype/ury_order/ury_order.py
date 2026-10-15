@@ -2380,18 +2380,7 @@ def cancel_kot(invoice_id):
     kot_naming_series = pos_profile.custom_kot_naming_series
     cancel_kot_naming_series = "CNCL-" + kot_naming_series
 
-    items = []
-    # Create a list of items for the canceled KOT
-    for item in pos_invoice.items:
-        if cint(getattr(item, "ury_held", 0)):
-            continue
-        order_item = {
-            "item_code": item.get("item", item.get("item_code")),
-            "qty": item.qty,
-            "item_name": item.item_name,
-            "comments": item.comment or "",
-        }
-        items.append(order_item)
+    items = _kitchen_snapshot(pos_invoice.items)
 
     if pos_invoice.restaurant_table:
         restaurant_table = pos_invoice.restaurant_table
