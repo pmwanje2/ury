@@ -73,15 +73,18 @@ function offlineCashOrMobile(mode: string, reference?: string): OfflineSettlemen
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
-  clientOrderId, amount, modeOfPayment, reference, discount, orderType, onlineSettle }: {
+  clientOrderId, amount, due, modeOfPayment, reference, discount, orderType, onlineSettle }: {
   profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
-  cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; modeOfPayment: string;
+  cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; due: number; modeOfPayment: string;
   reference?: string; discount?: number; orderType?: string;
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
   const kind = offlineCashOrMobile(modeOfPayment, reference);
-  const queueable = !!kind && canCaptureOffline(profile, user) && !(discount && discount > 0);
+  // A short named-account settlement (#44) leaves a balance owed. It is not a
+  // cash settlement and stays online-only, so the tender must cover the bill.
+  const paidInFull = Number.isFinite(due) && amount >= due - 0.005;
+  const queueable = !!kind && paidInFull && canCaptureOffline(profile, user) && !(discount && discount > 0);
   if (!queueable) return { offline: false as const, response: await onlineSettle() };
   const existing = clientOrderId
     ? (await queue.list()).find((row) => row.client_order_id === clientOrderId && row.state === 'pending')

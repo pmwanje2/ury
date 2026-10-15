@@ -161,6 +161,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         user: user ?? { name: 'Guest', roles: [] },
         invoice, customer, table, cashier, owner, clientOrderId,
         amount: payments.length === 1 ? payments[0].amount : paymentsTotal,
+        due: finalTotal,
         modeOfPayment: payments.length === 1 ? payments[0].mode_of_payment : '',
         discount: appliedDiscount,
         onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
