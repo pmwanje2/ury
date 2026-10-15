@@ -54,6 +54,7 @@ export interface PosProfileFull {
   idx: number;
   company: string;
   customer: string | null;
+  allow_partial_payment?: number;
   country: string;
   disabled: number;
   warehouse: string;
