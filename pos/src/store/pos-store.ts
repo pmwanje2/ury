@@ -755,13 +755,17 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   loadTableOrder: async (table: string) => {
+    // Bind the read to the session that issued it. A response (or failure)
+    // that arrives after logout purge or a user switch is dropped before it
+    // can touch the cache or the active till.
+    const read = beginOpenTableRead(sessionOwner());
+    const stale = () => read ? !openTableReadCurrent(read, sessionOwner()) : !!sessionOwner();
     try {
       set({ orderLoading: true, error: null });
-      // Bind the cache write to the session that issued the read.
-      const read = beginOpenTableRead(sessionOwner());
       const response = await getTableOrder(table);
+      if (stale()) return;
       const order = response.message;
-      const owner = openTableReadCurrent(read, sessionOwner()) ? read.user : null;
+      const owner = read?.user;
       if (order && order.name && order.items && order.items.length > 0) {
         const orderItems: OrderItem[] = order.items.map(item => {
           const orderItem = {
@@ -822,6 +826,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         });
       }
     } catch (error) {
+      if (stale()) return;
       // A down link is not a broken till. Keep the table selected with a fresh
       // cart; offline capture appends to the cached open check.
       const linkDown = isLinkDown(error);
