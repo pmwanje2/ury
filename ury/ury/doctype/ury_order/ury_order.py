@@ -2259,7 +2259,12 @@ def make_invoice(
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
 
     _lock_hold_order(invoice)
-    if any(cint(getattr(row, "ury_held", 0)) for row in invoice.items):
+    settlement_invoices = [invoice]
+    if invoice.custom_merged_pos_invoice:
+        linked = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
+        _lock_hold_order(linked)
+        settlement_invoices.append(linked)
+    if any(cint(getattr(row, "ury_held", 0)) for bill in settlement_invoices for row in bill.items):
         frappe.throw(_("URY_HELD_NOT_FIRED: Fire or remove held items before settlement."))
 
     if client_order_id and invoice.get("ury_client_order_id") not in (None, "", client_order_id):
