@@ -1427,6 +1427,16 @@ class TestCaptainTransferCandidates(FrappeTestCase):
     def test_excludes_current_captain(self):
         self.assertNotIn(self.invoice.waiter, {row["name"] for row in self._candidates()})
 
+    def test_refuses_current_captain_even_if_client_claims_another_owner(self):
+        current = self.invoice.waiter
+        for multiple_cashier in (0, 1):
+            with self.subTest(multiple_cashier=multiple_cashier):
+                self.profile.custom_enable_multiple_cashier = multiple_cashier
+                with self.assertRaises(frappe.PermissionError):
+                    captain_transfer("amina@example.com", current, self.invoice.name)
+                self.assertEqual(self.invoice.waiter, current)
+                self.invoice.save.assert_not_called()
+
     def test_room_scoped_when_multiple_cashier(self):
         self.profile.custom_enable_multiple_cashier = 1
         self.assertEqual(self._candidates(), [{"name": "amina@example.com", "full_name": "Amina Captain"}])
@@ -1453,12 +1463,10 @@ class TestCaptainTransferCandidates(FrappeTestCase):
     def test_every_candidate_is_accepted_and_every_non_candidate_refused(self):
         current = self.invoice.waiter
         for multiple_cashier in (0, 1):
+            self.invoice.waiter = current
             self.profile.custom_enable_multiple_cashier = multiple_cashier
             listed = {row["name"] for row in self._candidates()}
             for user in self.users:
-                # Reassigning the existing owner is not a transfer target.
-                if user == current:
-                    continue
                 with self.subTest(multiple_cashier=multiple_cashier, user=user):
                     self.invoice.waiter = current
                     self.invoice.save.reset_mock()
