@@ -223,6 +223,32 @@ class TestFloorPin(unittest.TestCase):
 		self.assertEqual(writes[0].args[:3], writes[1].args[:3])
 		self.assertNotEqual(writes[0].args[3], writes[1].args[3])
 
+	def test_issue_pin_retries_native_database_unique_violation(self):
+		# db.set_value bypasses Document's UniqueValidationError translation.
+		api = self.api()
+		collision = RuntimeError(1062, "Duplicate unique hash")
+		self.frappe.db.is_unique_key_violation.side_effect = lambda error: error is collision
+		self.frappe.db.set_value.side_effect = [collision, None]
+		with patch.object(api.secrets, "randbelow", side_effect=[7, 8]):
+			try:
+				result = api.issue_pin(self.user)
+			except RuntimeError:
+				self.fail("Native db.set_value unique collision was not retried")
+		self.assertEqual(result, {"pin": "0008"})
+		self.frappe.db.set_value.side_effect = RuntimeError("database unavailable")
+		with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+			api.issue_pin(self.user)
+
+	def test_failed_pin_audit_survives_request_rollback(self):
+		self.pair()
+		pending, committed = [], []
+		self.audit.side_effect = lambda *args, **kwargs: pending.append((args, kwargs))
+		self.frappe.db.commit.side_effect = lambda: committed.extend(pending)
+		self.refused("URY_FLOOR_PIN_REFUSED", lambda: self.sign_in("bad"))
+		pending.clear()  # Frappe rolls back when the authentication exception escapes.
+		self.assertEqual(len(committed), 1, "Failed PIN audit must survive request rollback")
+		self.assertNotIn("bad", str(committed))
+
 	def test_issue_pin_activity_log_never_contains_pin(self):
 		api = self.api()
 		with patch.object(api.secrets, "randbelow", return_value=527):
