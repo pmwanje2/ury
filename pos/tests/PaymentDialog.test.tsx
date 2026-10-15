@@ -104,7 +104,7 @@ test('short payment stays disabled before the profile is loaded', async () => {
 });
 
 test('unpaid account settlement uses an existing mode id with zero paid amount', async () => {
-  usePOSStore.setState({ paymentModes: [{ id: 'Card', name: 'Bank card' }] as any });
+  usePOSStore.setState({ paymentModes: [{ id: 'Card', name: 'Bank card' }] as unknown as string[] });
   const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
   await render();
   expect(payButton().disabled).toBe(false);

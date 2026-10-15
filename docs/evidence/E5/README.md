@@ -3,7 +3,7 @@
 Base: `7f0c2aeefbff3ac5c238462a7e4ab1cde546495c`, fetched from
 `pmwanje2/ury:maximus/integration-hospitality-20261004a`. The integration head
 was re-read before handoff; O4 merge `ebd31b120b23a68b951709e90e8665a6a71de96e`
-is an ancestor. No backend, offline outbox, phone-payment, tender/change,
+is an ancestor. No backend, offline outbox, phone-payment,
 rounding or permissions code changed.
 
 ## RED then GREEN
@@ -37,6 +37,29 @@ then pass the UI with positive or zero tender. The server remains responsible
 for credit groups, limits, comp authorization and posting. This does not prove
 zero-total comp settlement, real receivables, consolidation, stock or GL.
 
+### Native unpaid-payment correction
+
+Independent review found that zero tender produced `payments: []`, which
+ERPNext rejects before credit validation: "At least one mode of payment is
+required for POS invoice." A read-only, disposable ERPNext v16.50 image probe
+executed the real `validate_mode_of_payment`, `validate_payment_amount` and
+`validate_full_payment` method bodies. An existing Cash mode with amount zero
+passes those validators with partial payment enabled, leaves `paid_amount=0`,
+and is refused when partial payment is disabled. This is validator evidence,
+not full posting or live ERP proof.
+
+- RED `967956a`: **4 failed, 467 passed**, 38 files. Two existing unpaid cases
+  exposed the empty payload; object-shaped mode and absent-mode cases exposed
+  the same native boundary. Two additional binary-flag regression cases pass.
+- GREEN `25c29a9`: **471 passed**, 38 files, 0 failed/skipped;
+  `node --test pos/tests/*.test.mjs pos/tests/*.test.cjs`: **16 passed**;
+  `npm run build --workspace pos`: PASS.
+- Unpaid settlement sends the ID of an existing configured mode with amount
+  zero. With no configured mode, Pay stays disabled. Positive split payments
+  and the displayed paid amount are unchanged. No Credit tender, pretend
+  money or server behavior was added. Four cases were added to the prior467;
+  none were removed (23 additions relative to the448-test integration base).
+
 ## Dev-server screenshots
 
 Real URY App/router, Orders page, PaymentDialog, shared UI/theme and Zustand
@@ -55,6 +78,7 @@ development harness was added.
 `/` and `/tg` from the generic SiteOps implementer brief are not URY cashier
 routes. URY mounts its router at `/pos`; neither irrelevant route is offered
 as payment-dialog evidence. The local fixture server reports 404 for both.
+The zero-row payload correction does not change these positive-tender states.
 
 ## Release dependencies
 
