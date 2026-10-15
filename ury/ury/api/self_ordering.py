@@ -793,15 +793,9 @@ def get_order_status(session):
 # they only differ in how the frontend presents payment_url (auto-redirect
 # vs. copyable/QR link) — no need for two backend code paths.
 #
-# Settlement-on-payment (webhook -> Payment Entry -> invoice submit) is
-# ERPNext core's own responsibility once a real Payment Gateway Account is
-# configured (PaymentRequest.set_as_paid() / its gateway callbacks) — this
-# module does not reimplement or verify gateway webhooks itself. Without a
-# configured gateway (true for this track's dev/test bench — no real
-# Razorpay/Stripe credentials available), get_payment_url() has nothing to
-# return; create_payment_request() still creates a real, correctly-priced
-# Payment Request against the invoice, which is what's actually verifiable
-# without live gateway credentials.
+# The gateway verifies payment; the Phone request becoming Paid does not
+# submit the POS Invoice. The cashier settles through URY make_invoice,
+# selecting the same gateway mode. No provider webhook logic belongs here.
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist(allow_guest=True)
@@ -830,7 +824,10 @@ def create_payment_request(session):
         gateway_account = get_gateway_details(frappe._dict(company=invoice.company))
         pos_profile = frappe.get_cached_doc("POS Profile", profile.pos_profile)
         mode_of_payment = None
-        for profile_payment in pos_profile.payments if gateway_account and gateway_account.payment_channel == "Phone" else []:
+        profile_payments = (
+            pos_profile.payments if gateway_account and gateway_account.payment_channel == "Phone" else []
+        )
+        for profile_payment in profile_payments:
             mode_of_payment = profile_payment.mode_of_payment
             if frappe.db.get_value("Mode of Payment", mode_of_payment, "type") != "Phone":
                 continue
@@ -854,6 +851,8 @@ def create_payment_request(session):
                 frappe.ValidationError,
             )
 
+        # ERPNext populates outstanding_amount only when submitting POS
+        # invoices; an unpaid draft normally still has zero in that field.
         outstanding_amount = (
             invoice.get("outstanding_amount")
             or invoice.get("rounded_total")
@@ -873,22 +872,6 @@ def create_payment_request(session):
 
         # make_payment_request() derives its own amount from the reference
         # doc server-side (get_amount()) — the client never supplies one.
-        #
-        # ERPNext quirk (found via live testing, not documented anywhere
-        # obvious): for dt="POS Invoice" specifically, get_amount() does
-        # NOT fall back to outstanding_amount the way it does for Sales/
-        # Purchase Invoice — it only sums payments rows with
-        # type="Phone" matching the configured gateway account, and
-        # throws "Payment Entry is already created" if none exist (reads
-        # as if the invoice were already paid, even on a fresh unpaid
-        # draft — a confusing message for what's really "no online
-        # payment method configured"). This requires the branch's POS
-        # Profile to have a Mode of Payment with Payment Type "Phone"
-        # linked to a real Payment Gateway Account — neither exists on
-        # this dev/test bench, so this is the actual, expected failure
-        # mode here, not a bug in this function. Surface it as a clear,
-        # honest "not configured yet" rather than ERPNext's confusing
-        # raw message.
         try:
             pr = make_payment_request(
                 dt="POS Invoice",
