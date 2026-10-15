@@ -912,9 +912,11 @@ def create_payment_request(session):
             return _payment_request_response(pr, _payment_url(pr), paid_amount)
 
         # A stale unpaid guest link is replaced only if its checkout never
-        # started or ended (no Integration Request, or Failed/Cancelled). A
-        # Queued checkout may still be paid at the provider, so keep its link.
-        # Requests made elsewhere (e.g. a cashier) are never cancelled here.
+        # started (no Integration Request). Any checkout, even one marked
+        # Failed, may still be paid at the provider, so keep its link; the
+        # gateway app cancels requests that truly failed or expired, and the
+        # next tap then creates a new one. Requests made elsewhere (e.g. a
+        # cashier) are never cancelled here.
         busy = _("A payment for this order is already in progress. Please ask staff for help.")
         open_requests = frappe.get_all(
             "Payment Request",
@@ -936,9 +938,9 @@ def create_payment_request(session):
                 filters={"reference_doctype": "Payment Request", "reference_docname": open_request.name},
                 pluck="status",
             ))
-            if checkout - {"Failed", "Cancelled", "Queued"}:
+            if checkout & {"Authorized", "Completed"}:
                 frappe.throw(busy, frappe.ValidationError)
-            if "Queued" in checkout:
+            if checkout:
                 pr = frappe.get_doc("Payment Request", open_request.name)
                 return _payment_request_response(pr, _payment_url(pr), paid_amount)
         for open_request in open_requests:
