@@ -566,6 +566,30 @@ describe('native username and private PIN', () => {
 });
 
 describe('paired floor PIN sign-in', () => {
+  it('a reloaded PIN session still hides password change; password login and logout clear the marker', async () => {
+    expect(auth.pinSignIn).toBeTypeOf('function');
+    auth.call.post.mockResolvedValue({ message: { full_name: 'Alice Waiter', csrf_token: 'fresh-csrf' } });
+    vi.spyOn(auth, 'fetchUserDetails').mockResolvedValue(undefined);
+    await auth.pinSignIn('0527');
+    setActivePinia(createPinia());
+    auth = useAuthStore();
+    invoice = useInvoiceDataStore();
+    mount(Header);
+    expect(host.querySelector('a[href="/update-password"]')).toBeNull();
+    expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('0527');
+    nativeLogin();
+    auth.userId = 'manager'; auth.currentPassword = 'SyntheticOnly42';
+    await auth.login();
+    setActivePinia(createPinia()); auth = useAuthStore();
+    expect(auth.pinSession).toBe(false);
+    auth.call.post.mockResolvedValue({ message: { full_name: 'Alice Waiter', csrf_token: 'fresh-csrf' } });
+    vi.spyOn(auth, 'fetchUserDetails').mockResolvedValue(undefined);
+    await auth.pinSignIn('0527');
+    await auth.logOut();
+    setActivePinia(createPinia()); auth = useAuthStore();
+    expect(auth.pinSession).toBe(false);
+  });
+
   it('sets the returned CSRF token before fetching the waiter and opening tables', async () => {
     expect(auth.pinSignIn).toBeTypeOf('function');
     auth.call.post.mockResolvedValue({ message: { full_name: 'Alice Waiter', csrf_token: 'fresh-csrf' } });
