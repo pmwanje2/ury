@@ -208,7 +208,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
-        existing_row = MagicMock(item_code="Biryani", item_name="Biryani", qty=2)
+        existing_row = MagicMock(item_code="Biryani", item_name="Biryani", qty=2, comment="")
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
@@ -227,7 +227,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # would.
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"], comment=row_dict.get("comment")))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
@@ -383,8 +383,8 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # Two SEPARATE Biryani rows already on the invoice (from two earlier
         # add_customer_items() calls) -- this is the realistic pre-existing
         # state that exposed the bug.
-        existing_row_1 = MagicMock(item_code="Biryani", item_name="Biryani", qty=1)
-        existing_row_2 = MagicMock(item_code="Biryani", item_name="Biryani", qty=1)
+        existing_row_1 = MagicMock(item_code="Biryani", item_name="Biryani", qty=1, comment="")
+        existing_row_2 = MagicMock(item_code="Biryani", item_name="Biryani", qty=1, comment="")
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row_1, existing_row_2]
@@ -398,7 +398,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"], comment=row_dict.get("comment")))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
