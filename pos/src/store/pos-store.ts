@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey } from '@ury/core';
+import { storage, getOrderTabsStorageKey, getSessionUser, getUserSessionStorageKey, isLinkDown } from '@ury/core';
 import { bindOfflineUser, syncOfflineCapture } from '../pwa/register-offline';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
@@ -818,8 +818,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         });
       }
     } catch (error) {
+      // A down link is not a broken till. Keep the table selected with a fresh
+      // cart; offline capture appends to the cached open check.
+      const linkDown = isLinkDown(error);
       set({
-        error: 'Failed to load table order',
+        error: linkDown ? null : 'Failed to load table order',
         tableOrder: null,
         activeOrders: [],
         selectedCustomer: null,
