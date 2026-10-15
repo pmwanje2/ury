@@ -1,13 +1,13 @@
 """P2: real POS/Payment Request persistence; only the PSP controller is a double."""
 
 import hashlib
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import frappe
-from frappe.utils import add_to_date, now_datetime
 from erpnext.accounts.utils import create_payment_gateway_account
+from frappe.utils import add_to_date, now_datetime
 
 from ury.tests.offline_pos_utils import make_offline_pos, send_order, settle_order
 from ury.ury.api.self_ordering import create_payment_request
