@@ -1,0 +1,8 @@
+/tmp/ury-p2b-sol-vV1HKO6V/lint-base/ury/tests/test_guest_phone_payment.py:3:1: I001 [*] Import block is un-sorted or un-formatted
+/tmp/ury-p2b-sol-vV1HKO6V/lint-base/ury/ury/api/self_ordering.py:25:1: I001 [*] Import block is un-sorted or un-formatted
+/tmp/ury-p2b-sol-vV1HKO6V/lint-base/ury/ury/api/self_ordering.py:321:24: RUF059 Unpacked variable `session` is never used
+/tmp/ury-p2b-sol-vV1HKO6V/lint-base/ury/ury/api/self_ordering.py:339:14: RUF059 Unpacked variable `existing_table` is never used
+/tmp/ury-p2b-sol-vV1HKO6V/lint-base/ury/ury/api/self_ordering.py:359:24: RUF059 Unpacked variable `session` is never used
+/tmp/ury-p2b-sol-vV1HKO6V/lint-base/ury/ury/api/self_ordering.py:569:18: RUF059 Unpacked variable `invoice_name` is never used
+Found 6 errors.
+[*] 2 fixable with the `--fix` option (4 hidden fixes can be enabled with the `--unsafe-fixes` option).

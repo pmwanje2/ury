@@ -1,0 +1,2 @@
+{"name": "SiteOps PAY-007 Gateway Payment Request - POS Invoice", "sha256": "cf55c4be32a6b5c4ee55e8f0b81a83194aa5864c08b69c38c39a517db099391d", "disabled": 0, "event": "Before Submit", "reference_doctype": "POS Invoice"}
+{"name": "SiteOps PAY-007 Gateway Payment Request - Sales Invoice", "sha256": "cf55c4be32a6b5c4ee55e8f0b81a83194aa5864c08b69c38c39a517db099391d", "disabled": 0, "event": "Before Submit", "reference_doctype": "Sales Invoice"}

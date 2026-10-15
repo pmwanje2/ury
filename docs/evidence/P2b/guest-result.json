@@ -1,0 +1,94 @@
+{
+  "guest": [
+    {
+      "status": 200,
+      "body": {
+        "message": {
+          "payment_request": "ACC-PRQ-2026-00004",
+          "amount": 12000,
+          "currency": "UGX",
+          "payment_url": "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00004",
+          "status": "Requested",
+          "paid_amount": 0,
+          "remaining_amount": 12000
+        },
+        "_server_messages": "[\"{\\\"message\\\":\\\"SMS sent successfully\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\"}\"]"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "message": {
+          "payment_request": "ACC-PRQ-2026-00004",
+          "amount": 12000,
+          "currency": "UGX",
+          "payment_url": null,
+          "status": "Paid",
+          "paid_amount": 12000,
+          "remaining_amount": 0
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "message": {
+          "payment_request": "ACC-PRQ-2026-00004",
+          "amount": 12000,
+          "currency": "UGX",
+          "payment_url": null,
+          "status": "Paid",
+          "paid_amount": 12000,
+          "remaining_amount": 12000
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "message": {
+          "payment_request": "ACC-PRQ-2026-00004",
+          "amount": 12000,
+          "currency": "UGX",
+          "payment_url": null,
+          "status": "Paid",
+          "paid_amount": 12000,
+          "remaining_amount": 12000
+        }
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "message": {
+          "payment_request": "ACC-PRQ-2026-00004",
+          "amount": 12000,
+          "currency": "UGX",
+          "payment_url": null,
+          "status": "Paid",
+          "paid_amount": 12000,
+          "remaining_amount": 12000
+        }
+      }
+    }
+  ],
+  "navigations": [
+    "https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00004"
+  ],
+  "actor": "p2-cashier-012995cb@example.test",
+  "ipn": {
+    "status": 200,
+    "body": {
+      "orderNotificationType": "IPNCHANGE",
+      "orderTrackingId": "TRACK-ACC-PRQ-2026-00004",
+      "orderMerchantReference": "ACC-PRQ-2026-00004",
+      "status": 200,
+      "message": {
+        "orderNotificationType": "IPNCHANGE",
+        "orderTrackingId": "TRACK-ACC-PRQ-2026-00004",
+        "orderMerchantReference": "ACC-PRQ-2026-00004",
+        "status": 200
+      }
+    }
+  }
+}

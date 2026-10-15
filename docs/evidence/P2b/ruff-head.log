@@ -1,0 +1,7 @@
+ury/ury/api/self_ordering.py:25:1: I001 [*] Import block is un-sorted or un-formatted
+ury/ury/api/self_ordering.py:321:24: RUF059 Unpacked variable `session` is never used
+ury/ury/api/self_ordering.py:339:14: RUF059 Unpacked variable `existing_table` is never used
+ury/ury/api/self_ordering.py:359:24: RUF059 Unpacked variable `session` is never used
+ury/ury/api/self_ordering.py:569:18: RUF059 Unpacked variable `invoice_name` is never used
+Found 5 errors.
+[*] 1 fixable with the `--fix` option (4 hidden fixes can be enabled with the `--unsafe-fixes` option).
