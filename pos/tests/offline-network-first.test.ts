@@ -78,3 +78,40 @@ test('a fresh 200 replaces the cached read; errors are never cached', async () =
   expect((await get(PROFILE)).status).toBe(500);
   expect(await storage.body('ury-pos-reads', PROFILE)).toBe('Alice fresh profile');
 });
+
+test.each([502, 503, 504, 520, 521, 522, 523, 524])(
+  'a gateway status (%i) falls back to the cached read and does not store the error',
+  async (code) => {
+    vi.stubGlobal('fetch', reply(code, `gateway ${code}`));
+    const { get } = await worker();
+    const response = await get(PROFILE);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('Alice prior cached profile');
+    expect(await storage.body('ury-pos-reads', PROFILE)).toBe('Alice prior cached profile');
+  },
+);
+
+test('a gateway 502 for the POS shell falls back to the cached shell', async () => {
+  vi.stubGlobal('fetch', reply(502, 'bad gateway'));
+  const { get } = await worker();
+  // Bind purges caches, so the shell entry has to be stored after it.
+  await (await storage.open('ury-pos-shell')).put(ORIGIN + '/pos', ownedResponse('cached shell', 'alice@ury.com'));
+  const response = await get(ORIGIN + '/pos');
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe('cached shell');
+});
+
+test.each([400, 401, 403, 404, 500])('HTTP %i is returned and is never the cached read', async (code) => {
+  vi.stubGlobal('fetch', reply(code, `answer ${code}`));
+  const { get } = await worker();
+  const response = await get(PROFILE);
+  expect(response.status).toBe(code);
+  expect(await response.text()).toBe(`answer ${code}`);
+});
+
+test('HTTP 500 does not purge the cached read', async () => {
+  vi.stubGlobal('fetch', reply(500, 'boom'));
+  const { get } = await worker();
+  expect((await get(PROFILE)).status).toBe(500);
+  expect(await storage.body('ury-pos-reads', PROFILE)).toBe('Alice prior cached profile');
+});

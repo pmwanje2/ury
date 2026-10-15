@@ -89,6 +89,8 @@ export interface SyncOrderRequest {
   last_modified_time?: string;
   comments?: string | null;
   room?: string;
+  client_order_id?: string;
+  round_id?: string;
 }
 
 /**

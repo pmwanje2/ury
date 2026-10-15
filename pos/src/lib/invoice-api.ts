@@ -31,6 +31,7 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  ury_client_order_id?: string | null;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
 }

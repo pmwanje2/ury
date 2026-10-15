@@ -137,7 +137,8 @@ const OrderPanel = () => {
       const submission = await submitOrderOfflineAware({ profile: posProfile, user,
         total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
         order: target ? { ...target.order, items: orderData.items } : orderData,
-        clientOrderId: offlineTarget || undefined, onlineSubmit: () => syncOrder(orderData) });
+        clientOrderId: offlineTarget || undefined, onlineSubmit: (ids) => syncOrder({ ...orderData,
+          client_order_id: ids?.clientOrderId, round_id: ids?.roundId }) });
       const result = submission.offline ? null : submission.response;
 
       // sync_order returns { status: 'Failure' } instead of throwing when the

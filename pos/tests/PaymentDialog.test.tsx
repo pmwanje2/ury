@@ -1,10 +1,14 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { call } from '@ury/core';
 import PaymentDialog from '../src/components/PaymentDialog';
 import { initI18n } from '../src/i18n';
 import { usePOSStore } from '../src/store/pos-store';
+import { useRootStore } from '../src/store/root-store';
+import { OfflineOutbox } from '../src/offline/outbox';
+import { testLocks } from './offline-locks';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -186,4 +190,25 @@ test('O4 still refuses on-account settlement offline without posting', async () 
   expect(post).not.toHaveBeenCalled();
   expect(onClose).not.toHaveBeenCalled();
   expect(clearSelectedOrder).not.toHaveBeenCalled();
+});
+
+test('a gateway 502 on an opted-in named-account short settlement is an error, not queued offline', async () => {
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: testLocks() });
+  const user = { name: 'cashier@example.com', full_name: 'Cashier', roles: ['Cashier'] };
+  useRootStore.setState({ user });
+  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, ury_offline_capture: 1,
+    role_allowed_for_billing: [{ role: 'Cashier' }] } as unknown as NonNullable<typeof initialStore.posProfile> });
+  const post = vi.spyOn(call, 'post').mockRejectedValue({ httpStatus: 502, message: 'bad gateway' });
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  await render();
+  await enter('40');
+  expect(payButton().disabled).toBe(false);
+  await act(async () => payButton().click());
+  await vi.waitFor(() => expect(document.body.textContent).not.toMatch(/Processing/));
+  expect(post).toHaveBeenCalledOnce();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(clearSelectedOrder).not.toHaveBeenCalled();
+  expect(await new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user }).list()).toEqual([]);
+  useRootStore.setState({ user: null });
 });

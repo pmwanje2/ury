@@ -815,6 +815,7 @@ export default function Orders() {
           clearSelectedOrder={clearSelectedOrder}
           discountPercentage={selectedOrder.additional_discount_percentage}
           discountAmount={selectedOrder.discount_amount}
+          clientOrderId={selectedOrder.ury_client_order_id}
         />
       )}
       {selectedOrder && (
