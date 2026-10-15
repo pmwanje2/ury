@@ -11,12 +11,14 @@ import { Button } from '@ury/ui';
 import { cn } from '@ury/ui';
 import { t } from '../i18n';
 import { Spinner } from '@ury/ui';
-import { db } from '@ury/core';
+import { getCaptainTransferCandidates } from '../lib/order-api';
+import { parseFrappeError } from '@ury/core';
 
 interface CaptainTransferDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentCaptain: string;
+  invoiceName: string;
   onConfirm: (newCaptain: string) => Promise<void>;
 }
 
@@ -25,18 +27,15 @@ interface CaptainOption {
   full_name?: string;
 }
 
-const SEARCH_DEBOUNCE_MS = 300;
-const SEARCH_LIMIT = 20;
-
 const CaptainTransferDialog = ({
   open,
   onOpenChange,
   currentCaptain,
+  invoiceName,
   onConfirm,
 }: CaptainTransferDialogProps) => {
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [candidates, setCandidates] = useState<CaptainOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -44,15 +43,9 @@ const CaptainTransferDialog = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [search]);
-
-  useEffect(() => {
     if (!open) return;
     setSelected(null);
     setSearch('');
-    setDebouncedSearch('');
     setCandidates([]);
     setLoadError(null);
     setError(null);
@@ -66,28 +59,16 @@ const CaptainTransferDialog = ({
     setLoading(true);
     setLoadError(null);
 
-    const q = debouncedSearch.trim();
-    const pattern = q ? `%${q}%` : '%';
-
-    db.getDocList('User', {
-      fields: ['name', 'full_name'],
-      filters: [['enabled', '=', 1]],
-      orFilters: [
-        ['name', 'like', pattern],
-        ['full_name', 'like', pattern],
-      ],
-      limit: SEARCH_LIMIT,
-      orderBy: { field: 'full_name', order: 'asc' },
-    } as unknown as Parameters<typeof db.getDocList>[1])
+    getCaptainTransferCandidates(invoiceName)
       .then((rows) => {
         if (cancelled) return;
         setCandidates(
-          (rows as CaptainOption[]).filter((row) => row.name !== currentCaptain)
+          rows.filter((row) => row.name !== currentCaptain)
         );
       })
       .catch((err) => {
         if (!cancelled) {
-          setLoadError(err instanceof Error ? err.message : t('tables.transfer_failed'));
+          setLoadError(parseFrappeError(err, t('tables.transfer_failed')));
           setCandidates([]);
         }
       })
@@ -98,9 +79,15 @@ const CaptainTransferDialog = ({
     return () => {
       cancelled = true;
     };
-  }, [open, debouncedSearch, currentCaptain]);
+  }, [open, currentCaptain, invoiceName]);
 
-  const displayCandidates = useMemo(() => candidates, [candidates]);
+  const displayCandidates = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return candidates;
+    return candidates.filter((row) =>
+      [row.name, row.full_name || ''].some((value) => value.toLowerCase().includes(query))
+    );
+  }, [candidates, search]);
 
   const handleOpenChange = (next: boolean) => {
     if (isSubmitting) return;

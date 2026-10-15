@@ -524,7 +524,7 @@
               @click="this.table.selectcaptain(captain)"
             >
               <h1 class="text-base font-semibold leading-normal">
-                {{ captain.name }}
+                {{ captain.full_name || captain.name }}
               </h1>
             </div>
           </div>

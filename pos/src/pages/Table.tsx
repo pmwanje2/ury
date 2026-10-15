@@ -571,6 +571,7 @@ const TableView = () => {
           if (!open) setCaptainTransferContext(null);
         }}
         currentCaptain={captainTransferContext?.currentCaptain ?? ''}
+        invoiceName={captainTransferContext?.invoiceName ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
 

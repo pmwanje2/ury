@@ -82,9 +82,9 @@ export const useTableStore = defineStore("table", {
     },
     searchCaptian() {
       return this.captain.filter((ordeTakers) => {
-        return ordeTakers.name
-          .toLowerCase()
-          .includes(this.newCaptain.toLowerCase());
+        const search = this.newCaptain.toLowerCase();
+        return ordeTakers.name.toLowerCase().includes(search)
+          || (ordeTakers.full_name || '').toLowerCase().includes(search);
       });
     },
     toggleTableType(state) {
@@ -348,16 +348,24 @@ export const useTableStore = defineStore("table", {
         console.error("Failed to merge tables:", error);
       }
     },
-    fetchCaptain() {
-      this.db
-        .getDocList("User", {
-          fields: ["name"],
-          limit: 0,
-        })
-        .then((docs) => {
-          this.captain = docs;
-        })
-        .catch((error) => console.error(error));
+    async fetchCaptain() {
+      this.captain = [];
+      this.invoiceNumber = null;
+      try {
+        await this.invoiceNumberFetching();
+        if (!this.invoiceNumber) {
+          this.captain = [];
+          return;
+        }
+        const result = await this.call.get(
+          "ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates",
+          { invoice: this.invoiceNumber },
+        );
+        this.captain = result.message || [];
+      } catch (error) {
+        this.captain = [];
+        console.error(error);
+      }
     },
     async toggleDropdown(index) {
       this.tableName = index;

@@ -153,6 +153,17 @@ export async function captainTransfer(
   });
 }
 
+export async function getCaptainTransferCandidates(invoice: string): Promise<{
+  name: string;
+  full_name: string;
+}[]> {
+  const response = await call.get(
+    'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates',
+    { invoice },
+  );
+  return response.message as { name: string; full_name: string }[];
+}
+
 /**
  * Reprints the KOT for an invoice via the hardened `reprint_kot` endpoint
  * (`ury/ury/api/ury_kot_reprint.py`), which already enforces branch and
