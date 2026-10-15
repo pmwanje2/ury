@@ -99,6 +99,29 @@ class TestGuestPhonePayment(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Payment Request", result["payment_request"],
             "payment_gateway_account"), self.gateway.name)
 
+    def test_uses_company_default_gateway_not_first_profile_phone_mode(self):
+        frappe.set_user("Administrator")
+        frappe.get_doc({"doctype": "Payment Gateway", "gateway": "P2 Preferred"}).insert()
+        create_payment_gateway_account("P2 Preferred", payment_channel="Phone", company="URY")
+        preferred = frappe.get_doc("Payment Gateway Account",
+            {"payment_gateway": "P2 Preferred", "company": "URY"})
+        preferred.is_default = 1
+        preferred.save()
+        frappe.get_doc({"doctype": "Mode of Payment", "mode_of_payment": "P2 Preferred",
+            "type": "Phone", "accounts": [{"company": "URY",
+            "default_account": preferred.payment_account}]}).insert()
+        self.pos.profile.append("payments", {"mode_of_payment": "P2 Preferred"})
+        self.pos.profile.save()
+        frappe.set_user("Guest")
+        result = self.request()
+        pr = frappe.get_doc("Payment Request", result["payment_request"])
+        self.assertEqual((pr.payment_gateway_account, pr.mode_of_payment),
+            (preferred.name, "P2 Preferred"))
+
+    def test_positive_invoice_outstanding_is_used_instead_of_total(self):
+        frappe.db.set_value("POS Invoice", self.invoice_name, "outstanding_amount", 60)
+        self.assertEqual(self.request()["amount"], 60)
+
     def test_no_shopping_cart_redirect_or_automatic_sales_invoice(self):
         # Characterize the v16 trap independently of the missing-row defect.
         frappe.set_user("Administrator")

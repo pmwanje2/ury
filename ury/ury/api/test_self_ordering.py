@@ -576,7 +576,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
 
         def configured_gateway(doctype, *args, **kwargs):
             if doctype == "Payment Gateway Account":
-                return frappe._dict(name="P2 Gateway", payment_account="P2 Bank")
+                return frappe._dict(name="P2 Gateway", payment_account="P2 Bank", payment_channel="Phone")
             if doctype == "Mode of Payment":
                 return "Phone"
             if doctype == "Mode of Payment Account":
