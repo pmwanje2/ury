@@ -1,0 +1,171 @@
+{
+  "payment_requests": [
+    {
+      "name": "ACC-PRQ-2026-00005",
+      "reference_name": "P2-8be922db-00003",
+      "grand_total": 12000.0,
+      "currency": "UGX",
+      "payment_gateway_account": "Pesapal - UGX - P2",
+      "mode_of_payment": "Pesapal",
+      "payment_channel": "Phone",
+      "make_sales_invoice": 0,
+      "mute_email": 1,
+      "docstatus": 1,
+      "status": "Paid",
+      "payment_url": null
+    },
+    {
+      "name": "ACC-PRQ-2026-00004",
+      "reference_name": "P2-8be922db-00002",
+      "grand_total": 12000.0,
+      "currency": "UGX",
+      "payment_gateway_account": "Pesapal - UGX - P2",
+      "mode_of_payment": "Pesapal",
+      "payment_channel": "Phone",
+      "make_sales_invoice": 0,
+      "mute_email": 1,
+      "docstatus": 1,
+      "status": "Requested",
+      "payment_url": null
+    },
+    {
+      "name": "ACC-PRQ-2026-00003",
+      "reference_name": "P2-8be922db-00001",
+      "grand_total": 12000.0,
+      "currency": "UGX",
+      "payment_gateway_account": "Pesapal - UGX - P2",
+      "mode_of_payment": "Pesapal",
+      "payment_channel": "Phone",
+      "make_sales_invoice": 0,
+      "mute_email": 1,
+      "docstatus": 1,
+      "status": "Requested",
+      "payment_url": null
+    }
+  ],
+  "integration_requests": [
+    {
+      "name": "TRACK-ACC-PRQ-2026-00005",
+      "reference_docname": "ACC-PRQ-2026-00005",
+      "status": "Completed",
+      "integration_request_service": "Pesapal",
+      "data": "{\n \"checkout_url\": \"https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00005\",\n \"currency\": \"UGX\",\n \"reference\": \"ACC-PRQ-2026-00005\",\n \"request_amount\": 12000\n}"
+    },
+    {
+      "name": "TRACK-ACC-PRQ-2026-00004",
+      "reference_docname": "ACC-PRQ-2026-00004",
+      "status": "Queued",
+      "integration_request_service": "Pesapal",
+      "data": "{\n \"checkout_url\": \"https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00004\",\n \"currency\": \"UGX\",\n \"reference\": \"ACC-PRQ-2026-00004\",\n \"request_amount\": 12000\n}"
+    },
+    {
+      "name": "TRACK-ACC-PRQ-2026-00003",
+      "reference_docname": "ACC-PRQ-2026-00003",
+      "status": "Queued",
+      "integration_request_service": "Pesapal",
+      "data": "{\n \"checkout_url\": \"https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00003\",\n \"currency\": \"UGX\",\n \"reference\": \"ACC-PRQ-2026-00003\",\n \"request_amount\": 12000\n}"
+    }
+  ],
+  "invoices": [
+    {
+      "name": "P2-8be922db-00005",
+      "docstatus": 0,
+      "grand_total": 12000.0,
+      "outstanding_amount": 0.0,
+      "payments": [
+        {
+          "name": "n3bovis2uo",
+          "mode_of_payment": "Cash",
+          "amount": 0.0,
+          "type": "Cash",
+          "account": "Cash - P2"
+        }
+      ]
+    },
+    {
+      "name": "P2-8be922db-00004",
+      "docstatus": 0,
+      "grand_total": 12000.0,
+      "outstanding_amount": 0.0,
+      "payments": [
+        {
+          "name": "mjhvd3gvo2",
+          "mode_of_payment": "Cash",
+          "amount": 0.0,
+          "type": "Cash",
+          "account": "Cash - P2"
+        }
+      ]
+    },
+    {
+      "name": "P2-8be922db-00003",
+      "docstatus": 1,
+      "grand_total": 12000.0,
+      "outstanding_amount": 0.0,
+      "payments": [
+        {
+          "name": "orhpd7i359",
+          "mode_of_payment": "Pesapal",
+          "amount": 12000.0,
+          "type": "Phone",
+          "account": "Pesapal - P2"
+        }
+      ]
+    },
+    {
+      "name": "P2-8be922db-00002",
+      "docstatus": 0,
+      "grand_total": 12000.0,
+      "outstanding_amount": 0.0,
+      "payments": [
+        {
+          "name": "lh60a5rnjp",
+          "mode_of_payment": "Cash",
+          "amount": 0.0,
+          "type": "Cash",
+          "account": "Cash - P2"
+        },
+        {
+          "name": "lh8urf32tt",
+          "mode_of_payment": "Pesapal",
+          "amount": 12000.0,
+          "type": "Phone",
+          "account": "Pesapal - P2"
+        }
+      ]
+    },
+    {
+      "name": "P2-8be922db-00001",
+      "docstatus": 0,
+      "grand_total": 12000.0,
+      "outstanding_amount": 0.0,
+      "payments": [
+        {
+          "name": "l09vnhfkub",
+          "mode_of_payment": "Cash",
+          "amount": 0.0,
+          "type": "Cash",
+          "account": "Cash - P2"
+        },
+        {
+          "name": "l0effflslb",
+          "mode_of_payment": "Pesapal",
+          "amount": 12000.0,
+          "type": "Phone",
+          "account": "Pesapal - P2"
+        }
+      ]
+    }
+  ],
+  "fence": {
+    "disabled": 0,
+    "sha256": "23c0aab6265515d6547939c6abc131404abdfc79f8a129bb66ca2f868736b75a"
+  },
+  "installed_apps": [
+    "frappe",
+    "erpnext",
+    "ury",
+    "payments",
+    "ea_payments"
+  ]
+}

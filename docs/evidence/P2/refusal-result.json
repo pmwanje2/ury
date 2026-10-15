@@ -1,0 +1,7 @@
+{
+  "status": 417,
+  "body": {
+    "exc_type": "ValidationError",
+    "_server_messages": "[\"{\\\"message\\\":\\\"[URY-PAYMENT-NOT-CONFIGURED] Configure a Phone payment method with a Payment Gateway Account for this POS Profile.\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\",\\\"indicator\\\":\\\"red\\\",\\\"raise_exception\\\":1,\\\"__frappe_exc_id\\\":\\\"b7f1ef24b977e895883b45c296763e64118d512841543d0381b0209d\\\"}\"]"
+  }
+}
