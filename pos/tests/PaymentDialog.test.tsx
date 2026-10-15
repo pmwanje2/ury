@@ -143,10 +143,11 @@ test('a pending on-account settlement cannot be submitted twice', async () => {
   const post = vi.spyOn(call, 'post').mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
   await render();
   await enter('40');
-  expect(payButton().disabled).toBe(false);
-  await act(async () => payButton().click());
-  expect(payButton().disabled).toBe(true);
-  await act(async () => payButton().click());
+  const button = payButton();
+  expect(button.disabled).toBe(false);
+  await act(async () => button.click());
+  expect(button.disabled).toBe(true);
+  await act(async () => button.click());
   expect(post).toHaveBeenCalledOnce();
   await act(async () => finish({ message: { docstatus: 1 } }));
 });
