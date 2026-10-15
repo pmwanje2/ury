@@ -1677,7 +1677,7 @@ def sync_order(
             "item_code": item.item_code,
             "item_name": item.item_name,
             "qty": item.qty,
-            "comments": "",
+            "comments": item.comment or "",
         }
         past_item.append(previous_item)
         

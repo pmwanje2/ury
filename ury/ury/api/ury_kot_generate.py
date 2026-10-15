@@ -283,7 +283,8 @@ def create_cancel_kot_doc(
             kot_cancel_items = kot_doc.kot_items
             itemCheckFlag = False
             for kotItem in kot_cancel_items:
-                if cancelItem["item_code"] == kotItem.item:
+                if (cancelItem["item_code"] == kotItem.item
+                        and (cancelItem.get("comments") or "") == (kotItem.comments or "")):
                     itemCheckFlag = True
             if itemCheckFlag:
                 original_kots.append(kot_doc.name)
@@ -320,7 +321,8 @@ def create_cancel_kot_doc(
     for cancelItem in cancel_items:
         course = frappe.db.get_value("URY Menu Item", {"item": cancelItem["item_code"],"parent":menu}, "course")
         for item in invoiceItems:
-            if cancelItem["item_code"] == item["item_code"]:
+            if (cancelItem["item_code"] == item["item_code"]
+                    and (cancelItem.get("comments") or "") == (item.get("comments") or "")):
                 kot_cancel_doc.append(
                     "kot_items",
                     {
@@ -420,12 +422,14 @@ def compare_two_array(array_1, array_2):
     for index, x in enumerate(array_1):
         a = list(
             filter(
-                lambda y: y["item_code"] == x["item_code"] and y["qty"] == x["qty"],
+                lambda y: y["item_code"] == x["item_code"] and y["qty"] == x["qty"]
+                and (y.get("comments") or "") == (x.get("comments") or ""),
                 array_2,
             )
         )
         if len(a) == 0:
-            b = list(filter(lambda z: z["item_code"] == x["item_code"], array_2))
+            b = list(filter(lambda z: z["item_code"] == x["item_code"]
+                            and (z.get("comments") or "") == (x.get("comments") or ""), array_2))
             for qtb in b:
                 x["qty"] = int(x["qty"]) - int(qtb["qty"])
             finalarray.append(x)
@@ -437,6 +441,7 @@ def get_removed_items(array_1, array_2):
     removed_objects = [
         obj
         for obj in array_1
-        if obj["item_code"] not in [x["item_code"] for x in array_2]
+        if (obj["item_code"], obj.get("comments") or "")
+        not in [(x["item_code"], x.get("comments") or "") for x in array_2]
     ]
     return removed_objects
