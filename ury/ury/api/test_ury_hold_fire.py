@@ -171,6 +171,14 @@ class HoldFireTests(OrderingCases, TestCase):
             self.order.cancel_kot(self.invoice.name)
         self.assertEqual([(r["comments"], r["qty"]) for r in cancel.call_args.args[3]], [("chilli", 2)])
 
+    def test_whole_order_cancel_aggregates_duplicate_sent_note_identity(self):
+        self.row("sent-1", held=0, qty=2)
+        self.row("sent-2", held=0, qty=3)
+        self.row("held", qty=4)
+        self.order.cancel_kot(self.invoice.name)
+        self.assertEqual([(row.cancelled_qty, row.comments) for ticket in self.tickets for row in ticket.kot_items],
+                         [(5, "no onions")])
+
     def test_settlement_refuses_held_lines_even_if_switch_was_turned_off(self):
         self.row()
         self.pos_profile.ury_enable_hold_fire = 0
