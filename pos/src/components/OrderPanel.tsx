@@ -206,8 +206,8 @@ const OrderPanel = () => {
   const isInteractionDisabled = isOrderInteractionDisabled() || isSubmitting;
 
   return (
-    <div data-testid="order-panel" className="absolute inset-y-0 end-0 z-10 flex h-full min-h-0 w-full max-w-sm flex-col border-s border-gray-200 bg-white">
-      <div className="p-4 border-b border-gray-200 flex-shrink-0">
+    <div data-testid="order-panel" className="absolute inset-y-0 end-0 z-10 flex h-full min-h-0 w-full max-w-sm flex-col overflow-hidden border-s border-gray-200 bg-white">
+      <div className="min-h-0 overflow-y-auto border-b border-gray-200 p-4">
         {outbox.offline && <label className="block text-sm mb-2">{t('offline.round_target')}
           <select data-testid="offline-round-target" className="block w-full border p-1" value={offlineTarget} disabled={isInteractionDisabled || outbox.replaying} onChange={(event) => setOfflineTarget(event.target.value)}>
             <option value="">{t('offline.new_order')}</option>
@@ -249,7 +249,7 @@ const OrderPanel = () => {
         <EmptyCartUI />
       ) : (
         <>
-          <div className="flex-1 overflow-y-auto px-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6">
             {activeOrders.map((item) => (
               <div
                 key={item.uniqueId}
