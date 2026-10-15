@@ -27,7 +27,7 @@ describe('POS opening zero-balance copy', () => {
         if (entry.text.includes('\u20b9')) offenders.push(`${file}:${entry.path}`);
       }
     }
-    expect(offenders).toEqual(['broken-on-purpose']);
+    expect(offenders).toEqual([]);
   });
 
   it('states a zero opening balance without a currency symbol or interpolation', () => {
