@@ -55,7 +55,7 @@ const en = {
     request_created:
       'Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.',
     paid: 'Paid ({{amount}} {{currency}}) — thank you.',
-    remaining: 'Already paid {{paid}} {{currency}}, paying the remaining {{remaining}} {{currency}}.',
+    remaining: "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter.",
   },
   bill: {
     request: 'Request Bill',
@@ -135,7 +135,7 @@ const sw = {
     request_created:
       'Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.',
     paid: 'Imelipwa ({{amount}} {{currency}}) — asante.',
-    remaining: 'Tayari umelipa {{paid}} {{currency}}, unalipa kiasi kilichobaki {{remaining}} {{currency}}.',
+    remaining: 'Umelipa {{paid}} {{currency}} kwa simu. Tafadhali lipa kiasi kilichobaki {{remaining}} {{currency}} kwenye kaunta.',
   },
   bill: {
     request: 'Omba bili',
@@ -215,7 +215,7 @@ const lg = {
     request_created:
       'Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.',
     paid: 'Kusasuddwa ({{amount}} {{currency}}) — webale.',
-    remaining: 'Wasasula dda {{paid}} {{currency}}, kati osasula ebisigaddeyo {{remaining}} {{currency}}.',
+    remaining: 'Osasudde {{paid}} {{currency}} ku ssimu. Nsaba sasula ebisigaddeyo {{remaining}} {{currency}} ku kaunta.',
   },
   bill: {
     request: 'Saba bili',

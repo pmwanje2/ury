@@ -22,13 +22,15 @@ test('guest phone payment outcome', async (t) => {
     }
   })
 
-  await t.test('remainder after an earlier payment redirects and says so', () => {
-    const outcome = paymentOutcome({ ...base, status: 'Requested', amount: 3000, paid_amount: 12000, remaining_amount: 3000 })
-    assert.equal(outcome.redirect, base.payment_url)
-    assert.deepEqual(outcome.notice, {
-      key: 'payment.remaining',
-      params: { paid: 12000, remaining: 3000, currency: 'UGX' },
-    })
+  await t.test('paid phone plus growth sends the remaining balance to the counter, never checkout', () => {
+    for (const status of ['Paid', 'Partially Paid', 'Requested']) {
+      const outcome = paymentOutcome({ ...base, status, amount: 12000, paid_amount: 12000, remaining_amount: 3000 })
+      assert.equal(outcome.redirect, null)
+      assert.deepEqual(outcome.notice, {
+        key: 'payment.remaining',
+        params: { paid: 12000, remaining: 3000, currency: 'UGX' },
+      })
+    }
   })
 
   await t.test('first request redirects without a notice', () => {

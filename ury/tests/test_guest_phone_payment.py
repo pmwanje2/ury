@@ -155,27 +155,78 @@ class TestGuestPhonePayment(unittest.TestCase):
         status = frappe.call(get_payment_status, session=self.token)
         self.assertEqual((status["status"], status["payment_url"]), ("Partially Paid", None))
 
-    def test_order_growth_after_paid_request_charges_only_remainder(self):
-        first = self.request()
-        self.mark_paid(first["payment_request"])
+    def grow_order(self):
         frappe.set_user("Administrator")
         invoice = frappe.get_doc("POS Invoice", self.invoice_name)
-        invoice.items[0].qty = 2
+        invoice.items[0].qty += 1
         invoice.save()
-        self.assertEqual(invoice.rounded_total or invoice.grand_total, 200)
         frappe.set_user("Guest")
 
+    def test_order_growth_after_paid_request_returns_counter_balance_without_new_request(self):
+        first = self.request()
+        self.mark_paid(first["payment_request"])
+        self.grow_order()
+
         remainder = self.request()
-        self.assertNotEqual(remainder["payment_request"], first["payment_request"])
+        self.assertEqual(remainder["payment_request"], first["payment_request"])
         self.assertEqual((remainder["amount"], remainder["paid_amount"], remainder["remaining_amount"]),
             (100, 100, 100))
-        self.assertTrue(remainder["payment_url"])
-        self.assertEqual(frappe.db.get_value("Payment Request", remainder["payment_request"],
-            "grand_total"), 100)
-        phone = frappe.get_all("Sales Invoice Payment", filters={"parent": self.invoice_name,
-            "parenttype": "POS Invoice", "mode_of_payment": "P2 Phone"}, pluck="amount")
-        self.assertEqual(phone, [200])
-        self.assertEqual(self.request()["payment_request"], remainder["payment_request"])
+        self.assertEqual((remainder["status"], remainder["payment_url"]), ("Paid", None))
+        self.assertEqual(self.request(), remainder)
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+        self.assertEqual(frappe.session.user, "Guest")
+
+    def test_unpaid_growth_cancels_stale_request_and_replaces_full_amount(self):
+        first = self.request()
+        self.grow_order()
+        replacement = self.request()
+        self.assertEqual((replacement["amount"], replacement["paid_amount"],
+            replacement["remaining_amount"]), (200, 0, 200))
+        self.assertNotEqual(replacement["payment_request"], first["payment_request"])
+        self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"],
+            "docstatus"), 2)
+        self.assertEqual(self.request(), replacement)
+        self.assertEqual(frappe.db.count("Payment Request",
+            {"reference_name": self.invoice_name, "docstatus": 1}), 1)
+
+    def test_phone_paid_then_growth_settles_single_phone_plus_cash_as_cashier(self):
+        first = self.request()
+        self.mark_paid(first["payment_request"])
+        self.grow_order()
+        self.request()
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+        frappe.set_user(self.pos.user.name)
+        settle_order(self.pos, self.invoice_name, payments=[
+            {"mode_of_payment": "P2 Phone", "amount": 100},
+            {"mode_of_payment": "Cash", "amount": 100},
+        ])
+        saved = frappe.get_doc("POS Invoice", self.invoice_name)
+        self.assertEqual((saved.docstatus, saved.outstanding_amount), (1, 0))
+        self.assertEqual([(p.mode_of_payment, p.amount) for p in saved.payments],
+            [("P2 Phone", 100), ("Cash", 100)])
+
+    def test_paid_phone_request_blocks_second_gateway_after_default_changes(self):
+        first = self.request()
+        self.mark_paid(first["payment_request"])
+        self.grow_order()
+        frappe.set_user("Administrator")
+        frappe.get_doc({"doctype": "Payment Gateway", "gateway": "P2 Preferred"}).insert()
+        create_payment_gateway_account("P2 Preferred", payment_channel="Phone", company="URY")
+        preferred = frappe.get_doc("Payment Gateway Account",
+            {"payment_gateway": "P2 Preferred", "company": "URY"})
+        preferred.is_default = 1
+        preferred.save()
+        frappe.get_doc({"doctype": "Mode of Payment", "mode_of_payment": "P2 Preferred",
+            "type": "Phone", "accounts": [{"company": "URY",
+            "default_account": preferred.payment_account}]}).insert()
+        self.pos.profile.append("payments", {"mode_of_payment": "P2 Preferred"})
+        self.pos.profile.save()
+        frappe.set_user("Guest")
+        again = self.request()
+        self.assertEqual((again["payment_request"], again["status"], again["payment_url"]),
+            (first["payment_request"], "Paid", None))
+        self.assertEqual((again["paid_amount"], again["remaining_amount"]), (100, 100))
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
 
     def test_request_errors_are_not_reported_as_unconfigured(self):
         def refuse(**kwargs):
