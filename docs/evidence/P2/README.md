@@ -2,6 +2,8 @@
 
 Review fix (idempotent re-tap, unwrapped errors, row gateway):
 [review-fix/README.md](review-fix/README.md).
+Review fix 2 (paid re-tap never reopens checkout; remainder after growth):
+[paid-retap/README.md](paid-retap/README.md).
 
 Scope: [tracker #3712](https://github.com/Maximus-Tech-Enterprise-Apps/maximus-siteops/issues/3712),
 item P2; approved [Gap #3445 section 6.2](https://github.com/Maximus-Tech-Enterprise-Apps/maximus-siteops/issues/3445).
