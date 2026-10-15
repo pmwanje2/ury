@@ -46,6 +46,19 @@ test('hold store refuses offline and does not merge held and sent lines', () => 
   expect(usePOSStore.getState().activeOrders[0].ury_held).toBeFalsy();
 });
 
+test('adding another of the same dish never merges it into an unsaved held line', async () => {
+  usePOSStore.setState({ activeOrders: [] });
+  const item = { id: 'Fish', name: 'Fish', price: 100, quantity: 1 };
+  await usePOSStore.getState().addToOrder(item as never);
+  const uniqueId = usePOSStore.getState().activeOrders[0].uniqueId!;
+  usePOSStore.getState().setItemHeld(uniqueId, true);
+  await usePOSStore.getState().addToOrder(item as never);
+  const rows = usePOSStore.getState().activeOrders;
+  expect(rows.map(row => [!!row.ury_held, row.quantity])).toEqual([[true, 1], [false, 1]]);
+  expect(new Set(rows.map(row => row.uniqueId)).size).toBe(2);
+  expect(rows[0].uniqueId).toBe(uniqueId);
+});
+
 // Render the real control with the real store. No server/site/table is contacted.
 test('held/sent controls are default-off and hidden offline; fire preserves unsaved cart edits', async () => {
   const modules = import.meta.glob('../src/components/*Controls.tsx');
@@ -71,9 +84,9 @@ test('held/sent controls are default-off and hidden offline; fire preserves unsa
     expect(usePOSStore.getState().activeOrders[0].ury_held).toBe(0);
     expect(usePOSStore.getState().lastModifiedTime).toBe('v2');
     expect(host.textContent).toContain('Sent');
-    usePOSStore.setState({ posProfile: { name: 'POS A' } as never }); await render();
+    await act(async () => { usePOSStore.setState({ posProfile: { name: 'POS A' } as never }); }); await render();
     expect(host.textContent).toBe('');
-    usePOSStore.setState({ posProfile: { name: 'POS A', ury_enable_hold_fire: 1 } as never });
+    await act(async () => { usePOSStore.setState({ posProfile: { name: 'POS A', ury_enable_hold_fire: 1 } as never }); });
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     await act(async () => { window.dispatchEvent(new Event('offline')); }); await render();
     expect(host.querySelector('button')).toBeNull();

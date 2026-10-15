@@ -1,8 +1,8 @@
 """U3 behavior regressions using real staff pricing/KOT/ownership code, no site."""
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
@@ -189,6 +189,47 @@ class HoldFireTests(OrderingCases, TestCase):
         self.fire(line="held-1")
         self.assertTrue(any("for update" in call.args[0].lower() for call in self.framework.db.sql.call_args_list))
         self.invoice.reload.assert_called()
+
+    def test_adding_a_new_dish_preserves_an_existing_held_row(self):
+        self.row()
+        self.sync([self.request("held-1"), self.request(held=0, code="Tea")])
+        self.assertEqual(self.ticket_lines(), [("Tea", 1, "no onions")])
+        self.assertEqual(self.invoice.items[0].ury_held, 1)
+
+    def test_append_round_with_existing_held_line_sends_only_the_new_round(self):
+        self.row()
+        self.sync([self.request(held=0, code="Tea")], append=1)
+        self.assertEqual(self.ticket_lines(), [("Tea", 1, "no onions")])
+        self.assertEqual(self.invoice.items[0].ury_held, 1)
+
+    def test_table_order_restricted_role_cannot_fire_even_with_billing_access(self):
+        self.row()
+        self.invoice.order_type = "Dine In"
+        self.pos_profile.role_restricted_for_table_order = [Row(role="URY Cashier")]
+        with self.assertRaises(PermissionError):
+            self.fire(line="held-1")
+
+    def test_guest_addition_does_not_release_existing_held_items(self):
+        self.row()
+        self.add(code="Tea")
+        self.assertEqual(self.ticket_lines(), [("Tea", 1, "")])
+        self.assertEqual(self.invoice.items[0].ury_held, 1)
+
+    def test_after_fire_next_sync_and_cancel_keep_the_native_diffs(self):
+        self.row(qty=2)
+        self.row("held-2", qty=4, note="chilli")
+        self.fire(line="held-1")
+        self.tickets.clear()
+        self.sync([self.request("held-1", held=0, qty=1), self.request("held-2", qty=4, note="chilli")])
+        self.assertEqual([(r.comments, r.cancelled_qty) for t in self.tickets for r in t.kot_items], [("no onions", 1)])
+
+    def test_stale_fire_and_kot_failure_are_not_acknowledged_as_success(self):
+        self.row()
+        with self.assertRaisesRegex(ValueError, "modified"):
+            self.fire(line="held-1", last_modified_time="old version")
+        with patch.object(self.order, "kot_execute", side_effect=RuntimeError("KOT failed")):
+            with self.assertRaisesRegex(RuntimeError, "KOT failed"):
+                self.fire(line="held-1")
 
     def test_native_custom_fields_default_off_and_hold_survives_upgrade(self):
         native = ModuleType("frappe.custom.doctype.custom_field.custom_field")
