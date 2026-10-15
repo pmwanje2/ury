@@ -307,6 +307,13 @@ def get_custom_fields():
 
 		"POS Profile": [
 			{
+				"fieldname": "ury_enable_hold_fire",
+				"fieldtype": "Check",
+				"label": "Enable Hold and Fire",
+				"default": "0",
+				"insert_after": "restaurant_info",
+			},
+			{
 				"fieldname": "restaurant_info",
 				"fieldtype": "Section Break",
 				"label": "Restaurant Info",
@@ -425,6 +432,15 @@ def get_custom_fields():
 		],
 
 		"POS Invoice Item": [
+			{
+				"fieldname": "ury_held",
+				"fieldtype": "Check",
+				"label": "Held",
+				"default": "0",
+				"read_only": 1,
+				"no_copy": 1,
+				"insert_after": "comment",
+			},
 			{
 				"fieldname": "comment",
 				"fieldtype": "Data",

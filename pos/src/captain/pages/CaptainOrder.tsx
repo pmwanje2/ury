@@ -25,6 +25,7 @@ import CommentDialog from '../../components/CommentDialog';
 import TableTransferDialog from '../../components/TableTransferDialog';
 import CaptainTransferDialog from '../../components/CaptainTransferDialog';
 import { CustomerSelect } from '../../components/CustomerSelect';
+import { HoldFireControls } from '../../components/HoldFireControls';
 
 type Mode = 'menu' | 'order';
 
@@ -200,6 +201,8 @@ export default function CaptainOrder() {
 
       const orderData: SyncOrderRequest = {
         items: activeOrders.map((item) => ({
+          name: item.invoiceItemName,
+          ury_held: item.ury_held || 0,
           item: item.id,
           item_name: item.name,
           rate: item.selectedVariant?.price || item.price,
@@ -380,6 +383,7 @@ export default function CaptainOrder() {
         </div>
       )}
 
+      {canModify && <HoldFireControls />}
       {canModify && (
         <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-3 py-3">
           <span className="text-sm font-medium text-gray-700">Pax</span>

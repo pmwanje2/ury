@@ -18,6 +18,7 @@ import { DINE_IN } from '../data/order-types';
 import { t } from '../i18n';
 import { submitOrderOfflineAware } from '../offline/cashier';
 import { useOutbox } from '../offline/use-outbox';
+import { HoldFireControls } from './HoldFireControls';
 
 const OrderPanel = () => {
   const { 
@@ -111,6 +112,8 @@ const OrderPanel = () => {
       
       const orderData = {
         items: activeOrders.map(item => ({
+          name: item.invoiceItemName,
+          ury_held: item.ury_held || 0,
           item: item.id,
           item_name: item.name,
           rate: item.selectedVariant?.price || item.price,
@@ -134,7 +137,9 @@ const OrderPanel = () => {
         comments: orderComment || undefined
       };
 
-      const submission = await submitOrderOfflineAware({ profile: posProfile, user,
+      const hasHeld = activeOrders.some(item => item.ury_held);
+      if (hasHeld && outbox.offline) throw new Error(t('hold_fire.offline'));
+      const submission = hasHeld ? { offline: false as const, response: await syncOrder(orderData) } : await submitOrderOfflineAware({ profile: posProfile, user,
         total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
         order: target ? { ...target.order, items: orderData.items } : orderData,
         clientOrderId: offlineTarget || undefined, onlineSubmit: (ids) => syncOrder({ ...orderData,
@@ -250,6 +255,7 @@ const OrderPanel = () => {
       ) : (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-6">
+            <HoldFireControls />
             {activeOrders.map((item) => (
               <div
                 key={item.uniqueId}
