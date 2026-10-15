@@ -68,7 +68,7 @@ test.each(['40', '0', ''])('a named account can settle with tender %j and leave 
   expect(post).toHaveBeenCalledExactlyOnceWith('ury.ury.doctype.ury_order.ury_order.make_invoice', {
     additionalDiscount: null, cashier: 'cashier@example.com', customer: 'House Account',
     invoice: 'BILL-1', owner: 'waiter@example.com',
-    payments: amount === '40' ? [{ mode_of_payment: 'Cash', amount: 40 }] : [],
+    payments: [{ mode_of_payment: 'Cash', amount: amount === '40' ? 40 : 0 }],
     pos_profile: 'Till A', table: null,
   });
   expect(onClose).toHaveBeenCalledOnce();
@@ -79,6 +79,8 @@ test.each(['40', '0', ''])('a named account can settle with tender %j and leave 
 test.each([
   ['partial payments disabled', { allow_partial_payment: 0 }, 'House Account'],
   ['partial-payment setting missing', { allow_partial_payment: undefined }, 'House Account'],
+  ['non-binary partial-payment setting', { allow_partial_payment: 2 }, 'House Account'],
+  ['string partial-payment setting', { allow_partial_payment: '1' }, 'House Account'],
   ['default customer', {}, 'Walk-in Customer'],
   ['empty customer', {}, ''],
   ['whitespace customer', {}, '   '],
@@ -99,6 +101,26 @@ test('short payment stays disabled before the profile is loaded', async () => {
   await render();
   await enter('40');
   expect(payButton().disabled).toBe(true);
+});
+
+test('unpaid account settlement uses an existing mode id with zero paid amount', async () => {
+  usePOSStore.setState({ paymentModes: [{ id: 'Card', name: 'Bank card' }] as any });
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
+  await render();
+  expect(payButton().disabled).toBe(false);
+  await act(async () => payButton().click());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    payments: [{ mode_of_payment: 'Card', amount: 0 }],
+  });
+});
+
+test('an account cannot settle without a configured payment mode', async () => {
+  usePOSStore.setState({ paymentModes: [] });
+  const post = vi.spyOn(call, 'post');
+  await render();
+  expect(payButton().disabled).toBe(true);
+  await act(async () => payButton().click());
+  expect(post).not.toHaveBeenCalled();
 });
 
 test.each([0, 1])('full split payment still works with partial-payment setting %s', async (flag) => {
