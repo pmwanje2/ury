@@ -103,8 +103,10 @@ def issue_pin(user):
 		pin = f"{secrets.randbelow(10000):04d}"
 		try:
 			frappe.db.set_value("User", user, "custom_floor_pin_hash", _digest("ury-floor-pin-v1", pin), update_modified=False)
-		except frappe.UniqueValidationError:
-			continue
+		except Exception as error:
+			if isinstance(error, frappe.UniqueValidationError) or frappe.db.is_unique_key_violation(error):
+				continue
+			raise
 		add_authentication_log(f"Floor PIN issued for {user} by {frappe.session.user}", frappe.session.user)
 		return {"pin": pin}
 	_refuse("URY_FLOOR_PIN_NOT_PERMITTED", "A PIN could not be issued. Try again.")
@@ -136,6 +138,7 @@ def _sign_in(pin):
 		short.add_failure_attempt()
 		day.add_failure_attempt()
 		add_authentication_log(f"Floor PIN refused on tablet '{escape(label)}'", "Guest", status="Failed")
+		frappe.db.commit()  # As LoginManager.fail: retain the audit across the refusal rollback.
 		_refuse("URY_FLOOR_PIN_REFUSED", "That PIN didn't work.")
 	short.add_success_attempt()
 	frappe.local.login_manager.login_as(user, session_end=(datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat())

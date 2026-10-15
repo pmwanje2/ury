@@ -74,7 +74,6 @@ export const useAuthStore = defineStore("auth", {
     async pinSignIn(pin) {
       const { message } = await this.call.post("ury.ury_pos.floor_pin.sign_in", { pin });
       window.csrf_token = message.csrf_token;
-      this.auth.axios.defaults.headers["X-Frappe-CSRF-Token"] = message.csrf_token;
       this.pinSession = true;
       this.userAuth = true;
       localStorage.setItem("userAuth", "true");
