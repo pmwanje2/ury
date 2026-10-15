@@ -113,7 +113,7 @@ describe('floor tablet sign-out', () => {
     expect(localStorage.getItem('userAuth')).toBeNull();
     expect(sessionStorage.getItem('posProfile')).toBeNull();
     expect(invoice.menu.cart).toEqual([]);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     expect(auth.idleStop).toBeNull();
     await vi.advanceTimersByTimeAsync(120000);
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -125,7 +125,7 @@ describe('floor tablet sign-out', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     await flushPromises();
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 
   it('a listed non-billing role stays signed in after idle', async () => {
@@ -146,7 +146,7 @@ describe('floor tablet sign-out', () => {
     expect(auth.staySignedIn).toBe(false);
     await vi.advanceTimersByTimeAsync(60000);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 
   it('an empty stay list signs everyone out on idle when seconds are above zero', async () => {
@@ -155,7 +155,7 @@ describe('floor tablet sign-out', () => {
     expect(auth.staySignedIn).toBe(false);
     await vi.advanceTimersByTimeAsync(60000);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 
   it('zero disables idle sign-out', async () => {
@@ -182,7 +182,7 @@ describe('floor tablet sign-out', () => {
     expect(auth.switchWaiter).toBeTypeOf('function');
     await auth.switchWaiter();
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     expect(JSON.parse(localStorage.getItem(recentKey))).toEqual(names);
   });
 
@@ -201,7 +201,7 @@ describe('floor tablet sign-out', () => {
     expect(localStorage.getItem('selectedRoom')).toBeNull();
     expect(sessionStorage.getItem('posProfile')).toBeNull();
     expect(JSON.parse(localStorage.getItem(recentKey))).toEqual(names);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     expect(auth.idleStop).toBeNull();
     await auth.logOut();
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -214,7 +214,7 @@ describe('floor tablet sign-out', () => {
     expect(auth.userAuth).toBe(false);
     expect(invoice.menu.cart).toEqual([]);
     expect(localStorage.getItem('userAuth')).toBeNull();
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 });
 
@@ -224,7 +224,7 @@ describe('successful send is the only after-send sign-out path', () => {
     await invoice.invoiceCreation();
     expect(invoice.call.post).toHaveBeenCalledWith('ury.ury.doctype.ury_order.ury_order.sync_order', expect.any(Object));
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 
   it.each(['server refusal', 'network failure'])('%s does not sign a waiter out or lose the cart', async (failure) => {
@@ -260,7 +260,7 @@ describe('successful send is the only after-send sign-out path', () => {
     invoice.call.post.mockResolvedValue({ message: { name: 'POS-INV-TEST', status: 'Draft' } });
     await invoice.invoiceCreation();
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     expect(router.push).not.toHaveBeenCalledWith('/recentOrder');
   });
 
@@ -328,7 +328,7 @@ describe('ERP sessions without a local PIN sign-in marker', () => {
     expect(localStorage.getItem('userAuth')).toBeNull();
     expect(router.push).not.toHaveBeenCalledWith('/Table');
     expect(boundary.table.fetchRoom).not.toHaveBeenCalled();
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     mount(Login);
     expect(host.querySelector('input[name="currentPassword"]')).not.toBeNull();
   });
@@ -341,7 +341,7 @@ describe('ERP sessions without a local PIN sign-in marker', () => {
     expect(auth.userAuth).toBeFalsy();
     expect(localStorage.getItem('userAuth')).toBeNull();
     expect(router.push).not.toHaveBeenCalledWith('/Table');
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 
   it('does not admit the session while the POS Profile role list is still loading', async () => {
@@ -374,7 +374,7 @@ describe('ERP sessions without a local PIN sign-in marker', () => {
     expect(auth.userAuth).toBeFalsy();
     expect(localStorage.getItem('userAuth')).toBeNull();
     expect(router.push).not.toHaveBeenCalledWith('/Table');
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
   });
 
   it('a session bypass never adds the manager to recent waiters', async () => {
@@ -387,7 +387,7 @@ describe('ERP sessions without a local PIN sign-in marker', () => {
     expect(JSON.parse(localStorage.getItem(recentKey))).toEqual(names);
   });
 
-  it('PIN login still admits an unlisted waiter and records their recent name', async () => {
+  it('password fallback still admits an unlisted waiter without recording their name', async () => {
     const requests = pageSession({ roles: ['URY Captain'], stayRoles: ['URY Manager'] });
     auth.auth.axios.defaults.adapter = async config => {
       requests.push({ url: config.url, body: config.data ? JSON.parse(config.data) : undefined });
@@ -409,7 +409,7 @@ describe('ERP sessions without a local PIN sign-in marker', () => {
     expect(localStorage.getItem('userAuth')).toBe('true');
     expect(router.push).toHaveBeenCalledWith('/Table');
     expect(auth.currentPassword).toBe('');
-    expect(JSON.parse(localStorage.getItem(recentKey))).toEqual([{ username: 'alice', displayName: 'Alice Waiter' }]);
+    expect(localStorage.getItem(recentKey)).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
 });
@@ -441,7 +441,7 @@ describe('native username and private PIN', () => {
     await flushPromises();
     expect(requests).toEqual([{ url: '/api/method/frappe.auth.get_logged_user', body: undefined }]);
     expect(auth.userAuth).toBeFalsy();
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     expect(localStorage.getItem('userAuth')).toBeNull();
     expect(router.push).not.toHaveBeenCalled();
 
@@ -483,7 +483,7 @@ describe('native username and private PIN', () => {
     expect(auth.currentPassword).toBe('');
   });
 
-  it('stores only usernames and display names, max six, most recent first, and survives clearing', async () => {
+  it('password sign-in no longer stores recent waiter names or credentials', async () => {
     nativeLogin();
     for (let n = 0; n < 8; n++) {
       auth.userId = `waiter${n}`;
@@ -494,12 +494,7 @@ describe('native username and private PIN', () => {
     auth.currentPassword = '82649371';
     await auth.login();
     clearAppStorage();
-    const names = JSON.parse(localStorage.getItem(recentKey));
-    expect(names).toHaveLength(6);
-    expect(names.map(row => row.username)).toEqual(['waiter4', 'waiter7', 'waiter6', 'waiter5', 'waiter3', 'waiter2']);
-    for (const row of names) expect(Object.keys(row).sort()).toEqual(['displayName', 'username']);
-    expect(names[0].displayName).toBe('Alice Waiter');
-    expect(JSON.stringify(names)).not.toContain('82649371');
+    expect(localStorage.getItem(recentKey)).toBeNull();
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('82649371');
   });
 
@@ -517,7 +512,7 @@ describe('native username and private PIN', () => {
     expect(auth.alert.createAlert).toHaveBeenCalledWith('Message', 'Invalid login credentials', 'OK');
   });
 
-  it('the pad labels username and numeric eight-digit PIN and recent chips select a name, not a secret', async () => {
+  it('the fallback labels the existing native credential as a password', async () => {
     nativeLogin();
     auth.userId = 'alice';
     auth.currentPassword = '82649371';
@@ -527,26 +522,20 @@ describe('native username and private PIN', () => {
     const username = host.querySelector('input[name="user_id"]');
     const pin = host.querySelector('input[name="currentPassword"]');
     expect(host.textContent).toContain('Username');
-    expect(host.textContent).toContain('PIN');
-    expect(pin.getAttribute('inputmode')).toBe('numeric');
-    expect(pin.getAttribute('autocomplete')).toBe('off');
-    expect(host.textContent).toContain('Recent waiters on this tablet');
-    const chip = [...host.querySelectorAll('button')].find(button => button.textContent.includes('Alice Waiter'));
-    expect(chip).toBeDefined();
-    chip.click();
-    await nextTick();
+    expect(host.textContent).toContain('Password');
+    expect(pin.getAttribute('autocomplete')).toBe('current-password');
+    expect(host.textContent).not.toContain('Recent waiters on this tablet');
     expect(username.value).toBe('alice');
-    expect(pin.value).toBe('');
-    expect(document.activeElement).toBe(pin);
+    expect(pin.value).toBe('11111111');
   });
 
-  it('the pad reads recent usernames after a new page load', () => {
+  it('the fallback does not display cached waiter names after a page load', () => {
     localStorage.setItem(recentKey, JSON.stringify([{ username: 'alice', displayName: 'Alice Waiter' }]));
     setActivePinia(createPinia());
     auth = useAuthStore();
     mount(Login);
-    expect(host.textContent).toContain('Alice Waiter');
-    expect(host.textContent).toContain('alice');
+    expect(host.textContent).not.toContain('Alice Waiter');
+    expect(host.textContent).not.toContain('alice');
   });
 
   it('a corrupt recent-name cache does not prevent sign-in', () => {
@@ -557,21 +546,51 @@ describe('native username and private PIN', () => {
     expect(host.querySelector('input[name="user_id"]')).not.toBeNull();
   });
 
-  it('the login screen links Forgot PIN to /login#forgot', () => {
+  it('the fallback links Forgot password to /login#forgot', () => {
     mount(Login);
     const link = host.querySelector('a[href="/login#forgot"]');
-    expect(link?.textContent.trim()).toBe('Forgot PIN?');
+    expect(link?.textContent.trim()).toBe('Forgot password?');
   });
 
-  it('the header exposes Switch waiter directly and Change my PIN links to native self-service', async () => {
+  it('the header exposes Switch waiter and native Change my password for password sessions', async () => {
     mount(Header);
     const switchButton = [...host.querySelectorAll('button')].find(button => button.textContent.trim() === 'Switch waiter');
     expect(switchButton).toBeDefined();
     switchButton.click();
     await flushPromises();
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(window.location.href).toBe('/urypos/login');
+    expect(window.location.href).toBe('/urypos');
     const change = host.querySelector('a[href="/update-password"]');
-    expect(change?.textContent.trim()).toBe('Change my PIN');
+    expect(change?.textContent.trim()).toBe('Change my password');
+  });
+});
+
+describe('paired floor PIN sign-in', () => {
+  it('sets the returned CSRF token before fetching the waiter and opening tables', async () => {
+    expect(auth.pinSignIn).toBeTypeOf('function');
+    auth.call.post.mockResolvedValue({ message: { full_name: 'Alice Waiter', csrf_token: 'fresh-csrf' } });
+    auth.auth.axios.defaults.adapter = async config => ({ data: { message: 'alice@example.com' },
+      status: 200, statusText: 'OK', headers: {}, config });
+    vi.spyOn(invoice, 'fetchInvoiceDetails').mockImplementation(async () => {
+      expect(window.csrf_token).toBe('fresh-csrf'); invoice.posProfile = 'Salama POS';
+    });
+    mockRole({ seconds: 0 });
+    await auth.pinSignIn('0527');
+    await flushPromises();
+    expect(auth.call.post).toHaveBeenCalledWith('ury.ury_pos.floor_pin.sign_in', { pin: '0527' });
+    expect(window.csrf_token).toBe('fresh-csrf');
+    expect(auth.pinSession).toBe(true);
+    expect(router.push).toHaveBeenCalledWith('/Table');
+    expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('0527');
+  });
+
+  it('never logs or stores a failed PIN or raw API error', async () => {
+    expect(auth.pinSignIn).toBeTypeOf('function');
+    auth.call.post.mockRejectedValue({ message: 'Refused', request: { pin: '0527' } });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(auth.pinSignIn('0527')).rejects.toBeDefined();
+    expect(log).not.toHaveBeenCalled();
+    expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('0527');
+    expect(auth.pinSession).toBe(false);
   });
 });

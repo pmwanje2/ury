@@ -19,7 +19,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['urypos/tests/**/*.test.js', 'urypos/src/stores/Table.test.js', 'urypos/src/stores/Auth.test.js'],
+    include: ['urypos/tests/**/*.test.js', 'urypos/src/stores/Table.test.js', 'urypos/src/stores/Auth.test.js', 'urypos/src/components/*.test.js'],
     maxWorkers: 1,
     fileParallelism: false,
   },
