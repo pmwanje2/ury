@@ -1,0 +1,4 @@
+{"type":"review_context","reviewType":"all","currentBranch":"fix/p2b-one-phone-payment","baseBranch":"develop","baseCommit":"42806a32664d574dd865322cd89b09994dd7f218","workingDirectory":"/tmp/ury-p2b-QgHVRNG3/src"}
+{"type":"status","phase":"connecting","status":"connecting_to_review_service"}
+{"type":"error","errorType":"connection","message":"Connection failed: Invalid organization","recoverable":true,"details":{"shape":{"message":"Invalid organization","code":-32003,"data":{"code":"FORBIDDEN","httpStatus":403,"path":"vsCode.subscribeToEvents"}},"data":{"code":"FORBIDDEN","httpStatus":403,"path":"vsCode.subscribeToEvents"},"name":"TRPCClientError"}}
+Error: Invalid organization

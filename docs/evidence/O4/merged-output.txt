@@ -1,0 +1,36 @@
+Final merged base:
+678bf9b3 Merge pull request #38 from pmwanje2/feat/o3-pwa-read-cache-3712
+
+Final candidate:
+5c7caadf800609dc8c461c5ef7506a84be28fe22
+
+$ npm run test:pos -- --no-cache
+Test Files 35 passed (35)
+Tests 428 passed (428)
+
+$ node --test pos/tests/logout.test.ts pos/tests/order-tabs.test.ts pos/tests/till-close-api.test.mjs
+tests 25
+pass 25
+fail 0
+skipped 0
+
+$ python3 -m unittest ury.tests.unit.test_offline_capture_fixture
+Ran 1 test in 0.006s
+OK
+
+$ npm run build --workspace pos
+Done in 0.09s.
+
+$ npx --no-install tsc --noEmit -p pos/tsconfig.app.json
+The landed O3 base and final candidate both report the same 8 diagnostics:
+POSOpeningProvider.tsx OfflineCaptureProfile structural mismatch (2),
+pos-store.ts OfflineCaptureProfile structural mismatch (1), PaymentDialog.tsx
+unused variables (2), ProductDialog.tsx unused argument (1),
+TableMergeDialog.tsx comparison (1), and Table.tsx unused constant (1).
+
+$ git diff --check origin/maximus/integration-hospitality-20261004a
+clean
+
+O3 composition check:
+$ git diff --name-only origin/maximus/integration-hospitality-20261004a..HEAD -- pos/vite.config.ts packages/core/src/storage.ts pos/src/pwa
+(no output)

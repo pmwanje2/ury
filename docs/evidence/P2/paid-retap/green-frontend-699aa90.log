@@ -1,0 +1,38 @@
+REV=699aa904b6d790c5c3d3ab0267b52533161066f7
+?? node_modules
+▶ guest ordering languages
+  ✔ browser language is the default and an explicit choice wins (42.216493ms)
+  ✔ switcher choice is stored and mirrored to the Frappe guest cookie (0.627085ms)
+  ✔ sw and lg catalogs cover every guest string and keep dish names out (4.248064ms)
+  ✔ initI18n activates the catalog before the page renders (4.493556ms)
+  ✔ guest surfaces wrap copy and keep ERP dish names (1.686264ms)
+✔ guest ordering languages (55.345312ms)
+▶ guest wording, waiter copy, and footer follow the catalog
+  ✔ swahili uses the locative and luganda names every cart item (0.323673ms)
+  ✔ call waiter, both confirmations, and the refusal fallback are translated (0.491993ms)
+  ✔ the visible footer words follow the guest language and keep the licence line (0.650322ms)
+  ✔ a recovery error and a waiter confirmation are translated when shown (0.361226ms)
+  ✔ switching language rewrites the footer already on the page (0.213974ms)
+  ✔ a device recovery error is translated when it is shown (0.151558ms)
+  ✔ a category label is not saved already translated (0.181373ms)
+  ✔ a missing ordering code and a device error still offer the language switcher (0.330956ms)
+✔ guest wording, waiter copy, and footer follow the catalog (4.128491ms)
+▶ production build ships the guest catalogs
+  ✔ swahili and luganda are in the bundle, not fetched at runtime (0.517486ms)
+  ✔ the corrected copy and waiter strings are in the bundle (0.164699ms)
+  ✔ the built page keeps the AGPL line and marks built-on and Source (0.14743ms)
+✔ production build ships the guest catalogs (3854.095941ms)
+▶ guest phone payment outcome
+  ✔ paid request never redirects, even with a link (1.037818ms)
+  ✔ remainder after an earlier payment redirects and says so (0.151493ms)
+  ✔ first request redirects without a notice (0.114455ms)
+  ✔ request without a link keeps the staff-assist notice (0.118769ms)
+✔ guest phone payment outcome (29.639796ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3978.331562

@@ -2,6 +2,7 @@ import { StateCreator } from 'zustand';
 import { AuthSlice } from './auth-slice';
 import { getSessionUser, getUserSessionStorageKey } from '@ury/core';
 import { getCombinedPosProfile, PosProfileCombined } from '../../lib/pos-profile-api';
+import { bindOfflineUser } from '../../pwa/register-offline';
 
 interface RolePermission {
   name: string;
@@ -96,6 +97,7 @@ export const createConfigSlice: StateCreator<
   fetchPosProfile: async (forceRefresh = false) => {
     try {
       set({ isLoading: true, error: null });
+      await bindOfflineUser(getSessionUser());
 
       // Check session storage first if not forcing refresh
       sessionStorage.removeItem('posProfile');

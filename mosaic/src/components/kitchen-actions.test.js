@@ -16,6 +16,45 @@ try {
 } catch (error) {
   if (error.code !== "ERR_MODULE_NOT_FOUND") throw error;
 }
+helpers = { ...helpers, ...await import("./station-print.js").catch(() => ({})) };
+
+test("realtime QZ failure does not stop display updates and reconnect prints missed tickets once", async t => {
+  assert.equal(typeof helpers.createStationPrinter, "function", "Station printing is missing");
+  const env = kitchen();
+  let broken = true;
+  const printed = [];
+  const stored = new Map();
+  const call = {
+    get: async () => ({ message: { html: "<div>Ticket</div>" } }),
+    post: async () => ({}),
+  };
+  const printer = helpers.createStationPrinter({
+    production: "Kitchen", user: "chef@example.test", call,
+    storage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) },
+    now: () => new Date("2026-10-01T12:00:00").getTime(),
+    qz: {
+      security: { setCertificatePromise() {}, setSignatureAlgorithm() {}, setSignaturePromise() {} },
+      websocket: { isActive: () => true }, configs: { create: value => value },
+      print: async (_config, data) => { if (broken) throw Error("offline"); printed.push(data); },
+    },
+  });
+  printer.configure({ enabled: true, host: "192.0.2.10", port: 9100, printFormat: "Kitchen Ticket" });
+  const mounted = env.mount("Kitchen", { stationPrinter: printer });
+  t.after(() => env.unmount(mounted));
+  await settle();
+  const fresh = { ...socketTicket("FRESH"), creation: "2026-10-01 12:01:00" };
+  env.socket.emit(mounted.kot_channel, socketEvent(fresh));
+  await settle();
+  assert.ok(mounted.kot.some(kot => kot.name === "FRESH"), "Display must keep the failed-print ticket");
+  assert.deepEqual(printer.failed(), ["FRESH"]);
+  broken = false;
+  const missed = { ...socketTicket("MISSED"), creation: "2026-10-01 12:02:00" };
+  env.snapshot([fresh, missed]);
+  env.disconnect(); env.connect(); await settle();
+  env.disconnect(); env.connect(); await settle();
+  assert.equal(printed.length, 1, "Reconnect prints a missed ticket, not already-attempted ones");
+  assert.equal(mounted.kot.length, 2);
+});
 
 const settle = () => new Promise(setImmediate);
 const socketTicket = (name, production = "Kitchen") => ({
@@ -78,8 +117,8 @@ function kitchen({ connected = true } = {}) {
     invoice: "INV-001", tableortakeaway: "T-01", user: "Cook",
   };
   state.kot = [ticket];
-  function mount(production = "Kitchen") {
-    const mounted = { ...component.data(), production };
+  function mount(production = "Kitchen", overrides = {}) {
+    const mounted = { ...component.data(), production, ...overrides };
     for (const [name, method] of Object.entries(component.methods)) mounted[name] = method.bind(mounted);
     mounted.masonryLoading = () => {};
     component.mounted.call(mounted);

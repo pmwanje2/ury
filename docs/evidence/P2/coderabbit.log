@@ -1,0 +1,4 @@
+{"type":"review_context","reviewType":"committed","currentBranch":"fix/p2-phone-payment-request","baseBranch":"maximus/integration-hospitality-20261004a","baseCommit":"24acff6ca6d5a810727aa6bd40954f00534f837e","workingDirectory":"/tmp/ury-p2-hKTJTxtp/src"}
+{"type":"status","phase":"connecting","status":"connecting_to_review_service"}
+{"type":"error","errorType":"connection","message":"Connection failed: Invalid organization","recoverable":true,"details":{"shape":{"message":"Invalid organization","code":-32003,"data":{"code":"FORBIDDEN","httpStatus":403,"path":"vsCode.subscribeToEvents"}},"data":{"code":"FORBIDDEN","httpStatus":403,"path":"vsCode.subscribeToEvents"},"name":"TRPCClientError"}}
+Error: Invalid organization

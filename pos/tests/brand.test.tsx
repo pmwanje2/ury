@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Header from '../src/components/Header';
+import { Button } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 
 vi.mock('../src/store/root-store', () => ({ useRootStore: (selector?: Function) => {
@@ -63,9 +64,31 @@ describe('POS Header site identity', () => {
       expect(logo.getAttribute('src')).toBe(brand?.logo ?? defaults.logo);
       expect(logo.getAttribute('alt')).toBe(brand?.name ?? defaults.name);
       expect(container.querySelector('script')).toBeNull();
+      const header = container.querySelector('header')!;
+      expect(header.classList.contains('bg-header')).toBe(true);
+      expect(header.classList.contains('text-header-foreground')).toBe(true);
+      expect(header.classList.contains('border-header-border')).toBe(true);
+      expect(header.classList.contains('bg-white')).toBe(false);
+      expect([...header.querySelectorAll('button')].some(button => button.classList.contains('text-header-user'))).toBe(true);
     } finally {
       await act(async () => root.unmount());
       container.remove();
     }
   });
+});
+
+it('primary action buttons consume the contrast-selected foreground with a native-white default', async () => {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Button>Send Order</Button>));
+    const button = container.querySelector('button')!;
+    expect(button.classList.contains('bg-primary')).toBe(true);
+    expect(button.classList.contains('text-button-foreground')).toBe(true);
+    expect(button.classList.contains('text-white')).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
 });

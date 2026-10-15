@@ -10,6 +10,8 @@ from frappe.model.document import Document
 
 class URYKOT(Document):
     def on_submit(self):
+        if self.get("ury_offline_printed"):
+            return
         self.multi_print_kot()
         self.kotDisplayRealtime()
 
@@ -106,6 +108,7 @@ class URYKOT(Document):
         frappe.publish_realtime(
             kot_channel,
             {"kot": kotjson, "audio_file": audio_file, "last_kot_time": time},
+            after_commit=True,
         )
         frappe.cache().set_value(cache_key, self.time)
 

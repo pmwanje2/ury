@@ -16,6 +16,8 @@ import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
 import { t } from '../i18n';
+import { submitOrderOfflineAware } from '../offline/cashier';
+import { useOutbox } from '../offline/use-outbox';
 
 const OrderPanel = () => {
   const { 
@@ -43,6 +45,9 @@ const OrderPanel = () => {
     lastModifiedTime
   } = usePOSStore();
   const user = useRootStore((state: RootState) => state.user);
+  const outbox = useOutbox(posProfile, user);
+  const [offlineTarget, setOfflineTarget] = useState('');
+  const target = outbox.rows.find((row) => row.client_order_id === offlineTarget && row.state === 'pending');
   const [editingItem, setEditingItem] = useState<typeof activeOrders[0] | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
@@ -86,18 +91,18 @@ const OrderPanel = () => {
       }
 
       // Validate customer/aggregator details
-      if (selectedOrderType === 'Aggregators') {
+      if (!target && selectedOrderType === 'Aggregators') {
         if (!selectedAggregator?.customer) {
           showToast.error(t('errors.select_aggregator'));
           return;
         }
-      } else if (selectedOrderType !== DINE_IN && selectedOrderType !== 'Take Away' && !selectedCustomer?.name) {
+      } else if (!target && !selectedCustomer?.name && !(outbox.offline && posProfile.customer)) {
         showToast.error(t('errors.select_customer'));
         return;
       }
 
       // Validate table selection for dine-in orders
-      if (selectedOrderType === DINE_IN && !selectedTable) {
+      if (!target && selectedOrderType === DINE_IN && !selectedTable) {
         showToast.error(t('errors.select_table', { order_type: DINE_IN }));
         return;
       }
@@ -117,7 +122,7 @@ const OrderPanel = () => {
         order_type: selectedOrderType,
         table: selectedTable || undefined,
         room: selectedRoom || undefined,
-        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : (selectedCustomer?.name ?? ''),
+        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : selectedCustomer?.name || (outbox.offline ? posProfile.customer || undefined : undefined),
         aggregator_id: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : undefined,
         cashier: posProfile.cashier,
         owner: posProfile.owner,
@@ -129,7 +134,12 @@ const OrderPanel = () => {
         comments: orderComment || undefined
       };
 
-      const result = await syncOrder(orderData);
+      const submission = await submitOrderOfflineAware({ profile: posProfile, user,
+        total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
+        order: target ? { ...target.order, items: orderData.items } : orderData,
+        clientOrderId: offlineTarget || undefined, onlineSubmit: (ids) => syncOrder({ ...orderData,
+          client_order_id: ids?.clientOrderId, round_id: ids?.roundId }) });
+      const result = submission.offline ? null : submission.response;
 
       // sync_order returns { status: 'Failure' } instead of throwing when the
       // write is rejected (stale last_modified_time, table already occupied,
@@ -141,7 +151,8 @@ const OrderPanel = () => {
 
       // Reset all states after successful order submission
       resetOrderState();
-      showToast.success(isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
+      setOfflineTarget('');
+      showToast.success(submission.offline ? t('offline.saved') : isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
     } catch (error) {
       console.error('Failed to sync order:', error);
       showToast.error(parseFrappeError(error, t('errors.failed_process_order')));
@@ -195,8 +206,14 @@ const OrderPanel = () => {
   const isInteractionDisabled = isOrderInteractionDisabled() || isSubmitting;
 
   return (
-    <div className="w-96 bg-white border-s border-gray-200 flex flex-col h-[calc(100vh-4rem)] fixed end-0 z-10">
-      <div className="p-4 border-b border-gray-200 flex-shrink-0">
+    <div data-testid="order-panel" className="absolute inset-y-0 end-0 z-10 flex h-full min-h-0 w-full max-w-sm flex-col overflow-hidden border-s border-gray-200 bg-white">
+      <div className="min-h-0 overflow-y-auto border-b border-gray-200 p-4">
+        {outbox.offline && <label className="block text-sm mb-2">{t('offline.round_target')}
+          <select data-testid="offline-round-target" className="block w-full border p-1" value={offlineTarget} disabled={isInteractionDisabled || outbox.replaying} onChange={(event) => setOfflineTarget(event.target.value)}>
+            <option value="">{t('offline.new_order')}</option>
+            {outbox.rows.filter((row) => row.state === 'pending' && !row.settlement && row.next_round === 0).map((row) => <option key={row.client_order_id} value={row.client_order_id}>{row.order.customer} · {row.client_order_id.slice(0, 8)}</option>)}
+          </select>
+        </label>}
         <OrderTabs disabled={isInteractionDisabled} />
         <OrderTypeSelect disabled={isInteractionDisabled} />
         <div className="mt-3"><CustomerSelect disabled={isInteractionDisabled} /></div>
@@ -232,7 +249,7 @@ const OrderPanel = () => {
         <EmptyCartUI />
       ) : (
         <>
-          <div className="flex-1 overflow-y-auto px-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6">
             {activeOrders.map((item) => (
               <div
                 key={item.uniqueId}
@@ -352,7 +369,7 @@ const OrderPanel = () => {
               onClick={handleSubmit}
               variant="default"
               size="default"
-              className="w-full"
+              className="w-full shrink-0"
               disabled={isInteractionDisabled}
             >
               {isSubmitting ? (
@@ -395,4 +412,4 @@ const OrderPanel = () => {
   );
 };
 
-export default OrderPanel; 
+export default OrderPanel;

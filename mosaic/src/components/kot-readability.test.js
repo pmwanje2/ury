@@ -6,7 +6,8 @@ import postcss from "postcss";
 import tailwindcss from "tailwindcss";
 import { compile } from "@vue/compiler-dom";
 import { parse } from "@vue/compiler-sfc";
-import * as helpers from "./kitchen-actions.js";
+import * as kitchenHelpers from "./kitchen-actions.js";
+const helpers = { ...kitchenHelpers, ...await import("./station-print.js").catch(() => ({})) };
 
 const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", { url: "https://synthetic.test" });
 for (const key of ["window", "document", "navigator", "Element", "HTMLElement", "SVGElement", "localStorage"]) {

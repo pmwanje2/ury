@@ -22,7 +22,7 @@ def get_context(context):
 	rather than frappe.sessions.get()'s full desk boot payload.
 	"""
 	csrf_token = frappe.sessions.get_csrf_token()
-	context.update(get_brand_context())
+	context.update(get_brand_context(surface="guest"))
 	frappe.db.commit()  # nosemgrep
 
 	boot = frappe.website.utils.get_boot_data()

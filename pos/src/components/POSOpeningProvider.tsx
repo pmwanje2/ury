@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { Button, showToast } from '@ury/ui';
-import { logoutSession, clearAppStorage } from '@ury/core';
+import { clearCashierStorage } from '../offline/cashier';
+import { isLinkDown, getUserSessionStorageKey } from '@ury/core';
+import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import {
   checkPOSOpening,
   parseFrappeError,
@@ -57,6 +59,16 @@ function getHttpStatus(error: unknown): number | undefined {
   return undefined;
 }
 
+function readConfirmedOpening(key: string | null): POSOpeningEntryRef | null {
+  if (!key) return null;
+  try {
+    const entry = JSON.parse(sessionStorage.getItem(key) || 'null');
+    return entry && typeof entry === 'object' && 'name' in entry ? entry as POSOpeningEntryRef : null;
+  } catch {
+    return null;
+  }
+}
+
 const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [blockingState, setBlockingState] = useState<OpeningBlockingState | null>(null);
@@ -79,11 +91,10 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
-      await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      clearAppStorage();
-      window.location.href = '/login';
-    } catch {
-      showToast.error(t('errors.failed_logout'));
+      await clearCashierStorage(true, (window as Window & { csrf_token?: string }).csrf_token);
+      window.location.href = '/login?redirect-to=%2Fpos';
+    } catch (error) {
+      showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;
       setLoggingOut(false);
     }
@@ -100,6 +111,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const { user } = useRootStore();
 
   const canAccessDesk = useMemo(() => hasDeskAccess(user), [user]);
+  const confirmedOpeningKey = getUserSessionStorageKey('ury_offline_opening', user?.name);
 
   const clearBlockingState = useCallback(() => {
     setBlockingState(null);
@@ -189,6 +201,8 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
             return;
           }
         } catch (error) {
+          // A gateway page is the link being down, not a pending checklist.
+          if (isLinkDown(error)) throw error;
           console.error('Failed to check opening checklist status:', error);
           // On error, block on the checklist for safety.
           setNeedsOpeningChecklist(true);
@@ -206,9 +220,25 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         }
       }
 
+      // Every gate passed online. An opted-in till remembers this opening for
+      // the tab so an offline reload can show the cached workspace.
+      if (offlineCaptureEnabled(posProfile) && confirmedOpeningKey) {
+        sessionStorage.setItem(confirmedOpeningKey, JSON.stringify(matchingEntry));
+      }
       setIsLoading(false);
     } catch (error) {
       console.error('Failed to check POS opening status:', error);
+      // The opening read is not cached. Only a down link (no HTTP answer, or
+      // 502/503/504/52x) on an opted-in till that confirmed this same opening
+      // online in this tab may show the workspace. 401/403/500 still block.
+      const confirmed = isLinkDown(error) && offlineCaptureEnabled(posProfile)
+        ? readConfirmedOpening(confirmedOpeningKey)
+        : null;
+      if (confirmed && confirmed.pos_profile === posProfile.name && confirmed.company === posProfile.company) {
+        setExistingEntry(confirmed);
+        setIsLoading(false);
+        return;
+      }
 
       const serverMessage = parseFrappeError(error);
       const status = getHttpStatus(error);
@@ -228,7 +258,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
 
       setIsLoading(false);
     }
-  }, [posProfile, user?.name, clearBlockingState]);
+  }, [posProfile, user?.name, clearBlockingState, confirmedOpeningKey]);
 
   const handleOpeningSuccess = useCallback(() => {
     clearBlockingState();

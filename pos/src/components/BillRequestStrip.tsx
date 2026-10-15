@@ -8,6 +8,7 @@ interface BillRequest {
   name: string;
   table: string | null;
   invoice: string | null;
+  request_type: 'Bill' | 'Assistance';
   status: string;
   requested_at: string;
 }
@@ -48,8 +49,8 @@ export default function BillRequestStrip({ orders, selectOrder }: {
       const tableNames = tables.message.map(table => table.name);
       const response = tableNames.length ? await call.get<{ message: BillRequest[] }>('frappe.client.get_list', {
         doctype: 'URY Service Request',
-        filters: [['request_type', '=', 'Bill'], ['status', '!=', 'Resolved'], ['table', 'in', tableNames]],
-        fields: ['name', 'table', 'invoice', 'status', 'requested_at'],
+        filters: [['request_type', 'in', ['Bill', 'Assistance']], ['status', '!=', 'Resolved'], ['table', 'in', tableNames]],
+        fields: ['name', 'table', 'invoice', 'request_type', 'status', 'requested_at'],
         limit_page_length: 0,
       }) : { message: [] };
       if (active.current && id === refreshId.current) {
@@ -129,6 +130,8 @@ export default function BillRequestStrip({ orders, selectOrder }: {
       <div className="flex items-center justify-between gap-2">
         <h2 className="font-semibold" aria-live="polite">
           {loading ? t('bill_requests.loading') : unavailable ? t('bill_requests.unavailable')
+            : requests.some(request => request.request_type === 'Assistance')
+              ? `${t('Service requests')}: ${requests.length} ${t('waiting')}`
             : t('bill_requests.waiting', { count: requests.length })}
         </h2>
         <Button variant="outline" className="min-h-11" disabled={refreshing} onClick={() => void refresh()}>
@@ -143,6 +146,7 @@ export default function BillRequestStrip({ orders, selectOrder }: {
             <li key={request.name} className="flex flex-wrap items-center gap-2">
               <Button variant="outline" className="min-h-11 h-auto whitespace-normal" disabled={lookupLoading}
                 onClick={() => void pickUp(request)}>
+                {request.request_type === 'Assistance' && `${t('Assistance')} · `}
                 {request.table || request.name} {request.invoice && `· ${request.invoice}`} · {request.requested_at} · {request.status}
               </Button>
               <a className="inline-flex min-h-11 items-center text-sm text-blue-600 underline"

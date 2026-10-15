@@ -84,19 +84,19 @@ export function getStoredSession(): string | null {
   return sessionStorage.getItem(SESSION_KEY)
 }
 
-export function getStoredContext(): OrderingContext | null {
+export function getStoredContext(): (OrderingContext & { qrToken?: string }) | null {
   const raw = sessionStorage.getItem(CONTEXT_KEY)
   if (!raw) return null
   try {
-    return JSON.parse(raw) as OrderingContext
+    return JSON.parse(raw) as OrderingContext & { qrToken?: string }
   } catch {
     return null
   }
 }
 
-function storeContext(context: OrderingContext) {
+function storeContext(context: OrderingContext, qrToken?: string) {
   sessionStorage.setItem(SESSION_KEY, context.session)
-  sessionStorage.setItem(CONTEXT_KEY, JSON.stringify(context))
+  sessionStorage.setItem(CONTEXT_KEY, JSON.stringify({ ...context, qrToken }))
 }
 
 // Every whitelisted Frappe method response is wrapped as {"message": <actual
@@ -114,8 +114,13 @@ interface FrappeResponse<T> {
 }
 
 export async function bootstrap(token: string): Promise<OrderingContext> {
+  // A reload keeps the QR in the URL. Resume only the context from that
+  // same QR; a different table/link must still bootstrap its own session.
+  // Menu/order reads continue to validate the opaque session server-side.
+  const stored = getStoredContext()
+  if (stored?.session && stored.qrToken === token) return stored
   const response = await call.get<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, { token })
-  storeContext(response.message)
+  storeContext(response.message, token)
   return response.message
 }
 
@@ -170,6 +175,11 @@ export async function requestBill(session: string): Promise<{ status: string; re
   return response.message
 }
 
+export async function requestAssistance(session: string): Promise<{ status: string; request: string }> {
+  const response = await call.post<FrappeResponse<{ status: string; request: string }>>(`${M}.request_assistance`, { session })
+  return response.message
+}
+
 export async function getStatus(session: string): Promise<OrderStatus> {
   const response = await call.get<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
   return response.message
@@ -181,12 +191,15 @@ export interface PaymentRequestResult {
   currency: string
   payment_url: string | null
   status: string
+  paid_amount?: number
+  remaining_amount?: number
 }
 
 export interface PaymentStatusResult {
   status: string | null
   payment_request?: string
   amount?: number
+  payment_url?: string | null
 }
 
 export async function createPaymentRequest(session: string): Promise<PaymentRequestResult> {

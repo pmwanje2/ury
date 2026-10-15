@@ -318,6 +318,13 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
           selectedTables ? `Sent to kitchen · ${selectedTables}` : "Sent to kitchen"
         );
         this.table.fetchTable();
+        if (
+          this.auth.staySignedIn === false &&
+          this.invoiceDetails.floor_signout_after_send
+        ) {
+          await this.auth.logOut();
+          return;
+        }
         if (this.auth.cashier) {
           await router.push("/recentOrder");
           this.recentOrders.viewRecentOrder(response.message);
@@ -402,7 +409,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
             this.alert.createAlert(
               "Message",
               "Printing is Blocked Table is assigned to " +
-              result.message.waiter,
+              this.table.ownerLabel(result.message.waiter),
               "OK"
             );
           } else {

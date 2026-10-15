@@ -8,7 +8,7 @@ import { syncOrder, type POSInvoice } from '../src/lib/order-api';
 
 const state = vi.hoisted(() => ({
   activeOrders: [{ id: 'SOUP', uniqueId: 'ROW-1', name: 'Soup', price: 18000, quantity: 1 }],
-  posProfile: { name: 'POS-1', cashier: 'Cashier', owner: 'Owner' },
+  posProfile: { name: 'POS-1', cashier: 'Cashier', owner: 'Owner', customer: undefined as string | undefined },
   selectedOrderType: 'Take Away', selectedTable: null as string | null, selectedRoom: 'Dining',
   selectedCustomer: null as { name: string } | null,
   selectedAggregator: null as { customer: string } | null,
@@ -40,6 +40,7 @@ beforeEach(async () => {
   await initI18n('en');
   Object.assign(state, { selectedOrderType: 'Take Away', selectedTable: null, selectedCustomer: null,
     selectedAggregator: null, isUpdatingOrder: false, disabled: false, user: { name: 'waiter@example.com' } });
+  state.posProfile.customer = undefined;
   vi.clearAllMocks();
   vi.mocked(syncOrder).mockResolvedValue({ message: invoice });
   vi.spyOn(showToast, 'error').mockImplementation(() => {});
@@ -62,6 +63,13 @@ it.each(['Take Away', 'Dine In'])('submits anonymous %s for native customer reso
     items: [{ item: 'SOUP', item_name: 'Soup', rate: 18000, qty: 1, comment: undefined }] }));
   expect(JSON.parse(JSON.stringify(vi.mocked(syncOrder).mock.calls[0][0]))).toHaveProperty('customer', '');
   expect(state.resetOrderState).toHaveBeenCalledOnce(); expect(showToast.success).toHaveBeenCalledOnce();
+});
+it.each(['Take Away', 'Dine In'])('online anonymous %s sends an explicit empty customer even when the profile has a default', async type => {
+  state.posProfile.customer = 'Native Walk In';
+  state.selectedOrderType = type; state.selectedTable = type === 'Dine In' ? 'Table 1' : null;
+  await submit();
+  expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ customer: '', order_type: type }));
+  expect(JSON.parse(JSON.stringify(vi.mocked(syncOrder).mock.calls[0][0]))).toHaveProperty('customer', '');
 });
 it.each([false, true])('preserves explicit customer and invoice metadata (update=%s)', async updating => {
   state.selectedCustomer = { name: 'Named Customer' }; state.isUpdatingOrder = updating;
@@ -91,9 +99,10 @@ it('requires a Dine In table even without a named customer', async () => {
 });
 it('surfaces missing native default configuration and retains the cart', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.mocked(syncOrder).mockRejectedValue(new Error('Please configure a default Customer in POS Profile'));
+  vi.mocked(syncOrder).mockRejectedValue(new Error('Select a customer or set a default customer in the POS Profile.'));
   await submit();
-  expect(showToast.error).toHaveBeenCalledWith(expect.stringContaining('configure a default Customer'));
+  expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ customer: '' }));
+  expect(showToast.error).toHaveBeenCalledWith('Select a customer or set a default customer in the POS Profile.');
   expect(state.resetOrderState).not.toHaveBeenCalled(); expect(state.clearOrder).not.toHaveBeenCalled();
   expect(host.textContent).toContain('Soup'); expect(submitButton().disabled).toBe(false);
 });

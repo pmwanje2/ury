@@ -1,7 +1,7 @@
 import frappe
 import json
 from frappe import _
-from datetime import date, datetime
+from datetime import datetime
 from frappe.utils import nestedset, validate_phone_number
 from ury.ury.api.ury_dashboard import _business_day_bounds
 
@@ -125,33 +125,40 @@ def getMenuCourses():
     courses = frappe.get_all("URY Menu Course", fields=["name", "icon"])
     return [{"name": d.name, "label": _(d.name), "icon": d.icon} for d in courses]
 
-@frappe.whitelist()
-def getBranch():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch
+def _user_branch_assignments():
+    rows = frappe.db.sql("""
+        SELECT b.name AS branch, a.room
         FROM `tabURY User` AS a
         INNER JOIN `tabBranch` AS b ON a.parent = b.name
         WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
-    if not branch_array:
+    """, frappe.session.user, as_dict=True)
+    if not rows:
         frappe.throw("User is not Associated with any Branch.Please refresh Page")
 
-    branch_name = branch_array[0].get("branch")
+    branches = {row.get("branch") for row in rows}
+    if len(branches) == 1:
+        return rows
 
-    return branch_name
+    from frappe.core.doctype.user_permission.user_permission import get_user_permissions
+
+    defaults = {
+        permission.get("doc")
+        for permission in get_user_permissions().get("Branch", [])
+        if permission.get("is_default") and permission.get("doc") in branches
+    }
+    if len(defaults) != 1:
+        frappe.throw(_("URY-BRANCH-AMBIGUOUS: Set a default Branch User Permission for an assigned branch."))
+    branch = defaults.pop()
+    return [row for row in rows if row.get("branch") == branch]
+
+
+@frappe.whitelist()
+def getBranch():
+    return _user_branch_assignments()[0].get("branch")
 
 @frappe.whitelist()
 def getBranchRoom():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch , a.room
-        FROM `tabURY User` AS a
-        INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
+    branch_array = _user_branch_assignments()
     
     branch_name = branch_array[0].get("branch")
     room_name = branch_array[0].get("room")
@@ -169,14 +176,7 @@ def getBranchRoom():
 
 @frappe.whitelist()
 def getRoom():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch, a.room
-        FROM `tabURY User` AS a
-        INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
+    branch_array = _user_branch_assignments()
     
     if not branch_array:
         frappe.throw("No branch or room information found for the user. Please contact your administrator.")
@@ -494,7 +494,7 @@ def getPosInvoice(status, limit, limit_start):
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
+                additional_discount_percentage, discount_amount, ury_client_order_id
             FROM `tabPOS Invoice`
             WHERE branch = %s AND status = %s
             ORDER BY creation ASC
@@ -514,7 +514,7 @@ def getPosInvoice(status, limit, limit_start):
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
+                additional_discount_percentage, discount_amount, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             AND (invoice_printed = 1 OR (invoice_printed = 0 AND COALESCE(restaurant_table, '') = ''))
@@ -537,7 +537,7 @@ def getPosInvoice(status, limit, limit_start):
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
+                additional_discount_percentage, discount_amount, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             AND (invoice_printed = 0 AND restaurant_table IS NOT NULL)
@@ -558,7 +558,7 @@ def getPosInvoice(status, limit, limit_start):
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from,
-                custom_merged_pos_invoice, custom_merged_total
+                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             ORDER BY modified desc
@@ -578,7 +578,7 @@ def getPosInvoice(status, limit, limit_start):
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from,
-                custom_merged_pos_invoice, custom_merged_total
+                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             ORDER BY modified desc
@@ -673,7 +673,8 @@ def searchPosInvoice(query,status):
             "custom_merged_pos_invoice",
             "custom_merged_total",
             "additional_discount_percentage",
-            "discount_amount"
+            "discount_amount",
+            "ury_client_order_id"
         ],
         limit_page_length=10 
     )
@@ -855,6 +856,8 @@ def getPosProfile():
         "edit_order_type":edit_order_type,
         "enable_kot_reprint":enable_kot_reprint,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
+        "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
+        "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
 
     }
 
@@ -1504,7 +1507,7 @@ def get_checklist(pos_profile, checklist_type):
         filters={
             "pos_profile": pos_profile,
             "checklist_type": checklist_type,
-            "shift_date": date.today(),
+            "shift_date": frappe.utils.getdate(),
         },
         limit=1,
     )
@@ -1557,7 +1560,7 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
         filters={
             "pos_profile": pos_profile,
             "checklist_type": checklist_type,
-            "shift_date": date.today(),
+            "shift_date": frappe.utils.getdate(),
         },
         limit=1,
     )
@@ -1569,7 +1572,7 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
         log_doc.pos_profile = pos_profile
         log_doc.branch = getBranch()
         log_doc.checklist_type = checklist_type
-        log_doc.shift_date = date.today()
+        log_doc.shift_date = frappe.utils.getdate()
 
     if pos_opening_entry:
         log_doc.pos_opening_entry = pos_opening_entry

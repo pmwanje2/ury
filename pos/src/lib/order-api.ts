@@ -1,4 +1,5 @@
-import { call } from '@ury/core';
+import { call, isLinkDown } from '@ury/core';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 
 export interface POSInvoiceItem {
   name: string;
@@ -42,6 +43,7 @@ export interface POSInvoice {
   no_of_pax?: number;
   custom_comments?: string | null;
   modified?: string;
+  ury_client_order_id?: string | null;
 }
 
 export interface TableOrder {
@@ -60,6 +62,8 @@ export async function getTableOrder(table_no: string): Promise<TableOrder> {
     });
     return res as TableOrder;
   } catch (error) {
+    // An outage must not look like an empty table, or the cached open check is forgotten.
+    if (isLinkDown(error)) throw error;
     console.error('Error fetching table order:', error);
     return { message: null };
   }
@@ -88,6 +92,8 @@ export interface SyncOrderRequest {
   last_modified_time?: string;
   comments?: string | null;
   room?: string;
+  client_order_id?: string;
+  round_id?: string;
 }
 
 /**
@@ -98,6 +104,7 @@ export interface SyncOrderRequest {
 export type SyncOrderResponse = POSInvoice | { status: 'Failure' };
 
 export const syncOrder = async (data: SyncOrderRequest) => {
+  await assertOfflineActionAllowed('online-order rounds, reductions or voids');
   return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
 };
 
@@ -116,6 +123,7 @@ export async function splitBill(
   itemsToMove: SplitBillItemMove[],
   customer?: string | null
 ): Promise<SplitBillResponse> {
+  await assertOfflineActionAllowed('split');
   const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_bill', {
     source_invoice: sourceInvoice,
     items_to_move: itemsToMove,
@@ -129,6 +137,7 @@ export async function tableTransfer(
   newTable: string,
   invoice: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
     table,
     newTable,
@@ -141,11 +150,23 @@ export async function captainTransfer(
   newCaptain: string,
   invoice: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.captain_transfer', {
     currentCaptain,
     newCaptain,
     invoice,
   });
+}
+
+export async function getCaptainTransferCandidates(invoice: string): Promise<{
+  name: string;
+  full_name: string;
+}[]> {
+  const response = await call.get(
+    'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates',
+    { invoice },
+  );
+  return response.message as { name: string; full_name: string }[];
 }
 
 /**

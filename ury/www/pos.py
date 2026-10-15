@@ -5,7 +5,7 @@ import frappe
 import frappe.sessions
 from frappe import _
 from frappe.utils.telemetry import capture
-from ury.brand import get_brand, get_brand_context, json_for_script
+from ury.brand import get_brand, get_brand_context, get_theme_context, json_for_script
 
 no_cache = 1
 
@@ -15,6 +15,7 @@ CLOSING_SCRIPT_TAG_PATTERN = re.compile(r"</script\>")
 
 def get_context(context):
 	context.update(get_brand_context(surface="staff"))
+	context.update(get_theme_context())
 	csrf_token = frappe.sessions.get_csrf_token()
 	# Manually commit the CSRF token here
 	frappe.db.commit()  # nosemgrep

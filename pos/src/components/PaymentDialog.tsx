@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { X, Percent, Coins } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
+import { useRootStore } from '../store/root-store';
 import { formatCurrency, call, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
+import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
 
 
 interface PaymentDialogProps {
@@ -22,6 +24,7 @@ interface PaymentDialogProps {
   clearSelectedOrder: () => void;
   discountPercentage?: number;
   discountAmount?: number;
+  clientOrderId?: string | null;
 }
 
 const PaymentDialog: React.FC<PaymentDialogProps> = ({
@@ -38,9 +41,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   fetchOrders,
   clearSelectedOrder,
   discountPercentage,
-  discountAmount
+  discountAmount,
+  clientOrderId,
 }) => {
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile } = usePOSStore();
+  const user = useRootStore((state) => state.user);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
@@ -63,7 +68,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
 
-  const handleApplyDiscount = () => {
+  const handleApplyDiscount = async () => {
+    try { await assertOfflineActionAllowed('discount'); }
+    catch (error) { setError(error instanceof Error ? error.message : t('errors.invalid_discount')); return; }
     const value = parseFloat(discountValue);
     if (isNaN(value) || value <= 0) {
       setError(t('errors.invalid_discount'));
@@ -99,6 +106,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
   const shortfall = finalTotal - paymentsTotal;
   const isShort = shortfall > 0.005;
+  const accountPaymentMode = paymentModes
+    .map((mode: string | { id: string }) => typeof mode === 'string' ? mode : mode.id)
+    .find(Boolean);
+  const canPayOnAccount = isShort && !!accountPaymentMode && storePosProfile?.name === posProfile
+    && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
+    && !!customer.trim() && customer !== storePosProfile.customer;
+  const paymentDisabled = isProcessing || ((payments.length === 0 || isShort) && !canPayOnAccount);
 
   const finalAdjustment = finalTotal - discountedTotal;
   const roundedFinalAdjustment = Math.round(finalAdjustment * 100) / 100;
@@ -141,16 +155,31 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     setIsProcessing(true);
     setError(null);
     try {
-      await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-        additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
-        cashier,
-        customer,
-        invoice,
-        owner,
-        payments,
-        pos_profile: posProfile,
-        table,
+      await assertOfflineActionAllowed('online invoice settlement, card or pay-by-phone');
+      const settlement = await submitSettlementOfflineAware({
+        profile: storePosProfile ?? { name: posProfile },
+        user: user ?? { name: 'Guest', roles: [] },
+        invoice, customer, table, cashier, owner, clientOrderId,
+        amount: payments.length === 1 ? payments[0].amount : paymentsTotal,
+        due: finalTotal,
+        modeOfPayment: payments.length === 1 ? payments[0].mode_of_payment : '',
+        discount: appliedDiscount,
+        onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
+          additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
+          cashier, customer, invoice, owner,
+          payments: payments.length === 0 && canPayOnAccount
+            ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
+            : payments,
+          pos_profile: posProfile, table,
+          ...(ids ? { client_order_id: ids.clientOrderId, round_id: ids.roundId } : {}),
+        }),
       });
+      if (settlement.offline) {
+        showToast.success(t('offline.saved'));
+        onClose();
+        clearSelectedOrder();
+        return;
+      }
       showToast.success(t('payment.success', { amount: formatCurrency(paymentsTotal) }));
       onClose();
       clearSelectedOrder();
@@ -309,8 +338,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           {/* Payment Button */}
           <Button
             onClick={handlePayment}
-            disabled={isProcessing || payments.length === 0 || isShort}
-            variant={isProcessing || payments.length === 0 || isShort ? "secondary" : "default"}
+            disabled={paymentDisabled}
+            variant={paymentDisabled ? "secondary" : "default"}
             className="w-full"
           >
             {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(paymentsTotal > 0 ? paymentsTotal : finalTotal) })}
@@ -321,4 +350,4 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   );
 };
 
-export default PaymentDialog; 
+export default PaymentDialog;

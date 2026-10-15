@@ -34,6 +34,7 @@ beforeEach(() => {
   ];
   state.auth = reactive({ cashier: false, viewItemImage: true, restrictTableOrder: false, removeTableOrderItem: 1 });
   state.table = reactive({ tables, filteredTables: tables, rooms: [{ name: 'Dining' }], selectedRoom: 'Dining',
+    serviceRequests: [], serviceRequestsLoading: false, serviceRequestsUnavailable: false, fetchServiceRequests: vi.fn(),
     getBadgeText: row => row.state, getBadgeType: row => ({ Free: 'green', Occupied: 'yellow', Attention: 'red', Active: 'default' })[row.state],
     getTimeDifference: row => row.age, addToSelectedTables: vi.fn(), routeToMenu: vi.fn(), routeToCart: vi.fn(),
     handleRoomChange: vi.fn(), toggleTableTypeSwitch: vi.fn(), toggleDropdown: vi.fn(),

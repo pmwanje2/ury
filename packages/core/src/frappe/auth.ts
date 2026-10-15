@@ -1,4 +1,5 @@
-import { db, auth } from './client';
+import { db, auth, NETWORK_FAILURE_MARK } from './client';
+import { gatewayStatusOf } from '../gateway-status';
 import { clearAppStorage } from '../storage';
 
 type LoggedUserResponse = string | null;
@@ -24,15 +25,35 @@ export const getSessionUser = (): LoggedUserResponse => {
   }
 };
 
-export const getLoggedUser = async (): Promise<LoggedUserResponse> => {
+// True only for the client's tagged "no HTTP answer" shape. 401/403 keep
+// their httpStatus; other TypeErrors and messages are not offline.
+export function isNetworkFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as Record<string, unknown>;
+  return failure.httpStatus === 0 && failure[NETWORK_FAILURE_MARK] === true;
+}
+
+// Transport failure or a gateway page (502/503/504/52x). 401/403/500 stay answers.
+export function isLinkDown(error: unknown): boolean {
+  return isNetworkFailure(error) || gatewayStatusOf(error) !== null;
+}
+
+export interface LoggedUserResult {
+  user: LoggedUserResponse;
+  networkFailure: boolean;
+}
+
+export const readLoggedUser = async (): Promise<LoggedUserResult> => {
   try {
     const response = await auth.getLoggedInUser();
-    return response as LoggedUserResponse;
+    return { user: (response as LoggedUserResponse) || null, networkFailure: false };
   } catch (error) {
     console.error('Error getting logged user:', error);
-    return null;
+    return { user: null, networkFailure: isLinkDown(error) };
   }
 };
+
+export const getLoggedUser = async (): Promise<LoggedUserResponse> => (await readLoggedUser()).user;
 
 export const getUserRoles = async (email: string): Promise<{ roles: string[]; full_name: string }> => {
   try {
@@ -72,8 +93,8 @@ export const getUserRoles = async (email: string): Promise<{ roles: string[]; fu
 
 export const logout = async () => {
   try {
-    return auth.logout().then((result) => {
-      clearAppStorage();
+    return auth.logout().then(async (result) => {
+      await clearAppStorage();
       return result;
     });
   }catch(e){

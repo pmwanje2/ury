@@ -1,6 +1,6 @@
 import { StateCreator } from 'zustand';
 import { OrderType, OrderStatusType } from '../../data/order-types';
-import { call, getSessionUser, getUserSessionStorageKey } from '@ury/core';
+import { call, getSessionUser, getUserSessionStorageKey, isLinkDown } from '@ury/core';
 import { getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoiceTax } from '../../lib/invoice-api';
 import { searchPosInvoice } from '../../lib/invoice-api';
 
@@ -38,6 +38,7 @@ export interface OrdersState {
   orders: POSInvoice[];
   orderLoading: boolean;
   error: string | null;
+  ordersOffline: boolean;
   pagination: {
     currentPage: number;
     hasNextPage: boolean;
@@ -77,6 +78,7 @@ export const createOrdersSlice: StateCreator<
   orders: [],
   orderLoading: false,
   error: null,
+  ordersOffline: false,
   pagination: {
     currentPage: 1,
     hasNextPage: false,
@@ -93,7 +95,7 @@ export const createOrdersSlice: StateCreator<
   // Actions
   fetchOrders: async (page = 1) => {
     try {
-      set({ orderLoading: true, error: null });
+      set({ orderLoading: true, error: null, ordersOffline: false });
       const { orderSearchQuery, selectedStatus } = get();
       
       // Get POS profile to access paid_limit
@@ -136,6 +138,10 @@ export const createOrdersSlice: StateCreator<
         orderLoading: false 
       });
     } catch (error) {
+      if (isLinkDown(error)) {
+        set({ orderLoading: false, ordersOffline: true });
+        return;
+      }
       set({ 
         error: error instanceof Error ? error.message : 'Failed to fetch orders',
         orderLoading: false 

@@ -1,0 +1,158 @@
+I001 [*] Import block is un-sorted or un-formatted
+  --> ury/ury/api/self_ordering.py:25:1
+   |
+23 |   # Frappe user session. Elevation is always narrow and wrapped in try/finally.
+24 |
+25 | / import base64
+26 | | import hashlib
+27 | | import hmac
+28 | | import json
+29 | |
+30 | | import frappe
+31 | | from frappe import _
+32 | | from frappe.utils import add_to_date, now_datetime
+33 | |
+34 | | from ury.ury_pos.api import resolve_restaurant_menu
+35 | | from ury.ury.doctype.ury_order.ury_order import (
+36 | |     _resolve_or_create_pos_invoice,
+37 | |     price_items_for_invoice,
+38 | | )
+39 | | from ury.ury.api.ury_kot_generate import kot_execute
+   | |____________________________________________________^
+40 |
+41 |   SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
+   |
+help: Organize imports
+   |
+33 |
+   - from ury.ury_pos.api import resolve_restaurant_menu
+34 + from ury.ury.api.ury_kot_generate import kot_execute
+35 | from ury.ury.doctype.ury_order.ury_order import (
+36 |     _resolve_or_create_pos_invoice,
+37 |     price_items_for_invoice,
+38 | )
+   - from ury.ury.api.ury_kot_generate import kot_execute
+39 + from ury.ury_pos.api import resolve_restaurant_menu
+40 |
+   |
+
+RUF059 Unpacked variable `session` is never used
+   --> ury/ury/api/self_ordering.py:321:24
+    |
+319 |         frappe.throw(_("Missing ordering token or device credentials"), frappe.PermissionError)
+320 |
+321 |     raw_session_token, session = _open_session(profile, source, table, device_name)
+    |                        ^^^^^^^
+322 |
+323 |     return _ordering_context_response(raw_session_token, source, profile, table, layout)
+    |
+help: Prefix it with an underscore or any other dummy variable pattern
+
+RUF059 Unpacked variable `existing_table` is never used
+   --> ury/ury/api/self_ordering.py:339:14
+    |
+337 |     per-staff attribution/audit — out of scope for this pass.
+338 |     """
+339 |     profile, existing_table, source, device_name, layout = _resolve_device(device_id, device_credential)
+    |              ^^^^^^^^^^^^^^
+340 |
+341 |     table_mode = frappe.db.get_value("URY Ordering Device", device_name, "table_mode")
+    |
+help: Prefix it with an underscore or any other dummy variable pattern
+
+RUF059 Unpacked variable `session` is never used
+   --> ury/ury/api/self_ordering.py:359:24
+    |
+357 |         frappe.throw(_("Invalid table"), frappe.ValidationError)
+358 |
+359 |     raw_session_token, session = _open_session(profile, source, table, device_name)
+    |                        ^^^^^^^
+360 |
+361 |     return _ordering_context_response(raw_session_token, source, profile, table, layout)
+    |
+help: Prefix it with an underscore or any other dummy variable pattern
+
+RUF059 Unpacked variable `invoice_name` is never used
+   --> ury/ury/api/self_ordering.py:569:18
+    |
+567 |         _ensure_admin_branch_mapping(profile.branch)
+568 |
+569 |         invoice, invoice_name = _resolve_or_create_pos_invoice(
+    |                  ^^^^^^^^^^^^
+570 |             table=session.table, invoiceNo=session.invoice, order_type=order_type, is_payment=None,
+571 |             check_permission=False, override_branch=profile.branch,
+    |
+help: Prefix it with an underscore or any other dummy variable pattern
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> ury/ury/api/test_self_ordering.py:11:1
+   |
+ 9 |   # bench as part of this track's acceptance criteria.
+10 |
+11 | / import base64
+12 | | import hmac
+13 | | import hashlib
+14 | | import unittest
+15 | | from unittest.mock import patch, MagicMock
+16 | |
+17 | | import frappe
+18 | |
+19 | | from ury.ury.api.self_ordering import (
+20 | |     _verify_qr_token,
+21 | |     _sign,
+22 | |     add_customer_items,
+23 | |     assign_device_table,
+24 | |     get_customer_order,
+25 | |     request_bill,
+26 | |     create_payment_request,
+27 | |     get_payment_status,
+28 | |     share_payment_link,
+29 | |     register_communication_provider,
+30 | | )
+   | |_^
+help: Organize imports
+   |
+11 | import base64
+12 + import hashlib
+13 | import hmac
+   - import hashlib
+14 | import unittest
+   - from unittest.mock import patch, MagicMock
+15 + from unittest.mock import MagicMock, patch
+16 |
+17 | import frappe
+18 |
+19 | from ury.ury.api.self_ordering import (
+20 +     _sign,
+21 |     _verify_qr_token,
+   -     _sign,
+22 |     add_customer_items,
+23 |     assign_device_table,
+   -     get_customer_order,
+   -     request_bill,
+24 |     create_payment_request,
+25 +     get_customer_order,
+26 |     get_payment_status,
+27 +     register_communication_provider,
+28 +     request_bill,
+29 |     share_payment_link,
+   -     register_communication_provider,
+30 | )
+   -
+31 |
+   |
+
+F841 Local variable `result` is assigned to but never used
+   --> ury/ury/api/test_self_ordering.py:241:9
+    |
+239 |         mock_db_get_value.return_value = "Menu A"
+240 |
+241 |         result = add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
+    |         ^^^^^^
+242 |
+243 |         # Existing rows were never cleared/replaced.
+    |
+help: Remove assignment to unused variable `result`
+
+Found 7 errors.
+[*] 2 fixable with the `--fix` option (5 hidden fixes can be enabled with the `--unsafe-fixes` option).

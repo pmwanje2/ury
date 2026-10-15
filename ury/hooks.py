@@ -62,6 +62,10 @@ website_route_rules = [
     {"from_route": "/pos/<path:app_path>", "to_route": "pos"},
 ]
 
+# /sw.js is the POS service worker. Scope "/pos" needs Service-Worker-Allowed, which
+# /assets cannot send. Registration stays opt-in in the POS client.
+page_renderer = ["ury.offline_sw.OfflineServiceWorkerPage"]
+
 setup_wizard_requires = [
     "assets/erpnext/js/setup_wizard.js",
     "assets/ury/js/setup_wizard.js",
@@ -199,7 +203,7 @@ doc_events = {
         },
     "URY Menu Course": {
 		"validate": "ury.ury.api.ury_menu_course_validation.validate_priority",
-	}    
+    }
 }
 
 # Scheduled Tasks
@@ -335,6 +339,11 @@ fixtures = [
                     "POS Invoice-cashier",
                     "POS Invoice-invoice_printed",
                     "POS Invoice-invoice_created",
+                    "POS Invoice-ury_client_order_id",
+                    "POS Invoice-ury_last_round_id",
+                    "POS Invoice-ury_offline_captured_at",
+                    "URY KOT-ury_offline_printed",
+                    "POS Profile-ury_offline_capture",
                     "POS Invoice-custom_aggregator_id",
                     "POS Invoice-restaurant_info",
                     "POS Invoice-restaurant",
@@ -390,6 +399,13 @@ fixtures = [
                     "POS Profile-show_image",
                     "POS Profile-custom_daily_pos_close",
                     "POS Profile-custom_blind_cash_count",
+                    "POS Profile-custom_floor_idle_signout_seconds",
+                    "POS Profile-custom_floor_signout_after_send",
+                    "POS Profile-custom_floor_stay_signed_in_roles",
+                    "User-custom_floor_pin_hash",
+                    "POS Profile-custom_floor_pin_login",
+                    "POS Profile-custom_floor_pin_roles",
+                    "POS Profile-custom_floor_device_epoch",
                     "POS Profile-custom_checklist_items",
                     "POS Profile-paid_limit",
                     "POS Profile-table_attention_time",

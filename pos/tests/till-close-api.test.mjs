@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { stripTypeScriptTypes } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { loadModule } from '../../packages/core/test/logout-harness.mjs';
 import test from 'node:test';
 import vm from 'node:vm';
 
@@ -17,11 +18,8 @@ const invoice = {
 };
 
 function loadReactAPI(call) {
-  const source = readFileSync(new URL('../src/lib/pos-closing-api.ts', import.meta.url), 'utf8');
-  const script = stripTypeScriptTypes(source.replace("import { call, db } from '@ury/core';", ''))
-    .replace(/\bexport /g, '');
-  return vm.runInNewContext(`${script}\n({ getMainCashierPosInvoices, getSubCashierPosInvoices });`,
-    { call, db: {}, console });
+  return loadModule(fileURLToPath(new URL('../src/lib/pos-closing-api.ts', import.meta.url)),
+    { console }, { '@ury/core': { call, db: {} } });
 }
 
 test('legacy main close requests the whole till and consumes full invoice documents', async () => {

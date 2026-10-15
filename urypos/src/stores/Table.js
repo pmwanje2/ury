@@ -8,11 +8,18 @@ import { useNotifications } from "./Notification.js";
 import { useAlert } from "./Alert.js";
 import frappe from "./frappeSdk.js";
 import { usetoggleRecentOrder } from "./recentOrder.js";
+import { useNotificationModal } from "./NotificationModal.js";
 
 
 export const useTableStore = defineStore("table", {
   state: () => ({
     tables: [],
+    serviceRequests: [],
+    serviceRequestsLoading: true,
+    serviceRequestsUnavailable: false,
+    serviceRequestsDenied: false,
+    serviceRequestsRead: 0,
+    serviceRequestsRoom: null,
     selectedTable: null,
     previousOrderdItem: [],
     invoiceNo: "",
@@ -43,6 +50,7 @@ export const useTableStore = defineStore("table", {
     showCaptain: false,
     cashier: null,
     captain: [],
+    captainRead: 0,
     previousWaiter: null,
     newCaptain: "",
     invoicePrinted: "",
@@ -51,6 +59,7 @@ export const useTableStore = defineStore("table", {
     customers: useCustomerStore(),
     db: frappe.db(),
     serverTimeOffset: 0,
+    ownerNames: {},
     totalMinutes: null,
     invoiceNumber: null,
     modifiedTime: null,
@@ -74,9 +83,9 @@ export const useTableStore = defineStore("table", {
     },
     searchCaptian() {
       return this.captain.filter((ordeTakers) => {
-        return ordeTakers.name
-          .toLowerCase()
-          .includes(this.newCaptain.toLowerCase());
+        const search = this.newCaptain.toLowerCase();
+        return ordeTakers.name.toLowerCase().includes(search)
+          || (ordeTakers.full_name || '').toLowerCase().includes(search);
       });
     },
     toggleTableType(state) {
@@ -158,6 +167,11 @@ export const useTableStore = defineStore("table", {
       });
     },
     fetchTable() {
+      const room = this.selectedRoom;
+      let tableListLoaded = false;
+      this.serviceRequests = [];
+      this.serviceRequestsLoading = true;
+      ++this.serviceRequestsRead;
       this.call
         .get("ury.ury.api.ury_server_time.get_server_time")
         .then((result) => {
@@ -184,18 +198,23 @@ export const useTableStore = defineStore("table", {
           limit: 0,
         })
         .then(async (tables) => {
+          if (room !== this.selectedRoom) return;
+          tableListLoaded = true;
           this.tables = tables.sort((a, b) => {
             return a.name.localeCompare(b.name, undefined, {
               numeric: true,
               sensitivity: "base",
             });
           });
+          this.serviceRequestsRoom = room;
+          this.fetchServiceRequests();
           // Publish the floor first; a pending/denied bill read must not block it.
           const occupiedTables = this.tables.filter((table) => table.occupied === 1);
           if (!occupiedTables.length) return;
           const invoices = await this.db.getDocList("POS Invoice", {
-            fields: ["restaurant_table", "creation", "custom_merged_tables"],
+            fields: ["name", "restaurant_table", "creation", "custom_merged_tables", "waiter"],
             filters: [
+              ["branch", "=", this.invoiceData.branch],
               ["docstatus", "=", 0],
             ],
             orFilters: [
@@ -222,8 +241,42 @@ export const useTableStore = defineStore("table", {
               }
             }
           }
+          if (room === this.selectedRoom) {
+            await this.attachTableOwners(occupiedTables, room, invoices);
+          }
         })
-        .catch((error) => console.error(error));
+        .catch((error) => {
+          if (!tableListLoaded && room === this.selectedRoom) {
+            this.serviceRequestsLoading = false;
+            this.serviceRequestsUnavailable = true;
+            this.serviceRequestsDenied = false;
+          }
+          console.error(error);
+        });
+    },
+    async fetchServiceRequests() {
+      const room = this.selectedRoom;
+      if (this.serviceRequestsRoom !== room) return;
+      const read = ++this.serviceRequestsRead;
+      const tableNames = this.tables.map(table => table.name);
+      try {
+        const requests = tableNames.length ? await this.db.getDocList("URY Service Request", {
+          fields: ["name", "table", "invoice", "request_type", "status", "requested_at"],
+          filters: [["table", "in", tableNames], ["request_type", "in", ["Bill", "Assistance"]], ["status", "!=", "Resolved"]],
+          orderBy: { field: "requested_at", order: "asc" }, limit: 0,
+        }) : [];
+        if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
+        this.serviceRequests = requests;
+        this.serviceRequestsUnavailable = false;
+        this.serviceRequestsDenied = false;
+      } catch (error) {
+        if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
+        this.serviceRequests = [];
+        this.serviceRequestsUnavailable = true;
+        this.serviceRequestsDenied = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
+      } finally {
+        if (read === this.serviceRequestsRead && room === this.selectedRoom) this.serviceRequestsLoading = false;
+      }
     },
     async getMenu() {
       const getMenuIem = {
@@ -296,28 +349,43 @@ export const useTableStore = defineStore("table", {
         console.error("Failed to merge tables:", error);
       }
     },
-    fetchCaptain() {
-      this.db
-        .getDocList("User", {
-          fields: ["name"],
-          limit: 0,
-        })
-        .then((docs) => {
-          this.captain = docs;
-        })
-        .catch((error) => console.error(error));
+    async fetchCaptain() {
+      const read = ++this.captainRead;
+      this.captain = [];
+      this.invoiceNumber = null;
+      try {
+        const invoice = await this.invoiceNumberFetching();
+        if (read !== this.captainRead || !invoice?.name) return;
+        const result = await this.call.get(
+          "ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates",
+          { invoice: invoice.name },
+        );
+        if (read === this.captainRead) this.captain = result.message || [];
+      } catch (error) {
+        if (read === this.captainRead) this.captain = [];
+        console.error(error);
+      }
     },
     async toggleDropdown(index) {
       this.tableName = index;
+      this.captain = [];
+      ++this.captainRead;
       if (this.activeDropdown === index) {
         this.activeDropdown = null;
+        return;
       } else {
         this.activeDropdown = index;
       }
-      await this.invoiceNumberFetching();
+      if (this.auth.hasAccess) {
+        await this.fetchCaptain();
+      } else {
+        await this.invoiceNumberFetching();
+      }
     },
     hideDropdown() {
       this.activeDropdown = null;
+      this.captain = [];
+      ++this.captainRead;
     },
     selectTable(tables) {
       this.newTable = tables.name;
@@ -389,7 +457,52 @@ export const useTableStore = defineStore("table", {
         }
       }
     },
-    async addToSelectedTables(table) {
+    cartHasUnsentItems() {
+      const lineKeys = (rows, codeOf) => (rows || [])
+        .map((row) => {
+          const code = row && codeOf(row);
+          if (!code) return null;
+          const comment = String(row.comment == null ? "" : row.comment).trim();
+          return code + "\0" + Number(row.qty || 0) + "\0" + comment;
+        })
+        .filter((key) => key !== null)
+        .sort();
+      const cart = this.menu.cart || [];
+      const tableSaved = Array.isArray(this.previousOrderdItem) ? this.previousOrderdItem : [];
+      const recent = this.recentOrders;
+      const recentItems = recent && recent.pastOrderdItem;
+      const recentSaved = Array.isArray(recentItems) ? recentItems : [];
+      const storedTable = recent && recent.restaurantTable;
+      const listedTable = recent && recent.selectedTable;
+      const recentTable = storedTable || listedTable;
+      const recentInvoice = recent && (recent.draftInvoice || recent.invoiceNumber);
+      const tablesAgree = Boolean(storedTable) && (!listedTable || listedTable === storedTable);
+      const openDraftBelongsToItsTable = Boolean(recent && recent.draftInvoice) && tablesAgree;
+      const sameTable = Boolean(recentTable) && recentTable === this.selectedTable;
+      const sameInvoice = Boolean(recentInvoice) && recentInvoice === this.invoiceNo && sameTable;
+      const saved = tableSaved.length ? tableSaved : ((openDraftBelongsToItsTable || sameInvoice) ? recentSaved : []);
+      const cartKeys = lineKeys(cart, (row) => row.item);
+      const savedKeys = lineKeys(saved, (row) => row.item_code || row.item);
+      if (cartKeys.length !== savedKeys.length) return true;
+      return cartKeys.some((key, index) => key !== savedKeys[index]);
+    },
+    confirmLeaveUnsent(onLeave) {
+      if (!this.cartHasUnsentItems()) {
+        onLeave();
+        return;
+      }
+      useNotificationModal().showModal({
+        title: "Unsent items",
+        message: "You have unsent items. Leave without sending them?",
+        showCancelButton: true,
+        onConfirm: () => onLeave(),
+        onCancel: () => {},
+      });
+    },
+    addToSelectedTables(table) {
+      this.confirmLeaveUnsent(() => this.loadSelectedTable(table));
+    },
+    async loadSelectedTable(table) {
       this.selectedTable = table.name;
       this.takeAwayTable = 0;
 
@@ -434,7 +547,7 @@ export const useTableStore = defineStore("table", {
               this.alert
                 .createAlert(
                   "Message",
-                  "Table is assigned to " + this.previousOrder.waiter,
+                  "Table is assigned to " + this.ownerLabel(this.previousOrder.waiter),
                   "OK"
                 )
                 .then(() => {
@@ -496,15 +609,39 @@ export const useTableStore = defineStore("table", {
             });
           }
         })
-        .catch((error) => console.error(error));
+        .catch((error) => {
+          const permissionRefused = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
+          if (permissionRefused && !this.auth.hasAccess && !this.auth.cashier) {
+            const fromFloor = table && typeof table.owner_name === "string" ? table.owner_name.trim() : "";
+            const ownerName = fromFloor || this.ownerLabel(table && table.waiter) || "another waiter";
+            this.alert
+              .createAlert(
+                "Message",
+                "Table is assigned to " + ownerName,
+                "OK"
+              )
+              .then(() => {
+                return router.push("/Table").then(() => {
+                  window.location.reload();
+                });
+              })
+              .catch((error) => console.error(error));
+            return;
+          }
+          console.error(error);
+        });
     },
     routeToCart(table) {
-      this.addToSelectedTables(table);
-      router.push("/Cart");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Cart");
+      });
     },
     routeToMenu(table) {
-      this.addToSelectedTables(table);
-      router.push("/Menu");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Menu");
+      });
     },
     async invoiceNumberFetching() {
       const tableInvoiceNumber = {
@@ -515,8 +652,10 @@ export const useTableStore = defineStore("table", {
           "ury.ury.doctype.ury_order.ury_order.get_order_invoice",
           tableInvoiceNumber
         );
+        if (this.tableName !== tableInvoiceNumber.table) return;
         this.invoiceNumber = result.message.name;
         this.currentCaptain = result.message.waiter;
+        return result.message;
       } catch (error) {
         console.error(error._server_messages);
       }
@@ -572,6 +711,56 @@ export const useTableStore = defineStore("table", {
             }
           });
       }
+    },
+    async attachTableOwners(occupiedTables, room, invoices) {
+      if (room !== this.selectedRoom) return;
+      try {
+        const visible = new Set(occupiedTables.map((table) => table.name));
+        const waiterByTable = new Map();
+        for (const bill of invoices || []) {
+          if (!bill || !bill.waiter) continue;
+          const names = [];
+          if (bill.restaurant_table) names.push(bill.restaurant_table);
+          for (const partner of String(bill.custom_merged_tables || "").split(",")) {
+            const name = partner.trim();
+            if (name) names.push(name);
+          }
+          for (const name of names) {
+            if (visible.has(name)) waiterByTable.set(name, bill.waiter);
+          }
+        }
+        const waiterIds = [...new Set(waiterByTable.values())];
+        if (waiterIds.length) {
+          try {
+            const users = await this.db.getDocList("User", {
+              fields: ["name", "full_name"],
+              filters: [["name", "in", waiterIds]],
+              limit: waiterIds.length,
+            });
+            if (room !== this.selectedRoom) return;
+            for (const user of users || []) {
+              const fullName = user && typeof user.full_name === "string" ? user.full_name.trim() : "";
+              if (user && user.name && fullName) this.ownerNames[user.name] = fullName;
+            }
+          } catch (error) {
+            console.error(error);
+          }
+        }
+        if (room !== this.selectedRoom) return;
+        for (const table of this.tables) {
+          const waiter = waiterByTable.get(table.name);
+          table.owner_name = waiter ? this.ownerLabel(waiter) : "";
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    },
+    ownerLabel(userId) {
+      if (!userId) return "";
+      const known = this.ownerNames[userId];
+      if (known) return known;
+      const at = String(userId).indexOf("@");
+      return at > 0 ? String(userId).slice(0, at) : String(userId);
     },
   },
 });

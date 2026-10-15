@@ -18,6 +18,12 @@
  */
 
 import { call, db } from '@ury/core';
+import { assertOutboxEmpty } from '../offline/outbox';
+
+async function assertCloseAllowed() {
+  if (navigator.onLine === false) throw new Error('Till close is refused offline.');
+  await assertOutboxEmpty();
+}
 
 /**
  * Represents a tax line from a POS Invoice
@@ -259,6 +265,7 @@ export async function getMainCashierPosInvoices(
 export async function createSubPosClosing(
   data: SubPosClosingCreateData
 ): Promise<{ name: string }> {
+  await assertCloseAllowed();
   return db.createDoc('Sub POS Closing', { ...data, docstatus: 0 });
 }
 
@@ -268,6 +275,7 @@ export async function createSubPosClosing(
 export async function submitSubPosClosing(
   name: string
 ): Promise<{ name: string }> {
+  await assertCloseAllowed();
   return db.updateDoc('Sub POS Closing', name, { docstatus: 1 });
 }
 
@@ -277,6 +285,7 @@ export async function submitSubPosClosing(
 export async function createPosClosingEntry(
   data: PosClosingEntryCreateData
 ): Promise<{ name: string }> {
+  await assertCloseAllowed();
   return db.createDoc('POS Closing Entry', { ...data, docstatus: 0 });
 }
 
@@ -286,5 +295,6 @@ export async function createPosClosingEntry(
 export async function submitPosClosingEntry(
   name: string
 ): Promise<{ name: string }> {
+  await assertCloseAllowed();
   return db.updateDoc('POS Closing Entry', name, { docstatus: 1 });
 }

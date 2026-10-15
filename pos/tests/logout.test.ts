@@ -53,11 +53,12 @@ function header(env: ReturnType<typeof environment>) {
   };
 }
 
-test('POS: logout includes CSRF, clears only URY state and goes to /login', async () => {
+test('POS: logout includes CSRF, clears only URY state and retains only the till return path', async () => {
   const env = environment();
+  env.globals.window.location.href = '/pos/orders?invoice=PRIVATE-BILL';
   await header(env)()('header.logout').props.onClick();
   assert.equal(env.calls[0][1].headers?.['X-Frappe-CSRF-Token'], 'session-token');
-  assert.equal(env.globals.window.location.href, '/login');
+  assert.equal(env.globals.window.location.href, '/login?redirect-to=%2Fpos');
   assert.equal(env.globals.localStorage.getItem('posOrderTabsData'), null);
   assert.equal(env.globals.sessionStorage.getItem('posProfile'), null);
   assert.equal(env.globals.sessionStorage.getItem('ury.setup.configureState'), null);
@@ -75,7 +76,7 @@ test('POS: successful logout stays disabled and blocks requests while navigating
   await button.props.onClick();
   assert.equal(disabled, true);
   assert.equal(env.calls.length, 1);
-  assert.equal(env.globals.window.location.href, '/login');
+  assert.equal(env.globals.window.location.href, '/login?redirect-to=%2Fpos');
 });
 
 for (const failure of ['HTTP', 'network']) {
@@ -105,6 +106,7 @@ test('POS: pending logout disables its button and sends only one request', async
   const click = render()('header.logout').props.onClick;
   const first = click();
   const second = click();
+  await new Promise((resolve) => setImmediate(resolve));
   const disabled = render()('header.logout').props.disabled;
   const requests = env.calls.length;
   complete!({ ok: true, status: 200 });
@@ -113,9 +115,9 @@ test('POS: pending logout disables its button and sends only one request', async
   assert.equal(requests, 1);
 });
 
-test('POS: Clear Cache preserves Desk storage and self-ordering credentials', () => {
+test('POS: Clear Cache preserves Desk storage and self-ordering credentials', async () => {
   const env = environment();
-  header(env)()('header.clear_cache').props.onClick();
+  await header(env)()('header.clear_cache').props.onClick();
   assert.equal(env.globals.localStorage.getItem('deskPreference'), 'keep');
   assert.equal(env.globals.localStorage.getItem('ury_device_credential'), 'keep');
   assert.equal(env.globals.sessionStorage.getItem('deskSession'), 'keep');
@@ -182,14 +184,14 @@ function openingScreen(env: ReturnType<typeof environment>, occupied: boolean) {
 
 for (const occupied of [false, true]) {
   const screen = occupied ? 'occupied' : 'opening';
-  test(`POS ${screen}: logout POSTs with CSRF, clears named keys and navigates to plain /login`, async () => {
+  test(`POS ${screen}: logout POSTs with CSRF, clears named keys and retains the till return path`, async () => {
     const env = environment();
     const render = openingScreen(env, occupied);
     await render().props.onClick();
     assert.equal(env.calls[0][0], '/api/method/logout');
     assert.equal(env.calls[0][1].method, 'POST');
     assert.equal(env.calls[0][1].headers?.['X-Frappe-CSRF-Token'], 'session-token');
-    assert.equal(env.globals.window.location.href, '/login');
+    assert.equal(env.globals.window.location.href, '/login?redirect-to=%2Fpos');
     assert.equal(env.globals.localStorage.getItem('posOrderTabsData'), null);
     assert.equal(env.globals.sessionStorage.getItem('posProfile'), null);
     assert.equal(env.globals.localStorage.getItem('deskPreference'), 'keep');
@@ -226,6 +228,7 @@ for (const occupied of [false, true]) {
     const click = render().props.onClick;
     const first = click();
     const second = click();
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(env.calls.length, 1);
     assert.equal(render().props.disabled, true);
     complete!({ ok: true, status: 200 });

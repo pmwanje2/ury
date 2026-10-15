@@ -33,6 +33,72 @@ from ury.ury.api.self_ordering import (
 MOD = "ury.ury.api.self_ordering"
 
 
+class TestRequestAssistance(unittest.TestCase):
+    def setUp(self):
+        from ury.ury.api import self_ordering
+        self.api = self_ordering
+        self.session = MagicMock(table="Table 7", invoice="POS-1", ordering_profile="Profile A")
+        self.session.name = "SESSION-1"
+        self.profile = MagicMock(enable_request_bill=1)
+        self.resolve = self.enterContext(patch(f"{MOD}._resolve_session", return_value=self.session))
+        self.get_doc = self.enterContext(patch(f"{MOD}.frappe.get_doc"))
+        self.exists = self.enterContext(patch(f"{MOD}.frappe.db.exists", return_value=None))
+        self.user = self.enterContext(patch(f"{MOD}.frappe.set_user"))
+        self.req = MagicMock()
+        self.req.name = "REQ-ASSIST"
+        self.get_doc.side_effect = lambda doctype, name=None: self.req if isinstance(doctype, dict) else self.profile
+
+    def request(self):
+        method = getattr(self.api, "request_assistance", None)
+        self.assertTrue(callable(method), "Guests cannot request native Assistance yet")
+        return method("opaque-session")
+
+    def test_creates_native_assistance_for_verified_table_and_invoice(self):
+        result = self.request()
+        self.assertEqual(result, {"status": "Requested", "request": "REQ-ASSIST"})
+        self.resolve.assert_called_once_with("opaque-session")
+        payload = self.get_doc.call_args.args[0]
+        self.assertEqual({key: payload[key] for key in ("doctype", "request_type", "table", "invoice", "session", "status")},
+                         {"doctype": "URY Service Request", "request_type": "Assistance", "table": "Table 7",
+                          "invoice": "POS-1", "session": "SESSION-1", "status": "Open"})
+        self.req.insert.assert_called_once_with(ignore_permissions=True)
+
+    def test_unresolved_request_is_deduplicated_by_table_invoice_and_type(self):
+        self.exists.return_value = "REQ-OPEN"
+        self.assertEqual(self.request(), {"status": "Already Requested", "request": "REQ-OPEN"})
+        self.exists.assert_called_once_with("URY Service Request", {"table": "Table 7", "invoice": "POS-1",
+            "request_type": "Assistance", "status": ["!=", "Resolved"]})
+        self.req.insert.assert_not_called()
+
+    def test_disabled_service_requests_are_refused(self):
+        self.profile.enable_request_bill = 0
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.req.insert.assert_not_called()
+
+    def test_table_and_active_order_are_required(self):
+        for field in ("table", "invoice"):
+            with self.subTest(field=field):
+                old = getattr(self.session, field)
+                setattr(self.session, field, None)
+                with self.assertRaises(frappe.ValidationError):
+                    self.request()
+                setattr(self.session, field, old)
+        self.req.insert.assert_not_called()
+
+    def test_expired_or_forged_session_is_refused_before_insertion(self):
+        self.resolve.side_effect = frappe.PermissionError("Expired")
+        with self.assertRaises(frappe.PermissionError):
+            self.request()
+        self.get_doc.assert_not_called()
+
+    def test_insertion_failure_restores_guest_identity(self):
+        self.req.insert.side_effect = frappe.ValidationError("Cannot insert")
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.assertEqual(self.user.call_args.args, (frappe.session.user,))
+
+
 class TestQRTokenRoundtrip(unittest.TestCase):
     @patch(f"{MOD}.frappe.db.exists")
     @patch(f"{MOD}.frappe.get_doc")
@@ -70,6 +136,21 @@ class TestQRTokenRoundtrip(unittest.TestCase):
     def test_verify_qr_token_malformed_rejected(self):
         with self.assertRaises(frappe.PermissionError):
             _verify_qr_token("not-a-valid-token")
+
+
+class TestGuestBrandMalformedLink(unittest.TestCase):
+    def test_non_ascii_qr_signature_does_not_break_guest_page_identity(self):
+        from ury.brand import get_brand
+        token = base64.urlsafe_b64encode("Profile A|Table 7|\u00e9".encode()).decode().rstrip("=")
+        settings = frappe._dict(app_name="MAX\\MUS", app_logo=None, favicon=None)
+        with patch(f"{MOD}.frappe.get_cached_doc", return_value=settings), \
+             patch(f"{MOD}.frappe.form_dict", frappe._dict(t=token)), \
+             patch(f"{MOD}._get_profile_secret", return_value="test-secret"):
+            try:
+                brand = get_brand(surface="guest")
+            except Exception as error:
+                self.fail(f"Malformed QR signatures must not break /order rendering: {error}")
+        self.assertEqual(brand, {"name": "MAX\\MUS", "logo": None, "favicon": None})
 
 
 class TestAddCustomerItemsAppendOnly(unittest.TestCase):
@@ -488,6 +569,24 @@ class TestRequestBill(unittest.TestCase):
 
 
 class TestCreatePaymentRequest(unittest.TestCase):
+    def setUp(self):
+        pos_profile = MagicMock()
+        pos_profile.payments = [frappe._dict(mode_of_payment="P2 Phone")]
+        self.enterContext(patch(f"{MOD}.frappe.get_cached_doc", return_value=pos_profile))
+
+        def configured_gateway(doctype, *args, **kwargs):
+            if doctype == "Payment Gateway Account":
+                return frappe._dict(name="P2 Gateway", payment_account="P2 Bank", payment_channel="Phone")
+            if doctype == "Mode of Payment":
+                return "Phone"
+            if doctype == "Mode of Payment Account":
+                return "P2 Bank"
+            return None
+
+        self.enterContext(patch(f"{MOD}.frappe.db.get_value", side_effect=configured_gateway))
+        # No earlier Paid requests for these mocked invoices.
+        self.enterContext(patch(f"{MOD}.frappe.get_all", return_value=[]))
+
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
@@ -535,7 +634,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         # any client-supplied argument (there isn't one to trust).
         mock_make_pr.assert_called_once_with(
             dt="POS Invoice", dn="POS-INV-100", submit_doc=1, mute_email=1,
-            order_type="Shopping Cart", return_doc=1,
+            payment_gateway_account="P2 Gateway", mode_of_payment="P2 Phone", return_doc=1,
         )
         self.assertEqual(result["payment_request"], "PR-001")
         self.assertEqual(result["amount"], 1293.72)
@@ -640,24 +739,12 @@ class TestCreatePaymentRequest(unittest.TestCase):
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
     @patch(f"{MOD}.frappe.set_user")
-    def test_create_payment_request_reports_unconfigured_gateway_clearly(
+    def test_create_payment_request_does_not_relabel_request_errors(
         self, mock_set_user, mock_resolve_session, mock_get_doc, mock_log_error, mock_clear_messages, mock_make_pr,
     ):
-        """Live-testing finding (two parts): for dt="POS Invoice", ERPNext's
-        get_amount() only recognizes payments rows with type="Phone"
-        matching a configured gateway account -- with none configured (true
-        on a fresh bench with no real Payment Gateway Account set up),
-        make_payment_request() itself throws "Payment Entry is already
-        created", which reads as if the order were already paid. This must
-        surface as a clear "not configured yet" exception message (part 1
-        -- already covered before this fix). But live browser testing found
-        a SECOND leak: ERPNext's own frappe.throw() inside make_payment_request
-        queues that raw message via msgprint into frappe.local.message_log
-        BEFORE we ever catch the exception -- so even though the exception
-        object we raise is clean, the queued message survives and would
-        still reach the client's _server_messages array alongside it. Part
-        2: frappe.clear_messages() must be called to drop that queued
-        message before re-throwing."""
+        """Missing configuration is refused before ERPNext is called. Any
+        later Payment Request error is real and must not be relabelled as
+        "online payment isn't set up"."""
         session = MagicMock()
         session.invoice = "POS-INV-100"
         mock_resolve_session.return_value = session
@@ -676,13 +763,13 @@ class TestCreatePaymentRequest(unittest.TestCase):
             return invoice
 
         mock_get_doc.side_effect = get_doc_side_effect
-        mock_make_pr.side_effect = frappe.ValidationError("Payment Entry is already created")
+        mock_make_pr.side_effect = frappe.ValidationError("Payment Request is already created")
 
         with self.assertRaises(frappe.ValidationError) as ctx:
             create_payment_request("session-token")
-        self.assertIn("isn't set up", str(ctx.exception))
-        self.assertNotIn("already created", str(ctx.exception))
-        mock_clear_messages.assert_called_once()
+        self.assertIn("already created", str(ctx.exception))
+        self.assertNotIn("isn't set up", str(ctx.exception))
+        mock_clear_messages.assert_not_called()
 
 
 class TestSharePaymentLink(unittest.TestCase):

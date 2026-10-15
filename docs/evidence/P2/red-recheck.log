@@ -1,0 +1,505 @@
+/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py:1077: UserWarning: WARNING: module `ea_payments` found in apps `ea_payments` and `ea_payments`
+  warnings.warn(
+test_cashier_settlement_rebuilds_gateway_tender_and_submits (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_cashier_settlement_rebuilds_gateway_tender_and_submits) ... FAIL
+test_client_amount_is_ignored_by_real_dispatch (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_client_amount_is_ignored_by_real_dispatch) ... FAIL
+test_missing_gateway_refuses_with_stable_id_without_creating_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_missing_gateway_refuses_with_stable_id_without_creating_request) ... FAIL
+test_no_shopping_cart_redirect_or_automatic_sales_invoice (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_no_shopping_cart_redirect_or_automatic_sales_invoice) ... /home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/utils.py:1197: V16FrappeDeprecationWarning: It was marked on unknown for removal from v16 with note: Use `NumberFormat.from_string()` from `frappe.utils.number_format` instead
+  return get_number_format_info(number_format)[2]
+FAIL
+test_positive_invoice_outstanding_is_used_instead_of_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_positive_invoice_outstanding_is_used_instead_of_total) ... FAIL
+test_profile_without_gateway_phone_row_refuses_with_stable_id (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_profile_without_gateway_phone_row_refuses_with_stable_id) ... FAIL
+test_server_populates_phone_row_for_exact_unpaid_invoice_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_server_populates_phone_row_for_exact_unpaid_invoice_total) ... FAIL
+test_uses_company_default_gateway_not_first_profile_phone_mode (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_company_default_gateway_not_first_profile_phone_mode) ... FAIL
+
+======================================================================
+FAIL: test_cashier_settlement_rebuilds_gateway_tender_and_submits (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_cashier_settlement_rebuilds_gateway_tender_and_submits)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 861, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 141, in test_cashier_settlement_rebuilds_gateway_tender_and_submits
+    result = self.request()
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+======================================================================
+FAIL: test_client_amount_is_ignored_by_real_dispatch (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_client_amount_is_ignored_by_real_dispatch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 861, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 97, in test_client_amount_is_ignored_by_real_dispatch
+    result = self.request(amount=1, grand_total=2, payment_gateway_account="foreign")
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+======================================================================
+FAIL: test_missing_gateway_refuses_with_stable_id_without_creating_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_missing_gateway_refuses_with_stable_id_without_creating_request)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 72, in test_missing_gateway_refuses_with_stable_id_without_creating_request
+    with self.assertRaisesRegex(frappe.ValidationError, "URY-PAYMENT-NOT-CONFIGURED"):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "URY-PAYMENT-NOT-CONFIGURED" does not match "Online payment isn't set up for this restaurant yet. Please pay at the counter."
+
+======================================================================
+FAIL: test_no_shopping_cart_redirect_or_automatic_sales_invoice (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_no_shopping_cart_redirect_or_automatic_sales_invoice)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 135, in test_no_shopping_cart_redirect_or_automatic_sales_invoice
+    self.assertNotEqual(frappe.local.response.get("type"), "redirect")
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'redirect' == 'redirect'
+
+======================================================================
+FAIL: test_positive_invoice_outstanding_is_used_instead_of_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_positive_invoice_outstanding_is_used_instead_of_total)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 861, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 123, in test_positive_invoice_outstanding_is_used_instead_of_total
+    self.assertEqual(self.request()["amount"], 60)
+                     ~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+======================================================================
+FAIL: test_profile_without_gateway_phone_row_refuses_with_stable_id (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_profile_without_gateway_phone_row_refuses_with_stable_id)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 81, in test_profile_without_gateway_phone_row_refuses_with_stable_id
+    with self.assertRaisesRegex(frappe.ValidationError, "URY-PAYMENT-NOT-CONFIGURED"):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "URY-PAYMENT-NOT-CONFIGURED" does not match "Online payment isn't set up for this restaurant yet. Please pay at the counter."
+
+======================================================================
+FAIL: test_server_populates_phone_row_for_exact_unpaid_invoice_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_server_populates_phone_row_for_exact_unpaid_invoice_total)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 861, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 86, in test_server_populates_phone_row_for_exact_unpaid_invoice_total
+    result = self.request()
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+======================================================================
+FAIL: test_uses_company_default_gateway_not_first_profile_phone_mode (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_company_default_gateway_not_first_profile_phone_mode)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 843, in create_payment_request
+    pr = make_payment_request(
+        dt="POS Invoice",
+    ...<4 lines>...
+        return_doc=1,
+    )
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/doctype/payment_request/payment_request.py", line 653, in make_payment_request
+    frappe.throw(_("Payment Entry is already created"))
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Payment Entry is already created
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 66, in request
+    return frappe.call(create_payment_request, session=self.token, **extra)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/__init__.py", line 1150, in call
+    return fn(*args, **newargs)
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/typing_validations.py", line 36, in wrapper
+    return func(*args, **kwargs)
+  File "/home/frappe/frappe-bench/apps/ury/ury/ury/api/self_ordering.py", line 861, in create_payment_request
+    frappe.throw(
+    ~~~~~~~~~~~~^
+        _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        frappe.ValidationError,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 159, in throw
+    msgprint(
+    ~~~~~~~~^
+    	msg,
+     ^^^^
+    ...<7 lines>...
+    	allow_dangerous_html=allow_dangerous_html,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 118, in msgprint
+    _raise_exception()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/frappe/frappe-bench/apps/frappe/frappe/utils/messages.py", line 59, in _raise_exception
+    raise exc
+frappe.exceptions.ValidationError: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 116, in test_uses_company_default_gateway_not_first_profile_phone_mode
+    result = self.request()
+  File "/home/frappe/frappe-bench/apps/ury/ury/tests/test_guest_phone_payment.py", line 68, in request
+    self.fail(f"An unpaid configured invoice must create a Phone request: {error}")
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: An unpaid configured invoice must create a Phone request: Online payment isn't set up for this restaurant yet. Please pay at the counter.
+
+----------------------------------------------------------------------
+Ran 8 tests in 22.274s
+
+FAILED (failures=8)

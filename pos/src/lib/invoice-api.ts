@@ -1,5 +1,6 @@
 import { DOCTYPES } from '../data/doctypes';
-import { call, db, getSessionUser, getUserSessionStorageKey } from '@ury/core';
+import { assertOfflineActionAllowed } from '../offline/cashier';
+import { call, db, getSessionUser, getUserSessionStorageKey, isLinkDown } from '@ury/core';
 import { OrderStatusType, OrderType } from '../data/order-types';
 import type { Filter } from 'frappe-js-sdk/lib/db/types';
 
@@ -30,6 +31,7 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  ury_client_order_id?: string | null;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
 }
@@ -103,6 +105,8 @@ export async function getPOSInvoices({
       hasMore: response.message.next
     };
   } catch (error) {
+    // A down link is not an access denial. 401/403 keep today's message.
+    if (isLinkDown(error)) throw error;
     console.error('Error fetching POS invoices:', error);
     throw new Error('Failed to fetch POS invoices');
   }
@@ -421,6 +425,7 @@ export async function mergeBills(
   primaryInvoice: string,
   secondaryInvoice: string
 ): Promise<MergeBillsResponse> {
+  await assertOfflineActionAllowed('merge');
   const response = await call.post<{ message: MergeBillsResponse }>(
     'ury.ury_pos.api.merge_bills',
     {

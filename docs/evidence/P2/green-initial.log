@@ -1,0 +1,15 @@
+test_cashier_settlement_rebuilds_gateway_tender_and_submits (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_cashier_settlement_rebuilds_gateway_tender_and_submits) ... /home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/utils.py:1197: V16FrappeDeprecationWarning: It was marked on unknown for removal from v16 with note: Use `NumberFormat.from_string()` from `frappe.utils.number_format` instead
+  return get_number_format_info(number_format)[2]
+ok
+test_client_amount_is_ignored_by_real_dispatch (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_client_amount_is_ignored_by_real_dispatch) ... ok
+test_missing_gateway_refuses_with_stable_id_without_creating_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_missing_gateway_refuses_with_stable_id_without_creating_request) ... ok
+test_no_shopping_cart_redirect_or_automatic_sales_invoice (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_no_shopping_cart_redirect_or_automatic_sales_invoice) ... ok
+test_positive_invoice_outstanding_is_used_instead_of_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_positive_invoice_outstanding_is_used_instead_of_total) ... ok
+test_profile_without_gateway_phone_row_refuses_with_stable_id (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_profile_without_gateway_phone_row_refuses_with_stable_id) ... ok
+test_server_populates_phone_row_for_exact_unpaid_invoice_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_server_populates_phone_row_for_exact_unpaid_invoice_total) ... ok
+test_uses_company_default_gateway_not_first_profile_phone_mode (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_company_default_gateway_not_first_profile_phone_mode) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 12.180s
+
+OK

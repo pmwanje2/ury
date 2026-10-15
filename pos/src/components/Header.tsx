@@ -14,9 +14,11 @@ import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { logoutSession, clearAppStorage, resolveBrand } from '@ury/core';
+import { resolveBrand } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { homePath } from '../lib/home-route';
+import { clearCashierStorage } from '../offline/cashier';
+import { useOutbox } from '../offline/use-outbox';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
@@ -27,7 +29,8 @@ const Header = () => {
   const user = useRootStore((state: RootState) => state.user);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
-  const { searchQuery, setSearchQuery, setShowVoluntaryClosing } = usePOSStore();
+  const { searchQuery, setSearchQuery, setShowVoluntaryClosing, posProfile } = usePOSStore();
+  const outbox = useOutbox(posProfile, user);
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
 
@@ -95,20 +98,18 @@ const Header = () => {
     logoutPending.current = true;
     setLoggingOut(true);
     try {
-      await logoutSession((window as Window & { csrf_token?: string }).csrf_token);
-      clearAppStorage();
-      window.location.href = '/login';
+      await clearCashierStorage(true, (window as Window & { csrf_token?: string }).csrf_token);
+      window.location.href = '/login?redirect-to=%2Fpos';
     } catch (error) {
-      showToast.error(t('errors.failed_logout'));
+      showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
       logoutPending.current = false;
       setLoggingOut(false);
     }
   };
 
-  const handleClearCache = () => {
-    clearAppStorage();
-    // Reload the page
-    window.location.reload();
+  const handleClearCache = async () => {
+    try { await clearCashierStorage(); window.location.reload(); }
+    catch (error) { showToast.error(error instanceof Error ? error.message : t('errors.failed_logout')); }
   };
 
   const handleCloseShift = () => {
@@ -117,7 +118,7 @@ const Header = () => {
   };
 
   return (
-    <header className="bg-white border-b border-gray-200">
+    <header className="bg-header text-header-foreground border-b border-header-border">
       <div className="flex items-center justify-between h-16 px-6">
         {/* Logo */}
         <div className="flex items-center">
@@ -132,7 +133,7 @@ const Header = () => {
 
         {/* Search Bar */}
         {location.pathname !== '/dashboard' ? (
-          <div className="px-4 py-2 flex-1 flex items-center max-w-2xl mx-8 bg-gray-50 hover:bg-gray-100 border border-input rounded-md">
+          <div className="px-4 py-2 flex-1 flex items-center max-w-2xl mx-8 bg-gray-50 text-foreground hover:bg-gray-100 border border-input rounded-md">
             <Input
               ref={searchInputRef}
               placeholder={searchPlaceholder}
@@ -156,7 +157,7 @@ const Header = () => {
             <Button
               onClick={handleUserMenuToggle}
               variant="ghost"
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+              className="flex items-center gap-2 text-header-user hover:text-gray-900"
             >
               <div className="w-8 h-8 bg-primary-500 rounded-full flex items-center justify-center">
                 <User className="w-4 h-4 text-white" />
@@ -177,6 +178,7 @@ const Header = () => {
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     onClick={handleCloseShift}
+                    disabled={outbox.offline || outbox.replaying || outbox.rows.length > 0}
                   >
                     <Lock className="w-4 h-4 me-3" />
                     {t('header.close_shift')}

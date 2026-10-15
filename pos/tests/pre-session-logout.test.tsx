@@ -97,11 +97,12 @@ async function logout() {
   expect(request).toHaveBeenCalledExactlyOnceWith('/api/method/logout', {
     method: 'POST', headers: { 'X-Frappe-CSRF-Token': 'fixture-csrf' },
   });
-  expect(location.href).toBe('/login');
+  expect(location.href).toBe('/login?redirect-to=%2Fpos');
 }
 
 describe('pre-session logout', () => {
   it('renders Logout on the opening checklist and uses shared CSRF logout and named storage cleanup', async () => {
+    location.href = '/pos/orders?invoice=PRIVATE-BILL';
     await render();
     expect(container.textContent).toContain('Opening Checklist');
     expect(container.textContent).toContain('Submit Checklist');
@@ -137,7 +138,34 @@ describe('pre-session logout', () => {
     expect(button('Logout').disabled).toBe(false);
     await act(async () => button('Logout').click());
     expect(request).toHaveBeenCalledTimes(2);
-    expect(location.href).toBe('/login');
+    expect(location.href).toBe('/login?redirect-to=%2Fpos');
+  });
+
+  it('navigates to login only after the URY worker has ended the session', async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const active = {
+      scriptURL: 'http://localhost:3000/sw.js',
+      postMessage: (_message: unknown, ports: MessagePort[]) => {
+        void released.then(() => ports[0]?.postMessage({ ok: true }));
+      },
+    };
+    vi.stubGlobal('navigator', Object.assign(Object.create(navigator), {
+      serviceWorker: {
+        controller: active,
+        getRegistrations: async () => [{ scope: 'http://localhost:3000/pos', active, unregister: async () => true }],
+      },
+    }));
+    vi.stubGlobal('caches', { keys: async () => ['ury-pos-reads'], delete: async () => true });
+    await render();
+    await act(async () => button('Logout').click());
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(location.href).toBe('/pos');
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(location.href).toBe('/login?redirect-to=%2Fpos');
   });
 
   it('ignores double clicks and keeps storage until logout is confirmed', async () => {
@@ -153,7 +181,7 @@ describe('pre-session logout', () => {
     expect(localStorage.getItem('posOrderTabsData')).toBe('cart');
     expect(location.href).toBe('/pos');
     await act(async () => complete({ ok: true }));
-    expect(location.href).toBe('/login');
+    expect(location.href).toBe('/login?redirect-to=%2Fpos');
   });
 
   it('preserves checked items and remarks when logout fails', async () => {

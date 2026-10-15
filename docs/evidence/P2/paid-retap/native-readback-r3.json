@@ -1,0 +1,83 @@
+{
+  "payment_requests": [
+    {
+      "name": "ACC-PRQ-2026-00002",
+      "reference_name": "P2-f97c4ea4-00001",
+      "grand_total": 12000.0,
+      "currency": "UGX",
+      "payment_gateway_account": "Pesapal - UGX - P2",
+      "mode_of_payment": "Pesapal",
+      "payment_channel": "Phone",
+      "make_sales_invoice": 0,
+      "mute_email": 1,
+      "docstatus": 1,
+      "status": "Requested",
+      "payment_url": null
+    },
+    {
+      "name": "ACC-PRQ-2026-00001",
+      "reference_name": "P2-f97c4ea4-00001",
+      "grand_total": 12000.0,
+      "currency": "UGX",
+      "payment_gateway_account": "Pesapal - UGX - P2",
+      "mode_of_payment": "Pesapal",
+      "payment_channel": "Phone",
+      "make_sales_invoice": 0,
+      "mute_email": 1,
+      "docstatus": 1,
+      "status": "Paid",
+      "payment_url": null
+    }
+  ],
+  "integration_requests": [
+    {
+      "name": "TRACK-ACC-PRQ-2026-00002",
+      "reference_docname": "ACC-PRQ-2026-00002",
+      "status": "Queued",
+      "integration_request_service": "Pesapal",
+      "data": "{\n \"checkout_url\": \"https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00002\",\n \"currency\": \"UGX\",\n \"reference\": \"ACC-PRQ-2026-00002\",\n \"request_amount\": 12000\n}"
+    },
+    {
+      "name": "TRACK-ACC-PRQ-2026-00001",
+      "reference_docname": "ACC-PRQ-2026-00001",
+      "status": "Completed",
+      "integration_request_service": "Pesapal",
+      "data": "{\n \"checkout_url\": \"https://cybqa.pesapal.com/pay/ACC-PRQ-2026-00001\",\n \"currency\": \"UGX\",\n \"reference\": \"ACC-PRQ-2026-00001\",\n \"request_amount\": 12000\n}"
+    }
+  ],
+  "invoices": [
+    {
+      "name": "P2-f97c4ea4-00001",
+      "docstatus": 0,
+      "grand_total": 24000.0,
+      "outstanding_amount": 0.0,
+      "payments": [
+        {
+          "name": "a7l199nv9t",
+          "mode_of_payment": "Cash",
+          "amount": 0.0,
+          "type": "Cash",
+          "account": "Cash - P2"
+        },
+        {
+          "name": "a7qqina6uq",
+          "mode_of_payment": "Pesapal",
+          "amount": 24000.0,
+          "type": "Phone",
+          "account": "Pesapal - P2"
+        }
+      ]
+    }
+  ],
+  "fence": {
+    "disabled": 0,
+    "sha256": "23c0aab6265515d6547939c6abc131404abdfc79f8a129bb66ca2f868736b75a"
+  },
+  "installed_apps": [
+    "frappe",
+    "erpnext",
+    "payments",
+    "ea_payments",
+    "ury"
+  ]
+}

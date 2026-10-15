@@ -1,0 +1,24 @@
+REV=699aa904b6d790c5c3d3ab0267b52533161066f7
+SELECTION=ury.tests.test_guest_phone_payment
+test_cashier_settlement_rebuilds_gateway_tender_and_submits (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_cashier_settlement_rebuilds_gateway_tender_and_submits) ... /home/frappe/frappe-bench/apps/erpnext/erpnext/accounts/utils.py:1197: V16FrappeDeprecationWarning: It was marked on unknown for removal from v16 with note: Use `NumberFormat.from_string()` from `frappe.utils.number_format` instead
+  return get_number_format_info(number_format)[2]
+ok
+test_client_amount_is_ignored_by_real_dispatch (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_client_amount_is_ignored_by_real_dispatch) ... ok
+test_missing_gateway_refuses_with_stable_id_without_creating_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_missing_gateway_refuses_with_stable_id_without_creating_request) ... ok
+test_no_shopping_cart_redirect_or_automatic_sales_invoice (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_no_shopping_cart_redirect_or_automatic_sales_invoice) ... ok
+test_order_growth_after_paid_request_charges_only_remainder (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_order_growth_after_paid_request_charges_only_remainder) ... ok
+test_payment_status_returns_existing_payment_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_payment_status_returns_existing_payment_url) ... ok
+test_positive_invoice_outstanding_is_used_instead_of_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_positive_invoice_outstanding_is_used_instead_of_total) ... ok
+test_profile_without_gateway_phone_row_refuses_with_stable_id (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_profile_without_gateway_phone_row_refuses_with_stable_id) ... ok
+test_request_errors_are_not_reported_as_unconfigured (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_request_errors_are_not_reported_as_unconfigured) ... ok
+test_retap_after_paid_returns_paid_without_checkout_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_retap_after_paid_returns_paid_without_checkout_url) ... ok
+test_retap_returns_existing_request_and_url (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_retap_returns_existing_request_and_url) ... ok
+test_server_populates_phone_row_for_exact_unpaid_invoice_total (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_server_populates_phone_row_for_exact_unpaid_invoice_total) ... ok
+test_status_never_returns_url_for_partially_paid_request (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_status_never_returns_url_for_partially_paid_request) ... ok
+test_uses_company_default_gateway_not_first_profile_phone_mode (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_company_default_gateway_not_first_profile_phone_mode) ... ok
+test_uses_phone_row_gateway_when_company_default_is_another_gateway (ury.tests.test_guest_phone_payment.TestGuestPhonePayment.test_uses_phone_row_gateway_when_company_default_is_another_gateway) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 90.510s
+
+OK

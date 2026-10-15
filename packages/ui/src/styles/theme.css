@@ -2,6 +2,15 @@
   :root {
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
+    --header: 0 0% 100%;
+    --header-foreground: var(--foreground);
+    --header-user: var(--gray-600);
+    --header-title: var(--gray-900);
+    --header-muted: var(--gray-500);
+    --header-border: var(--gray-200);
+    --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --font-inter: Inter, sans-serif;
+    --button-foreground: var(--white);
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
@@ -19,6 +28,18 @@
     --primary-800: 264 70% 37%;
     --primary-900: 264 62% 28%;
     --primary-950: 264 55% 18%;
+    /* Stock Tailwind blue; active Website Themes override this scale. */
+    --blue-50: 213.75 100% 96.862745098%;
+    --blue-100: 214.2857142857 94.5945945946% 92.7450980392%;
+    --blue-200: 213.3333333333 96.9230769231% 87.2549019608%;
+    --blue-300: 211.6981132075 96.3636363636% 78.431372549%;
+    --blue-400: 213.1168831169 93.9024390244% 67.8431372549%;
+    --blue-500: 217.2192513369 91.2195121951% 59.8039215686%;
+    --blue-600: 221.2121212121 83.1932773109% 53.3333333333%;
+    --blue-700: 224.2780748663 76.3265306122% 48.0392156863%;
+    --blue-800: 225.9310344828 70.7317073171% 40.1960784314%;
+    --blue-900: 224.4444444444 64.2857142857% 32.9411764706%;
+    --blue-950: 226.2295081967 57.0093457944% 20.9803921569%;
     --secondary: 210 40% 96%;
     --secondary-foreground: 222.2 84% 4.9%;
     --muted: 210 40% 96%;
@@ -64,6 +85,12 @@
   .dark {
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
+    --header: 0 0% 100%;
+    --header-foreground: var(--foreground);
+    --header-user: var(--gray-600);
+    --header-title: var(--gray-900);
+    --header-muted: var(--gray-500);
+    --header-border: var(--gray-200);
     --card: 222.2 84% 4.9%;
     --card-foreground: 210 40% 98%;
     --popover: 222.2 84% 4.9%;

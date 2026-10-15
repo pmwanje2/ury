@@ -10,6 +10,7 @@ import router from "../router";
 import { disconnectQzPrinter } from "./utils/PrintWithQz";
 import { logoutSession } from "../../../packages/core/src/logout.ts";
 import { clearAppStorage } from "../../../packages/core/src/storage.ts";
+import { watchIdle } from "../../../packages/core/src/idle.ts";
 
 axios.defaults.baseURL = frappe.url;
 
@@ -27,6 +28,7 @@ export const useAuthStore = defineStore("auth", {
     loggingOut: false,
     cashierisPosOpen: false,
     cashier: null,
+    staySignedIn: null,
     viewItemImage: null,
     viewAllStatus: null,
     restrictTableOrder: null,
@@ -39,6 +41,8 @@ export const useAuthStore = defineStore("auth", {
     table: useTableStore(),
     invoiceData: useInvoiceDataStore(),
     userAuth: localStorage.getItem("userAuth"),
+    idleStop: null,
+    pinSession: sessionStorage.getItem("ury_floor_pin_session") === "true",
   }),
   getters: {
     isAuthenticated(state) {
@@ -55,14 +59,27 @@ export const useAuthStore = defineStore("auth", {
         await this.auth.loginWithUsernamePassword({
           username: this.userId,
           password: this.currentPassword,
-          device: "mobile",
         });
+        this.pinSession = false;
+        sessionStorage.removeItem("ury_floor_pin_session");
         this.userAuth = true;
         localStorage.setItem("userAuth", "true");
+        this.currentPassword = "";
         await this.fetchUserDetails();
       } catch (error) {
         this.alert.createAlert("Message", error.message, "OK");
+      } finally {
+        this.currentPassword = "";
       }
+    },
+    async pinSignIn(pin) {
+      const { message } = await this.call.post("ury.ury_pos.floor_pin.sign_in", { pin });
+      window.csrf_token = message.csrf_token;
+      this.pinSession = true;
+      sessionStorage.setItem("ury_floor_pin_session", "true");
+      this.userAuth = true;
+      localStorage.setItem("userAuth", "true");
+      await this.fetchUserDetails();
     },
     checkAuthState() {
       if (this.userAuth && localStorage.getItem("userAuth")) {
@@ -79,28 +96,32 @@ export const useAuthStore = defineStore("auth", {
       return this.userName;
     },
     fetchUserDetails() {
-      const user = localStorage.getItem("userAuth");
-      // if (user !== "true") {
-      //   this.userAuth = false;
-      //   localStorage.removeItem("userAuth");
-      //   router.push("/login");
-      //   return
-      // }
-      this.auth
+      const hasLocalAuth = localStorage.getItem("userAuth") === "true";
+      return this.auth
         .getLoggedInUser()
-        .then((user) => {
+        .then(async (user) => {
           this.sessionUser = user;
           if (!this.sessionUser) {
             this.userAuth = false;
             localStorage.removeItem("userAuth");
-          } else {
-            this.userAuth = true;
-            this.invoiceData.fetchInvoiceDetails().then(() => {
-              router.push("/Table");
-              this.table.fetchRoom();
-              this.fetchUserRole();
-            });
+            return;
           }
+
+          await this.invoiceData.fetchInvoiceDetails();
+          if (!hasLocalAuth) {
+            await this.fetchUserRole();
+            // A waiter's surviving cookie must still end at the PIN pad.
+            if (this.staySignedIn !== true) {
+              await this.logOut();
+              return;
+            }
+          }
+
+          this.userAuth = true;
+          localStorage.setItem("userAuth", "true");
+          router.push("/Table");
+          this.table.fetchRoom();
+          if (hasLocalAuth) this.fetchUserRole();
         })
         .catch((error) => {
           this.userAuth = false;
@@ -110,7 +131,9 @@ export const useAuthStore = defineStore("auth", {
     },
     fetchUserRole() {
       //Fetching role based on logged user
-      this.db
+      this.stopIdle();
+      this.staySignedIn = null;
+      return this.db
         .getDoc("User", this.sessionUser)
         .then((doc) => {
           this.userRole = doc.roles.map((item) => item.role);
@@ -118,13 +141,19 @@ export const useAuthStore = defineStore("auth", {
             doctype: "POS Profile",
             name: this.invoiceData.posProfile,
           };
-          this.call
+          return this.call
             .get("frappe.client.get", getPosProfile)
             .then((result) => {
               var billingRoles = result.message.role_allowed_for_billing.map(
                 (role) => role.role
               );
               this.cashier = billingRoles.some((role) =>
+                this.userRole.includes(role)
+              );
+              const stayRoles = (result.message.custom_floor_stay_signed_in_roles || []).map(
+                (role) => role.role
+              );
+              this.staySignedIn = stayRoles.some((role) =>
                 this.userRole.includes(role)
               );
               if (this.cashier) {
@@ -149,6 +178,13 @@ export const useAuthStore = defineStore("auth", {
               this.viewAllStatus = result.message.view_all_status;
               this.removeTableOrderItem = result.message.remove_items;
               this.viewItemImage = result.message.show_image;
+              const idleSeconds = Number(
+                result.message.custom_floor_idle_signout_seconds ??
+                0
+              );
+              if (this.staySignedIn === false && idleSeconds > 0) {
+                this.idleStop = watchIdle(() => this.logOut(), idleSeconds * 1000);
+              }
             })
             .catch((error) => console.error(error));
         })
@@ -241,18 +277,34 @@ export const useAuthStore = defineStore("auth", {
       this.activeDropdown = false;
     },
 
+    stopIdle() {
+      if (this.idleStop) {
+        this.idleStop();
+        this.idleStop = null;
+      }
+    },
+
+    switchWaiter() {
+      return this.logOut();
+    },
+
     async logOut() {
       if (this.loggingOut) return;
       this.loggingOut = true;
+      this.stopIdle();
       try {
         await logoutSession(window.csrf_token);
-        clearAppStorage();
+      } catch (_error) {
+        // The server session may survive, but the shared tablet must lock locally.
+      } finally {
+        await clearAppStorage();
+        this.invoiceData.clearDataAfterUpdate();
         this.userAuth = false;
+        this.currentPassword = "";
+        this.pinSession = false;
+        sessionStorage.removeItem("ury_floor_pin_session");
         disconnectQzPrinter();
-        window.location.href = "/login";
-      } catch (error) {
-        this.alert.createAlert("Message", "Failed to logout. Please try again.", "OK");
-        this.loggingOut = false;
+        window.location.href = "/urypos";
       }
     },
   },

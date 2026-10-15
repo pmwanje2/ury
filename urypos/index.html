@@ -10,6 +10,7 @@
     <div id="app"></div>
     <script>
       window.csrf_token = '{{ csrf_token }}';
+      window.floor_pad = {{ floor_pad | default({'paired': false, 'till_open': false}) | tojson }};
       if (!window.frappe) window.frappe = {};
       if (!window.frappe.boot) window.frappe.boot = {};
       window.frappe.boot.ury_brand = {{ brand_json | safe }};

@@ -8,7 +8,8 @@ import { parse } from "@vue/compiler-sfc";
 import * as Vue from "vue";
 import postcss from "postcss";
 import tailwindcss from "tailwindcss";
-import * as helpers from "./kitchen-actions.js";
+import * as kitchenHelpers from "./kitchen-actions.js";
+const helpers = { ...kitchenHelpers, ...await import("./station-print.js").catch(() => ({})) };
 
 const source = await readFile(join(dirname(fileURLToPath(import.meta.url)), "kot.vue"), "utf8");
 const { descriptor } = parse(source);

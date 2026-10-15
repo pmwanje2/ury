@@ -1,0 +1,35 @@
+vite v6.4.3 building for production...
+transforming...
+✓ 1916 modules transformed.
+rendering chunks...
+computing gzip size...
+../ury/public/pos/index.html                           1.41 kB │ gzip:   0.74 kB
+../ury/public/pos/assets/index-CmFpvMNz.css           70.92 kB │ gzip:  13.17 kB
+../ury/public/pos/assets/ar-eOZCFjmD.js               11.70 kB │ gzip:   4.14 kB
+../ury/public/pos/assets/en-DGacMVC6.js               18.48 kB │ gzip:   6.30 kB
+../ury/public/pos/assets/fr-Bw886YdT.js               20.52 kB │ gzip:   6.83 kB
+../ury/public/pos/assets/lucide-react-CKAvJllz.js    786.79 kB │ gzip: 143.36 kB
+../ury/public/pos/assets/index-Bo2P61pH.js         1,155.80 kB │ gzip: 334.87 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 3.73s
+
+PWA v2.0.0
+Building src/pwa/sw.ts service worker ("iife" format)...
+vite v6.4.3 building for production...
+transforming...
+✓ 81 modules transformed.
+rendering chunks...
+computing gzip size...
+../ury/public/pos/sw.js  20.50 kB │ gzip: 6.89 kB
+✓ built in 88ms
+
+PWA v2.0.0
+mode      injectManifest
+format:   iife
+precache  8 entries (2082.26 KiB)
+files generated
+  ../ury/public/pos/sw.js

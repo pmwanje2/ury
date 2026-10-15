@@ -1,0 +1,79 @@
+{
+  "actor": "p2-cashier-8be922db@example.test",
+  "roles": [
+    "URY Cashier",
+    "All",
+    "Guest",
+    "Desk User"
+  ],
+  "invoice": {
+    "status": 403,
+    "body": {
+      "exception": "frappe.exceptions.PermissionError: No permission for Payment Request",
+      "exc_type": "PermissionError",
+      "exc": "[\"Traceback (most recent call last):\\n  File \\\"apps/frappe/frappe/app.py\\\", line 158, in application\\n    response = frappe.api.handle(request)\\n  File \\\"apps/frappe/frappe/api/__init__.py\\\", line 63, in handle\\n    data = endpoint(**arguments)\\n  File \\\"apps/frappe/frappe/api/v1.py\\\", line 41, in handle_rpc_call\\n    return frappe.handler.handle()\\n           ~~~~~~~~~~~~~~~~~~~~~^^\\n  File \\\"apps/frappe/frappe/handler.py\\\", line 54, in handle\\n    data = execute_cmd(cmd)\\n  File \\\"apps/frappe/frappe/handler.py\\\", line 87, in execute_cmd\\n    return frappe.call(method, **frappe.form_dict)\\n           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\\"apps/frappe/frappe/__init__.py\\\", line 1150, in call\\n    return fn(*args, **newargs)\\n  File \\\"apps/frappe/frappe/utils/typing_validations.py\\\", line 36, in wrapper\\n    return func(*args, **kwargs)\\n  File \\\"apps/frappe/frappe/client.py\\\", line 136, in get_value\\n    frappe.throw(_(\\\"No permission for {0}\\\").format(_(doctype)), frappe.PermissionError)\\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\\"apps/frappe/frappe/utils/messages.py\\\", line 159, in throw\\n    msgprint(\\n    ~~~~~~~~^\\n    \\tmsg,\\n     ^^^^\\n    ...<7 lines>...\\n    \\tallow_dangerous_html=allow_dangerous_html,\\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n    )\\n    ^\\n  File \\\"apps/frappe/frappe/utils/messages.py\\\", line 118, in msgprint\\n    _raise_exception()\\n    ~~~~~~~~~~~~~~~~^^\\n  File \\\"apps/frappe/frappe/utils/messages.py\\\", line 59, in _raise_exception\\n    raise exc\\nfrappe.exceptions.PermissionError: No permission for Payment Request\\n\"]",
+      "_server_messages": "[\"{\\\"message\\\":\\\"No permission for Payment Request\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\",\\\"indicator\\\":\\\"red\\\",\\\"raise_exception\\\":1,\\\"__frappe_exc_id\\\":\\\"903b9fda789b9de55a1af06b7d6838e8d1190b8a7888548825c6a3b3\\\"}\"]"
+    }
+  },
+  "before": {
+    "name": "P2-8be922db-00003",
+    "docstatus": 0,
+    "grand_total": 12000,
+    "outstanding_amount": 0,
+    "payments": [
+      {
+        "name": "lsi6kn5apo",
+        "mode_of_payment": "Cash",
+        "amount": 0,
+        "type": "Cash",
+        "account": "Cash - P2"
+      },
+      {
+        "name": "lsjofevmtt",
+        "mode_of_payment": "Pesapal",
+        "amount": 12000,
+        "type": "Phone",
+        "account": "Pesapal - P2"
+      }
+    ]
+  },
+  "directSave": {
+    "status": 403,
+    "body": {
+      "exception": "frappe.exceptions.PermissionError: [SAL-POS-CHECK-POS-ONLY] Open checks are changed only in the POS.",
+      "exc_type": "PermissionError",
+      "_exc_source": "Server Script",
+      "exc": "[\"Traceback (most recent call last):\\n  File \\\"apps/frappe/frappe/app.py\\\", line 158, in application\\n    response = frappe.api.handle(request)\\n  File \\\"apps/frappe/frappe/api/__init__.py\\\", line 63, in handle\\n    data = endpoint(**arguments)\\n  File \\\"apps/frappe/frappe/api/v1.py\\\", line 41, in handle_rpc_call\\n    return frappe.handler.handle()\\n           ~~~~~~~~~~~~~~~~~~~~~^^\\n  File \\\"apps/frappe/frappe/handler.py\\\", line 54, in handle\\n    data = execute_cmd(cmd)\\n  File \\\"apps/frappe/frappe/handler.py\\\", line 87, in execute_cmd\\n    return frappe.call(method, **frappe.form_dict)\\n           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\\"apps/frappe/frappe/__init__.py\\\", line 1150, in call\\n    return fn(*args, **newargs)\\n  File \\\"apps/frappe/frappe/utils/typing_validations.py\\\", line 36, in wrapper\\n    return func(*args, **kwargs)\\n  File \\\"apps/frappe/frappe/client.py\\\", line 254, in save\\n    doc.save()\\n    ~~~~~~~~^^\\n  File \\\"apps/frappe/frappe/model/document.py\\\", line 558, in save\\n    return self._save(*args, **kwargs)\\n           ~~~~~~~~~~^^^^^^^^^^^^^^^^^\\n  File \\\"apps/frappe/frappe/model/document.py\\\", line 595, in _save\\n    self.run_before_save_methods()\\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^\\n  File \\\"apps/frappe/frappe/model/document.py\\\", line 1408, in run_before_save_methods\\n    self.run_method(\\\"before_validate\\\")\\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^\\n  File \\\"apps/frappe/frappe/model/document.py\\\", line 1266, in run_method\\n    run_server_script_for_doc_event(self, method)\\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^\\n  File \\\"apps/frappe/frappe/core/doctype/server_script/server_script_utils.py\\\", line 49, in run_server_script_for_doc_event\\n    frappe.get_cached_doc(\\\"Server Script\\\", script_name).execute_doc(doc)\\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^\\n  File \\\"apps/frappe/frappe/core/doctype/server_script/server_script.py\\\", line 196, in execute_doc\\n    safe_exec(\\n    ~~~~~~~~~^\\n    \\tself.script,\\n     ^^^^^^^^^^^^\\n    ...<2 lines>...\\n    \\tscript_filename=self.name,\\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^\\n    )\\n    ^\\n  File \\\"apps/frappe/frappe/utils/safe_exec.py\\\", line 126, in safe_exec\\n    exec(_compile_code(script, filename=filename), exec_globals, _locals)\\n    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \\\"<serverscript>: salama___pos_invoice_changes_only_through_the_pos\\\", line 28, in <module>\\n  File \\\"apps/frappe/frappe/utils/messages.py\\\", line 159, in throw\\n    msgprint(\\n    ~~~~~~~~^\\n    \\tmsg,\\n     ^^^^\\n    ...<7 lines>...\\n    \\tallow_dangerous_html=allow_dangerous_html,\\n     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n    )\\n    ^\\n  File \\\"apps/frappe/frappe/utils/messages.py\\\", line 118, in msgprint\\n    _raise_exception()\\n    ~~~~~~~~~~~~~~~~^^\\n  File \\\"apps/frappe/frappe/utils/messages.py\\\", line 59, in _raise_exception\\n    raise exc\\nfrappe.exceptions.PermissionError: [SAL-POS-CHECK-POS-ONLY] Open checks are changed only in the POS.\\n\"]",
+      "_server_messages": "[\"{\\\"message\\\":\\\"[SAL-POS-CHECK-POS-ONLY] Open checks are changed only in the POS.\\\",\\\"as_table\\\":false,\\\"title\\\":\\\"Message\\\",\\\"indicator\\\":\\\"red\\\",\\\"raise_exception\\\":1,\\\"__frappe_exc_id\\\":\\\"67ae790aa2cbb1dc7f8ac51b6614ba1aa8df18fd124188fa4e9202a8\\\"}\"]"
+    }
+  },
+  "ipn": {
+    "status": 200,
+    "body": {
+      "orderNotificationType": "IPNCHANGE",
+      "orderTrackingId": "TRACK-ACC-PRQ-2026-00005",
+      "orderMerchantReference": "ACC-PRQ-2026-00005",
+      "status": 200,
+      "message": {
+        "orderNotificationType": "IPNCHANGE",
+        "orderTrackingId": "TRACK-ACC-PRQ-2026-00005",
+        "orderMerchantReference": "ACC-PRQ-2026-00005",
+        "status": 200
+      }
+    }
+  },
+  "settlement": {
+    "status": 200,
+    "body": {
+      "name": "P2-8be922db-00003",
+      "docstatus": 1,
+      "payments": [
+        {
+          "name": "orhpd7i359",
+          "mode_of_payment": "Pesapal",
+          "amount": 12000
+        }
+      ]
+    }
+  }
+}

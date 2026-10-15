@@ -1,4 +1,16 @@
 <template>
+  <section v-if="!table.serviceRequestsDenied" aria-label="Service requests" class="mb-4 rounded border border-gray-200 bg-white p-3 text-left">
+    <h2 aria-live="polite" class="font-semibold">
+      {{ table.serviceRequestsLoading ? 'Loading requests' : table.serviceRequestsUnavailable ? 'Requests unavailable' : `Requests waiting: ${table.serviceRequests.length}` }}
+    </h2>
+    <ul v-if="!table.serviceRequestsLoading && !table.serviceRequestsUnavailable" class="mt-2 space-y-2">
+      <li v-for="request in table.serviceRequests" :key="request.name" class="flex flex-wrap items-center gap-2 text-sm">
+        <span class="rounded bg-yellow-100 px-2 py-1 text-yellow-800">{{ request.request_type }}</span>
+        <span>{{ request.table }} · {{ request.status }} · {{ request.requested_at }}</span>
+        <a :href="`/app/ury-service-request/${encodeURIComponent(request.name)}`" class="inline-flex min-h-[44px] items-center text-blue-700 underline">Open request</a>
+      </li>
+    </ul>
+  </section>
   <div
     class="grid grid-cols-2 md:grid-cols-4"
     :class="[
@@ -128,7 +140,7 @@
                 {{ this.table.getBadgeText(table, now) }}
               </span>
             </div>
-            <div class="relative" v-if="table.occupied !== 1">
+            <div class="relative">
               <button
                 class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-sm text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
                 :aria-label="`Table options for ${table.name}`"
@@ -168,7 +180,7 @@
                       >Table Transfer</a
                     >
                   </li>
-                  <li v-if="table.occupied === 1 && this.auth.hasAccess">
+                  <li v-if="table.occupied === 1 && this.auth.hasAccess && this.table.activeDropdown === table.name && this.table.captain.length > 0">
                     <a
                       href="#"
                       class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:text-white"
@@ -199,6 +211,12 @@
                   </svg>
                 </button>
               </h5>
+              <p
+                v-if="table.occupied === 1 && table.owner_name"
+                class="truncate text-sm font-medium text-gray-700 dark:text-gray-200"
+              >
+                {{ table.owner_name }}
+              </p>
               <span class="text-base font-medium tabular-nums text-gray-500 dark:text-gray-400">
                 {{
                   table.occupied === 1
@@ -506,7 +524,7 @@
               @click="this.table.selectcaptain(captain)"
             >
               <h1 class="text-base font-semibold leading-normal">
-                {{ captain.name }}
+                {{ captain.full_name || captain.name }}
               </h1>
             </div>
           </div>
@@ -562,10 +580,12 @@ export default {
     const recentOrders = usetoggleRecentOrder();
     const now = ref(Date.now());
     let clockInterval;
+    let requestsInterval;
     onMounted(() => {
       clockInterval = setInterval(() => { now.value = Date.now(); }, 60 * 1000);
+      requestsInterval = setInterval(() => table.fetchServiceRequests(), 30 * 1000);
     });
-    onUnmounted(() => clearInterval(clockInterval));
+    onUnmounted(() => { clearInterval(clockInterval); clearInterval(requestsInterval); });
 
     return { table, invoiceData, auth, menu, recentOrders, now };
   },
