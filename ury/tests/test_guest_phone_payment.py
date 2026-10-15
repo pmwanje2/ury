@@ -225,13 +225,32 @@ class TestGuestPhonePayment(unittest.TestCase):
         self.assertEqual(frappe.db.get_value("Integration Request", ir, "status"), "Queued")
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
 
-    def test_growth_replaces_request_whose_checkout_failed(self):
+    def test_growth_keeps_request_whose_checkout_failed(self):
+        # ea_payments may mark an IR Failed on a transport error while the
+        # guest can still pay; only ea_payments itself cancels such requests.
+        first = self.request()
+        ir = self.integration(first["payment_request"], "Failed")
+        self.grow_order()
+        again = self.request()
+        self.assertEqual((again["payment_request"], again["payment_url"], again["amount"]),
+            (first["payment_request"], first["payment_url"], 100))
+        self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"],
+            ["docstatus", "status"]), (1, "Requested"))
+        self.assertEqual(frappe.db.get_value("Integration Request", ir, "status"), "Failed")
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+
+    def test_growth_replaces_cancelled_guest_request_with_new_one(self):
         first = self.request()
         self.integration(first["payment_request"], "Failed")
+        frappe.set_user("Administrator")
+        pr = frappe.get_doc("Payment Request", first["payment_request"])
+        pr.flags.ignore_permissions = True
+        pr.cancel()  # as ea_payments does on a provider-confirmed failure
+        frappe.set_user("Guest")
         self.grow_order()
         replacement = self.request()
+        self.assertNotEqual(replacement["payment_request"], first["payment_request"])
         self.assertEqual(replacement["amount"], 200)
-        self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"], "docstatus"), 2)
 
     def test_processed_checkout_refuses_with_plain_guest_message(self):
         first = self.request()
