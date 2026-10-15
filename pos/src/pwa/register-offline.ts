@@ -4,6 +4,32 @@ import { offlineCaptureEnabled, type OfflineCaptureProfile } from "./runtime-cac
 const SERVICE_WORKER_URL = "/sw.js";
 const SERVICE_WORKER_SCOPE = "/pos";
 
+let binding: { user: string | null; promise: Promise<void> } | null = null;
+
+async function messageControllingWorker(user: string | null): Promise<void> {
+  if (typeof navigator === "undefined" || !navigator.serviceWorker?.controller) return;
+  const controller = navigator.serviceWorker.controller;
+  try {
+    if (new URL(controller.scriptURL, window.location.href).pathname !== SERVICE_WORKER_URL) return;
+  } catch {
+    return;
+  }
+  await tellOfflineWorker(controller, { type: "URY_BIND_SESSION", user });
+}
+
+// Isolation does not depend on this ack: the worker serves a cached read only
+// when its owner tag is the user in the user_id cookie. Waiting (bounded) lets
+// the first reads be stored for the new user once the worker is bound.
+export function bindOfflineUser(user?: string | null): Promise<void> {
+  const key = user ?? null;
+  if (binding?.user === key) return binding.promise;
+  const promise = messageControllingWorker(key).finally(() => {
+    if (binding?.promise === promise) binding = null;
+  });
+  binding = { user: key, promise };
+  return promise;
+}
+
 export async function syncOfflineCapture(
   profile: OfflineCaptureProfile | null | undefined,
   user?: string | null,

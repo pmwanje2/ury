@@ -180,6 +180,22 @@ test('positive extra rounds only attach to an un-settled order from this same ou
   await expect(q.capture(data, 300, first.client_order_id)).rejects.toThrow(/settled|settlement/i);
 });
 
+test('a lost sync acknowledgement keeps the outage id until the queue is empty', async () => {
+  const q = await outbox();
+  const row = await q.capture(data, 100);
+  request.mockImplementationOnce(async () => json(user.name)).mockImplementationOnce(async () => {
+    throw new TypeError('Lost acknowledgement');
+  });
+  await q.replay();
+  const extra = await q.capture(data, 200, row.client_order_id);
+  expect(extra.outage_id).toBe(row.outage_id);
+  expect(extra.rounds).toHaveLength(2);
+  await q.replay();
+  expect(await q.list()).toEqual([]);
+  const later = await q.capture(data, 100);
+  expect(later.outage_id).not.toBe(row.outage_id);
+});
+
 test('offline opt-in and this profile billing role are both required (no admin or empty-role shortcut)', async () => {
   for (const options of [{ profile: { ...profile, ury_offline_capture: 0 } }, { user: { ...user, roles: ['Waiter'] } },
     { profile: { ...profile, role_allowed_for_billing: [] } }, { user: { name: 'Guest', roles: ['Cashier'] } }]) {

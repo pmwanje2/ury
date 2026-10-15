@@ -216,7 +216,6 @@ export class OfflineOutbox {
         const user = await this.call('frappe.auth.get_logged_user');
         if (user !== this.options.user.name) { this.reachable = false; return; }
         this.reachable = true;
-        await transaction(['outages'], 'readwrite', (tx, result) => { tx.objectStore('outages').delete(this.scope); result(undefined); });
         for (const entry of await this.list()) {
           if (entry.state !== 'pending') continue;
           if (entry.rounds.some((round) => !round.offline_printed) || entry.settlement && !entry.bill_printed) break;
@@ -243,6 +242,9 @@ export class OfflineOutbox {
             if (!(error instanceof Refused)) { this.reachable = false; break; }
             entry.state = 'review'; entry.reason = error.message; await save(entry);
           }
+        }
+        if ((await this.list()).length === 0) {
+          await transaction(['outages'], 'readwrite', (tx, result) => { tx.objectStore('outages').delete(this.scope); result(undefined); });
         }
       } catch { this.reachable = false; }
     }).finally(() => { this.replaying = false; this.replayPromise = undefined; changed(); });

@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Real workbox-strategies 7.4.1 NetworkFirst through the worker's routes.
 import { beforeEach, expect, test, vi } from 'vitest';
-import { installWorkerGlobals, ORIGIN, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
+import { installWorkerGlobals, ORIGIN, ownedResponse, TestExtendableEvent, type MemoryCacheStorage } from './helpers/sw-env';
 
 let storage: MemoryCacheStorage;
 const PROFILE = ORIGIN + '/api/method/ury.ury_pos.api.getPosProfile';
@@ -14,7 +14,7 @@ async function worker() {
   for (const route of instance.routes) router.registerRoute(route);
   await instance.handleMessage({ type: 'URY_BIND_SESSION', user: 'alice@ury.com' });
   // Alice's earlier read, cached while her session was bound.
-  await (await storage.open('ury-pos-reads')).put(PROFILE, new Response('Alice prior cached profile', { status: 200 }));
+  await (await storage.open('ury-pos-reads')).put(PROFILE, ownedResponse('Alice prior cached profile', 'alice@ury.com'));
   return {
     instance,
     async get(href: string) {

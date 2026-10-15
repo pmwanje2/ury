@@ -22,6 +22,22 @@ function decodedPath(url: URL): string | null {
   }
 }
 
+// Match the path the browser will actually use. An encoded slash such as
+// /pos%2F..%2Fsecret decodes to a /pos/ prefix and would otherwise hit the
+// shell cache; dot-segments that decoding invents are not that path.
+function canonicalPath(url: URL): string | null {
+  const decoded = decodedPath(url);
+  if (!decoded || decoded.includes("\\") || decoded.includes("\0")) return null;
+  let normalized: string;
+  try {
+    normalized = decodeURIComponent(new URL(decoded, url.origin).pathname);
+  } catch {
+    return null;
+  }
+  if (normalized !== decoded) return null;
+  return normalized;
+}
+
 function isDocResource(path: string, base: string): boolean {
   if (path === base) return true;
   if (!path.startsWith(base + "/")) return false;
@@ -36,7 +52,7 @@ export function matchOfflineRequest(url: URL, method: string, origin: string): s
   if (method !== "GET" || url.origin !== origin) return undefined;
   const keys = [...url.searchParams.keys()];
   if (new Set(keys).size !== keys.length || url.searchParams.has("cmd")) return undefined;
-  const path = decodedPath(url);
+  const path = canonicalPath(url);
   if (!path) return undefined;
   if (path === "/pos" || path.startsWith("/pos/")) return SHELL_CACHE;
   if (path === TABLE_LIST) {
