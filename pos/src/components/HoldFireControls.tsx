@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, showToast } from '@ury/ui';
+import { Button, Input, showToast } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
@@ -40,7 +40,7 @@ export function HoldFireControls() {
         {t(item.ury_held ? 'hold_fire.held' : item.invoiceItemName ? 'hold_fire.sent' : 'hold_fire.ready')}
       </span>
       {!item.invoiceItemName && <label className="flex items-center gap-1">
-        <input type="checkbox" checked={!!item.ury_held} disabled={busy || orderLoading}
+        <Input type="checkbox" className="h-4 w-4 p-0" checked={!!item.ury_held} disabled={busy || orderLoading}
           onChange={event => setItemHeld(item.uniqueId!, event.target.checked)} />{t('hold_fire.hold')}
       </label>}
       {!!item.ury_held && item.invoiceItemName && <Button size="sm" disabled={busy || orderLoading}
