@@ -798,6 +798,15 @@ def get_order_status(session):
 # selecting the same gateway mode. No provider webhook logic belongs here.
 # ---------------------------------------------------------------------------
 
+def _payment_url(pr):
+    try:
+        return pr.get_payment_url()
+    except Exception as e:
+        # The Payment Request is real; only the gateway link is unavailable.
+        frappe.log_error(f"Payment Request has no payment URL available: {e}", "Self-Order Payment")
+        return None
+
+
 @frappe.whitelist(allow_guest=True)
 def create_payment_request(session):
     session = _resolve_session(session)
@@ -809,38 +818,36 @@ def create_payment_request(session):
         frappe.throw(_("No active order for this session"), frappe.ValidationError)
 
     with _elevated():
-        from erpnext.accounts.doctype.payment_request.payment_request import (
-            get_gateway_details,
-            make_payment_request,
-        )
+        from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 
         invoice = frappe.get_doc("POS Invoice", session.invoice)
         if invoice.docstatus == 1:
             frappe.throw(_("This order is already settled"), frappe.ValidationError)
 
         # POS Invoice payment requests use the Phone payment row's account as
-        # the amount source in ERPNext v16. Select only a Phone mode that is
-        # on this profile and backed by the company's default gateway.
-        gateway_account = get_gateway_details(frappe._dict(company=invoice.company))
+        # the amount source in ERPNext v16. Use the gateway account of that
+        # row's own account; a company default gateway only breaks ties.
         pos_profile = frappe.get_cached_doc("POS Profile", profile.pos_profile)
-        mode_of_payment = None
-        profile_payments = (
-            pos_profile.payments if gateway_account and gateway_account.payment_channel == "Phone" else []
-        )
-        for profile_payment in profile_payments:
-            mode_of_payment = profile_payment.mode_of_payment
-            if frappe.db.get_value("Mode of Payment", mode_of_payment, "type") != "Phone":
+        gateway_account = mode_of_payment = payment_account = None
+        for profile_payment in pos_profile.payments:
+            row_mode = profile_payment.mode_of_payment
+            if frappe.db.get_value("Mode of Payment", row_mode, "type") != "Phone":
                 continue
 
-            payment_account = frappe.db.get_value(
+            row_account = frappe.db.get_value(
                 "Mode of Payment Account",
-                {"parent": mode_of_payment, "company": invoice.company},
+                {"parent": row_mode, "company": invoice.company},
                 "default_account",
             )
-            if payment_account and payment_account == gateway_account.payment_account:
-                break
-        else:
-            mode_of_payment = None
+            row_gateway = row_account and frappe.db.get_value(
+                "Payment Gateway Account",
+                {"company": invoice.company, "payment_account": row_account, "payment_channel": "Phone"},
+                ["name", "payment_account", "is_default"],
+                as_dict=True,
+                order_by="is_default desc",
+            )
+            if row_gateway and (not gateway_account or (row_gateway.is_default and not gateway_account.is_default)):
+                gateway_account, mode_of_payment, payment_account = row_gateway, row_mode, row_account
 
         if not mode_of_payment:
             frappe.throw(
@@ -858,6 +865,31 @@ def create_payment_request(session):
             or invoice.get("rounded_total")
             or invoice.get("grand_total")
         )
+
+        # Re-tap: return the request already open for this exact amount.
+        existing = frappe.db.get_value(
+            "Payment Request",
+            {
+                "reference_doctype": "POS Invoice",
+                "reference_name": invoice.name,
+                "payment_gateway_account": gateway_account.name,
+                "grand_total": outstanding_amount,
+                "docstatus": 1,
+                "status": ["not in", ["Cancelled", "Failed"]],
+            },
+            "name",
+            order_by="creation desc",
+        )
+        if existing:
+            pr = frappe.get_doc("Payment Request", existing)
+            return {
+                "payment_request": pr.name,
+                "amount": pr.grand_total,
+                "currency": pr.currency,
+                "payment_url": _payment_url(pr),
+                "status": pr.status,
+            }
+
         phone_payment = next(
             (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
             None,
@@ -872,41 +904,18 @@ def create_payment_request(session):
 
         # make_payment_request() derives its own amount from the reference
         # doc server-side (get_amount()) — the client never supplies one.
-        try:
-            pr = make_payment_request(
-                dt="POS Invoice",
-                dn=invoice.name,
-                submit_doc=1,
-                mute_email=1,
-                payment_gateway_account=gateway_account.name,
-                mode_of_payment=mode_of_payment,
-                return_doc=1,
-            )
-        except Exception as e:
-            frappe.log_error(f"create_payment_request failed: {e}", "Self-Order Payment")
-            # ERPNext's make_payment_request() queues its own raw msgprint
-            # (e.g. "Payment Entry is already created") via frappe.throw
-            # before we ever get a chance to catch it — that message stays
-            # queued in frappe.local.message_log even after we catch the
-            # exception here, so it would still reach the client's
-            # _server_messages alongside our clean one below. Clear it so
-            # only the customer-appropriate message is ever queued.
-            frappe.clear_messages()
-            frappe.throw(
-                _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
-                frappe.ValidationError,
-            )
-
-        payment_url = None
-        try:
-            payment_url = pr.get_payment_url()
-        except Exception as e:
-            # A Payment Request was created but the configured gateway
-            # rejected the URL request — the Payment Request itself is
-            # still real and valid; only the redirect/link URL is
-            # unavailable. Surface this plainly instead of fabricating a
-            # fake link.
-            frappe.log_error(f"Payment Request created but no payment URL available: {e}", "Self-Order Payment")
+        # Configuration is refused above; any error here is real and is not
+        # relabelled as missing configuration.
+        pr = make_payment_request(
+            dt="POS Invoice",
+            dn=invoice.name,
+            submit_doc=1,
+            mute_email=1,
+            payment_gateway_account=gateway_account.name,
+            mode_of_payment=mode_of_payment,
+            return_doc=1,
+        )
+        payment_url = _payment_url(pr)
 
     return {
         "payment_request": pr.name,
@@ -931,10 +940,20 @@ def get_payment_status(session):
             as_dict=True,
             order_by="creation desc",
         )
+        payment_url = (
+            _payment_url(frappe.get_doc("Payment Request", pr.name))
+            if pr and pr.status not in ("Paid", "Cancelled", "Failed")
+            else None
+        )
 
     if not pr:
         return {"status": None}
-    return {"payment_request": pr.name, "status": pr.status, "amount": pr.grand_total}
+    return {
+        "payment_request": pr.name,
+        "status": pr.status,
+        "amount": pr.grand_total,
+        "payment_url": payment_url,
+    }
 
 
 # ---------------------------------------------------------------------------
