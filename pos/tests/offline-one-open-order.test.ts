@@ -162,3 +162,33 @@ test('sign-out forgets cached open table checks', async () => {
   await clearAppStorage();
   expect(sessionStorage.getItem(OPEN_KEY)).toBeNull();
 });
+
+// Sol #47 finding 3: the round id sent on the live write must be the one
+// queued, so a lost acknowledgement replays into the server's round dedupe.
+test.each(['cached server check', 'local offline check'])(
+  'a gateway 504 on an occupied table (%s) queues the round id that was sent',
+  async (source) => {
+    const { initI18n } = await import('../src/i18n');
+    await initI18n('en');
+    vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write: vi.fn(), close: vi.fn() }, focus: vi.fn(), print: vi.fn(), opener: null }) as never);
+    let open = KNOWN;
+    if (source === 'cached server check') {
+      sessionStorage.setItem(OPEN_KEY, JSON.stringify([{ table: 'T-01', clientOrderId: KNOWN, invoice: 'INV-SERVER', grandTotal: 5000, customer: 'Walk In', orderType: 'Dine In', noOfPax: 1 }]));
+    } else {
+      open = (await (await outbox()).capture(dine('T-01', { item: 'Tea', item_name: 'Tea', qty: 1, rate: 1000 }), 1000)).client_order_id;
+    }
+    vi.stubGlobal('navigator', { onLine: true, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });
+    const { cashierOutbox, submitOrderOfflineAware } = await import('../src/offline/cashier');
+    cashierOutbox(profile, user).reachable = true;
+    let sent: { clientOrderId: string; roundId: string } | undefined;
+    const result = await submitOrderOfflineAware({
+      profile, user, order: dine('T-01', { item: 'Water', item_name: 'Water', qty: 1, rate: 1000 }) as never, total: 1000,
+      onlineSubmit: async (ids?: { clientOrderId: string; roundId: string }) => { sent = ids; throw { httpStatus: 504, message: 'timeout' }; },
+    });
+    expect(result.offline).toBe(true);
+    if (!result.offline) return;
+    expect(sent?.clientOrderId).toBe(open);
+    expect(result.entry.client_order_id).toBe(open);
+    expect(result.entry.rounds.at(-1)?.round_id).toBe(sent?.roundId);
+  },
+);
