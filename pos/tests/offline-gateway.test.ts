@@ -136,7 +136,7 @@ test('a 504 on cash settlement is queued with the client order id sent to the se
   let sent: { clientOrderId: string; roundId: string } | undefined;
   const result = await submitSettlementOfflineAware({
     profile, user, invoice: 'INV-9', customer: 'Walk In', table: 'T-1', cashier: user.name, owner: user.name,
-    clientOrderId: KNOWN_ID, amount: 100, modeOfPayment: 'Cash',
+    clientOrderId: KNOWN_ID, amount: 100, due: 100, modeOfPayment: 'Cash',
     onlineSettle: async (ids) => {
       sent = ids;
       throw { httpStatus: 504, message: 'timeout' };
@@ -184,9 +184,35 @@ test.each([
   const { submitSettlementOfflineAware } = await captureModule();
   await expect(submitSettlementOfflineAware({
     profile, user, invoice: 'INV-9', customer: 'Walk In', cashier: user.name, owner: user.name,
-    amount: 100, modeOfPayment: mode, discount,
+    amount: 100, due: 100, modeOfPayment: mode, discount,
     onlineSettle: async () => { throw error; },
   })).rejects.toEqual(error);
+  expect(await queuedIds()).toEqual([]);
+});
+
+// #44: a named account may settle short online, leaving the rest owed. That is
+// not a cash settlement, so a gateway error must not queue it offline.
+test.each([
+  ['short cash tender', 40],
+  ['zero-amount account row', 0],
+])('a gateway 502 on a named-account %s is not queued', async (_name, amount) => {
+  const { submitSettlementOfflineAware } = await captureModule();
+  const onlineSettle = vi.fn(async () => { throw { httpStatus: 502, message: 'gateway' }; });
+  await expect(submitSettlementOfflineAware({
+    profile, user, invoice: 'INV-9', customer: 'House Account', cashier: user.name, owner: user.name,
+    clientOrderId: KNOWN_ID, amount, due: 100, modeOfPayment: 'Cash', onlineSettle,
+  })).rejects.toMatchObject({ httpStatus: 502 });
+  expect(onlineSettle).toHaveBeenCalledOnce();
+  expect(await queuedIds()).toEqual([]);
+});
+
+test('a gateway 502 on cash settlement without a known amount due is not queued', async () => {
+  const { submitSettlementOfflineAware } = await captureModule();
+  await expect(submitSettlementOfflineAware({
+    profile, user, invoice: 'INV-9', customer: 'Walk In', cashier: user.name, owner: user.name,
+    amount: 100, modeOfPayment: 'Cash',
+    onlineSettle: async () => { throw { httpStatus: 502, message: 'gateway' }; },
+  } as any)).rejects.toMatchObject({ httpStatus: 502 });
   expect(await queuedIds()).toEqual([]);
 });
 
@@ -194,7 +220,7 @@ test('an opted-out till does not queue a gateway settlement', async () => {
   const { submitSettlementOfflineAware } = await captureModule();
   await expect(submitSettlementOfflineAware({
     profile: { ...profile, ury_offline_capture: 0 }, user, invoice: 'INV-9', customer: 'Walk In',
-    cashier: user.name, owner: user.name, amount: 100, modeOfPayment: 'Cash',
+    cashier: user.name, owner: user.name, amount: 100, due: 100, modeOfPayment: 'Cash',
     onlineSettle: async () => { throw { httpStatus: 520, message: 'cloudflare' }; },
   })).rejects.toMatchObject({ httpStatus: 520 });
   expect(await queuedIds()).toEqual([]);
