@@ -42,7 +42,7 @@ export const useAuthStore = defineStore("auth", {
     invoiceData: useInvoiceDataStore(),
     userAuth: localStorage.getItem("userAuth"),
     idleStop: null,
-    pinSession: false,
+    pinSession: sessionStorage.getItem("ury_floor_pin_session") === "true",
   }),
   getters: {
     isAuthenticated(state) {
@@ -61,6 +61,7 @@ export const useAuthStore = defineStore("auth", {
           password: this.currentPassword,
         });
         this.pinSession = false;
+        sessionStorage.removeItem("ury_floor_pin_session");
         this.userAuth = true;
         localStorage.setItem("userAuth", "true");
         this.currentPassword = "";
@@ -75,6 +76,7 @@ export const useAuthStore = defineStore("auth", {
       const { message } = await this.call.post("ury.ury_pos.floor_pin.sign_in", { pin });
       window.csrf_token = message.csrf_token;
       this.pinSession = true;
+      sessionStorage.setItem("ury_floor_pin_session", "true");
       this.userAuth = true;
       localStorage.setItem("userAuth", "true");
       await this.fetchUserDetails();
@@ -299,6 +301,8 @@ export const useAuthStore = defineStore("auth", {
         this.invoiceData.clearDataAfterUpdate();
         this.userAuth = false;
         this.currentPassword = "";
+        this.pinSession = false;
+        sessionStorage.removeItem("ury_floor_pin_session");
         disconnectQzPrinter();
         window.location.href = "/urypos";
       }
