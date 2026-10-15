@@ -1446,6 +1446,10 @@ def fire_items(invoice, line=None, course=None, last_modified_time=None):
         frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
     if invoice.docstatus != 0:
         frappe.throw(_("This order is no longer open."))
+    if invoice.order_type == "Dine In" and _has_role(
+        frappe.get_roles(), profile.role_restricted_for_table_order
+    ):
+        frappe.throw(_("You are not permitted to take Dine In table orders."), frappe.PermissionError)
     if bool(line) == bool(course):
         frappe.throw(_("Select exactly one line or course to fire."))
     selected = [row for row in invoice.items if row.name == line] if line else [
@@ -1769,7 +1773,9 @@ def sync_order(
             frappe.throw(_("URY_ALREADY_SENT: Sent lines cannot be held again."))
         if old and cint(getattr(old, "ury_held", 0)) and not cint(item.get("ury_held")):
             frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Use Fire to send held lines."))
-    if any(item["ury_held"] for item in past_item) and any(not item.get("name") for item in items):
+    held_names = {name for name, row in previous_rows.items() if cint(getattr(row, "ury_held", 0))}
+    requested_names = {item.get("name") for item in items}
+    if not append and held_names - requested_names and any(not item.get("name") for item in items):
         # Older POS clients must not implicitly fire a held baseline by
         # replacing it with unnamed sent rows. Reload using hold-aware POS.
         frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Reload the held order before editing."))

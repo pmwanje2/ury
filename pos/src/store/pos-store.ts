@@ -524,7 +524,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       }
 
       const uniqueId = generateUniqueId(item);
-      const existingItemIndex = get().activeOrders.findIndex(orderItem => orderItem.uniqueId === uniqueId);
+      const existingItemIndex = get().activeOrders.findIndex(orderItem => !orderItem.invoiceItemName
+        && generateUniqueId(orderItem) === uniqueId && !!orderItem.ury_held === !!item.ury_held);
 
       if (existingItemIndex !== -1) {
         const existingItem = get().activeOrders[existingItemIndex];
@@ -544,7 +545,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         
         set({ activeOrders: newOrders });
       } else {
-        const newOrders = [...get().activeOrders, { ...item, uniqueId }];
+        const rowId = get().activeOrders.some(row => row.uniqueId === uniqueId) ? uuidv4() : uniqueId;
+        const newOrders = [...get().activeOrders, { ...item, uniqueId: rowId }];
         set({ activeOrders: newOrders });
       }
     } catch (error) {
