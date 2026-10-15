@@ -201,8 +201,8 @@ export default function CaptainOrder() {
 
       const orderData: SyncOrderRequest = {
         items: activeOrders.map((item) => ({
-          name: item.invoiceItemName,
-          ury_held: item.ury_held || 0,
+          ...(item.invoiceItemName ? { name: item.invoiceItemName } : {}),
+          ...(posProfile.ury_enable_hold_fire || item.ury_held ? { ury_held: item.ury_held || 0 } : {}),
           item: item.id,
           item_name: item.name,
           rate: item.selectedVariant?.price || item.price,
