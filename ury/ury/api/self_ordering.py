@@ -818,10 +818,7 @@ def create_payment_request(session):
         frappe.throw(_("No active order for this session"), frappe.ValidationError)
 
     with _elevated():
-        from erpnext.accounts.doctype.payment_request.payment_request import (
-            cancel_old_payment_requests,
-            make_payment_request,
-        )
+        from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 
         invoice = frappe.get_doc("POS Invoice", session.invoice)
         if invoice.docstatus == 1:
@@ -914,9 +911,40 @@ def create_payment_request(session):
             pr = frappe.get_doc("Payment Request", existing)
             return _payment_request_response(pr, _payment_url(pr), paid_amount)
 
-        # Cancel stale unpaid links before ERPNext derives the full amount.
-        # Native cancellation also checks in-flight Integration Requests.
-        cancel_old_payment_requests("POS Invoice", invoice.name)
+        # A stale unpaid guest link is replaced only if its checkout never
+        # started or ended (no Integration Request, or Failed/Cancelled). A
+        # Queued checkout may still be paid at the provider, so keep its link.
+        # Requests made elsewhere (e.g. a cashier) are never cancelled here.
+        busy = _("A payment for this order is already in progress. Please ask staff for help.")
+        open_requests = frappe.get_all(
+            "Payment Request",
+            filters={**request_filters, "status": ["not in", ["Paid", "Partially Paid", "Cancelled", "Failed"]]},
+            fields=["name", "owner", "payment_gateway_account", "payment_channel", "payment_request_type"],
+            order_by="creation desc",
+        )
+        for open_request in open_requests:
+            # The guest path creates requests while elevated to Administrator.
+            if (
+                open_request.owner != "Administrator"
+                or open_request.payment_gateway_account != gateway_account.name
+                or open_request.payment_channel != "Phone"
+                or open_request.payment_request_type != "Inward"
+            ):
+                frappe.throw(busy, frappe.ValidationError)
+            checkout = set(frappe.get_all(
+                "Integration Request",
+                filters={"reference_doctype": "Payment Request", "reference_docname": open_request.name},
+                pluck="status",
+            ))
+            if checkout - {"Failed", "Cancelled", "Queued"}:
+                frappe.throw(busy, frappe.ValidationError)
+            if "Queued" in checkout:
+                pr = frappe.get_doc("Payment Request", open_request.name)
+                return _payment_request_response(pr, _payment_url(pr), paid_amount)
+        for open_request in open_requests:
+            pr = frappe.get_doc("Payment Request", open_request.name)
+            pr.flags.ignore_permissions = True
+            pr.cancel()
 
         phone_payment = next(
             (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
