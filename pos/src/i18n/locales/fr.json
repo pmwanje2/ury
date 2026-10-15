@@ -1,6 +1,7 @@
 {
   "offline": {
     "capture": "Saisie hors ligne",
+    "orders_unavailable": "Les commandes sont indisponibles tant que la liaison est coupée.",
     "outbox": "File hors ligne",
     "replaying": "Synchronisation",
     "pending": "{{count}} en attente",

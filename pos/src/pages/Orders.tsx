@@ -57,6 +57,7 @@ export default function Orders() {
     orders,
     orderLoading,
     error,
+    ordersOffline,
     selectedStatus,
     pagination,
     selectedOrder,
@@ -391,7 +392,11 @@ export default function Orders() {
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 overflow-y-auto bg-gray-50 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(22rem,1fr)] lg:grid-rows-[minmax(0,1fr)_auto] lg:overflow-hidden xl:grid-cols-[minmax(20rem,1.2fr)_minmax(22rem,1fr)_minmax(16rem,0.8fr)] xl:grid-rows-1">
           <div className="min-h-0 min-w-0 overflow-y-auto lg:col-start-1 lg:row-start-1">
           <BillRequestStrip orders={error ? [] : orders} selectOrder={selectOrder} />
-          {error ? (
+          {ordersOffline ? (
+            <div className="p-4 text-center" role="status" data-testid="offline-orders-notice">
+              <p className="font-semibold text-amber-800">{t('offline.orders_unavailable')}</p>
+            </div>
+          ) : error ? (
             <div className="p-4 text-center">
               <p className="font-semibold text-red-600">Failed to load orders</p>
               <p className="text-gray-600">{error}</p>
