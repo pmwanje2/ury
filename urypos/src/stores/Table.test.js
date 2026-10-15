@@ -42,6 +42,95 @@ afterEach(() => {
 
 const activeBranch = 'Salama Kampala';
 
+it('fetchCaptain loads eligible captains for the active invoice', async () => {
+  const store = useTableStore();
+  store.tableName = 'Table 1';
+  store.invoiceNumber = 'STALE-INVOICE';
+  const eligible = [{ name: 'waiter3@fixture.invalid', full_name: 'Test Waiter Three' }];
+  let resolveInvoice;
+  store.call.get.mockImplementation((method, args) => {
+    if (method === 'ury.ury.doctype.ury_order.ury_order.get_order_invoice') {
+      expect(args).toEqual({ table: 'Table 1' });
+      return new Promise(resolve => { resolveInvoice = resolve; });
+    }
+    if (method === 'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates') {
+      expect(args).toEqual({ invoice: 'POS-INV-1' });
+      return Promise.resolve({ message: eligible });
+    }
+    throw new Error(`Unexpected endpoint: ${method}`);
+  });
+  store.db.getDocList.mockResolvedValue([{ name: 'unrelated@fixture.invalid' }]);
+  const loading = store.fetchCaptain();
+  await flushPromises();
+  expect(store.call.get).toHaveBeenCalledExactlyOnceWith(
+    'ury.ury.doctype.ury_order.ury_order.get_order_invoice', { table: 'Table 1' },
+  );
+  resolveInvoice({ message: { name: 'POS-INV-1', waiter: 'current@fixture.invalid' } });
+  await loading;
+  expect(store.captain).toEqual(eligible);
+  expect(store.db.getDocList).not.toHaveBeenCalled();
+});
+
+it('searchCaptian matches full name as well as user id', () => {
+  const store = useTableStore();
+  store.captain = [
+    { name: 'waiter3@fixture.invalid', full_name: 'Test Waiter Three' },
+    { name: 'other@fixture.invalid', full_name: 'Amina Nakato' },
+  ];
+  for (const search of ['THREE', 'waiter3@']) {
+    store.newCaptain = search;
+    expect(store.searchCaptian).toEqual([store.captain[0]]);
+  }
+});
+
+it('shows captain full names and falls back to user ids in the transfer picker', async () => {
+  const store = useTableStore();
+  store.showModalCaptainTransfer = true;
+  store.showCaptain = true;
+  store.captain = [
+    { name: 'waiter3@fixture.invalid', full_name: 'Test Waiter Three' },
+    { name: 'unnamed@fixture.invalid', full_name: '' },
+  ];
+  floorElement = document.createElement('div');
+  document.body.appendChild(floorElement);
+  floorApp = createApp(FloorPlan);
+  floorApp.use(getActivePinia());
+  floorApp.mount(floorElement);
+  await nextTick();
+  const labels = [...floorElement.querySelectorAll('h1')].map(el => el.textContent.trim());
+  expect(labels).toContain('Test Waiter Three');
+  expect(labels).toContain('unnamed@fixture.invalid');
+});
+
+it('clears old captains when the candidate read is refused', async () => {
+  const store = useTableStore();
+  store.captain = [{ name: 'stale@fixture.invalid', full_name: 'Stale Captain' }];
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  store.call.get.mockImplementation(async method => {
+    if (method.endsWith('.get_order_invoice')) return { message: { name: 'POS-INV-1' } };
+    throw new Error('You are not permitted to transfer captains.');
+  });
+  store.db.getDocList.mockRejectedValue(new Error('Global User read must not be used'));
+  await store.fetchCaptain();
+  await flushPromises();
+  expect(store.captain).toEqual([]);
+});
+
+it('does not load captains for a stale invoice when the active invoice read is refused', async () => {
+  const store = useTableStore();
+  store.tableName = 'Table 2';
+  store.invoiceNumber = 'STALE-INVOICE';
+  store.captain = [{ name: 'stale@fixture.invalid', full_name: 'Stale Captain' }];
+  store.db.getDocList.mockResolvedValue([]);
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  store.call.get.mockRejectedValue({ _server_messages: 'Invoice access denied' });
+  await store.fetchCaptain();
+  expect(store.call.get).toHaveBeenCalledExactlyOnceWith(
+    'ury.ury.doctype.ury_order.ury_order.get_order_invoice', { table: 'Table 2' },
+  );
+  expect(store.captain).toEqual([]);
+});
+
 function activeInvoiceQuery(tableNames) {
   return {
     fields: ['name', 'restaurant_table', 'creation', 'custom_merged_tables', 'waiter'],
