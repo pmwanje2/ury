@@ -86,3 +86,41 @@ test('a read with no purge still remembers the server-known open check', async (
   ]);
 });
 
+// Sol #47 re-review: the stale response must not reach the active till either.
+const bobCart = [{ id: 'Coffee', uniqueId: 'C1', name: 'Coffee', price: 2000, quantity: 1 }];
+const bobCustomer = { id: 'BOB-GUEST', name: 'Bob Guest' };
+
+function bobTill() {
+  usePOSStore.setState({
+    activeOrders: bobCart as never, selectedCustomer: bobCustomer as never, selectedTable: 'T-01',
+    orderId: null, isUpdatingOrder: false, tableOrder: null, noOfPax: 2, orderComment: 'bob note',
+  });
+}
+
+function expectBobTill() {
+  const state = usePOSStore.getState();
+  expect(state.orderId).toBeNull();
+  expect(state.isUpdatingOrder).toBe(false);
+  expect(state.tableOrder).toBeNull();
+  expect(state.selectedCustomer).toEqual(bobCustomer);
+  expect(state.activeOrders.map((item) => item.name)).toEqual(['Coffee']);
+  expect(state.noOfPax).toBe(2);
+  expect(state.orderComment).toBe('bob note');
+  expect(state.error).toBeNull();
+  expect(state.orderLoading).toBe(false);
+}
+
+test('Alice\'s late table read does not change Bob\'s active cart or customer', async () => {
+  await aliceReadAcross(() => {
+    document.cookie = 'user_id=' + encodeURIComponent(bob) + '; Path=/';
+    bobTill();
+  });
+  expectBobTill();
+});
+
+test('a table read from before a same-user purge does not restore the old till', async () => {
+  await aliceReadAcross(() => bobTill());
+  expectBobTill();
+});
+
+
