@@ -140,7 +140,7 @@
                 {{ this.table.getBadgeText(table, now) }}
               </span>
             </div>
-            <div class="relative" v-if="table.occupied !== 1">
+            <div class="relative">
               <button
                 class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-sm text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
                 :aria-label="`Table options for ${table.name}`"
@@ -180,7 +180,7 @@
                       >Table Transfer</a
                     >
                   </li>
-                  <li v-if="table.occupied === 1 && this.auth.hasAccess">
+                  <li v-if="table.occupied === 1 && this.auth.hasAccess && this.table.activeDropdown === table.name && this.table.captain.length > 0">
                     <a
                       href="#"
                       class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:text-white"
@@ -524,7 +524,7 @@
               @click="this.table.selectcaptain(captain)"
             >
               <h1 class="text-base font-semibold leading-normal">
-                {{ captain.name }}
+                {{ captain.full_name || captain.name }}
               </h1>
             </div>
           </div>

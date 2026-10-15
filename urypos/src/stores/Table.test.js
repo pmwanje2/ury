@@ -4,14 +4,16 @@ import { createApp, nextTick } from 'vue';
 import { setImmediate as flushPromises } from 'node:timers/promises';
 import { useTableStore } from './Table.js';
 import FloorPlan from '../components/Table.vue';
+import TakeAwayTable from '../components/takeAwayTable.vue';
 import router from '../router';
 
+const transferAuth = vi.hoisted(() => ({ hasAccess: false }));
 vi.mock('../router', () => ({ default: { push: vi.fn() } }));
 vi.mock('./Menu.js', () => ({ useMenuStore: () => ({ fetchItems: vi.fn() }) }));
 vi.mock('./invoiceData.js', () => ({
   useInvoiceDataStore: () => ({ tableAttention: 15 }),
 }));
-vi.mock('./Auth.js', () => ({ useAuthStore: () => ({}) }));
+vi.mock('./Auth.js', () => ({ useAuthStore: () => transferAuth }));
 vi.mock('./Customer.js', () => ({ useCustomerStore: () => ({}) }));
 vi.mock('./Notification.js', () => ({ useNotifications: () => ({}) }));
 vi.mock('./Alert.js', () => ({ useAlert: () => ({}) }));
@@ -29,6 +31,7 @@ let floorElement;
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.useFakeTimers();
+  transferAuth.hasAccess = false;
 });
 
 afterEach(() => {
@@ -41,6 +44,207 @@ afterEach(() => {
 });
 
 const activeBranch = 'Salama Kampala';
+
+describe.each([
+  ['dine-in', FloorPlan, 0],
+  ['takeaway', TakeAwayTable, 1],
+])('%s captain transfer menu', (_name, component, isTakeAway) => {
+  async function mountMenu() {
+    const store = useTableStore();
+    transferAuth.hasAccess = true;
+    store.tables = [{ name: 'Table 1', occupied: 1, is_take_away: isTakeAway }];
+    store.call.get.mockImplementation(async (method, args) => {
+      if (method.endsWith('.get_order_invoice')) {
+        expect(args).toEqual({ table: 'Table 1' });
+        return { message: { name: 'POS-INV-1', waiter: 'current@fixture.invalid' } };
+      }
+      if (method.endsWith('.get_captain_transfer_candidates')) {
+        expect(args).toEqual({ invoice: 'POS-INV-1' });
+        return { message: [] };
+      }
+      throw new Error(`Unexpected endpoint: ${method}`);
+    });
+    floorElement = document.createElement('div');
+    document.body.appendChild(floorElement);
+    floorApp = createApp(component);
+    floorApp.use(getActivePinia());
+    floorApp.mount(floorElement);
+    await nextTick();
+    return store;
+  }
+
+  function transferLink() {
+    return [...floorElement.querySelectorAll('a')].find(el => el.textContent.trim() === 'Captain Transfer');
+  }
+
+  it('hides transfer with no candidates and requests the active invoice candidates', async () => {
+    const store = await mountMenu();
+    await store.toggleDropdown('Table 1');
+    await nextTick();
+    expect(transferLink()).toBeUndefined();
+    expect(store.call.get).toHaveBeenCalledWith(
+      'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates', { invoice: 'POS-INV-1' },
+    );
+  });
+
+  it('shows transfer for eligible candidates and opens the existing picker', async () => {
+    const store = await mountMenu();
+    store.call.get.mockImplementation(async method => ({ message: method.endsWith('.get_order_invoice')
+      ? { name: 'POS-INV-1', waiter: 'current@fixture.invalid' }
+      : [{ name: 'waiter@fixture.invalid', full_name: 'Eligible Waiter' }] }));
+    await store.toggleDropdown('Table 1');
+    await nextTick();
+    expect(transferLink()).toBeDefined();
+    transferLink().click();
+    await nextTick();
+    expect(store.showModalCaptainTransfer).toBe(true);
+    await store.toggleDropdown('Table 1');
+    store.call.get.mockImplementation(async method => ({ message: method.endsWith('.get_order_invoice')
+      ? { name: 'POS-INV-1', waiter: 'current@fixture.invalid' } : [] }));
+    await store.toggleDropdown('Table 1');
+    await nextTick();
+    expect(transferLink()).toBeUndefined();
+  });
+
+  it('fails closed when the candidate read is refused', async () => {
+    const store = await mountMenu();
+    store.captain = [{ name: 'stale@fixture.invalid', full_name: 'Stale Captain' }];
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    store.call.get.mockImplementation(async method => {
+      if (method.endsWith('.get_order_invoice')) return { message: { name: 'POS-INV-1' } };
+      throw new Error('Candidate access denied');
+    });
+    await store.toggleDropdown('Table 1');
+    await nextTick();
+    expect(transferLink()).toBeUndefined();
+    expect(store.captain).toEqual([]);
+  });
+
+  it('retains the role gate when eligible candidates exist', async () => {
+    const store = await mountMenu();
+    // The component and store share the authenticated user's role context.
+    floorApp.unmount();
+    transferAuth.hasAccess = false;
+    store.captain = [{ name: 'waiter@fixture.invalid', full_name: 'Eligible Waiter' }];
+    floorApp = createApp(component);
+    floorApp.use(getActivePinia());
+    floorApp.mount(floorElement);
+    await store.toggleDropdown('Table 1');
+    await nextTick();
+    expect(transferLink()).toBeUndefined();
+    expect(store.call.get.mock.calls.some(([method]) => method.endsWith('.get_captain_transfer_candidates'))).toBe(false);
+  });
+
+  it('does not restore candidates from a closed menu after reopening', async () => {
+    const store = await mountMenu();
+    let resolveOld;
+    const oldResponse = new Promise(resolve => { resolveOld = resolve; });
+    let reads = 0;
+    store.call.get.mockImplementation(async method => {
+      if (method.endsWith('.get_order_invoice')) return { message: { name: 'POS-INV-1' } };
+      return ++reads === 1 ? oldResponse : { message: [] };
+    });
+    const firstOpen = store.toggleDropdown('Table 1');
+    await flushPromises();
+    await store.toggleDropdown('Table 1');
+    await store.toggleDropdown('Table 1');
+    resolveOld({ message: [{ name: 'stale@fixture.invalid', full_name: 'Stale Captain' }] });
+    await firstOpen;
+    await nextTick();
+    expect(transferLink()).toBeUndefined();
+    expect(store.captain).toEqual([]);
+    expect(reads).toBe(2);
+  });
+});
+
+it('fetchCaptain loads eligible captains for the active invoice', async () => {
+  const store = useTableStore();
+  store.tableName = 'Table 1';
+  store.invoiceNumber = 'STALE-INVOICE';
+  const eligible = [{ name: 'waiter3@fixture.invalid', full_name: 'Test Waiter Three' }];
+  let resolveInvoice;
+  store.call.get.mockImplementation((method, args) => {
+    if (method === 'ury.ury.doctype.ury_order.ury_order.get_order_invoice') {
+      expect(args).toEqual({ table: 'Table 1' });
+      return new Promise(resolve => { resolveInvoice = resolve; });
+    }
+    if (method === 'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates') {
+      expect(args).toEqual({ invoice: 'POS-INV-1' });
+      return Promise.resolve({ message: eligible });
+    }
+    throw new Error(`Unexpected endpoint: ${method}`);
+  });
+  store.db.getDocList.mockResolvedValue([{ name: 'unrelated@fixture.invalid' }]);
+  const loading = store.fetchCaptain();
+  await flushPromises();
+  expect(store.call.get).toHaveBeenCalledExactlyOnceWith(
+    'ury.ury.doctype.ury_order.ury_order.get_order_invoice', { table: 'Table 1' },
+  );
+  resolveInvoice({ message: { name: 'POS-INV-1', waiter: 'current@fixture.invalid' } });
+  await loading;
+  expect(store.captain).toEqual(eligible);
+  expect(store.db.getDocList).not.toHaveBeenCalled();
+});
+
+it('searchCaptian matches full name as well as user id', () => {
+  const store = useTableStore();
+  store.captain = [
+    { name: 'waiter3@fixture.invalid', full_name: 'Test Waiter Three' },
+    { name: 'other@fixture.invalid', full_name: 'Amina Nakato' },
+  ];
+  for (const search of ['THREE', 'waiter3@']) {
+    store.newCaptain = search;
+    expect(store.searchCaptian).toEqual([store.captain[0]]);
+  }
+});
+
+it('shows captain full names and falls back to user ids in the transfer picker', async () => {
+  const store = useTableStore();
+  store.showModalCaptainTransfer = true;
+  store.showCaptain = true;
+  store.captain = [
+    { name: 'waiter3@fixture.invalid', full_name: 'Test Waiter Three' },
+    { name: 'unnamed@fixture.invalid', full_name: '' },
+  ];
+  floorElement = document.createElement('div');
+  document.body.appendChild(floorElement);
+  floorApp = createApp(FloorPlan);
+  floorApp.use(getActivePinia());
+  floorApp.mount(floorElement);
+  await nextTick();
+  const labels = [...floorElement.querySelectorAll('h1')].map(el => el.textContent.trim());
+  expect(labels).toContain('Test Waiter Three');
+  expect(labels).toContain('unnamed@fixture.invalid');
+});
+
+it('clears old captains when the candidate read is refused', async () => {
+  const store = useTableStore();
+  store.captain = [{ name: 'stale@fixture.invalid', full_name: 'Stale Captain' }];
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  store.call.get.mockImplementation(async method => {
+    if (method.endsWith('.get_order_invoice')) return { message: { name: 'POS-INV-1' } };
+    throw new Error('You are not permitted to transfer captains.');
+  });
+  store.db.getDocList.mockRejectedValue(new Error('Global User read must not be used'));
+  await store.fetchCaptain();
+  await flushPromises();
+  expect(store.captain).toEqual([]);
+});
+
+it('does not load captains for a stale invoice when the active invoice read is refused', async () => {
+  const store = useTableStore();
+  store.tableName = 'Table 2';
+  store.invoiceNumber = 'STALE-INVOICE';
+  store.captain = [{ name: 'stale@fixture.invalid', full_name: 'Stale Captain' }];
+  store.db.getDocList.mockResolvedValue([]);
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  store.call.get.mockRejectedValue({ _server_messages: 'Invoice access denied' });
+  await store.fetchCaptain();
+  expect(store.call.get).toHaveBeenCalledExactlyOnceWith(
+    'ury.ury.doctype.ury_order.ury_order.get_order_invoice', { table: 'Table 2' },
+  );
+  expect(store.captain).toEqual([]);
+});
 
 function activeInvoiceQuery(tableNames) {
   return {

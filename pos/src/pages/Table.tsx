@@ -9,7 +9,7 @@ import { Spinner } from '@ury/ui';
 import { Button } from '@ury/ui';
 import { Badge } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
-import { captainTransfer, getTableOrder, tableTransfer } from '../lib/order-api';
+import { captainTransfer, getCaptainTransferCandidates, getTableOrder, tableTransfer } from '../lib/order-api';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat } from '../lib/invoice-api';
 import { canCaptainTransfer, isUserRestrictedFromTableOrders } from '@ury/core';
@@ -27,7 +27,7 @@ const TableView = () => {
   const navigate = useNavigate();
   const { posProfile, setSelectedTable, setSelectedOrderType } = usePOSStore();
   const user = useRootStore((state) => state.user);
-  const showCaptainTransfer = canCaptainTransfer(user, posProfile);
+  const hasTransferRole = canCaptainTransfer(user, posProfile);
   const isRestricted = isUserRestrictedFromTableOrders(user, posProfile);
 
   const branch = posProfile?.branch ?? null;
@@ -42,6 +42,7 @@ const TableView = () => {
   const [error, setError] = useState<string | null>(null);
   const [printingTable, setPrintingTable] = useState<string | null>(null);
   const [menuOpenForTable, setMenuOpenForTable] = useState<string | null>(null);
+  const [showCaptainTransfer, setShowCaptainTransfer] = useState(false);
   const [mergeSourceTable, setMergeSourceTable] = useState<Table | null>(null);
   const [unmergeSourceTable, setUnmergeSourceTable] = useState<Table | null>(null);
   const [transferSourceTable, setTransferSourceTable] = useState<Table | null>(null);
@@ -163,6 +164,24 @@ const TableView = () => {
     if (!selectedRoom) return;
     loadTables(selectedRoom);
   }, [selectedRoom, loadTables]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setShowCaptainTransfer(false);
+    if (!menuOpenForTable || !hasTransferRole) return;
+
+    getTableOrder(menuOpenForTable)
+      .then(async ({ message: invoice }) => {
+        if (!invoice?.name || cancelled) return;
+        const candidates = await getCaptainTransferCandidates(invoice.name);
+        if (!cancelled) setShowCaptainTransfer(candidates.length > 0);
+      })
+      .catch(() => {
+        if (!cancelled) setShowCaptainTransfer(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [menuOpenForTable, hasTransferRole]);
 
   const handleNavigateToPOS = (tableName: string) => {
     if (!selectedRoom) return;
@@ -376,12 +395,15 @@ const TableView = () => {
       mergeGroupLabel={mergeGroupLabel}
       className={className}
       menuOpen={menuOpenForTable === table.name}
-      onMenuOpenChange={(open) => setMenuOpenForTable(open ? table.name : null)}
+      onMenuOpenChange={(open) => {
+        setShowCaptainTransfer(false);
+        setMenuOpenForTable(open ? table.name : null);
+      }}
       onMerge={() => setMergeSourceTable(table)}
       onUnmerge={() => setUnmergeSourceTable(table)}
       onTransferTable={canTransferTable ? () => void handleOpenTransferTable(table) : undefined}
       onTransferCaptain={() => void handleOpenCaptainTransfer(table)}
-      showCaptainTransfer={showCaptainTransfer}
+      showCaptainTransfer={hasTransferRole && showCaptainTransfer && menuOpenForTable === table.name}
       onNavigate={() => handleNavigateToPOS(table.name)}
       onPreview={(event) => handlePreviewTable(table, event)}
       onPrint={(event) => handlePrintTable(table, event)}
@@ -571,6 +593,7 @@ const TableView = () => {
           if (!open) setCaptainTransferContext(null);
         }}
         currentCaptain={captainTransferContext?.currentCaptain ?? ''}
+        invoiceName={captainTransferContext?.invoiceName ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
 

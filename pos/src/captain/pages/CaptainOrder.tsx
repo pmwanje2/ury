@@ -721,6 +721,7 @@ export default function CaptainOrder() {
         open={isTransferCaptainOpen}
         onOpenChange={setIsTransferCaptainOpen}
         currentCaptain={currentCaptain}
+        invoiceName={invoiceId ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
     </div>

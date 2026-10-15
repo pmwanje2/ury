@@ -50,6 +50,7 @@ export const useTableStore = defineStore("table", {
     showCaptain: false,
     cashier: null,
     captain: [],
+    captainRead: 0,
     previousWaiter: null,
     newCaptain: "",
     invoicePrinted: "",
@@ -82,9 +83,9 @@ export const useTableStore = defineStore("table", {
     },
     searchCaptian() {
       return this.captain.filter((ordeTakers) => {
-        return ordeTakers.name
-          .toLowerCase()
-          .includes(this.newCaptain.toLowerCase());
+        const search = this.newCaptain.toLowerCase();
+        return ordeTakers.name.toLowerCase().includes(search)
+          || (ordeTakers.full_name || '').toLowerCase().includes(search);
       });
     },
     toggleTableType(state) {
@@ -348,28 +349,43 @@ export const useTableStore = defineStore("table", {
         console.error("Failed to merge tables:", error);
       }
     },
-    fetchCaptain() {
-      this.db
-        .getDocList("User", {
-          fields: ["name"],
-          limit: 0,
-        })
-        .then((docs) => {
-          this.captain = docs;
-        })
-        .catch((error) => console.error(error));
+    async fetchCaptain() {
+      const read = ++this.captainRead;
+      this.captain = [];
+      this.invoiceNumber = null;
+      try {
+        const invoice = await this.invoiceNumberFetching();
+        if (read !== this.captainRead || !invoice?.name) return;
+        const result = await this.call.get(
+          "ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates",
+          { invoice: invoice.name },
+        );
+        if (read === this.captainRead) this.captain = result.message || [];
+      } catch (error) {
+        if (read === this.captainRead) this.captain = [];
+        console.error(error);
+      }
     },
     async toggleDropdown(index) {
       this.tableName = index;
+      this.captain = [];
+      ++this.captainRead;
       if (this.activeDropdown === index) {
         this.activeDropdown = null;
+        return;
       } else {
         this.activeDropdown = index;
       }
-      await this.invoiceNumberFetching();
+      if (this.auth.hasAccess) {
+        await this.fetchCaptain();
+      } else {
+        await this.invoiceNumberFetching();
+      }
     },
     hideDropdown() {
       this.activeDropdown = null;
+      this.captain = [];
+      ++this.captainRead;
     },
     selectTable(tables) {
       this.newTable = tables.name;
@@ -636,8 +652,10 @@ export const useTableStore = defineStore("table", {
           "ury.ury.doctype.ury_order.ury_order.get_order_invoice",
           tableInvoiceNumber
         );
+        if (this.tableName !== tableInvoiceNumber.table) return;
         this.invoiceNumber = result.message.name;
         this.currentCaptain = result.message.waiter;
+        return result.message;
       } catch (error) {
         console.error(error._server_messages);
       }
