@@ -13,6 +13,7 @@ interface CartPanelProps {
   submitting: boolean
   billRequested: boolean
   payingOnline: boolean
+  paymentNotice?: string | null
   onIncrement: (item: MenuItem) => void
   onDecrement: (itemCode: string) => void
   onSubmit: () => void
@@ -35,6 +36,7 @@ function CartPanel({
   submitting,
   billRequested,
   payingOnline,
+  paymentNotice,
   onIncrement,
   onDecrement,
   onSubmit,
@@ -121,6 +123,7 @@ function CartPanel({
             {payingOnline ? t('payment.starting') : t('payment.pay_online')}
           </button>
         )}
+        {paymentNotice && <p role="status" className="mt-2 text-xs text-muted-foreground">{paymentNotice}</p>}
         {context?.capabilities.request_bill_enabled && order && !order.billed && (
           <button
             className="mt-2 w-full rounded-md border py-2 text-sm font-medium disabled:opacity-50"

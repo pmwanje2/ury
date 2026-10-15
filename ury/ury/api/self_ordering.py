@@ -29,7 +29,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import add_to_date, now_datetime
+from frappe.utils import add_to_date, flt, now_datetime
 
 from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
@@ -866,29 +866,49 @@ def create_payment_request(session):
             or invoice.get("grand_total")
         )
 
+        # Money already received on this gateway counts against the total.
+        # A paid guest never gets a checkout link again; if the order grew,
+        # only the remainder is requested (several Paid requests then sum to
+        # the one Phone row, as SiteOps PAY-007/PAY-008 accept).
+        request_filters = {
+            "reference_doctype": "POS Invoice",
+            "reference_name": invoice.name,
+            "payment_gateway_account": gateway_account.name,
+            "docstatus": 1,
+        }
+        paid_requests = frappe.get_all(
+            "Payment Request",
+            filters={**request_filters, "status": ["in", ["Paid", "Partially Paid"]]},
+            fields=["name", "currency", "grand_total", "outstanding_amount"],
+            order_by="creation desc",
+        )
+        paid_amount = flt(sum(flt(p.grand_total) - flt(p.outstanding_amount) for p in paid_requests))
+        remaining_amount = flt(flt(outstanding_amount) - paid_amount, invoice.precision("grand_total"))
+        if paid_requests and remaining_amount <= 0:
+            return {
+                "payment_request": paid_requests[0].name,
+                "amount": paid_amount,
+                "currency": paid_requests[0].currency,
+                "payment_url": None,
+                "status": "Paid",
+                "paid_amount": paid_amount,
+                "remaining_amount": 0,
+            }
+
         # Re-tap: return the request already open for this exact amount.
         existing = frappe.db.get_value(
             "Payment Request",
             {
-                "reference_doctype": "POS Invoice",
-                "reference_name": invoice.name,
-                "payment_gateway_account": gateway_account.name,
-                "grand_total": outstanding_amount,
-                "docstatus": 1,
-                "status": ["not in", ["Cancelled", "Failed"]],
+                **request_filters,
+                "grand_total": remaining_amount,
+                "status": ["not in", ["Paid", "Partially Paid", "Cancelled", "Failed"]],
             },
             "name",
             order_by="creation desc",
         )
         if existing:
             pr = frappe.get_doc("Payment Request", existing)
-            return {
-                "payment_request": pr.name,
-                "amount": pr.grand_total,
-                "currency": pr.currency,
-                "payment_url": _payment_url(pr),
-                "status": pr.status,
-            }
+            return _payment_request_response(pr, _payment_url(pr), paid_amount)
 
         phone_payment = next(
             (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
@@ -902,6 +922,17 @@ def create_payment_request(session):
         phone_payment.amount = outstanding_amount
         invoice.save(ignore_permissions=True)
 
+        # The stored Phone row stays the full total. ERPNext sizes a POS
+        # Invoice request from that row, so after a payment it is given an
+        # unsaved copy whose row holds only the server-derived remainder.
+        request_args = {}
+        if paid_amount:
+            ref_doc = frappe.get_doc("POS Invoice", invoice.name)
+            for payment in ref_doc.payments:
+                if payment.mode_of_payment == mode_of_payment:
+                    payment.amount = remaining_amount
+            request_args["ref_doc"] = ref_doc
+
         # make_payment_request() derives its own amount from the reference
         # doc server-side (get_amount()) — the client never supplies one.
         # Configuration is refused above; any error here is real and is not
@@ -914,15 +945,22 @@ def create_payment_request(session):
             payment_gateway_account=gateway_account.name,
             mode_of_payment=mode_of_payment,
             return_doc=1,
+            **request_args,
         )
         payment_url = _payment_url(pr)
 
+    return _payment_request_response(pr, payment_url, paid_amount)
+
+
+def _payment_request_response(pr, payment_url, paid_amount):
     return {
         "payment_request": pr.name,
         "amount": pr.grand_total,
         "currency": pr.currency,
         "payment_url": payment_url,
         "status": pr.status,
+        "paid_amount": paid_amount,
+        "remaining_amount": pr.grand_total,
     }
 
 
@@ -942,7 +980,7 @@ def get_payment_status(session):
         )
         payment_url = (
             _payment_url(frappe.get_doc("Payment Request", pr.name))
-            if pr and pr.status not in ("Paid", "Cancelled", "Failed")
+            if pr and pr.status not in ("Paid", "Partially Paid", "Cancelled", "Failed")
             else None
         )
 

@@ -14,6 +14,7 @@ import {
   type OrderingContext,
   type PaymentRequestResult,
 } from '../lib/api'
+import { paymentOutcome } from '../lib/payment-outcome'
 import { t } from '../i18n'
 import { useGuestLanguage } from '../components/LanguageSwitcher'
 
@@ -102,6 +103,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   useGuestLanguage()
   const assistanceInFlight = useRef(false)
   const [paymentRequest, setPaymentRequest] = useState<PaymentRequestResult | null>(null)
+  const [paymentNotice, setPaymentNotice] = useState<string | null>(null)
   const [payingOnline, setPayingOnline] = useState(false)
 
   const loadOrder = useCallback(async (session: string) => {
@@ -182,6 +184,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setBillRequested(false)
     setAssistanceStatus(null)
     setPaymentRequest(null)
+    setPaymentNotice(null)
     setPayingOnline(false)
     setSubmitting(false)
     setShownError(null)
@@ -265,8 +268,10 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     try {
       const result = await createPaymentRequest(context.session)
       setPaymentRequest(result)
-      if (result.payment_url) {
-        window.location.href = result.payment_url
+      const outcome = paymentOutcome(result)
+      setPaymentNotice(outcome.notice ? t(outcome.notice.key, outcome.notice.params) : null)
+      if (outcome.redirect) {
+        window.location.href = outcome.redirect
       }
     } catch (err) {
       // Includes the graceful "online payment isn't set up yet" case from
@@ -302,6 +307,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     assistanceMessage,
     handleRequestAssistance,
     paymentRequest,
+    paymentNotice,
     payingOnline,
     addToCart,
     decrementCart,
