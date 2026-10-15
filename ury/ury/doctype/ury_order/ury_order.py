@@ -918,6 +918,9 @@ def _authorize_captain_transfer(invoice):
 
 
 def _captain_transfer_refusal(pos_invoice_doc, pos_profile_doc, user):
+    if user == pos_invoice_doc.waiter:
+        return _("The selected user is already the captain of this order.")
+
     branch_rows = frappe.db.sql(
         """
             SELECT room
@@ -962,7 +965,7 @@ def _get_captain_transfer_candidates(pos_invoice_doc, pos_profile_doc):
     seen = set()
     for row in rows:
         user = row.get("user")
-        if not user or user == pos_invoice_doc.waiter or user in seen:
+        if not user or user in seen:
             continue
         seen.add(user)
         if _captain_transfer_refusal(pos_invoice_doc, pos_profile_doc, user):

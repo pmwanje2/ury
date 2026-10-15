@@ -50,6 +50,7 @@ export const useTableStore = defineStore("table", {
     showCaptain: false,
     cashier: null,
     captain: [],
+    captainRead: 0,
     previousWaiter: null,
     newCaptain: "",
     invoicePrinted: "",
@@ -349,35 +350,42 @@ export const useTableStore = defineStore("table", {
       }
     },
     async fetchCaptain() {
+      const read = ++this.captainRead;
       this.captain = [];
       this.invoiceNumber = null;
       try {
-        await this.invoiceNumberFetching();
-        if (!this.invoiceNumber) {
-          this.captain = [];
-          return;
-        }
+        const invoice = await this.invoiceNumberFetching();
+        if (read !== this.captainRead || !invoice?.name) return;
         const result = await this.call.get(
           "ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates",
-          { invoice: this.invoiceNumber },
+          { invoice: invoice.name },
         );
-        this.captain = result.message || [];
+        if (read === this.captainRead) this.captain = result.message || [];
       } catch (error) {
-        this.captain = [];
+        if (read === this.captainRead) this.captain = [];
         console.error(error);
       }
     },
     async toggleDropdown(index) {
       this.tableName = index;
+      this.captain = [];
+      ++this.captainRead;
       if (this.activeDropdown === index) {
         this.activeDropdown = null;
+        return;
       } else {
         this.activeDropdown = index;
       }
-      await this.invoiceNumberFetching();
+      if (this.auth.hasAccess) {
+        await this.fetchCaptain();
+      } else {
+        await this.invoiceNumberFetching();
+      }
     },
     hideDropdown() {
       this.activeDropdown = null;
+      this.captain = [];
+      ++this.captainRead;
     },
     selectTable(tables) {
       this.newTable = tables.name;
@@ -644,8 +652,10 @@ export const useTableStore = defineStore("table", {
           "ury.ury.doctype.ury_order.ury_order.get_order_invoice",
           tableInvoiceNumber
         );
+        if (this.tableName !== tableInvoiceNumber.table) return;
         this.invoiceNumber = result.message.name;
         this.currentCaptain = result.message.waiter;
+        return result.message;
       } catch (error) {
         console.error(error._server_messages);
       }
