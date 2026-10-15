@@ -1424,10 +1424,15 @@ def _kitchen_snapshot(items):
     return list(result.values())
 
 
-def _lock_hold_order(invoice):
+def _lock_hold_order(invoice, preserve_resolved=False):
     if invoice.name:
+        # get_order_invoice resolves these from the current native menu in
+        # memory. Reload the persisted held state, not stale menu settings.
+        resolved = {field: invoice.get(field) for field in ("selling_price_list", "taxes_and_charges")} if preserve_resolved else {}
         frappe.db.sql("SELECT name FROM `tabPOS Invoice` WHERE name=%s FOR UPDATE", (invoice.name,))
         invoice.reload()
+        for field, value in resolved.items():
+            setattr(invoice, field, value)
 
 
 @frappe.whitelist()
@@ -1529,7 +1534,7 @@ def sync_order(
 
     hold_enabled = cint(getattr(posprofile, "ury_enable_hold_fire", 0)) == 1
     if hold_enabled:
-        _lock_hold_order(invoice)
+        _lock_hold_order(invoice, preserve_resolved=True)
 
     if client_order_id and invoice.get("ury_client_order_id") not in (None, "", client_order_id):
         frappe.throw(_("Client order ID cannot be changed for an existing order."))
@@ -2258,7 +2263,7 @@ def make_invoice(
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
 
-    _lock_hold_order(invoice)
+    _lock_hold_order(invoice, preserve_resolved=True)
     settlement_invoices = [invoice]
     if invoice.custom_merged_pos_invoice:
         linked = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
