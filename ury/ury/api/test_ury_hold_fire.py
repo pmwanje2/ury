@@ -22,6 +22,7 @@ class HoldFireTests(OrderingCases, TestCase):
         self.pos_profile.get = lambda key, default=None: getattr(self.pos_profile, key, default)
         self.pos_profile.ury_enable_hold_fire = 1
         self.invoice.docstatus = 0
+        self.invoice.custom_merged_pos_invoice = None
         self.invoice.modified = "2026-10-16 12:00:00"
         self.invoice.get.side_effect = lambda key, default=None: getattr(self.invoice, key, default)
         self.invoice.as_dict.side_effect = lambda: {"name": self.invoice.name, "items": [vars(row).copy() for row in self.invoice.items]}
@@ -186,6 +187,21 @@ class HoldFireTests(OrderingCases, TestCase):
             self.order.make_invoice("Walk-in", [], "untrusted", "POS A", "untrusted", invoice=self.invoice.name)
         self.invoice.save.assert_not_called()
         self.invoice.submit.assert_not_called()
+
+    def test_settlement_refuses_held_lines_on_the_native_linked_bill(self):
+        self.row("sent", held=0)
+        self.invoice.custom_merged_pos_invoice = "LINKED"
+        linked = MagicMock()
+        linked.name = "LINKED"
+        linked.restaurant_table = None
+        linked.items = [Row(ury_held=1)]
+        original = self.framework.get_doc.side_effect
+        self.framework.get_doc.side_effect = lambda dt, name=None: linked if dt == "POS Invoice" and name == "LINKED" else original(dt, name)
+        with self.assertRaisesRegex(ValueError, "URY_HELD_NOT_FIRED"):
+            self.order.make_invoice("Walk-in", [], "untrusted", "POS A", "untrusted", invoice=self.invoice.name)
+        self.invoice.save.assert_not_called()
+        linked.save.assert_not_called()
+        linked.submit.assert_not_called()
 
     def test_split_copy_preserves_hold_flag(self):
         row = self.row()
