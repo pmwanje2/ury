@@ -261,6 +261,27 @@ class TestGuestKOTNotes(OrderingCases, TestCase):
 
 
 class TestStaffKOTNotes(OrderingCases, TestCase):
+    def test_whole_order_void_preserves_variant_notes_quantities_and_original_tickets(self):
+        self.seed("no onions", 2)
+        self.seed("extra chilli")
+        for row in self.invoice.items:
+            row.get = lambda key, default=None, row=row: getattr(row, key, default)
+        self.historical_tickets = {
+            "KOT-PLAIN": SimpleNamespace(name="KOT-PLAIN", kot_items=[SimpleNamespace(item="Fish", comments="no onions")], save=MagicMock()),
+            "KOT-HOT": SimpleNamespace(name="KOT-HOT", kot_items=[SimpleNamespace(item="Fish", comments="extra chilli")], save=MagicMock()),
+        }
+        self.framework.db.get_list.return_value = [SimpleNamespace(name=name) for name in self.historical_tickets]
+
+        self.order.cancel_kot(self.invoice.name)
+
+        self.assertEqual(len(self.tickets), 1)
+        ticket = self.tickets[0]
+        self.assertEqual(set(ticket.original_kot.split(",")), {"KOT-PLAIN", "KOT-HOT"})
+        self.assertEqual(ticket.type, "Cancelled")
+        self.assertEqual([(row.quantity, row.cancelled_qty, row.comments) for row in ticket.kot_items],
+                         [(2, 2, "no onions"), (1, 1, "extra chilli")])
+        self.assertEqual([ticket.docstatus for ticket in self.historical_tickets.values()], [2, 2])
+
     def test_staff_sync_preserves_existing_note_in_the_kot_baseline(self):
         self.seed("no onions")
         with patch.object(self.order, "kot_execute", wraps=self.kot.kot_execute) as execute:
