@@ -1,5 +1,8 @@
 # P2: guest Phone Payment Request (disposable integration proof)
 
+Review fix (idempotent re-tap, unwrapped errors, row gateway):
+[review-fix/README.md](review-fix/README.md).
+
 Scope: [tracker #3712](https://github.com/Maximus-Tech-Enterprise-Apps/maximus-siteops/issues/3712),
 item P2; approved [Gap #3445 section 6.2](https://github.com/Maximus-Tech-Enterprise-Apps/maximus-siteops/issues/3445).
 Public AGPL URY fork only. No production deployment, merchant credentials, real SMS,
@@ -159,7 +162,7 @@ otherwise the server rounded/grand total. The positive-outstanding test checks
   needs separate native permissions/UX qualification. No permission was expanded.
 - PAY-007 rejection of an **unpaid** gateway tender is separate tracker P4;
   not implemented or claimed here. Split tender, post-request order changes,
-  repeated-click/rate-limit behavior, Flutterwave, live merchant checkout and
+  rate-limit behavior, Flutterwave, live merchant checkout and
   real funds/SMS remain outside this P2 proof.
 - [Opus verification-specialist review](verification.md): evidence-fed code
   review PASS, no blocking code issue. Independent command execution remains
