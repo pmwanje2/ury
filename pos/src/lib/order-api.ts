@@ -1,4 +1,4 @@
-import { call } from '@ury/core';
+import { call, isLinkDown } from '@ury/core';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 
 export interface POSInvoiceItem {
@@ -43,6 +43,7 @@ export interface POSInvoice {
   no_of_pax?: number;
   custom_comments?: string | null;
   modified?: string;
+  ury_client_order_id?: string | null;
 }
 
 export interface TableOrder {
@@ -61,6 +62,8 @@ export async function getTableOrder(table_no: string): Promise<TableOrder> {
     });
     return res as TableOrder;
   } catch (error) {
+    // An outage must not look like an empty table, or the cached open check is forgotten.
+    if (isLinkDown(error)) throw error;
     console.error('Error fetching table order:', error);
     return { message: null };
   }

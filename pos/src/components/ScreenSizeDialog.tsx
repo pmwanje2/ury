@@ -31,7 +31,7 @@ const ScreenSizeDialog = () => {
               This POS system is designed for desktop computers and tablets with larger screens.
             </p>
             <p className="text-sm">
-              Mobile support will be available in a future update. Please use a device with a screen width of 1024px or larger.
+              Mobile support will be available in a future update. Please use a device with a screen width of 320px or larger.
             </p>
           </div>
           
@@ -41,7 +41,7 @@ const ScreenSizeDialog = () => {
               Current screen width: <span className="font-semibold text-gray-800">{window.innerWidth}px</span>
             </p>
             <p className="text-sm text-gray-600">
-              Required: <span className="font-semibold text-gray-800">1024px or larger</span>
+              Required: <span className="font-semibold text-gray-800">320px or larger</span>
             </p>
           </div>
           

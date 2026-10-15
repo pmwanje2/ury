@@ -1,4 +1,5 @@
 import { db, auth, NETWORK_FAILURE_MARK } from './client';
+import { gatewayStatusOf } from '../gateway-status';
 import { clearAppStorage } from '../storage';
 
 type LoggedUserResponse = string | null;
@@ -32,6 +33,11 @@ export function isNetworkFailure(error: unknown): boolean {
   return failure.httpStatus === 0 && failure[NETWORK_FAILURE_MARK] === true;
 }
 
+// Transport failure or a gateway page (502/503/504/52x). 401/403/500 stay answers.
+export function isLinkDown(error: unknown): boolean {
+  return isNetworkFailure(error) || gatewayStatusOf(error) !== null;
+}
+
 export interface LoggedUserResult {
   user: LoggedUserResponse;
   networkFailure: boolean;
@@ -43,7 +49,7 @@ export const readLoggedUser = async (): Promise<LoggedUserResult> => {
     return { user: (response as LoggedUserResponse) || null, networkFailure: false };
   } catch (error) {
     console.error('Error getting logged user:', error);
-    return { user: null, networkFailure: isNetworkFailure(error) };
+    return { user: null, networkFailure: isLinkDown(error) };
   }
 };
 

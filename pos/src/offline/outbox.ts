@@ -1,4 +1,5 @@
 import { v4 as uuid } from 'uuid';
+import { forgetOpenTableCheck, readOpenTableCheck, rememberOpenTableCheck, type OpenTableCheck } from './open-table-checks';
 
 export interface OfflineProfile {
   name: string;
@@ -143,6 +144,46 @@ export class OfflineOutbox {
       await save(entry);
     });
   }
+  private async rememberPersistence(): Promise<void> {
+    if (this.persistent !== null) return;
+    try { this.persistent = await navigator.storage?.persist?.() || false; } catch { this.persistent = false; }
+  }
+  private async storeRound(entry: OfflineEntry, round: OfflineRound): Promise<OfflineEntry> {
+    entry.rounds.push(round);
+    await save(entry);
+    if (await this.tryPrint(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
+    return entry;
+  }
+  private round(items: OfflineRound['items'], expected: number, roundId?: string): OfflineRound {
+    return { items: structuredClone(items), round_id: roundId || uuid(), captured_at: new Date().toISOString(), expected_total: expected, offline_printed: 0 };
+  }
+  // One open check per table, same as the server. A caller-supplied client id
+  // keeps the total it was given (already cumulative). Auto-bind adds the new
+  // items onto the open check and does not mint another id.
+  private async appendToOpenTable(order: OfflineOrder, total: number, rows: OfflineEntry[], outage: string): Promise<OfflineEntry | undefined> {
+    if (!order.table) return undefined;
+    const local = rows.find((row) => row.order.table === order.table && row.state === 'pending' && row.next_round === 0 && !row.settlement);
+    if (local) {
+      await this.rememberPersistence();
+      const last = local.rounds[local.rounds.length - 1]?.expected_total ?? 0;
+      return this.storeRound(local, this.round(order.items, last + total));
+    }
+    const known = readOpenTableCheck(this.options.user.name, order.table);
+    if (!known || rows.some((row) => row.client_order_id === known.clientOrderId)) return undefined;
+    await this.rememberPersistence();
+    const adopted = structuredClone(order);
+    if (known.customer !== undefined) adopted.customer = known.customer;
+    if (known.orderType !== undefined) adopted.order_type = known.orderType;
+    if (known.noOfPax !== undefined) adopted.no_of_pax = known.noOfPax;
+    if (known.room !== undefined) adopted.room = known.room;
+    adopted.table = known.table;
+    const entry: OfflineEntry = {
+      owner: this.options.user.name, profile: this.options.profile.name, client_order_id: known.clientOrderId,
+      outage_id: outage, order: adopted, rounds: [], state: 'pending', next_round: 0, phase: 'order',
+      ...(known.invoice ? { server_invoice: known.invoice } : {}),
+    };
+    return this.storeRound(entry, this.round(order.items, (known.grandTotal ?? 0) + total));
+  }
   async capture(order: OfflineOrder, total: number, clientId?: string,
     reserved?: { clientOrderId: string; roundId: string }): Promise<OfflineEntry> {
     this.allowed();
@@ -160,20 +201,19 @@ export class OfflineOutbox {
         const same = rows.find((row) => row.client_order_id === reserved.clientOrderId);
         if (same) return same;
       }
+      if (!clientId) {
+        const appended = await this.appendToOpenTable(order, total, rows, outage);
+        if (appended) return appended;
+      }
       const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;
       if (clientId && (!previous || previous.outage_id !== outage || previous.state !== 'pending' || previous.next_round)) throw new Error('Extra rounds require an order from this same outage.');
       if (previous && (['customer', 'table', 'room', 'order_type', 'no_of_pax'] as const).some((key) => previous.order[key] !== order[key])) throw new Error('Extra rounds cannot change the order context, customer or table offline.');
       if (previous?.settlement) throw new Error('This order already has a settlement.');
-      if (this.persistent === null) {
-        try { this.persistent = await navigator.storage?.persist?.() || false; } catch { this.persistent = false; }
-      }
-      const round: OfflineRound = { items: structuredClone(order.items), round_id: (!previous && reserved?.roundId) || uuid(), captured_at: new Date().toISOString(), expected_total: total, offline_printed: 0 };
+      await this.rememberPersistence();
+      const round = this.round(order.items, total, !previous ? reserved?.roundId : undefined);
       const entry: OfflineEntry = previous || { owner: this.options.user.name, profile: this.options.profile.name,
         client_order_id: reserved?.clientOrderId || uuid(), outage_id: outage, order: structuredClone(order), rounds: [], state: 'pending', next_round: 0, phase: 'order' };
-      entry.rounds.push(round);
-      await save(entry);
-      if (await this.tryPrint(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
-      return entry;
+      return this.storeRound(entry, round);
     });
   }
   async settle(clientId: string, tender: OfflineSettlement): Promise<OfflineEntry> {
@@ -186,6 +226,7 @@ export class OfflineOutbox {
       if (entry.settlement) throw new Error('This order already has a settlement.');
       if (!Number.isFinite(tender.amount) || tender.amount < entry.rounds[entry.rounds.length - 1].expected_total) throw new Error('Tender must cover the provisional bill total.');
       entry.settlement = { ...tender, reference: tender.reference?.trim() };
+      forgetOpenTableCheck(this.options.user.name, entry.order.table);
       if (tender.reference) entry.order.comments = [entry.order.comments, `Manual mobile-money reference: ${tender.reference.trim()}`].filter(Boolean).join('\n');
       await save(entry);
       entry.bill_printed = await this.tryPrint(entry, 'bill'); await save(entry);
@@ -249,6 +290,15 @@ export class OfflineOutbox {
     if (typeof body.message === 'object' && body.message && 'status' in body.message && body.message.status === 'Failure') throw new Refused('Server refused the order');
     return body.message;
   }
+  private rememberOpen(entry: OfflineEntry): void {
+    if (!entry.order.table) return;
+    const check: OpenTableCheck = {
+      table: entry.order.table, clientOrderId: entry.client_order_id, invoice: entry.server_invoice,
+      grandTotal: entry.rounds[entry.rounds.length - 1]?.expected_total, customer: entry.order.customer,
+      orderType: entry.order.order_type, noOfPax: entry.order.no_of_pax, room: entry.order.room,
+    };
+    rememberOpenTableCheck(entry.owner, check);
+  }
   async replay(): Promise<void> {
     if (!canCaptureOffline(this.options.profile, this.options.user)) return;
     if (this.replayPromise) return this.replayPromise;
@@ -271,7 +321,7 @@ export class OfflineOutbox {
               if (!reply || typeof reply !== 'object' || !('name' in reply) || typeof reply.name !== 'string') throw new NotReady('Order acknowledgement is incomplete');
               entry.server_invoice = reply.name; entry.next_round++; await save(entry);
             }
-            if (!entry.settlement) { await remove(entry); continue; }
+            if (!entry.settlement) { this.rememberOpen(entry); await remove(entry); continue; }
             if (entry.phase === 'order') { entry.phase = 'print'; await save(entry); }
             if (entry.phase === 'print') { await this.call('ury.ury.api.ury_print.qz_print_update', { invoice: entry.server_invoice }); entry.phase = 'settle'; await save(entry); }
             const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
@@ -279,6 +329,7 @@ export class OfflineOutbox {
               pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
               round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }], additionalDiscount: null });
             if (!reply || typeof reply !== 'object' || !('docstatus' in reply) || reply.docstatus !== 1) throw new NotReady('Settlement acknowledgement is incomplete');
+            forgetOpenTableCheck(entry.owner, entry.order.table);
             await remove(entry);
           } catch (error) {
             if (!(error instanceof Refused)) { this.reachable = false; break; }

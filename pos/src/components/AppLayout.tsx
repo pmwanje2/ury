@@ -8,7 +8,7 @@ const AppLayout = () => {
     <div className="flex flex-col h-screen bg-gray-100 font-inter">
       <Header />
       <OfflineBanner />
-      <div className="flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <Outlet />
       </div>
       <Footer />

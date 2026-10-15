@@ -3,6 +3,7 @@ import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
 import { OfflineOutbox, canCaptureOffline, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
 import { gatewayStatusOf } from './gateway';
+import { readOpenTableCheck } from './open-table-checks';
 
 const queues = new WeakMap<OfflineProfile, WeakMap<OfflineUser, OfflineOutbox>>();
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
@@ -52,18 +53,26 @@ export async function submitOrderOfflineAware<T>({ profile, user, order, total, 
     const entry = await queue.capture(order, total, clientOrderId);
     return { offline: true as const, entry };
   }
-  // The id goes out on the live write. A gateway timeout after the ERP saved
-  // the order is replayed with the same id, so the server returns that order.
+  // The id goes out on the live write. A free table keeps that id if the
+  // gateway drops the ack. An occupied table reuses its open check id.
   const queueable = canCaptureOffline(profile, user) && !order.invoice && !order.last_invoice;
-  const ids = queueable ? { clientOrderId: uuid(), roundId: uuid() } : undefined;
+  const occupied = queueable && order.table ? await openClientForTable(queue, user.name, order.table) : undefined;
+  const ids = queueable ? { clientOrderId: occupied || uuid(), roundId: uuid() } : undefined;
   try {
     return { offline: false as const, response: await onlineSubmit(ids) };
   } catch (error) {
     if (!ids || !gatewayStatusOf(error)) throw error;
     queue.reachable = false;
-    const entry = await queue.capture(order, total, undefined, ids);
+    const entry = occupied
+      ? await queue.capture(order, total)
+      : await queue.capture(order, total, undefined, ids);
     return { offline: true as const, entry };
   }
+}
+
+async function openClientForTable(queue: OfflineOutbox, user: string, table: string): Promise<string | undefined> {
+  const local = (await queue.list()).find((row) => row.order.table === table && row.state === 'pending' && row.next_round === 0 && !row.settlement);
+  return local?.client_order_id || readOpenTableCheck(user, table)?.clientOrderId;
 }
 
 function offlineCashOrMobile(mode: string, reference?: string): OfflineSettlement['kind'] | null {

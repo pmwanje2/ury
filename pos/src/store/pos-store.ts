@@ -8,6 +8,7 @@ import { getMenuCourses } from '../lib/menu-course-api';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
+import { forgetOpenTableCheck, rememberOpenTableCheck } from '../offline/open-table-checks';
 import { getPaymentModes } from '../lib/payment-api';
 
 // Constants
@@ -756,6 +757,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       set({ orderLoading: true, error: null });
       const response = await getTableOrder(table);
       const order = response.message;
+      const owner = getSessionUser() || (window as Window & { frappe?: { boot?: { user?: { name?: string } } } }).frappe?.boot?.user?.name;
       if (order && order.name && order.items && order.items.length > 0) {
         const orderItems: OrderItem[] = order.items.map(item => {
           const orderItem = {
@@ -780,6 +782,13 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           } as OrderItem;
         });
 
+        if (owner && order.ury_client_order_id) {
+          rememberOpenTableCheck(owner, {
+            table, clientOrderId: order.ury_client_order_id, invoice: order.name,
+            grandTotal: order.grand_total, customer: order.customer, orderType: order.order_type,
+            noOfPax: order.no_of_pax, room: order.custom_restaurant_room,
+          });
+        }
         set({
           tableOrder: response,
           activeOrders: orderItems,
@@ -796,6 +805,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           orderComment: order.custom_comments || '',
         });
       } else {
+        if (owner) forgetOpenTableCheck(owner, table);
         set({
           tableOrder: null,
           activeOrders: [],

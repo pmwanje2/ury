@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { Button, showToast } from '@ury/ui';
 import { clearCashierStorage } from '../offline/cashier';
-import { isNetworkFailure, getUserSessionStorageKey } from '@ury/core';
+import { isLinkDown, getUserSessionStorageKey } from '@ury/core';
 import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import {
   checkPOSOpening,
@@ -201,6 +201,8 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
             return;
           }
         } catch (error) {
+          // A gateway page is the link being down, not a pending checklist.
+          if (isLinkDown(error)) throw error;
           console.error('Failed to check opening checklist status:', error);
           // On error, block on the checklist for safety.
           setNeedsOpeningChecklist(true);
@@ -226,10 +228,10 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
       setIsLoading(false);
     } catch (error) {
       console.error('Failed to check POS opening status:', error);
-      // The opening read is not cached. Only "no HTTP answer" on an opted-in
-      // till that confirmed this same opening online in this tab may show the
-      // workspace. HTTP errors (401/403/...) and everything else block.
-      const confirmed = isNetworkFailure(error) && offlineCaptureEnabled(posProfile)
+      // The opening read is not cached. Only a down link (no HTTP answer, or
+      // 502/503/504/52x) on an opted-in till that confirmed this same opening
+      // online in this tab may show the workspace. 401/403/500 still block.
+      const confirmed = isLinkDown(error) && offlineCaptureEnabled(posProfile)
         ? readConfirmedOpening(confirmedOpeningKey)
         : null;
       if (confirmed && confirmed.pos_profile === posProfile.name && confirmed.company === posProfile.company) {
