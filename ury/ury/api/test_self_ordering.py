@@ -584,6 +584,8 @@ class TestCreatePaymentRequest(unittest.TestCase):
             return None
 
         self.enterContext(patch(f"{MOD}.frappe.db.get_value", side_effect=configured_gateway))
+        # No earlier Paid requests for these mocked invoices.
+        self.enterContext(patch(f"{MOD}.frappe.get_all", return_value=[]))
 
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
