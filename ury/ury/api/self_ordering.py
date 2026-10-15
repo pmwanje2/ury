@@ -818,7 +818,10 @@ def create_payment_request(session):
         frappe.throw(_("No active order for this session"), frappe.ValidationError)
 
     with _elevated():
-        from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
+        from erpnext.accounts.doctype.payment_request.payment_request import (
+            cancel_old_payment_requests,
+            make_payment_request,
+        )
 
         invoice = frappe.get_doc("POS Invoice", session.invoice)
         if invoice.docstatus == 1:
@@ -866,25 +869,25 @@ def create_payment_request(session):
             or invoice.get("grand_total")
         )
 
-        # Money already received on this gateway counts against the total.
-        # A paid guest never gets a checkout link again; if the order grew,
-        # only the remainder is requested (several Paid requests then sum to
-        # the one Phone row, as SiteOps PAY-007/PAY-008 accept).
+        # ERPNext validates each Phone row against ONE Paid request, not a
+        # sum of requests. After phone payment, any growth is paid at the
+        # counter; changing the default gateway must not open another link.
         request_filters = {
             "reference_doctype": "POS Invoice",
             "reference_name": invoice.name,
-            "payment_gateway_account": gateway_account.name,
             "docstatus": 1,
         }
         paid_requests = frappe.get_all(
             "Payment Request",
-            filters={**request_filters, "status": ["in", ["Paid", "Partially Paid"]]},
+            filters={**request_filters, "payment_channel": "Phone", "payment_request_type": "Inward",
+                "company": invoice.company, "currency": invoice.currency,
+                "status": ["in", ["Paid", "Partially Paid"]]},
             fields=["name", "currency", "grand_total", "outstanding_amount"],
             order_by="creation desc",
         )
         paid_amount = flt(sum(flt(p.grand_total) - flt(p.outstanding_amount) for p in paid_requests))
         remaining_amount = flt(flt(outstanding_amount) - paid_amount, invoice.precision("grand_total"))
-        if paid_requests and remaining_amount <= 0:
+        if paid_requests:
             return {
                 "payment_request": paid_requests[0].name,
                 "amount": paid_amount,
@@ -892,7 +895,7 @@ def create_payment_request(session):
                 "payment_url": None,
                 "status": "Paid",
                 "paid_amount": paid_amount,
-                "remaining_amount": 0,
+                "remaining_amount": max(0, remaining_amount),
             }
 
         # Re-tap: return the request already open for this exact amount.
@@ -900,6 +903,7 @@ def create_payment_request(session):
             "Payment Request",
             {
                 **request_filters,
+                "payment_gateway_account": gateway_account.name,
                 "grand_total": remaining_amount,
                 "status": ["not in", ["Paid", "Partially Paid", "Cancelled", "Failed"]],
             },
@@ -909,6 +913,10 @@ def create_payment_request(session):
         if existing:
             pr = frappe.get_doc("Payment Request", existing)
             return _payment_request_response(pr, _payment_url(pr), paid_amount)
+
+        # Cancel stale unpaid links before ERPNext derives the full amount.
+        # Native cancellation also checks in-flight Integration Requests.
+        cancel_old_payment_requests("POS Invoice", invoice.name)
 
         phone_payment = next(
             (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
@@ -922,17 +930,6 @@ def create_payment_request(session):
         phone_payment.amount = outstanding_amount
         invoice.save(ignore_permissions=True)
 
-        # The stored Phone row stays the full total. ERPNext sizes a POS
-        # Invoice request from that row, so after a payment it is given an
-        # unsaved copy whose row holds only the server-derived remainder.
-        request_args = {}
-        if paid_amount:
-            ref_doc = frappe.get_doc("POS Invoice", invoice.name)
-            for payment in ref_doc.payments:
-                if payment.mode_of_payment == mode_of_payment:
-                    payment.amount = remaining_amount
-            request_args["ref_doc"] = ref_doc
-
         # make_payment_request() derives its own amount from the reference
         # doc server-side (get_amount()) — the client never supplies one.
         # Configuration is refused above; any error here is real and is not
@@ -945,7 +942,6 @@ def create_payment_request(session):
             payment_gateway_account=gateway_account.name,
             mode_of_payment=mode_of_payment,
             return_doc=1,
-            **request_args,
         )
         payment_url = _payment_url(pr)
 

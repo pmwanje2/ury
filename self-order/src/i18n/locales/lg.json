@@ -45,7 +45,7 @@
     "starting": "Ntandika okusasula…",
     "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.",
     "paid": "Kusasuddwa ({{amount}} {{currency}}) — webale.",
-    "remaining": "Wasasula dda {{paid}} {{currency}}, kati osasula ebisigaddeyo {{remaining}} {{currency}}."
+    "remaining": "Osasudde {{paid}} {{currency}} ku ssimu. Nsaba sasula ebisigaddeyo {{remaining}} {{currency}} ku kaunta."
   },
   "bill": {
     "request": "Saba bili",

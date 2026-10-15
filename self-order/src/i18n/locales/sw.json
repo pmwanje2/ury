@@ -45,7 +45,7 @@
     "starting": "Inaanzisha malipo…",
     "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.",
     "paid": "Imelipwa ({{amount}} {{currency}}) — asante.",
-    "remaining": "Tayari umelipa {{paid}} {{currency}}, unalipa kiasi kilichobaki {{remaining}} {{currency}}."
+    "remaining": "Umelipa {{paid}} {{currency}} kwa simu. Tafadhali lipa kiasi kilichobaki {{remaining}} {{currency}} kwenye kaunta."
   },
   "bill": {
     "request": "Omba bili",

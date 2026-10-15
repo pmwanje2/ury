@@ -16,6 +16,15 @@ export interface PaymentOutcome {
  */
 export function paymentOutcome(result: PaymentRequestResult): PaymentOutcome {
   const currency = result.currency
+  if (result.paid_amount && (result.remaining_amount ?? 0) > 0) {
+    return {
+      redirect: null,
+      notice: {
+        key: 'payment.remaining',
+        params: { paid: result.paid_amount, remaining: result.remaining_amount!, currency },
+      },
+    }
+  }
   if (result.status === 'Paid' || result.status === 'Partially Paid') {
     return {
       redirect: null,
@@ -23,15 +32,6 @@ export function paymentOutcome(result: PaymentRequestResult): PaymentOutcome {
     }
   }
   const redirect = result.payment_url || null
-  if (result.paid_amount) {
-    return {
-      redirect,
-      notice: {
-        key: 'payment.remaining',
-        params: { paid: result.paid_amount, remaining: result.remaining_amount ?? result.amount, currency },
-      },
-    }
-  }
   if (!redirect) {
     return { redirect, notice: { key: 'payment.request_created', params: { amount: result.amount, currency } } }
   }
