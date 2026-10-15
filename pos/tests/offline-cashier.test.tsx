@@ -8,7 +8,7 @@ import { testLocks } from './offline-locks';
 import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import { useRootStore } from '../src/store/root-store';
-import { usePOSStore } from '../src/store/pos-store';
+import { usePOSStore, type OrderItem } from '../src/store/pos-store';
 import OrderPanel from '../src/components/OrderPanel';
 import { OfflineOutbox } from '../src/offline/outbox';
 import Header from '../src/components/Header';
@@ -160,7 +160,7 @@ test.each(['Take Away', 'Dine In'])('new offline %s orders use the profile nativ
 test.each(['Take Away', 'Dine In'])('anonymous offline %s without a profile customer is refused and retains its cart', async (orderType) => {
   usePOSStore.setState({ isInitializing: false, isUpdatingOrder: false, orderId: null, orderLoading: false,
     selectedOrderType: orderType, selectedCustomer: null, selectedTable: orderType === 'Dine In' ? 'Table 1' : null, selectedRoom: null,
-    paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T5', name: 'Tea', price: 100, quantity: 1 } as any] });
+    paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T5', name: 'Tea', price: 100, quantity: 1 } as unknown as OrderItem] });
   const post = vi.spyOn(call, 'post');
   const warning = vi.spyOn(showToast, 'error');
   await act(async () => root.render(<OrderPanel />));
