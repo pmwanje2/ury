@@ -1,3 +1,4 @@
+import { v4 as uuid } from 'uuid';
 import { getUserSessionStorageKey } from '../../../packages/core/src/storage';
 
 // Server-known open checks for this cashier. One row per table. Logout clears
@@ -14,6 +15,25 @@ export interface OpenTableCheck {
 }
 
 const PREFIX = 'ury_open_table_checks';
+// Per-tab session marker. Logout purges it (USER_SESSION_STORAGE_KEYS), so a
+// read issued before the purge, or for another user, cannot write the cache.
+const SESSION_PREFIX = 'ury_open_table_checks_session';
+
+export interface OpenTableRead { user: string; nonce: string }
+
+export function beginOpenTableRead(user: string | null | undefined): OpenTableRead | null {
+  const key = getUserSessionStorageKey(SESSION_PREFIX, user);
+  if (!key || !user || typeof sessionStorage === 'undefined') return null;
+  let nonce = sessionStorage.getItem(key);
+  if (!nonce) { nonce = uuid(); sessionStorage.setItem(key, nonce); }
+  return { user, nonce };
+}
+
+export function openTableReadCurrent(read: OpenTableRead | null, user: string | null | undefined): read is OpenTableRead {
+  if (!read || read.user !== user) return false;
+  const key = getUserSessionStorageKey(SESSION_PREFIX, user);
+  return !!key && sessionStorage.getItem(key) === read.nonce;
+}
 
 function keyFor(user: string): string | null {
   return getUserSessionStorageKey(PREFIX, user);

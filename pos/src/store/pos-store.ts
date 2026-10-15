@@ -8,7 +8,7 @@ import { getMenuCourses } from '../lib/menu-course-api';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
-import { forgetOpenTableCheck, rememberOpenTableCheck } from '../offline/open-table-checks';
+import { beginOpenTableRead, forgetOpenTableCheck, openTableReadCurrent, rememberOpenTableCheck } from '../offline/open-table-checks';
 import { getPaymentModes } from '../lib/payment-api';
 
 // Constants
@@ -252,6 +252,8 @@ export const generateCartHash = (state: Partial<POSState>) => {
 
 // Frappe injects the authenticated identity before this module is loaded.
 const orderTabsStorageKey = getOrderTabsStorageKey((window as any).frappe?.boot?.user?.name);
+const sessionOwner = () => getSessionUser()
+  || (window as Window & { frappe?: { boot?: { user?: { name?: string } } } }).frappe?.boot?.user?.name;
 
 const getInitialTabsState = () => {
   try {
@@ -755,9 +757,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   loadTableOrder: async (table: string) => {
     try {
       set({ orderLoading: true, error: null });
+      // Bind the cache write to the session that issued the read.
+      const read = beginOpenTableRead(sessionOwner());
       const response = await getTableOrder(table);
       const order = response.message;
-      const owner = getSessionUser() || (window as Window & { frappe?: { boot?: { user?: { name?: string } } } }).frappe?.boot?.user?.name;
+      const owner = openTableReadCurrent(read, sessionOwner()) ? read.user : null;
       if (order && order.name && order.items && order.items.length > 0) {
         const orderItems: OrderItem[] = order.items.map(item => {
           const orderItem = {
