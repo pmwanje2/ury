@@ -10,7 +10,7 @@ from erpnext.accounts.utils import create_payment_gateway_account
 from frappe.utils import add_to_date, now_datetime
 
 from ury.tests.offline_pos_utils import make_offline_pos, send_order, settle_order
-from ury.ury.api.self_ordering import create_payment_request
+from ury.ury.api.self_ordering import create_payment_request, get_payment_status
 
 
 class TestGuestPhonePayment(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestGuestPhonePayment(unittest.TestCase):
             "status": "Active", "opened_at": now_datetime(),
             "expires_at": add_to_date(now_datetime(), minutes=30),
             "invoice": self.invoice_name}).insert()
-        controller = SimpleNamespace(
+        self.controller = controller = SimpleNamespace(
             validate_transaction_currency=lambda currency: None,
             request_for_payment=lambda **kwargs: None,
             get_payment_url=lambda **kwargs: "https://psp.example.test/" + kwargs["reference_docname"],
@@ -121,6 +121,42 @@ class TestGuestPhonePayment(unittest.TestCase):
     def test_positive_invoice_outstanding_is_used_instead_of_total(self):
         frappe.db.set_value("POS Invoice", self.invoice_name, "outstanding_amount", 60)
         self.assertEqual(self.request()["amount"], 60)
+
+    def test_retap_returns_existing_request_and_url(self):
+        first = self.request()
+        second = self.request()
+        self.assertEqual((second["payment_request"], second["payment_url"], second["amount"]),
+            (first["payment_request"], first["payment_url"], 100))
+        self.assertEqual(frappe.db.count("Payment Request",
+            {"reference_name": self.invoice_name, "docstatus": 1}), 1)
+
+    def test_payment_status_returns_existing_payment_url(self):
+        first = self.request()
+        status = frappe.call(get_payment_status, session=self.token)
+        self.assertEqual(status.get("payment_url"), first["payment_url"])
+
+    def test_request_errors_are_not_reported_as_unconfigured(self):
+        def refuse(**kwargs):
+            frappe.throw("PAY-005: Configure native SMS Settings before requesting phone payment.")
+
+        self.controller.request_for_payment = refuse
+        with self.assertRaises(frappe.ValidationError) as raised:
+            create_payment_request(self.token)
+        self.assertIn("PAY-005", str(raised.exception))
+        self.assertNotIn("isn't set up", str(raised.exception))
+
+    def test_uses_phone_row_gateway_when_company_default_is_another_gateway(self):
+        frappe.set_user("Administrator")
+        frappe.get_doc({"doctype": "Payment Gateway", "gateway": "P2 Other"}).insert()
+        create_payment_gateway_account("P2 Other", payment_channel="Phone", company="URY")
+        other = frappe.get_doc("Payment Gateway Account",
+            {"payment_gateway": "P2 Other", "company": "URY"})
+        other.is_default = 1
+        other.save()
+        frappe.set_user("Guest")
+        result = self.request()
+        self.assertEqual(frappe.db.get_value("Payment Request", result["payment_request"],
+            "payment_gateway_account"), self.gateway.name)
 
     def test_no_shopping_cart_redirect_or_automatic_sales_invoice(self):
         # Characterize the v16 trap independently of the missing-row defect.

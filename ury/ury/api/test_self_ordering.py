@@ -737,24 +737,12 @@ class TestCreatePaymentRequest(unittest.TestCase):
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
     @patch(f"{MOD}.frappe.set_user")
-    def test_create_payment_request_reports_unconfigured_gateway_clearly(
+    def test_create_payment_request_does_not_relabel_request_errors(
         self, mock_set_user, mock_resolve_session, mock_get_doc, mock_log_error, mock_clear_messages, mock_make_pr,
     ):
-        """Live-testing finding (two parts): for dt="POS Invoice", ERPNext's
-        get_amount() only recognizes payments rows with type="Phone"
-        matching a configured gateway account -- with none configured (true
-        on a fresh bench with no real Payment Gateway Account set up),
-        make_payment_request() itself throws "Payment Entry is already
-        created", which reads as if the order were already paid. This must
-        surface as a clear "not configured yet" exception message (part 1
-        -- already covered before this fix). But live browser testing found
-        a SECOND leak: ERPNext's own frappe.throw() inside make_payment_request
-        queues that raw message via msgprint into frappe.local.message_log
-        BEFORE we ever catch the exception -- so even though the exception
-        object we raise is clean, the queued message survives and would
-        still reach the client's _server_messages array alongside it. Part
-        2: frappe.clear_messages() must be called to drop that queued
-        message before re-throwing."""
+        """Missing configuration is refused before ERPNext is called. Any
+        later Payment Request error is real and must not be relabelled as
+        "online payment isn't set up"."""
         session = MagicMock()
         session.invoice = "POS-INV-100"
         mock_resolve_session.return_value = session
@@ -773,13 +761,13 @@ class TestCreatePaymentRequest(unittest.TestCase):
             return invoice
 
         mock_get_doc.side_effect = get_doc_side_effect
-        mock_make_pr.side_effect = frappe.ValidationError("Payment Entry is already created")
+        mock_make_pr.side_effect = frappe.ValidationError("Payment Request is already created")
 
         with self.assertRaises(frappe.ValidationError) as ctx:
             create_payment_request("session-token")
-        self.assertIn("isn't set up", str(ctx.exception))
-        self.assertNotIn("already created", str(ctx.exception))
-        mock_clear_messages.assert_called_once()
+        self.assertIn("already created", str(ctx.exception))
+        self.assertNotIn("isn't set up", str(ctx.exception))
+        mock_clear_messages.assert_not_called()
 
 
 class TestSharePaymentLink(unittest.TestCase):
