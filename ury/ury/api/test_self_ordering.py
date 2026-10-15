@@ -569,6 +569,22 @@ class TestRequestBill(unittest.TestCase):
 
 
 class TestCreatePaymentRequest(unittest.TestCase):
+    def setUp(self):
+        pos_profile = MagicMock()
+        pos_profile.payments = [frappe._dict(mode_of_payment="P2 Phone")]
+        self.enterContext(patch(f"{MOD}.frappe.get_cached_doc", return_value=pos_profile))
+
+        def configured_gateway(doctype, *args, **kwargs):
+            if doctype == "Payment Gateway Account":
+                return frappe._dict(name="P2 Gateway", payment_account="P2 Bank")
+            if doctype == "Mode of Payment":
+                return "Phone"
+            if doctype == "Mode of Payment Account":
+                return "P2 Bank"
+            return None
+
+        self.enterContext(patch(f"{MOD}.frappe.db.get_value", side_effect=configured_gateway))
+
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
@@ -616,7 +632,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         # any client-supplied argument (there isn't one to trust).
         mock_make_pr.assert_called_once_with(
             dt="POS Invoice", dn="POS-INV-100", submit_doc=1, mute_email=1,
-            order_type="Shopping Cart", return_doc=1,
+            payment_gateway_account="P2 Gateway", mode_of_payment="P2 Phone", return_doc=1,
         )
         self.assertEqual(result["payment_request"], "PR-001")
         self.assertEqual(result["amount"], 1293.72)

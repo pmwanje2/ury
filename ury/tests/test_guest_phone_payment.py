@@ -104,7 +104,8 @@ class TestGuestPhonePayment(unittest.TestCase):
         frappe.set_user("Administrator")
         invoice = frappe.get_doc("POS Invoice", self.invoice_name)
         for row in invoice.payments:
-            row.amount = 100 if row.mode_of_payment == "P2 Phone" else 0
+            row.amount = 0
+        invoice.append("payments", {"mode_of_payment": "P2 Phone", "amount": 100})
         invoice.save()
         frappe.set_user("Guest")
         result = self.request()
