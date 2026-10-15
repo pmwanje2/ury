@@ -42,7 +42,7 @@ test at self-order/src/i18n/guest-language.test.mjs:383:11
   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
   + actual - expected
   ... Skipped lines
-  
+
     {
       actions: {
         new_order: 'New Order',
@@ -57,7 +57,7 @@ test at self-order/src/i18n/guest-language.test.mjs:383:11
       },
       status: {
         loading_menu: 'Loading menu…',
-  
+
       at TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/i18n/guest-language.test.mjs:386:12)
       at async Test.run (node:internal/test_runner/test:1409:7)
       at async TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/i18n/guest-language.test.mjs:383:3)
@@ -75,7 +75,7 @@ test at self-order/src/lib/payment-outcome.test.mjs:25:11
 ✖ paid phone plus growth sends the remaining balance to the counter, never checkout (1.825956ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
   + actual - expected
-  
+
     {
   +   key: 'payment.paid',
   -   key: 'payment.remaining',
@@ -86,7 +86,7 @@ test at self-order/src/lib/payment-outcome.test.mjs:25:11
   -     remaining: 3000
       }
     }
-  
+
       at TestContext.<anonymous> (file:///tmp/ury-p2b-QgHVRNG3/src/self-order/src/lib/payment-outcome.test.mjs:29:14)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1402:25)

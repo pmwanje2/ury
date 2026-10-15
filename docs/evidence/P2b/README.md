@@ -9,6 +9,24 @@ and Phone-plus-Cash settlement; `red-guest.log` records the wrong paid-growth
 notice. The GREEN commit is `9cf57dcf`: the focused payment suite passed 18/18,
 the API suite passed 34/34, and the guest suite passed 24/24.
 
+`green-final-pay007-010.log` repeats both Python modules in fresh processes
+against the final PAY-007..010 baseline: 34 + 18 tests pass, no skips.
+The native runners used Python 3.14.8. Guest tests used Node 24:
+
+```sh
+docker exec ury-p2b-qghvrng3-bench-1 bash -lc \
+  'cd /home/frappe/frappe-bench && env/bin/python /proof/run_tests.py ury.ury.api.test_self_ordering && env/bin/python /proof/run_tests.py ury.tests.test_guest_phone_payment'
+node --test self-order/src/lib/payment-outcome.test.mjs self-order/src/i18n/guest-language.test.mjs
+```
+
+The two modules run separately because their existing global `frappe.get_doc`
+mocks can contaminate the System Settings client cache when run together.
+The real singleton is warmed before each module; no tested payment behavior
+is mocked away. Salama's additional POS-only HTTP-command fence was disabled
+for the in-process Python harness, then re-enabled. It was enabled during
+browser order creation and the successful cashier settlement. The PAY scripts
+were never disabled.
+
 The isolated bench was `ury-p2b-qghvrng3`, served only on
 `127.0.0.1:19382`, with Frappe/ERPNext, `payments`, `ea_payments`, and URY.
 The PAY-007 through PAY-010 Server Scripts were installed from SiteOps main
@@ -17,6 +35,13 @@ read back with the body hash recorded in `platform-baseline-pay007-010.json`.
 The provider transport was the disposable local stub only; Payment Request
 documents, the Paid transition, ERPNext `check_phone_payments`, and the final
 invoice submit were real.
+
+The image is `frappe/erpnext:v16.50.0`, digest
+`sha256:0c84219faf21600d824408daf39c4bddd21d0ef4898a4aae36bf3cc57b95f5e2`:
+Frappe 16.52.0, ERPNext 16.50.0. `payments` is
+`cca07d9f9392e2ea0e521c5975151db9e4b6c321`; public `ea_payments` main is
+`e8d66497e1254b90d23fdf882e06efb124541f61`. This is lab qualification, not
+production deployment or a real PSP sandbox transaction.
 
 Browser proof:
 
@@ -29,6 +54,15 @@ Browser proof:
   is the submitted native invoice readback screen.
 - `native-before.json` / `native-after.json` record one Paid request,
   `docstatus=1`, `outstanding_amount=0`, and the two final payment rows.
+
+The abandoned local branch from the crashed agent targeted multiple Phone
+rows. It and its uncommitted implementation were discarded before starting
+this branch from the specified base. Its unique isolated bench was reused.
+
+Non-green auxiliary checks: CodeRabbit service access returned `Invalid
+organization`; `coderabbit-unavailable.log` is not a review pass. Ruff 0.16.4
+reports the same five existing findings in `self_ordering.py` on base and
+candidate; this change adds none. No lint rules or CI gates were relaxed.
 
 The bench was torn down after capture with `docker compose -p
 ury-p2b-qghvrng3 -f /tmp/ury-p2b-QgHVRNG3/compose.yaml down -v`.
