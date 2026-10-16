@@ -51,7 +51,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
   } = ordering
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
-  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   function handleReset() {
     if (window.confirm(t('confirm.new_order'))) {
