@@ -1108,6 +1108,8 @@ def read_signed_invoice_grant(token, purpose):
         padded = token + "=" * (-len(token) % 4)
         raw = base64.urlsafe_b64decode(padded.encode()).decode()
         body, signature = raw.rsplit("|", 1)
+        if len(signature) != 64 or any(character not in "0123456789abcdef" for character in signature):
+            raise ValueError("Invalid signature")
         profile_name, token_purpose, invoice_name, expiry_text = body.rsplit("|", 3)
         expiry_ts = int(expiry_text)
     except Exception:
