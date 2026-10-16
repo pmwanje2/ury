@@ -167,6 +167,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         session.device = None
         session.name = "SESSION-1"
         session.ordering_profile = "Profile A"
+        session.get.side_effect = lambda field, default=None: {"is_granted": int(bool(invoice))}.get(field, default)
         return session
 
     @patch(f"{MOD}.kot_execute")
@@ -197,11 +198,13 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         pos_profile_doc = MagicMock()
         pos_profile_doc.payments = [MagicMock(mode_of_payment="Cash")]
 
-        def get_doc_side_effect(doctype, name=None):
+        def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
             if doctype == "POS Profile":
                 return pos_profile_doc
+            if doctype == "POS Invoice":
+                return invoice
             return MagicMock()
 
         mock_get_doc.side_effect = get_doc_side_effect
@@ -273,16 +276,11 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
     @patch(f"{MOD}.frappe.db.set_value")
     @patch(f"{MOD}.frappe.db.get_value")
     @patch(f"{MOD}.frappe.set_user")
-    def test_add_customer_items_sets_restaurant_table_on_new_invoice(
+    def test_menu_only_table_session_cannot_create_an_invoice(
         self, mock_set_user, mock_db_get_value, mock_db_set_value, mock_db_exists, mock_resolve_session, mock_get_doc,
         mock_resolve_menu, mock_resolve_invoice, mock_price_items, mock_kot,
     ):
-        """_resolve_or_create_pos_invoice() never sets restaurant_table on a
-        brand-new invoice (that's the caller's job, same as sync_order()
-        does it). Without add_customer_items() also doing it, a SECOND call
-        for the same table can't find the first call's invoice by name --
-        confirmed live: two invoices got created for one table/session
-        instead of the running order being updated once."""
+        """G1: a table session without a staff grant is menu-only, even on a free table."""
         mock_db_exists.return_value = True
         session = self._session_doc(table="Table 9", invoice=None)
         mock_resolve_session.return_value = session
@@ -327,9 +325,10 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                                            "comment": "", "rate": 100, "price_list_rate": 100,
                                            "base_price_list_rate": 100, "cost_center": "CC"}]
 
-        add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
-
-        self.assertEqual(new_invoice.restaurant_table, "Table 9")
+        with self.assertRaises(frappe.PermissionError):
+            add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
+        mock_resolve_invoice.assert_not_called()
+        new_invoice.save.assert_not_called()
 
     @patch(f"{MOD}.kot_execute")
     @patch(f"{MOD}.price_items_for_invoice")
@@ -375,6 +374,8 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                 return profile
             if doctype == "POS Profile":
                 return pos_profile_doc
+            if doctype == "POS Invoice":
+                return invoice
             return MagicMock()
 
         mock_get_doc.side_effect = get_doc_side_effect
@@ -476,20 +477,17 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
             mock_get_all.return_value = [MagicMock(name="POS-INV-EXISTING")]
 
-            with self.assertRaises(frappe.ValidationError):
+            with self.assertRaises(frappe.PermissionError):
                 add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
 
-            mock_get_all.assert_called_once()
-            called_kwargs = mock_get_all.call_args.kwargs
-            self.assertEqual(called_kwargs["or_filters"]["restaurant_table"], "Table 7")
+            mock_get_all.assert_not_called()
 
     @patch(f"{MOD}.frappe.get_all")
     @patch(f"{MOD}._resolve_session")
-    def test_add_customer_items_first_call_proceeds_when_table_free(
+    def test_add_customer_items_first_call_requires_grant_even_when_table_free(
         self, mock_resolve_session, mock_get_all,
     ):
-        """Same disabled-flag config, but no pre-existing invoice on the
-        table — the new guard must not block a session's own first order."""
+        """A free table cannot turn a static QR into a bill grant."""
         session = self._session_doc(invoice=None)
         mock_resolve_session.return_value = session
         mock_get_all.return_value = []
@@ -504,13 +502,9 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
             mock_get_doc.return_value = profile
             mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}]}
 
-            # No exception from the pre-existing-order guard itself; it will
-            # fail further down on unmocked invoice-resolution internals,
-            # which is fine — this test only asserts the guard we're fixing
-            # doesn't false-positive on a session's own legitimate first order.
-            with self.assertRaises(Exception) as ctx:
+            with self.assertRaises(frappe.PermissionError):
                 add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
-            self.assertNotIn("already has an order in progress", str(ctx.exception))
+            mock_get_all.assert_not_called()
 
 
 class TestRequestBill(unittest.TestCase):
@@ -1026,6 +1020,10 @@ class TestQRPickup(unittest.TestCase):
         invoice.selling_price_list = "Standard Selling"
         invoice.grand_total = 100
         invoice.name = "POS-INV-PICKUP"
+        invoice.get.side_effect = lambda field: {
+            "name": invoice.name, "branch": invoice.branch, "pos_profile": "POS Profile A",
+            "docstatus": 0, "customer": invoice.customer, "is_return": 0,
+        }.get(field)
         mock_resolve_invoice.return_value = (invoice, None)
         mock_price_items.return_value = [{"item_code": "Biryani", "item_name": "Biryani", "qty": 1,
                                            "comment": "", "rate": 100, "price_list_rate": 100,

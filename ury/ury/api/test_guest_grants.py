@@ -5,8 +5,8 @@ No installed-site or transaction-contention claim is made by this unit suite.
 
 import base64
 import hashlib
-import json
 import inspect
+import json
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -16,7 +16,6 @@ from unittest.mock import MagicMock, patch
 import frappe
 
 from ury.ury.api import self_ordering as api
-
 
 MOD = "ury.ury.api.self_ordering"
 NOW = datetime(2026, 10, 16, 12)
@@ -81,7 +80,7 @@ class TestGuestGrants(unittest.TestCase):
         self.kot = self.enterContext(patch(f"{MOD}.kot_execute"))
         self.resolver = self.enterContext(patch(f"{MOD}._resolve_or_create_pos_invoice", return_value=(self.invoice, self.invoice.name)))
         self.cache = MagicMock()
-        self.cache.get_value.side_effect = self.cache_data.get
+        self.cache.get_value.side_effect = lambda key, **kw: self.cache_data.get(key)
         self.cache.set_value.side_effect = lambda key, value, **kw: self.cache_data.__setitem__(key, value)
         self.enterContext(patch.object(frappe, "cache", self.cache))
         self.enterContext(patch("ury.ury_pos.api.getBranch", return_value="Branch A"))
@@ -167,11 +166,12 @@ class TestGuestGrants(unittest.TestCase):
         raise AssertionError((doctype, filters, fieldname))
 
     def get_values(self, doctype, filters, fieldname="name", **kwargs):
-        self.assertEqual(doctype, "POS Invoice")
         self.assertTrue(kwargs.get("for_update"), "lifecycle membership must use a native current read")
         self.events.append(("members", filters))
         rows = []
-        for row in self.rows.values():
+        self.assertIn(doctype, ("POS Invoice", "URY Ordering Session"))
+        source = self.rows if doctype == "POS Invoice" else self.sessions
+        for row in source.values():
             matches = True
             for key, value in filters.items():
                 if isinstance(value, (list, tuple)):
