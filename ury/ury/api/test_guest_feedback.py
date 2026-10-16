@@ -300,6 +300,37 @@ class TestGuestFeedback(unittest.TestCase):
         self.assertEqual(self.submit(receipt_token=token, ratings=RATINGS), {"status": "Already Received"})
         self.feedback.insert.assert_called_once_with(ignore_permissions=True)
 
+    def test_native_snapshot_conflict_returns_safe_retry_not_database_details(self):
+        original_get_doc = self._get_doc
+
+        def conflict(doctype, name=None, **kwargs):
+            if doctype == "POS Invoice" and kwargs.get("for_update"):
+                raise frappe.QueryDeadlockError(1020, "PRIVATE native snapshot details")
+            return original_get_doc(doctype, name, **kwargs)
+
+        self.get_doc.side_effect = conflict
+        try:
+            self.submit(session="opaque-session", ratings=RATINGS)
+        except (frappe.ValidationError, frappe.QueryDeadlockError) as exc:
+            self.assertIsInstance(exc, frappe.ValidationError)
+            self.assertIn("URY_FEEDBACK_RETRY", str(exc))
+            self.assertNotIn("PRIVATE", str(exc))
+        else:
+            self.fail("A native snapshot conflict must refuse with a safe retry")
+        self.feedback.insert.assert_not_called()
+
+    def test_native_duplicate_lock_timeout_returns_safe_retry_without_guessing_success(self):
+        self.get_value.side_effect = frappe.QueryTimeoutError("PRIVATE native lock details")
+        try:
+            self.submit(session="opaque-session", ratings=RATINGS)
+        except (frappe.ValidationError, frappe.QueryTimeoutError) as exc:
+            self.assertIsInstance(exc, frappe.ValidationError)
+            self.assertIn("URY_FEEDBACK_RETRY", str(exc))
+            self.assertNotIn("PRIVATE", str(exc))
+        else:
+            self.fail("A native lock timeout must not guess successful feedback")
+        self.feedback.insert.assert_not_called()
+
     def test_rating_outside_1_to_5_is_refused(self):
         for rating in (0, 6, -1, True, 5.0, "2x", " 5 ", "", None):
             with self.subTest(rating=rating):
