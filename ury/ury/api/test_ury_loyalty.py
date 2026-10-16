@@ -331,3 +331,20 @@ class LoyaltyTests(OrderingCases, TestCase):
                                (dict(pos_profile="Other POS"), "URY_LOYALTY_PROFILE")):
             with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, refusal):
                 self.settle(**extra)
+
+    def test_native_consolidated_invoice_does_not_post_points_again(self):
+        self.settle()
+        entries = list(self.ledger)
+        namespace = self.native.copy()
+        namespace.update(SalesTaxWithholding=MagicMock(), update_linked_doc=MagicMock(),
+                         update_company_current_month_sales=MagicMock(), update_coupon_code_count=MagicMock())
+        submit = native_functions("accounts/doctype/sales_invoice/sales_invoice.py", namespace,
+                                  "SalesInvoice", {"on_submit"})["on_submit"]
+        consolidated = MagicMock(is_consolidated=1, is_return=0, is_pos=1, update_stock=0, coupon_code=None)
+        consolidated.loyalty_program = self.program.name
+        consolidated.loyalty_points = 10
+        consolidated.redeem_loyalty_points = 1
+        consolidated.make_loyalty_point_entry.side_effect = lambda: self.sales_native["make_loyalty_point_entry"](self.invoice)
+        consolidated.apply_loyalty_points.side_effect = lambda: self.sales_native["apply_loyalty_points"](self.invoice)
+        submit(consolidated)
+        self.assertEqual(self.ledger, entries)

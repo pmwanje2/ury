@@ -80,6 +80,7 @@ test('server quote, not browser conversion, reduces tender and sends points only
     loyalty_amount: 23, amount_due: 77 } });
   await act(async () => redeem()!.click());
   expect(document.body.textContent).toMatch(/77/);
+  expect(document.body.textContent).not.toContain('Adjustment');
   await enter('input[type="number"]:not([aria-label="Points to redeem"])', '77');
   expect(pay().disabled).toBe(false);
   await act(async () => pay().click());
