@@ -629,7 +629,10 @@ def _sanitize_invoice_for_customer(invoice):
                 "item_code": row.item_code,
                 "item_name": row.item_name,
                 "qty": row.qty,
-                "comment": row.comment,
+                # The native line comment has no guest provenance: it may
+                # contain internal kitchen/staff instructions. Keep it on the
+                # invoice/KOT, never in guest reads or append responses.
+                "comment": None,
                 "rate": row.rate,
                 "amount": row.amount,
             }
