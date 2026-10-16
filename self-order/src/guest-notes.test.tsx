@@ -325,6 +325,87 @@ it('keeps every layout menu and the authorized order usable while one optional a
   expect(host.textContent).not.toContain('Loading menu')
 })
 
+it('keeps nine stalled optional reads from blocking the required order or a guest action', async () => {
+  // Chrome allows six HTTP/1.1 connections per origin. Nine hung add-on reads must not take them before the order.
+  const browserHttp1Pool = 6
+  const quiet = { ...context, capabilities: { ...context.capabilities, item_notes_enabled: false } }
+  const served: CustomerOrder = {
+    invoice: 'TEST-1', billed: false, grand_total: 9000,
+    items: [{ item_code: 'Served', item_name: 'Served', qty: 1, rate: 9000, amount: 9000, comment: privateText }],
+  }
+  menu = Array.from({ length: 9 }, (_, index) => item(`Dish${index}`, 1000 + index))
+  serverOrder = served
+  let openSockets = 0
+  const socketWaiters: Array<() => void> = []
+  const releaseReads: Array<() => void> = []
+  let holdProducts = true
+  let productReads = 0
+  let orderReads = 0
+  async function limited<T>(run: () => Promise<T>): Promise<T> {
+    if (openSockets >= browserHttp1Pool) await new Promise<void>(resolve => { socketWaiters.push(resolve) })
+    openSockets += 1
+    try {
+      return await run()
+    } finally {
+      openSockets -= 1
+      socketWaiters.shift()?.()
+    }
+  }
+  vi.spyOn(call, 'get').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+    if (path.endsWith('get_customer_menu')) return { message: { items: menu, name: 'Nine item menu', modified_time: null } }
+    if (path.endsWith('get_customer_order')) {
+      orderReads += 1
+      return { message: serverOrder }
+    }
+    if (path.endsWith('get_customer_product')) {
+      productReads += 1
+      const itemCode = String(params?.item_code ?? '')
+      if (!holdProducts) return { message: { item_code: itemCode, variants: [], addons: [] } }
+      return await new Promise(resolve => {
+        releaseReads.push(() => resolve({ message: { item_code: itemCode, variants: [], addons: [] } }))
+      })
+    }
+    throw new Error(`Unexpected GET ${path}`)
+  }))
+  vi.spyOn(call, 'post').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+    if (!path.endsWith('add_customer_items')) throw new Error(`Unexpected POST ${path}`)
+    sent.push(JSON.parse(String(params?.items)))
+    return { message: serverOrder }
+  }))
+  try {
+    for (const [layoutName, Layout] of Object.entries({ Mobile, Tablet, Landscape, Portrait })) {
+      productReads = 0
+      orderReads = 0
+      sent = []
+      await reload(<Layout initialContext={quiet} />)
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      expect(orderReads, `${layoutName} sent the required order while ${productReads} optional reads were in flight`).toBe(1)
+      expect(productReads, `${layoutName} keeps optional hydration to one connection`).toBeLessThanOrEqual(1)
+      expect(openSockets, `${layoutName} leaves a connection free for a guest action`).toBeLessThanOrEqual(1)
+      expect(host.textContent, `${layoutName} must not stay on the global menu loader`).not.toContain('Loading menu')
+      expect(host.textContent, `${layoutName} shows the whole menu`).toContain('Dish8')
+      expect(host.textContent, `${layoutName} shows the current order`).toContain('Served')
+      expect(host.textContent, `${layoutName} still hides raw staff notes`).not.toContain(privateText)
+      expect(host.textContent, `${layoutName} does not invent prices`).not.toContain('Price unavailable')
+      expect(host.querySelector('button[aria-label^="Add add-on"]'), `${layoutName} cannot select an add-on that has not loaded`).toBeNull()
+      const pendingAddons = [...host.querySelectorAll('[role="status"]')].filter(node => node.textContent?.includes('Loading add-ons'))
+      expect(pendingAddons, `${layoutName} shows the single in-flight add-on read`).toHaveLength(1)
+      await click(dish('Dish0')!)
+      await expand()
+      await click(button('Place Order'))
+      expect(sent, `${layoutName} places the priced dish while the optional read is still stalled`).toEqual([[{ item: 'Dish0', qty: 1 }]])
+      expect(productReads, `${layoutName} does not fan out optional reads after the guest action`).toBeLessThanOrEqual(1)
+      expect(openSockets, `${layoutName} still has a free connection after the guest action`).toBeLessThanOrEqual(1)
+      expect(host.textContent).not.toContain('Loading menu')
+      expect(host.textContent).not.toContain(privateText)
+    }
+  } finally {
+    holdProducts = false
+    const pending = releaseReads.splice(0)
+    await act(async () => { pending.forEach(release => release()) })
+  }
+})
+
 it('removes unqualified comments from the real hook state on load and submit (not just hidden in CSS)', async () => {
   serverOrder = privateOrder
   const ctx = { ...context, capabilities: { ...context.capabilities, item_notes_enabled: false } }
