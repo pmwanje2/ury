@@ -41,6 +41,9 @@ let productFails: boolean
 let serverOrder: CustomerOrder
 let sent: { item: string; qty: number; comment?: string }[][]
 let hook: ReturnType<typeof useOrderingSession>
+let holdItem: string | null
+let heldProductReads: number
+let held: { resolve: () => void; reject: (reason?: unknown) => void }[]
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -50,6 +53,9 @@ beforeEach(async () => {
   menu = [item('Fish', 12000), item('Sauce', 2000), item('Closed', 1000, 1), item('Free', 0)]
   addons = [{ item_code: 'Sauce', item_name: 'Sauce', rate: null }]
   productFails = false
+  holdItem = null
+  heldProductReads = 0
+  held = []
   serverOrder = emptyOrder
   sent = []
   vi.spyOn(call, 'get').mockImplementation(async (path: string, params?: Record<string, unknown>) => {
@@ -57,6 +63,17 @@ beforeEach(async () => {
     if (path.endsWith('get_customer_order')) return { message: serverOrder }
     if (path.endsWith('get_customer_product')) {
       if (productFails) throw new Error('503 synthetic add-on outage')
+      const itemCode = String(params?.item_code ?? '')
+      if (holdItem && itemCode === holdItem && heldProductReads === 0) {
+        heldProductReads += 1
+        const snapshot = addons.map(row => ({ ...row }))
+        return await new Promise((resolve, reject) => {
+          held.push({
+            resolve: () => resolve({ message: { item_code: itemCode, variants: [], addons: snapshot } }),
+            reject,
+          })
+        })
+      }
       return { message: { item_code: params?.item_code, variants: [], addons: params?.item_code === 'Fish' ? addons : [] } }
     }
     throw new Error(`Unexpected GET ${path}`)
@@ -92,6 +109,11 @@ async function fish() {
   const found = [...host.querySelectorAll('button')].find(b => b.textContent?.trim().startsWith('Fish'))
   expect(found, 'real menu rendered').toBeDefined()
   await click(found!)
+}
+function dish(name: string): HTMLButtonElement | undefined {
+  return [...host.querySelectorAll('button')].find(b =>
+    b.textContent?.trim().startsWith(name) && !b.getAttribute('aria-label')?.startsWith('Add add-on'),
+  ) as HTMLButtonElement | undefined
 }
 async function note(text: string) {
   const el = host.querySelector('textarea')
@@ -236,6 +258,72 @@ for (const [layoutName, Layout] of Object.entries({ Mobile, Tablet, Landscape, P
     })
   }
 }
+
+it('keeps every layout menu and the authorized order usable while one optional add-on read stays pending', async () => {
+  const quiet = { ...context, capabilities: { ...context.capabilities, item_notes_enabled: false } }
+  const served: CustomerOrder = {
+    invoice: 'TEST-1', billed: false, grand_total: 9000,
+    items: [{ item_code: 'Served', item_name: 'Served', qty: 1, rate: 9000, amount: 9000, comment: privateText }],
+  }
+  for (const [layoutName, Layout] of Object.entries({ Mobile, Tablet, Landscape, Portrait })) {
+    holdItem = 'Fish'
+    heldProductReads = 0
+    held = []
+    addons = [{ item_code: 'Sauce', item_name: 'Sauce', rate: null }]
+    serverOrder = served
+    sent = []
+    await reload(<Layout initialContext={quiet} />)
+    expect(host.textContent, `${layoutName} must not stay on the global menu loader`).not.toContain('Loading menu')
+    const fishButton = dish('Fish')
+    expect(fishButton, `${layoutName} menu stays reachable`).toBeDefined()
+    expect(fishButton!.disabled, `${layoutName} priced dish stays orderable`).toBe(false)
+    expect(host.textContent, `${layoutName} loads the current order without waiting for add-ons`).toContain('Served')
+    expect(host.textContent, `${layoutName} still hides raw staff notes`).not.toContain(privateText)
+    expect(fishButton!.parentElement?.textContent, `${layoutName} shows the pending add-on on that dish`).toContain('Loading add-ons')
+    expect(fishButton!.parentElement?.querySelector('button[aria-label="Add add-on Sauce"]'), `${layoutName} cannot select an add-on whose price is still unknown`).toBeNull()
+    expect(dish('Sauce')!.disabled, `${layoutName} dishes without a pending add-on stay orderable`).toBe(false)
+    await click(dish('Free')!)
+    await expand()
+    await click(button('Place Order'))
+    expect(sent, `${layoutName} submits the priced dish and not the unresolved add-on`).toEqual([[{ item: 'Free', qty: 1 }]])
+    expect(host.textContent).not.toContain(privateText)
+    const pending = held[0]
+    expect(pending, `${layoutName} left the optional add-on read pending`).toBeDefined()
+    await act(async () => { pending.reject(new Error('503 synthetic add-on outage')) })
+    expect(host.textContent, `${layoutName} keeps the menu when the pending add-on fails`).not.toContain('Loading menu')
+    expect(dish('Fish'), `${layoutName} menu remains after add-on failure`).toBeDefined()
+    expect(host.textContent).toContain('Could not load add-ons.')
+    expect(button('Retry add-ons')).toBeDefined()
+    expect(host.querySelector('button[aria-label="Add add-on Sauce"]')).toBeNull()
+  }
+
+  holdItem = 'Fish'
+  heldProductReads = 0
+  held = []
+  addons = [{ item_code: 'Sauce', item_name: 'Sauce', rate: null }]
+  serverOrder = served
+  await reload(<Mobile initialContext={quiet} />)
+  expect(host.textContent, 'Mobile must not stay on the global menu loader').not.toContain('Loading menu')
+  expect(dish('Fish'), 'Mobile menu stays reachable before the session changes').toBeDefined()
+  addons = []
+  serverOrder = {
+    invoice: 'TEST-2', billed: false, grand_total: 1000,
+    items: [{ item_code: 'Second', item_name: 'Second', qty: 1, rate: 1000, amount: 1000, comment: privateText }],
+  }
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  await click(button('Start Over'))
+  expect(host.textContent, 'replacement session shows its own order').toContain('Second')
+  expect(host.textContent, 'replacement session drops the previous order').not.toContain('Served')
+  expect(host.querySelector('button[aria-label="Add add-on Sauce"]')).toBeNull()
+  const late = held[0]
+  expect(late, 'the replaced session still has its original add-on read in flight').toBeDefined()
+  await act(async () => { late.resolve() })
+  expect(host.querySelector('button[aria-label="Add add-on Sauce"]'), 'a late add-on result from the replaced session cannot be selected').toBeNull()
+  expect(host.textContent).toContain('Second')
+  expect(host.textContent).not.toContain('Served')
+  expect(host.textContent).not.toContain(privateText)
+  expect(host.textContent).not.toContain('Loading menu')
+})
 
 it('removes unqualified comments from the real hook state on load and submit (not just hidden in CSS)', async () => {
   serverOrder = privateOrder
