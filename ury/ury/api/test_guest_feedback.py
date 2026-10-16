@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import frappe
+from frappe.model.document import Document
 
 from ury.ury.api import self_ordering
 
@@ -87,6 +88,7 @@ class TestGuestFeedback(unittest.TestCase):
             customer_name="SECRET-CUSTOMER",
             contact_mobile="0700999888",
             contact_email="secret@example.test",
+            check_permission=MagicMock(),
         )
         self.template = SimpleNamespace(
             name="Guest Meal",
@@ -366,6 +368,31 @@ class TestGuestFeedback(unittest.TestCase):
         self.assertEqual(self.payloads[0]["document_name"], "SECRET-CUSTOMER")
         self.assertNotIn("SECRET-CUSTOMER", json.dumps(result))
 
+    def _invoice_permission_boundary(self, allowed):
+        self.invoice.has_permission = lambda permtype: permtype in allowed
+        self.invoice._handle_permission_failure = MagicMock(side_effect=frappe.PermissionError("Denied"))
+        self.invoice.check_permission = lambda permtype: Document.check_permission(self.invoice, permtype)
+
+    def test_receipt_helper_refuses_without_invoice_permission_before_profile_or_secret(self):
+        self._invoice_permission_boundary(set())
+        with self.assertRaises(frappe.PermissionError):
+            self.api.feedback_receipt_link("POS-1")
+        self.get_all.assert_not_called()
+        self.secret.assert_not_called()
+        self.user.assert_not_called()
+
+    def test_receipt_helper_does_not_treat_invoice_read_as_print_authority(self):
+        self._invoice_permission_boundary({"read"})
+        with self.assertRaises(frappe.PermissionError):
+            self.api.feedback_receipt_link("POS-1")
+        self.secret.assert_not_called()
+
+    def test_receipt_helper_accepts_native_print_authority_without_read(self):
+        self._invoice_permission_boundary({"print"})
+        token = self.api.feedback_receipt_link("POS-1")
+        self.assertEqual(self.api.read_signed_invoice_grant(token, "feedback"), ("Profile A", "POS-1"))
+        self.user.assert_not_called()
+
     def test_forged_expired_or_bill_grant_is_refused(self):
         expiry = _epoch(FIXED_NOW) + 3600
         valid = _expected_grant("Profile A", "feedback", "POS-1", expiry)
@@ -507,6 +534,7 @@ class TestInvoiceGrant(unittest.TestCase):
         invoice = SimpleNamespace(
             name="POS-1", branch="Salama", pos_profile="Salama Till",
             docstatus=0, invoice_printed=0, is_return=0,
+            check_permission=MagicMock(),
         )
         profile = SimpleNamespace(name="Profile A", branch="Salama", pos_profile="Salama Till", enable_feedback=1, enabled=1)
         self.enterContext(patch(f"{MOD}.frappe.get_doc", side_effect=lambda doctype, name=None: invoice if doctype == "POS Invoice" else profile))
@@ -535,6 +563,7 @@ class TestInvoiceGrant(unittest.TestCase):
         invoice = SimpleNamespace(
             name="POS-1", branch="Salama", pos_profile="Salama Till",
             docstatus=0, invoice_printed=0, is_return=0,
+            check_permission=MagicMock(),
         )
         self.enterContext(patch(f"{MOD}.frappe.get_doc", return_value=invoice))
         profiles = {"rows": ["Profile A", "Profile B"]}
