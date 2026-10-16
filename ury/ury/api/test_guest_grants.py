@@ -52,6 +52,7 @@ class TestGuestGrants(unittest.TestCase):
         self.rows = {}
         self.cache_data = {}
         self.commits = []
+        self.rollbacks = []
         self.profile = frappe._dict(
             name="Guest Profile", enabled=1, branch="Branch A", pos_profile="Till A",
             restaurant="Restaurant A", enable_qr_table_ordering=1, enable_guest_assistant=0,
@@ -68,6 +69,7 @@ class TestGuestGrants(unittest.TestCase):
         self.enterContext(patch(f"{MOD}.frappe.db.set_value", side_effect=self.set_value))
         self.enterContext(patch(f"{MOD}.frappe.db.commit", side_effect=lambda: self.events.append("COMMIT")))
         self.enterContext(patch(f"{MOD}.frappe.db.after_commit.add", side_effect=self.commits.append))
+        self.enterContext(patch(f"{MOD}.frappe.db.after_rollback.add", side_effect=self.rollbacks.append))
         self.enterContext(patch(f"{MOD}.frappe.set_user", side_effect=self.set_user))
         self.enterContext(patch(f"{MOD}.now_datetime", return_value=NOW))
         self.enterContext(patch(f"{MOD}._", side_effect=lambda value: value))
@@ -82,6 +84,7 @@ class TestGuestGrants(unittest.TestCase):
         self.cache = MagicMock()
         self.cache.get_value.side_effect = lambda key, **kw: self.cache_data.get(key)
         self.cache.set_value.side_effect = lambda key, value, **kw: self.cache_data.__setitem__(key, value)
+        self.cache.delete_value.side_effect = lambda key: self.cache_data.pop(key, None)
         self.enterContext(patch.object(frappe, "cache", self.cache))
         self.enterContext(patch("ury.ury_pos.api.getBranch", return_value="Branch A"))
         self.enterContext(patch("ury.ury.doctype.ury_order.ury_order.getRoom", return_value=[{"name": "Dining"}]))
@@ -159,6 +162,7 @@ class TestGuestGrants(unittest.TestCase):
         if doctype == "URY Menu":
             return "Menu A"
         if doctype in ("Payment Request", "URY Service Request"):
+            self.events.append(("payment-read" if doctype == "Payment Request" else "service-read", filters))
             return None
         if doctype == "POS Invoice":
             row = self.rows.get(filters)
@@ -362,7 +366,8 @@ class TestGuestGrants(unittest.TestCase):
         result = api.add_customer_items(token, items, request_id="round-1")
         self.assertEqual(result["items"][0]["rate"], 20)
         self.assertEqual(self.invoice.items[0].rate, 20)
-        self.assertFalse(self.cache_data, "cache success must not precede native transaction commit")
+        self.assertTrue(all("response" not in value for value in self.cache_data.values()),
+                        "cache success must not precede native transaction commit")
         for callback in self.commits:
             callback()
         self.assertEqual(api.add_customer_items(token, items, request_id="round-1"), result)
@@ -407,6 +412,108 @@ class TestGuestGrants(unittest.TestCase):
                 self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(value))
         self.profile.enable_guest_assistant = 0
         self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(result["assistant_token"]))
+
+    def test_pending_round_refuses_in_native_commit_to_cache_callback_window(self):
+        token, _session = self.grant()
+        api.add_customer_items(token, [{"item": "Tea", "qty": 1}], request_id="round-1")
+        # A waiting native request can acquire the invoice after SQL COMMIT,
+        # but before after_commit callbacks run. It must not append twice.
+        self.assert_denied(lambda: api.add_customer_items(token, [{"item": "Tea", "qty": 1}], request_id="round-1"))
+        self.assertEqual(len(self.invoice.items), 1)
+
+    def test_native_rollback_clears_pending_round_without_recording_success(self):
+        token, _session = self.grant()
+        api.add_customer_items(token, [{"item": "Tea", "qty": 1}], request_id="round-1")
+        self.assertTrue(self.rollbacks, "No native rollback cleanup for the in-flight request ID")
+        self.invoice.items.clear()  # Controlled DB boundary; actual rollback is a native-site gate.
+        for callback in self.rollbacks:
+            callback()
+        self.commits.clear()
+        result = api.add_customer_items(token, [{"item": "Tea", "qty": 1}], request_id="round-1")
+        self.assertEqual(len(result["items"]), 1)
+
+    def test_table_grant_expires_within_thirty_minutes_even_with_long_profile_timeout(self):
+        self.profile.session_idle_timeout_minutes = 600
+        _token, session = self.grant()
+        self.assertLessEqual(session.expires_at, NOW + timedelta(minutes=30))
+
+    def test_menu_only_session_never_looks_up_unbound_payment_links(self):
+        token, _session = api._open_session(self.profile, "QR Table", "Table 7")
+        self.assert_denied(lambda: api.share_payment_link(token, "nobody@example.test"))
+        self.assertFalse(any(event[0] == "payment-read" for event in self.events),
+                         "Menu-only QR queried a payment request without an authorized invoice")
+
+    def test_non_ascii_grant_fingerprint_refuses_as_permission_not_server_error(self):
+        token, session = self.grant()
+        session.grant_fingerprint = "é" * 64
+        try:
+            api.get_customer_order(token)
+        except frappe.PermissionError:
+            pass
+        except Exception as error:
+            self.fail(f"Malformed fingerprint escaped as {type(error).__name__}")
+        else:
+            self.fail("Malformed fingerprint was accepted")
+
+    def budget_runtime(self):
+        counters = {}
+        self.cache.make_key.side_effect = lambda value: value.encode()
+        self.cache.get.side_effect = counters.get
+        self.cache.setex.side_effect = lambda key, seconds, value: counters.__setitem__(key, value)
+        def increment(key, amount):
+            counters[key] = counters.get(key, 0) + amount
+            return counters[key]
+        self.cache.incrby.side_effect = increment
+        frappe.local.request = SimpleNamespace(method="POST")
+        frappe.local.request_ip = "203.0.113.1"
+        self.addCleanup(setattr, frappe.local, "request", None)
+        self.enterContext(patch("frappe.rate_limiter._", side_effect=lambda value: value))
+
+    def test_native_session_budget_cannot_be_reset_by_ip_or_form_key(self):
+        token, _session = self.grant()
+        self.profile.enable_guest_assistant = 1
+        self.budget_runtime()
+        for index in range(5):
+            frappe.local.request_ip = f"203.0.113.{index + 1}"
+            frappe.local.form_dict = frappe._dict(cmd=f"forged-{index}", _ury_guest_scope=f"forged-{index}")
+            original = frappe.local.form_dict
+            self.method("issue_guest_assistant_token")(token)
+            self.assertIs(frappe.local.form_dict, original)
+        frappe.local.request_ip = "203.0.113.99"
+        with self.assertRaises(frappe.RateLimitExceededError):
+            self.method("issue_guest_assistant_token")(token)
+
+    def test_native_table_budget_cannot_be_reset_by_staff_grant_reissue(self):
+        self.profile.enable_guest_assistant = 1
+        self.budget_runtime()
+        for index in range(5):
+            token, _session = self.grant()
+            frappe.local.request_ip = f"203.0.113.{index + 1}"
+            self.method("issue_guest_assistant_token")(token)
+        token, _session = self.grant()
+        frappe.local.request_ip = "203.0.113.99"
+        with self.assertRaises(frappe.RateLimitExceededError):
+            self.method("issue_guest_assistant_token")(token)
+
+    def test_assistant_turn_resolution_charges_native_budget_before_model(self):
+        token, _session = self.grant()
+        self.profile.enable_guest_assistant = 1
+        self.budget_runtime()
+        result = self.method("issue_guest_assistant_token")(token)
+        for _index in range(4):
+            self.method("resolve_guest_assistant_token")(result["assistant_token"])
+        with self.assertRaises(frappe.RateLimitExceededError):
+            self.method("resolve_guest_assistant_token")(result["assistant_token"])
+
+    def test_assistant_has_no_bill_or_general_erp_guest_resolver(self):
+        method = self.method("resolve_guest_assistant_token")
+        self.assertNotIn(method, frappe.guest_methods)
+        issue = self.method("issue_table_grant")
+        self.assertNotIn(issue, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[issue], ["POST"])
+        assistant = self.method("issue_guest_assistant_token")
+        self.assertIn(assistant, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[assistant], ["POST"])
 
 
 class TestGuestGrantSchema(unittest.TestCase):
