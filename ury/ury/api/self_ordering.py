@@ -1193,8 +1193,21 @@ def _feedback_parameters(ratings, expected):
     return [{"parameter": parameter, "rating": supplied[parameter]} for parameter in expected]
 
 
+def _limit_feedback_credential(kind, identity):
+    """Charge the native limiter using verified scope, independently of IP."""
+    if not frappe.request:
+        return
+    original_form = frappe.local.form_dict
+    try:
+        frappe.local.form_dict = frappe._dict(original_form)
+        frappe.form_dict._ury_feedback_budget = f"feedback:{kind}:{_hash_credential(identity)}"
+        rate_limit(key="_ury_feedback_budget", limit=5, seconds=600, ip_based=False)(lambda: None)()
+    finally:
+        frappe.local.form_dict = original_form
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
-@rate_limit(key="session", limit=5, seconds=600)
+@rate_limit(limit=5, seconds=600)
 def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None, template=None):
     """Store one Quality Feedback for this session bill, or for a signed receipt.
 
@@ -1209,9 +1222,11 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         invoice_name = resolved.invoice
         if not invoice_name:
             frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+        _limit_feedback_credential("session", resolved.name)
     elif receipt_token:
         profile_name, invoice_name = read_signed_invoice_grant(receipt_token, "feedback")
         profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
+        _limit_feedback_credential("receipt", json.dumps([profile_name, invoice_name]))
     else:
         frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
 
