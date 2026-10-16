@@ -122,6 +122,8 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   const [noteItem, setNoteItem] = useState<MenuItem | null>(null)
   const [noteText, setNoteText] = useState('')
   const addonGeneration = useRef(0)
+  const addonPending = useRef(0)
+  const addonTail = useRef<Promise<void>>(Promise.resolve())
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [shownError, setShownError] = useState<ShownError | null>(null)
@@ -156,6 +158,17 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     }
   }, [])
 
+  function enqueueAddonRead(generation: number, read: () => Promise<void>) {
+    const run = () => (addonGeneration.current === generation ? read() : undefined)
+    addonPending.current += 1
+    const started = addonPending.current === 1
+      ? new Promise<void>(resolve => { resolve(run()) })
+      : addonTail.current.then(run)
+    addonTail.current = started.then(() => undefined, () => undefined).then(() => {
+      addonPending.current -= 1
+    })
+  }
+
   const init = useCallback(async () => {
     const generation = ++addonGeneration.current
     setLoading(true)
@@ -185,13 +198,14 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setMenu(items)
       await loadOrder(ctx.session)
       setContext(ctx)
-      // One optional read at a time, and only after the order is on screen.
-      // A hung add-on must not fill the browser's HTTP/1.1 connection pool.
+      // One optional read at a time, including a visible retry, and only after
+      // the order is on screen. A hung add-on must not fill the HTTP/1.1 pool.
       if (ctx.capabilities.product_detail_enabled) {
         void (async () => {
           for (const item of items) {
             if (addonGeneration.current !== generation) return
-            await loadAddons(ctx.session, item, items, generation)
+            enqueueAddonRead(generation, () => loadAddons(ctx.session, item, items, generation))
+            await addonTail.current
           }
         })()
       }
@@ -275,7 +289,10 @@ export function useOrderingSession(initialContext?: OrderingContext) {
 
   function retryAddons(itemCode: string) {
     const item = menu.find(candidate => candidate.item === itemCode)
-    if (context && item) void loadAddons(context.session, item, menu, addonGeneration.current)
+    if (!context || !item) return
+    const generation = addonGeneration.current
+    setAddonsByItem(prev => ({ ...prev, [item.item]: { status: 'loading', items: [] } }))
+    enqueueAddonRead(generation, () => loadAddons(context.session, item, menu, generation))
   }
 
   function decrementCart(itemCode: string) {
