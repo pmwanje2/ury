@@ -1679,9 +1679,17 @@ def sync_order(
         frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
     if has_held and (captured_at is not None or cint(offline_printed)):
         frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
+    seen_line_names = set()
     for item in items:
-        old = previous_rows.get(item.get("name"))
-        if item.get("name") and not old:
+        name = item.get("name")
+        if name:
+            if append:
+                frappe.throw(_("Append rounds cannot specify a line name."))
+            if name in seen_line_names:
+                frappe.throw(_("Repeated line names are not allowed."))
+            seen_line_names.add(name)
+        old = previous_rows.get(name)
+        if name and not old:
             frappe.throw(_("The selected line is not on this order."))
         if old and not cint(getattr(old, "ury_held", 0)) and cint(item.get("ury_held")):
             frappe.throw(_("URY_ALREADY_SENT: Sent lines cannot be held again."))
