@@ -183,11 +183,18 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       const menuResponse = await getMenu(ctx.session)
       const items = menuResponse.items.filter((item) => !item.disabled)
       setMenu(items)
-      if (ctx.capabilities.product_detail_enabled) {
-        for (const item of items) void loadAddons(ctx.session, item, items, generation)
-      }
       await loadOrder(ctx.session)
       setContext(ctx)
+      // One optional read at a time, and only after the order is on screen.
+      // A hung add-on must not fill the browser's HTTP/1.1 connection pool.
+      if (ctx.capabilities.product_detail_enabled) {
+        void (async () => {
+          for (const item of items) {
+            if (addonGeneration.current !== generation) return
+            await loadAddons(ctx.session, item, items, generation)
+          }
+        })()
+      }
     } catch (err) {
       setShownError(serverTextOrCatalog(err, 'load_menu'))
     } finally {
