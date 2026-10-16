@@ -1582,6 +1582,44 @@ def sync_order(
             )
             return {"status": "Failure"}
 
+    past_item = []
+    for item in invoice.items:
+        past_item.append({
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "qty": item.qty,
+            "comments": item.comment or "",
+        })
+
+    # Legacy URY clients send JSON; the POS sends an already formatted list.
+    if isinstance(items, str):
+        items = json.loads(items)
+
+    if append and any(flt(item.get("qty")) <= 0 for item in items):
+        frappe.throw(_("Append rounds must contain only positive quantities."))
+
+    # Authorize before changing headers, payments or lines. Reducing a sent
+    # dish+note quantity emits a kitchen cancellation even if the dish total
+    # stays unchanged. Match the KOT identity and existing remove_items flag;
+    # additions and append-only rounds do not remove the sent baseline.
+    if not append and past_item and not bool(posprofile.remove_items):
+        requested_qty_by_variant = {}
+        for item in items:
+            key = (item.get("item"), item.get("comment") or "")
+            requested_qty_by_variant[key] = requested_qty_by_variant.get(key, 0) + flt(item.get("qty"))
+
+        previous_qty_by_variant = {}
+        for item in past_item:
+            key = (item["item_code"], item["comments"])
+            previous_qty_by_variant[key] = previous_qty_by_variant.get(key, 0) + flt(item["qty"])
+
+        for key, previous_qty in previous_qty_by_variant.items():
+            if requested_qty_by_variant.get(key, 0) < previous_qty:
+                frappe.throw(
+                    _("You are not permitted to reduce or remove items from this order."),
+                    frappe.PermissionError,
+                )
+
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
         invoice.ury_offline_captured_at = captured
@@ -1670,54 +1708,6 @@ def sync_order(
             dict(mode_of_payment=mode_of_payment, amount=invoice.grand_total),
         )
         invoice.invoice_created = 1
-
-    past_item = []
-    for item in invoice.items:
-        previous_item = {
-            "item_code": item.item_code,
-            "item_name": item.item_name,
-            "qty": item.qty,
-            "comments": "",
-        }
-        past_item.append(previous_item)
-        
-
-    # Conditional checking for 'items' type:
-    # - 'ury': JSON passed, hence using isinstance
-    # - 'ury_pos': Already formatted list, hence using else
-    if isinstance(items, str):
-        items = json.loads(items)
-
-    if append and any(flt(item.get("qty")) <= 0 for item in items):
-        frappe.throw(_("Append rounds must contain only positive quantities."))
-
-    # Reduction/removal permission: gate any decrease in a previously-sent
-    # item's quantity (including full removal) by POS Profile `remove_items`,
-    # matching Phase 2's can_reduce_items/can_remove_items derivation.
-    if not append and past_item and not bool(posprofile.remove_items):
-        requested_qty_by_item = {}
-        for d in items:
-            requested_qty_by_item[d.get("item")] = requested_qty_by_item.get(
-                d.get("item"), 0
-            ) + flt(d.get("qty"))
-
-        # Aggregate previous qty per item too: a restaurant order can carry
-        # the same item_code across multiple lines (different comments/
-        # courses), so comparing the requested aggregate against each
-        # previous LINE individually would let a real reduction slip through
-        # as long as no single previous line's qty dropped on its own.
-        previous_qty_by_item = {}
-        for prev in past_item:
-            previous_qty_by_item[prev["item_code"]] = previous_qty_by_item.get(
-                prev["item_code"], 0
-            ) + flt(prev["qty"])
-
-        for item_code, prev_qty in previous_qty_by_item.items():
-            if requested_qty_by_item.get(item_code, 0) < prev_qty:
-                frappe.throw(
-                    _("You are not permitted to reduce or remove items from this order."),
-                    frappe.PermissionError,
-                )
 
     if not append:
         invoice.items = []
@@ -2285,6 +2275,7 @@ def cancel_kot(invoice_id):
             "item_code": item.get("item", item.get("item_code")),
             "qty": item.qty,
             "item_name": item.item_name,
+            "comments": item.comment or "",
         }
         items.append(order_item)
 

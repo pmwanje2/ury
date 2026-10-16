@@ -40,7 +40,7 @@ from ury.ury.api.ury_kot_generate import kot_execute
 
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
-MAX_COMMENT_LEN = 200
+MAX_COMMENT_LEN = 140  # Data fields: POS Invoice Item.comment and URY KOT Items.comments.
 
 
 # ---------------------------------------------------------------------------
@@ -607,30 +607,18 @@ def add_customer_items(session, items):
         if session.device:
             invoice.custom_ordering_device = session.device
 
-        # Aggregated by item_code, same as current_items_for_kot below (built
-        # after the append). This symmetry matters: add_customer_items()
-        # always appends a NEW row rather than merging into an existing
-        # same-item_code row (simpler, safer for concurrent requests), so a
-        # table's invoice routinely ends up with multiple separate rows for
-        # the same item_code after a few rounds of ordering. kot_execute's
-        # compare_two_array() does an exact-match-then-delta comparison
-        # assuming ONE row per item_code on each side — if `previous_items`
-        # were left as raw per-row entries while `current_items` was
-        # aggregated (as an earlier version of this function had it), a
-        # repeat item_code's several qty=1 previous rows would never
-        # exact-match the aggregated current total, and
-        # compare_two_array's delta loop overwrites (not accumulates)
-        # across multiple matching previous rows -- producing a bogus
-        # cancellation KOT for an item nobody cancelled. Confirmed live via
-        # a real second-order-on-a-multi-round-invoice test.
+        # Aggregate both snapshots by item AND note. Guest rounds append
+        # rows, so the diff needs one total per variant on each side.
         past_qty_by_item = {}
         past_name_by_item = {}
         for row in invoice.items:
-            past_qty_by_item[row.item_code] = past_qty_by_item.get(row.item_code, 0) + row.qty
-            past_name_by_item[row.item_code] = row.item_name
+            key = (row.item_code, row.comment or "")
+            past_qty_by_item[key] = past_qty_by_item.get(key, 0) + row.qty
+            past_name_by_item[key] = row.item_name
         past_item = [
-            {"item_code": code, "item_name": past_name_by_item[code], "qty": past_qty_by_item[code], "comments": ""}
-            for code in past_qty_by_item
+            {"item_code": code, "item_name": past_name_by_item[(code, note)],
+             "qty": past_qty_by_item[(code, note)], "comments": note}
+            for code, note in past_qty_by_item
         ]
 
         menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
@@ -664,23 +652,18 @@ def add_customer_items(session, items):
             )
 
         try:
-            # kot_execute()'s diff (compare_two_array) expects `current_items`
-            # to be the COMPLETE desired per-item-code quantity state, one
-            # row per item_code — not just the newly-added rows. Passing
-            # clean_items alone here made every pre-existing item look
-            # "removed" (present in previous_items, absent from current),
-            # generating spurious cancellation KOTs for food nobody
-            # cancelled. Aggregate invoice.items (which now includes both
-            # the untouched old rows and the just-appended new ones) by
-            # item_code to build the correct current-state view.
+            # Pass the complete post-append state, preserving each note;
+            # passing only the new rows would cancel existing dishes.
             qty_by_item = {}
             name_by_item = {}
             for row in invoice.items:
-                qty_by_item[row.item_code] = qty_by_item.get(row.item_code, 0) + row.qty
-                name_by_item[row.item_code] = row.item_name
+                key = (row.item_code, row.comment or "")
+                qty_by_item[key] = qty_by_item.get(key, 0) + row.qty
+                name_by_item[key] = row.item_name
             current_items_for_kot = [
-                {"item_code": code, "item_name": name_by_item[code], "qty": qty_by_item[code], "comments": ""}
-                for code in qty_by_item
+                {"item_code": code, "item_name": name_by_item[(code, note)],
+                 "qty": qty_by_item[(code, note)], "comments": note}
+                for code, note in qty_by_item
             ]
             kot_execute(invoice.name, invoice.customer, invoice.restaurant_table, current_items_for_kot, past_item, None)
         except Exception as e:
