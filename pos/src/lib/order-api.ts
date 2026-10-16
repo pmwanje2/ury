@@ -2,6 +2,8 @@ import { call, isLinkDown } from '@ury/core';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 
 export interface POSInvoiceItem {
+  ury_held?: number;
+  custom_course?: string;
   name: string;
   item_code: string;
   item_name: string;
@@ -73,6 +75,8 @@ export interface SyncOrderRequest {
   table?: string;
   customer?: string;
   items: Array<{
+    name?: string;
+    ury_held?: number;
     item: string;
     item_name: string;
     rate: number;
@@ -107,6 +111,11 @@ export const syncOrder = async (data: SyncOrderRequest) => {
   await assertOfflineActionAllowed('online-order rounds, reductions or voids');
   return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
 };
+
+export async function fireItems(invoice: string, selection: { line?: string; course?: string; last_modified_time?: string }) {
+  await assertOfflineActionAllowed('hold/fire');
+  return call.post('ury.ury.doctype.ury_order.ury_order.fire_items', { invoice, ...selection }) as Promise<{ message: POSInvoice }>;
+}
 
 export interface SplitBillItemMove {
   name: string;
