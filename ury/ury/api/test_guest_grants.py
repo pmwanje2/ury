@@ -245,6 +245,38 @@ class TestGuestGrants(unittest.TestCase):
         self.assert_denied(lambda: api.get_customer_order(first))
         self.assertEqual(api.get_customer_order(second)["invoice"], "BILL-1")
 
+    def test_guest_bill_read_does_not_disclose_private_staff_line_notes(self):
+        self.invoice.items.append(frappe._dict(
+            item_code="Tea", item_name="Tea", qty=1,
+            comment="PRIVATE STAFF kitchen note", rate=20, amount=20,
+        ))
+        token, _session = self.grant()
+        result = api.get_customer_order(token)
+        self.assertIsNone(result["items"][0].get("comment"))
+        self.assertNotIn("PRIVATE STAFF", json.dumps(result))
+        self.assertEqual(result["items"][0]["item_name"], "Tea")
+        self.assertEqual(result["items"][0]["amount"], 20)
+        self.assertEqual(self.invoice.items[0].comment, "PRIVATE STAFF kitchen note")
+
+    def test_guest_append_response_hides_notes_without_removing_them_from_kitchen(self):
+        self.invoice.items.append(frappe._dict(
+            item_code="Tea", item_name="Tea", qty=1,
+            comment="PRIVATE STAFF kitchen note", rate=20, amount=20,
+        ))
+        self.pricing.return_value = [{
+            "item_code": "Tea", "item_name": "Tea", "qty": 1,
+            "comment": "guest no sugar", "rate": 20, "amount": 20,
+        }]
+        token, _session = self.grant()
+        result = api.add_customer_items(token, [{"item": "Tea", "qty": 1, "comment": "guest no sugar"}])
+        self.assertNotIn("PRIVATE STAFF", json.dumps(result))
+        self.assertTrue(all(row.get("comment") is None for row in result["items"]))
+        self.assertEqual([row.comment for row in self.invoice.items], ["PRIVATE STAFF kitchen note", "guest no sugar"])
+        self.assertEqual(self.kot.call_args.args[3], [
+            {"item_code": "Tea", "item_name": "Tea", "qty": 1, "comments": "PRIVATE STAFF kitchen note"},
+            {"item_code": "Tea", "item_name": "Tea", "qty": 1, "comments": "guest no sugar"},
+        ])
+
     def test_staff_authority_requires_native_write_branch_room_and_waiter(self):
         cases = ["guest", "write", "branch", "room", "waiter", "submitted", "return", "disabled"]
         for case in cases:
