@@ -175,6 +175,53 @@ class HoldFireTests(OrderingCases, TestCase):
         with self.assertRaisesRegex(ValueError, "URY_ALREADY_SENT"):
             self.sync([self.request("sent")])
 
+    def test_unsent_note_edit_does_not_need_kitchen_removal_permission(self):
+        self.pos_profile.remove_items = 0
+        self.row()
+        self.sync([self.request("held-1", note="extra chilli")])
+        self.assertEqual([(row.comment, row.ury_held) for row in self.invoice.items],
+                         [("extra chilli", 1)])
+        self.assertEqual(self.tickets, [])
+
+    def test_held_note_cannot_offset_a_sent_note_reduction(self):
+        self.pos_profile.remove_items = 0
+        self.row("sent", held=0, note="no onions")
+        self.row("held", note="extra chilli")
+        before = [(vars(row).copy()) for row in self.invoice.items]
+        with self.assertRaises(PermissionError):
+            self.sync([self.request("sent", held=0, note="extra chilli"),
+                       self.request("held", note="no onions")])
+        self.assertEqual([vars(row).copy() for row in self.invoice.items], before)
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
+
+    def test_comments_alias_cannot_bypass_sent_note_removal_permission(self):
+        self.pos_profile.remove_items = 0
+        self.row("sent", held=0, note="")
+        before = [vars(row).copy() for row in self.invoice.items]
+        request = self.request("sent", held=0, note="")
+        del request["comment"]
+        request["comments"] = "extra chilli"
+        with self.assertRaises(PermissionError):
+            self.sync([request])
+        self.assertEqual([vars(row).copy() for row in self.invoice.items], before)
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
+
+    def test_held_quantity_reduction_keeps_native_bill_removal_permission(self):
+        self.pos_profile.remove_items = 0
+        self.row(qty=2)
+        with self.assertRaises(PermissionError):
+            self.sync([self.request("held-1", qty=1)])
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
+
+    def test_repartitioning_same_sent_note_does_not_emit_a_kitchen_cancellation(self):
+        self.pos_profile.remove_items = 0
+        self.row("sent", held=0, qty=2)
+        self.sync([self.request("sent", held=0), self.request(held=0)])
+        self.assertEqual(self.tickets, [])
+
     def test_held_identity_survives_sync_and_unsent_removal_does_not_cancel_kitchen(self):
         self.row()
         self.row("sent", held=0, note="chilli", qty=2)
