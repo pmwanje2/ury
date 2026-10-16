@@ -1,0 +1,45 @@
+name: POS tests
+
+on:
+  pull_request:
+    branches:
+      - maximus/integration-hospitality-20261004a
+
+permissions:
+  contents: read
+
+jobs:
+  pos:
+    name: POS vitest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.20.0
+          cache: npm
+
+      # Root postinstall runs yarn for urypos and mosaic. The POS suite does
+      # not need those builds. Ignore scripts so install stays on the lockfile.
+      - name: Install from the lockfile
+        run: npm ci --ignore-scripts
+
+      - name: POS vitest
+        run: npm run test:pos
+
+      # Stdlib only. The other Python tests import frappe or IntegrationTestCase
+      # and need a bench. pytest is not pinned, so the site-less pytest module
+      # is not run here.
+      - name: Site-less Python unit tests
+        run: >-
+          python3 -m unittest
+          ury.tests.unit.test_offline_capture_fixture
+          ury.ury.api.test_ury_kot_notes
+          ury.ury.api.test_ury_hold_fire
+          ury.ury.api.test_ury_table_bookings
+          ury.ury_pos.test_floor_pin
