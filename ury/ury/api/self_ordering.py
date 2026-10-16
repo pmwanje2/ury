@@ -1223,7 +1223,7 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
 
     with _elevated():
-        invoice_doc = frappe.get_doc("POS Invoice", invoice_name)
+        invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
         if invoice_doc.branch != profile.branch or invoice_doc.pos_profile != profile.pos_profile:
             frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
         if not _invoice_accepts_feedback(invoice_doc):
@@ -1231,7 +1231,11 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         if not getattr(invoice_doc, "customer", None):
             frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
 
-        existing = frappe.db.exists("Quality Feedback", {FEEDBACK_BILL_FIELD: invoice_doc.name})
+        # Serialize this endpoint on the exact bill. The locking duplicate
+        # read also sees a winner committed after this transaction's snapshot.
+        existing = frappe.db.get_value(
+            "Quality Feedback", {FEEDBACK_BILL_FIELD: invoice_doc.name}, "name", for_update=True,
+        )
         if existing:
             return {"status": "Already Received"}
 
