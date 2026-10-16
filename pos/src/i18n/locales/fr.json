@@ -112,6 +112,12 @@
     "order_actions": "Actions sur la commande"
   },
   "payment": {
+    "loyalty": "Fidélité",
+    "points_available": "{{points}} points disponibles",
+    "points_to_redeem": "Points à utiliser",
+    "redeem": "Utiliser",
+    "loyalty_bill_only": "Les points s’appliquent à cette facture, pas à la facture associée.",
+    "loyalty_redeemed": "Fidélité appliquée : {{amount}}",
     "title": "Paiement",
     "apply_discount": "Appliquer une remise",
     "discount_placeholder": "Entrer %",

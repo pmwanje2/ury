@@ -46,6 +46,7 @@ interface RolePermission {
 // Full POS Profile response
 export interface PosProfileFull {
   ury_enable_hold_fire?: number;
+  ury_enable_loyalty?: number;
   name: string;
   owner: string;
   creation: string;

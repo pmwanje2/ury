@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Percent, Coins } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
@@ -25,6 +25,15 @@ interface PaymentDialogProps {
   discountPercentage?: number;
   discountAmount?: number;
   clientOrderId?: string | null;
+}
+
+interface LoyaltyQuote {
+  enabled: boolean;
+  balance: number;
+  loyalty_points: number;
+  loyalty_amount: number;
+  amount_due: number;
+  context: string;
 }
 
 const PaymentDialog: React.FC<PaymentDialogProps> = ({
@@ -60,6 +69,60 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
+  const [pointsInput, setPointsInput] = useState('');
+  const [loyaltyQuote, setLoyaltyQuote] = useState<LoyaltyQuote | null>(null);
+  const [loyaltyBusy, setLoyaltyBusy] = useState(false);
+  const loyaltyRequest = useRef(0);
+  const loyaltyEnabled = storePosProfile?.name === posProfile && storePosProfile.ury_enable_loyalty === 1
+    && !!storePosProfile.customer && !!customer.trim() && customer !== storePosProfile.customer
+    && !['walkin', 'walkincustomer'].includes(customer.toLowerCase().replace(/[- ]/g, ''))
+    && navigator.onLine !== false;
+  const loyaltyContext = JSON.stringify([invoice, customer, posProfile, appliedDiscount]);
+  const currentQuote = loyaltyEnabled && loyaltyQuote?.context === loyaltyContext ? loyaltyQuote : null;
+  const requestedPoints = Number(pointsInput || 0);
+  const unquotedPoints = !Number.isSafeInteger(requestedPoints) || requestedPoints < 0
+    || requestedPoints !== (currentQuote?.loyalty_points ?? 0);
+  const redeemedPoints = currentQuote?.enabled && !unquotedPoints ? currentQuote.loyalty_points : 0;
+
+  useEffect(() => {
+    const requests = loyaltyRequest;
+    const request = ++requests.current;
+    setLoyaltyQuote(null);
+    setPointsInput('');
+    setLoyaltyBusy(loyaltyEnabled);
+    if (loyaltyEnabled) {
+      call.get('ury.ury.doctype.ury_order.ury_order.get_loyalty_redemption', {
+        invoice, customer, pos_profile: posProfile, loyalty_points: 0,
+        additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
+      }).then(({ message }) => {
+        if (request === loyaltyRequest.current) setLoyaltyQuote({ ...message, context: loyaltyContext });
+      }).catch((err: unknown) => {
+        if (request === loyaltyRequest.current) setError(parseFrappeError(err, t('errors.payment_failed')));
+      }).finally(() => {
+        if (request === loyaltyRequest.current) setLoyaltyBusy(false);
+      });
+    }
+    return () => { ++requests.current; };
+  }, [loyaltyEnabled, loyaltyContext, invoice, customer, posProfile, appliedDiscount]);
+
+  const handleRedeem = async () => {
+    if (unquotedPoints && (!Number.isSafeInteger(requestedPoints) || requestedPoints < 0)) return;
+    const request = ++loyaltyRequest.current;
+    setLoyaltyBusy(true);
+    setError(null);
+    try {
+      await assertOfflineActionAllowed('loyalty redemption');
+      const { message } = await call.get('ury.ury.doctype.ury_order.ury_order.get_loyalty_redemption', {
+        invoice, customer, pos_profile: posProfile, loyalty_points: requestedPoints,
+        additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
+      });
+      if (request === loyaltyRequest.current) setLoyaltyQuote({ ...message, context: loyaltyContext });
+    } catch (err) {
+      if (request === loyaltyRequest.current) setError(parseFrappeError(err, t('errors.payment_failed')));
+    } finally {
+      if (request === loyaltyRequest.current) setLoyaltyBusy(false);
+    }
+  };
 
   useEffect(() => {
     fetchPaymentModes();
@@ -93,7 +156,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // If discount is applied, round up; else, round normally
-  const finalTotal = appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal);
+  const finalTotal = currentQuote?.enabled && !unquotedPoints ? currentQuote.amount_due
+    : appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal);
 
   // Calculate split payment total
   const payments = paymentModes
@@ -112,7 +176,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const canPayOnAccount = isShort && !!accountPaymentMode && storePosProfile?.name === posProfile
     && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
     && !!customer.trim() && customer !== storePosProfile.customer;
-  const paymentDisabled = isProcessing || ((payments.length === 0 || isShort) && !canPayOnAccount);
+  const fullyRedeemed = redeemedPoints > 0 && finalTotal === 0 && !!accountPaymentMode;
+  const paymentDisabled = isProcessing || loyaltyBusy || (loyaltyEnabled && unquotedPoints)
+    || ((payments.length === 0 || isShort) && !canPayOnAccount && !fullyRedeemed);
 
   const finalAdjustment = finalTotal - discountedTotal;
   const roundedFinalAdjustment = Math.round(finalAdjustment * 100) / 100;
@@ -156,7 +222,20 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     setError(null);
     try {
       await assertOfflineActionAllowed('online invoice settlement, card or pay-by-phone');
-      const settlement = await submitSettlementOfflineAware({
+      const onlineSettle = (ids?: { clientOrderId: string; roundId: string }) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
+        additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
+        cashier, customer, invoice, owner,
+        payments: payments.length === 0 && (canPayOnAccount || fullyRedeemed)
+          ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
+          : payments,
+        pos_profile: posProfile, table,
+        ...(redeemedPoints > 0 ? { loyalty_points: redeemedPoints } : {}),
+        ...(ids ? { client_order_id: ids.clientOrderId, round_id: ids.roundId } : {}),
+      });
+      // Points are never an offline cash payment, including a gateway outage
+      // after the online request. The native ledger must validate them now.
+      const settlement = redeemedPoints > 0 ? { offline: false, response: await onlineSettle() }
+        : await submitSettlementOfflineAware({
         profile: storePosProfile ?? { name: posProfile },
         user: user ?? { name: 'Guest', roles: [] },
         invoice, customer, table, cashier, owner, clientOrderId,
@@ -164,15 +243,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         due: finalTotal,
         modeOfPayment: payments.length === 1 ? payments[0].mode_of_payment : '',
         discount: appliedDiscount,
-        onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-          additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
-          cashier, customer, invoice, owner,
-          payments: payments.length === 0 && canPayOnAccount
-            ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
-            : payments,
-          pos_profile: posProfile, table,
-          ...(ids ? { client_order_id: ids.clientOrderId, round_id: ids.roundId } : {}),
-        }),
+        onlineSettle,
       });
       if (settlement.offline) {
         showToast.success(t('offline.saved'));
@@ -238,6 +309,26 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           )}
 
           {/* Payment Methods Section - Split Payment */}
+          {currentQuote?.enabled && (
+            <div className="space-y-3 mb-6">
+              <h3 className="text-lg font-semibold">{t('payment.loyalty')}</h3>
+              <p className="text-sm">{t('payment.points_available', { points: currentQuote.balance })}</p>
+              <p className="text-sm text-gray-600">{t('payment.loyalty_bill_only')}</p>
+              <div className="flex gap-2">
+                <Input type="number" min="0" step="1" max={currentQuote.balance}
+                  aria-label={t('payment.points_to_redeem')} value={pointsInput}
+                  onChange={e => { ++loyaltyRequest.current; setLoyaltyBusy(false); setPointsInput(e.target.value); }}
+                  disabled={isProcessing || loyaltyBusy} size="sm" className="flex-1" />
+                <Button onClick={handleRedeem} disabled={isProcessing || loyaltyBusy
+                  || !Number.isSafeInteger(requestedPoints) || requestedPoints < 0} size="sm">
+                  {t('payment.redeem')}
+                </Button>
+              </div>
+              {redeemedPoints > 0 && <p className="text-sm">{t('payment.loyalty_redeemed', {
+                amount: formatCurrency(currentQuote.loyalty_amount),
+              })}</p>}
+            </div>
+          )}
           <div className="space-y-4 mb-6">
             <h3 className="text-lg font-semibold">{t('payment.payment_methods')}</h3>
             <div className="grid grid-cols-1 gap-3">
@@ -319,7 +410,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 </div>
               )}
               {/* Adjustment (if any) */}
-              {showFinalAdjustment && (
+              {showFinalAdjustment && !redeemedPoints && (
                 <div className="flex justify-between text-blue-600">
                   <span>{t('payment.adjustment')}</span>
                   <span>{roundedFinalAdjustment > 0 ? '+' : ''}{formatCurrency(roundedFinalAdjustment)}</span>
