@@ -2283,7 +2283,9 @@ def get_loyalty_redemption(invoice, customer, pos_profile, loyalty_points=0, add
     Points apply to this bill only, not its merged partner. Native totals
     include both bills' remaining tender; neither document is saved here.
     """
-    from erpnext.accounts.doctype.loyalty_program.loyalty_program import get_loyalty_program_details_with_points
+    from erpnext.accounts.doctype.loyalty_program.loyalty_program import (
+        get_loyalty_program_details_with_points,
+    )
 
     points = _redemption_points(loyalty_points)
     invoice = frappe.get_doc("POS Invoice", invoice)

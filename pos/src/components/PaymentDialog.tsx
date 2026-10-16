@@ -85,7 +85,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const redeemedPoints = currentQuote?.enabled && !unquotedPoints ? currentQuote.loyalty_points : 0;
 
   useEffect(() => {
-    const request = ++loyaltyRequest.current;
+    const requests = loyaltyRequest;
+    const request = ++requests.current;
     setLoyaltyQuote(null);
     setPointsInput('');
     setLoyaltyBusy(loyaltyEnabled);
@@ -101,7 +102,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         if (request === loyaltyRequest.current) setLoyaltyBusy(false);
       });
     }
-    return () => { ++loyaltyRequest.current; };
+    return () => { ++requests.current; };
   }, [loyaltyEnabled, loyaltyContext, invoice, customer, posProfile, appliedDiscount]);
 
   const handleRedeem = async () => {
@@ -409,7 +410,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 </div>
               )}
               {/* Adjustment (if any) */}
-              {showFinalAdjustment && (
+              {showFinalAdjustment && !redeemedPoints && (
                 <div className="flex justify-between text-blue-600">
                   <span>{t('payment.adjustment')}</span>
                   <span>{roundedFinalAdjustment > 0 ? '+' : ''}{formatCurrency(roundedFinalAdjustment)}</span>
