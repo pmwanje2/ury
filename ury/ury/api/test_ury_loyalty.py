@@ -12,6 +12,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
 import erpnext
+import frappe as native_frappe
 from frappe import _dict
 from frappe.utils import add_days, cint, flt, getdate
 
@@ -38,6 +39,9 @@ def native_functions(relative, namespace, class_name=None, names=None):
 
 class LoyaltyTests(OrderingCases, TestCase):
     def setUp(self):
+        # Rounding configuration is a DB read, even for native flt(20, 2).
+        # Keep native rounding; double only that settings lookup.
+        self.enterContext(patch.object(native_frappe, "get_system_settings", return_value="Banker's Rounding"))
         super().setUp()
         self.framework.session.user = "cashier@example.com"
         self.framework._dict = _dict

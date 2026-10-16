@@ -320,6 +320,13 @@ def get_custom_fields():
 				"insert_after": "restaurant_info",
 			},
 			{
+				"fieldname": "ury_enable_loyalty",
+				"fieldtype": "Check",
+				"label": "Enable Loyalty",
+				"default": "0",
+				"insert_after": "ury_enable_hold_fire",
+			},
+			{
 				"fieldname": "restaurant",
 				"fieldtype": "Link",
 				"insert_after": "restaurant_info",

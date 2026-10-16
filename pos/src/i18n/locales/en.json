@@ -112,6 +112,12 @@
     "order_actions": "Order actions"
   },
   "payment": {
+    "loyalty": "Loyalty",
+    "points_available": "{{points}} points available",
+    "points_to_redeem": "Points to redeem",
+    "redeem": "Redeem",
+    "loyalty_bill_only": "Points apply to this bill, not its merged partner.",
+    "loyalty_redeemed": "Loyalty applied: {{amount}}",
     "title": "Payment",
     "apply_discount": "Apply Discount",
     "discount_placeholder": "Enter %",

@@ -2220,6 +2220,94 @@ def _validate_additional_discount(additional_discount, pos_profile):
 
 
 # Method for URY POS
+def _redemption_points(value):
+    """Do not let Int-field coercion truncate or negate a redemption request."""
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool) or not str(value).isdecimal():
+        frappe.throw(_("URY_LOYALTY_POINTS: Enter a non-negative whole number of points."))
+    return int(value)
+
+
+def _loyalty_program_for_invoice(invoice, customer, pos_profile, points):
+    if invoice.pos_profile != pos_profile:
+        frappe.throw(_("URY_LOYALTY_PROFILE: Use the bill's POS Profile."))
+    if invoice.docstatus != 0:
+        frappe.throw(_("This order is no longer open."))
+    if not frappe.has_permission("POS Invoice", "read", doc=invoice) or not frappe.has_permission(
+        "POS Invoice", "submit", doc=invoice
+    ):
+        frappe.throw(_("Not permitted to settle this order."), frappe.PermissionError)
+    branch = getBranch()
+    if branch and invoice.branch != branch:
+        frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+    _enforce_order_access(invoice)
+    profile = frappe.get_doc("POS Profile", invoice.pos_profile)
+    if profile.get("ury_enable_loyalty") != 1 or profile.get("disabled"):
+        if points:
+            frappe.throw(_("URY_LOYALTY_DISABLED: Loyalty is disabled for this POS Profile."))
+        return None
+    if (
+        customer != invoice.customer or not customer or not customer.strip() or not profile.customer
+        or customer == profile.customer
+        or customer.lower().replace("-", "").replace(" ", "") in ("walkin", "walkincustomer")
+    ):
+        if points:
+            frappe.throw(_("URY_LOYALTY_CUSTOMER: Select the bill's named, enrolled customer."))
+        return None
+    program = frappe.db.get_value("Customer", customer, "loyalty_program")
+    if not program and points:
+        frappe.throw(_("URY_LOYALTY_CUSTOMER: Customer is not enrolled in a Loyalty Program."))
+    return program
+
+
+def _set_native_redemption(invoice, points=0, program=None):
+    # The native validator fills an EMPTY amount only. Never retain a stale
+    # draft amount/program/account, or accept those values from a browser.
+    invoice.redeem_loyalty_points = 0
+    invoice.loyalty_points = invoice.loyalty_amount = 0
+    invoice.loyalty_redemption_account = invoice.loyalty_redemption_cost_center = None
+    if points:
+        from erpnext.accounts.doctype.loyalty_program.loyalty_program import validate_loyalty_points
+
+        invoice.loyalty_program = program
+        invoice.redeem_loyalty_points = 1
+        validate_loyalty_points(invoice, points)
+        invoice.validate_loyalty_transaction()
+
+
+@frappe.whitelist()
+def get_loyalty_redemption(invoice, customer, pos_profile, loyalty_points=0, additionalDiscount=None):
+    """Read-only native balance/amount quote for one authorized existing bill.
+
+    Points apply to this bill only, not its merged partner. Native totals
+    include both bills' remaining tender; neither document is saved here.
+    """
+    from erpnext.accounts.doctype.loyalty_program.loyalty_program import get_loyalty_program_details_with_points
+
+    points = _redemption_points(loyalty_points)
+    invoice = frappe.get_doc("POS Invoice", invoice)
+    program = _loyalty_program_for_invoice(invoice, customer, pos_profile, points)
+    if not program:
+        return {"enabled": False}
+    details = get_loyalty_program_details_with_points(customer, program, company=invoice.company)
+    invoice.additional_discount_percentage = _validate_additional_discount(additionalDiscount, pos_profile)
+    invoice.calculate_taxes_and_totals()
+    invoice.set("payments", [])
+    _set_native_redemption(invoice, points, program)
+    invoice.calculate_taxes_and_totals()
+    amount_due = invoice.outstanding_amount
+    if invoice.custom_merged_pos_invoice:
+        linked = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
+        _loyalty_program_for_invoice(linked, linked.customer, linked.pos_profile, 0)
+        linked.set("payments", [])
+        _set_native_redemption(linked)
+        linked.calculate_taxes_and_totals()
+        amount_due += linked.outstanding_amount
+    return dict(enabled=True, balance=details.loyalty_points, loyalty_points=points,
+                loyalty_amount=invoice.loyalty_amount, amount_due=amount_due)
+
+
 @frappe.whitelist()
 def make_invoice(
     customer,
@@ -2232,6 +2320,7 @@ def make_invoice(
     invoice=None,
     client_order_id=None,
     round_id=None,
+    loyalty_points=0,
 ):
     client_order_id = _validate_client_order_id(client_order_id)
     if round_id is not None and not str(round_id).strip():
@@ -2261,6 +2350,14 @@ def make_invoice(
         settlement_invoices.append(linked)
     if any(cint(getattr(row, "ury_held", 0)) for bill in settlement_invoices for row in bill.items):
         frappe.throw(_("URY_HELD_NOT_FIRED: Fire or remove held items before settlement."))
+
+    points = _redemption_points(loyalty_points)
+    program = None
+    if points:
+        # Serialize this seam's redemptions for the customer, not just for a
+        # single bill; balance validation and native submit share the lock.
+        frappe.db.sql("SELECT name FROM `tabCustomer` WHERE name=%s FOR UPDATE", (invoice.customer,))
+        program = _loyalty_program_for_invoice(invoice, customer, pos_profile, points)
 
     if client_order_id and invoice.get("ury_client_order_id") not in (None, "", client_order_id):
         frappe.throw(_("Client order ID cannot be changed for an existing order."))
@@ -2294,13 +2391,18 @@ def make_invoice(
     invoice.calculate_taxes_and_totals()
 
     invoice.set("payments", [])
+    _set_native_redemption(invoice, points, program)
+    if points:
+        invoice.calculate_taxes_and_totals()
 
     if invoice.custom_merged_pos_invoice:
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
         target.cashier = frappe.session.user
+        _set_native_redemption(target)
+        target.set("payments", [])
         target.calculate_taxes_and_totals()
         
-        doc_req = invoice.rounded_total
+        doc_req = invoice.outstanding_amount if points else invoice.rounded_total
         target_req = target.rounded_total
         
         target.set("payments", [])
