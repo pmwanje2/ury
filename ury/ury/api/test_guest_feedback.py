@@ -108,6 +108,7 @@ class TestGuestFeedback(unittest.TestCase):
         self.resolve = self.enterContext(patch(f"{MOD}._resolve_session", return_value=self.session))
         self.get_doc = self.enterContext(patch(f"{MOD}.frappe.get_doc", side_effect=self._get_doc))
         self.exists = self.enterContext(patch(f"{MOD}.frappe.db.exists", side_effect=self._exists))
+        self.get_value = self.enterContext(patch(f"{MOD}.frappe.db.get_value", side_effect=self._get_value))
         self.get_all = self.enterContext(patch(f"{MOD}.frappe.get_all", side_effect=self._get_all))
         self.get_meta = self.enterContext(patch(f"{MOD}.frappe.get_meta", return_value=self.meta))
         self.user = self.enterContext(patch(f"{MOD}.frappe.set_user"))
@@ -115,7 +116,7 @@ class TestGuestFeedback(unittest.TestCase):
         self.now = self.enterContext(patch(f"{MOD}.now_datetime", return_value=FIXED_NOW))
         self.sql = self.enterContext(patch(f"{MOD}.frappe.db.sql", side_effect=AssertionError("guest feedback must not build SQL")))
 
-    def _get_doc(self, doctype, name=None):
+    def _get_doc(self, doctype, name=None, **kwargs):
         if isinstance(doctype, dict):
             self.payloads.append(doctype)
             return self.feedback
@@ -139,6 +140,11 @@ class TestGuestFeedback(unittest.TestCase):
         if doctype == "Quality Feedback" and self.duplicate:
             return "QA-FB-1"
         return None
+
+    def _get_value(self, doctype, filters, fieldname="name", **kwargs):
+        self.assertEqual(doctype, "Quality Feedback")
+        self.assertEqual(fieldname, "name")
+        return self._exists(doctype, filters)
 
     def _get_all(self, doctype, *args, **kwargs):
         self.assertNotEqual(doctype, "Quality Feedback")
@@ -259,6 +265,38 @@ class TestGuestFeedback(unittest.TestCase):
         self.assertEqual(self.submit(session="opaque-session", ratings=RATINGS), {"status": "Already Received"})
         self.feedback.insert.assert_not_called()
         self.assertNotIn("QA-FB-1", json.dumps(self.submit(session="opaque-session", ratings=RATINGS)))
+
+    def test_receipt_retry_sees_feedback_committed_while_waiting_for_invoice_lock(self):
+        # A consistent read can retain an old snapshot even after another
+        # transaction commits. Both invoice and duplicate reads must be current.
+        self.exists.side_effect = lambda *args, **kwargs: None
+        get_doc = self._get_doc
+
+        def after_winner_commit(doctype, name=None, **kwargs):
+            if doctype == "POS Invoice" and name == "POS-1" and kwargs.get("for_update"):
+                self.duplicate = True
+            return get_doc(doctype, name, **kwargs)
+
+        def current_feedback(doctype, filters, fieldname="name", **kwargs):
+            if kwargs.get("for_update"):
+                return self._get_value(doctype, filters, fieldname, **kwargs)
+            return None
+
+        self.get_doc.side_effect = after_winner_commit
+        self.get_value.side_effect = current_feedback
+        token = _expected_grant("Profile A", "feedback", "POS-1", _epoch(FIXED_NOW) + 60)
+        self.assertEqual(self.submit(receipt_token=token, ratings=RATINGS), {"status": "Already Received"})
+        self.feedback.insert.assert_not_called()
+
+    def test_receipt_retry_is_idempotent_despite_an_earlier_empty_snapshot(self):
+        token = _expected_grant("Profile A", "feedback", "POS-1", _epoch(FIXED_NOW) + 60)
+        self.feedback.insert.side_effect = lambda **kwargs: setattr(self, "duplicate", True)
+        self.exists.side_effect = lambda *args, **kwargs: None
+        get_value = self._get_value
+        self.get_value.side_effect = lambda *args, **kwargs: get_value(*args, **kwargs) if kwargs.get("for_update") else None
+        self.assertEqual(self.submit(receipt_token=token, ratings=RATINGS), {"status": "Received"})
+        self.assertEqual(self.submit(receipt_token=token, ratings=RATINGS), {"status": "Already Received"})
+        self.feedback.insert.assert_called_once_with(ignore_permissions=True)
 
     def test_rating_outside_1_to_5_is_refused(self):
         for rating in (0, 6, -1, True, 5.0, "2x", " 5 ", "", None):
