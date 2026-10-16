@@ -1657,6 +1657,66 @@ def sync_order(
             )
             return {"status": "Failure"}
 
+    past_item = []
+    previous_rows = {getattr(row, "name", None): row for row in invoice.items}
+    for item in invoice.items:
+        past_item.append({
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "qty": item.qty,
+            "comments": item.comment or "",
+            "ury_held": cint(getattr(item, "ury_held", 0)),
+        })
+
+    # Legacy URY clients send JSON; the POS sends an already formatted list.
+    if isinstance(items, str):
+        items = json.loads(items)
+    # Use the same note for authorization, native pricing/storage and KOTs.
+    items = [{**item, "comment": item.get("comment") or item.get("comments") or ""} for item in items]
+
+    has_held = any(cint(item.get("ury_held")) for item in items)
+    if has_held and not hold_enabled:
+        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
+    if has_held and (captured_at is not None or cint(offline_printed)):
+        frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
+    for item in items:
+        old = previous_rows.get(item.get("name"))
+        if item.get("name") and not old:
+            frappe.throw(_("The selected line is not on this order."))
+        if old and not cint(getattr(old, "ury_held", 0)) and cint(item.get("ury_held")):
+            frappe.throw(_("URY_ALREADY_SENT: Sent lines cannot be held again."))
+        if old and cint(getattr(old, "ury_held", 0)) and not cint(item.get("ury_held")):
+            frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Use Fire to send held lines."))
+    held_names = {name for name, row in previous_rows.items() if cint(getattr(row, "ury_held", 0))}
+    requested_names = {item.get("name") for item in items}
+    if not append and held_names - requested_names and any(not item.get("name") for item in items):
+        frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Reload the held order before editing."))
+
+    if append and any(flt(item.get("qty")) <= 0 for item in items):
+        frappe.throw(_("Append rounds must contain only positive quantities."))
+
+    # Authorize before changing headers, payments or lines. Reducing a sent
+    # dish+note quantity emits a kitchen cancellation even if the dish total
+    # stays unchanged. Match the KOT identity and existing remove_items flag;
+    # additions and append-only rounds do not remove the sent baseline.
+    if not append and past_item and not bool(posprofile.remove_items):
+        requested_qty_by_item = {}
+        for item in items:
+            code = item.get("item")
+            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
+        previous_qty_by_item = {}
+        for item in past_item:
+            code = item["item_code"]
+            previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
+        sent_before = {(row["item_code"], row["comments"]): row["qty"] for row in _kitchen_snapshot(past_item)}
+        sent_after = {(row["item_code"], row["comments"]): row["qty"] for row in _kitchen_snapshot(items)}
+        if (any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items())
+                or any(sent_after.get(key, 0) < qty for key, qty in sent_before.items())):
+            frappe.throw(
+                _("You are not permitted to reduce or remove items from this order."),
+                frappe.PermissionError,
+            )
+
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
         invoice.ury_offline_captured_at = captured
@@ -1745,76 +1805,6 @@ def sync_order(
             dict(mode_of_payment=mode_of_payment, amount=invoice.grand_total),
         )
         invoice.invoice_created = 1
-
-    past_item = []
-    previous_rows = {getattr(row, "name", None): row for row in invoice.items}
-    for item in invoice.items:
-        previous_item = {
-            "item_code": item.item_code,
-            "item_name": item.item_name,
-            "qty": item.qty,
-            "comments": item.comment or "",
-            "ury_held": cint(getattr(item, "ury_held", 0)),
-        }
-        past_item.append(previous_item)
-        
-
-    # Conditional checking for 'items' type:
-    # - 'ury': JSON passed, hence using isinstance
-    # - 'ury_pos': Already formatted list, hence using else
-    if isinstance(items, str):
-        items = json.loads(items)
-
-    has_held = any(cint(item.get("ury_held")) for item in items)
-    if has_held and not hold_enabled:
-        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
-    if has_held and (captured_at is not None or cint(offline_printed)):
-        frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
-    for item in items:
-        old = previous_rows.get(item.get("name"))
-        if item.get("name") and not old:
-            frappe.throw(_("The selected line is not on this order."))
-        if old and not cint(getattr(old, "ury_held", 0)) and cint(item.get("ury_held")):
-            frappe.throw(_("URY_ALREADY_SENT: Sent lines cannot be held again."))
-        if old and cint(getattr(old, "ury_held", 0)) and not cint(item.get("ury_held")):
-            frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Use Fire to send held lines."))
-    held_names = {name for name, row in previous_rows.items() if cint(getattr(row, "ury_held", 0))}
-    requested_names = {item.get("name") for item in items}
-    if not append and held_names - requested_names and any(not item.get("name") for item in items):
-        # Older POS clients must not implicitly fire a held baseline by
-        # replacing it with unnamed sent rows. Reload using hold-aware POS.
-        frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Reload the held order before editing."))
-
-    if append and any(flt(item.get("qty")) <= 0 for item in items):
-        frappe.throw(_("Append rounds must contain only positive quantities."))
-
-    # Reduction/removal permission: gate any decrease in a previously-sent
-    # item's quantity (including full removal) by POS Profile `remove_items`,
-    # matching Phase 2's can_reduce_items/can_remove_items derivation.
-    if not append and past_item and not bool(posprofile.remove_items):
-        requested_qty_by_item = {}
-        for d in items:
-            requested_qty_by_item[d.get("item")] = requested_qty_by_item.get(
-                d.get("item"), 0
-            ) + flt(d.get("qty"))
-
-        # Aggregate previous qty per item too: a restaurant order can carry
-        # the same item_code across multiple lines (different comments/
-        # courses), so comparing the requested aggregate against each
-        # previous LINE individually would let a real reduction slip through
-        # as long as no single previous line's qty dropped on its own.
-        previous_qty_by_item = {}
-        for prev in past_item:
-            previous_qty_by_item[prev["item_code"]] = previous_qty_by_item.get(
-                prev["item_code"], 0
-            ) + flt(prev["qty"])
-
-        for item_code, prev_qty in previous_qty_by_item.items():
-            if requested_qty_by_item.get(item_code, 0) < prev_qty:
-                frappe.throw(
-                    _("You are not permitted to reduce or remove items from this order."),
-                    frappe.PermissionError,
-                )
 
     if not append:
         invoice.items = []
