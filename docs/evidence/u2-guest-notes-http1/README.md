@@ -16,9 +16,11 @@ Each layout received the required order before the single optional add-on read. 
 | portrait.png | 1 | 2 | 1 | visible | no |
 | qr.png | 1 | 2 | 1 | visible | no |
 
-## Retry queue at 5a9a7799
+## Retry queue and React 19 compatibility at c9889682
 
-The five `*-retry.png` images were captured against `5a9a7799b029a305b1f10c2271da3aee45583d27`, before the docs commit that adds them. Chrome 150.0.7871.186, Vite 6.4.3, loopback HTTP/1.1. Dish0-Dish4 failed once, Dish5 stayed open, then the five visible Retry add-ons controls were clicked. The fixture received no new product read for those clicks. Place Order for Dish8 reached the fixture while that one read stayed open. The accepted order is `[{ "item": "Dish8", "qty": 1 }]`, with no price and no comment. The raw staff note was not shown.
+The five `*-retry.png` images were freshly captured against `c98896826ec9f47d42ed56a61c94f9afb5435d41`, before this documentation-only commit. They replace the earlier `5a9a7799` captures. Chrome 150.0.7871.186, Vite 6.4.3, loopback HTTP/1.1. Dish0-Dish4 failed once, Dish5 stayed open, then the five visible Retry add-ons controls were clicked. The fixture received no new product read for those clicks. Place Order for Dish8 reached the fixture while that one read stayed open. The accepted order is `[{ "item": "Dish8", "qty": 1 }]`, with no price and no comment. The raw staff note was not shown.
+
+The retry repair has separate RED `2697a0b9` and GREEN `5a9a7799` commits. The subsequent native TypeScript check was committed RED as `e511c029`: React 19 rejected three timer refs without initial values (TS2554). GREEN `c9889682` initializes those refs to `undefined`; the same native TypeScript check now passes. This was a typecheck defect, not a Vite runtime-build failure. The new capture verifies the actual updated layouts. Independent review of the earlier head does not approve these later commits; fresh final-head review remains required.
 
 The loading labels in the images are queued retry feedback. They are not six sockets. `maxHeld` stayed 1. Device layouts also recorded duplicate fast 503s from dev StrictMode; those responses were not held.
 
