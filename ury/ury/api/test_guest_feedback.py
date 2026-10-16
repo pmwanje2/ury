@@ -413,6 +413,19 @@ class TestGuestFeedback(unittest.TestCase):
         self.feedback.insert.assert_not_called()
         self.sql.assert_not_called()
 
+    def test_malformed_signature_is_a_permission_refusal_not_a_server_error(self):
+        body = f"Profile A|feedback|POS-1|{_epoch(FIXED_NOW) + 60}"
+        for signature in ("é" * 64, "☃", "", "0" * 63, "0" * 65, "g" * 64):
+            with self.subTest(signature=signature):
+                token = base64.urlsafe_b64encode(f"{body}|{signature}".encode()).decode().rstrip("=")
+                try:
+                    self.submit(receipt_token=token, ratings=RATINGS)
+                except Exception as error:
+                    self.assertIsInstance(error, frappe.PermissionError)
+                else:
+                    self.fail("Malformed signature was accepted")
+        self.feedback.insert.assert_not_called()
+
     def test_insert_failure_restores_guest_identity(self):
         self.feedback.insert.side_effect = frappe.ValidationError("Cannot insert")
         with self.assertRaises(frappe.ValidationError):
