@@ -1241,19 +1241,24 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
 
     with _elevated():
-        invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
-        if invoice_doc.branch != profile.branch or invoice_doc.pos_profile != profile.pos_profile:
-            frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
-        if not _invoice_accepts_feedback(invoice_doc):
-            frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
-        if not getattr(invoice_doc, "customer", None):
-            frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+        try:
+            invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
+            if invoice_doc.branch != profile.branch or invoice_doc.pos_profile != profile.pos_profile:
+                frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+            if not _invoice_accepts_feedback(invoice_doc):
+                frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+            if not getattr(invoice_doc, "customer", None):
+                frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
 
-        # Serialize this endpoint on the exact bill. The locking duplicate
-        # read also sees a winner committed after this transaction's snapshot.
-        existing = frappe.db.get_value(
-            "Quality Feedback", {FEEDBACK_BILL_FIELD: invoice_doc.name}, "name", for_update=True,
-        )
+            # Current locking reads serialize the exact bill. MariaDB can
+            # refuse a stale transaction snapshot rather than expose the winner.
+            existing = frappe.db.get_value(
+                "Quality Feedback", {FEEDBACK_BILL_FIELD: invoice_doc.name}, "name", for_update=True,
+            )
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            # Let the native request boundary roll back; never reset its
+            # isolation, commit unrelated writes, or guess that feedback exists.
+            frappe.throw(_("URY_FEEDBACK_RETRY: Another request is finishing. Please try again."), frappe.ValidationError)
         if existing:
             return {"status": "Already Received"}
 
