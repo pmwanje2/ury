@@ -1,20 +1,19 @@
 import { formatCurrency } from '@ury/core'
-import type { CustomerOrder, MenuItem, OrderingContext } from '../../lib/api'
+import type { CustomerOrder, OrderingContext } from '../../lib/api'
+import type { GuestLine } from '../../hooks/useOrderingSession'
 import { t } from '../../i18n'
-
-type CartEntry = { item: MenuItem; qty: number }
 
 interface CartPanelProps {
   context: OrderingContext | null
   order: CustomerOrder | null
-  cartItems: CartEntry[]
+  cartItems: GuestLine[]
   cartCount: number
   cartTotal: number
   submitting: boolean
   billRequested: boolean
   payingOnline: boolean
   paymentNotice?: string | null
-  onIncrement: (item: MenuItem) => void
+  onIncrement: (line: GuestLine) => void
   onDecrement: (itemCode: string) => void
   onSubmit: () => void
   onRequestBill: () => void
@@ -74,11 +73,11 @@ function CartPanel({
           ) : (
             <ul className="space-y-2 text-sm">
               {cartItems.map((entry) => (
-                <li key={entry.item.item} className="flex items-center justify-between gap-2">
-                  <span className="flex-1">{entry.item.item_name}</span>
+                <li key={entry.key} className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 break-words">{entry.item.item_name}{entry.note && <small className="block whitespace-pre-wrap">{entry.note}</small>}</span>
                   <span className="flex items-center gap-2">
                     <button
-                      onClick={() => onDecrement(entry.item.item)}
+                      onClick={() => onDecrement(entry.key)}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
                       aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                     >
@@ -86,7 +85,7 @@ function CartPanel({
                     </button>
                     <span className="w-4 text-center">{entry.qty}</span>
                     <button
-                      onClick={() => onIncrement(entry.item)}
+                      onClick={() => onIncrement(entry)}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
                       aria-label={t('cart.add_one', { name: entry.item.item_name })}
                     >
