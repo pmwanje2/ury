@@ -1130,6 +1130,7 @@ def read_signed_invoice_grant(token, purpose):
 def feedback_receipt_link(invoice):
     """Opaque feedback grant for a print format. Empty when it must not be printed."""
     invoice_doc = frappe.get_doc("POS Invoice", invoice)
+    invoice_doc.check_permission("print")
     if cint(getattr(invoice_doc, "docstatus", 0)) == 2 or cint(getattr(invoice_doc, "is_return", 0)) == 1:
         return ""
     if not invoice_doc.branch or not invoice_doc.pos_profile:
