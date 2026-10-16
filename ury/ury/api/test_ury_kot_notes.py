@@ -37,6 +37,10 @@ class OrderingCases:
         utils.add_to_date = MagicMock()
         document = ModuleType("frappe.model.document")
         document.Document = object
+        rate_limiter = ModuleType("frappe.rate_limiter")
+        # These cases exercise orders/KOTs, not feedback throttling. Keep the
+        # native decorator importable without substituting the feedback suite.
+        rate_limiter.rate_limit = lambda **kwargs: lambda function: function
         queries = ModuleType("erpnext.controllers.queries")
         queries.item_query = MagicMock()
         pos_api = ModuleType("ury.ury_pos.api")
@@ -47,6 +51,7 @@ class OrderingCases:
         printer.print_combined_waiter_order_slip = MagicMock()
         self.enterContext(patch.dict(sys.modules, {
             "frappe": self.framework, "frappe.utils": utils,
+            "frappe.rate_limiter": rate_limiter,
             "frappe.model.document": document, "erpnext.controllers.queries": queries,
             "ury.ury_pos.api": pos_api, "ury.ury.api.ury_waiter_print": printer,
         }))
@@ -354,6 +359,94 @@ class TestSentNotePermissions(OrderingCases, TestCase):
         self.assertEqual(self.tickets, [])
         self.framework.db.set_value.assert_not_called()
         self.framework.db.commit.assert_not_called()
+
+    def assert_invalid_line_names_without_mutation(self, items, **kwargs):
+        self.pos_profile.ury_enable_hold_fire = 0
+        self.invoice.invoice_created = 0
+        before = self.invoice_state()
+        with patch.object(self.order, "kot_execute", wraps=self.kot.kot_execute) as execute:
+            with self.assertRaisesRegex(ValueError, "line"):
+                self.send(items, **kwargs)
+            execute.assert_not_called()
+        self.assertEqual(self.invoice_state(), before)
+        self.invoice.append.assert_not_called()
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
+        self.framework.db.set_value.assert_not_called()
+        self.framework.db.commit.assert_not_called()
+
+    def named_sent_lines(self):
+        self.seed("no onions")
+        self.invoice.items[-1].name = "line-A"
+        self.seed("extra chilli")
+        self.invoice.items[-1].name = "line-B"
+
+    def test_duplicate_line_a_cannot_replace_sent_line_b_with_hold_disabled(self):
+        self.named_sent_lines()
+        self.assert_invalid_line_names_without_mutation([
+            {**self.requested("no onions"), "name": "line-A"},
+            {**self.requested("extra chilli"), "name": "line-A"},
+        ])
+
+    def test_duplicate_line_b_cannot_replace_sent_line_a_with_hold_disabled(self):
+        self.named_sent_lines()
+        self.assert_invalid_line_names_without_mutation([
+            {**self.requested("no onions"), "name": "line-B"},
+            {**self.requested("extra chilli"), "name": "line-B"},
+        ])
+
+    def test_nonadjacent_duplicate_line_names_are_refused_in_full_replacement(self):
+        self.named_sent_lines()
+        self.assert_invalid_line_names_without_mutation([
+            {**self.requested("no onions", 0.5), "name": "line-A"},
+            {**self.requested("extra chilli"), "name": "line-B"},
+            {**self.requested("no onions", 0.5), "name": "line-A"},
+        ])
+
+    def test_append_refuses_existing_line_name_before_adding_any_round_items(self):
+        self.named_sent_lines()
+        self.assert_invalid_line_names_without_mutation([
+            self.requested("new round"),
+            {**self.requested("no onions"), "name": "line-A"},
+        ], append=1)
+
+    def test_full_replacement_refuses_unknown_line_name_without_mutation(self):
+        self.named_sent_lines()
+        self.framework.db.exists.return_value = False
+        self.assert_invalid_line_names_without_mutation([
+            {**self.requested("no onions"), "name": "line-A"},
+            {**self.requested("extra chilli"), "name": "unknown-line"},
+        ])
+
+    def test_full_replacement_refuses_foreign_line_name_without_mutation(self):
+        self.named_sent_lines()
+        self.framework.db.exists.return_value = True
+        self.assert_invalid_line_names_without_mutation([
+            {**self.requested("no onions"), "name": "line-A"},
+            {**self.requested("extra chilli"), "name": "other-invoice-line"},
+        ])
+
+    def test_append_refuses_unknown_or_foreign_line_names_without_mutation(self):
+        self.named_sent_lines()
+        for name, exists in (("unknown-line", False), ("other-invoice-line", True)):
+            with self.subTest(name=name):
+                self.framework.db.exists.return_value = exists
+                self.assert_invalid_line_names_without_mutation([
+                    self.requested("new round"),
+                    {**self.requested("no onions"), "name": name},
+                ], append=1)
+
+    def test_distinct_existing_line_names_remain_valid_with_hold_disabled(self):
+        self.pos_profile.ury_enable_hold_fire = 0
+        self.named_sent_lines()
+        self.send([
+            {**self.requested("no onions"), "name": "line-A"},
+            {**self.requested("extra chilli"), "name": "line-B"},
+        ])
+        self.assertEqual([(row.name, row.comment, row.qty) for row in self.invoice.items],
+                         [("line-A", "no onions", 1), ("line-B", "extra chilli", 1)])
+        self.assertEqual(self.tickets, [])
+        self.invoice.save.assert_called_once()
 
     def test_captain_cannot_replace_a_sent_note_without_removal_permission(self):
         self.seed("no onions")

@@ -1,4 +1,16 @@
 {
+  "hold_fire": {
+    "title": "Kitchen hold and fire",
+    "held": "Held",
+    "sent": "Sent",
+    "ready": "Ready",
+    "hold": "Hold",
+    "fire_line": "Fire line",
+    "fire_course": "Fire course: {{course}}",
+    "save_first": "Save the order to keep these items held. Fire them when ready.",
+    "offline": "Hold and fire requires an online connection.",
+    "failed": "Could not fire items. Reload the order and try again."
+  },
   "offline": {
     "capture": "Offline capture",
     "orders_unavailable": "Orders are unavailable while the link is down.",
