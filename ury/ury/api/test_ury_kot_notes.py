@@ -293,3 +293,163 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
         self.assertEqual(execute.call_args.args[4], [self.line("no onions")])
         self.framework.log_error.assert_not_called()
         self.assertEqual(self.tickets, [], "An unchanged noted staff line must not be sent again")
+
+
+class TestSentNotePermissions(OrderingCases, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.framework.session.user = "waiter@example.com"
+        self.framework.get_roles.return_value = ["URY Captain"]
+        self.pos_profile.remove_items = 0
+        self.invoice.modified = "2026-10-16 12:00:00"
+        for name, value in {
+            "mobile_number": "old phone", "custom_comments": "old comment", "no_of_pax": 1,
+            "cashier": "cashier@example.com", "custom_aggregator_id": None,
+            "custom_restaurant_room": None, "payments": [],
+        }.items():
+            setattr(self.invoice, name, value)
+        self.framework.db.get_list.side_effect = lambda doctype, **kwargs: (
+            [] if doctype == "URY KOT" else [SimpleNamespace(price_list_rate=100)]
+        )
+
+    def append_invoice(self, field, row):
+        if field == "payments":
+            self.invoice.payments.append(SimpleNamespace(**row))
+        else:
+            super().append_invoice(field, row)
+
+    @staticmethod
+    def requested(note="", qty=1):
+        return {"item": "Fish", "item_name": "Fish", "qty": qty, "comment": note, "rate": 0.01}
+
+    def send(self, items, **kwargs):
+        return self.order.sync_order(
+            items=items, cashier=None, owner=None, mode_of_payment="Cash", customer="Named Customer",
+            no_of_pax=5, last_invoice=self.invoice.name, last_modified_time=self.invoice.modified,
+            waiter="ignored@example.com", pos_profile="POS A", order_type="Take Away",
+            comments="new comment", **kwargs,
+        )
+
+    def invoice_state(self):
+        fields = (
+            "customer", "order_type", "mobile_number", "custom_comments", "no_of_pax", "pos_profile",
+            "cashier", "waiter", "custom_aggregator_id", "custom_restaurant_room", "restaurant_table",
+            "custom_merged_tables", "invoice_created",
+        )
+        return {
+            **{name: getattr(self.invoice, name) for name in fields},
+            "items": [vars(row).copy() for row in self.invoice.items],
+            "payments": [vars(row).copy() for row in self.invoice.payments],
+        }
+
+    def assert_denied_without_mutation(self, items):
+        before = self.invoice_state()
+        with patch.object(self.order, "kot_execute", wraps=self.kot.kot_execute) as execute:
+            with self.assertRaisesRegex(PermissionError, "not permitted to reduce or remove items"):
+                self.send(items)
+            execute.assert_not_called()
+        self.assertEqual(self.invoice_state(), before)
+        self.invoice.append.assert_not_called()
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
+        self.framework.db.set_value.assert_not_called()
+        self.framework.db.commit.assert_not_called()
+
+    def test_captain_cannot_replace_a_sent_note_without_removal_permission(self):
+        self.seed("no onions")
+        self.assert_denied_without_mutation([self.requested("extra chilli")])
+
+    def test_captain_cannot_move_one_sent_noted_portion_to_plain(self):
+        self.seed("no onions", 2)
+        self.seed("", 1)
+        self.assert_denied_without_mutation([self.requested("no onions"), self.requested("", 2)])
+
+    def test_repeated_sent_rows_cannot_hide_a_variant_reduction(self):
+        self.seed("no onions")
+        self.seed("no onions")
+        self.seed("")
+        self.assert_denied_without_mutation([self.requested("no onions"), self.requested("", 2)])
+
+    def test_quantity_reduction_is_refused_before_header_or_dummy_payment_mutation(self):
+        self.seed("no onions", 2)
+        self.invoice.invoice_created = 0
+        self.assert_denied_without_mutation([self.requested("no onions")])
+
+    def test_full_line_removal_is_refused_without_mutation(self):
+        self.seed("no onions")
+        self.assert_denied_without_mutation([])
+
+    def test_manager_with_removal_permission_can_replace_a_sent_note(self):
+        self.framework.get_roles.return_value = ["URY Manager"]
+        self.pos_profile.remove_items = 1
+        self.seed("no onions")
+        self.send([self.requested("extra chilli")])
+        self.framework.log_error.assert_not_called()
+        self.assertEqual([(ticket.type, row.comments, getattr(row, "cancelled_qty", None))
+                          for ticket in self.tickets for row in ticket.kot_items],
+                         [("Order Modified", "extra chilli", None), ("Partially cancelled", "no onions", 1)])
+        self.assertEqual([(row.comment, row.qty, row.rate) for row in self.invoice.items],
+                         [("extra chilli", 1, 100)])
+        self.invoice.save.assert_called_once()
+
+    def test_removal_permission_does_not_require_a_manager_role(self):
+        self.pos_profile.remove_items = 1
+        self.seed("no onions", 2)
+        self.seed("")
+        self.send([self.requested("no onions"), self.requested("", 2)])
+        self.framework.log_error.assert_not_called()
+        self.assertEqual([(ticket.type, row.comments, getattr(row, "cancelled_qty", None))
+                          for ticket in self.tickets for row in ticket.kot_items],
+                         [("Order Modified", "", None), ("Partially cancelled", "no onions", 1)])
+
+    def test_new_note_variant_does_not_require_void_permission_when_sent_note_remains(self):
+        self.seed("no onions")
+        self.send([self.requested("no onions"), self.requested("extra chilli")])
+        self.framework.log_error.assert_not_called()
+        self.assertEqual(self.ticket_lines(), [("Fish", 1, "extra chilli")])
+        self.assertEqual([ticket.type for ticket in self.tickets], ["Order Modified"])
+
+    def test_new_unsent_order_note_does_not_require_void_permission(self):
+        self.invoice.name = None
+        self.invoice.waiter = None
+        self.send([self.requested("extra chilli")])
+        self.framework.log_error.assert_not_called()
+        self.assertEqual(self.ticket_lines(), [("Fish", 1, "extra chilli")])
+        self.assertEqual(self.invoice.waiter, "waiter@example.com")
+
+    def test_append_round_does_not_treat_omitted_sent_notes_as_removals(self):
+        self.seed("no onions")
+        self.send([self.requested("extra chilli")], append=1)
+        self.framework.log_error.assert_not_called()
+        self.assertEqual(self.ticket_lines(), [("Fish", 1, "extra chilli")])
+        self.assertEqual([(row.comment, row.qty) for row in self.invoice.items],
+                         [("no onions", 1), ("extra chilli", 1)])
+
+    def test_null_missing_and_empty_notes_remain_the_same_sent_identity(self):
+        self.seed(None)
+        for items in ([self.requested(None)], [self.requested("")],
+                      [{"item": "Fish", "item_name": "Fish", "qty": 1}]):
+            with self.subTest(items=items):
+                self.send(items)
+                self.framework.log_error.assert_not_called()
+                self.assertEqual(self.tickets, [])
+
+    def test_unchanged_repeated_rows_are_aggregated_for_permission(self):
+        self.seed("no onions")
+        self.seed("no onions")
+        self.send([self.requested("no onions"), self.requested("no onions")])
+        self.framework.log_error.assert_not_called()
+        self.assertEqual(self.tickets, [])
+        self.assertEqual([(row.comment, row.qty) for row in self.invoice.items],
+                         [("no onions", 1), ("no onions", 1)])
+
+    def test_removal_permission_does_not_bypass_another_waiters_order_ownership(self):
+        self.pos_profile.remove_items = 1
+        self.invoice.waiter = "other@example.com"
+        self.seed("no onions")
+        before = self.invoice_state()
+        with self.assertRaisesRegex(PermissionError, "Not permitted to modify this order"):
+            self.send([self.requested("extra chilli")])
+        self.assertEqual(self.invoice_state(), before)
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
