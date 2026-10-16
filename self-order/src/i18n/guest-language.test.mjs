@@ -83,6 +83,10 @@ const en = {
     add: 'Add {{name}}',
     addons: 'Add-ons',
     addon_add: 'Add add-on {{name}}',
+    price_unavailable: 'Price unavailable',
+    addons_error: 'Could not load add-ons.',
+    addons_retry: 'Retry add-ons',
+    addons_loading: 'Loading add-ons…',
   },
   errors: {
     missing_code: 'This link is missing an ordering code. Please rescan the QR code on your table.',
@@ -170,6 +174,10 @@ const sw = {
     add: 'Ongeza {{name}}',
     addons: 'Nyongeza',
     addon_add: 'Ongeza nyongeza {{name}}',
+    price_unavailable: 'Bei haipatikani',
+    addons_error: 'Imeshindwa kupakia nyongeza.',
+    addons_retry: 'Jaribu nyongeza tena',
+    addons_loading: 'Inapakia nyongeza…',
   },
   errors: {
     missing_code: 'Kiungo hiki hakina msimbo wa oda. Tafadhali skani tena msimbo wa QR ulio mezani.',
@@ -257,6 +265,10 @@ const lg = {
     add: 'Teekako {{name}}',
     addons: 'Ebyongerwako',
     addon_add: 'Yongerako ekyongerwako {{name}}',
+    price_unavailable: 'Omuwendo tegulabika',
+    addons_error: 'Ebyongerwako tebibadde bisobola kutikkibwa.',
+    addons_retry: 'Gezaako ebyongerwako nate',
+    addons_loading: 'Ebyongerwako bitikkibwa…',
   },
   errors: {
     missing_code: 'Link eno terina koodi y\'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.',
