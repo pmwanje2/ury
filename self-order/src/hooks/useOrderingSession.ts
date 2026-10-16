@@ -184,7 +184,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       const items = menuResponse.items.filter((item) => !item.disabled)
       setMenu(items)
       if (ctx.capabilities.product_detail_enabled) {
-        await Promise.all(items.map(item => loadAddons(ctx.session, item, items, generation)))
+        for (const item of items) void loadAddons(ctx.session, item, items, generation)
       }
       await loadOrder(ctx.session)
       setContext(ctx)
