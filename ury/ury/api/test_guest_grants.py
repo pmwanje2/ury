@@ -227,6 +227,10 @@ class TestGuestGrants(unittest.TestCase):
         self.assertFalse(any(event[0] == "discovery" for event in self.events))
         self.assertIsNone(session.get("invoice"))
 
+    def test_existing_menu_bootstrap_still_commits_its_unprivileged_session(self):
+        api._open_session(self.profile, "QR Table", "Table 7")
+        self.assertIn("COMMIT", self.events, "Existing GET bootstrap must remain usable on its next request")
+
     def test_staff_issue_exact_grant_revokes_previous_without_committing(self):
         first, old = self.grant()
         second, current = self.grant()
@@ -320,6 +324,14 @@ class TestGuestGrants(unittest.TestCase):
         sibling.docstatus = 2
         self.assert_denied(lambda: api.get_customer_order(token))
         del self.rows[sibling.name]
+        self.assert_denied(lambda: api.get_customer_order(token))
+
+    def test_legacy_split_child_inherits_native_parent_group_for_resplit_revocation(self):
+        self.invoice.custom_split_from = "ROOT-SECRET"
+        self.make_invoice("ROOT-SECRET", custom_split_group="GROUP")
+        self.rows["SIBLING-SECRET"].custom_split_group = "GROUP"
+        token, _session = self.grant()
+        self.make_invoice("NESTED-SECRET", custom_split_group="GROUP", custom_split_from="SIBLING-SECRET")
         self.assert_denied(lambda: api.get_customer_order(token))
 
     def test_rounds_print_and_sorted_table_order_do_not_invalidate_grant(self):
