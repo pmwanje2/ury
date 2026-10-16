@@ -413,6 +413,111 @@ it('keeps nine stalled optional reads from blocking the required order or a gues
   }
 })
 
+it('places the priced dish while retried add-ons wait behind one held optional read', async () => {
+  // Chrome allows six HTTP/1.1 connections per origin. Five visible retries must not occupy the rest while one add-on read is already held.
+  const browserHttp1Pool = 6
+  const quiet = { ...context, capabilities: { ...context.capabilities, item_notes_enabled: false } }
+  const served: CustomerOrder = {
+    invoice: 'TEST-1', billed: false, grand_total: 9000,
+    items: [{ item_code: 'Served', item_name: 'Served', qty: 1, rate: 9000, amount: 9000, comment: privateText }],
+  }
+  menu = Array.from({ length: 9 }, (_, index) => item(`Dish${index}`, 1000 + index))
+  serverOrder = served
+  let openSockets = 0
+  const socketWaiters: Array<() => void> = []
+  const releaseReads: Array<() => void> = []
+  const failedOnce = new Set<string>()
+  let holdSlowReads = true
+  let heldOptional = 0
+  let productReads = 0
+  async function limited<T>(run: () => Promise<T>): Promise<T> {
+    if (openSockets >= browserHttp1Pool) await new Promise<void>(resolve => { socketWaiters.push(resolve) })
+    openSockets += 1
+    try {
+      return await run()
+    } finally {
+      openSockets -= 1
+      socketWaiters.shift()?.()
+    }
+  }
+  vi.spyOn(call, 'get').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+    if (path.endsWith('get_customer_menu')) return { message: { items: menu, name: 'Nine item menu', modified_time: null } }
+    if (path.endsWith('get_customer_order')) return { message: serverOrder }
+    if (path.endsWith('get_customer_product')) {
+      productReads += 1
+      const itemCode = String(params?.item_code ?? '')
+      const index = Number(itemCode.slice(4))
+      if (index < 5 && !failedOnce.has(itemCode)) {
+        failedOnce.add(itemCode)
+        throw new Error('503 synthetic add-on outage')
+      }
+      if (holdSlowReads && index <= 5) {
+        heldOptional += 1
+        return await new Promise(resolve => {
+          releaseReads.push(() => {
+            heldOptional -= 1
+            resolve({ message: { item_code: itemCode, variants: [], addons: [] } })
+          })
+        })
+      }
+      return { message: { item_code: itemCode, variants: [], addons: [] } }
+    }
+    throw new Error(`Unexpected GET ${path}`)
+  }))
+  vi.spyOn(call, 'post').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+    if (!path.endsWith('add_customer_items')) throw new Error(`Unexpected POST ${path}`)
+    sent.push(JSON.parse(String(params?.items)))
+    return { message: serverOrder }
+  }))
+  const retryButtons = () => [...host.querySelectorAll('button')].filter(node => node.textContent?.trim() === 'Retry add-ons')
+  async function drainOptionalReads() {
+    // A previous page keeps its queued reads until they settle. Let them finish before the next layout measures a fresh pool.
+    holdSlowReads = false
+    for (let turn = 0; turn < 16 && (releaseReads.length > 0 || openSockets > 0); turn += 1) {
+      const pending = releaseReads.splice(0)
+      await act(async () => { pending.forEach(release => release()) })
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    }
+    holdSlowReads = true
+  }
+  try {
+    for (const [layoutName, Layout] of Object.entries({ Mobile, Tablet, Landscape, Portrait })) {
+      await drainOptionalReads()
+      failedOnce.clear()
+      heldOptional = 0
+      productReads = 0
+      sent = []
+      await reload(<Layout initialContext={quiet} />)
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      expect(retryButtons(), `${layoutName} shows a recovery control for each fast add-on failure`).toHaveLength(5)
+      expect(heldOptional, `${layoutName} holds the next optional read and no others`).toBe(1)
+      expect(openSockets, `${layoutName} has one optional read on the wire`).toBe(1)
+      expect(host.textContent, `${layoutName} must not stay on the global menu loader`).not.toContain('Loading menu')
+      expect(host.textContent, `${layoutName} shows the current order before add-on recovery`).toContain('Served')
+      expect(host.textContent, `${layoutName} still hides raw staff notes`).not.toContain(privateText)
+      expect(dish('Dish8')?.disabled, `${layoutName} priced dish stays orderable`).toBe(false)
+      for (let attempt = 0; attempt < 5; attempt += 1) await click(button('Retry add-ons'))
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      await click(dish('Dish8')!)
+      await expand()
+      await click(button('Place Order'))
+      expect(sent, `${layoutName} placed Dish8 while ${heldOptional} optional reads were held after ${productReads} product reads`).toEqual([[{ item: 'Dish8', qty: 1 }]])
+      expect(heldOptional, `${layoutName} keeps retried add-on reads behind the one held request`).toBe(1)
+      expect(openSockets, `${layoutName} still has room for a guest action`).toBeLessThanOrEqual(1)
+      expect(host.textContent, `${layoutName} does not reveal the raw staff note on submit`).not.toContain(privateText)
+      const readsBeforeResume = productReads
+      const pending = releaseReads.splice(0)
+      expect(pending, `${layoutName} still has the original optional read to resume`).toHaveLength(1)
+      await act(async () => { pending[0]() })
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      expect(productReads, `${layoutName} still performs the queued retry after the held read finishes`).toBeGreaterThan(readsBeforeResume)
+      expect(heldOptional, `${layoutName} resumes at most one queued retry`).toBeLessThanOrEqual(1)
+    }
+  } finally {
+    await drainOptionalReads()
+  }
+})
+
 it('removes unqualified comments from the real hook state on load and submit (not just hidden in CSS)', async () => {
   serverOrder = privateOrder
   const ctx = { ...context, capabilities: { ...context.capabilities, item_notes_enabled: false } }
