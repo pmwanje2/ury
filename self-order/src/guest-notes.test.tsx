@@ -374,6 +374,13 @@ it('keeps nine stalled optional reads from blocking the required order or a gues
   }))
   try {
     for (const [layoutName, Layout] of Object.entries({ Mobile, Tablet, Landscape, Portrait })) {
+      // A new page load closes the previous document's connections. Release that page before measuring the next one.
+      if (releaseReads.length) {
+        holdProducts = false
+        const previous = releaseReads.splice(0)
+        await act(async () => { previous.forEach(release => release()) })
+        holdProducts = true
+      }
       productReads = 0
       orderReads = 0
       sent = []
