@@ -420,12 +420,62 @@ class TestGuestFeedback(unittest.TestCase):
             with self.assertRaises(frappe.RateLimitExceededError):
                 self.submit(session="opaque-session", ratings=RATINGS)
             frappe.local.request_ip = "203.0.113.6"
-            with self.assertRaises(frappe.ValidationError):
+            with self.assertRaises((frappe.ValidationError, frappe.RateLimitExceededError)) as caught:
                 self.submit(session="opaque-session", ratings=RATINGS)
+            self.assertIsInstance(caught.exception, frappe.RateLimitExceededError)
         finally:
             frappe.cache = None
             frappe.local.request = None
         self.feedback.insert.assert_not_called()
+
+    def _feedback_budget_outcomes(self, credentials, addresses, credential_key):
+        self.profile.enable_feedback = 0
+        self.resolve.side_effect = lambda token: SimpleNamespace(**{**vars(self.session), "name": f"session-{token}"})
+        self.enterContext(patch.object(frappe, "cache", _MemoryCache()))
+        frappe.local.request = SimpleNamespace(method="POST")
+        self.addCleanup(setattr, frappe.local, "request", None)
+        outcomes = []
+        for credential, address in zip(credentials, addresses, strict=True):
+            frappe.local.request_ip = address
+            frappe.local.form_dict = frappe._dict(
+                cmd=f"{MOD}.submit_feedback",
+                **{credential_key: credential},
+                _ury_feedback_budget=f"guest-chosen-{address}",
+            )
+            try:
+                self.submit(**{credential_key: credential}, ratings=RATINGS)
+            except frappe.RateLimitExceededError:
+                outcomes.append("limited")
+            except frappe.ValidationError:
+                outcomes.append("disabled")
+        return outcomes
+
+    def test_ip_budget_cannot_be_reset_by_changing_session(self):
+        outcomes = self._feedback_budget_outcomes(
+            [f"attempt-{index}" for index in range(6)], ["203.0.113.5"] * 6, "session",
+        )
+        self.assertEqual(outcomes, ["disabled"] * 5 + ["limited"])
+
+    def test_session_budget_cannot_be_reset_by_changing_ip(self):
+        outcomes = self._feedback_budget_outcomes(
+            ["opaque-session"] * 6, [f"203.0.113.{index}" for index in range(6)], "session",
+        )
+        self.assertEqual(outcomes, ["disabled"] * 5 + ["limited"])
+
+    def test_receipt_budget_cannot_be_reset_by_changing_ip(self):
+        token = _expected_grant("Profile A", "feedback", "POS-1", _epoch(FIXED_NOW) + 60)
+        outcomes = self._feedback_budget_outcomes(
+            [token] * 6, [f"203.0.113.{index}" for index in range(6)], "receipt_token",
+        )
+        self.assertEqual(outcomes, ["disabled"] * 5 + ["limited"])
+
+    def test_receipt_budget_uses_verified_bill_not_guest_encoding_or_budget_key(self):
+        token = _expected_grant("Profile A", "feedback", "POS-1", _epoch(FIXED_NOW) + 60)
+        outcomes = self._feedback_budget_outcomes(
+            [token + "=" * index for index in range(6)],
+            [f"203.0.113.{index}" for index in range(6)], "receipt_token",
+        )
+        self.assertEqual(outcomes, ["disabled"] * 5 + ["limited"])
 
 
 class TestInvoiceGrant(unittest.TestCase):
