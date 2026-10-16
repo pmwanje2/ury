@@ -334,7 +334,9 @@ class HoldFireTests(OrderingCases, TestCase):
         native.create_custom_fields = MagicMock()
         roles = ModuleType("ury.role_permissions")
         roles.setup_role_permissions = MagicMock()
-        with patch.dict(sys.modules, {native.__name__: native, roles.__name__: roles}):
+        # Field metadata does not call click; CI deliberately has stdlib only.
+        click = ModuleType("click")
+        with patch.dict(sys.modules, {native.__name__: native, roles.__name__: roles, "click": click}):
             path = Path(__file__).resolve().parents[2] / "setup_customizations.py"
             spec = importlib.util.spec_from_file_location("hold_fields_test", path)
             module = importlib.util.module_from_spec(spec)
