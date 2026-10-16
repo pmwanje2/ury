@@ -67,13 +67,6 @@
     "other": "Nyingine",
     "categories": "Makundi ya menyu"
   },
-  "item": {
-    "note_label": "Ujumbe kwa jikoni",
-    "note_placeholder": "Kwa mfano, bila vitunguu",
-    "add": "Ongeza {{name}}",
-    "addons": "Nyongeza",
-    "addon_add": "Ongeza nyongeza {{name}}"
-  },
   "errors": {
     "missing_code": "Kiungo hiki hakina msimbo wa oda. Tafadhali skani tena msimbo wa QR ulio mezani.",
     "load_menu": "Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.",

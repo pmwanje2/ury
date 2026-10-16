@@ -5,10 +5,7 @@ import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
-import GuestNoteDialog from '../components/GuestNoteDialog'
 import type { MenuItem, OrderingContext } from '../lib/api'
-import { qtyForItem } from '../lib/guest-lines'
-import AddonChoices from './shared/AddonChoices'
 
 const IDLE_WARN_MS = 60000
 const IDLE_RESET_GRACE_MS = 15000
@@ -57,14 +54,6 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-    noteItem,
-    noteText,
-    updateNote,
-    confirmNote,
-    cancelNote,
-    addonsByItem,
-    addAddon,
-    incrementLine,
   } = useOrderingSession(initialContext)
 
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY)
@@ -158,10 +147,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
           <ul className="space-y-1 text-base">
             {order.items.map((row, idx) => (
               <li key={`${row.item_code}-${idx}`} className="flex justify-between">
-                <span>
-                  {row.item_name} × {row.qty}
-                  {row.comment && <span className="block text-xs text-muted-foreground">{row.comment}</span>}
-                </span>
+                <span>{row.item_name} × {row.qty}</span>
                 <span>{row.amount}</span>
               </li>
             ))}
@@ -224,15 +210,13 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
 
         <section className="grid flex-1 grid-cols-2 gap-4 self-start">
           {visibleMenu.map((item) => (
-            <div key={item.item}>
-              <MenuCard
-                item={item}
-                qtyInCart={qtyForItem(cart, item.item)}
-                showImage={context?.capabilities.show_item_images ?? false}
-                onAdd={() => addToCart(item)}
-              />
-              <AddonChoices choices={addonsByItem[item.item] ?? []} onAdd={addAddon} />
-            </div>
+            <MenuCard
+              key={item.item}
+              item={item}
+              qtyInCart={cart[item.item]?.qty ?? 0}
+              showImage={context?.capabilities.show_item_images ?? false}
+              onAdd={() => addToCart(item)}
+            />
           ))}
         </section>
       </div>
@@ -243,14 +227,11 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             <div className="max-h-[50vh] overflow-y-auto border-b p-4">
               <ul className="space-y-2 text-base">
                 {cartItems.map((entry) => (
-                  <li key={entry.key} className="flex items-center justify-between">
-                    <span>
-                      {entry.item.item_name}
-                      {entry.note && <span className="block text-xs text-muted-foreground">{entry.note}</span>}
-                    </span>
+                  <li key={entry.item.item} className="flex items-center justify-between">
+                    <span>{entry.item.item_name}</span>
                     <span className="flex items-center gap-3">
                       <button
-                        onClick={() => decrementCart(entry.key)}
+                        onClick={() => decrementCart(entry.item.item)}
                         className="h-8 w-8 rounded-full border text-base leading-none"
                         aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                       >
@@ -258,7 +239,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
                       </button>
                       {entry.qty}
                       <button
-                        onClick={() => incrementLine(entry)}
+                        onClick={() => addToCart(entry.item)}
                         className="h-8 w-8 rounded-full border text-base leading-none"
                         aria-label={t('cart.add_one', { name: entry.item.item_name })}
                       >
@@ -308,13 +289,6 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <GuestNoteDialog
-        item={noteItem}
-        text={noteText}
-        onText={updateNote}
-        onConfirm={confirmNote}
-        onClose={cancelNote}
-      />
     </div>
   )
 }
@@ -333,7 +307,7 @@ function MenuCard({
   return (
     <button
       onClick={onAdd}
-      className="flex w-full flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
+      className="flex flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
     >
       {showImage && item.item_image && (
         <img src={item.item_image} alt={item.item_name} className="h-48 w-full object-cover" />

@@ -5,7 +5,6 @@ import {
   bootstrap,
   createPaymentRequest,
   getCurrentOrder,
-  getCustomerProduct,
   getMenu,
   getStoredContext,
   requestBill,
@@ -15,18 +14,6 @@ import {
   type OrderingContext,
   type PaymentRequestResult,
 } from '../lib/api'
-import {
-  addGuestLine,
-  addonChoices,
-  addonLineItem,
-  decrementGuestLine,
-  guestOrderPayload,
-  linePrice,
-  type AddonChoice,
-  type GuestCart,
-  type GuestLine,
-  type GuestMenuItem,
-} from '../lib/guest-lines'
 import { paymentOutcome } from '../lib/payment-outcome'
 import { t } from '../i18n'
 import { useGuestLanguage } from '../components/LanguageSwitcher'
@@ -81,17 +68,7 @@ function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = fa
 const SESSION_KEY = 'ury_order_session'
 const CONTEXT_KEY = 'ury_order_context'
 
-async function loadGuestAddons(session: string, items: MenuItem[]): Promise<Record<string, AddonChoice[]>> {
-  const pairs = await Promise.all(items.map(async (item) => {
-    try {
-      const product = await getCustomerProduct(session, item.item)
-      return [item.item, addonChoices(product?.addons, items)] as const
-    } catch {
-      return [item.item, [] as AddonChoice[]] as const
-    }
-  }))
-  return Object.fromEntries(pairs)
-}
+type Cart = Record<string, { item: MenuItem; qty: number }>
 
 function useQueryToken(): string | null {
   const params = new URLSearchParams(window.location.search)
@@ -115,10 +92,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   const [context, setContext] = useState<OrderingContext | null>(null)
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [order, setOrder] = useState<CustomerOrder | null>(null)
-  const [cart, setCart] = useState<GuestCart>({})
-  const [addonsByItem, setAddonsByItem] = useState<Record<string, AddonChoice[]>>({})
-  const [noteItem, setNoteItem] = useState<GuestMenuItem | null>(null)
-  const [noteText, setNoteText] = useState('')
+  const [cart, setCart] = useState<Cart>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [shownError, setShownError] = useState<ShownError | null>(null)
@@ -161,9 +135,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
         }
       }
       const menuResponse = await getMenu(ctx.session)
-      const items = menuResponse.items.filter((item) => !item.disabled)
-      setMenu(items)
-      setAddonsByItem(await loadGuestAddons(ctx.session, items))
+      setMenu(menuResponse.items.filter((item) => !item.disabled))
       await loadOrder(ctx.session)
       setContext(ctx)
     } catch (err) {
@@ -208,9 +180,6 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     sessionStorage.removeItem(SESSION_KEY)
     sessionStorage.removeItem(CONTEXT_KEY)
     setCart({})
-    setAddonsByItem({})
-    setNoteItem(null)
-    setNoteText('')
     setOrder(null)
     setBillRequested(false)
     setAssistanceStatus(null)
@@ -224,56 +193,39 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     init()
   }, [init])
 
-  function addToCart(item: GuestMenuItem) {
-    if (context?.capabilities.item_notes_enabled) {
-      setNoteItem(item)
-      setNoteText('')
-      return
-    }
-    setCart((prev) => addGuestLine(prev, item, '', false))
+  function addToCart(item: MenuItem) {
+    setCart((prev) => {
+      const existing = prev[item.item]
+      return { ...prev, [item.item]: { item, qty: (existing?.qty ?? 0) + 1 } }
+    })
   }
 
-  function confirmNote() {
-    if (!noteItem) return
-    const item = noteItem
-    const text = noteText
-    setNoteItem(null)
-    setNoteText('')
-    setCart((prev) => addGuestLine(prev, item, text, true))
-  }
-
-  function cancelNote() {
-    setNoteItem(null)
-    setNoteText('')
-  }
-
-  function addAddon(choice: AddonChoice) {
-    addToCart(addonLineItem(choice, menu))
-  }
-
-  function incrementLine(line: GuestLine) {
-    setCart((prev) => addGuestLine(prev, line.item, line.note, Boolean(context?.capabilities.item_notes_enabled)))
-  }
-
-  function decrementCart(lineKey: string) {
-    setCart((prev) => decrementGuestLine(prev, lineKey))
+  function decrementCart(itemCode: string) {
+    setCart((prev) => {
+      const existing = prev[itemCode]
+      if (!existing) return prev
+      if (existing.qty <= 1) {
+        const rest = { ...prev }
+        delete rest[itemCode]
+        return rest
+      }
+      return { ...prev, [itemCode]: { ...existing, qty: existing.qty - 1 } }
+    })
   }
 
   const cartItems = Object.values(cart)
   const cartCount = cartItems.reduce((sum, entry) => sum + entry.qty, 0)
-  const cartTotal = cartItems.reduce((sum, entry) => sum + (linePrice(entry) ?? 0), 0)
+  const cartTotal = cartItems.reduce((sum, entry) => sum + entry.qty * entry.item.rate, 0)
 
   async function submitCart() {
     if (!context || cartItems.length === 0) return
     setSubmitting(true)
     setShownError(null)
     try {
-      const payload = guestOrderPayload(cart)
+      const payload = cartItems.map((entry) => ({ item: entry.item.item, qty: entry.qty }))
       const updated = await addItems(context.session, payload)
       setOrder(updated)
       setCart({})
-      setNoteItem(null)
-      setNoteText('')
     } catch (err) {
       setShownError(serverTextOrCatalog(err, 'place_order', true))
     } finally {
@@ -366,13 +318,5 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     cartItems,
     cartCount,
     cartTotal,
-    noteItem,
-    noteText,
-    updateNote: setNoteText,
-    confirmNote,
-    cancelNote,
-    addonsByItem,
-    addAddon,
-    incrementLine,
   }
 }

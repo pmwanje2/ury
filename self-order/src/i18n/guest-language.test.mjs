@@ -343,8 +343,6 @@ const GUEST_UI = [
   'layouts/PortraitKioskLayout.tsx',
   'layouts/shared/CartPanel.tsx',
   'layouts/shared/MenuGrid.tsx',
-  'layouts/shared/AddonChoices.tsx',
-  'components/GuestNoteDialog.tsx',
   'App.tsx',
   'hooks/useOrderingSession.ts',
   'hooks/useDeviceBootstrap.ts',

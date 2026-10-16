@@ -5,7 +5,6 @@ import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
-import GuestNoteDialog from '../components/GuestNoteDialog'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
 
@@ -46,14 +45,6 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-    noteItem,
-    noteText,
-    updateNote,
-    confirmNote,
-    cancelNote,
-    addonsByItem,
-    addAddon,
-    incrementLine,
   } = useOrderingSession(initialContext)
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
@@ -127,10 +118,8 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
           <MenuGrid
             menu={menu}
             cart={cart}
-            addonsByItem={addonsByItem}
             capabilities={context?.capabilities}
             onAdd={addToCart}
-            onAddAddon={addAddon}
             gridClassName="grid grid-cols-4 gap-6 xl:grid-cols-5"
             cardClassName="flex min-w-[180px] flex-col overflow-hidden rounded-2xl border text-left text-lg transition active:scale-[0.97]"
             imageClassName="h-40 w-full object-cover"
@@ -147,7 +136,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
           billRequested={billRequested}
           payingOnline={payingOnline}
           paymentNotice={paymentNotice}
-          onIncrement={incrementLine}
+          onIncrement={addToCart}
           onDecrement={decrementCart}
           onSubmit={submitCart}
           onRequestBill={handleRequestBill}
@@ -156,13 +145,6 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
         />
       </div>
 
-      <GuestNoteDialog
-        item={noteItem}
-        text={noteText}
-        onText={updateNote}
-        onConfirm={confirmNote}
-        onClose={cancelNote}
-      />
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
         <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>

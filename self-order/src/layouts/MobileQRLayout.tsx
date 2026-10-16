@@ -1,11 +1,8 @@
 import { formatCurrency, resolveBrand } from '@ury/core'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
-import { qtyForItem } from '../lib/guest-lines'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
-import GuestNoteDialog from '../components/GuestNoteDialog'
-import AddonChoices from './shared/AddonChoices'
 
 interface LayoutProps {
   initialContext?: OrderingContext
@@ -37,14 +34,6 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-    noteItem,
-    noteText,
-    updateNote,
-    confirmNote,
-    cancelNote,
-    addonsByItem,
-    addAddon,
-    incrementLine,
   } = useOrderingSession(initialContext)
 
   function handleStartOver() {
@@ -117,10 +106,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
           <ul className="space-y-1 text-sm">
             {order.items.map((row, idx) => (
               <li key={`${row.item_code}-${idx}`} className="flex justify-between">
-                <span>
-                  {row.item_name} × {row.qty}
-                  {row.comment && <span className="block text-xs text-muted-foreground">{row.comment}</span>}
-                </span>
+                <span>{row.item_name} × {row.qty}</span>
                 <span>{row.amount}</span>
               </li>
             ))}
@@ -163,24 +149,22 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
       <section className="mx-4 mt-4 grid grid-cols-2 gap-3">
         {menu.map((item) => (
-          <div key={item.item}>
-            <button
-              onClick={() => addToCart(item)}
-              className="flex w-full flex-col overflow-hidden rounded-lg border text-left transition active:scale-[0.98]"
-            >
-              {context?.capabilities.show_item_images && item.item_image && (
-                <img src={item.item_image} alt={item.item_name} className="h-24 w-full object-cover" />
+          <button
+            key={item.item}
+            onClick={() => addToCart(item)}
+            className="flex flex-col overflow-hidden rounded-lg border text-left transition active:scale-[0.98]"
+          >
+            {context?.capabilities.show_item_images && item.item_image && (
+              <img src={item.item_image} alt={item.item_name} className="h-24 w-full object-cover" />
+            )}
+            <div className="p-2">
+              <div className="text-sm font-medium">{item.item_name}</div>
+              <div className="text-sm text-muted-foreground tabular-nums">{formatCurrency(item.rate)}</div>
+              {cart[item.item] && (
+                <div className="mt-1 text-xs font-semibold text-primary">{t('cart.in_cart', { qty: cart[item.item].qty })}</div>
               )}
-              <div className="p-2">
-                <div className="text-sm font-medium">{item.item_name}</div>
-                <div className="text-sm text-muted-foreground tabular-nums">{formatCurrency(item.rate)}</div>
-                {qtyForItem(cart, item.item) > 0 && (
-                  <div className="mt-1 text-xs font-semibold text-primary">{t('cart.in_cart', { qty: qtyForItem(cart, item.item) })}</div>
-                )}
-              </div>
-            </button>
-            <AddonChoices choices={addonsByItem[item.item] ?? []} onAdd={addAddon} />
-          </div>
+            </div>
+          </button>
         ))}
       </section>
 
@@ -188,14 +172,11 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
         <div className="fixed inset-x-0 bottom-0 border-t bg-background p-4">
           <ul className="mb-2 max-h-32 space-y-1 overflow-y-auto text-sm">
             {cartItems.map((entry) => (
-              <li key={entry.key} className="flex items-center justify-between">
-                <span>
-                  {entry.item.item_name}
-                  {entry.note && <span className="block text-xs text-muted-foreground">{entry.note}</span>}
-                </span>
+              <li key={entry.item.item} className="flex items-center justify-between">
+                <span>{entry.item.item_name}</span>
                 <span className="flex items-center gap-2">
                   <button
-                    onClick={() => decrementCart(entry.key)}
+                    onClick={() => decrementCart(entry.item.item)}
                     className="h-6 w-6 rounded-full border text-xs leading-none"
                     aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                   >
@@ -203,7 +184,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
                   </button>
                   {entry.qty}
                   <button
-                    onClick={() => incrementLine(entry)}
+                    onClick={() => addToCart(entry.item)}
                     className="h-6 w-6 rounded-full border text-xs leading-none"
                     aria-label={t('cart.add_one', { name: entry.item.item_name })}
                   >
@@ -226,13 +207,6 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
           </button>
         </div>
       )}
-      <GuestNoteDialog
-        item={noteItem}
-        text={noteText}
-        onText={updateNote}
-        onConfirm={confirmNote}
-        onClose={cancelNote}
-      />
     </div>
   )
 }

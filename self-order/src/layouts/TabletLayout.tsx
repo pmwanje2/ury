@@ -5,7 +5,6 @@ import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
-import GuestNoteDialog from '../components/GuestNoteDialog'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
 
@@ -44,14 +43,6 @@ function TabletLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-    noteItem,
-    noteText,
-    updateNote,
-    confirmNote,
-    cancelNote,
-    addonsByItem,
-    addAddon,
-    incrementLine,
   } = useOrderingSession(initialContext)
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
@@ -125,10 +116,8 @@ function TabletLayout({ initialContext }: LayoutProps) {
           <MenuGrid
             menu={menu}
             cart={cart}
-            addonsByItem={addonsByItem}
             capabilities={context?.capabilities}
             onAdd={addToCart}
-            onAddAddon={addAddon}
             gridClassName="grid grid-cols-3 gap-4 lg:grid-cols-4"
             cardClassName="flex min-w-[150px] flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
             imageClassName="h-32 w-full object-cover"
@@ -145,7 +134,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
           billRequested={billRequested}
           payingOnline={payingOnline}
           paymentNotice={paymentNotice}
-          onIncrement={incrementLine}
+          onIncrement={addToCart}
           onDecrement={decrementCart}
           onSubmit={submitCart}
           onRequestBill={handleRequestBill}
@@ -154,13 +143,6 @@ function TabletLayout({ initialContext }: LayoutProps) {
         />
       </div>
 
-      <GuestNoteDialog
-        item={noteItem}
-        text={noteText}
-        onText={updateNote}
-        onConfirm={confirmNote}
-        onClose={cancelNote}
-      />
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
         <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>

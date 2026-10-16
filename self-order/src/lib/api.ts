@@ -154,23 +154,6 @@ export async function getMenu(session: string): Promise<MenuResponse> {
   return response.message
 }
 
-export interface CustomerProduct {
-  item_code: string
-  item_name: string
-  description: string | null
-  image: string | null
-  variants: unknown[]
-  addons: unknown[]
-}
-
-export async function getCustomerProduct(session: string, itemCode: string): Promise<CustomerProduct> {
-  const response = await call.get<FrappeResponse<CustomerProduct>>(`${M}.get_customer_product`, {
-    session,
-    item_code: itemCode,
-  })
-  return response.message
-}
-
 export async function getCurrentOrder(session: string): Promise<CustomerOrder> {
   const response = await call.get<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
   return response.message

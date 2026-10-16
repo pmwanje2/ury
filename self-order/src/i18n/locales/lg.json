@@ -67,13 +67,6 @@
     "other": "Ebirala",
     "categories": "Ebika bya menyu"
   },
-  "item": {
-    "note_label": "Ekiwandiiko eri mu kyumba ky'emmere",
-    "note_placeholder": "Okugeza, tewali butungulu",
-    "add": "Teekako {{name}}",
-    "addons": "Ebyongerwako",
-    "addon_add": "Yongerako ekyongerwako {{name}}"
-  },
   "errors": {
     "missing_code": "Link eno terina koodi y'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.",
     "load_menu": "Menyu tetuuse. Nsaba oskane nate koodi ya QR.",
