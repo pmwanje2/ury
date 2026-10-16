@@ -154,6 +154,12 @@ export async function getMenu(session: string): Promise<MenuResponse> {
   return response.message
 }
 
+export async function getProductAddons(session: string, item_code: string): Promise<{ item_code: string }[]> {
+  const response = await call.get<FrappeResponse<{ addons: { item_code: string }[] }>>(`${M}.get_customer_product`, { session, item_code })
+  if (!Array.isArray(response.message?.addons)) throw new Error('Invalid add-on response')
+  return response.message.addons
+}
+
 export async function getCurrentOrder(session: string): Promise<CustomerOrder> {
   const response = await call.get<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
   return response.message

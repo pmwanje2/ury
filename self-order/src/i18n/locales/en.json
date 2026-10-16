@@ -67,6 +67,17 @@
     "other": "Other",
     "categories": "Menu categories"
   },
+  "item": {
+    "note_label": "Note for the kitchen",
+    "note_placeholder": "For example, no onions",
+    "add": "Add {{name}}",
+    "addons": "Add-ons",
+    "addon_add": "Add add-on {{name}}",
+    "price_unavailable": "Price unavailable",
+    "addons_error": "Could not load add-ons.",
+    "addons_retry": "Retry add-ons",
+    "addons_loading": "Loading add-ons…"
+  },
   "errors": {
     "missing_code": "This link is missing an ordering code. Please rescan the QR code on your table.",
     "load_menu": "Unable to load the menu. Please rescan the QR code.",

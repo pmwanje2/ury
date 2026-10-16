@@ -7,6 +7,7 @@ import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
+import GuestNoteDialog from '../components/GuestNoteDialog'
 
 const IDLE_WARN_MS = 60000
 const IDLE_RESET_GRACE_MS = 15000
@@ -23,6 +24,7 @@ interface LayoutProps {
  */
 function TabletLayout({ initialContext }: LayoutProps) {
   useGuestLanguage()
+  const ordering = useOrderingSession(initialContext)
   const {
     context,
     menu,
@@ -35,6 +37,9 @@ function TabletLayout({ initialContext }: LayoutProps) {
     payingOnline,
     paymentNotice,
     addToCart,
+    incrementLine,
+    addonsByItem,
+    retryAddons,
     decrementCart,
     submitCart,
     handleRequestBill,
@@ -43,7 +48,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-  } = useOrderingSession(initialContext)
+  } = ordering
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
   const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -118,6 +123,8 @@ function TabletLayout({ initialContext }: LayoutProps) {
             cart={cart}
             capabilities={context?.capabilities}
             onAdd={addToCart}
+            addonsByItem={addonsByItem}
+            onRetryAddons={retryAddons}
             gridClassName="grid grid-cols-3 gap-4 lg:grid-cols-4"
             cardClassName="flex min-w-[150px] flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
             imageClassName="h-32 w-full object-cover"
@@ -134,7 +141,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
           billRequested={billRequested}
           payingOnline={payingOnline}
           paymentNotice={paymentNotice}
-          onIncrement={addToCart}
+          onIncrement={incrementLine}
           onDecrement={decrementCart}
           onSubmit={submitCart}
           onRequestBill={handleRequestBill}
@@ -143,6 +150,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
         />
       </div>
 
+      <GuestNoteDialog {...ordering} />
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
         <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>

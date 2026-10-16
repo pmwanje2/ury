@@ -6,6 +6,7 @@ import {
   createPaymentRequest,
   getCurrentOrder,
   getMenu,
+  getProductAddons,
   getStoredContext,
   requestBill,
   requestAssistance,
@@ -68,7 +69,31 @@ function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = fa
 const SESSION_KEY = 'ury_order_session'
 const CONTEXT_KEY = 'ury_order_context'
 
-type Cart = Record<string, { item: MenuItem; qty: number }>
+export type GuestLine = { key: string; item: MenuItem; qty: number; note: string }
+export type AddonState = { status: 'loading' | 'error' | 'ready'; items: MenuItem[] }
+type Cart = Record<string, GuestLine>
+
+export function hasPrice(item: MenuItem): boolean {
+  return typeof item.rate === 'number' && Number.isFinite(item.rate) && item.rate >= 0
+}
+
+// A raw invoice comment has no guest provenance. Never promote it into
+// guest UI state, even when notes are enabled. Network projection is U7.
+function guestOrder(current: CustomerOrder): CustomerOrder {
+  return {
+    invoice: current.invoice, table: current.table, order_type: current.order_type,
+    pickup_code: current.pickup_code, grand_total: current.grand_total, billed: current.billed,
+    items: current.items.map(row => ({
+      item_code: row.item_code, item_name: row.item_name, qty: row.qty,
+      rate: row.rate, amount: row.amount, comment: null,
+    })),
+  }
+}
+
+function addLine(cart: Cart, item: MenuItem, note: string): Cart {
+  const key = JSON.stringify([item.item, note])
+  return { ...cart, [key]: { key, item, note, qty: (cart[key]?.qty ?? 0) + 1 } }
+}
 
 function useQueryToken(): string | null {
   const params = new URLSearchParams(window.location.search)
@@ -93,6 +118,10 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [order, setOrder] = useState<CustomerOrder | null>(null)
   const [cart, setCart] = useState<Cart>({})
+  const [addonsByItem, setAddonsByItem] = useState<Record<string, AddonState>>({})
+  const [noteItem, setNoteItem] = useState<MenuItem | null>(null)
+  const [noteText, setNoteText] = useState('')
+  const addonGeneration = useRef(0)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [shownError, setShownError] = useState<ShownError | null>(null)
@@ -108,10 +137,27 @@ export function useOrderingSession(initialContext?: OrderingContext) {
 
   const loadOrder = useCallback(async (session: string) => {
     const current = await getCurrentOrder(session)
-    setOrder(current)
+    setOrder(guestOrder(current))
+  }, [])
+
+  const loadAddons = useCallback(async (session: string, item: MenuItem, items: MenuItem[], generation: number) => {
+    const update = (state: AddonState) => {
+      if (addonGeneration.current === generation) setAddonsByItem(prev => ({ ...prev, [item.item]: state }))
+    }
+    update({ status: 'loading', items: [] })
+    try {
+      const linked = await getProductAddons(session, item.item)
+      // Availability and displayed price come from the current server menu,
+      // not an invented zero or a stale/disabled/off-menu linked product.
+      const codes = new Set(linked.map(addon => addon.item_code))
+      update({ status: 'ready', items: items.filter(candidate => !candidate.disabled && codes.has(candidate.item)) })
+    } catch {
+      update({ status: 'error', items: [] })
+    }
   }, [])
 
   const init = useCallback(async () => {
+    const generation = ++addonGeneration.current
     setLoading(true)
     try {
       let ctx: OrderingContext
@@ -135,7 +181,11 @@ export function useOrderingSession(initialContext?: OrderingContext) {
         }
       }
       const menuResponse = await getMenu(ctx.session)
-      setMenu(menuResponse.items.filter((item) => !item.disabled))
+      const items = menuResponse.items.filter((item) => !item.disabled)
+      setMenu(items)
+      if (ctx.capabilities.product_detail_enabled) {
+        await Promise.all(items.map(item => loadAddons(ctx.session, item, items, generation)))
+      }
       await loadOrder(ctx.session)
       setContext(ctx)
     } catch (err) {
@@ -180,6 +230,9 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     sessionStorage.removeItem(SESSION_KEY)
     sessionStorage.removeItem(CONTEXT_KEY)
     setCart({})
+    setAddonsByItem({})
+    setNoteItem(null)
+    setNoteText('')
     setOrder(null)
     setBillRequested(false)
     setAssistanceStatus(null)
@@ -194,10 +247,28 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   }, [init])
 
   function addToCart(item: MenuItem) {
-    setCart((prev) => {
-      const existing = prev[item.item]
-      return { ...prev, [item.item]: { item, qty: (existing?.qty ?? 0) + 1 } }
-    })
+    if (item.disabled || !hasPrice(item)) return
+    if (context?.capabilities.item_notes_enabled) {
+      setNoteItem(item)
+      setNoteText('')
+    } else setCart(prev => addLine(prev, item, ''))
+  }
+
+  function cancelNote() { setNoteItem(null); setNoteText('') }
+
+  function confirmNote() {
+    if (!noteItem || !hasPrice(noteItem)) return
+    setCart(prev => addLine(prev, noteItem, context?.capabilities.item_notes_enabled ? noteText.trim().slice(0, 140) : ''))
+    cancelNote()
+  }
+
+  function incrementLine(line: GuestLine) {
+    if (hasPrice(line.item)) setCart(prev => addLine(prev, line.item, line.note))
+  }
+
+  function retryAddons(itemCode: string) {
+    const item = menu.find(candidate => candidate.item === itemCode)
+    if (context && item) void loadAddons(context.session, item, menu, addonGeneration.current)
   }
 
   function decrementCart(itemCode: string) {
@@ -214,17 +285,24 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   }
 
   const cartItems = Object.values(cart)
+  const cartByItem: Record<string, { item: MenuItem; qty: number }> = {}
+  for (const line of cartItems) {
+    cartByItem[line.item.item] = { item: line.item, qty: (cartByItem[line.item.item]?.qty ?? 0) + line.qty }
+  }
   const cartCount = cartItems.reduce((sum, entry) => sum + entry.qty, 0)
   const cartTotal = cartItems.reduce((sum, entry) => sum + entry.qty * entry.item.rate, 0)
 
   async function submitCart() {
-    if (!context || cartItems.length === 0) return
+    if (!context || cartItems.length === 0 || cartItems.some(line => !hasPrice(line.item))) return
     setSubmitting(true)
     setShownError(null)
     try {
-      const payload = cartItems.map((entry) => ({ item: entry.item.item, qty: entry.qty }))
+      const payload = cartItems.map(entry => ({
+        item: entry.item.item, qty: entry.qty,
+        ...(context.capabilities.item_notes_enabled && entry.note ? { comment: entry.note } : {}),
+      }))
       const updated = await addItems(context.session, payload)
-      setOrder(updated)
+      setOrder(guestOrder(updated))
       setCart({})
     } catch (err) {
       setShownError(serverTextOrCatalog(err, 'place_order', true))
@@ -297,7 +375,15 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     context,
     menu,
     order,
-    cart,
+    cart: cartByItem,
+    addonsByItem,
+    retryAddons,
+    noteItem,
+    noteText,
+    changeNote: (text: string) => setNoteText(text.slice(0, 140)),
+    confirmNote,
+    cancelNote,
+    incrementLine,
     loading,
     submitting,
     error,

@@ -7,6 +7,7 @@ import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
+import GuestNoteDialog from '../components/GuestNoteDialog'
 
 const IDLE_WARN_MS = 60000
 const IDLE_RESET_GRACE_MS = 15000
@@ -25,6 +26,7 @@ interface LayoutProps {
  */
 function LandscapeKioskLayout({ initialContext }: LayoutProps) {
   useGuestLanguage()
+  const ordering = useOrderingSession(initialContext)
   const {
     context,
     menu,
@@ -37,6 +39,9 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     payingOnline,
     paymentNotice,
     addToCart,
+    incrementLine,
+    addonsByItem,
+    retryAddons,
     decrementCart,
     submitCart,
     handleRequestBill,
@@ -45,7 +50,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-  } = useOrderingSession(initialContext)
+  } = ordering
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
   const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -120,6 +125,8 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
             cart={cart}
             capabilities={context?.capabilities}
             onAdd={addToCart}
+            addonsByItem={addonsByItem}
+            onRetryAddons={retryAddons}
             gridClassName="grid grid-cols-4 gap-6 xl:grid-cols-5"
             cardClassName="flex min-w-[180px] flex-col overflow-hidden rounded-2xl border text-left text-lg transition active:scale-[0.97]"
             imageClassName="h-40 w-full object-cover"
@@ -136,7 +143,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
           billRequested={billRequested}
           payingOnline={payingOnline}
           paymentNotice={paymentNotice}
-          onIncrement={addToCart}
+          onIncrement={incrementLine}
           onDecrement={decrementCart}
           onSubmit={submitCart}
           onRequestBill={handleRequestBill}
@@ -145,6 +152,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
         />
       </div>
 
+      <GuestNoteDialog {...ordering} />
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
         <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>

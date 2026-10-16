@@ -1,6 +1,8 @@
 import { formatCurrency } from '@ury/core'
 import type { MenuItem, OrderingCapabilities } from '../../lib/api'
 import { t } from '../../i18n'
+import { hasPrice, type AddonState } from '../../hooks/useOrderingSession'
+import GuestAddons from '../../components/GuestAddons'
 
 type Cart = Record<string, { item: MenuItem; qty: number }>
 
@@ -9,6 +11,8 @@ interface MenuGridProps {
   cart: Cart
   capabilities: OrderingCapabilities | undefined
   onAdd: (item: MenuItem) => void
+  addonsByItem: Record<string, AddonState>
+  onRetryAddons: (itemCode: string) => void
   /** Tailwind grid classes (columns/gap) — differs between Tablet and Kiosk. */
   gridClassName: string
   /** Tailwind classes for each card — controls touch-target size. */
@@ -21,11 +25,12 @@ interface MenuGridProps {
  * between TabletLayout and LandscapeKioskLayout — only the sizing classes
  * differ (larger cards, more columns on the kiosk).
  */
-function MenuGrid({ menu, cart, capabilities, onAdd, gridClassName, cardClassName, imageClassName }: MenuGridProps) {
+function MenuGrid({ menu, cart, capabilities, onAdd, addonsByItem, onRetryAddons, gridClassName, cardClassName, imageClassName }: MenuGridProps) {
   return (
     <div className={gridClassName}>
       {menu.map((item) => (
-        <button key={item.item} onClick={() => onAdd(item)} className={cardClassName}>
+        <div key={item.item} className="min-w-0 overflow-hidden rounded-xl border">
+        <button disabled={!hasPrice(item)} onClick={() => onAdd(item)} className={`${cardClassName} w-full disabled:opacity-60`}>
           {capabilities?.show_item_images && item.item_image && (
             <img
               src={item.item_image}
@@ -35,12 +40,14 @@ function MenuGrid({ menu, cart, capabilities, onAdd, gridClassName, cardClassNam
           )}
           <div className="flex flex-1 flex-col gap-1 p-3">
             <div className="font-medium">{item.item_name}</div>
-            <div className="text-muted-foreground tabular-nums">{formatCurrency(item.rate)}</div>
+            <div className="text-muted-foreground tabular-nums">{hasPrice(item) ? formatCurrency(item.rate) : t('item.price_unavailable')}</div>
             {cart[item.item] && (
               <div className="mt-1 text-sm font-semibold text-primary">{t('cart.in_cart', { qty: cart[item.item].qty })}</div>
             )}
           </div>
         </button>
+        <GuestAddons state={addonsByItem[item.item]} onAdd={onAdd} onRetry={() => onRetryAddons(item.item)} />
+        </div>
       ))}
     </div>
   )

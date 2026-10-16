@@ -2,7 +2,9 @@ import { useMemo, useRef, useState } from 'react'
 import { formatCurrency } from '@ury/core'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@ury/ui'
 import { useIdleReset } from '../hooks/useIdleReset'
-import { useOrderingSession } from '../hooks/useOrderingSession'
+import { hasPrice, useOrderingSession } from '../hooks/useOrderingSession'
+import GuestAddons from '../components/GuestAddons'
+import GuestNoteDialog from '../components/GuestNoteDialog'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import type { MenuItem, OrderingContext } from '../lib/api'
@@ -34,6 +36,7 @@ interface LayoutProps {
  */
 function PortraitKioskLayout({ initialContext }: LayoutProps) {
   useGuestLanguage()
+  const ordering = useOrderingSession(initialContext)
   const {
     context,
     menu,
@@ -46,6 +49,9 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     payingOnline,
     paymentNotice,
     addToCart,
+    incrementLine,
+    addonsByItem,
+    retryAddons,
     decrementCart,
     submitCart,
     handleRequestBill,
@@ -54,7 +60,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     cartItems,
     cartCount,
     cartTotal,
-  } = useOrderingSession(initialContext)
+  } = ordering
 
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY)
   const [cartExpanded, setCartExpanded] = useState(false)
@@ -210,13 +216,15 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
 
         <section className="grid flex-1 grid-cols-2 gap-4 self-start">
           {visibleMenu.map((item) => (
+            <div key={item.item} className="min-w-0 overflow-hidden rounded-xl border">
             <MenuCard
-              key={item.item}
               item={item}
               qtyInCart={cart[item.item]?.qty ?? 0}
               showImage={context?.capabilities.show_item_images ?? false}
               onAdd={() => addToCart(item)}
             />
+            <GuestAddons state={addonsByItem[item.item]} onAdd={addToCart} onRetry={() => retryAddons(item.item)} />
+            </div>
           ))}
         </section>
       </div>
@@ -227,11 +235,11 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             <div className="max-h-[50vh] overflow-y-auto border-b p-4">
               <ul className="space-y-2 text-base">
                 {cartItems.map((entry) => (
-                  <li key={entry.item.item} className="flex items-center justify-between">
-                    <span>{entry.item.item_name}</span>
+                  <li key={entry.key} className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 break-words">{entry.item.item_name}{entry.note && <small className="block whitespace-pre-wrap">{entry.note}</small>}</span>
                     <span className="flex items-center gap-3">
                       <button
-                        onClick={() => decrementCart(entry.item.item)}
+                        onClick={() => decrementCart(entry.key)}
                         className="h-8 w-8 rounded-full border text-base leading-none"
                         aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                       >
@@ -239,7 +247,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
                       </button>
                       {entry.qty}
                       <button
-                        onClick={() => addToCart(entry.item)}
+                        onClick={() => incrementLine(entry)}
                         className="h-8 w-8 rounded-full border text-base leading-none"
                         aria-label={t('cart.add_one', { name: entry.item.item_name })}
                       >
@@ -274,6 +282,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
         </div>
       )}
 
+      <GuestNoteDialog {...ordering} />
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
         <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
@@ -307,14 +316,15 @@ function MenuCard({
   return (
     <button
       onClick={onAdd}
-      className="flex flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
+      disabled={!hasPrice(item)}
+      className="flex w-full flex-col text-left transition active:scale-[0.98] disabled:opacity-60"
     >
       {showImage && item.item_image && (
         <img src={item.item_image} alt={item.item_name} className="h-48 w-full object-cover" />
       )}
       <div className="p-4">
         <div className="text-lg font-medium">{item.item_name}</div>
-        <div className="mt-1 text-base text-muted-foreground tabular-nums">{formatCurrency(item.rate)}</div>
+        <div className="mt-1 text-base text-muted-foreground tabular-nums">{hasPrice(item) ? formatCurrency(item.rate) : t('item.price_unavailable')}</div>
         {qtyInCart > 0 && (
           <div className="mt-2 text-sm font-semibold text-primary">{t('cart.in_cart', { qty: qtyInCart })}</div>
         )}
