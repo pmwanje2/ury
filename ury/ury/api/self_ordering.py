@@ -208,6 +208,8 @@ def _open_session(profile, source, table, device=None, invoice=None, granted_by=
     raw_session_token = frappe.generate_hash(length=SESSION_TOKEN_BYTES_HASH_LEN)
     token_hash = hashlib.sha256(raw_session_token.encode()).hexdigest()
     timeout_minutes = profile.session_idle_timeout_minutes or 30
+    if invoice:
+        timeout_minutes = max(1, min(cint(timeout_minutes), 30))
 
     with _elevated():
         session = frappe.get_doc({
@@ -250,6 +252,10 @@ def _guest_retry():
 
 def _sorted_tables(value):
     return sorted({table.strip() for table in (value or "").split(",") if table.strip()})
+
+
+def _valid_fingerprint(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
 def _grant_row(invoice):
@@ -305,6 +311,7 @@ def _checked_guest_session(session_name):
                         or cint(invoice.docstatus) != 0 or cint(invoice.get("is_return"))
                         or invoice.branch != profile.branch or invoice.pos_profile != profile.pos_profile
                         or invoice.restaurant_table != session.table
+                        or not _valid_fingerprint(session.get("grant_fingerprint"))
                         or not hmac.compare_digest(session.get("grant_fingerprint") or "", _grant_fingerprint(invoice))):
                     _guest_refused()
             return session
@@ -382,10 +389,27 @@ def _guest_assistant_enabled(session):
     return profile
 
 
+def _limit_guest_assistant(session):
+    if not frappe.request:
+        return
+    original = frappe.local.form_dict
+    try:
+        frappe.local.form_dict = frappe._dict(original)
+        # A fixed command and server-derived scope prevent caller-selected budgets.
+        frappe.form_dict.cmd = "ury.guest.assistant"
+        rate_limit(limit=5, seconds=600)(lambda: None)()
+        for kind, identity in (("session", session.name), ("table", session.table or session.name)):
+            frappe.form_dict._ury_guest_scope = _hash_credential(f"{kind}:{session.ordering_profile}:{identity}")
+            rate_limit(key="_ury_guest_scope", limit=5, seconds=600, ip_based=False)(lambda: None)()
+    finally:
+        frappe.local.form_dict = original
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def issue_guest_assistant_token(session):
     session = _resolve_session(session)
     profile = _guest_assistant_enabled(session)
+    _limit_guest_assistant(session)
     expiry = min(get_datetime(session.expires_at), now_datetime() + timedelta(minutes=5))
     return {"assistant_token": mint_signed_invoice_grant(profile.name, session.name, "assistant", expiry),
             "expires_at": expiry}
@@ -402,6 +426,7 @@ def resolve_guest_assistant_token(token):
     if session.ordering_profile != profile_name:
         _guest_refused()
     _guest_assistant_enabled(session)
+    _limit_guest_assistant(session)
     return session
 
 
@@ -684,6 +709,8 @@ def add_customer_items(session, items, request_id=None):
         if previous:
             if previous["payload_hash"] != payload_hash:
                 frappe.throw(_("Request ID already used for different items"), frappe.ValidationError)
+            if "response" not in previous:
+                _guest_retry()
             return previous["response"]
 
     order_type = "Dine In" if session.table else "Take Away"
@@ -767,6 +794,13 @@ def add_customer_items(session, items, request_id=None):
             invoice.invoice_created = 1
 
         try:
+            if cache_key:
+                # This is an idempotency record, not a lock. The native invoice
+                # (or new pickup's Session) is locked first. Keep a fail-closed
+                # marker across the SQL COMMIT / after_commit callback window.
+                cache_ttl = max(1800, int((get_datetime(session.expires_at) - now_datetime()).total_seconds()) + 60)
+                frappe.cache.set_value(cache_key, {"payload_hash": payload_hash}, expires_in_sec=cache_ttl)
+                frappe.db.after_rollback.add(lambda: frappe.cache.delete_value(cache_key))
             invoice.save(ignore_permissions=True)
         except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
             _guest_retry()
@@ -809,7 +843,7 @@ def add_customer_items(session, items, request_id=None):
         # Failed/rolled-back writes must never poison replay. The exact invoice
         # lock serializes requests through the native request commit boundary.
         frappe.db.after_commit.add(lambda: frappe.cache.set_value(
-            cache_key, {"payload_hash": payload_hash, "response": response}, expires_in_sec=1800,
+            cache_key, {"payload_hash": payload_hash, "response": response}, expires_in_sec=cache_ttl,
         ))
     return response
 
@@ -1179,6 +1213,8 @@ def share_payment_link(session, recipient):
     so validate it's at least non-empty before handing it to the provider.
     """
     session = _resolve_session(session)
+    if not session.invoice:
+        _guest_refused()
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
     if not profile.enable_payment_link:
         frappe.throw(_("Payment links are not enabled"), frappe.ValidationError)
