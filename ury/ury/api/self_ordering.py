@@ -231,6 +231,10 @@ def _open_session(profile, source, table, device=None, invoice=None, granted_by=
         session.insert(ignore_permissions=True)
         # The native successful POST boundary commits this insert. Grant
         # revocation and replacement must be one transaction, never an early commit.
+        if invoice is None:
+            # Preserve existing GET menu/device bootstrap durability only.
+            # A staff-issued invoice grant must use the native POST transaction.
+            frappe.db.commit()
 
     return raw_session_token, session
 
@@ -272,8 +276,11 @@ def _grant_fingerprint(invoice):
     """
     members = {}
     filters = [{"custom_split_from": invoice.name}, {"custom_merged_pos_invoice": invoice.name}]
-    if invoice.get("custom_split_group"):
-        filters.append({"custom_split_group": invoice.custom_split_group})
+    group = invoice.get("custom_split_group")
+    if not group and invoice.get("custom_split_from"):
+        group = frappe.db.get_value("POS Invoice", invoice.custom_split_from, "custom_split_group", for_update=True)
+    if group:
+        filters.append({"custom_split_group": group})
     for scope in filters:
         for row in frappe.db.get_values(
             "POS Invoice", {**scope, "docstatus": ["<", 2]}, list(_GRANT_FIELDS),
