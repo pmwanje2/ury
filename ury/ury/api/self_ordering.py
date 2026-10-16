@@ -23,13 +23,16 @@
 # Frappe user session. Elevation is always narrow and wrapped in try/finally.
 
 import base64
+import calendar
 import hashlib
 import hmac
 import json
+from datetime import timedelta
 
 import frappe
 from frappe import _
-from frappe.utils import add_to_date, flt, now_datetime
+from frappe.rate_limiter import rate_limit
+from frappe.utils import add_to_date, cint, flt, now_datetime
 
 from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
@@ -1066,3 +1069,209 @@ def share_payment_link(session, recipient):
     _communication_provider(recipient, message)
 
     return {"status": "Sent", "payment_request": pr.name}
+
+
+# ---------------------------------------------------------------------------
+# Guest feedback
+#
+# Native Quality Feedback.document_type is only User or Customer, so the bill
+# is stored in the tenant field custom_pos_invoice (S1). This module does not
+# create that field. A receipt link is minted with the profile QR secret while
+# the bill is rendered; URY marks the bill printed only after rendering, and
+# submit_feedback rechecks the live printed-or-paid state.
+# mint_signed_invoice_grant / read_signed_invoice_grant are purpose-scoped so
+# a later bill grant can reuse the same secret without accepting a feedback QR.
+# ---------------------------------------------------------------------------
+
+FEEDBACK_BILL_FIELD = "custom_pos_invoice"
+INVOICE_GRANT_LIFETIME_SECONDS = 7 * 24 * 60 * 60
+_FEEDBACK_RATINGS = {"1", "2", "3", "4", "5"}
+
+
+def _utc_epoch(moment):
+    return calendar.timegm(moment.utctimetuple())
+
+
+def mint_signed_invoice_grant(profile_name, invoice_name, purpose, expires_at):
+    """Sign an invoice-scoped grant with the profile QR secret. Not guest-callable."""
+    secret = _get_profile_secret(profile_name)
+    expiry_ts = _utc_epoch(expires_at)
+    payload = f"{profile_name}|{purpose}|{invoice_name}|{expiry_ts}"
+    signature = _sign(payload, secret)
+    raw = f"{payload}|{signature}"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def read_signed_invoice_grant(token, purpose):
+    """Return (profile_name, invoice_name) or refuse. Purpose is part of the signature."""
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode()).decode()
+        body, signature = raw.rsplit("|", 1)
+        if len(signature) != 64 or any(character not in "0123456789abcdef" for character in signature):
+            raise ValueError("Invalid signature")
+        profile_name, token_purpose, invoice_name, expiry_text = body.rsplit("|", 3)
+        expiry_ts = int(expiry_text)
+    except Exception:
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+
+    if not profile_name or not invoice_name or token_purpose != purpose:
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+
+    secret = _get_profile_secret(profile_name)
+    expected = _sign(f"{profile_name}|{token_purpose}|{invoice_name}|{expiry_ts}", secret)
+    if not hmac.compare_digest(expected, signature):
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+
+    now_ts = _utc_epoch(now_datetime())
+    if expiry_ts <= now_ts or expiry_ts > now_ts + INVOICE_GRANT_LIFETIME_SECONDS:
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+    return profile_name, invoice_name
+
+
+def feedback_receipt_link(invoice):
+    """Opaque feedback grant for a print format. Empty when it must not be printed."""
+    invoice_doc = frappe.get_doc("POS Invoice", invoice)
+    invoice_doc.check_permission("print")
+    if cint(getattr(invoice_doc, "docstatus", 0)) == 2 or cint(getattr(invoice_doc, "is_return", 0)) == 1:
+        return ""
+    if not invoice_doc.branch or not invoice_doc.pos_profile:
+        return ""
+
+    profiles = frappe.get_all(
+        "URY Self Ordering Profile",
+        filters={
+            "branch": invoice_doc.branch,
+            "pos_profile": invoice_doc.pos_profile,
+            "enabled": 1,
+            "enable_feedback": 1,
+        },
+        pluck="name",
+    )
+    if len(profiles) != 1:
+        return ""
+
+    expires_at = now_datetime() + timedelta(seconds=INVOICE_GRANT_LIFETIME_SECONDS)
+    return mint_signed_invoice_grant(profiles[0], invoice_doc.name, "feedback", expires_at)
+
+
+def _invoice_accepts_feedback(invoice):
+    if cint(getattr(invoice, "docstatus", 0)) == 2 or cint(getattr(invoice, "is_return", 0)) == 1:
+        return False
+    if cint(getattr(invoice, "invoice_printed", 0)) == 1:
+        return True
+    return cint(getattr(invoice, "docstatus", 0)) == 1 and flt(getattr(invoice, "outstanding_amount", 1)) <= 0
+
+
+def _feedback_rating(value):
+    if isinstance(value, bool) or isinstance(value, float):
+        frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+    if isinstance(value, int) and value in (1, 2, 3, 4, 5):
+        return str(value)
+    if isinstance(value, str) and value in _FEEDBACK_RATINGS:
+        return value
+    frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+
+
+def _feedback_parameters(ratings, expected):
+    if isinstance(ratings, str):
+        try:
+            ratings = json.loads(ratings)
+        except Exception:
+            frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+    if not isinstance(ratings, list):
+        frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+
+    supplied = {}
+    allowed = set(expected)
+    for row in ratings:
+        if not isinstance(row, dict) or set(row) != {"parameter", "rating"}:
+            frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+        parameter = row.get("parameter")
+        if not isinstance(parameter, str) or parameter not in allowed or parameter in supplied:
+            frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+        supplied[parameter] = _feedback_rating(row.get("rating"))
+    if set(supplied) != allowed:
+        frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+    return [{"parameter": parameter, "rating": supplied[parameter]} for parameter in expected]
+
+
+def _limit_feedback_credential(kind, identity):
+    """Charge the native limiter using verified scope, independently of IP."""
+    if not frappe.request:
+        return
+    original_form = frappe.local.form_dict
+    try:
+        frappe.local.form_dict = frappe._dict(original_form)
+        frappe.form_dict._ury_feedback_budget = f"feedback:{kind}:{_hash_credential(identity)}"
+        rate_limit(key="_ury_feedback_budget", limit=5, seconds=600, ip_based=False)(lambda: None)()
+    finally:
+        frappe.local.form_dict = original_form
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+@rate_limit(limit=5, seconds=600)
+def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None, template=None):
+    """Store one Quality Feedback for this session bill, or for a signed receipt.
+
+    `invoice` and `template` are accepted and discarded. The bill is the
+    session invoice, or the invoice inside a feedback grant. Never a guest value.
+    """
+    del invoice, template
+
+    if session:
+        resolved = _resolve_session(session)
+        profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
+        invoice_name = resolved.invoice
+        if not invoice_name:
+            frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+        _limit_feedback_credential("session", resolved.name)
+    elif receipt_token:
+        profile_name, invoice_name = read_signed_invoice_grant(receipt_token, "feedback")
+        profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
+        _limit_feedback_credential("receipt", json.dumps([profile_name, invoice_name]))
+    else:
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+
+    if not cint(getattr(profile, "enabled", 0)) or not cint(getattr(profile, "enable_feedback", 0)):
+        frappe.throw(_("URY_FEEDBACK_DISABLED"), frappe.ValidationError)
+    if not getattr(profile, "feedback_template", None):
+        frappe.throw(_("URY_FEEDBACK_TEMPLATE"), frappe.ValidationError)
+    if not frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD):
+        frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
+
+    with _elevated():
+        try:
+            invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
+            if invoice_doc.branch != profile.branch or invoice_doc.pos_profile != profile.pos_profile:
+                frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+            if not _invoice_accepts_feedback(invoice_doc):
+                frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+            if not getattr(invoice_doc, "customer", None):
+                frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+
+            # Current locking reads serialize the exact bill. MariaDB can
+            # refuse a stale transaction snapshot rather than expose the winner.
+            existing = frappe.db.get_value(
+                "Quality Feedback", {FEEDBACK_BILL_FIELD: invoice_doc.name}, "name", for_update=True,
+            )
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            # Let the native request boundary roll back; never reset its
+            # isolation, commit unrelated writes, or guess that feedback exists.
+            frappe.throw(_("URY_FEEDBACK_RETRY: Another request is finishing. Please try again."), frappe.ValidationError)
+        if existing:
+            return {"status": "Already Received"}
+
+        template_doc = frappe.get_doc("Quality Feedback Template", profile.feedback_template)
+        parameters = _feedback_parameters(ratings, [row.parameter for row in template_doc.parameters])
+        feedback = frappe.get_doc({
+            "doctype": "Quality Feedback",
+            "template": profile.feedback_template,
+            "document_type": "Customer",
+            "document_name": invoice_doc.customer,
+            FEEDBACK_BILL_FIELD: invoice_doc.name,
+            "parameters": parameters,
+        })
+        feedback.insert(ignore_permissions=True)
+
+    return {"status": "Received"}

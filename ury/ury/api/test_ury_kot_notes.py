@@ -37,6 +37,10 @@ class OrderingCases:
         utils.add_to_date = MagicMock()
         document = ModuleType("frappe.model.document")
         document.Document = object
+        rate_limiter = ModuleType("frappe.rate_limiter")
+        # These cases exercise orders/KOTs, not feedback throttling. Keep the
+        # native decorator importable without substituting the feedback suite.
+        rate_limiter.rate_limit = lambda **kwargs: lambda function: function
         queries = ModuleType("erpnext.controllers.queries")
         queries.item_query = MagicMock()
         pos_api = ModuleType("ury.ury_pos.api")
@@ -47,6 +51,7 @@ class OrderingCases:
         printer.print_combined_waiter_order_slip = MagicMock()
         self.enterContext(patch.dict(sys.modules, {
             "frappe": self.framework, "frappe.utils": utils,
+            "frappe.rate_limiter": rate_limiter,
             "frappe.model.document": document, "erpnext.controllers.queries": queries,
             "ury.ury_pos.api": pos_api, "ury.ury.api.ury_waiter_print": printer,
         }))
