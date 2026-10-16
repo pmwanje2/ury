@@ -8,6 +8,7 @@
     "build": "vite build --base=/assets/ury/order/ && yarn copy-html-entry",
     "copy-html-entry": "cp ../ury/public/order/index.html ../ury/www/order.html",
     "lint": "eslint .",
+    "test:types": "tsc -p tsconfig.app.json --noEmit",
     "preview": "vite preview"
   },
   "dependencies": {
