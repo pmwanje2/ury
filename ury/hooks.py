@@ -130,6 +130,7 @@ ury_demo_transaction_doctypes = [
 jinja = {
     "methods": [
         "ury.ury.api.self_ordering.feedback_receipt_link",
+        "ury.ury.api.self_ordering.feedback_receipt_qr",
     ],
 }
 

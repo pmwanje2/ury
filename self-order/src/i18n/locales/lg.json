@@ -51,6 +51,19 @@
     "request": "Saba bili",
     "requested": "Bili esabiddwa — abaweereza bategeezeddwa"
   },
+  "feedback": {
+    "title": "Pima ku luwummula lwo",
+    "rate_visit": "Pima ku luwummula lwo",
+    "loading": "Etikka okuteesa…",
+    "submit": "Wereza okuteesa",
+    "submitting": "Etuma…",
+    "thanks": "Weebale olw'okuteesa kwo.",
+    "already_received": "Kumaze okuweerezebwa",
+    "not_eligible": "Okuteesa tekuli ku bili eno.",
+    "retry": "Gezaako nate",
+    "load_error": "Okuteesa tekutikkiddwa.",
+    "rating": "{{parameter}} {{rating}} ku 5"
+  },
   "cart": {
     "title": "Ekikapu",
     "empty": "Nyiga ku mmere ku menyu ogiteeke mu kikapu.",

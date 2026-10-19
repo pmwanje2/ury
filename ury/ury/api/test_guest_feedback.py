@@ -745,8 +745,16 @@ class TestFeedbackForm(unittest.TestCase):
         link = self.enterContext(patch(f"{MOD}.feedback_receipt_link", return_value="TOKEN"))
         from frappe.utils import print_format_generator
 
-        qr = self.enterContext(patch.object(print_format_generator, "get_qr_code", return_value="data:image/svg+xml;base64,QR"))
-        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "data:image/svg+xml;base64,QR")
+        def fake_qr(value):
+            return "data:image/svg+xml;base64," + base64.b64encode(value.encode()).decode()
+
+        qr = self.enterContext(patch.object(print_format_generator, "get_qr_code", side_effect=fake_qr))
+        result = method("POS-1", "https://salama.example/order/feedback")
+        self.assertTrue(result.startswith("data:image/svg+xml;base64,"))
+        self.assertEqual(
+            base64.b64decode(result.split(",", 1)[1]).decode(),
+            "https://salama.example/order/feedback#r=TOKEN",
+        )
         qr.assert_called_once_with("https://salama.example/order/feedback#r=TOKEN")
         link.return_value = ""
         qr.reset_mock()

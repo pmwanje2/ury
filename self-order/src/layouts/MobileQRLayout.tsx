@@ -150,6 +150,14 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
             </button>
             </>
           )}
+          {context?.capabilities.feedback_enabled && order.billed && (
+            <a
+              href="/order/feedback"
+              className="mt-3 block w-full rounded-md border py-2 text-center text-sm font-medium"
+            >
+              {t('feedback.rate_visit')}
+            </a>
+          )}
         </section>
       )}
 

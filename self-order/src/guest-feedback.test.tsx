@@ -80,7 +80,9 @@ async function render(node: React.ReactNode) {
 }
 
 function exactButton(text: string): HTMLButtonElement {
-  const found = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === text)
+  const found = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button =>
+    button.textContent?.trim() === text || button.getAttribute('aria-label') === text,
+  )
   expect(found, `button ${text}`).toBeDefined()
   return found!
 }
@@ -102,9 +104,9 @@ describe('guest feedback route', () => {
     await render(<App />)
     const submit = exactButton('Submit feedback')
     expect(submit.disabled).toBe(true)
-    await click(exactButton('Food 5'))
+    await click(exactButton('Food label 5 out of 5'))
     expect(submit.disabled).toBe(true)
-    await click(exactButton('Service 3'))
+    await click(exactButton('Service label 3 out of 5'))
     expect(submit.disabled).toBe(false)
     await click(submit)
     const request = postCalls.find(call => call.path.endsWith('submit_feedback'))

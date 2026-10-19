@@ -301,6 +301,7 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
             "payment_link_enabled": bool(profile.enable_payment_link),
             "pay_at_counter_enabled": bool(profile.enable_pay_at_counter),
             "add_to_running_table_enabled": bool(profile.allow_add_to_running_table),
+            "feedback_enabled": bool(cint(getattr(profile, "enable_feedback", 0))) and bool(getattr(profile, "feedback_template", None)),
         },
     }
 
@@ -1155,6 +1156,20 @@ def feedback_receipt_link(invoice):
     return mint_signed_invoice_grant(profiles[0], invoice_doc.name, "feedback", expires_at)
 
 
+def feedback_receipt_qr(invoice, base_url):
+    """Return a receipt QR for the opaque feedback grant, or nothing on failure."""
+    token = feedback_receipt_link(invoice)
+    if not token:
+        return ""
+    try:
+        from frappe.utils.print_format_generator import get_qr_code
+
+        return get_qr_code(f"{base_url}#r={token}")
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "URY feedback receipt QR")
+        return ""
+
+
 def _invoice_accepts_feedback(invoice):
     if cint(getattr(invoice, "docstatus", 0)) == 2 or cint(getattr(invoice, "is_return", 0)) == 1:
         return False
@@ -1207,6 +1222,53 @@ def _limit_feedback_credential(kind, identity):
         rate_limit(key="_ury_feedback_budget", limit=5, seconds=600, ip_based=False)(lambda: None)()
     finally:
         frappe.local.form_dict = original_form
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+@rate_limit(limit=5, seconds=600)
+def get_feedback_form(session=None, receipt_token=None):
+    """Read the current guest feedback labels for one verified bill."""
+    if session:
+        resolved = _resolve_session(session)
+        profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
+        invoice_name = resolved.invoice
+        if not invoice_name:
+            frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+        _limit_feedback_credential("session", resolved.name)
+    elif receipt_token:
+        profile_name, invoice_name = read_signed_invoice_grant(receipt_token, "feedback")
+        profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
+        _limit_feedback_credential("receipt", json.dumps([profile_name, invoice_name]))
+    else:
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+
+    if not cint(getattr(profile, "enabled", 0)) or not cint(getattr(profile, "enable_feedback", 0)):
+        frappe.throw(_("URY_FEEDBACK_DISABLED"), frappe.ValidationError)
+    if not getattr(profile, "feedback_template", None):
+        frappe.throw(_("URY_FEEDBACK_TEMPLATE"), frappe.ValidationError)
+    if not frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD):
+        frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
+
+    with _elevated():
+        invoice_doc = frappe.get_doc("POS Invoice", invoice_name)
+        eligible = (
+            invoice_doc.branch == profile.branch
+            and invoice_doc.pos_profile == profile.pos_profile
+            and _invoice_accepts_feedback(invoice_doc)
+            and bool(getattr(invoice_doc, "customer", None))
+        )
+        template_doc = frappe.get_doc("Quality Feedback Template", profile.feedback_template)
+        parameters = [
+            {"parameter": row.parameter, "label": _(row.parameter)}
+            for row in template_doc.parameters
+        ]
+        if not eligible:
+            return {"status": "not_eligible", "parameters": parameters}
+        existing = frappe.db.get_value(
+            "Quality Feedback", {FEEDBACK_BILL_FIELD: invoice_doc.name}, "name",
+        )
+
+    return {"status": "received" if existing else "open", "parameters": parameters}
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

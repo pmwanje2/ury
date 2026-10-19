@@ -6,6 +6,7 @@ import PortraitKioskLayout from './layouts/PortraitKioskLayout'
 import type { OrderingLayout } from './lib/api'
 import { t } from './i18n'
 import LanguageSwitcher, { useGuestLanguage } from './components/LanguageSwitcher'
+import GuestFeedback from './components/GuestFeedback'
 
 const LAYOUTS: Record<OrderingLayout, typeof MobileQRLayout> = {
   Mobile: MobileQRLayout,
@@ -23,8 +24,7 @@ const LAYOUTS: Record<OrderingLayout, typeof MobileQRLayout> = {
  * the QR/mobile case) falls through to MobileQRLayout, which does its own
  * token/session bootstrap via useOrderingSession().
  */
-function App() {
-  useGuestLanguage()
+function OrderingApp() {
   const { isDevice, deviceContext, deviceLoading, deviceError } = useDeviceBootstrap()
 
   if (isDevice) {
@@ -49,6 +49,12 @@ function App() {
   }
 
   return <MobileQRLayout />
+}
+
+function App() {
+  useGuestLanguage()
+  if (window.location.pathname === '/order/feedback') return <GuestFeedback />
+  return <OrderingApp />
 }
 
 export default App
