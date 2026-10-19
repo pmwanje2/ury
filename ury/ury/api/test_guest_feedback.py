@@ -635,6 +635,32 @@ class TestFeedbackForm(unittest.TestCase):
     _exists = TestGuestFeedback._exists
     _get_value = TestGuestFeedback._get_value
     _get_all = TestGuestFeedback._get_all
+    _invoice_permission_boundary = TestGuestFeedback._invoice_permission_boundary
+
+    def _receipt_qr_without_native_qr(self):
+        method = getattr(self.api, "feedback_receipt_qr", None)
+        self.assertTrue(callable(method), "Receipt QR helper is missing")
+        from frappe.utils import print_format_generator
+
+        qr = self.enterContext(patch.object(print_format_generator, "get_qr_code", side_effect=AssertionError("no QR expected")))
+        logged = self.enterContext(patch(f"{MOD}.frappe.log_error"))
+        return method, qr, logged
+
+    def test_receipt_qr_is_blank_for_a_read_only_printer(self):
+        # Native print accepts read OR print; the receipt must still render.
+        self._invoice_permission_boundary({"read"})
+        method, qr, logged = self._receipt_qr_without_native_qr()
+        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "")
+        qr.assert_not_called()
+        logged.assert_not_called()
+        self.secret.assert_not_called()
+
+    def test_receipt_qr_is_blank_when_the_link_lookup_fails(self):
+        self.get_all.side_effect = RuntimeError("db down")
+        method, qr, logged = self._receipt_qr_without_native_qr()
+        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "")
+        qr.assert_not_called()
+        logged.assert_called_once()
 
     def test_feedback_capability_requires_an_enabled_profile_and_template(self):
         for enabled, template, expected in (
