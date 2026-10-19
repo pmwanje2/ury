@@ -51,7 +51,7 @@ describe('guest phone grant bootstrap', () => {
     expect(post).not.toHaveBeenCalledWith(expect.stringContaining('raw-grant-secret'), expect.anything());
     expect(container.textContent).toContain('Soup');
     expect(container.textContent).toContain('Call waiter');
-    expect(container.textContent).toContain('Request bill');
+    expect(container.textContent).toContain('Request Bill');
   });
 
   it('shows the generic refusal when a grant is expired or revoked', async () => {

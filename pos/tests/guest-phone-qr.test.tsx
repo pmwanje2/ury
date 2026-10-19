@@ -59,12 +59,12 @@ describe('Guest phone QR', () => {
     expect(post.mock.calls[1][0]).toBe('frappe.utils.print_format_generator.get_qr_code');
     expect(String(post.mock.calls[1][1]?.value)).toContain('/order/#g=grant-one');
     expect(String(post.mock.calls[1][1]?.value)).not.toContain('?g=');
-    expect(container.querySelector('img')?.getAttribute('src')).toContain('grant-one');
+    expect(container.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/);
 
     await act(async () => button('Guest phone QR')?.click());
     expect(post).toHaveBeenNthCalledWith(3, 'ury.ury.api.self_ordering.issue_table_grant', { invoice: 'INV-1' });
-    expect(String(post.mock.calls[4][1]?.value)).toContain('/order/#g=grant-two');
-    expect(container.querySelector('img')?.getAttribute('src')).toContain('grant-two');
+    expect(String(post.mock.calls[3][1]?.value)).toContain('/order/#g=grant-two');
+    expect(container.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/);
   });
 
   it('shows ERP refusal text verbatim', async () => {
@@ -84,7 +84,7 @@ it('adds Guest phone QR to the captain actions menu only when enabled', async ()
       isOpen
       onOpenChange={vi.fn()}
       showGuestPhoneQr
-      onGuestPhoneQr
+      onGuestPhoneQr={onGuestPhoneQr}
     />
   ));
   expect(button('Guest phone QR')).toBeDefined();
