@@ -740,7 +740,6 @@ class TestFeedbackForm(unittest.TestCase):
             {"invoice_printed": 0, "docstatus": 0, "is_return": 0},
             {"invoice_printed": 1, "docstatus": 2, "is_return": 0},
             {"invoice_printed": 1, "docstatus": 1, "is_return": 1},
-            {"invoice_printed": 1, "docstatus": 0, "is_return": 0, "pos_profile": "Other Till"},
         )
         for changes in cases:
             with self.subTest(changes=changes):
@@ -752,6 +751,16 @@ class TestFeedbackForm(unittest.TestCase):
                 for key, value in changes.items():
                     setattr(self.invoice, key, value)
                 self.assertEqual(self._get_feedback_form(session="opaque-session")["status"], "not_eligible")
+
+    def test_form_read_and_submit_share_one_bill_check(self):
+        # A bill from another till is a bad link on both paths, never a status.
+        self.invoice.pos_profile = "Other Till"
+        with self.assertRaises(frappe.PermissionError) as read:
+            self._get_feedback_form(session="opaque-session")
+        with self.assertRaises(frappe.PermissionError) as submit:
+            self.api.submit_feedback(session="opaque-session", ratings=RATINGS)
+        self.assertEqual(str(read.exception), str(submit.exception))
+        self.assertTrue(callable(getattr(self.api, "_feedback_bill", None)), "No shared feedback bill resolver")
 
     def test_feedback_form_is_disabled_and_post_only(self):
         self.profile.enable_feedback = 0
