@@ -99,6 +99,16 @@ describe('ERP refusal text', () => {
   });
 });
 
+describe('guest read transport', () => {
+  it('loads the menu and running bill as POST bodies, never as GET query strings', async () => {
+    await render();
+    expect(container.textContent).toContain('Soup');
+    expect(call.post).toHaveBeenCalledWith('ury.ury.api.self_ordering.get_customer_menu', { session: 'synthetic-session' });
+    expect(call.post).toHaveBeenCalledWith('ury.ury.api.self_ordering.get_customer_order', { session: 'synthetic-session' });
+    expect(call.get).not.toHaveBeenCalled();
+  });
+});
+
 it('renders the guest boot brand name and logo without interpreting HTML', async () => {
   const browser = window as Window & { frappe?: { boot: object } };
   browser.frappe = { boot: { ury_brand: { name: 'Salama <script>evil()</script>', logo: '/files/salama.png' } } };
