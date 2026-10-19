@@ -128,7 +128,8 @@
    "fieldtype": "Link",
    "label": "Invoice",
    "options": "POS Invoice",
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 1,

@@ -199,6 +199,7 @@ class TestGuestGrants(unittest.TestCase):
         return method
 
     def grant(self):
+        self.profile.require_guest_invoice_grant = 1
         self.set_user("captain@example.test")
         result = self.method("issue_table_grant")("BILL-1")
         self.set_user("Guest")
