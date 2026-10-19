@@ -1236,10 +1236,8 @@ def _limit_feedback_credential(kind, identity):
         frappe.local.form_dict = original_form
 
 
-@frappe.whitelist(allow_guest=True, methods=["POST"])
-@rate_limit(limit=5, seconds=600)
-def get_feedback_form(session=None, receipt_token=None):
-    """Read the current guest feedback labels for one verified bill."""
+def _feedback_bill(session, receipt_token):
+    """Resolve (profile, invoice_name) from a verified credential. Shared by read and submit."""
     if session:
         resolved = _resolve_session(session)
         profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
@@ -1260,15 +1258,25 @@ def get_feedback_form(session=None, receipt_token=None):
         frappe.throw(_("URY_FEEDBACK_TEMPLATE"), frappe.ValidationError)
     if not frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD):
         frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
+    return profile, invoice_name
+
+
+def _feedback_bill_check(profile, invoice_doc):
+    """Refuse another till's bill; return False when this bill cannot take feedback."""
+    if invoice_doc.branch != profile.branch or invoice_doc.pos_profile != profile.pos_profile:
+        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
+    return _invoice_accepts_feedback(invoice_doc) and bool(getattr(invoice_doc, "customer", None))
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+@rate_limit(limit=5, seconds=600)
+def get_feedback_form(session=None, receipt_token=None):
+    """Read the current guest feedback labels for one verified bill."""
+    profile, invoice_name = _feedback_bill(session, receipt_token)
 
     with _elevated():
         invoice_doc = frappe.get_doc("POS Invoice", invoice_name)
-        eligible = (
-            invoice_doc.branch == profile.branch
-            and invoice_doc.pos_profile == profile.pos_profile
-            and _invoice_accepts_feedback(invoice_doc)
-            and bool(getattr(invoice_doc, "customer", None))
-        )
+        eligible = _feedback_bill_check(profile, invoice_doc)
         template_doc = frappe.get_doc("Quality Feedback Template", profile.feedback_template)
         parameters = [
             {"parameter": row.parameter, "label": _(row.parameter)}
@@ -1292,36 +1300,12 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
     session invoice, or the invoice inside a feedback grant. Never a guest value.
     """
     del invoice, template
-
-    if session:
-        resolved = _resolve_session(session)
-        profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
-        invoice_name = resolved.invoice
-        if not invoice_name:
-            frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
-        _limit_feedback_credential("session", resolved.name)
-    elif receipt_token:
-        profile_name, invoice_name = read_signed_invoice_grant(receipt_token, "feedback")
-        profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
-        _limit_feedback_credential("receipt", json.dumps([profile_name, invoice_name]))
-    else:
-        frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
-
-    if not cint(getattr(profile, "enabled", 0)) or not cint(getattr(profile, "enable_feedback", 0)):
-        frappe.throw(_("URY_FEEDBACK_DISABLED"), frappe.ValidationError)
-    if not getattr(profile, "feedback_template", None):
-        frappe.throw(_("URY_FEEDBACK_TEMPLATE"), frappe.ValidationError)
-    if not frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD):
-        frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
+    profile, invoice_name = _feedback_bill(session, receipt_token)
 
     with _elevated():
         try:
             invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
-            if invoice_doc.branch != profile.branch or invoice_doc.pos_profile != profile.pos_profile:
-                frappe.throw(_("Invalid feedback link"), frappe.PermissionError)
-            if not _invoice_accepts_feedback(invoice_doc):
-                frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
-            if not getattr(invoice_doc, "customer", None):
+            if not _feedback_bill_check(profile, invoice_doc):
                 frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
 
             # Current locking reads serialize the exact bill. MariaDB can
