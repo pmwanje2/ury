@@ -56,7 +56,8 @@ class TestGuestGrants(unittest.TestCase):
         self.profile = frappe._dict(
             name="Guest Profile", enabled=1, branch="Branch A", pos_profile="Till A",
             restaurant="Restaurant A", enable_qr_table_ordering=1, enable_guest_assistant=0,
-            allow_add_to_running_table=1, default_customer="Walk In", session_idle_timeout_minutes=30,
+            require_guest_invoice_grant=0, allow_add_to_running_table=1, default_customer="Walk In",
+            session_idle_timeout_minutes=30,
             enable_request_bill=1, enable_customer_payment=1, enable_payment_link=1,
         )
         self.invoice = self.make_invoice("BILL-1")
@@ -218,6 +219,7 @@ class TestGuestGrants(unittest.TestCase):
         self.kot.assert_not_called()
 
     def test_static_qr_is_menu_only_and_never_discovers_or_appends_existing_bills(self):
+        self.profile.require_guest_invoice_grant = 1
         raw, session = api._open_session(self.profile, "QR Table", "Table 7")
         self.set_user("Guest")
         self.events.clear()
@@ -434,6 +436,7 @@ class TestGuestGrants(unittest.TestCase):
         token, session = self.grant()
         self.assert_denied(lambda: self.method("issue_guest_assistant_token")(token))
         self.profile.enable_guest_assistant = 1
+        self.budget_runtime()
         result = self.method("issue_guest_assistant_token")(token)
         assistant = result["assistant_token"]
         resolved = self.method("resolve_guest_assistant_token")(assistant)
@@ -450,6 +453,7 @@ class TestGuestGrants(unittest.TestCase):
     def test_malformed_assistant_and_disabled_profile_fail_closed(self):
         token, _session = self.grant()
         self.profile.enable_guest_assistant = 1
+        self.budget_runtime()
         result = self.method("issue_guest_assistant_token")(token)
         for value in (None, "bad", base64.urlsafe_b64encode("profile|assistant|session|0|é".encode()).decode()):
             with self.subTest(value=value):
@@ -480,6 +484,30 @@ class TestGuestGrants(unittest.TestCase):
         self.profile.session_idle_timeout_minutes = 600
         _token, session = self.grant()
         self.assertLessEqual(session.expires_at, NOW + timedelta(minutes=30))
+
+    def test_staff_grant_expiry_does_not_slide_on_activity(self):
+        _token, session = self.grant()
+        session.expires_at = NOW + timedelta(minutes=5)
+        session.last_activity = NOW - timedelta(minutes=4)
+        api._checked_guest_session(session.name)
+        self.assertEqual(session.expires_at, NOW + timedelta(minutes=5))
+        self.assertEqual(session.last_activity, NOW - timedelta(minutes=4))
+
+    def test_non_grant_session_slides_expiry_on_activity(self):
+        _token, session = api._open_session(self.profile, "Kiosk", None)
+        session.expires_at = NOW + timedelta(minutes=1)
+        session.last_activity = NOW - timedelta(minutes=4)
+        api._checked_guest_session(session.name)
+        self.assertEqual(session.expires_at, NOW + timedelta(minutes=30))
+        self.assertEqual(session.last_activity, NOW)
+
+    def test_trusted_assistant_resolver_refuses_without_an_http_request(self):
+        token, _session = self.grant()
+        self.profile.enable_guest_assistant = 1
+        self.budget_runtime()
+        result = self.method("issue_guest_assistant_token")(token)
+        frappe.local.request = None
+        self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(result["assistant_token"]))
 
     def test_menu_only_session_never_looks_up_unbound_payment_links(self):
         token, _session = api._open_session(self.profile, "QR Table", "Table 7")
@@ -559,6 +587,18 @@ class TestGuestGrants(unittest.TestCase):
         self.assertIn(assistant, frappe.guest_methods)
         self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[assistant], ["POST"])
 
+    def test_bill_bearing_guest_reads_are_post_only(self):
+        for name in ("get_customer_menu", "get_customer_product", "get_customer_order",
+                     "get_order_status", "get_payment_status"):
+            with self.subTest(name=name):
+                method = self.method(name)
+                self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[method], ["POST"])
+
+    def test_issue_table_grant_does_not_wrap_open_session_in_redundant_elevation(self):
+        with patch.object(api, "_elevated", wraps=api._elevated) as elevated:
+            self.grant()
+        self.assertEqual(elevated.call_count, 1)
+
 
 class TestGuestGrantSchema(unittest.TestCase):
     def test_native_session_grants_are_hidden_readonly_and_assistant_is_default_off(self):
@@ -574,3 +614,22 @@ class TestGuestGrantSchema(unittest.TestCase):
         fields = {row["fieldname"]: row for row in profile["fields"]}
         self.assertIn("enable_guest_assistant", fields)
         self.assertEqual(str(fields["enable_guest_assistant"]["default"]), "0")
+        self.assertIn("require_guest_invoice_grant", fields)
+        self.assertEqual(str(fields["require_guest_invoice_grant"]["default"]), "0")
+
+        custom_fields = json.loads((Path(__file__).resolve().parents[2] / "fixtures" / "custom_field.json").read_text())
+        indexed = {
+            row["fieldname"]: row
+            for row in custom_fields
+            if row.get("dt") == "POS Invoice"
+            and row.get("fieldname") in {"custom_split_from", "custom_merged_pos_invoice", "custom_split_group"}
+        }
+        self.assertEqual(set(indexed), {"custom_split_from", "custom_merged_pos_invoice", "custom_split_group"})
+        for name, row in indexed.items():
+            with self.subTest(field=name):
+                self.assertEqual(row.get("search_index"), 1)
+
+        session_fields = {row["fieldname"]: row for row in json.loads(
+            (root / "ury_ordering_session/ury_ordering_session.json").read_text()
+        )["fields"]}
+        self.assertEqual(session_fields["invoice"].get("search_index"), 1)
