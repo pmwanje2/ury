@@ -131,8 +131,35 @@ describe('guest feedback route', () => {
     await act(async () => root.unmount())
     root = createRoot(host)
     await render(<App />)
-    expect(host.textContent).toContain('URY_FEEDBACK_RETRY: try again')
+    expect(host.textContent).toContain('Another request is finishing. Please try again.')
+    expect(host.textContent).not.toContain('URY_FEEDBACK_')
     expect(exactButton('Retry')).toBeDefined()
+  })
+
+  it('shows translated guest messages for stable refusal codes, never the raw code', async () => {
+    const cases = {
+      en: ['Feedback is not available right now.', 'Feedback is not available for this bill.'],
+      sw: ['Maoni hayapatikani kwa sasa.', 'Maoni hayapatikani kwa bili hii.'],
+      lg: ['Okuteesa tekuli kati.', 'Okuteesa tekuli ku bili eno.'],
+    } as const
+    for (const [lang, [unavailable, notEligible]] of Object.entries(cases)) {
+      await initI18n(lang, { setCookie() {} })
+      for (const [code, expected] of [
+        ['URY_FEEDBACK_DISABLED', unavailable],
+        ['URY_FEEDBACK_TEMPLATE', unavailable],
+        ['URY_FEEDBACK_BILL_LINK_MISSING', unavailable],
+        ['URY_FEEDBACK_NOT_ELIGIBLE', notEligible],
+        ['URY_FEEDBACK_RATINGS', unavailable],
+      ]) {
+        feedbackError = new Error(code)
+        await act(async () => root.unmount())
+        root = createRoot(host)
+        await render(<App />)
+        expect(host.textContent, `${lang} ${code}`).toContain(expected)
+        expect(host.textContent, `${lang} ${code}`).not.toContain('URY_FEEDBACK_')
+        expect([...host.querySelectorAll('button')].some(button => button.textContent?.trim() === 'Retry')).toBe(false)
+      }
+    }
   })
 
   it('hides the in-session feedback button unless feedback is enabled and the order is billed', async () => {
@@ -177,7 +204,7 @@ describe('guest feedback route', () => {
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
     const localeRoot = path.resolve(process.cwd(), 'self-order/src/i18n/locales')
-    const keys = ['title', 'submit', 'submitting', 'thanks', 'already_received', 'not_eligible', 'retry', 'load_error', 'rating']
+    const keys = ['title', 'submit', 'submitting', 'thanks', 'already_received', 'not_eligible', 'retry', 'load_error', 'rating', 'unavailable', 'retry_later']
     const locales = await Promise.all(['en', 'sw', 'lg'].map(async locale => {
       const content = JSON.parse(await fs.readFile(path.join(localeRoot, `${locale}.json`), 'utf8'))
       return { locale, feedback: content.feedback ?? {} }
