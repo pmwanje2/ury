@@ -692,6 +692,26 @@ def add_customer_items(session, items, request_id=None):
     if session.invoice and not profile.allow_add_to_running_table:
         frappe.throw(_("Adding further items to this order is not allowed"), frappe.ValidationError)
 
+    # Preserve the existing table-first ordering guard while the exact-invoice
+    # grant requirement remains disabled. A fresh legacy table session must not
+    # join a staff or earlier guest bill when running-table additions are off.
+    if not requires_grant and session.table and not session.invoice and not profile.allow_add_to_running_table:
+        with _elevated():
+            existing_invoice = frappe.get_all(
+                "POS Invoice",
+                filters={"docstatus": 0, "invoice_printed": 0},
+                or_filters={
+                    "restaurant_table": session.table,
+                    "custom_merged_tables": ["like", f"%{session.table}%"],
+                },
+                limit=1,
+            )
+        if existing_invoice:
+            frappe.throw(
+                _("This table already has an order in progress. Please ask staff for assistance."),
+                frappe.ValidationError,
+            )
+
     if isinstance(items, str):
         items = json.loads(items)
     if not items or not isinstance(items, list):

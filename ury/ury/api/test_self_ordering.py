@@ -370,7 +370,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         pos_profile_doc = MagicMock()
         pos_profile_doc.payments = [MagicMock(mode_of_payment="Cash")]
 
-        def get_doc_side_effect(doctype, name=None):
+        def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
             if doctype == "POS Profile":
@@ -489,8 +489,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         self, mock_resolve_session, mock_get_all,
     ):
         """Same disabled-flag config, but no pre-existing invoice on the
-        table -- the pre-existing-order guard must not block a session's own
-        legitimate first order."""
+        table — the new guard must not block a session's own first order."""
         session = self._session_doc(invoice=None)
         mock_resolve_session.return_value = session
         mock_get_all.return_value = []
@@ -507,8 +506,8 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
             # No exception from the pre-existing-order guard itself; it will
             # fail further down on unmocked invoice-resolution internals,
-            # which is fine -- this test only asserts the guard doesn't
-            # false-positive on a session's own legitimate first order.
+            # which is fine — this test only asserts the guard we're fixing
+            # doesn't false-positive on a session's own legitimate first order.
             with self.assertRaises(Exception) as ctx:
                 add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
             self.assertNotIn("already has an order in progress", str(ctx.exception))
