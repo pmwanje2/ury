@@ -629,6 +629,136 @@ class TestInvoiceGrant(unittest.TestCase):
                 self.enterContext(patch(f"{MOD}.frappe.get_doc", return_value=current))
                 self.assertEqual(method("POS-1"), "")
 
+class TestFeedbackForm(unittest.TestCase):
+    setUp = TestGuestFeedback.setUp
+    _get_doc = TestGuestFeedback._get_doc
+    _exists = TestGuestFeedback._exists
+    _get_value = TestGuestFeedback._get_value
+    _get_all = TestGuestFeedback._get_all
+
+    def test_feedback_capability_requires_an_enabled_profile_and_template(self):
+        for enabled, template, expected in (
+            (0, None, False),
+            (1, None, False),
+            (0, "Guest Meal", False),
+            (1, "Guest Meal", True),
+        ):
+            with self.subTest(enabled=enabled, template=template):
+                profile = SimpleNamespace(
+                    restaurant="Salama",
+                    enable_product_detail_page=0,
+                    show_item_images=0,
+                    show_item_descriptions=0,
+                    enable_item_notes=0,
+                    enable_request_bill=0,
+                    enable_customer_payment=0,
+                    enable_payment_link=0,
+                    enable_pay_at_counter=0,
+                    allow_add_to_running_table=0,
+                    enable_feedback=enabled,
+                    feedback_template=template,
+                )
+                response = self.api._ordering_context_response("SESSION", "QR Table", profile, "Table 7", "Mobile")
+                self.assertEqual(response["capabilities"]["feedback_enabled"], expected)
+
+    def _get_feedback_form(self, **kwargs):
+        method = getattr(self.api, "get_feedback_form", None)
+        self.assertTrue(callable(method), "Guest feedback form reader is missing")
+        return method(**kwargs)
+
+    def test_feedback_form_requires_a_verified_credential(self):
+        expiry = _epoch(FIXED_NOW) + 3600
+        valid = _expected_grant("Profile A", "feedback", "POS-1", expiry)
+        expired = _expected_grant("Profile A", "feedback", "POS-1", _epoch(FIXED_NOW))
+        wrong_purpose = _expected_grant("Profile A", "bill", "POS-1", expiry)
+        for kwargs in ({}, {"receipt_token": "forged"}, {"receipt_token": expired}, {"receipt_token": wrong_purpose}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(frappe.PermissionError) as caught:
+                    self._get_feedback_form(**kwargs)
+                self.assertIn("Invalid feedback link", str(caught.exception))
+        self.assertEqual(self._get_feedback_form(session="opaque-session")["status"], "open")
+        self.assertEqual(self._get_feedback_form(receipt_token=valid)["status"], "open")
+
+    def test_feedback_form_returns_only_ordered_translated_template_labels(self):
+        self.enterContext(patch(f"{MOD}._", side_effect=lambda value: f"translated:{value}"))
+        response = self._get_feedback_form(session="opaque-session")
+        self.assertEqual(set(response), {"status", "parameters"})
+        self.assertEqual(response["status"], "open")
+        self.assertEqual(response["parameters"], [
+            {"parameter": "Food", "label": "translated:Food"},
+            {"parameter": "Service", "label": "translated:Service"},
+            {"parameter": "Ambience", "label": "translated:Ambience"},
+        ])
+        serialized = json.dumps(response)
+        for secret in ("POS-1", "SECRET-CUSTOMER", "QA-FB-9"):
+            self.assertNotIn(secret, serialized)
+
+    def test_feedback_form_reports_open_received_and_not_eligible_statuses(self):
+        self.assertEqual(self._get_feedback_form(session="opaque-session")["status"], "open")
+        self.duplicate = True
+        self.assertEqual(self._get_feedback_form(session="opaque-session")["status"], "received")
+
+        cases = (
+            {"invoice_printed": 0, "docstatus": 0, "is_return": 0},
+            {"invoice_printed": 1, "docstatus": 2, "is_return": 0},
+            {"invoice_printed": 1, "docstatus": 1, "is_return": 1},
+            {"invoice_printed": 1, "docstatus": 0, "is_return": 0, "pos_profile": "Other Till"},
+        )
+        for changes in cases:
+            with self.subTest(changes=changes):
+                self.duplicate = False
+                self.invoice.invoice_printed = 1
+                self.invoice.docstatus = 0
+                self.invoice.is_return = 0
+                self.invoice.pos_profile = "Salama Till"
+                for key, value in changes.items():
+                    setattr(self.invoice, key, value)
+                self.assertEqual(self._get_feedback_form(session="opaque-session")["status"], "not_eligible")
+
+    def test_feedback_form_is_disabled_and_post_only(self):
+        self.profile.enable_feedback = 0
+        method = getattr(self.api, "get_feedback_form", None)
+        self.assertTrue(callable(method), "Guest feedback form reader is missing")
+        with self.assertRaises(frappe.ValidationError) as caught:
+            method(session="opaque-session")
+        self.assertIn("URY_FEEDBACK_DISABLED", str(caught.exception))
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[method], ["POST"])
+
+    def test_feedback_form_charges_the_verified_credential_budget(self):
+        self.profile.enable_feedback = 0
+        self.enterContext(patch.object(frappe, "cache", _MemoryCache()))
+        frappe.local.request = SimpleNamespace(method="POST")
+        self.addCleanup(setattr, frappe.local, "request", None)
+        for index in range(5):
+            frappe.local.request_ip = f"203.0.113.{index}"
+            frappe.local.form_dict = frappe._dict(cmd=f"{MOD}.get_feedback_form", session="opaque-session")
+            with self.assertRaises(frappe.ValidationError):
+                self._get_feedback_form(session="opaque-session")
+        frappe.local.request_ip = "203.0.113.99"
+        frappe.local.form_dict = frappe._dict(cmd=f"{MOD}.get_feedback_form", session="opaque-session")
+        with self.assertRaises(frappe.RateLimitExceededError):
+            self._get_feedback_form(session="opaque-session")
+
+    def test_feedback_receipt_qr_is_blank_or_native_svg_and_fails_closed(self):
+        method = getattr(self.api, "feedback_receipt_qr", None)
+        self.assertTrue(callable(method), "Receipt QR helper is missing")
+        link = self.enterContext(patch(f"{MOD}.feedback_receipt_link", return_value="TOKEN"))
+        from frappe.utils import print_format_generator
+
+        qr = self.enterContext(patch.object(print_format_generator, "get_qr_code", return_value="data:image/svg+xml;base64,QR"))
+        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "data:image/svg+xml;base64,QR")
+        qr.assert_called_once_with("https://salama.example/order/feedback#r=TOKEN")
+        link.return_value = ""
+        qr.reset_mock()
+        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "")
+        qr.assert_not_called()
+
+        link.return_value = "TOKEN"
+        qr.side_effect = RuntimeError("native QR unavailable")
+        logged = self.enterContext(patch(f"{MOD}.frappe.log_error"))
+        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "")
+        logged.assert_called_once()
+
 
 class _MemoryCache:
     def __init__(self):
@@ -674,4 +804,11 @@ class TestFeedbackReceiptRegistration(unittest.TestCase):
         jinja = getattr(hooks, "jinja", None) or {}
         if isinstance(jinja, dict):
             methods = jinja.get("methods") or []
-        self.assertIn("ury.ury.api.self_ordering.feedback_receipt_link", methods)
+        self.assertEqual(methods, [
+            "ury.ury.api.self_ordering.feedback_receipt_link",
+            "ury.ury.api.self_ordering.feedback_receipt_qr",
+        ])
+        form = getattr(self_ordering, "get_feedback_form", None)
+        self.assertTrue(callable(form), "Guest feedback form reader is missing")
+        self.assertIn(form, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[form], ["POST"])
