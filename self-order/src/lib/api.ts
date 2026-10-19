@@ -12,6 +12,7 @@ export interface OrderingCapabilities {
   payment_link_enabled: boolean
   pay_at_counter_enabled: boolean
   add_to_running_table_enabled: boolean
+  feedback_enabled: boolean
 }
 
 export type OrderingLayout = 'Mobile' | 'Tablet' | 'Landscape Kiosk' | 'Portrait Kiosk'
@@ -70,6 +71,21 @@ export interface OrderStatus {
   billed?: boolean
   submitted?: boolean
   open_requests?: { name: string; request_type: string; status: string }[]
+}
+
+export interface FeedbackParameter {
+  parameter: string
+  label: string
+}
+
+export interface FeedbackForm {
+  status: 'open' | 'received' | 'not_eligible'
+  parameters: FeedbackParameter[]
+}
+
+export interface FeedbackRating {
+  parameter: string
+  rating: number
 }
 
 // Persist the full ordering context (not just the opaque session token)
@@ -194,6 +210,25 @@ export async function requestAssistance(session: string): Promise<{ status: stri
 
 export async function getStatus(session: string): Promise<OrderStatus> {
   const response = await call.post<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
+  return response.message
+}
+
+export async function getFeedbackForm(session?: string, receiptToken?: string): Promise<FeedbackForm> {
+  const credentials = session ? { session } : receiptToken ? { receipt_token: receiptToken } : {}
+  const response = await call.post<FrappeResponse<FeedbackForm>>(`${M}.get_feedback_form`, credentials)
+  return response.message
+}
+
+export async function submitFeedback(
+  ratings: FeedbackRating[],
+  session?: string,
+  receiptToken?: string,
+): Promise<{ status: string }> {
+  const credentials = session ? { session } : { receipt_token: receiptToken }
+  const response = await call.post<FrappeResponse<{ status: string }>>(`${M}.submit_feedback`, {
+    ...credentials,
+    ratings: JSON.stringify(ratings),
+  })
   return response.message
 }
 
