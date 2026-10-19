@@ -17,6 +17,7 @@ const context: OrderingContext = {
     product_detail_enabled: true, show_item_images: false, show_item_descriptions: false,
     item_notes_enabled: true, request_bill_enabled: true, customer_payment_enabled: false,
     payment_link_enabled: false, pay_at_counter_enabled: true, add_to_running_table_enabled: true,
+    feedback_enabled: false,
   },
 }
 const item = (code: string, rate: number | null = 6000, disabled = 0) => ({

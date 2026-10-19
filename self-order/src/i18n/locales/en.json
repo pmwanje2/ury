@@ -51,6 +51,21 @@
     "request": "Request Bill",
     "requested": "Bill requested — staff notified"
   },
+  "feedback": {
+    "title": "Rate your visit",
+    "rate_visit": "Rate your visit",
+    "loading": "Loading feedback…",
+    "submit": "Submit feedback",
+    "submitting": "Submitting…",
+    "thanks": "Thank you for your feedback.",
+    "already_received": "Already received",
+    "not_eligible": "Feedback is not available for this bill.",
+    "retry": "Retry",
+    "load_error": "Could not load feedback.",
+    "unavailable": "Feedback is not available right now.",
+    "retry_later": "Another request is finishing. Please try again.",
+    "rating": "{{parameter}} {{rating}} out of 5"
+  },
   "cart": {
     "title": "Cart",
     "empty": "Tap a menu item to add it to your cart.",

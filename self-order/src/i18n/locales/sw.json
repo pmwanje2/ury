@@ -51,6 +51,21 @@
     "request": "Omba bili",
     "requested": "Bili imeombwa — wahudumu wamearifiwa"
   },
+  "feedback": {
+    "title": "Pima ziara yako",
+    "rate_visit": "Pima ziara yako",
+    "loading": "Inapakia maoni…",
+    "submit": "Tuma maoni",
+    "submitting": "Inatuma…",
+    "thanks": "Asante kwa maoni yako.",
+    "already_received": "Tayari yamepokelewa",
+    "not_eligible": "Maoni hayapatikani kwa bili hii.",
+    "retry": "Jaribu tena",
+    "load_error": "Imeshindwa kupakia maoni.",
+    "unavailable": "Maoni hayapatikani kwa sasa.",
+    "retry_later": "Ombi lingine linamalizika. Tafadhali jaribu tena.",
+    "rating": "{{parameter}} {{rating}} kati ya 5"
+  },
   "cart": {
     "title": "Kikapu",
     "empty": "Gusa chakula kwenye menyu ili uweke kikapuni.",
