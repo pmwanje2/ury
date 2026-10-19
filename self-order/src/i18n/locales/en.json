@@ -62,6 +62,8 @@
     "not_eligible": "Feedback is not available for this bill.",
     "retry": "Retry",
     "load_error": "Could not load feedback.",
+    "unavailable": "Feedback is not available right now.",
+    "retry_later": "Another request is finishing. Please try again.",
     "rating": "{{parameter}} {{rating}} out of 5"
   },
   "cart": {

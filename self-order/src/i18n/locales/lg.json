@@ -62,6 +62,8 @@
     "not_eligible": "Okuteesa tekuli ku bili eno.",
     "retry": "Gezaako nate",
     "load_error": "Okuteesa tekutikkiddwa.",
+    "unavailable": "Okuteesa tekuli kati.",
+    "retry_later": "Okusaba okulala kukyaggwa. Nsaba ogezeeko nate.",
     "rating": "{{parameter}} {{rating}} ku 5"
   },
   "cart": {

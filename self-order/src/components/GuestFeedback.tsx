@@ -14,8 +14,23 @@ function readCredential(): FeedbackCredential | null {
   return session ? { session } : null
 }
 
-function errorText(error: unknown): string {
-  return parseFrappeError(error, t('feedback.load_error'))
+// Stable server refusal ids become guest copy; the raw id is never shown.
+const REFUSALS: Record<string, string> = {
+  URY_FEEDBACK_RETRY: 'feedback.retry_later',
+  URY_FEEDBACK_NOT_ELIGIBLE: 'feedback.not_eligible',
+  URY_FEEDBACK_DISABLED: 'feedback.unavailable',
+  URY_FEEDBACK_TEMPLATE: 'feedback.unavailable',
+  URY_FEEDBACK_BILL_LINK_MISSING: 'feedback.unavailable',
+  URY_FEEDBACK_RATINGS: 'feedback.unavailable',
+}
+
+type ShownError = { text: string; retryable: boolean }
+
+function errorText(error: unknown): ShownError {
+  const parsed = parseFrappeError(error, t('feedback.load_error'))
+  const code = parsed.match(/URY_FEEDBACK_[A-Z_]+/)?.[0]
+  if (!code) return { text: parsed, retryable: false }
+  return { text: t(REFUSALS[code] ?? 'feedback.unavailable'), retryable: code === 'URY_FEEDBACK_RETRY' }
 }
 
 function GuestFeedback() {
@@ -24,7 +39,7 @@ function GuestFeedback() {
   const [form, setForm] = useState<FeedbackForm | null>(null)
   const [ratings, setRatings] = useState<Record<string, number>>({})
   const [outcome, setOutcome] = useState<FeedbackOutcome | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ShownError | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [retry, setRetry] = useState(0)
@@ -37,7 +52,7 @@ function GuestFeedback() {
       setForm(null)
       setOutcome(null)
       if (!credential) {
-        setError(t('errors.missing_code'))
+        setError({ text: t('errors.missing_code'), retryable: false })
         setLoading(false)
         return
       }
@@ -75,7 +90,7 @@ function GuestFeedback() {
     }
   }
 
-  const retryable = error?.includes('URY_FEEDBACK_RETRY') ?? false
+  const retryable = error?.retryable ?? false
   const complete = form?.status === 'open' && form.parameters.length > 0 && form.parameters.every(row => ratings[row.parameter] !== undefined)
 
   return (
@@ -85,7 +100,7 @@ function GuestFeedback() {
       {loading && <p role="status">{t('feedback.loading')}</p>}
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          <p role="status">{error}</p>
+          <p role="status">{error.text}</p>
           {retryable && <button className="mt-3 rounded-md border px-3 py-2" onClick={() => setRetry(value => value + 1)}>{t('feedback.retry')}</button>}
         </div>
       )}

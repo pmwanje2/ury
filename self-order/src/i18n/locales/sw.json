@@ -62,6 +62,8 @@
     "not_eligible": "Maoni hayapatikani kwa bili hii.",
     "retry": "Jaribu tena",
     "load_error": "Imeshindwa kupakia maoni.",
+    "unavailable": "Maoni hayapatikani kwa sasa.",
+    "retry_later": "Ombi lingine linamalizika. Tafadhali jaribu tena.",
     "rating": "{{parameter}} {{rating}} kati ya 5"
   },
   "cart": {
