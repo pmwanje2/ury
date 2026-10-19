@@ -10,3 +10,5 @@ live ERP acceptance.
 - `submitted-thanks.png` — ratings submitted and thanks state.
 - `already-submitted.png` — received/already-submitted state.
 - `disabled-expired.png` — invalid/expired link refusal.
+- `feedback-disabled.png` — profile feedback disabled (server `URY_FEEDBACK_DISABLED`),
+  shown as translated guest copy, never the raw code. Captured 2026-10-20.
