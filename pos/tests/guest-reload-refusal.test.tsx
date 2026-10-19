@@ -20,6 +20,9 @@ const emptyOrder = { invoice: null, items: [], grand_total: 0, billed: false }
 let root: Root
 let container: HTMLDivElement
 let bootstraps: number
+// Bill-bearing guest reads travel as POST bodies; guest actions use `writes`.
+let reads: (path: string, args?: Record<string, unknown>) => Promise<unknown>
+let writes: ReturnType<typeof vi.fn>
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -27,16 +30,22 @@ beforeEach(async () => {
   localStorage.clear()
   window.history.replaceState(null, '', '/order?t=qr-a')
   bootstraps = 0
+  // QR bootstrap stays GET-compatible: it carries the static QR token only.
   vi.spyOn(call, 'get').mockImplementation(async (path: string, args?: Record<string, unknown>) => {
     if (path.endsWith('get_ordering_context')) {
       bootstraps++
       return { message: bootstraps === 1 ? context : { ...context, session: 'session-b', table: 'T-06' } }
     }
+    throw Error(`Unexpected GET ${path} ${JSON.stringify(args)}`)
+  })
+  reads = async (path, args) => {
     if (path.endsWith('get_customer_menu')) return { message: menu }
     if (path.endsWith('get_customer_order')) return { message: args?.session === 'session-a' ? order : emptyOrder }
     throw Error(`Unexpected read ${path}`)
-  })
-  vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
+  }
+  writes = vi.fn().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
+  vi.spyOn(call, 'post').mockImplementation(async (path: string, args?: Record<string, unknown>) =>
+    /\.get_[a-z_]+$/.test(path) ? reads(path, args) : writes(path, args))
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -68,7 +77,8 @@ describe('guest reload', () => {
     expect(container.textContent).toContain('Your order so far')
     expect(container.textContent).toContain('Soup × 2')
     expect(container.textContent).toContain('24000')
-    expect(call.get).toHaveBeenLastCalledWith('ury.ury.api.self_ordering.get_customer_order', { session: 'session-a' })
+    expect(call.post).toHaveBeenLastCalledWith('ury.ury.api.self_ordering.get_customer_order', { session: 'session-a' })
+    expect(call.get).not.toHaveBeenCalledWith('ury.ury.api.self_ordering.get_customer_order', expect.anything())
     expect(bootstraps).toBe(1)
   })
 
@@ -109,14 +119,14 @@ describe('guest reload', () => {
   ])('shows the ERP sentence without cached table/order UI after a %s %s reload', async (language, _status, sentence) => {
     await initI18n(language, { setCookie() {} })
     await render()
-    const get = vi.mocked(call.get).getMockImplementation()!
-    vi.mocked(call.get).mockImplementation(async (path, args) => {
+    const read = reads
+    reads = async (path, args) => {
       if (path.endsWith('get_customer_order')) throw {
         httpStatus: 403, exc_type: 'PermissionError',
         _server_messages: JSON.stringify([JSON.stringify({ message: sentence })]),
       }
-      return get(path, args)
-    })
+      return read(path, args)
+    }
     await reload()
     expect.soft(container.textContent).toContain(sentence)
     expect.soft(container.querySelector('header')).toBeNull()
@@ -128,11 +138,11 @@ describe('guest reload', () => {
   it('keeps the translated transport fallback without a cached table on a failed reload', async () => {
     await initI18n('sw', { setCookie() {} })
     await render()
-    const get = vi.mocked(call.get).getMockImplementation()!
-    vi.mocked(call.get).mockImplementation(async (path, args) => {
+    const read = reads
+    reads = async (path, args) => {
       if (path.endsWith('get_customer_order')) throw { httpStatus: 503 }
-      return get(path, args)
-    })
+      return read(path, args)
+    }
     await reload()
     expect(container.textContent).toContain('Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.')
     expect(container.querySelector('header')).toBeNull()
@@ -147,7 +157,7 @@ describe('translated ERP refusals', () => {
   ]
   it.each(refusals)('shows the %s server sentence once without the legacy wrapper', async (language, sentence, placeOrder) => {
     await initI18n(language, { setCookie() {} })
-    vi.mocked(call.post).mockRejectedValue({ _server_messages: JSON.stringify([
+    writes.mockRejectedValue({ _server_messages: JSON.stringify([
       JSON.stringify({ message: `[SAL-QR-WAITER-OPENS-TABLE] ${sentence}` }),
       JSON.stringify({ message: `Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] ${sentence}` }),
     ]) })
@@ -162,7 +172,7 @@ describe('translated ERP refusals', () => {
 
   it.each(refusals)('removes the legacy wrapper from an exception-only %s refusal', async (language, sentence, placeOrder) => {
     await initI18n(language, { setCookie() {} })
-    vi.mocked(call.post).mockRejectedValue({ exception: `frappe.exceptions.ValidationError: Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] ${sentence}` })
+    writes.mockRejectedValue({ exception: `frappe.exceptions.ValidationError: Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] ${sentence}` })
     await render()
     await act(async () => [...container.querySelectorAll('button')].find(candidate => candidate.textContent?.startsWith('Soup'))!.click())
     await act(async () => button(placeOrder)!.click())
@@ -171,7 +181,7 @@ describe('translated ERP refusals', () => {
   })
 
   it('preserves distinct validation reasons rather than taking only the first message', async () => {
-    vi.mocked(call.post).mockRejectedValue({ _server_messages: JSON.stringify([
+    writes.mockRejectedValue({ _server_messages: JSON.stringify([
       JSON.stringify({ message: 'Please ask staff.' }), JSON.stringify({ message: 'Your bill is printed.' }),
     ]) })
     await render()

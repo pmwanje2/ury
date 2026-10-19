@@ -13,15 +13,23 @@ const context: OrderingContext = {
 };
 const order = { invoice: 'POS-1', items: [{ item_code: 'Soup', item_name: 'Soup', qty: 1, rate: 12000, amount: 12000 }],
   grand_total: 12000, billed: false };
+const menu = {
+  items: [{ item: 'Soup', item_name: 'Soup', rate: 12000, disabled: 0, special_dish: 0, item_image: null, course: null, course_label: null }],
+  modified_time: null, name: 'Menu A',
+};
 let root: Root, container: HTMLDivElement;
+// Bill-bearing guest reads travel as POST bodies; guest actions use `writes`.
+let writes: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   sessionStorage.clear();
-  vi.spyOn(call, 'get').mockImplementation(async (path: string) => ({ message: path.endsWith('get_customer_menu') ? {
-    items: [{ item: 'Soup', item_name: 'Soup', rate: 12000, disabled: 0, special_dish: 0, item_image: null, course: null, course_label: null }],
-    modified_time: null, name: 'Menu A',
-  } : order }));
-  vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } });
+  writes = vi.fn().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } });
+  vi.spyOn(call, 'get').mockImplementation(async (path: string) => { throw Error(`Unexpected GET ${path}`); });
+  vi.spyOn(call, 'post').mockImplementation(async (path: string, args?: Record<string, unknown>) => {
+    if (path.endsWith('get_customer_menu')) return { message: menu };
+    if (/\.get_[a-z_]+$/.test(path)) return { message: order };
+    return writes(path, args);
+  });
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(async () => {
@@ -50,9 +58,9 @@ describe('guest service requests', () => {
     expect(button('Call waiter')?.disabled).toBe(false);
   });
   it('blocks repeat taps while the request is in flight', async () => {
-    vi.mocked(call.post).mockImplementation(() => new Promise(() => {}));
+    writes.mockImplementation(() => new Promise(() => {}));
     await render(); await click('Call waiter'); await click('Calling waiter…');
-    expect(call.post).toHaveBeenCalledTimes(1);
+    expect(writes).toHaveBeenCalledTimes(1);
   });
   it('keeps the cooldown when Start Over starts a new ordering session', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -60,7 +68,7 @@ describe('guest service requests', () => {
     expect(button('Call waiter')?.disabled).toBe(true);
   });
   it('does not confirm failed requests and allows a retry', async () => {
-    vi.mocked(call.post).mockRejectedValue({ _server_messages: JSON.stringify([JSON.stringify({ message: 'Session expired. Rescan.' })]) });
+    writes.mockRejectedValue({ _server_messages: JSON.stringify([JSON.stringify({ message: 'Session expired. Rescan.' })]) });
     await render(); await click('Call waiter');
     expect(container.textContent).toContain('Session expired. Rescan.');
     expect(container.textContent).not.toContain('staff notified');
@@ -78,7 +86,7 @@ describe('ERP refusal text', () => {
       JSON.stringify({ message: 'Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] Please ask a waiter to open your table first.' })]) },
     { exception: 'frappe.exceptions.ValidationError: Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] Please ask a waiter to open your table first.' },
   ])('shows the ERP reason without its code, preserving the cart', async refusal => {
-    vi.mocked(call.post).mockRejectedValue(refusal);
+    writes.mockRejectedValue(refusal);
     await render(); await addSoup();
     await click('Place Order');
     expect(container.textContent).toContain('Please ask a waiter to open your table first.');
@@ -87,13 +95,13 @@ describe('ERP refusal text', () => {
     expect(button('Place Order')).toBeDefined();
   });
   it('renders server HTML as harmless text only', async () => {
-    vi.mocked(call.post).mockRejectedValue({ _server_messages: JSON.stringify([JSON.stringify({ message: '[DENIED] <b>Please ask staff.</b><img src=x onerror=evil()>' })]) });
+    writes.mockRejectedValue({ _server_messages: JSON.stringify([JSON.stringify({ message: '[DENIED] <b>Please ask staff.</b><img src=x onerror=evil()>' })]) });
     await render(); await addSoup(); await click('Place Order');
     expect(container.textContent).toContain('Please ask staff.');
     expect(container.querySelector('b, [onerror], script')).toBeNull();
   });
   it('keeps the friendly fallback for transport failures without ERP text', async () => {
-    vi.mocked(call.post).mockRejectedValue({ httpStatus: 503 });
+    writes.mockRejectedValue({ httpStatus: 503 });
     await render(); await addSoup(); await click('Place Order');
     expect(container.textContent).toContain('Could not place the order. Please try again.');
   });
