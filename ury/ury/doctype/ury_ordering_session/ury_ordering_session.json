@@ -19,9 +19,42 @@
   "opened_at",
   "expires_at",
   "last_activity",
-  "invoice"
+  "invoice",
+  "grant_fingerprint",
+  "granted_by",
+  "is_granted"
  ],
  "fields": [
+  {
+   "fieldname": "grant_fingerprint",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Grant Fingerprint",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1
+  },
+  {
+   "fieldname": "granted_by",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Granted By",
+   "options": "User",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1,
+   "report_hide": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_granted",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Is Granted",
+   "no_copy": 1,
+   "read_only": 1
+  },
   {
    "fieldname": "session_section",
    "fieldtype": "Section Break",
@@ -95,7 +128,8 @@
    "fieldtype": "Link",
    "label": "Invoice",
    "options": "POS Invoice",
-   "read_only": 1
+   "read_only": 1,
+   "search_index": 1
   }
  ],
  "index_web_pages_for_search": 1,
