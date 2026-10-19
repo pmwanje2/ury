@@ -281,6 +281,9 @@ class TestGuestGrants(unittest.TestCase):
         ])
 
     def test_staff_authority_requires_native_write_branch_room_and_waiter(self):
+        # Grant mode ON: each refusal below must come from native authority,
+        # not from the default-OFF issuance refusal.
+        self.profile.require_guest_invoice_grant = 1
         cases = ["guest", "write", "branch", "room", "waiter", "submitted", "return", "disabled"]
         for case in cases:
             with self.subTest(case=case):
@@ -502,6 +505,34 @@ class TestGuestGrants(unittest.TestCase):
         self.assertEqual(session.expires_at, NOW + timedelta(minutes=30))
         self.assertEqual(session.last_activity, NOW)
 
+    def test_flag_off_table_qr_and_tablet_sessions_slide_like_pre_g1(self):
+        # Default OFF must keep the pre-G1 sliding expiry for every existing
+        # table surface, not only pickup/kiosk sessions.
+        self.profile.require_guest_invoice_grant = 0
+        for source, device in (("QR Table", None), ("Table Tablet", "DEVICE-1")):
+            with self.subTest(source=source):
+                token, session = api._open_session(self.profile, source, "Table 7", device)
+                session.expires_at = NOW + timedelta(minutes=1)
+                session.last_activity = NOW - timedelta(minutes=4)
+                self.set_user("Guest")
+                api.get_order_status(token)
+                self.assertEqual(session.expires_at, NOW + timedelta(minutes=30))
+                self.assertEqual(session.last_activity, NOW)
+
+    def test_flag_on_menu_only_table_session_keeps_fixed_expiry(self):
+        self.profile.require_guest_invoice_grant = 1
+        token, session = api._open_session(self.profile, "QR Table", "Table 7")
+        session.expires_at = NOW + timedelta(minutes=1)
+        self.set_user("Guest")
+        api.get_order_status(token)
+        self.assertEqual(session.expires_at, NOW + timedelta(minutes=1))
+
+    def test_staff_grant_refused_while_invoice_grant_flag_is_off(self):
+        self.profile.require_guest_invoice_grant = 0
+        self.set_user("captain@example.test")
+        self.assert_denied(lambda: self.method("issue_table_grant")("BILL-1"))
+        self.assertEqual(self.sessions, {})
+
     def test_trusted_assistant_resolver_refuses_without_an_http_request(self):
         token, _session = self.grant()
         self.profile.enable_guest_assistant = 1
@@ -511,6 +542,9 @@ class TestGuestGrants(unittest.TestCase):
         self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(result["assistant_token"]))
 
     def test_menu_only_session_never_looks_up_unbound_payment_links(self):
+        # Menu-only table sessions are a grant-mode (flag ON) contract; flag OFF
+        # keeps the legacy sliding-expiry session write on every resolution.
+        self.profile.require_guest_invoice_grant = 1
         token, _session = api._open_session(self.profile, "QR Table", "Table 7")
         self.assert_denied(lambda: api.share_payment_link(token, "nobody@example.test"))
         self.assertFalse(any(event[0] == "payment-read" for event in self.events),
