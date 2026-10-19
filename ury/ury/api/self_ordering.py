@@ -1151,6 +1151,8 @@ def feedback_receipt_link(invoice):
     )
     if len(profiles) != 1:
         return ""
+    if not getattr(frappe.get_doc("URY Self Ordering Profile", profiles[0]), "feedback_template", None):
+        return ""
 
     expires_at = now_datetime() + timedelta(seconds=INVOICE_GRANT_LIFETIME_SECONDS)
     return mint_signed_invoice_grant(profiles[0], invoice_doc.name, "feedback", expires_at)
