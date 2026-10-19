@@ -525,6 +525,7 @@ class TestGuestGrants(unittest.TestCase):
         self.assertEqual(self.sessions, {})
 
     def test_menu_only_session_never_looks_up_unbound_payment_links(self):
+        self.profile.require_guest_invoice_grant = 1
         token, _session = api._open_session(self.profile, "QR Table", "Table 7")
         self.assert_denied(lambda: api.share_payment_link(token, "nobody@example.test"))
         self.assertFalse(any(event[0] == "payment-read" for event in self.events),
