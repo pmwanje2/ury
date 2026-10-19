@@ -580,7 +580,10 @@ class TestInvoiceGrant(unittest.TestCase):
             docstatus=0, invoice_printed=0, is_return=0,
             check_permission=MagicMock(),
         )
-        profile = SimpleNamespace(name="Profile A", branch="Salama", pos_profile="Salama Till", enable_feedback=1, enabled=1)
+        profile = SimpleNamespace(
+            name="Profile A", branch="Salama", pos_profile="Salama Till",
+            enable_feedback=1, enabled=1, feedback_template="Guest Meal",
+        )
         self.enterContext(patch(f"{MOD}.frappe.get_doc", side_effect=lambda doctype, name=None: invoice if doctype == "POS Invoice" else profile))
         recorded = {}
 
@@ -661,6 +664,15 @@ class TestFeedbackForm(unittest.TestCase):
         self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "")
         qr.assert_not_called()
         logged.assert_called_once()
+
+    def test_receipt_qr_is_blank_until_a_feedback_template_is_chosen(self):
+        # Same eligibility as the capability and the form: enabled AND template.
+        self.profile.feedback_template = None
+        self.assertEqual(self.api.feedback_receipt_link("POS-1"), "")
+        method, qr, _logged = self._receipt_qr_without_native_qr()
+        self.assertEqual(method("POS-1", "https://salama.example/order/feedback"), "")
+        qr.assert_not_called()
+        self.secret.assert_not_called()
 
     def test_feedback_capability_requires_an_enabled_profile_and_template(self):
         for enabled, template, expected in (
