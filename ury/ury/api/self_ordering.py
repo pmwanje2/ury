@@ -1157,8 +1157,18 @@ def feedback_receipt_link(invoice):
 
 
 def feedback_receipt_qr(invoice, base_url):
-    """Return a receipt QR for the opaque feedback grant, or nothing on failure."""
-    token = feedback_receipt_link(invoice)
+    """Return a receipt QR for the opaque feedback grant, or nothing on failure.
+
+    Never raises: native print allows read OR print, so a read-only printer
+    must still get a receipt, just without the feedback QR.
+    """
+    try:
+        token = feedback_receipt_link(invoice)
+    except frappe.PermissionError:
+        return ""
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "URY feedback receipt QR")
+        return ""
     if not token:
         return ""
     try:
