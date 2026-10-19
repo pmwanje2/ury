@@ -124,6 +124,12 @@ export async function bootstrap(token: string): Promise<OrderingContext> {
   return response.message
 }
 
+export async function bootstrapGrantedSession(session: string): Promise<OrderingContext> {
+  const response = await call.post<FrappeResponse<OrderingContext>>(`${M}.get_granted_ordering_context`, { session })
+  storeContext(response.message, session)
+  return response.message
+}
+
 export async function bootstrapDevice(deviceId: string, deviceCredential: string): Promise<OrderingContext> {
   const response = await call.get<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, {
     device_id: deviceId,

@@ -404,55 +404,6 @@ def _require_table_grant(session):
         _guest_refused()
 
 
-def _guest_assistant_enabled(session):
-    _require_table_grant(session)
-    profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
-    if not session.invoice or not cint(profile.get("enable_guest_assistant")):
-        _guest_refused()
-    return profile
-
-
-def _limit_guest_assistant(session):
-    if not frappe.request:
-        _guest_refused()
-    original = frappe.local.form_dict
-    try:
-        frappe.local.form_dict = frappe._dict(original)
-        # A fixed command and server-derived scope prevent caller-selected budgets.
-        frappe.form_dict.cmd = "ury.guest.assistant"
-        rate_limit(limit=5, seconds=600)(lambda: None)()
-        for kind, identity in (("session", session.name), ("table", session.table or session.name)):
-            frappe.form_dict._ury_guest_scope = _hash_credential(f"{kind}:{session.ordering_profile}:{identity}")
-            rate_limit(key="_ury_guest_scope", limit=5, seconds=600, ip_based=False)(lambda: None)()
-    finally:
-        frappe.local.form_dict = original
-
-
-@frappe.whitelist(allow_guest=True, methods=["POST"])
-def issue_guest_assistant_token(session):
-    session = _resolve_session(session)
-    profile = _guest_assistant_enabled(session)
-    _limit_guest_assistant(session)
-    expiry = min(get_datetime(session.expires_at), now_datetime() + timedelta(minutes=5))
-    return {"assistant_token": mint_signed_invoice_grant(profile.name, session.name, "assistant", expiry),
-            "expires_at": expiry}
-
-
-def resolve_guest_assistant_token(token):
-    """Trusted fixed guest adapter seam, NOT whitelisted and NOT a staff connection.
-
-    Returns the server-bound Session only, never a caller-selected invoice/profile.
-    Charge native session/table budgets before dispatching a model turn.
-    """
-    profile_name, session_name = read_signed_invoice_grant(token, "assistant")
-    session = _checked_guest_session(session_name)
-    if session.ordering_profile != profile_name:
-        _guest_refused()
-    _guest_assistant_enabled(session)
-    _limit_guest_assistant(session)
-    return session
-
-
 # ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
@@ -504,6 +455,24 @@ def get_ordering_context(token=None, device_id=None, device_credential=None):
     raw_session_token, session = _open_session(profile, source, table, device_name)
 
     return _ordering_context_response(raw_session_token, source, profile, table, layout)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def get_granted_ordering_context(session):
+    """Return the context for an existing staff-issued invoice grant.
+
+    Unlike ``get_ordering_context`` this endpoint never opens a session. The
+    opaque value is already the raw token returned by ``issue_table_grant``;
+    it is accepted once for resolution and is returned unchanged so the
+    frontend can persist the same session context after consuming ``#g=``.
+    """
+    resolved = _resolve_session(session)
+    _require_table_grant(resolved)
+    profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
+    if (not _requires_guest_invoice_grant(profile) or resolved.source != "QR Table"
+            or not resolved.table or not _is_staff_grant(resolved)):
+        _guest_refused()
+    return _ordering_context_response(session, resolved.source, profile, resolved.table, "Mobile")
 
 
 @frappe.whitelist(allow_guest=True)
