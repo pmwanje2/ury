@@ -334,7 +334,9 @@ def _checked_guest_session(session_name):
                         or not _valid_fingerprint(session.get("grant_fingerprint"))
                         or not hmac.compare_digest(session.get("grant_fingerprint") or "", _grant_fingerprint(invoice))):
                     _guest_refused()
-            if not _is_staff_grant(session) and not session.table:
+            # Flag OFF: every session slides exactly as before G1. Flag ON:
+            # only pickup/kiosk slide; table and staff-grant expiry is fixed.
+            if not requires_grant or not (session.table or _is_staff_grant(session)):
                 session.last_activity = now_datetime()
                 session.expires_at = add_to_date(
                     now_datetime(), minutes=profile.session_idle_timeout_minutes or 30,
@@ -382,7 +384,8 @@ def issue_table_grant(invoice):
         if len(profiles) != 1:
             _guest_refused()
         profile = frappe.get_doc("URY Self Ordering Profile", profiles[0])
-        if not profile.enabled or not profile.enable_qr_table_ordering:
+        # A grant on a flag-OFF profile would never be fingerprint-rechecked.
+        if not profile.enabled or not profile.enable_qr_table_ordering or not _requires_guest_invoice_grant(profile):
             _guest_refused()
         _grant_fingerprint(invoice_doc)
         issuer = frappe.session.user
