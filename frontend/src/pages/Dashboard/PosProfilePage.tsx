@@ -546,7 +546,7 @@ export const PosProfilePage: React.FC = () => {
                         </Badge>
                       </div>
                       <p className="text-gray-600">
-                        Bill printer and KOT kitchen printer configuration are loaded automatically from POS Profile events and URY Printer Mappings.
+                        Bill printer and KOT kitchen printer configuration are loaded automatically from POS Profile events and printer mappings.
                       </p>
                     </div>
                   </div>
