@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { floorSignOut } from '../src/lib/floor-session';
 
 const boundary = vi.hoisted(() => ({
