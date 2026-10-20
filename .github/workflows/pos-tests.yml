@@ -42,4 +42,5 @@ jobs:
           ury.ury.api.test_ury_kot_notes
           ury.ury.api.test_ury_hold_fire
           ury.ury.api.test_ury_table_bookings
+          ury.ury.doctype.ury_order.test_split_bill_release
           ury.ury_pos.test_floor_pin
