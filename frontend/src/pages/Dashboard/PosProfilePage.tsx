@@ -342,7 +342,7 @@ export const PosProfilePage: React.FC = () => {
             <div>
               <h2 className="text-lg font-bold text-gray-900">POS Profile: {selectedProfile.name}</h2>
               <p className="text-xs text-gray-500">
-                Company: {selectedProfile.company || 'URY Restaurant'} &bull; Branch: {selectedProfile.branch || 'Main Branch'}
+                Company: {selectedProfile.company || 'Restaurant'} &bull; Branch: {selectedProfile.branch || 'Main Branch'}
               </p>
             </div>
           </div>
@@ -546,7 +546,7 @@ export const PosProfilePage: React.FC = () => {
                         </Badge>
                       </div>
                       <p className="text-gray-600">
-                        Bill printer and KOT kitchen printer configuration are loaded automatically from POS Profile events and URY Printer Mappings.
+                        Bill printer and KOT kitchen printer configuration are loaded automatically from POS Profile events and printer mappings.
                       </p>
                     </div>
                   </div>

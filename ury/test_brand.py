@@ -71,6 +71,7 @@ class TestSiteBrand(unittest.TestCase):
         framework.get_hooks = lambda hook: self.hooks if hook == "ury_brand" else self.fail(hook)
         framework.as_json = json.dumps
         framework.session = SimpleNamespace(user="Guest")
+        framework.local = SimpleNamespace(dev_server=0)
         framework.conf = {}
         framework.form_dict = {}
         framework.db = SimpleNamespace(commit=lambda: None)
@@ -96,6 +97,7 @@ class TestSiteBrand(unittest.TestCase):
         utils = ModuleType("frappe.utils")
         utils.__path__ = []
         utils.get_build_version = lambda: "test-version"
+        utils.cint = lambda value: int(value or 0)
         telemetry = ModuleType("frappe.utils.telemetry")
         telemetry.capture = lambda *args, **kwargs: None
         framework.sessions = sessions
@@ -274,6 +276,29 @@ class TestSiteBrand(unittest.TestCase):
         for boot in (self.context("pos")["boot"], controller.get_boot()):
             with self.subTest(boot=boot):
                 self.assertEqual(json.loads(json.loads(boot))["ury_brand"], STAFF_BRAND)
+
+    def test_ury_dashboard_uses_staff_brand_in_context_boot_and_html(self):
+        self.set_brand()
+        self.set_staff_brand()
+        self.framework.session.user = "manager@example.com"
+        controller = importlib.import_module("ury.www.ury")
+
+        context = controller.get_context({})
+        self.assertEqual(context["brand"], STAFF_BRAND)
+        self.assertEqual(json.loads(json.loads(context["boot"]))["ury_brand"], STAFF_BRAND)
+        self.assertEqual(json.loads(json.loads(controller.get_boot()))["ury_brand"], STAFF_BRAND)
+
+        template = Environment(autoescape=False, loader=FileSystemLoader(ROOT / "frontend")).from_string(
+            (ROOT / "frontend/index.html").read_text()
+        )
+        html = template.render(
+            **context,
+            app_name=self.settings.app_name or "",
+            frappe=SimpleNamespace(lang="en", session=self.framework.session),
+        )
+        parsed = PageParser(html)
+        self.assertEqual(parsed.title, STAFF_BRAND["name"])
+        self.assertEqual(parsed.favicon, STAFF_BRAND["favicon"])
 
     def test_all_controllers_preserve_unset_brand(self):
         for page in PAGES:

@@ -1,0 +1,13 @@
+Desktop Only
+
+This POS system is designed for desktop computers and tablets with larger screens.
+
+Mobile support will be available in a future update. Please use a device with a screen width of 320px or larger.
+
+Current screen width: 300px
+
+Required: 320px or larger
+
+You can use the classic POS for mobile devices.
+
+Switch to Version 1

@@ -7,6 +7,7 @@ import { Switch } from '../../components/ui/switch';
 import { dashboardService } from '../../services/dashboard';
 import { call } from '@ury/core';
 import SideDrawer from '../../components/layout/SideDrawer';
+import { ROLE_OPTIONS, roleLabel } from '../../lib/roleLabels';
 
 interface UserRecord {
   name: string;
@@ -48,8 +49,6 @@ export const UserPage: React.FC = () => {
     }
   };
 
-  const URY_ROLES = ['URY Manager', 'URY Waiter', 'URY Cashier'];
-
   const fetchUsers = async () => {
     setLoading(true);
     try {
@@ -69,7 +68,7 @@ export const UserPage: React.FC = () => {
 
   const getDisplayRole = (user: UserRecord): string => {
     if (user.roles && Array.isArray(user.roles) && user.roles.length > 0) {
-      return user.roles[0].role;
+      return roleLabel(user.roles[0].role);
     }
     return 'User';
   };
@@ -330,12 +329,8 @@ export const UserPage: React.FC = () => {
               onChange={(_, value) => setNewUser({ ...newUser, role: value })}
               options={
                 allRoles.length > 0 
-                  ? allRoles.map(r => ({ value: r.name, label: r.name }))
-                  : [
-                      { value: 'URY Cashier', label: 'URY Cashier' },
-                      { value: 'URY Waiter', label: 'URY Waiter' },
-                      { value: 'URY Manager', label: 'URY Manager' },
-                    ]
+                  ? allRoles.map(r => ({ value: r.name, label: roleLabel(r.name) }))
+                  : ROLE_OPTIONS
               }
             />
           </div>

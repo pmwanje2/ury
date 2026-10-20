@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { Button } from '@ury/ui';
+import { resolveBrand } from '@ury/core';
 import { Check } from 'lucide-react';
 import uryLogo from '../../../Public/photo_2026-08-19_13-24-09.jpg';
 
@@ -27,6 +28,7 @@ export function WizardLayout({
   isNextLoading,
   secondaryAction,
 }: WizardLayoutProps) {
+  const brand = resolveBrand({ name: 'POS', logo: uryLogo });
   const version = (window as any).frappe?.boot?.versions?.ury || 'v3.2.0';
 
   return (
@@ -35,7 +37,7 @@ export function WizardLayout({
       <header className="w-full border-b border-border bg-card">
         <div className={`${SHELL_WIDTH} h-16 flex items-center justify-between gap-4`}>
           <div className="flex items-center gap-3">
-            <img src={uryLogo} alt="URY Logo" className="h-7 w-auto" />
+            <img src={brand.logo} alt={brand.name} className="h-7 w-auto" />
             <span className="text-sm font-semibold text-foreground leading-none">Let's get your restaurant ready</span>
           </div>
 
@@ -73,7 +75,7 @@ export function WizardLayout({
         </div>
       </footer>
 
-      <div className="py-3 text-center text-xs text-muted-foreground">URY · {version}</div>
+      <div className="py-3 text-center text-xs text-muted-foreground">{brand.name} · {version}</div>
     </div>
   );
 }
