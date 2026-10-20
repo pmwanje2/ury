@@ -7,6 +7,7 @@ import { Switch } from '../../components/ui/switch';
 import { dashboardService } from '../../services/dashboard';
 import { call } from '@ury/core';
 import SideDrawer from '../../components/layout/SideDrawer';
+import { ROLE_OPTIONS, roleLabel } from '../../lib/roleLabels';
 
 interface UserRecord {
   name: string;
@@ -18,16 +19,6 @@ interface UserRecord {
   enabled?: number;
   roles?: Array<{ role: string }>;
 }
-
-const ROLE_LABELS: Record<string, string> = {
-  'URY Manager': 'POS Manager',
-  'URY Captain': 'POS Captain',
-  'URY Cashier': 'POS Cashier',
-  'URY Admin': 'POS Admin',
-  'URY Waiter': 'POS Captain',
-};
-
-const roleLabel = (role: string) => ROLE_LABELS[role] || role;
 
 export const UserPage: React.FC = () => {
   const { activeBranchId } = useBranchContext();
@@ -339,13 +330,7 @@ export const UserPage: React.FC = () => {
               options={
                 allRoles.length > 0 
                   ? allRoles.map(r => ({ value: r.name, label: roleLabel(r.name) }))
-                  : [
-                      { value: 'URY Cashier', label: 'POS Cashier' },
-                      { value: 'URY Captain', label: 'POS Captain' },
-                      { value: 'URY Waiter', label: 'POS Captain' },
-                      { value: 'URY Manager', label: 'POS Manager' },
-                      { value: 'URY Admin', label: 'POS Admin' },
-                    ]
+                  : ROLE_OPTIONS
               }
             />
           </div>

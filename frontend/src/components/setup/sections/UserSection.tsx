@@ -3,6 +3,7 @@ import { useConfigure, generateRandomPassword } from '../../../context/Configure
 import { Input, Button } from '@ury/ui';
 import { Plus, Trash2, Eye, EyeOff } from 'lucide-react';
 import { SearchableSelect } from '../../common/SearchableSelect';
+import { ROLE_OPTIONS } from '../../../lib/roleLabels';
 
 function UserRow({ user, usersLength, updateUser, deleteUser }: any) {
   const [showPassword, setShowPassword] = React.useState(false);
@@ -71,12 +72,7 @@ function UserRow({ user, usersLength, updateUser, deleteUser }: any) {
           <SearchableSelect
             id={`user-role-${user.id}`}
             value={user.role}
-            options={[
-              { value: 'URY Cashier', label: 'POS Cashier' },
-              { value: 'URY Captain', label: 'POS Captain' },
-              { value: 'URY Manager', label: 'POS Manager' },
-              { value: 'URY Admin', label: 'POS Admin' },
-            ]}
+            options={ROLE_OPTIONS}
             onChange={(_, val) => updateUser(user.id, { role: val })}
           />
         </div>

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, Button, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, Input } from '@ury/ui';
 import { SearchableSelect } from '../../components/common/SearchableSelect';
 import { useBranchContext } from '../../context/BranchContext';
+import { ROLE_OPTIONS, roleLabel } from '../../lib/roleLabels';
 
 type ModalType = 'menu' | 'table' | 'room' | 'branch' | 'user' | null;
 
@@ -67,7 +68,7 @@ export const QuickActions: React.FC = () => {
   const handleSubmitUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userForm.name || !userForm.email) return;
-    showNotification(`Successfully added user "${userForm.name}" as ${userForm.role}.`);
+    showNotification(`Successfully added user "${userForm.name}" as ${roleLabel(userForm.role)}.`);
     setUserForm({ name: '', email: '', role: 'URY Cashier' });
     handleClose();
     refreshDashboard();
@@ -446,10 +447,7 @@ export const QuickActions: React.FC = () => {
                 value={userForm.role}
                 onChange={(_, value) => setUserForm({ ...userForm, role: value })}
                 options={[
-                  { value: 'URY Cashier', label: 'POS Cashier' },
-                  { value: 'URY Captain', label: 'POS Captain' },
-                  { value: 'URY Manager', label: 'POS Manager' },
-                  { value: 'URY Admin', label: 'POS Admin' },
+                  ...ROLE_OPTIONS,
                   { value: 'URY Kitchen User', label: 'Kitchen Display User' },
                 ]}
               />
