@@ -23,7 +23,6 @@
   "column_break_ordering_modes",
   "enable_kiosk_ordering",
   "allow_add_to_running_table",
-  "require_guest_invoice_grant",
   "product_display_section",
   "enable_product_detail_page",
   "show_item_images",
@@ -133,13 +132,6 @@
    "fieldname": "allow_add_to_running_table",
    "fieldtype": "Check",
    "label": "Allow Add to Running Table"
-  },
-  {
-   "default": "0",
-   "description": "Require a staff-issued exact-invoice grant before a table guest can read or append an order. Off preserves existing QR/tablet ordering.",
-   "fieldname": "require_guest_invoice_grant",
-   "fieldtype": "Check",
-   "label": "Require Guest Invoice Grant"
   },
   {
    "fieldname": "product_display_section",
@@ -259,7 +251,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-20 12:00:00.000000",
+ "modified": "2026-09-02 19:24:59.922860",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Self Ordering Profile",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
-import { ArrowRightLeft, Loader2, MoreVertical, Printer, QrCode, Receipt, UserRound } from 'lucide-react';
+import { ArrowRightLeft, Loader2, MoreVertical, Printer, Receipt, UserRound } from 'lucide-react';
 import { Button } from '@ury/ui';
 
 /**
@@ -31,8 +31,6 @@ interface CaptainActionsMenuProps {
   showPrintBill?: boolean;
   onPrintBill?: () => void;
   isPrintingBill?: boolean;
-  showGuestPhoneQr?: boolean;
-  onGuestPhoneQr?: () => void;
 }
 
 const CaptainActionsMenu = ({
@@ -48,8 +46,6 @@ const CaptainActionsMenu = ({
   showPrintBill = false,
   onPrintBill,
   isPrintingBill = false,
-  showGuestPhoneQr = false,
-  onGuestPhoneQr,
 }: CaptainActionsMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +62,7 @@ const CaptainActionsMenu = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen, onOpenChange]);
 
-  if (!showReprintKot && !showTransferTable && !showTransferCaptain && !showPrintBill && !showGuestPhoneQr) {
+  if (!showReprintKot && !showTransferTable && !showTransferCaptain && !showPrintBill) {
     return null;
   }
 
@@ -97,12 +93,6 @@ const CaptainActionsMenu = ({
     event.stopPropagation();
     onOpenChange(false);
     onPrintBill?.();
-  };
-
-  const handleGuestPhoneQr = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    onOpenChange(false);
-    onGuestPhoneQr?.();
   };
 
   return (
@@ -168,16 +158,6 @@ const CaptainActionsMenu = ({
                 <Receipt className="h-4 w-4 shrink-0" />
               )}
               Print bill
-            </Button>
-          )}
-          {showGuestPhoneQr && (
-            <Button
-              variant="ghost"
-              className="flex h-auto w-full justify-start gap-2 rounded-none px-4 py-2.5 text-sm font-normal text-gray-700 hover:bg-gray-100"
-              onClick={handleGuestPhoneQr}
-            >
-              <QrCode className="h-4 w-4 shrink-0" />
-              Guest phone QR
             </Button>
           )}
         </div>
