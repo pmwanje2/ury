@@ -12,6 +12,19 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestPosFloorPad(unittest.TestCase):
+    def test_pos_template_defaults_to_unpaired_without_floor_context(self):
+        template = Environment().from_string((ROOT / "pos/index.html").read_text())
+        html = template.render(
+            csrf_token="session-token",
+            boot="{}",
+            brand={"name": "URY POS", "favicon": "/ury.ico"},
+            frappe=SimpleNamespace(lang="en"),
+        )
+        self.assertIn('window.floor_pad', html)
+        self.assertIn('"paired": false', html)
+        self.assertIn('"till_open": false', html)
+        self.assertNotRegex(html.lower(), r'"(?:pin|hash|device[_ ]?id)"\s*:')
+
     def test_pos_template_exposes_floor_pad_context(self):
         template = Environment().from_string((ROOT / "pos/index.html").read_text())
         html = template.render(
@@ -69,6 +82,8 @@ class TestPosFloorPad(unittest.TestCase):
 
         self.assertIs(result, context)
         self.assertEqual(context["floor_pad"], {"paired": True, "till_open": True})
+        self.assertEqual(set(context["floor_pad"]), {"paired", "till_open"})
+        self.assertNotRegex(json.dumps(context["floor_pad"]).lower(), r'pin|hash|device[_ ]?id')
 
 
 if __name__ == "__main__":

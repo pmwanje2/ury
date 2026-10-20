@@ -4,6 +4,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import CaptainTables from '../src/captain/pages/CaptainTables';
 
+vi.mock('../src/i18n', () => ({
+  t: (key: string) => key === 'header.switch_waiter' ? 'Translated waiter switch' : key,
+}));
+
 const boundary = vi.hoisted(() => ({
   floorSignOut: vi.fn(),
   context: {
@@ -52,10 +56,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it('offers Switch waiter in the Captain header and returns to the floor pad', async () => {
+it('offers the translated waiter switch in the Captain header and returns to the floor pad', async () => {
   await act(async () => root.render(<MemoryRouter><CaptainTables /></MemoryRouter>));
   const button = [...container.querySelectorAll('button')]
-    .find((candidate) => candidate.textContent?.trim() === 'Switch waiter');
+    .find((candidate) => candidate.textContent?.trim() === 'Translated waiter switch');
   expect(button).toBeDefined();
   await act(async () => button!.click());
   expect(boundary.floorSignOut).toHaveBeenCalledExactlyOnceWith();
