@@ -7,6 +7,7 @@ import { t } from '../i18n'
 import FloorPinPad from './FloorPinPad';
 import {
   floorSignOut,
+  hasFloorLogoutFailureMarker,
   hasFloorSessionMarker,
   isFloorPadActive,
   isStaySignedIn,
@@ -33,10 +34,11 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   const [isRechecking, setIsRechecking] = useState(false);
   const [isColdBootSigningOut, setIsColdBootSigningOut] = useState(false);
   const floorPadActive = isFloorPadActive();
+  const logoutFailed = hasFloorLogoutFailureMarker();
 
   const coldBoot = Boolean(
     floorPadActive && user && !user.provisional && posProfile
-      && !hasFloorSessionMarker() && !isStaySignedIn(user, posProfile),
+      && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
   );
 
   useEffect(() => {
@@ -78,7 +80,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
-  if (floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut)) {
+  if (floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed)) {
     return <FloorPinPad offline={user?.provisional} />;
   }
 

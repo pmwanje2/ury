@@ -88,7 +88,8 @@
     "close_shift": "Close Shift",
     "switch_to_desk": "Switch To Desk",
     "clear_cache": "Clear Cache",
-    "logout": "Logout"
+    "logout": "Logout",
+    "switch_waiter": "Switch waiter"
   },
   "menu": {
     "special_items": "Special Items"

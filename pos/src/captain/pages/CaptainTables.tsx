@@ -16,6 +16,7 @@ import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
 import { floorSignOut } from '../../lib/floor-session';
+import { t } from '../../i18n';
 
 /**
  * Captain "Tables" home screen (`/order`). See PLAN.md §5/§6 for the
@@ -212,7 +213,7 @@ export default function CaptainTables() {
               Refresh
             </Button>
             <Button variant="outline" size="sm" onClick={() => void floorSignOut()}>
-              Switch waiter
+              {t('header.switch_waiter')}
             </Button>
           </div>
         </div>

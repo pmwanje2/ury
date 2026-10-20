@@ -5,6 +5,7 @@ import {
 import { clearCashierStorage } from '../offline/cashier';
 
 const FLOOR_SESSION_MARKER = 'userAuth';
+const FLOOR_LOGOUT_FAILED_MARKER = 'ury_floor_logout_failed';
 
 export interface FloorPadContext {
   paired: boolean;
@@ -49,6 +50,15 @@ export function clearFloorSessionMarker(): void {
   if (typeof localStorage !== 'undefined') localStorage.removeItem(FLOOR_SESSION_MARKER);
 }
 
+export function hasFloorLogoutFailureMarker(): boolean {
+  return typeof sessionStorage !== 'undefined'
+    && sessionStorage.getItem(FLOOR_LOGOUT_FAILED_MARKER) === 'true';
+}
+
+export function clearFloorLogoutFailureMarker(): void {
+  if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(FLOOR_LOGOUT_FAILED_MARKER);
+}
+
 export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
   const stayRoles = profile && typeof profile === 'object' && 'custom_floor_stay_signed_in_roles' in profile
     ? ((profile as StayRoleProfile).custom_floor_stay_signed_in_roles ?? [])
@@ -62,17 +72,23 @@ export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
  * keeps the local tab from retaining the previous user's state.
  */
 export async function floorSignOut(): Promise<void> {
+  let logoutFailed = false;
   try {
     await clearCashierStorage(true, window.csrf_token);
   } catch {
+    logoutFailed = true;
     try {
       await clearAppStorage();
     } catch {
       // Local marker and printer state are still cleared below.
     }
   } finally {
+    if (logoutFailed) {
+      sessionStorage.setItem(FLOOR_LOGOUT_FAILED_MARKER, 'true');
+    } else {
+      clearFloorLogoutFailureMarker();
+    }
     clearFloorSessionMarker();
-    sessionStorage.removeItem('ury_floor_pin_session');
     disconnectQzPrinter();
     window.location.replace('/pos/order');
   }

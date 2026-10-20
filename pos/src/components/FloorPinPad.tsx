@@ -2,7 +2,7 @@ import { FormEvent, useRef, useState } from 'react';
 import { auth, call, parseFrappeError, resolveBrand } from '@ury/core';
 import { Button, Input } from '@ury/ui';
 import { t } from '../i18n';
-import { setFloorSessionMarker } from '../lib/floor-session';
+import { clearFloorLogoutFailureMarker, setFloorSessionMarker } from '../lib/floor-session';
 
 interface FloorPinPadProps {
   offline?: boolean;
@@ -40,7 +40,7 @@ export default function FloorPinPad({ offline = false }: FloorPinPadProps) {
         'ury.ury_pos.floor_pin.sign_in', { pin: value },
       );
       if (result.message?.csrf_token) window.csrf_token = result.message.csrf_token;
-      sessionStorage.setItem('ury_floor_pin_session', 'true');
+      clearFloorLogoutFailureMarker();
       setFloorSessionMarker();
       window.location.reload();
     } catch (reason) {
@@ -73,10 +73,12 @@ export default function FloorPinPad({ offline = false }: FloorPinPadProps) {
     setError('');
     try {
       await auth.loginWithUsernamePassword({ username, password });
+      clearFloorLogoutFailureMarker();
       setFloorSessionMarker();
       window.location.reload();
     } catch (reason) {
       setError(parseFrappeError(reason, t('floor_pin.login_failed')));
+      setPassword('');
     } finally {
       busyRef.current = false;
       setBusy(false);
