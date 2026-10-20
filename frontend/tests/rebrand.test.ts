@@ -32,24 +32,16 @@ describe('admin dashboard rebrand contracts', () => {
     expect(source).not.toContain('label="URY MOSAIC"');
   });
 
-  it('uses POS role labels without changing role values', () => {
-    const userPage = read('frontend/src/pages/Dashboard/UserPage.tsx');
-    const sources = [
-      read('frontend/src/components/setup/sections/UserSection.tsx'),
-      userPage,
-      read('frontend/src/pages/Dashboard/QuickActions.tsx'),
-    ].join('\n');
-    for (const [value, label] of [
-      ['URY Manager', 'POS Manager'],
-      ['URY Captain', 'POS Captain'],
-      ['URY Cashier', 'POS Cashier'],
-      ['URY Admin', 'POS Admin'],
+  it('imports role labels from one shared map in every role picker', () => {
+    for (const path of [
+      'frontend/src/components/setup/sections/UserSection.tsx',
+      'frontend/src/pages/Dashboard/UserPage.tsx',
+      'frontend/src/pages/Dashboard/QuickActions.tsx',
     ]) {
-      expect(sources).toContain(`value: '${value}'`);
-      expect(sources).toContain(`label: '${label}'`);
+      const source = read(path);
+      expect(source, path).toMatch(/from '(\.\.\/)+lib\/roleLabels'/);
+      expect(source, path).not.toMatch(/label: '(Restaurant )?POS (Manager|Captain|Cashier|Admin)'/);
     }
-    expect(userPage).toContain("value: 'URY Waiter'");
-    expect(userPage).toContain("label: 'POS Captain'");
   });
 
   it('uses neutral setup defaults and manager wording', () => {
