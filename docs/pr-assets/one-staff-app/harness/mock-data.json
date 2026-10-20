@@ -1,0 +1,52 @@
+{
+  "boot": {
+    "lang": "en",
+    "sysdefaults": { "currency": "UGX", "number_format": "#,###.##" },
+    "user": { "name": "captain@example.test", "full_name": "Amina Captain", "roles": ["URY Captain"] },
+    "ury_brand": { "name": "URY POS", "logo": "/ury_pos.png", "favicon": "/ury.ico" }
+  },
+  "files": {},
+  "api": {
+    "ury.ury_pos.floor_pin.sign_in": {
+      "_server_messages": "[\"{\\\"message\\\":\\\"URY_FLOOR_PIN_REFUSED: That PIN didn't work.\\\"}\"]",
+      "exc_type": "AuthenticationError"
+    },
+    "ury.ury.doctype.ury_order.ury_order.get_captain_context": {
+      "message": {
+        "user": "captain@example.test",
+        "roles": ["URY Captain"],
+        "branch": "Kampala Main",
+        "rooms": [],
+        "pos_profile": {
+          "name": "Kampala POS",
+          "transfer_role_permissions": true,
+          "role_allowed_for_billing": false,
+          "role_restricted_for_table_order": false,
+          "remove_items": false,
+          "show_image": true,
+          "custom_enable_kot_reprint": true,
+          "custom_enable_multiple_cashier": false
+        },
+        "role_restricted_for_table_order": false,
+        "opening_state": { "pos_open": true }
+      }
+    },
+    "ury.ury.api.ury_table_bookings.get_upcoming_bookings": { "message": {} },
+    "frappe.client.get_list:URY Room": {
+      "message": [{ "name": "Dining", "branch": "Kampala Main" }]
+    },
+    "frappe.client.get_list:URY Table": {
+      "message": [
+        { "name": "Table 1", "occupied": 0, "latest_invoice_time": null, "is_take_away": 0, "restaurant_room": "Dining", "table_shape": "Square", "no_of_seats": 4 },
+        { "name": "Table 2", "occupied": 1, "latest_invoice_time": "2026-10-20 13:20:00", "is_take_away": 0, "restaurant_room": "Dining", "table_shape": "Square", "no_of_seats": 4 }
+      ]
+    },
+    "frappe.client.get_list:POS Invoice": {
+      "message": [{ "name": "POS-INV-1001", "restaurant_table": "Table 2", "custom_merged_tables": null, "waiter": "waiter@example.test", "grand_total": 48000, "invoice_printed": 0 }]
+    },
+    "frappe.client.get_list:User": {
+      "message": [{ "name": "waiter@example.test", "full_name": "Okello Waiter" }]
+    }
+  },
+  "fallback": { "message": null }
+}

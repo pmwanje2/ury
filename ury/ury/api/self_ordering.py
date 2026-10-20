@@ -32,14 +32,14 @@ from datetime import timedelta
 import frappe
 from frappe import _
 from frappe.rate_limiter import rate_limit
-from frappe.utils import add_to_date, cint, flt, get_datetime, now_datetime
+from frappe.utils import add_to_date, cint, flt, now_datetime
 
-from ury.ury.api.ury_kot_generate import kot_execute
+from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
     _resolve_or_create_pos_invoice,
     price_items_for_invoice,
 )
-from ury.ury_pos.api import resolve_restaurant_menu
+from ury.ury.api.ury_kot_generate import kot_execute
 
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
@@ -204,12 +204,10 @@ def _resolve_device(device_id, credential):
 # Ordering session lifecycle
 # ---------------------------------------------------------------------------
 
-def _open_session(profile, source, table, device=None, invoice=None, granted_by=None):
+def _open_session(profile, source, table, device=None):
     raw_session_token = frappe.generate_hash(length=SESSION_TOKEN_BYTES_HASH_LEN)
     token_hash = hashlib.sha256(raw_session_token.encode()).hexdigest()
     timeout_minutes = profile.session_idle_timeout_minutes or 30
-    if invoice:
-        timeout_minutes = max(1, min(cint(timeout_minutes), 30))
 
     with _elevated():
         session = frappe.get_doc({
@@ -223,215 +221,66 @@ def _open_session(profile, source, table, device=None, invoice=None, granted_by=
             "opened_at": now_datetime(),
             "expires_at": add_to_date(now_datetime(), minutes=timeout_minutes),
             "last_activity": now_datetime(),
-            "invoice": invoice.name if invoice else None,
-            "is_granted": int(invoice is not None),
-            "grant_fingerprint": _grant_fingerprint(invoice) if invoice else None,
-            "granted_by": granted_by,
         })
         session.insert(ignore_permissions=True)
-        # The native successful POST boundary commits this insert. Grant
-        # revocation and replacement must be one transaction, never an early commit.
-        if invoice is None:
-            # Preserve existing GET menu/device bootstrap durability only.
-            # A staff-issued invoice grant must use the native POST transaction.
-            frappe.db.commit()
+        # Explicit commit rather than relying on Frappe's implicit
+        # end-of-request commit. Found live: a client that immediately
+        # uses the returned session token in its very next request (the
+        # real customer flow -- bootstrap then menu fetch, back-to-back
+        # with no human-scale delay) could get "session expired or
+        # invalid" because that next request's own transaction didn't yet
+        # see this insert. Manual sequential curl calls (with real-world
+        # latency between them) never showed this; an atomic
+        # bootstrap-then-fetch promise chain in the browser reproduced it
+        # reliably. This session is the customer's ONLY handle on their
+        # ordering context — every subsequent call depends on it existing
+        # the instant it's returned, so it must be durably committed
+        # before the response is, not just eventually consistent.
+        frappe.db.commit()
 
     return raw_session_token, session
 
 
-_GRANT_FIELDS = (
-    "name", "branch", "pos_profile", "docstatus", "restaurant_table",
-    "custom_merged_tables", "custom_merged_pos_invoice", "custom_split_from",
-    "custom_split_group", "waiter", "customer", "is_return",
-)
+def _resolve_session(session_token):
+    if not session_token:
+        frappe.throw(_("Missing ordering session"), frappe.PermissionError)
+    if not isinstance(session_token, str) or len(session_token) > 512:
+        frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
 
+    token_hash = hashlib.sha256(session_token.encode()).hexdigest()
+    session_name = frappe.db.get_value(
+        "URY Ordering Session",
+        {"token_hash": token_hash, "status": "Active"},
+        "name",
+    )
+    if not session_name:
+        frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
 
-def _guest_refused():
-    frappe.throw(_("URY_GUEST_GRANT_REQUIRED: Please ask staff for a new ordering link."), frappe.PermissionError)
+    with _elevated():
+        session = frappe.get_doc("URY Ordering Session", session_name)
+        # Native table-QR only: switching the ordering profile off ends every
+        # live guest session, and a session without an expiry is never valid.
+        if not frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "enabled"):
+            frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
+        if not session.expires_at or session.expires_at < now_datetime():
+            session.status = "Expired"
+            session.save(ignore_permissions=True)
+            frappe.throw(_("Ordering session expired. Please rescan the QR code."), frappe.PermissionError)
+
+        session.last_activity = now_datetime()
+        session.expires_at = add_to_date(
+            now_datetime(),
+            minutes=frappe.db.get_value(
+                "URY Self Ordering Profile", session.ordering_profile, "session_idle_timeout_minutes"
+            ) or 30,
+        )
+        session.save(ignore_permissions=True)
+
+    return session
 
 
 def _guest_retry():
     frappe.throw(_("URY_GUEST_RETRY: Another request is finishing. Please try again."), frappe.ValidationError)
-
-
-def _sorted_tables(value):
-    return sorted({table.strip() for table in (value or "").split(",") if table.strip()})
-
-
-def _valid_fingerprint(value):
-    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
-
-
-def _requires_guest_invoice_grant(profile):
-    """Opt into exact-invoice grants without changing existing guest ordering."""
-    return getattr(profile, "require_guest_invoice_grant", 0) in (True, 1, "1")
-
-
-def _is_staff_grant(session):
-    return bool(getattr(session, "invoice", None)) and bool(getattr(session, "is_granted", 0)) \
-        and getattr(session, "granted_by", None) not in (None, "Guest")
-
-
-def _grant_row(invoice):
-    row = {field: invoice.get(field) or None for field in _GRANT_FIELDS}
-    row["custom_merged_tables"] = _sorted_tables(invoice.get("custom_merged_tables"))
-    return row
-
-
-def _grant_fingerprint(invoice):
-    """Actual lifecycle values, including all split members, never modified/items/print.
-
-    Native current locking reads also see direct merge updates. Group rows are
-    private fingerprint material and are never returned to a guest.
-    """
-    members = {}
-    filters = [{"custom_split_from": invoice.name}, {"custom_merged_pos_invoice": invoice.name}]
-    group = invoice.get("custom_split_group")
-    if not group and invoice.get("custom_split_from"):
-        group = frappe.db.get_value("POS Invoice", invoice.custom_split_from, "custom_split_group", for_update=True)
-    if group:
-        filters.append({"custom_split_group": group})
-    for scope in filters:
-        for row in frappe.db.get_values(
-            "POS Invoice", {**scope, "docstatus": ["<", 2]}, list(_GRANT_FIELDS),
-            as_dict=True, for_update=True, order_by="name",
-        ):
-            members[row.name] = _grant_row(row)
-    table = None
-    if invoice.restaurant_table:
-        table = frappe.db.get_value(
-            "URY Table", invoice.restaurant_table, ["branch", "restaurant_room", "merged_with"],
-            as_dict=True, for_update=True,
-        )
-        if not table or table.branch != invoice.branch:
-            _guest_refused()
-        table["merged_with"] = _sorted_tables(table.merged_with)
-    snapshot = [_grant_row(invoice), [members[name] for name in sorted(members)], table]
-    return hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
-def _checked_guest_session(session_name):
-    try:
-        with _elevated():
-            session = frappe.get_doc("URY Ordering Session", session_name)
-            profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
-            if not profile.enabled or profile.name != session.ordering_profile:
-                _guest_refused()
-            requires_grant = _requires_guest_invoice_grant(profile)
-            # Invoice first, then session: issuers and guest mutations use the same
-            # native lock order. No alternative invoice is ever looked up. The
-            # legacy path intentionally does not lock or fingerprint an invoice.
-            invoice = frappe.get_doc("POS Invoice", session.invoice, for_update=True) \
-                if requires_grant and session.invoice else None
-            session = frappe.get_doc("URY Ordering Session", session_name, for_update=True)
-            if session.status != "Active" or not session.expires_at or get_datetime(session.expires_at) <= now_datetime():
-                _guest_refused()
-            if requires_grant and session.invoice:
-                if (not invoice or invoice.name != session.invoice or not cint(session.get("is_granted"))
-                        or cint(invoice.docstatus) != 0 or cint(invoice.get("is_return"))
-                        or invoice.branch != profile.branch or invoice.pos_profile != profile.pos_profile
-                        or invoice.restaurant_table != session.table
-                        or not _valid_fingerprint(session.get("grant_fingerprint"))
-                        or not hmac.compare_digest(session.get("grant_fingerprint") or "", _grant_fingerprint(invoice))):
-                    _guest_refused()
-            # Flag OFF: every session slides exactly as before G1. Flag ON:
-            # only pickup/kiosk slide; table and staff-grant expiry is fixed.
-            if not requires_grant or not (session.table or _is_staff_grant(session)):
-                session.last_activity = now_datetime()
-                session.expires_at = add_to_date(
-                    now_datetime(), minutes=profile.session_idle_timeout_minutes or 30,
-                )
-                session.save(ignore_permissions=True)
-            return session
-    except frappe.DoesNotExistError:
-        _guest_refused()
-    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
-        _guest_retry()
-
-
-def _session_name(session_token):
-    if not isinstance(session_token, str) or not session_token or len(session_token) > 512:
-        _guest_refused()
-    session_name = frappe.db.get_value(
-        "URY Ordering Session", {"token_hash": _hash_credential(session_token), "status": "Active"}, "name",
-    )
-    if not session_name:
-        _guest_refused()
-    return session_name
-
-
-def _resolve_session(session_token):
-    return _checked_guest_session(_session_name(session_token))
-
-
-def _grantable_invoice(invoice, for_update):
-    """Staff authority for one exact draft table bill; refuses otherwise."""
-    if frappe.session.user == "Guest":
-        _guest_refused()
-    from ury.ury.doctype.ury_order.ury_order import _enforce_order_access
-    from ury.ury_pos.api import getBranch
-
-    invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=for_update)
-    invoice_doc.check_permission("write")
-    if invoice_doc.branch != getBranch():
-        _guest_refused()
-    _enforce_order_access(invoice_doc, require_modify=True)
-    if not invoice_doc.restaurant_table or cint(invoice_doc.docstatus) != 0 or cint(invoice_doc.get("is_return")):
-        _guest_refused()
-    profiles = frappe.get_all(
-        "URY Self Ordering Profile",
-        filters={"branch": invoice_doc.branch, "pos_profile": invoice_doc.pos_profile,
-                 "enabled": 1, "enable_qr_table_ordering": 1}, pluck="name",
-    )
-    if len(profiles) != 1:
-        _guest_refused()
-    profile = frappe.get_doc("URY Self Ordering Profile", profiles[0])
-    # A grant on a flag-OFF profile would never be fingerprint-rechecked.
-    if not profile.enabled or not profile.enable_qr_table_ordering or not _requires_guest_invoice_grant(profile):
-        _guest_refused()
-    return invoice_doc, profile
-
-
-@frappe.whitelist(methods=["POST"])
-def can_issue_table_grant(invoice):
-    """Staff: may this user issue a guest-phone grant for this bill? Yes/no only.
-
-    Lets a waiter see the action without profile read (the profile holds the
-    QR signing secret). Same checks as issuance; no locks, writes or toasts.
-    """
-    messages = list(frappe.local.message_log or [])
-    try:
-        _grantable_invoice(invoice, for_update=False)
-        return {"visible": True}
-    except (frappe.PermissionError, frappe.ValidationError):
-        return {"visible": False}
-    finally:
-        frappe.local.message_log = messages
-
-
-@frappe.whitelist(methods=["POST"])
-def issue_table_grant(invoice):
-    """Staff: replace this exact draft invoice's grant; native authority stays ERP-side."""
-    try:
-        invoice_doc, profile = _grantable_invoice(invoice, for_update=True)
-        _grant_fingerprint(invoice_doc)
-        issuer = frappe.session.user
-        previous = frappe.db.get_values(
-            "URY Ordering Session", {"invoice": invoice_doc.name, "status": "Active"},
-            ["name"], as_dict=True, for_update=True, order_by="name",
-        )
-        for row in previous:
-            frappe.db.set_value("URY Ordering Session", row.name, "status", "Closed")
-        raw, session = _open_session(profile, "QR Table", invoice_doc.restaurant_table,
-                                     invoice=invoice_doc, granted_by=issuer)
-        return {"session": raw, "expires_at": session.expires_at}
-    except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
-        _guest_retry()
-
-
-def _require_table_grant(session):
-    if session.table and (not session.invoice or not cint(session.get("is_granted"))):
-        _guest_refused()
 
 
 # ---------------------------------------------------------------------------
@@ -486,33 +335,6 @@ def get_ordering_context(token=None, device_id=None, device_credential=None):
     raw_session_token, session = _open_session(profile, source, table, device_name)
 
     return _ordering_context_response(raw_session_token, source, profile, table, layout)
-
-
-@frappe.whitelist(allow_guest=True, methods=["POST"])
-def get_granted_ordering_context(session):
-    """Return the context for an existing staff-issued invoice grant.
-
-    Unlike ``get_ordering_context`` this endpoint never opens a session. The
-    opaque value is already the raw token returned by ``issue_table_grant``;
-    it is accepted once for resolution and is returned unchanged so the
-    frontend can persist the same session context after consuming ``#g=``.
-    """
-    session_name = _session_name(session)
-    try:
-        with _elevated():
-            profile_name = frappe.get_doc("URY Ordering Session", session_name).ordering_profile
-            profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
-    except frappe.DoesNotExistError:
-        _guest_refused()
-    # Flag OFF: refuse before the shared check would slide a legacy session.
-    if not _requires_guest_invoice_grant(profile):
-        _guest_refused()
-    resolved = _checked_guest_session(session_name)
-    _require_table_grant(resolved)
-    if (not _requires_guest_invoice_grant(profile) or resolved.source != "QR Table"
-            or not resolved.table or not _is_staff_grant(resolved)):
-        _guest_refused()
-    return _ordering_context_response(session, resolved.source, profile, resolved.table, "Mobile")
 
 
 @frappe.whitelist(allow_guest=True)
@@ -681,7 +503,7 @@ def get_customer_order(session):
 
 
 @frappe.whitelist(allow_guest=True)
-def add_customer_items(session, items, request_id=None):
+def add_customer_items(session, items):
     """Append-only customer order mutation. `items` is a list of
     {"item": <item_code>, "qty": <number>, "comment": <optional str>} —
     same shape sync_order()/price_items_for_invoice() already expect.
@@ -692,19 +514,19 @@ def add_customer_items(session, items, request_id=None):
     """
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
-    requires_grant = _requires_guest_invoice_grant(profile)
-    if requires_grant:
-        _require_table_grant(session)
 
     if not profile.enabled:
         frappe.throw(_("Ordering is currently unavailable"), frappe.ValidationError)
     if session.invoice and not profile.allow_add_to_running_table:
         frappe.throw(_("Adding further items to this order is not allowed"), frappe.ValidationError)
 
-    # Preserve the existing table-first ordering guard while the exact-invoice
-    # grant requirement remains disabled. A fresh legacy table session must not
-    # join a staff or earlier guest bill when running-table additions are off.
-    if not requires_grant and session.table and not session.invoice and not profile.allow_add_to_running_table:
+    # session.invoice is only set after THIS session has placed an order —
+    # it's None on a session's very first call even when the table already
+    # has an open invoice from staff (POS/Captain) or an earlier customer
+    # session. Without this check, allow_add_to_running_table=False could
+    # be silently bypassed by a customer's first request attaching to (and
+    # mutating pos_profile/order_source on) an order they didn't start.
+    if session.table and not session.invoice and not profile.allow_add_to_running_table:
         with _elevated():
             existing_invoice = frappe.get_all(
                 "POS Invoice",
@@ -756,34 +578,15 @@ def add_customer_items(session, items, request_id=None):
 
         clean_items.append({"item": item_code, "item_name": item_code, "qty": qty, "comment": comment})
 
-    cache_key = payload_hash = None
-    if request_id is not None:
-        if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
-            frappe.throw(_("Invalid request ID"), frappe.ValidationError)
-        cache_key = "ury:guest:round:" + _hash_credential(f"{session.name}:{request_id}")
-        payload_hash = _hash_credential(json.dumps(clean_items, sort_keys=True, separators=(",", ":")))
-        previous = frappe.cache.get_value(cache_key, use_local_cache=False)
-        if previous:
-            if previous["payload_hash"] != payload_hash:
-                frappe.throw(_("Request ID already used for different items"), frappe.ValidationError)
-            if "response" not in previous:
-                _guest_retry()
-            return previous["response"]
-
     order_type = "Dine In" if session.table else "Take Away"
 
     with _elevated():
         _ensure_admin_branch_mapping(profile.branch)
 
-        if session.invoice and requires_grant:
-            # Never use the native staff discovery/create helper for a grant.
-            # The exact native row is already locked and authorized by resolution.
-            invoice = frappe.get_doc("POS Invoice", session.invoice, for_update=True)
-        else:
-            invoice, _invoice_name = _resolve_or_create_pos_invoice(
-                table=session.table, invoiceNo=session.invoice, order_type=order_type, is_payment=None,
-                check_permission=False, override_branch=profile.branch,
-            )
+        invoice, invoice_name = _resolve_or_create_pos_invoice(
+            table=session.table, invoiceNo=session.invoice, order_type=order_type, is_payment=None,
+            check_permission=False, override_branch=profile.branch,
+        )
 
         # _resolve_or_create_pos_invoice() never sets restaurant_table on a
         # brand-new invoice — sync_order() does that itself after the call
@@ -851,13 +654,6 @@ def add_customer_items(session, items, request_id=None):
             invoice.invoice_created = 1
 
         try:
-            if cache_key:
-                # This is an idempotency record, not a lock. The native invoice
-                # (or new pickup's Session) is locked first. Keep a fail-closed
-                # marker across the SQL COMMIT / after_commit callback window.
-                cache_ttl = max(1800, int((get_datetime(session.expires_at) - now_datetime()).total_seconds()) + 60)
-                frappe.cache.set_value(cache_key, {"payload_hash": payload_hash}, expires_in_sec=cache_ttl)
-                frappe.db.after_rollback.add(lambda: frappe.cache.delete_value(cache_key))
             invoice.save(ignore_permissions=True)
         except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
             _guest_retry()
@@ -866,10 +662,6 @@ def add_customer_items(session, items, request_id=None):
 
         if not session.invoice:
             session.invoice = invoice.name
-            if requires_grant:
-                session.is_granted = 1
-                session.grant_fingerprint = _grant_fingerprint(invoice)
-                session.granted_by = "Guest"
             session.save(ignore_permissions=True)
 
         if invoice.invoice_printed == 0 and invoice.restaurant_table:
@@ -896,14 +688,7 @@ def add_customer_items(session, items, request_id=None):
         except Exception as e:
             frappe.log_error(f"Self-order KOT creation failed: {e}", "KOT Error")
 
-    response = _sanitize_invoice_for_customer(invoice)
-    if cache_key:
-        # Failed/rolled-back writes must never poison replay. The exact invoice
-        # lock serializes requests through the native request commit boundary.
-        frappe.db.after_commit.add(lambda: frappe.cache.set_value(
-            cache_key, {"payload_hash": payload_hash, "response": response}, expires_in_sec=cache_ttl,
-        ))
-    return response
+    return _sanitize_invoice_for_customer(invoice)
 
 
 # ---------------------------------------------------------------------------
@@ -1272,7 +1057,7 @@ def share_payment_link(session, recipient):
     """
     session = _resolve_session(session)
     if not session.invoice:
-        _guest_refused()
+        frappe.throw(_("No active order for this session"), frappe.ValidationError)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
     if not profile.enable_payment_link:
         frappe.throw(_("Payment links are not enabled"), frappe.ValidationError)

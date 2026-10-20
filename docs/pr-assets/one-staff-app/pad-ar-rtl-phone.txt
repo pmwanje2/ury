@@ -1,0 +1,17 @@
+Staff sign-in
+
+Enter your 4-digit PIN
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+Clear
+0
+⌫
+Sign in with username

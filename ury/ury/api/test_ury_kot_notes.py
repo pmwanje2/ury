@@ -104,7 +104,7 @@ class OrderingCases:
         return {"item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
                 "active_menu": "Menu A"}.get(field)
 
-    def get_doc(self, doctype, name=None, **kwargs):
+    def get_doc(self, doctype, name=None):
         if isinstance(doctype, dict):
             self.assertEqual(doctype["doctype"], "URY KOT")
             ticket = SimpleNamespace(**doctype, name=f"KOT-{len(self.tickets) + 1}", kot_items=[])

@@ -4,6 +4,14 @@ import { Button } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { RefreshCw } from 'lucide-react';
 import { t } from '../i18n'
+import FloorPinPad from './FloorPinPad';
+import {
+  floorSignOut,
+  hasFloorLogoutFailureMarker,
+  hasFloorSessionMarker,
+  isFloorPadActive,
+  isStaySignedIn,
+} from '../lib/floor-session';
 
 interface Props {
   children: React.ReactNode;
@@ -24,6 +32,14 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
+  const [isColdBootSigningOut, setIsColdBootSigningOut] = useState(false);
+  const floorPadActive = isFloorPadActive();
+  const logoutFailed = hasFloorLogoutFailureMarker();
+
+  const coldBoot = Boolean(
+    floorPadActive && user && !user.provisional && posProfile
+      && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
+  );
 
   useEffect(() => {
     // Start auth check
@@ -36,6 +52,12 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       fetchPosProfile();
     }
   }, [user, fetchPosProfile]);
+
+  useEffect(() => {
+    if (!coldBoot || isColdBootSigningOut) return;
+    setIsColdBootSigningOut(true);
+    void floorSignOut();
+  }, [coldBoot, isColdBootSigningOut]);
 
   // Show loading state while either auth or config is loading
   if (authLoading || (user && configLoading) || isRechecking) {
@@ -56,6 +78,10 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
         </div>
       </div>
     );
+  }
+
+  if (floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed)) {
+    return <FloorPinPad offline={user?.provisional} />;
   }
 
   if (!user) {

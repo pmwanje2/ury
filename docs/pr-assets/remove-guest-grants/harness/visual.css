@@ -1,0 +1,28 @@
+/* Capture-only styles. The app's Tailwind build does not compile from this
+   standalone harness root, so supply just the menu's utility classes. Not
+   loaded by any production entrypoint. */
+* { box-sizing: border-box; }
+body { margin: 0; background: #f8fafc; color: #111827; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 14px; }
+button { font: inherit; cursor: pointer; border: 0; background: transparent; }
+.relative { position: relative; }
+.absolute { position: absolute; }
+.right-0 { right: 0; }
+.top-full { top: 100%; }
+.mt-1 { margin-top: 4px; }
+.w-56 { width: 224px; }
+.rounded-lg { border-radius: 8px; }
+.border { border: 1px solid #e5e7eb; }
+.bg-white { background: white; }
+.py-1 { padding-top: 4px; padding-bottom: 4px; }
+.shadow-lg { box-shadow: 0 10px 15px rgb(0 0 0 / 10%); }
+.flex { display: flex; }
+.w-full { width: 100%; }
+.justify-start { justify-content: flex-start; }
+.gap-2 { gap: 8px; }
+.px-4 { padding-left: 16px; padding-right: 16px; }
+.py-2\.5 { padding-top: 10px; padding-bottom: 10px; }
+.text-gray-700 { color: #374151; }
+.h-4 { height: 16px; } .w-4 { width: 16px; }
+.h-5 { height: 20px; } .w-5 { width: 20px; }
+.h-9 { height: 36px; } .w-9 { width: 36px; }
+
