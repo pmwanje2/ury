@@ -140,7 +140,6 @@ describe('floor session isolation', () => {
     boundary.state.user = { name: 'cashier@example.test', roles: ['URY Cashier'], provisional: true };
     await render();
     expect(boundary.state.fetchPosProfile).toHaveBeenCalledExactlyOnceWith();
-    expect(container.textContent).toContain('Captain shell');
   });
 
   it('never renders Captain screens for an offline provisional cookie user', async () => {

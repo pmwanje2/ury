@@ -46,7 +46,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // Once we have a user, fetch POS profile
   useEffect(() => {
-    if (user && !user.provisional) {
+    if (user) {
       fetchPosProfile();
     }
   }, [user, fetchPosProfile]);
