@@ -677,7 +677,7 @@ export const BranchPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-gray-400">No URY Restaurant linked to this branch.</p>
+                <p className="text-sm text-gray-400">No Restaurant linked to this branch.</p>
               )}
             </div>
 
@@ -728,7 +728,7 @@ export const BranchPage: React.FC = () => {
                   </div>
                 </div>
               ) : (
-                <p className="text-sm text-gray-400">No URY Restaurant linked to this branch.</p>
+                <p className="text-sm text-gray-400">No Restaurant linked to this branch.</p>
               )}
             </div>
 
@@ -796,7 +796,7 @@ export const BranchPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-gray-400">No URY Restaurant linked to this branch.</p>
+                <p className="text-sm text-gray-400">No Restaurant linked to this branch.</p>
               )}
             </div>
           </Card>
