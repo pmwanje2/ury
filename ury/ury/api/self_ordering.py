@@ -349,7 +349,7 @@ def _checked_guest_session(session_name):
         _guest_retry()
 
 
-def _resolve_session(session_token):
+def _session_name(session_token):
     if not isinstance(session_token, str) or not session_token or len(session_token) > 512:
         _guest_refused()
     session_name = frappe.db.get_value(
@@ -357,7 +357,11 @@ def _resolve_session(session_token):
     )
     if not session_name:
         _guest_refused()
-    return _checked_guest_session(session_name)
+    return session_name
+
+
+def _resolve_session(session_token):
+    return _checked_guest_session(_session_name(session_token))
 
 
 def _grantable_invoice(invoice, for_update):
@@ -493,9 +497,18 @@ def get_granted_ordering_context(session):
     it is accepted once for resolution and is returned unchanged so the
     frontend can persist the same session context after consuming ``#g=``.
     """
-    resolved = _resolve_session(session)
+    session_name = _session_name(session)
+    try:
+        with _elevated():
+            profile_name = frappe.get_doc("URY Ordering Session", session_name).ordering_profile
+            profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
+    except frappe.DoesNotExistError:
+        _guest_refused()
+    # Flag OFF: refuse before the shared check would slide a legacy session.
+    if not _requires_guest_invoice_grant(profile):
+        _guest_refused()
+    resolved = _checked_guest_session(session_name)
     _require_table_grant(resolved)
-    profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
     if (not _requires_guest_invoice_grant(profile) or resolved.source != "QR Table"
             or not resolved.table or not _is_staff_grant(resolved)):
         _guest_refused()
