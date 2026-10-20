@@ -34,7 +34,7 @@
           </div>
         </div>
         <button type="submit" class="flex w-full justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700">Login</button>
-        <a href="/login#forgot" class="block text-center text-sm text-blue-600">Forgot password?</a>
+        <a v-if="!floorPad.paired" href="/login#forgot" class="block text-center text-sm text-blue-600">Forgot password?</a>
       </form>
     </div>
   </div>
@@ -62,7 +62,7 @@ export default {
       if (this.pin.length !== 4) return;
       this.busy = true;
       try { await this.auth.pinSignIn(this.pin); }
-      catch (_error) { this.error = "That PIN didn't work. If sign-in is paused, ask a manager or sign in with username."; }
+      catch (_error) { this.error = "That PIN didn't work. Ask a manager for a new PIN."; }
       finally { this.pin = ''; this.busy = false; }
     },
   },

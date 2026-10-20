@@ -91,14 +91,18 @@ def pair_device(pos_profile, label):
 	profile.add_comment("Info", f"Floor tablet '{escape(label)}' paired by {escape(frappe.session.user)}")
 
 
-@frappe.whitelist(methods=["POST"])
-def issue_pin(user):
+def _managed_profile(user=None):
 	for row in frappe.get_all("POS Profile", filters={"custom_floor_pin_login": 1, "disabled": 0}, fields=["name"]):
 		profile = frappe.get_doc("POS Profile", row.name)
-		if _enabled(profile) and frappe.has_permission("POS Profile", "write", profile) and _eligible(user, profile):
-			break
-	else:
-		_refuse("URY_FLOOR_PIN_NOT_PERMITTED", "A manager must issue a PIN to eligible floor staff.")
+		if (_enabled(profile) and frappe.has_permission("POS Profile", "write", profile)
+			and (user is None or _eligible(user, profile))):
+			return profile
+	_refuse("URY_FLOOR_PIN_NOT_PERMITTED", "A manager must issue a PIN to eligible floor staff.")
+
+
+@frappe.whitelist(methods=["POST"])
+def issue_pin(user):
+	_managed_profile(user)
 	previous = frappe.db.get_value("User", user, "custom_floor_pin_hash")
 	for _ in range(20):
 		pin = f"{secrets.randbelow(10000):04d}"
@@ -114,6 +118,20 @@ def issue_pin(user):
 		add_authentication_log(f"Floor PIN issued for {user} by {frappe.session.user}", frappe.session.user)
 		return {"pin": pin}
 	_refuse("URY_FLOOR_PIN_NOT_PERMITTED", "A PIN could not be issued. Try again.")
+
+
+@frappe.whitelist(methods=["GET"])
+def pin_staff():
+	profile = _managed_profile()
+	return [
+		{
+			"user": user,
+			"full_name": get_fullname(user),
+			"has_pin": bool(frappe.db.get_value("User", user, "custom_floor_pin_hash")),
+		}
+		for user in frappe.get_all("User", filters={"enabled": 1}, pluck="name")
+		if _eligible(user, profile)
+	]
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

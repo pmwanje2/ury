@@ -31,13 +31,18 @@ function mount(component) {
 function button(text) { return [...host.querySelectorAll('button')].find(node => node.textContent.trim() === text); }
 async function click(text) { expect(button(text), `Button ${text}`).toBeDefined(); button(text).click(); await flushPromises(); await nextTick(); }
 
-it('pad shown only when paired and till open, with a username fallback', async () => {
+it('paired tablet username fallback has no Forgot password link', async () => {
   mount(Login);
   expect(host.querySelector('[aria-label="4-digit PIN"]')).not.toBeNull();
   expect(host.querySelector('input[name="user_id"]')).toBeNull();
   await click('Sign in with username');
   expect(host.querySelector('input[name="user_id"]')).not.toBeNull();
   expect(host.textContent).toContain('Password');
+  expect(host.querySelector('a[href="/login#forgot"]')).toBeNull();
+});
+it('unpaired tablet still shows Forgot password', () => {
+  window.floor_pad = { paired: false, till_open: false };
+  mount(Login);
   expect(host.querySelector('a[href="/login#forgot"]').textContent).toBe('Forgot password?');
 });
 it.each([{ paired: true, till_open: false }, { paired: false, till_open: true }])(
@@ -46,13 +51,14 @@ it.each([{ paired: true, till_open: false }, { paired: false, till_open: true }]
     expect(host.querySelector('input[name="user_id"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="4-digit PIN"]')).toBeNull();
   });
-it('pad auto-submits on fourth digit, masks digits and clears on failure', async () => {
+it('pad refusal says ask a manager', async () => {
   mount(Login);
   for (const digit of ['0', '5', '2']) await click(digit);
   expect(state.auth.pinSignIn).not.toHaveBeenCalled();
   expect(host.textContent).not.toContain('052');
   await click('7');
   expect(state.auth.pinSignIn).toHaveBeenCalledExactlyOnceWith('0527');
+  expect(host.textContent).toContain("That PIN didn't work. Ask a manager for a new PIN.");
   expect(host.querySelector('[aria-label="4-digit PIN"]').textContent).not.toContain('●');
   expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('0527');
 });
@@ -84,12 +90,23 @@ it('pairing sends the tablet label to the server and never stores a device crede
   expect(localStorage.length + sessionStorage.length).toBe(0);
 });
 it('issued PIN is shown once and cleared on Done and close', async () => {
+  state.auth.call.get.mockImplementation((method) => Promise.resolve({ message:
+    method === 'frappe.client.has_permission' ? { has_permission: true } : [
+      { user: 'waiter@example.test', full_name: 'Amina Waiter', has_pin: true },
+      { user: 'second-waiter@example.test', full_name: 'Brian Waiter', has_pin: false },
+    ] }));
   state.auth.call.post.mockResolvedValue({ message: { pin: '0527' } });
   mount(Header); await flushPromises(); await click('Staff PINs');
-  expect(state.auth.call.get).toHaveBeenCalledWith('frappe.client.get', { doctype: 'Branch', name: 'Salama' });
-  await click('Issue new PIN');
-  expect(state.auth.call.post).toHaveBeenCalledWith('ury.ury_pos.floor_pin.issue_pin', { user: 'waiter@example.test' });
-  expect(host.textContent).toContain('0527');
+  expect(state.auth.call.get).toHaveBeenCalledWith('ury.ury_pos.floor_pin.pin_staff');
+  expect(state.auth.call.get).not.toHaveBeenCalledWith('frappe.client.get', expect.objectContaining({ doctype: 'Branch' }));
+  expect(host.textContent).toContain('Amina Waiter');
+  expect(host.textContent).toContain('Brian Waiter');
+  expect(host.textContent).toContain('Needs PIN');
+  expect(host.textContent).not.toContain('waiter@example.test');
+  expect(button('New PIN')).toBeDefined();
+  await click('Give PIN');
+  expect(state.auth.call.post).toHaveBeenCalledWith('ury.ury_pos.floor_pin.issue_pin', { user: 'second-waiter@example.test' });
+  expect(host.textContent).toContain('Brian Waiter, your PIN is 0527');
   expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('0527');
   await click('Done'); expect(host.textContent).not.toContain('0527');
   await click('Close'); await click('Staff PINs');
