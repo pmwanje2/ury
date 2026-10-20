@@ -166,18 +166,18 @@ export async function assignDeviceTable(
 }
 
 export async function getMenu(session: string): Promise<MenuResponse> {
-  const response = await call.get<FrappeResponse<MenuResponse>>(`${M}.get_customer_menu`, { session })
+  const response = await call.post<FrappeResponse<MenuResponse>>(`${M}.get_customer_menu`, { session })
   return response.message
 }
 
 export async function getProductAddons(session: string, item_code: string): Promise<{ item_code: string }[]> {
-  const response = await call.get<FrappeResponse<{ addons: { item_code: string }[] }>>(`${M}.get_customer_product`, { session, item_code })
+  const response = await call.post<FrappeResponse<{ addons: { item_code: string }[] }>>(`${M}.get_customer_product`, { session, item_code })
   if (!Array.isArray(response.message?.addons)) throw new Error('Invalid add-on response')
   return response.message.addons
 }
 
 export async function getCurrentOrder(session: string): Promise<CustomerOrder> {
-  const response = await call.get<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
+  const response = await call.post<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
   return response.message
 }
 
@@ -203,7 +203,7 @@ export async function requestAssistance(session: string): Promise<{ status: stri
 }
 
 export async function getStatus(session: string): Promise<OrderStatus> {
-  const response = await call.get<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
+  const response = await call.post<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
   return response.message
 }
 
@@ -249,7 +249,7 @@ export async function createPaymentRequest(session: string): Promise<PaymentRequ
 }
 
 export async function getPaymentStatus(session: string): Promise<PaymentStatusResult> {
-  const response = await call.get<FrappeResponse<PaymentStatusResult>>(`${M}.get_payment_status`, { session })
+  const response = await call.post<FrappeResponse<PaymentStatusResult>>(`${M}.get_payment_status`, { session })
   return response.message
 }
 
