@@ -342,6 +342,7 @@ export const UserPage: React.FC = () => {
                   : [
                       { value: 'URY Cashier', label: 'POS Cashier' },
                       { value: 'URY Captain', label: 'POS Captain' },
+                      { value: 'URY Waiter', label: 'POS Captain' },
                       { value: 'URY Manager', label: 'POS Manager' },
                       { value: 'URY Admin', label: 'POS Admin' },
                     ]
