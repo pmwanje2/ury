@@ -47,30 +47,21 @@ const order = {
 
 let root: Root
 let container: HTMLDivElement
-// Bill-bearing guest reads travel as POST bodies; guest actions use `writes`.
-let writes: ReturnType<typeof vi.fn>
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   sessionStorage.clear()
   window.history.replaceState(null, '', '/order')
-  writes = vi.fn().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
-  vi.spyOn(call, 'get').mockImplementation(async (path: string) => {
-    throw Error(`Unexpected GET ${path}`)
-  })
-  vi.spyOn(call, 'post').mockImplementation(async (path: string, args?: Record<string, unknown>) => {
-    if (String(path).endsWith('get_customer_menu')) {
-      return {
-        message: {
+  vi.spyOn(call, 'get').mockImplementation(async (path: string) => ({
+    message: String(path).endsWith('get_customer_menu')
+      ? {
           items: [{ item: 'Soup', item_name: 'Soup', rate: 12000, disabled: 0, special_dish: 0, item_image: null, course: null, course_label: null }],
           modified_time: null,
           name: 'Menu A',
-        },
-      }
-    }
-    if (/\.get_[a-z_]+$/.test(String(path))) return { message: order }
-    return writes(path, args)
-  })
+        }
+      : order,
+  }))
+  vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -195,7 +186,7 @@ describe('guest language switch', () => {
   })
 
   it('translates an already-requested waiter confirmation that is already on screen', async () => {
-    writes.mockResolvedValue({ message: { status: 'Already Requested', request: 'REQ-1' } })
+    vi.mocked(call.post).mockResolvedValue({ message: { status: 'Already Requested', request: 'REQ-1' } })
     await render(<MobileQRLayout initialContext={context} />)
     await act(async () => {
       button('Call waiter')!.click()
@@ -210,7 +201,7 @@ describe('guest language switch', () => {
   })
 
   it('translates a client order error that is already on screen and keeps the cart', async () => {
-    writes.mockRejectedValue({ httpStatus: 503 })
+    vi.mocked(call.post).mockRejectedValue({ httpStatus: 503 })
     await render(<MobileQRLayout initialContext={context} />)
     const soup = [...container.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Soup'))
     expect(soup).toBeDefined()
@@ -230,7 +221,7 @@ describe('guest language switch', () => {
   })
 
   it('keeps the server refusal text when the language changes', async () => {
-    writes.mockRejectedValue({
+    vi.mocked(call.post).mockRejectedValue({
       _server_messages: JSON.stringify([
         JSON.stringify({ message: '[SAL-QR-WAITER-OPENS-TABLE] Please ask a waiter to open your table first.' }),
       ]),

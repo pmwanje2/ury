@@ -23,8 +23,6 @@
   "column_break_ordering_modes",
   "enable_kiosk_ordering",
   "allow_add_to_running_table",
-  "require_guest_invoice_grant",
-  "enable_guest_assistant",
   "product_display_section",
   "enable_product_detail_page",
   "show_item_images",
@@ -46,13 +44,6 @@
   "staff_pin"
  ],
  "fields": [
-  {
-   "default": "0",
-   "fieldname": "enable_guest_assistant",
-   "fieldtype": "Check",
-   "label": "Enable Guest Assistant",
-   "description": "Off by default. Requires an exact-invoice staff grant and separately admitted fixed guest adapter. Does not enable staff Eve access."
-  },
   {
    "fieldname": "profile_info_tab",
    "fieldtype": "Tab Break",
@@ -141,13 +132,6 @@
    "fieldname": "allow_add_to_running_table",
    "fieldtype": "Check",
    "label": "Allow Add to Running Table"
-  },
-  {
-   "default": "0",
-   "description": "Require a staff-issued exact-invoice grant before a table guest can read or append an order. Off preserves existing QR/tablet ordering.",
-   "fieldname": "require_guest_invoice_grant",
-   "fieldtype": "Check",
-   "label": "Require Guest Invoice Grant"
   },
   {
    "fieldname": "product_display_section",

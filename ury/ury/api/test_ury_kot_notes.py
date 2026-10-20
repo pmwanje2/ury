@@ -104,7 +104,7 @@ class OrderingCases:
         return {"item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
                 "active_menu": "Menu A"}.get(field)
 
-    def get_doc(self, doctype, name=None, **kwargs):
+    def get_doc(self, doctype, name=None):
         if isinstance(doctype, dict):
             self.assertEqual(doctype["doctype"], "URY KOT")
             ticket = SimpleNamespace(**doctype, name=f"KOT-{len(self.tickets) + 1}", kot_items=[])
@@ -216,8 +216,7 @@ class TestGuestKOTNotes(OrderingCases, TestCase):
     def test_second_round_keeps_both_notes_and_sends_only_the_new_dish(self):
         self.seed("no onions")
         result = self.add("extra chilli")
-        self.assertEqual([row.comment for row in self.invoice.items], ["no onions", "extra chilli"])
-        self.assertEqual([row["comment"] for row in result["items"]], [None, None])
+        self.assertEqual([row["comment"] for row in result["items"]], ["no onions", "extra chilli"])
         self.assertEqual(self.ticket_lines(), [("Fish", 1, "extra chilli")])
 
     def test_repeated_rows_with_the_same_note_produce_only_the_added_quantity(self):
@@ -247,15 +246,11 @@ class TestGuestKOTNotes(OrderingCases, TestCase):
 
     def test_guest_note_is_capped_to_the_140_character_data_columns_before_pricing(self):
         result = self.add("n" * 141)
-        self.assertEqual(self.invoice.items[0].comment, "n" * 140)
-        self.assertEqual(self.ticket_lines(), [("Fish", 1, "n" * 140)])
-        self.assertIsNone(result["items"][0]["comment"])
+        self.assertEqual(result["items"][0]["comment"], "n" * 140)
 
     def test_unicode_note_is_capped_in_characters_not_utf8_bytes(self):
         result = self.add("é" * 141)
-        self.assertEqual(self.invoice.items[0].comment, "é" * 140)
-        self.assertEqual(self.ticket_lines(), [("Fish", 1, "é" * 140)])
-        self.assertIsNone(result["items"][0]["comment"])
+        self.assertEqual(result["items"][0]["comment"], "é" * 140)
 
     def test_note_at_the_column_limit_reaches_the_kitchen_without_truncation(self):
         self.add("n" * 140)
@@ -263,9 +258,7 @@ class TestGuestKOTNotes(OrderingCases, TestCase):
 
     def test_short_note_is_not_truncated(self):
         result = self.add("n" * 139)
-        self.assertEqual(self.invoice.items[0].comment, "n" * 139)
-        self.assertEqual(self.ticket_lines(), [("Fish", 1, "n" * 139)])
-        self.assertIsNone(result["items"][0]["comment"])
+        self.assertEqual(result["items"][0]["comment"], "n" * 139)
 
     def test_null_guest_note_remains_backward_compatible(self):
         self.add(None)
