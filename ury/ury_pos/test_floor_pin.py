@@ -177,6 +177,65 @@ class TestFloorPin(unittest.TestCase):
 		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", lambda: self.api().issue_pin(self.user))
 		self.frappe.db.set_value.assert_not_called()
 
+	def test_pin_staff_requires_pos_profile_write(self):
+		self.frappe.has_permission.return_value = False
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", lambda: self.api().pin_staff())
+		self.frappe.db.get_value.assert_not_called()
+
+	def test_pin_staff_lists_only_enabled_eligible_branch_users_with_full_name(self):
+		users = [
+			"waiter@example.test", "second-waiter@example.test", "disabled@example.test",
+			"off-branch@example.test", "manager@example.test", "system@example.test",
+		]
+		self.frappe.get_all.side_effect = [[Doc(name="Salama POS")], users]
+		roles = {
+			"waiter@example.test": ["URY Captain"],
+			"second-waiter@example.test": ["URY Captain"],
+			"disabled@example.test": ["URY Captain"],
+			"off-branch@example.test": ["URY Captain"],
+			"manager@example.test": ["URY Captain", "URY Manager"],
+			"system@example.test": ["URY Captain", "System Manager"],
+		}
+		full_names = {
+			"waiter@example.test": "Amina Waiter",
+			"second-waiter@example.test": "Brian Waiter",
+		}
+		self.frappe.get_roles.side_effect = roles.__getitem__
+		self.frappe.utils.get_fullname.side_effect = full_names.__getitem__
+
+		def get_value(doctype, user, field=None, **_kwargs):
+			if field == "enabled":
+				return user != "disabled@example.test"
+			if field == "custom_floor_pin_hash":
+				return "digest-for-amina" if user == "waiter@example.test" else None
+			return 1
+
+		self.frappe.db.get_value.side_effect = get_value
+		self.frappe.db.exists.side_effect = lambda doctype, filters: (
+			doctype != "URY User" or filters.get("user") in {"waiter@example.test", "second-waiter@example.test"}
+		)
+
+		result = self.api().pin_staff()
+
+		self.assertEqual(result, [
+			{"user": "waiter@example.test", "full_name": "Amina Waiter", "has_pin": True},
+			{"user": "second-waiter@example.test", "full_name": "Brian Waiter", "has_pin": False},
+		])
+
+	def test_pin_staff_has_pin_flag_never_returns_hash(self):
+		digest = "digest-for-amina"
+		self.frappe.get_all.side_effect = [[Doc(name="Salama POS")], [self.user]]
+		self.frappe.utils.get_fullname.return_value = "Amina Waiter"
+		self.frappe.db.get_value.side_effect = lambda _doctype, _user, field=None, **_kwargs: (
+			digest if field == "custom_floor_pin_hash" else 1
+		)
+		self.frappe.db.exists.return_value = True
+
+		result = self.api().pin_staff()
+
+		self.assertTrue(result[0]["has_pin"])
+		self.assertNotIn(digest, json.dumps(result))
+
 	def test_issue_pin_refuses_target_outside_branch_or_without_floor_role(self):
 		api = self.api()
 		self.frappe.db.exists.return_value = False
