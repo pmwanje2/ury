@@ -103,7 +103,7 @@ class TestDuplicateGuestGrantLayerRemoved(unittest.TestCase):
             patch(f"{MOD}.frappe.set_user"),
             patch(f"{MOD}.now_datetime", return_value=datetime(2026, 10, 20, 12)),
             patch(f"{MOD}.add_to_date", return_value="slid-expiry"),
-            patch(f"{MOD}.get_datetime", return_value=datetime(2099, 1, 1)),
+            patch(f"{MOD}.get_datetime", return_value=datetime(2099, 1, 1), create=True),
         ):
             result = self_ordering._resolve_session("raw-table-session")
 
