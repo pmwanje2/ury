@@ -33,9 +33,10 @@ describe('admin dashboard rebrand contracts', () => {
   });
 
   it('uses POS role labels without changing role values', () => {
+    const userPage = read('frontend/src/pages/Dashboard/UserPage.tsx');
     const sources = [
       read('frontend/src/components/setup/sections/UserSection.tsx'),
-      read('frontend/src/pages/Dashboard/UserPage.tsx'),
+      userPage,
       read('frontend/src/pages/Dashboard/QuickActions.tsx'),
     ].join('\n');
     for (const [value, label] of [
@@ -47,6 +48,8 @@ describe('admin dashboard rebrand contracts', () => {
       expect(sources).toContain(`value: '${value}'`);
       expect(sources).toContain(`label: '${label}'`);
     }
+    expect(userPage).toContain("value: 'URY Waiter'");
+    expect(userPage).toContain("label: 'POS Captain'");
   });
 
   it('uses neutral setup defaults and manager wording', () => {
