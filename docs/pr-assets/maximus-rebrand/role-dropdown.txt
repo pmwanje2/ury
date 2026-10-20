@@ -1,0 +1,39 @@
+All Branches
+Demo Manager
+Reports
+Dashboard
+Menu
+Table
+Room
+Branch
+Settings
+POS Profile
+User
+Aggregators
+Daily P&L Settings
+Production Unit
+Add User
+USER	USER ID	ROLE	ACTIONS
+
+A
+Amina
+	cashier@example.test	
+Restaurant POS Cashier	
+
+
+O
+Okello
+	captain@example.test	
+Restaurant POS Captain	
+Add User
+First Name
+Last Name
+User ID
+Role
+Cancel
+Create User
+Restaurant POS Manager
+Restaurant POS Captain
+Restaurant POS Cashier
+Restaurant POS Admin
+System Manager

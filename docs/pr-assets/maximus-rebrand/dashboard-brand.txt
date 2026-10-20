@@ -1,0 +1,41 @@
+All Branches
+Demo Manager
+Reports
+Dashboard
+Menu
+Table
+Room
+Branch
+Settings
+POS
+Kitchen Display
+
+TODAY'S SALES
+
+UGX 1,250,000
+
+ORDERS TODAY
+
+18
+
+TABLE OCCUPANCY
+
+29%
+
+OCCUPIED TABLES
+
+7 / 24
+
+AVERAGE ORDER VALUE
+
+UGX 69,444
+
+PENDING KITCHEN ORDERS
+
+4 KOTs
+Live POS Transactions
+
+Real-time sales and active checkouts
+
+Invoice ID	Customer	Table / Location	Order Type	Date & Time	Status	Grand Total
+No transactions recorded yet today.
