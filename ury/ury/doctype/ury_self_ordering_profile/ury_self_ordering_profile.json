@@ -24,6 +24,7 @@
   "enable_kiosk_ordering",
   "allow_add_to_running_table",
   "require_guest_invoice_grant",
+  "enable_guest_assistant",
   "product_display_section",
   "enable_product_detail_page",
   "show_item_images",
@@ -45,6 +46,13 @@
   "staff_pin"
  ],
  "fields": [
+  {
+   "default": "0",
+   "fieldname": "enable_guest_assistant",
+   "fieldtype": "Check",
+   "label": "Enable Guest Assistant",
+   "description": "Off by default. Requires an exact-invoice staff grant and separately admitted fixed guest adapter. Does not enable staff Eve access."
+  },
   {
    "fieldname": "profile_info_tab",
    "fieldtype": "Tab Break",
@@ -259,7 +267,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-20 12:00:00.000000",
+ "modified": "2026-09-02 19:24:59.922860",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Self Ordering Profile",

@@ -19,8 +19,6 @@ import { t } from '../i18n';
 import { submitOrderOfflineAware } from '../offline/cashier';
 import { useOutbox } from '../offline/use-outbox';
 import { HoldFireControls } from './HoldFireControls';
-import GuestPhoneQrDialog from './GuestPhoneQrDialog';
-import { useGuestPhoneQr } from './GuestPhoneQrDialog';
 
 const OrderPanel = () => {
   const { 
@@ -49,10 +47,6 @@ const OrderPanel = () => {
   } = usePOSStore();
   const user = useRootStore((state: RootState) => state.user);
   const outbox = useOutbox(posProfile, user);
-  const guestPhoneQr = useGuestPhoneQr({
-    invoice: isUpdatingOrder ? orderId : null,
-    table: selectedTable,
-  });
   const [offlineTarget, setOfflineTarget] = useState('');
   const target = outbox.rows.find((row) => row.client_order_id === offlineTarget && row.state === 'pending');
   const [editingItem, setEditingItem] = useState<typeof activeOrders[0] | null>(null);
@@ -420,7 +414,6 @@ const OrderPanel = () => {
         onSave={handleCommentSave}
         initialComment={orderComment}
       />
-      <GuestPhoneQrDialog {...guestPhoneQr} />
     </div>
   );
 };
