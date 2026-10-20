@@ -50,7 +50,10 @@ class TestURYKOT(TestCase):
             "frappe": framework,
             "frappe.www.printview": SimpleNamespace(validate_print_permission=MagicMock()),
             "pypdf": SimpleNamespace(PdfWriter=MagicMock()),
-            "ury.ury.doctype.ury_order.ury_order": SimpleNamespace(release_merge_cluster_tables=MagicMock()),
+            "ury.ury.doctype.ury_order.ury_order": SimpleNamespace(
+                release_merge_cluster_tables=MagicMock(),
+                _free_tables_if_no_open_invoices=MagicMock(),
+            ),
         }):
             path = Path(__file__).parents[2] / "api" / "ury_print.py"
             module = self.load_module(path, "kot_signer_under_test")

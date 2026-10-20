@@ -7,7 +7,7 @@ import os
 from pypdf import PdfWriter
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
+from ury.ury.doctype.ury_order.ury_order import _free_tables_if_no_open_invoices
 
 no_cache = 1
 
@@ -68,7 +68,7 @@ def network_printing(
 
                 if restaurant_table and invoice_printed == 0:
                     frappe.db.set_value("POS Invoice", name, "invoice_printed", 1)
-                    release_merge_cluster_tables(restaurant_table)
+                    _free_tables_if_no_open_invoices(restaurant_table)
                 else:
                     frappe.db.set_value("POS Invoice", name, "invoice_printed", 1)
 
@@ -152,12 +152,11 @@ def qz_print_update(invoice):
                     "POS Invoice", invoice, "invoice_printed", 1, update_modified=False
                 )
 
-                release_merge_cluster_tables(table)
+                _free_tables_if_no_open_invoices(table)
                 # Validate both updates
                 new_invoice_printed = frappe.db.get_value("POS Invoice", invoice, "invoice_printed")
-                new_table_status = frappe.db.get_value("URY Table", table, "occupied")
                 
-                if new_invoice_printed != 1 or new_table_status != 0:
+                if new_invoice_printed != 1:
                     return {"status": "Failure"}
         
         return {"status": "Success"}
@@ -188,7 +187,7 @@ def print_pos_page(doctype, name, print_format):
         frappe.db.set_value("POS Invoice", name, "invoice_printed", 1)
 
         if restaurant_table:
-            release_merge_cluster_tables(restaurant_table)
+            _free_tables_if_no_open_invoices(restaurant_table)
 
 
 @frappe.whitelist()
