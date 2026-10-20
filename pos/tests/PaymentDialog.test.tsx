@@ -63,6 +63,14 @@ async function enter(amount: string, index = 0) {
   });
 }
 
+async function enterText(value: string, selector = 'input[type="text"]') {
+  const input = document.querySelector<HTMLInputElement>(selector)!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 test.each(['40', '0', ''])('a named account can settle with tender %j and leave the rest owed', async (amount) => {
   const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
   await render();
@@ -78,6 +86,25 @@ test.each(['40', '0', ''])('a named account can settle with tender %j and leave 
   expect(onClose).toHaveBeenCalledOnce();
   expect(clearSelectedOrder).toHaveBeenCalledOnce();
   expect(fetchOrders).toHaveBeenCalledOnce();
+});
+
+test('room charge asks for a raw room or folio reference and sends it with settlement', async () => {
+  usePOSStore.setState({ paymentModes: ['Room Charge'] });
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
+  await render('Walk-in Customer');
+  expect(document.querySelector('input[type="text"]')).toBeNull();
+
+  await enter('100');
+  expect(document.body.textContent).toContain('Room / Folio');
+  await enterText('  ROOM-101  ');
+  await act(async () => payButton().click());
+
+  expect(post).toHaveBeenCalledExactlyOnceWith('ury.ury.doctype.ury_order.ury_order.make_invoice', {
+    additionalDiscount: null, cashier: 'cashier@example.com', customer: 'Walk-in Customer',
+    invoice: 'BILL-1', kamra_ref: '  ROOM-101  ', owner: 'waiter@example.com',
+    payments: [{ mode_of_payment: 'Room Charge', amount: 100 }],
+    pos_profile: 'Till A', table: null,
+  });
 });
 
 test.each([

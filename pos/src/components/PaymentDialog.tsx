@@ -60,6 +60,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
+  const [kamraRef, setKamraRef] = useState('');
 
   useEffect(() => {
     fetchPaymentModes();
@@ -104,6 +105,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     })
     .filter(Boolean);
   const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
+  const roomChargeAmount = parseFloat(paymentInputs['Room Charge'] || '');
   const shortfall = finalTotal - paymentsTotal;
   const isShort = shortfall > 0.005;
   const accountPaymentMode = paymentModes
@@ -171,6 +173,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
             : payments,
           pos_profile: posProfile, table,
+          ...(roomChargeAmount > 0 ? { kamra_ref: kamraRef } : {}),
           ...(ids ? { client_order_id: ids.clientOrderId, round_id: ids.roundId } : {}),
         }),
       });
@@ -262,6 +265,22 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 );
               })}
             </div>
+            {roomChargeAmount > 0 && (
+              <div className="space-y-2">
+                <label htmlFor="room-charge-reference" className="text-sm font-medium">
+                  {t('payment.room_folio')}
+                </label>
+                <Input
+                  id="room-charge-reference"
+                  type="text"
+                  value={kamraRef}
+                  onChange={e => setKamraRef(e.target.value)}
+                  className="w-full"
+                  size="sm"
+                  disabled={isProcessing}
+                />
+              </div>
+            )}
             <div className="flex justify-between mt-2 text-sm">
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
