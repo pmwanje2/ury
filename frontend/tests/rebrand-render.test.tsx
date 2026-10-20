@@ -1,4 +1,4 @@
-import { act, createElement, type ReactNode } from 'react';
+import { act, createElement, type ComponentProps, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Header } from '../src/components/layout/Header';
@@ -22,7 +22,7 @@ vi.mock('@ury/core', () => ({
 }));
 
 vi.mock('@ury/ui', () => ({
-  Button: (props: any) => createElement('button', props, props.children),
+  Button: (props: ComponentProps<'button'>) => createElement('button', props, props.children),
   showToast: { error: vi.fn() },
 }));
 
