@@ -135,6 +135,14 @@ describe('paired floor tablet sign-in', () => {
 });
 
 describe('floor session isolation', () => {
+  it('still loads a provisional cashier profile outside the paired floor flow', async () => {
+    setFloorPad({ paired: false, till_open: false });
+    boundary.state.user = { name: 'cashier@example.test', roles: ['URY Cashier'], provisional: true };
+    await render();
+    expect(boundary.state.fetchPosProfile).toHaveBeenCalledExactlyOnceWith();
+    expect(container.textContent).toContain('Captain shell');
+  });
+
   it('never renders Captain screens for an offline provisional cookie user', async () => {
     boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'], provisional: true };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
