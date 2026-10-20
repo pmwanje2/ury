@@ -44,6 +44,7 @@ afterEach(async () => {
 describe.each([
   [{ name: 'cashier', roles: ['URY Cashier'] }, '/orders'],
   [{ name: 'multi', roles: ['System Manager', 'URY Cashier'] }, '/orders'],
+  [{ name: 'captain', roles: ['URY Captain'] }, '/order'],
   [{ name: 'manager', roles: ['URY Manager'] }, '/dashboard'],
   [{ name: 'Administrator', roles: ['System Manager'] }, '/dashboard'],
   [{ name: 'Administrator', roles: ['System Manager', 'URY Cashier'] }, '/orders'],
