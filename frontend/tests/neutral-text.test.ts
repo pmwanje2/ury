@@ -10,6 +10,7 @@ describe('user-visible restaurant wording', () => {
     ['pages/Dashboard/BranchPage.tsx', 'No Restaurant linked to this branch.', 'No URY Restaurant linked'],
     ['pages/Dashboard/PosProfilePage.tsx', "selectedProfile.company || 'Restaurant'", "'URY Restaurant'"],
     ['pages/Reports/ItemWisePurchaseHistory.tsx', 'not a Restaurant-specific workflow', 'URY-specific'],
+    ['pages/Dashboard/PosProfilePage.tsx', 'POS Profile events and printer mappings.', 'URY Printer Mappings'],
   ])('%s uses neutral wording', (path, wanted, removed) => {
     const source = read(path);
     expect(source).toContain(wanted);
