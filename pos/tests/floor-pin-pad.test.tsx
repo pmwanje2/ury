@@ -144,6 +144,7 @@ describe('paired floor tablet sign-in', () => {
 
   it('supports in-app username fallback and sets the session marker', async () => {
     boundary.login.mockResolvedValue(undefined);
+    sessionStorage.setItem('ury_floor_logout_failed', 'true');
     await render();
     const fallback = [...container.querySelectorAll('button')]
       .find((button) => button.textContent?.includes('username'));
@@ -164,6 +165,7 @@ describe('paired floor tablet sign-in', () => {
       username: 'waiter@example.test', password: 'secret',
     });
     expect(localStorage.getItem('userAuth')).toBe('true');
+    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
   });
 
   it('clears the password after a failed username sign-in', async () => {
