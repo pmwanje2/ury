@@ -304,6 +304,9 @@ class TestGuestGrants(unittest.TestCase):
         ])
 
     def test_staff_authority_requires_native_write_branch_room_and_waiter(self):
+        # Grant mode ON: each refusal below must come from native authority,
+        # not from the default-OFF issuance refusal.
+        self.profile.require_guest_invoice_grant = 1
         cases = ["guest", "write", "branch", "room", "waiter", "submitted", "return", "disabled"]
         for case in cases:
             with self.subTest(case=case):
