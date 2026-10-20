@@ -42,6 +42,7 @@ function getRelativeTime(creationDate: string, serverTimeOffset: number | null):
 interface Props {
   title?: string;
   onOpenCheck?: (kot: string, isCurrentSession: () => boolean) => Promise<boolean>;
+  onNewUnread?: (unreadCount: number) => void;
 }
 
 export default function Notifications(props: Props) {
@@ -52,7 +53,7 @@ export default function Notifications(props: Props) {
   return <UserNotifications key={name} user={name} {...props} />;
 }
 
-function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }: Props & { user: string }) {
+function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, onNewUnread }: Props & { user: string }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [serverTimeOffset, setServerTimeOffset] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +65,13 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }
   const active = useRef(false);
   const requestId = useRef(0);
   const refreshRef = useRef<() => void>(() => {});
+  const previousUnreadCount = useRef<number | null>(null);
+  const onNewUnreadRef = useRef(onNewUnread);
   const isCurrentSession = () => active.current && getSessionUser() === user;
+
+  useEffect(() => {
+    onNewUnreadRef.current = onNewUnread;
+  }, [onNewUnread]);
 
   useEffect(() => {
     active.current = true;
@@ -109,7 +116,13 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }
         if (!Array.isArray(data.message)) throw new Error('Invalid notification list');
         if (!isCurrentSession()) { if (active.current) clearOldSession(); return; }
         if (id !== requestId.current) return;
-        setNotifications(data.message.filter((item: Notification) => item.for_user === user));
+        const nextNotifications = data.message.filter((item: Notification) => item.for_user === user);
+        const unreadCount = nextNotifications.filter((item: Notification) => !Number(item.read)).length;
+        if (previousUnreadCount.current !== null && unreadCount > previousUnreadCount.current) {
+          onNewUnreadRef.current?.(unreadCount);
+        }
+        previousUnreadCount.current = unreadCount;
+        setNotifications(nextNotifications);
         setFailed(false);
       } catch {
         if (isCurrentSession() && id === requestId.current) setFailed(true);

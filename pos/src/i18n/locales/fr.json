@@ -401,6 +401,10 @@
     "related": "Additions liées",
     "open_sibling_failed": "Impossible d'ouvrir l'addition liée"
   },
+  "notifications": {
+    "kitchen": "Cuisine",
+    "new_food_ready": "Nouvelle commande prête en cuisine"
+  },
   "bill_merge": {
     "merge_bill": "Fusionner l'addition",
     "select_secondary": "Choisir une addition à fusionner dans {{invoice}}",

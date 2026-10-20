@@ -8,12 +8,14 @@ import { useRootStore, RootState } from '../../store/root-store';
 import {
   captainTransfer,
   reprintKot,
+  splitBill,
   syncOrder,
   SyncOrderRequest,
   tableTransfer,
 } from '../../lib/order-api';
 import { printOrder } from '../../lib/print';
 import { resolvePrintFormat } from '../../lib/invoice-api';
+import type { SplitGroupInvoice } from '../../lib/invoice-api';
 import { getVacantTablesForBranch, Table } from '../../lib/table-api';
 import { DINE_IN } from '../../data/order-types';
 import { useTableOrderContext, OrderDeltaLine } from '../hooks/useTableOrderContext';
@@ -26,6 +28,9 @@ import TableTransferDialog from '../../components/TableTransferDialog';
 import CaptainTransferDialog from '../../components/CaptainTransferDialog';
 import { CustomerSelect } from '../../components/CustomerSelect';
 import { HoldFireControls } from '../../components/HoldFireControls';
+import BillSplitDialog, { type BillSplitItem } from '../../components/BillSplitDialog';
+import SplitGroupPanel from '../../components/SplitGroupPanel';
+import { t } from '../../i18n';
 
 type Mode = 'menu' | 'order';
 
@@ -55,6 +60,7 @@ export default function CaptainOrder() {
     alreadyOrderedLines,
     newOrChangedLines,
     reductionPendingLines,
+    refetchContext,
   } = useTableOrderContext(table);
 
   const {
@@ -92,6 +98,8 @@ export default function CaptainOrder() {
   const [transferDestinations, setTransferDestinations] = useState<Table[]>([]);
   const [isTransferDestinationsLoading, setIsTransferDestinationsLoading] = useState(false);
   const [isTransferCaptainOpen, setIsTransferCaptainOpen] = useState(false);
+  const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
+  const [printingSplitInvoice, setPrintingSplitInvoice] = useState<string | null>(null);
 
   // Default to the Order view for a table that already has a baseline
   // order, Menu for a fresh table — matches PLAN §5 ("free table: menu
@@ -272,6 +280,23 @@ export default function CaptainOrder() {
   const canTransferTable = permissions?.transfer_table ?? false;
   const canTransferCaptain = permissions?.transfer_captain ?? false;
   const canPrintBill = permissions?.print_bill ?? false;
+  const canSplitBill = permissions?.split_bill ?? false;
+
+  const splitItems = useMemo<BillSplitItem[]>(
+    () => activeOrders
+      .filter((item) => Boolean(item.invoiceItemName))
+      .map((item) => {
+        const rate = item.selectedVariant?.price || item.price;
+        return {
+          name: item.invoiceItemName!,
+          item_name: item.name,
+          qty: item.quantity,
+          rate,
+          amount: rate * item.quantity,
+        };
+      }),
+    [activeOrders],
+  );
 
   const handleReprintKot = async () => {
     if (!invoiceId) {
@@ -310,6 +335,44 @@ export default function CaptainOrder() {
       showToast.error(error instanceof Error ? error.message : 'Failed to print bill.');
     } finally {
       setIsPrintingBill(false);
+    }
+  };
+
+  const handleSplitBill = async (payload: {
+    itemsToMove: Array<{ name: string; qty: number }>;
+    customer?: string;
+  }) => {
+    if (!invoiceId) {
+      throw new Error('No active order to split.');
+    }
+    const result = await splitBill(invoiceId, payload.itemsToMove, payload.customer);
+    showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
+    await refetchContext();
+  };
+
+  const handleOpenSplitInvoice = (invoice: SplitGroupInvoice) => {
+    if (invoice.restaurant_table && invoice.restaurant_table !== table) {
+      navigate(`/order/table/${invoice.restaurant_table}`);
+    }
+  };
+
+  const handlePrintSplitInvoice = async (invoice: SplitGroupInvoice) => {
+    if (!posProfile) {
+      showToast.error('POS profile not found.');
+      return;
+    }
+    setPrintingSplitInvoice(invoice.name);
+    try {
+      await printOrder({
+        orderId: invoice.name,
+        posProfile,
+        printFormat: resolvePrintFormat(invoice, posProfile.print_format),
+      });
+      showToast.success(t('success.printed'));
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : 'Failed to print bill.');
+    } finally {
+      setPrintingSplitInvoice(null);
     }
   };
 
@@ -584,6 +647,8 @@ export default function CaptainOrder() {
             showPrintBill={canPrintBill}
             onPrintBill={handlePrintBill}
             isPrintingBill={isPrintingBill}
+            showSplitBill={canSplitBill}
+            onSplitBill={() => setIsSplitBillOpen(true)}
           />
         </div>
       </div>
@@ -593,6 +658,17 @@ export default function CaptainOrder() {
           <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
             View only — you don't have permission to modify this table's order right now.
           </p>
+        </div>
+      )}
+
+      {context?.order?.custom_split_group && invoiceId && (
+        <div className="px-3 pt-3">
+          <SplitGroupPanel
+            invoiceName={invoiceId}
+            onOpenInvoice={handleOpenSplitInvoice}
+            onPrintInvoice={handlePrintSplitInvoice}
+            printingInvoiceName={printingSplitInvoice}
+          />
         </div>
       )}
 
@@ -727,6 +803,23 @@ export default function CaptainOrder() {
         currentCaptain={currentCaptain}
         invoiceName={invoiceId ?? ''}
         onConfirm={handleCaptainTransferConfirm}
+      />
+
+      <BillSplitDialog
+        open={isSplitBillOpen}
+        onOpenChange={setIsSplitBillOpen}
+        invoiceName={invoiceId ?? ''}
+        items={splitItems}
+        sourceCustomer={
+          context?.order?.customer
+            ? {
+                id: context.order.customer,
+                name: context.order.customer_name || context.order.customer,
+                phone: context.order.mobile_number || '',
+              }
+            : null
+        }
+        onConfirm={handleSplitBill}
       />
     </div>
   );

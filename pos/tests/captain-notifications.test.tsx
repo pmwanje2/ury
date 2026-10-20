@@ -2,13 +2,25 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Button } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import Notifications from '../src/components/Notifications';
 import CaptainTables from '../src/captain/pages/CaptainTables';
 
+type NotificationRow = {
+  name: string;
+  for_user: string;
+  subject: string;
+  email_content: string;
+  creation: string;
+  read: number;
+  document_type: string;
+  document_name: string;
+};
+
 const boundary = vi.hoisted(() => ({
   session: 'waiter@example.com' as string | null,
-  rows: [] as any[],
+  rows: [] as NotificationRow[],
   fetchAlerts: vi.fn(),
   get: vi.fn(),
   toastInfo: vi.fn(),
@@ -70,7 +82,7 @@ vi.mock('../src/captain/lib/captain-table-api', () => ({
 
 vi.mock('../src/captain/components/CaptainTableCard', () => ({
   default: ({ table, onTap }: { table: { name: string }; onTap: () => void }) => (
-    <button onClick={onTap}>{table.name}</button>
+    <Button onClick={onTap}>{table.name}</Button>
   ),
 }));
 vi.mock('../src/lib/floor-session', () => ({ floorSignOut: vi.fn(async () => {}) }));
@@ -78,7 +90,7 @@ vi.mock('../src/lib/floor-session', () => ({ floorSignOut: vi.fn(async () => {})
 let container: HTMLDivElement;
 let root: Root;
 
-const notification = (changes = {}) => ({
+const notification = (changes: Partial<NotificationRow> = {}): NotificationRow => ({
   name: 'KOT-NOTIF-1',
   for_user: 'waiter@example.com',
   subject: 'Food ready: Table T-05',
@@ -167,7 +179,7 @@ describe('captain kitchen notifications', () => {
     boundary.rows = [notification({ name: 'KOT-NOTIF-2', read: 0 }), notification({ read: 1 })];
     await emit('notification');
 
-    expect(boundary.toastInfo).toHaveBeenCalledWith(expect.stringMatching(/food ready|kitchen/i));
+    expect(boundary.toastInfo).toHaveBeenCalledWith(expect.stringMatching(/food-ready|kitchen/i));
   });
 
   it('opens a kitchen notification on the KOT restaurant table', async () => {

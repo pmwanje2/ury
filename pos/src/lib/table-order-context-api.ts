@@ -17,6 +17,7 @@ export interface TableOrderPermissions {
   transfer_table: boolean;
   transfer_captain: boolean;
   print_bill: boolean;
+  split_bill: boolean;
   reprint_kot: boolean;
   settle: boolean;
   cancel: boolean;

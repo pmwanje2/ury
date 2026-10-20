@@ -448,6 +448,10 @@
     "related": "Related bills",
     "open_sibling_failed": "Could not open related bill"
   },
+  "notifications": {
+    "kitchen": "Kitchen",
+    "new_food_ready": "New food-ready order"
+  },
   "bill_merge": {
     "merge_bill": "Merge bill",
     "select_secondary": "Choose a bill to merge into {{invoice}}",

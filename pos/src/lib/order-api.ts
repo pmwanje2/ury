@@ -31,6 +31,7 @@ export interface POSInvoice {
   order_type: string;
   restaurant_table: string;
   custom_merged_tables?: string | null;
+  custom_split_group?: string | null;
   custom_restaurant_room: string;
   status: string;
   total: number;

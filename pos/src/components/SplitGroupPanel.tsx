@@ -10,9 +10,11 @@ import { Button } from '@ury/ui';
 interface SplitGroupPanelProps {
   invoiceName: string;
   onOpenInvoice: (invoice: SplitGroupInvoice) => void;
+  onPrintInvoice?: (invoice: SplitGroupInvoice) => void | Promise<void>;
+  printingInvoiceName?: string | null;
 }
 
-const SplitGroupPanel = ({ invoiceName, onOpenInvoice }: SplitGroupPanelProps) => {
+const SplitGroupPanel = ({ invoiceName, onOpenInvoice, onPrintInvoice, printingInvoiceName }: SplitGroupPanelProps) => {
   const [invoices, setInvoices] = useState<SplitGroupInvoice[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -171,6 +173,21 @@ const SplitGroupPanel = ({ invoiceName, onOpenInvoice }: SplitGroupPanelProps) =
               <span className="ms-3 shrink-0 font-semibold text-gray-900 tabular-nums">
                 {formatCurrency(invoice.rounded_total)}
               </span>
+              {!isCurrent && onPrintInvoice && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ms-3 h-8 shrink-0 text-xs"
+                  disabled={printingInvoiceName === invoice.name}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onPrintInvoice(invoice);
+                  }}
+                >
+                  {printingInvoiceName === invoice.name ? t('common.loading') : t('order.print')}
+                </Button>
+              )}
             </div>
           );
         })}

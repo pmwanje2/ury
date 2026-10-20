@@ -7,10 +7,14 @@ import { initI18n } from '../src/i18n';
 import CaptainActionsMenu from '../src/captain/components/CaptainActionsMenu';
 import CaptainOrder from '../src/captain/pages/CaptainOrder';
 
+type CaptainContextTestResult = {
+  context: { order: Record<string, unknown> | null };
+  refetchContext: ReturnType<typeof vi.fn>;
+};
+
 const boundary = vi.hoisted(() => ({
-  context: null as any,
-  posStore: null as any,
-  splitBill: vi.fn(),
+  context: null as CaptainContextTestResult | null,
+  posStore: null as Record<string, unknown> | null,
   getSplitGroup: vi.fn(),
   printOrder: vi.fn(),
 }));
@@ -37,7 +41,6 @@ vi.mock('../src/lib/order-api', async (importOriginal) => {
     reprintKot: vi.fn(),
     captainTransfer: vi.fn(),
     tableTransfer: vi.fn(),
-    splitBill: boundary.splitBill,
   };
 });
 
@@ -131,7 +134,7 @@ async function renderOrder() {
 
 function button(label: string) {
   return Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-    .find((candidate) => candidate.textContent?.includes(label));
+    .find((candidate) => candidate.textContent?.includes(label) || candidate.getAttribute('aria-label') === label);
 }
 
 beforeEach(async () => {
@@ -163,7 +166,6 @@ beforeEach(async () => {
     selectedRoom: 'Dining', selectedCustomer: { id: 'Walk In', name: 'Walk In', phone: '' }, clearTableOrder: vi.fn(),
     isOrderInteractionDisabled: () => false,
   };
-  boundary.splitBill.mockReset();
   boundary.getSplitGroup.mockReset().mockResolvedValue({ invoices: [], current: 'POS-INV-1', group: null });
   boundary.printOrder.mockReset().mockResolvedValue('qz');
   vi.spyOn(call, 'post').mockResolvedValue({ message: { source_invoice: 'POS-INV-1', new_invoice: 'POS-INV-2' } } as never);
@@ -203,11 +205,11 @@ describe('captain split bill actions', () => {
       items_to_move: [{ name: 'ROW-1', qty: 1 }],
       customer: undefined,
     });
-    expect(boundary.context.refetchContext).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(boundary.context.refetchContext).toHaveBeenCalledOnce());
   });
 
   it('renders sibling checks with one Print button per sibling', async () => {
-    boundary.context.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
+    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
     boundary.getSplitGroup.mockResolvedValue({
       invoices: [sibling('POS-INV-1', 1), sibling('POS-INV-2', 2), sibling('POS-INV-3', 3)],
       current: 'POS-INV-1',
@@ -222,7 +224,7 @@ describe('captain split bill actions', () => {
   });
 
   it('prints each sibling through printOrder using that sibling invoice', async () => {
-    boundary.context.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
+    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
     boundary.getSplitGroup.mockResolvedValue({
       invoices: [sibling('POS-INV-1', 1), sibling('POS-INV-2', 2), sibling('POS-INV-3', 3)],
       current: 'POS-INV-1',
