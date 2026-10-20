@@ -63,4 +63,3 @@ describe('guest phone grant bootstrap', () => {
     expect(container.textContent).not.toContain('Soup');
   });
 });
-

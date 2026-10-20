@@ -91,4 +91,3 @@ it('adds Guest phone QR to the captain actions menu only when enabled', async ()
   await act(async () => button('Guest phone QR')?.click());
   expect(onGuestPhoneQr).toHaveBeenCalledTimes(1);
 });
-
