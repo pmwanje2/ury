@@ -1,0 +1,39 @@
+{
+  "boot": {
+    "lang": "en",
+    "sysdefaults": { "currency": "UGX", "number_format": "#,###.##" },
+    "user": { "roles": ["URY Manager", "System Manager"], "full_name": "Demo Manager" },
+    "versions": { "ury": "v3.2.0" },
+    "ury_brand": { "name": "Maximus", "logo": "/files/maximus-logo.svg", "favicon": "/files/maximus-logo.svg" }
+  },
+  "files": {
+    "/files/maximus-logo.svg": "<svg xmlns='http://www.w3.org/2000/svg' width='180' height='48' viewBox='0 0 180 48'><rect width='180' height='48' rx='8' fill='#1d4ed8'/><text x='18' y='32' fill='white' font-family='Arial' font-size='24' font-weight='700'>Maximus</text></svg>"
+  },
+  "api": {
+    "frappe.auth.get_logged_user": { "message": "manager@example.test" },
+    "ury.ury.api.minimal.setup_organization.get_wizard_status": { "message": { "step1_complete": true, "step2_complete": true } },
+    "ury.ury.api.minimal.business_setup.get_branches": { "message": [{ "id": "Kampala Main", "name": "Kampala Main" }] },
+    "ury.ury.api.dashboard.get_dashboard_summary": {
+      "message": {
+        "today_sales": 1250000, "today_orders": 18, "occupied_tables": 7, "total_tables": 24,
+        "avg_order_value": 69444, "active_cashiers": 3, "pending_kitchen_orders": 4, "total_menu_items": 42
+      }
+    },
+    "ury.ury.api.dashboard.get_dashboard_charts": { "message": {} },
+    "ury.ury.api.dashboard.get_recent_transactions": { "message": [] },
+    "frappe.client.get_list:Notification Log": { "message": [] },
+    "frappe.client.get_list:Role": {
+      "message": [
+        { "name": "URY Manager" }, { "name": "URY Captain" }, { "name": "URY Cashier" },
+        { "name": "URY Admin" }, { "name": "System Manager" }
+      ]
+    },
+    "ury.ury.api.dashboard.get_module_records:User": {
+      "message": [
+        { "name": "cashier@example.test", "email": "cashier@example.test", "first_name": "Amina", "enabled": 1, "roles": [{ "role": "URY Cashier" }] },
+        { "name": "captain@example.test", "email": "captain@example.test", "first_name": "Okello", "enabled": 1, "roles": [{ "role": "URY Captain" }] }
+      ]
+    }
+  },
+  "fallback": { "message": null }
+}
