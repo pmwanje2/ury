@@ -396,23 +396,12 @@ def release_tables_after_print(invoice):
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to release tables for this invoice"), frappe.PermissionError)
 
-    tables = _get_table_group(
+    # Same rule as the POS print paths: a table stays occupied while another
+    # draft check (e.g. the other half of a split) is still unprinted.
+    _free_tables_if_no_open_invoices(
         invoice_doc.restaurant_table,
         invoice_doc.custom_merged_tables,
     )
-
-    for table in tables:
-
-        frappe.db.set_value(
-            "URY Table",
-            table,
-            {
-                "occupied": 0,
-                "latest_invoice_time": None,
-            },
-        )
-
-    frappe.db.commit()
 
     return True
 
