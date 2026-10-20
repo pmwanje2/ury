@@ -3,6 +3,7 @@ import { parseFrappeError } from '@ury/core'
 import {
   addItems,
   bootstrap,
+  bootstrapGrantedSession,
   createPaymentRequest,
   getCurrentOrder,
   getMenu,
@@ -100,6 +101,17 @@ function useQueryToken(): string | null {
   return params.get('t')
 }
 
+function useFragmentGrant(): string | null {
+  const match = window.location.hash.match(/^#g=(.+)$/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function consumeFragmentGrant() {
+  const url = new URL(window.location.href)
+  url.hash = ''
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+}
+
 /**
  * Owns all the stateful ordering logic shared across layouts: token
  * bootstrap, menu/order loading, cart management, order submission, and
@@ -114,6 +126,7 @@ function useQueryToken(): string | null {
  */
 export function useOrderingSession(initialContext?: OrderingContext) {
   const token = useQueryToken()
+  const grantToken = useRef(useFragmentGrant()).current
   const [context, setContext] = useState<OrderingContext | null>(null)
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [order, setOrder] = useState<CustomerOrder | null>(null)
@@ -176,6 +189,9 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       let ctx: OrderingContext
       if (initialContext) {
         ctx = initialContext
+      } else if (grantToken) {
+        consumeFragmentGrant()
+        ctx = await bootstrapGrantedSession(grantToken)
       } else if (token) {
         ctx = await bootstrap(token)
       } else {
@@ -215,7 +231,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialContext, token])
+  }, [grantToken, initialContext, token])
 
   useEffect(() => {
     init()

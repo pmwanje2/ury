@@ -349,7 +349,7 @@ def _checked_guest_session(session_name):
         _guest_retry()
 
 
-def _resolve_session(session_token):
+def _session_name(session_token):
     if not isinstance(session_token, str) or not session_token or len(session_token) > 512:
         _guest_refused()
     session_name = frappe.db.get_value(
@@ -357,36 +357,63 @@ def _resolve_session(session_token):
     )
     if not session_name:
         _guest_refused()
-    return _checked_guest_session(session_name)
+    return session_name
 
 
-@frappe.whitelist(methods=["POST"])
-def issue_table_grant(invoice):
-    """Staff: replace this exact draft invoice's grant; native authority stays ERP-side."""
+def _resolve_session(session_token):
+    return _checked_guest_session(_session_name(session_token))
+
+
+def _grantable_invoice(invoice, for_update):
+    """Staff authority for one exact draft table bill; refuses otherwise."""
     if frappe.session.user == "Guest":
         _guest_refused()
     from ury.ury.doctype.ury_order.ury_order import _enforce_order_access
     from ury.ury_pos.api import getBranch
 
+    invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=for_update)
+    invoice_doc.check_permission("write")
+    if invoice_doc.branch != getBranch():
+        _guest_refused()
+    _enforce_order_access(invoice_doc, require_modify=True)
+    if not invoice_doc.restaurant_table or cint(invoice_doc.docstatus) != 0 or cint(invoice_doc.get("is_return")):
+        _guest_refused()
+    profiles = frappe.get_all(
+        "URY Self Ordering Profile",
+        filters={"branch": invoice_doc.branch, "pos_profile": invoice_doc.pos_profile,
+                 "enabled": 1, "enable_qr_table_ordering": 1}, pluck="name",
+    )
+    if len(profiles) != 1:
+        _guest_refused()
+    profile = frappe.get_doc("URY Self Ordering Profile", profiles[0])
+    # A grant on a flag-OFF profile would never be fingerprint-rechecked.
+    if not profile.enabled or not profile.enable_qr_table_ordering or not _requires_guest_invoice_grant(profile):
+        _guest_refused()
+    return invoice_doc, profile
+
+
+@frappe.whitelist(methods=["POST"])
+def can_issue_table_grant(invoice):
+    """Staff: may this user issue a guest-phone grant for this bill? Yes/no only.
+
+    Lets a waiter see the action without profile read (the profile holds the
+    QR signing secret). Same checks as issuance; no locks, writes or toasts.
+    """
+    messages = list(frappe.local.message_log or [])
     try:
-        invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=True)
-        invoice_doc.check_permission("write")
-        if invoice_doc.branch != getBranch():
-            _guest_refused()
-        _enforce_order_access(invoice_doc, require_modify=True)
-        if not invoice_doc.restaurant_table or cint(invoice_doc.docstatus) != 0 or cint(invoice_doc.get("is_return")):
-            _guest_refused()
-        profiles = frappe.get_all(
-            "URY Self Ordering Profile",
-            filters={"branch": invoice_doc.branch, "pos_profile": invoice_doc.pos_profile,
-                     "enabled": 1, "enable_qr_table_ordering": 1}, pluck="name",
-        )
-        if len(profiles) != 1:
-            _guest_refused()
-        profile = frappe.get_doc("URY Self Ordering Profile", profiles[0])
-        # A grant on a flag-OFF profile would never be fingerprint-rechecked.
-        if not profile.enabled or not profile.enable_qr_table_ordering or not _requires_guest_invoice_grant(profile):
-            _guest_refused()
+        _grantable_invoice(invoice, for_update=False)
+        return {"visible": True}
+    except (frappe.PermissionError, frappe.ValidationError):
+        return {"visible": False}
+    finally:
+        frappe.local.message_log = messages
+
+
+@frappe.whitelist(methods=["POST"])
+def issue_table_grant(invoice):
+    """Staff: replace this exact draft invoice's grant; native authority stays ERP-side."""
+    try:
+        invoice_doc, profile = _grantable_invoice(invoice, for_update=True)
         _grant_fingerprint(invoice_doc)
         issuer = frappe.session.user
         previous = frappe.db.get_values(
@@ -405,55 +432,6 @@ def issue_table_grant(invoice):
 def _require_table_grant(session):
     if session.table and (not session.invoice or not cint(session.get("is_granted"))):
         _guest_refused()
-
-
-def _guest_assistant_enabled(session):
-    _require_table_grant(session)
-    profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
-    if not session.invoice or not cint(profile.get("enable_guest_assistant")):
-        _guest_refused()
-    return profile
-
-
-def _limit_guest_assistant(session):
-    if not frappe.request:
-        _guest_refused()
-    original = frappe.local.form_dict
-    try:
-        frappe.local.form_dict = frappe._dict(original)
-        # A fixed command and server-derived scope prevent caller-selected budgets.
-        frappe.form_dict.cmd = "ury.guest.assistant"
-        rate_limit(limit=5, seconds=600)(lambda: None)()
-        for kind, identity in (("session", session.name), ("table", session.table or session.name)):
-            frappe.form_dict._ury_guest_scope = _hash_credential(f"{kind}:{session.ordering_profile}:{identity}")
-            rate_limit(key="_ury_guest_scope", limit=5, seconds=600, ip_based=False)(lambda: None)()
-    finally:
-        frappe.local.form_dict = original
-
-
-@frappe.whitelist(allow_guest=True, methods=["POST"])
-def issue_guest_assistant_token(session):
-    session = _resolve_session(session)
-    profile = _guest_assistant_enabled(session)
-    _limit_guest_assistant(session)
-    expiry = min(get_datetime(session.expires_at), now_datetime() + timedelta(minutes=5))
-    return {"assistant_token": mint_signed_invoice_grant(profile.name, session.name, "assistant", expiry),
-            "expires_at": expiry}
-
-
-def resolve_guest_assistant_token(token):
-    """Trusted fixed guest adapter seam, NOT whitelisted and NOT a staff connection.
-
-    Returns the server-bound Session only, never a caller-selected invoice/profile.
-    Charge native session/table budgets before dispatching a model turn.
-    """
-    profile_name, session_name = read_signed_invoice_grant(token, "assistant")
-    session = _checked_guest_session(session_name)
-    if session.ordering_profile != profile_name:
-        _guest_refused()
-    _guest_assistant_enabled(session)
-    _limit_guest_assistant(session)
-    return session
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +486,33 @@ def get_ordering_context(token=None, device_id=None, device_credential=None):
     raw_session_token, session = _open_session(profile, source, table, device_name)
 
     return _ordering_context_response(raw_session_token, source, profile, table, layout)
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def get_granted_ordering_context(session):
+    """Return the context for an existing staff-issued invoice grant.
+
+    Unlike ``get_ordering_context`` this endpoint never opens a session. The
+    opaque value is already the raw token returned by ``issue_table_grant``;
+    it is accepted once for resolution and is returned unchanged so the
+    frontend can persist the same session context after consuming ``#g=``.
+    """
+    session_name = _session_name(session)
+    try:
+        with _elevated():
+            profile_name = frappe.get_doc("URY Ordering Session", session_name).ordering_profile
+            profile = frappe.get_doc("URY Self Ordering Profile", profile_name)
+    except frappe.DoesNotExistError:
+        _guest_refused()
+    # Flag OFF: refuse before the shared check would slide a legacy session.
+    if not _requires_guest_invoice_grant(profile):
+        _guest_refused()
+    resolved = _checked_guest_session(session_name)
+    _require_table_grant(resolved)
+    if (not _requires_guest_invoice_grant(profile) or resolved.source != "QR Table"
+            or not resolved.table or not _is_staff_grant(resolved)):
+        _guest_refused()
+    return _ordering_context_response(session, resolved.source, profile, resolved.table, "Mobile")
 
 
 @frappe.whitelist(allow_guest=True)

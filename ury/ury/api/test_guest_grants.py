@@ -3,7 +3,6 @@
 No installed-site or transaction-contention claim is made by this unit suite.
 """
 
-import base64
 import hashlib
 import inspect
 import json
@@ -55,7 +54,7 @@ class TestGuestGrants(unittest.TestCase):
         self.rollbacks = []
         self.profile = frappe._dict(
             name="Guest Profile", enabled=1, branch="Branch A", pos_profile="Till A",
-            restaurant="Restaurant A", enable_qr_table_ordering=1, enable_guest_assistant=0,
+            restaurant="Restaurant A", enable_qr_table_ordering=1,
             require_guest_invoice_grant=0, allow_add_to_running_table=1, default_customer="Walk In",
             session_idle_timeout_minutes=30,
             enable_request_bill=1, enable_customer_payment=1, enable_payment_link=1,
@@ -248,6 +247,49 @@ class TestGuestGrants(unittest.TestCase):
         self.assert_denied(lambda: api.get_customer_order(first))
         self.assertEqual(api.get_customer_order(second)["invoice"], "BILL-1")
 
+    def test_granted_context_reuses_exact_session_without_opening_or_extending(self):
+        token, session = self.grant()
+        original_expiry = session.expires_at
+        session.last_activity = NOW - timedelta(minutes=4)
+        self.events.clear()
+
+        result = self.method("get_granted_ordering_context")(token)
+
+        self.assertEqual(result["session"], token)
+        self.assertEqual(result["source"], "QR Table")
+        self.assertEqual(result["table"], "Table 7")
+        self.assertTrue(result["capabilities"]["add_to_running_table_enabled"])
+        self.assertEqual(len(self.sessions), 1)
+        self.assertEqual(session.expires_at, original_expiry)
+        self.assertEqual(session.last_activity, NOW - timedelta(minutes=4))
+        self.assertFalse(any(event[0] in ("insert", "save-session") for event in self.events))
+
+    def test_granted_context_rejects_menu_only_session(self):
+        self.profile.require_guest_invoice_grant = 1
+        token, _session = api._open_session(self.profile, "QR Table", "Table 7")
+        self.set_user("Guest")
+
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(token))
+
+    def test_granted_context_refuses_once_profile_flag_is_turned_off(self):
+        token, session = self.grant()
+        original_expiry = session.expires_at
+        self.profile.require_guest_invoice_grant = 0
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(token))
+        self.assertEqual(session.expires_at, original_expiry, "a refused grant must not be extended")
+
+    def test_granted_context_refuses_a_session_from_another_profile(self):
+        token, session = self.grant()
+        session.ordering_profile = "Other Profile"
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(token))
+
+    def test_granted_context_refuses_a_revoked_grant_after_reissue(self):
+        first, old = self.grant()
+        second, _current = self.grant()
+        self.assertEqual(old.status, "Closed")
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(first))
+        self.assertEqual(self.method("get_granted_ordering_context")(second)["session"], second)
+
     def test_guest_bill_read_does_not_disclose_private_staff_line_notes(self):
         self.invoice.items.append(frappe._dict(
             item_code="Tea", item_name="Tea", qty=1,
@@ -436,35 +478,6 @@ class TestGuestGrants(unittest.TestCase):
         self.invoice.customer = "Next Party"
         self.assert_denied(lambda: api.add_customer_items(token, [{"item": "Tea", "qty": 1}], request_id="round-1"))
 
-    def test_assistant_default_off_and_token_is_session_bound_not_a_payment_or_feedback_grant(self):
-        token, session = self.grant()
-        self.assert_denied(lambda: self.method("issue_guest_assistant_token")(token))
-        self.profile.enable_guest_assistant = 1
-        self.budget_runtime()
-        result = self.method("issue_guest_assistant_token")(token)
-        assistant = result["assistant_token"]
-        resolved = self.method("resolve_guest_assistant_token")(assistant)
-        self.assertEqual(resolved.name, session.name)
-        for purpose in ("payment", "feedback"):
-            with self.subTest(purpose=purpose):
-                self.assert_denied(lambda: api.read_signed_invoice_grant(assistant, purpose))
-                wrong = api.mint_signed_invoice_grant(self.profile.name, session.name, purpose, NOW + timedelta(minutes=5))
-                self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(wrong))
-        self.assert_denied(lambda: api.get_customer_order(assistant))
-        self.invoice.customer = "Next Party"
-        self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(assistant))
-
-    def test_malformed_assistant_and_disabled_profile_fail_closed(self):
-        token, _session = self.grant()
-        self.profile.enable_guest_assistant = 1
-        self.budget_runtime()
-        result = self.method("issue_guest_assistant_token")(token)
-        for value in (None, "bad", base64.urlsafe_b64encode("profile|assistant|session|0|é".encode()).decode()):
-            with self.subTest(value=value):
-                self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(value))
-        self.profile.enable_guest_assistant = 0
-        self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(result["assistant_token"]))
-
     def test_pending_round_refuses_in_native_commit_to_cache_callback_window(self):
         token, _session = self.grant()
         api.add_customer_items(token, [{"item": "Tea", "qty": 1}], request_id="round-1")
@@ -533,17 +546,31 @@ class TestGuestGrants(unittest.TestCase):
         self.assert_denied(lambda: self.method("issue_table_grant")("BILL-1"))
         self.assertEqual(self.sessions, {})
 
-    def test_trusted_assistant_resolver_refuses_without_an_http_request(self):
-        token, _session = self.grant()
-        self.profile.enable_guest_assistant = 1
-        self.budget_runtime()
-        result = self.method("issue_guest_assistant_token")(token)
-        frappe.local.request = None
-        self.assert_denied(lambda: self.method("resolve_guest_assistant_token")(result["assistant_token"]))
+    def test_captain_only_visibility_check_follows_profile_flag_without_issuing(self):
+        # setUp grants this user URY Captain only: no DocPerm on the profile,
+        # which holds qr_signing_secret. The answer must come from the server.
+        check = self.method("can_issue_table_grant")
+        self.assertNotIn(check, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[check], ["POST"])
+        self.set_user("captain@example.test")
+        for flag, expected in ((1, True), (0, False)):
+            with self.subTest(flag=flag):
+                self.profile.require_guest_invoice_grant = flag
+                self.events.clear()
+                frappe.local.message_log = []
+                self.assertEqual(check("BILL-1"), {"visible": expected})
+                self.assertEqual(self.sessions, {})
+                self.assertEqual(frappe.local.message_log, [], "a hidden action must not leak a refusal toast")
+                self.assertFalse(any(event[0] in ("insert", "set", "save-session", "save-invoice") for event in self.events))
+                self.assertFalse(any(event[0] == "load" and event[3] for event in self.events), "visibility must not lock rows")
+        self.profile.require_guest_invoice_grant = 1
+        self.invoice.waiter = "other@example.test"
+        self.assertEqual(check("BILL-1"), {"visible": False})
+        self.invoice.waiter = "captain@example.test"
+        self.set_user("Guest")
+        self.assertEqual(check("BILL-1"), {"visible": False})
 
     def test_menu_only_session_never_looks_up_unbound_payment_links(self):
-        # Menu-only table sessions are a grant-mode (flag ON) contract; flag OFF
-        # keeps the legacy sliding-expiry session write on every resolution.
         self.profile.require_guest_invoice_grant = 1
         token, _session = api._open_session(self.profile, "QR Table", "Table 7")
         self.assert_denied(lambda: api.share_payment_link(token, "nobody@example.test"))
@@ -562,69 +589,16 @@ class TestGuestGrants(unittest.TestCase):
         else:
             self.fail("Malformed fingerprint was accepted")
 
-    def budget_runtime(self):
-        counters = {}
-        self.cache.make_key.side_effect = lambda value: value.encode()
-        self.cache.get.side_effect = counters.get
-        self.cache.setex.side_effect = lambda key, seconds, value: counters.__setitem__(key, value)
-        def increment(key, amount):
-            counters[key] = counters.get(key, 0) + amount
-            return counters[key]
-        self.cache.incrby.side_effect = increment
-        frappe.local.request = SimpleNamespace(method="POST")
-        frappe.local.request_ip = "203.0.113.1"
-        self.addCleanup(setattr, frappe.local, "request", None)
-        self.enterContext(patch("frappe.rate_limiter._", side_effect=lambda value: value))
-
-    def test_native_session_budget_cannot_be_reset_by_ip_or_form_key(self):
-        token, _session = self.grant()
-        self.profile.enable_guest_assistant = 1
-        self.budget_runtime()
-        for index in range(5):
-            frappe.local.request_ip = f"203.0.113.{index + 1}"
-            frappe.local.form_dict = frappe._dict(cmd=f"forged-{index}", _ury_guest_scope=f"forged-{index}")
-            original = frappe.local.form_dict
-            self.method("issue_guest_assistant_token")(token)
-            self.assertIs(frappe.local.form_dict, original)
-        frappe.local.request_ip = "203.0.113.99"
-        with self.assertRaises(frappe.RateLimitExceededError):
-            self.method("issue_guest_assistant_token")(token)
-
-    def test_native_table_budget_cannot_be_reset_by_staff_grant_reissue(self):
-        self.profile.enable_guest_assistant = 1
-        self.budget_runtime()
-        for index in range(5):
-            token, _session = self.grant()
-            frappe.local.request_ip = f"203.0.113.{index + 1}"
-            self.method("issue_guest_assistant_token")(token)
-        token, _session = self.grant()
-        frappe.local.request_ip = "203.0.113.99"
-        with self.assertRaises(frappe.RateLimitExceededError):
-            self.method("issue_guest_assistant_token")(token)
-
-    def test_assistant_turn_resolution_charges_native_budget_before_model(self):
-        token, _session = self.grant()
-        self.profile.enable_guest_assistant = 1
-        self.budget_runtime()
-        result = self.method("issue_guest_assistant_token")(token)
-        for _index in range(4):
-            self.method("resolve_guest_assistant_token")(result["assistant_token"])
-        with self.assertRaises(frappe.RateLimitExceededError):
-            self.method("resolve_guest_assistant_token")(result["assistant_token"])
-
-    def test_assistant_has_no_bill_or_general_erp_guest_resolver(self):
-        method = self.method("resolve_guest_assistant_token")
-        self.assertNotIn(method, frappe.guest_methods)
+    def test_deferred_guest_assistant_token_surface_is_removed(self):
+        self.assertFalse(hasattr(api, "issue_guest_assistant_token"))
+        self.assertFalse(hasattr(api, "resolve_guest_assistant_token"))
         issue = self.method("issue_table_grant")
         self.assertNotIn(issue, frappe.guest_methods)
         self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[issue], ["POST"])
-        assistant = self.method("issue_guest_assistant_token")
-        self.assertIn(assistant, frappe.guest_methods)
-        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[assistant], ["POST"])
 
     def test_bill_bearing_guest_reads_are_post_only(self):
         for name in ("get_customer_menu", "get_customer_product", "get_customer_order",
-                     "get_order_status", "get_payment_status"):
+                     "get_order_status", "get_payment_status", "get_granted_ordering_context"):
             with self.subTest(name=name):
                 method = self.method(name)
                 self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[method], ["POST"])
@@ -636,7 +610,7 @@ class TestGuestGrants(unittest.TestCase):
 
 
 class TestGuestGrantSchema(unittest.TestCase):
-    def test_native_session_grants_are_hidden_readonly_and_assistant_is_default_off(self):
+    def test_native_session_grants_are_hidden_readonly_and_assistant_flag_is_removed(self):
         root = Path(__file__).resolve().parents[1] / "doctype"
         session = json.loads((root / "ury_ordering_session/ury_ordering_session.json").read_text())
         fields = {row["fieldname"]: row for row in session["fields"]}
@@ -647,8 +621,10 @@ class TestGuestGrantSchema(unittest.TestCase):
             self.assertEqual(fields[name].get("no_copy"), 1)
         profile = json.loads((root / "ury_self_ordering_profile/ury_self_ordering_profile.json").read_text())
         fields = {row["fieldname"]: row for row in profile["fields"]}
-        self.assertIn("enable_guest_assistant", fields)
-        self.assertEqual(str(fields["enable_guest_assistant"]["default"]), "0")
+        # Deferred guest chat has no code; its dead switch must not stay on the form.
+        self.assertNotIn("enable_guest_assistant", fields)
+        self.assertNotIn("enable_guest_assistant", profile["field_order"])
+        self.assertGreater(profile["modified"], "2026-10-20", "bump modified so migrate re-syncs the DocType")
         self.assertIn("require_guest_invoice_grant", fields)
         self.assertEqual(str(fields["require_guest_invoice_grant"]["default"]), "0")
 

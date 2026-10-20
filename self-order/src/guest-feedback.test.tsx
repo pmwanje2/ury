@@ -53,6 +53,8 @@ beforeEach(async () => {
   })
   vi.spyOn(call, 'post').mockImplementation(async (path: string, params?: Record<string, unknown>) => {
     postCalls.push({ path, params })
+    if (path.endsWith('get_customer_menu')) return { message: { items: [], name: 'Test menu', modified_time: null } }
+    if (path.endsWith('get_customer_order')) return { message: currentOrder }
     if (path.endsWith('get_feedback_form')) {
       if (feedbackError) throw feedbackError
       return { message: feedbackResponse }

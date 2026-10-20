@@ -26,6 +26,7 @@ import TableTransferDialog from '../../components/TableTransferDialog';
 import CaptainTransferDialog from '../../components/CaptainTransferDialog';
 import { CustomerSelect } from '../../components/CustomerSelect';
 import { HoldFireControls } from '../../components/HoldFireControls';
+import GuestPhoneQrDialog, { useGuestPhoneQr } from '../../components/GuestPhoneQrDialog';
 
 type Mode = 'menu' | 'order';
 
@@ -272,6 +273,11 @@ export default function CaptainOrder() {
   const canTransferTable = permissions?.transfer_table ?? false;
   const canTransferCaptain = permissions?.transfer_captain ?? false;
   const canPrintBill = permissions?.print_bill ?? false;
+  const guestPhoneQr = useGuestPhoneQr({
+    invoice: invoiceId,
+    table,
+    canModify,
+  });
 
   const handleReprintKot = async () => {
     if (!invoiceId) {
@@ -584,6 +590,8 @@ export default function CaptainOrder() {
             showPrintBill={canPrintBill}
             onPrintBill={handlePrintBill}
             isPrintingBill={isPrintingBill}
+            showGuestPhoneQr={guestPhoneQr.visible}
+            onGuestPhoneQr={guestPhoneQr.onRequest}
           />
         </div>
       </div>
@@ -728,6 +736,7 @@ export default function CaptainOrder() {
         invoiceName={invoiceId ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
+      <GuestPhoneQrDialog {...guestPhoneQr} showTrigger={false} />
     </div>
   );
 }
