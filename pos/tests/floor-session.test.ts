@@ -46,3 +46,25 @@ it('clears local state, disconnects QZ, and returns to the pad after logout fail
     vi.unstubAllGlobals();
   }
 });
+
+it('clears a stale failed-logout marker when logout succeeds', async () => {
+  boundary.clearCashierStorage.mockResolvedValue(undefined);
+  sessionStorage.setItem('ury_floor_logout_failed', 'true');
+  const replacement = vi.fn();
+  const browserWindow = window;
+  vi.stubGlobal('window', new Proxy(browserWindow, {
+    get(target, key) {
+      if (key === 'location') return { replace: replacement };
+      return Reflect.get(target, key, target);
+    },
+  }));
+  try {
+    await floorSignOut();
+    expect(boundary.clearAppStorage).not.toHaveBeenCalled();
+    expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
+    expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
+    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

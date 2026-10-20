@@ -100,6 +100,19 @@ describe('paired floor tablet sign-in', () => {
     expect(sessionStorage.getItem('ury_floor_pin_session')).toBeNull();
   });
 
+  it('clears a stale failed-logout marker after a successful PIN sign-in', async () => {
+    boundary.callPost.mockResolvedValue({ message: { csrf_token: 'fresh-csrf' } });
+    sessionStorage.setItem('ury_floor_logout_failed', 'true');
+    await render();
+    await act(async () => {
+      for (const value of ['0', '5', '2', '7']) digit(value).click();
+    });
+    expect(boundary.callPost).toHaveBeenCalledExactlyOnceWith(
+      'ury.ury_pos.floor_pin.sign_in', { pin: '0527' },
+    );
+    expect(sessionStorage.getItem('ury_floor_logout_failed')).toBeNull();
+  });
+
   it('clears the visible PIN after refusal and ignores a fifth press while busy', async () => {
     let finish!: (value: never) => void;
     boundary.callPost.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
