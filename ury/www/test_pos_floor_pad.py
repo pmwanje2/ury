@@ -83,7 +83,7 @@ class TestPosFloorPad(unittest.TestCase):
         self.assertIs(result, context)
         self.assertEqual(context["floor_pad"], {"paired": True, "till_open": True})
         self.assertEqual(set(context["floor_pad"]), {"paired", "till_open"})
-        self.assertNotRegex(json.dumps(context["floor_pad"]).lower(), r'pin|hash|device[_ ]?id')
+        self.assertNotRegex(json.dumps(context).lower(), r'pin|hash|device[_ ]?id')
 
 
 if __name__ == "__main__":

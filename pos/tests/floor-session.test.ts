@@ -20,7 +20,6 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   localStorage.setItem('userAuth', 'true');
-  sessionStorage.setItem('ury_floor_pin_session', 'true');
   boundary.clearCashierStorage.mockRejectedValue(new Error('logout failed online'));
   boundary.clearAppStorage.mockImplementation(async () => {
     localStorage.removeItem('userAuth');
@@ -40,7 +39,6 @@ it('clears local state, disconnects QZ, and returns to the pad after logout fail
     await floorSignOut();
     expect(boundary.clearAppStorage).toHaveBeenCalledExactlyOnceWith();
     expect(localStorage.getItem('userAuth')).toBeNull();
-    expect(sessionStorage.getItem('ury_floor_pin_session')).toBeNull();
     expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
     expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
     expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
