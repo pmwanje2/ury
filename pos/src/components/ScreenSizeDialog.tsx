@@ -48,7 +48,7 @@ const ScreenSizeDialog = () => {
           {/* Alternative Option */}
           <div className="bg-blue-50 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-800 mb-3">
-              You can use URY POS Version 1 for mobile devices.
+              You can use the classic POS for mobile devices.
             </p>
             <Button
               onClick={handleSwitchToVersion1}
@@ -64,4 +64,4 @@ const ScreenSizeDialog = () => {
   );
 };
 
-export default ScreenSizeDialog; 
+export default ScreenSizeDialog;

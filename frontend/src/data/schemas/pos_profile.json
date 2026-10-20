@@ -16,7 +16,7 @@
     "restaurant": {
       "type": "string",
       "title": "Restaurant",
-      "default": "URY Fine Dining"
+      "default": "Restaurant"
     },
     "operations": {
       "type": "object",

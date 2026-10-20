@@ -72,9 +72,10 @@ function UserRow({ user, usersLength, updateUser, deleteUser }: any) {
             id={`user-role-${user.id}`}
             value={user.role}
             options={[
-              { value: 'URY Cashier', label: 'URY Cashier' },
-              { value: 'URY Captain', label: 'URY Captain' },
-              { value: 'URY Manager', label: 'URY Manager' },
+              { value: 'URY Cashier', label: 'POS Cashier' },
+              { value: 'URY Captain', label: 'POS Captain' },
+              { value: 'URY Manager', label: 'POS Manager' },
+              { value: 'URY Admin', label: 'POS Admin' },
             ]}
             onChange={(_, val) => updateUser(user.id, { role: val })}
           />

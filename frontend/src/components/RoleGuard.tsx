@@ -50,7 +50,7 @@ export const RoleGuard: React.FC<RoleGuardProps> = ({ children }) => {
           <div className="p-6 text-center">
             <h2 className="text-lg font-semibold text-gray-900 mb-2">Access Denied</h2>
             <p className="text-gray-600">
-              You need the URY Manager role to access this section.
+              You need the manager role to access this section.
             </p>
           </div>
         </Card>

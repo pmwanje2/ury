@@ -4,10 +4,10 @@
 <html lang="{{ user_lang }}" dir="{{ 'rtl' if is_rtl else 'ltr' }}">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="/assets/ury/pos/ury.ico" />
+    <link rel="icon" href="{{ (brand.favicon if brand and brand.favicon else '/assets/ury/pos/ury.ico') | e }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <title>URY</title>
+    <title>{{ (brand.name if brand and brand.name else 'POS') | e }}</title>
   </head>
   <body>
     <div id="root"></div>

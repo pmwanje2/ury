@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useBranchContext } from '../../context/BranchContext';
-import { logoutSession, clearAppStorage, call, getLoggedUser, getUserRoles } from '@ury/core';
+import { logoutSession, clearAppStorage, call, getLoggedUser, getUserRoles, resolveBrand } from '@ury/core';
 import { showToast } from '@ury/ui';
 import uryLogo from '../../../Public/photo_2026-08-19_13-24-09.jpg';
 import {
@@ -33,6 +33,7 @@ interface NotificationItem {
 
 
 export const Header: React.FC = () => {
+  const brand = resolveBrand({ name: 'POS', logo: uryLogo });
   const navigate = useNavigate();
   const { activeBranchId, setActiveBranchId, branches, activeBranch, filterContext } = useBranchContext();
 
@@ -138,7 +139,7 @@ export const Header: React.FC = () => {
         {/* Left Section: Logo & Brand */}
         <div className="flex items-center space-x-3">
           <Link to="/dashboard" className="flex items-center space-x-3 group">
-            <img src={uryLogo} alt="URY Logo" className="h-7 w-auto" />
+            <img src={brand.logo} alt={brand.name} className="h-7 w-auto" />
           </Link>
         </div>
 

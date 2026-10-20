@@ -1,9 +1,8 @@
 import React from 'react';
-import { formatCurrency } from '@ury/core';
+import { formatCurrency, resolveBrand } from '@ury/core';
 import { Card, Spinner } from '@ury/ui';
 import { DashboardSummary } from '../../services/dashboard';
 import uryPosLogo from '../../../../pos/public/ury_pos.png';
-import uryMosaicLogo from '../../../../mosaic/src/assets/logos/mosaic.jpg';
 
 interface LinkCardProps {
   logoSrc: string;
@@ -52,6 +51,7 @@ const KPICard: React.FC<KPICardProps> = ({ title, value, loading }) => {
 };
 
 export const KPIGrid: React.FC<KPIGridProps> = ({ summary, loading }) => {
+  const brand = resolveBrand({ name: 'POS', logo: uryPosLogo });
   const todaySales = summary?.today_sales ?? 0;
   const ordersToday = summary?.today_orders ?? 0;
   const occupiedTables = summary?.occupied_tables ?? 0;
@@ -67,14 +67,14 @@ export const KPIGrid: React.FC<KPIGridProps> = ({ summary, loading }) => {
     <section className="w-full">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <LinkCard
-          logoSrc={uryPosLogo}
-          label="URY POS"
+          logoSrc={brand.logo}
+          label="POS"
           href="/pos"
         />
 
         <LinkCard
-          logoSrc={uryMosaicLogo}
-          label="URY MOSAIC"
+          logoSrc={brand.logo}
+          label="Kitchen Display"
           href="/mosaic"
         />
 

@@ -19,6 +19,16 @@ interface UserRecord {
   roles?: Array<{ role: string }>;
 }
 
+const ROLE_LABELS: Record<string, string> = {
+  'URY Manager': 'POS Manager',
+  'URY Captain': 'POS Captain',
+  'URY Cashier': 'POS Cashier',
+  'URY Admin': 'POS Admin',
+  'URY Waiter': 'POS Captain',
+};
+
+const roleLabel = (role: string) => ROLE_LABELS[role] || role;
+
 export const UserPage: React.FC = () => {
   const { activeBranchId } = useBranchContext();
   const [users, setUsers] = useState<UserRecord[]>([]);
@@ -47,8 +57,6 @@ export const UserPage: React.FC = () => {
       setAllRoles([]);
     }
   };
-
-  const URY_ROLES = ['URY Manager', 'URY Waiter', 'URY Cashier'];
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -330,11 +338,12 @@ export const UserPage: React.FC = () => {
               onChange={(_, value) => setNewUser({ ...newUser, role: value })}
               options={
                 allRoles.length > 0 
-                  ? allRoles.map(r => ({ value: r.name, label: r.name }))
+                  ? allRoles.map(r => ({ value: r.name, label: roleLabel(r.name) }))
                   : [
-                      { value: 'URY Cashier', label: 'URY Cashier' },
-                      { value: 'URY Waiter', label: 'URY Waiter' },
-                      { value: 'URY Manager', label: 'URY Manager' },
+                      { value: 'URY Cashier', label: 'POS Cashier' },
+                      { value: 'URY Captain', label: 'POS Captain' },
+                      { value: 'URY Manager', label: 'POS Manager' },
+                      { value: 'URY Admin', label: 'POS Admin' },
                     ]
               }
             />

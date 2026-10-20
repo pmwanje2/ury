@@ -446,9 +446,10 @@ export const QuickActions: React.FC = () => {
                 value={userForm.role}
                 onChange={(_, value) => setUserForm({ ...userForm, role: value })}
                 options={[
-                  { value: 'URY Cashier', label: 'URY Cashier' },
-                  { value: 'URY Captain', label: 'URY Captain / Waiter' },
-                  { value: 'URY Manager', label: 'URY Restaurant Manager' },
+                  { value: 'URY Cashier', label: 'POS Cashier' },
+                  { value: 'URY Captain', label: 'POS Captain' },
+                  { value: 'URY Manager', label: 'POS Manager' },
+                  { value: 'URY Admin', label: 'POS Admin' },
                   { value: 'URY Kitchen User', label: 'Kitchen Display User' },
                 ]}
               />
