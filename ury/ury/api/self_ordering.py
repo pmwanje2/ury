@@ -258,7 +258,11 @@ def _resolve_session(session_token):
 
     with _elevated():
         session = frappe.get_doc("URY Ordering Session", session_name)
-        if session.expires_at and session.expires_at < now_datetime():
+        # Native table-QR only: switching the ordering profile off ends every
+        # live guest session, and a session without an expiry is never valid.
+        if not frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "enabled"):
+            frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
+        if not session.expires_at or session.expires_at < now_datetime():
             session.status = "Expired"
             session.save(ignore_permissions=True)
             frappe.throw(_("Ordering session expired. Please rescan the QR code."), frappe.PermissionError)
