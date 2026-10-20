@@ -15,6 +15,7 @@ import {
 import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
+import { floorSignOut } from '../../lib/floor-session';
 
 /**
  * Captain "Tables" home screen (`/order`). See PLAN.md §5/§6 for the
@@ -206,9 +207,14 @@ export default function CaptainTables() {
       <div className="sticky top-0 z-10 border-b border-gray-200 bg-white p-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-bold text-gray-900">Tables</h1>
-          <Button variant="ghost" size="sm" onClick={refresh}>
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={refresh}>
+              Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void floorSignOut()}>
+              Switch waiter
+            </Button>
+          </div>
         </div>
 
         {branchRooms.length > 0 && (

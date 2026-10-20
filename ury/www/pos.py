@@ -6,6 +6,7 @@ import frappe.sessions
 from frappe import _
 from frappe.utils.telemetry import capture
 from ury.brand import get_brand, get_brand_context, get_theme_context, json_for_script
+from ury.ury_pos.floor_pin import get_floor_pad
 
 no_cache = 1
 
@@ -45,6 +46,7 @@ def get_context(context):
 	context.update(
 		{"build_version": frappe.utils.get_build_version(), "boot": boot_json, "csrf_token": csrf_token}
 	)
+	context["floor_pad"] = get_floor_pad()
 	return context
 
 

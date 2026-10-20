@@ -41,6 +41,8 @@ class TestPosFloorPad(unittest.TestCase):
         frappe_website_utils = ModuleType("frappe.website.utils")
         frappe_website_utils.get_boot_data = lambda: {}
         frappe_website.utils = frappe_website_utils
+        floor_pin = ModuleType("ury.ury_pos.floor_pin")
+        floor_pin.get_floor_pad = lambda: {"paired": True, "till_open": True}
         modules = {
             "frappe": frappe,
             "frappe.sessions": frappe_sessions,
@@ -49,6 +51,7 @@ class TestPosFloorPad(unittest.TestCase):
             "frappe.website": frappe_website,
             "frappe.website.utils": frappe_website_utils,
             "ury.brand": brand,
+            "ury.ury_pos.floor_pin": floor_pin,
         }
         with patch.dict(sys.modules, modules):
             controller = importlib.import_module("ury.www.pos")

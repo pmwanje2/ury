@@ -1,4 +1,23 @@
 {
+  "floor_pin": {
+    "title": "Staff sign-in",
+    "pin_prompt": "Enter your 4-digit PIN",
+    "clear": "Clear",
+    "delete": "Delete digit",
+    "username_fallback": "Sign in with username",
+    "username_label": "Username",
+    "password_label": "Password",
+    "username_placeholder": "Your username",
+    "password_placeholder": "Your password",
+    "sign_in": "Sign in",
+    "back_to_pin": "Back to PIN",
+    "refused": "That PIN didn't work. Ask a manager for a new PIN.",
+    "locked": "PIN sign-in is paused on this tablet. Ask a manager.",
+    "till_closed": "Sign in with username while the till is closed.",
+    "device_not_paired": "Sign in with username to pair this tablet.",
+    "login_failed": "Username sign-in failed. Check your credentials.",
+    "offline_notice": "Offline: the connection is unavailable. Sign in again before taking orders."
+  },
   "hold_fire": {
     "title": "Kitchen hold and fire",
     "held": "Held",

@@ -20,6 +20,7 @@
       if (!window.frappe) window.frappe = {};
       window.app_name = {{ app_name | default('') | tojson }};
       frappe.boot = JSON.parse({{ boot }});
+      window.floor_pad = {{ floor_pad | default({'paired': false, 'till_open': false}) | tojson }};
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createElement, act } from 'react';
+import { createElement, act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
@@ -19,13 +19,14 @@ vi.mock('../src/store/pos-store', () => ({ usePOSStore: () => ({ initializeApp: 
 vi.mock('../src/components/ScreenSizeProvider', () => ({ default: ({ children }: any) => children }));
 vi.mock('../src/components/POSOpeningProvider', () => ({ default: ({ children }: any) => children }));
 vi.mock('../src/components/AuthGuard', () => ({ default: ({ children }: any) => children }));
+vi.mock('../src/captain/components/CaptainRouteGuard', () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock('../src/components/KotAlertListener', () => ({ default: () => null }));
 vi.mock('../src/pages/Orders', () => ({ default: () => createElement('div', {}, 'Settlement page') }));
 vi.mock('../src/pages/Dashboard', () => ({ default: () => createElement('div', {}, 'Analytics page') }));
 vi.mock('../src/pages/POS', () => ({ default: () => null }));
 vi.mock('../src/pages/Table', () => ({ default: () => null }));
 vi.mock('../src/pages/Settings', () => ({ default: () => null }));
-vi.mock('../src/captain/pages/CaptainTables', () => ({ default: () => null }));
+vi.mock('../src/captain/pages/CaptainTables', () => ({ default: () => createElement('div', {}, 'Captain page') }));
 vi.mock('../src/captain/pages/CaptainOrder', () => ({ default: () => null }));
 
 let root: Root;
@@ -75,6 +76,8 @@ describe.each([
     window.history.replaceState({}, '', '/pos/');
     await act(async () => root.render(createElement(App)));
     expect(window.location.pathname).toBe(`/pos${path}`);
-    expect(container.textContent).toContain(path === '/orders' ? 'Settlement page' : 'Analytics page');
+    expect(container.textContent).toContain(
+      path === '/orders' ? 'Settlement page' : path === '/order' ? 'Captain page' : 'Analytics page',
+    );
   });
 });
