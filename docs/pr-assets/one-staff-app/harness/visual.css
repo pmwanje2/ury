@@ -1,0 +1,77 @@
+* { box-sizing: border-box; }
+html, body, #root { min-height: 100%; margin: 0; }
+body { background: #f8fafc; color: #111827; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+button, input { font: inherit; }
+button { min-height: 44px; cursor: pointer; border: 1px solid #d1d5db; border-radius: 8px; background: white; padding: 8px 14px; }
+button:hover { background: #f3f4f6; }
+input { min-height: 44px; width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 12px; }
+img { display: block; max-width: 100%; }
+.min-h-screen { min-height: 100vh; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.w-full { width: 100%; }
+.max-w-md { max-width: 448px; }
+.p-4 { padding: 16px; }
+.p-3 { padding: 12px; }
+.px-6 { padding-left: 24px; padding-right: 24px; }
+.py-8 { padding-top: 32px; padding-bottom: 32px; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.space-y-6 > * + * { margin-top: 24px; }
+.mb-8 { margin-bottom: 32px; }
+.rounded-lg { border-radius: 12px; }
+.shadow-md { box-shadow: 0 8px 24px rgb(15 23 42 / 12%); }
+.bg-white { background: white; }
+.bg-gray-50 { background: #f8fafc; }
+.text-center { text-align: center; }
+.text-2xl { font-size: 24px; }
+.text-4xl { font-size: 36px; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.text-gray-600 { color: #4b5563; }
+.text-gray-900 { color: #111827; }
+.text-red-700 { color: #b91c1c; }
+.text-amber-800 { color: #92400e; }
+.bg-amber-50 { background: #fffbeb; }
+.grid { display: grid; }
+.grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.overflow-x-auto { overflow-x: auto; }
+.flex-1 { flex: 1 1 0%; }
+.border-b { border-bottom: 1px solid #e5e7eb; }
+.border-2 { border-width: 2px; }
+.border-gray-200 { border-color: #e5e7eb; }
+.border-emerald-300 { border-color: #6ee7b7; }
+.border-amber-400 { border-color: #fbbf24; }
+.bg-emerald-50 { background: #ecfdf5; }
+.bg-amber-50 { background: #fffbeb; }
+/* Keep the visual-only layout rules scoped to the Captain screen. The same
+   structural div selectors would otherwise turn the PIN form into a row. */
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:last-child { padding: 16px; }
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:last-child > .grid { gap: 12px; }
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:last-child > .grid > button { min-height: 132px; text-align: left; }
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:first-child { padding: 16px; background: white; }
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:first-child > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:first-child > div:last-child { display: flex; gap: 8px; overflow-x: auto; padding-top: 8px; }
+body[data-screen="captain"] #root > div:not(.min-h-screen) img { width: 128px; height: 32px; object-fit: contain; }
+
+/* This harness deliberately does not load the app's Tailwind build: Vite's
+   standalone docs root cannot resolve the package preset in the same way as
+   the production build. Supply only the classes needed for these captures. */
+#root > div.min-h-screen:not(.flex-col) { display: flex; }
+#root > div.min-h-screen.flex.flex-col > div.w-full { width: 100%; }
+#root > div.min-h-screen.flex.flex-col > div.w-full > div.space-y-6,
+#root > div.min-h-screen.flex.flex-col > div.w-full > form.space-y-6 { display: block; }
+#root > div.min-h-screen.flex.flex-col > div.w-full .grid.grid-cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+#root > div.min-h-screen.flex.flex-col > div.w-full .grid.grid-cols-3 > button { width: 100%; min-height: 64px; padding: 0; }
+#root > div.min-h-screen.flex.flex-col > div.w-full .space-y-6 > button:last-child { display: block; width: 100%; }
+#root > div.min-h-screen.flex.flex-col > div.w-full [role="alert"] { margin: 16px 0 0; }
+#root > div.min-h-screen.flex.flex-col > div.w-full img { width: 256px; height: 64px; object-fit: contain; }
+@media (max-width: 500px) {
+  body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:last-child > .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #root > div.min-h-screen.flex.flex-col > div.w-full { max-width: calc(100vw - 32px); }
+  #root > div.min-h-screen.flex.flex-col > div.w-full img { width: 100%; max-width: 256px; }
+}
