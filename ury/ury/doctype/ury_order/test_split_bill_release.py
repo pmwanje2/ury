@@ -358,6 +358,18 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
                 self.assertEqual(self.table_releases, ["T1"])
                 self.assertEqual(self.table_occupied, 0)
 
+    def test_desk_print_keeps_table_occupied_while_sibling_open(self):
+        self._wire_print(sibling_open=True)
+        self.assertTrue(self.order.release_tables_after_print("POS-INV-1"))
+        self.assertEqual(self.table_releases, [])
+        self.assertEqual(self.table_occupied, 1)
+
+    def test_desk_print_releases_table_when_last_sibling_printed(self):
+        self._wire_print(sibling_open=False)
+        self.assertTrue(self.order.release_tables_after_print("POS-INV-1"))
+        self.assertEqual(self.table_releases, ["T1"])
+        self.assertEqual(self.table_occupied, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
