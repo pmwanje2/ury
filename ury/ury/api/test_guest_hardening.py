@@ -1,7 +1,7 @@
 """Grant-independent security contracts for the native guest ordering path."""
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -88,3 +88,45 @@ class TestGuestHardening(unittest.TestCase):
             with self.assertRaises((frappe.PermissionError, frappe.ValidationError)):
                 api.share_payment_link("session-token", "guest@example.test")
         lookup.assert_not_called()
+
+
+    def _resolve_with(self, *, enabled, expires_at):
+        now = datetime(2026, 10, 20, 12)
+        session = frappe._dict(
+            name="S1", ordering_profile="P1", status="Active", table="T7",
+            invoice="POS-1", expires_at=expires_at, source="QR Table",
+        )
+        session.save = MagicMock()
+        profile = frappe._dict(name="P1", enabled=enabled, session_idle_timeout_minutes=30)
+
+        def get_doc(doctype, name=None, **kwargs):
+            return profile if doctype == "URY Self Ordering Profile" else session
+
+        def get_value(doctype, filters=None, fieldname=None, *args, **kwargs):
+            if doctype == "URY Ordering Session":
+                return "S1"
+            if fieldname == "enabled":
+                return profile.enabled
+            return 30
+
+        with (
+            patch.object(api, "now_datetime", return_value=now),
+            patch.object(api, "add_to_date", return_value=now + timedelta(minutes=30)),
+            patch.object(api.frappe, "get_doc", side_effect=get_doc),
+            patch.object(api.frappe.db, "get_value", side_effect=get_value),
+        ):
+            result = api._resolve_session("t" * 64)
+        return result, session
+
+    def test_disabled_ordering_profile_refuses_existing_guest_sessions(self):
+        with self.assertRaises(frappe.PermissionError):
+            self._resolve_with(enabled=0, expires_at=datetime(2026, 10, 20, 12, 10))
+
+    def test_guest_session_without_expiry_is_refused(self):
+        with self.assertRaises(frappe.PermissionError):
+            self._resolve_with(enabled=1, expires_at=None)
+
+    def test_valid_guest_session_on_enabled_profile_still_slides(self):
+        result, session = self._resolve_with(enabled=1, expires_at=datetime(2026, 10, 20, 12, 10))
+        self.assertIs(result, session)
+        session.save.assert_called_once_with(ignore_permissions=True)
