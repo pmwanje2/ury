@@ -50,8 +50,6 @@ const OrderPanel = () => {
   const user = useRootStore((state: RootState) => state.user);
   const outbox = useOutbox(posProfile, user);
   const guestPhoneQr = useGuestPhoneQr({
-    branch: posProfile?.branch,
-    posProfile: posProfile?.name,
     invoice: isUpdatingOrder ? orderId : null,
     table: selectedTable,
   });

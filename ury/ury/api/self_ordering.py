@@ -360,33 +360,56 @@ def _resolve_session(session_token):
     return _checked_guest_session(session_name)
 
 
-@frappe.whitelist(methods=["POST"])
-def issue_table_grant(invoice):
-    """Staff: replace this exact draft invoice's grant; native authority stays ERP-side."""
+def _grantable_invoice(invoice, for_update):
+    """Staff authority for one exact draft table bill; refuses otherwise."""
     if frappe.session.user == "Guest":
         _guest_refused()
     from ury.ury.doctype.ury_order.ury_order import _enforce_order_access
     from ury.ury_pos.api import getBranch
 
+    invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=for_update)
+    invoice_doc.check_permission("write")
+    if invoice_doc.branch != getBranch():
+        _guest_refused()
+    _enforce_order_access(invoice_doc, require_modify=True)
+    if not invoice_doc.restaurant_table or cint(invoice_doc.docstatus) != 0 or cint(invoice_doc.get("is_return")):
+        _guest_refused()
+    profiles = frappe.get_all(
+        "URY Self Ordering Profile",
+        filters={"branch": invoice_doc.branch, "pos_profile": invoice_doc.pos_profile,
+                 "enabled": 1, "enable_qr_table_ordering": 1}, pluck="name",
+    )
+    if len(profiles) != 1:
+        _guest_refused()
+    profile = frappe.get_doc("URY Self Ordering Profile", profiles[0])
+    # A grant on a flag-OFF profile would never be fingerprint-rechecked.
+    if not profile.enabled or not profile.enable_qr_table_ordering or not _requires_guest_invoice_grant(profile):
+        _guest_refused()
+    return invoice_doc, profile
+
+
+@frappe.whitelist(methods=["POST"])
+def can_issue_table_grant(invoice):
+    """Staff: may this user issue a guest-phone grant for this bill? Yes/no only.
+
+    Lets a waiter see the action without profile read (the profile holds the
+    QR signing secret). Same checks as issuance; no locks, writes or toasts.
+    """
+    messages = list(frappe.local.message_log or [])
     try:
-        invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=True)
-        invoice_doc.check_permission("write")
-        if invoice_doc.branch != getBranch():
-            _guest_refused()
-        _enforce_order_access(invoice_doc, require_modify=True)
-        if not invoice_doc.restaurant_table or cint(invoice_doc.docstatus) != 0 or cint(invoice_doc.get("is_return")):
-            _guest_refused()
-        profiles = frappe.get_all(
-            "URY Self Ordering Profile",
-            filters={"branch": invoice_doc.branch, "pos_profile": invoice_doc.pos_profile,
-                     "enabled": 1, "enable_qr_table_ordering": 1}, pluck="name",
-        )
-        if len(profiles) != 1:
-            _guest_refused()
-        profile = frappe.get_doc("URY Self Ordering Profile", profiles[0])
-        # A grant on a flag-OFF profile would never be fingerprint-rechecked.
-        if not profile.enabled or not profile.enable_qr_table_ordering or not _requires_guest_invoice_grant(profile):
-            _guest_refused()
+        _grantable_invoice(invoice, for_update=False)
+        return {"visible": True}
+    except (frappe.PermissionError, frappe.ValidationError):
+        return {"visible": False}
+    finally:
+        frappe.local.message_log = messages
+
+
+@frappe.whitelist(methods=["POST"])
+def issue_table_grant(invoice):
+    """Staff: replace this exact draft invoice's grant; native authority stays ERP-side."""
+    try:
+        invoice_doc, profile = _grantable_invoice(invoice, for_update=True)
         _grant_fingerprint(invoice_doc)
         issuer = frappe.session.user
         previous = frappe.db.get_values(

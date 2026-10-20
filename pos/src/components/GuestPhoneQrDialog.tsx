@@ -2,19 +2,15 @@ import { useEffect, useState } from 'react';
 import { QrCode } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Button } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
-import { getGuestPhoneQrEnabled, issueGuestPhoneQr } from '../lib/guest-phone-qr-api';
+import { canIssueGuestPhoneQr, issueGuestPhoneQr } from '../lib/guest-phone-qr-api';
 
 interface GuestPhoneQrAvailabilityParams {
-  branch?: string | null;
-  posProfile?: string | null;
   invoice?: string | null;
   table?: string | null;
   canModify?: boolean;
 }
 
 export function useGuestPhoneQr({
-  branch,
-  posProfile,
   invoice,
   table,
   canModify = true,
@@ -26,12 +22,12 @@ export function useGuestPhoneQr({
   useEffect(() => {
     let cancelled = false;
     setProfileEnabled(false);
-    if (!branch || !posProfile || !invoice || !table || !canModify) return () => { cancelled = true; };
-    void getGuestPhoneQrEnabled(branch, posProfile)
+    if (!invoice || !table || !canModify) return () => { cancelled = true; };
+    void canIssueGuestPhoneQr(invoice)
       .then((enabled) => { if (!cancelled) setProfileEnabled(enabled); })
       .catch(() => { if (!cancelled) setProfileEnabled(false); });
     return () => { cancelled = true; };
-  }, [branch, canModify, invoice, posProfile, table]);
+  }, [canModify, invoice, table]);
 
   const visible = profileEnabled && Boolean(invoice && table && canModify);
 

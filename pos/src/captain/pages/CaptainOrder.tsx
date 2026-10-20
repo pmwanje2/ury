@@ -274,8 +274,6 @@ export default function CaptainOrder() {
   const canTransferCaptain = permissions?.transfer_captain ?? false;
   const canPrintBill = permissions?.print_bill ?? false;
   const guestPhoneQr = useGuestPhoneQr({
-    branch: posProfile?.branch,
-    posProfile: posProfile?.name,
     invoice: invoiceId,
     table,
     canModify,
