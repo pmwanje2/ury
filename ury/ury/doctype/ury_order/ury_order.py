@@ -556,6 +556,14 @@ def split_bill(source_invoice, items_to_move, customer=None):
     if not frappe.has_permission("POS Invoice", "write", doc=source):
         frappe.throw(_("Not permitted to split this invoice."), frappe.PermissionError)
 
+    _enforce_order_access(
+        source,
+        require_modify=True,
+        deny_message=_(
+            "[URY-SPLIT-NOT-PERMITTED] Not permitted to split this invoice."
+        ),
+    )
+
     try:
         user_branch = getBranch()
     except frappe.ValidationError:
@@ -1107,6 +1115,7 @@ def get_table_order_context(table):
         "transfer_table": False,
         "transfer_captain": False,
         "print_bill": False,
+        "split_bill": False,
         "reprint_kot": False,
         "settle": False,
         "cancel": False,
@@ -1216,6 +1225,17 @@ def get_table_order_context(table):
     invoice_billed = bool(order) and order.get("invoice_printed") == 1
     can_modify = can_view and (not order or not invoice_billed or is_billing_user)
 
+    order_items = list(invoice.get("items") or []) if invoice else []
+    can_split_bill = (
+        bool(order)
+        and can_view
+        and frappe.has_permission("POS Invoice", "write", doc=invoice)
+        and (
+            len(order_items) >= 2
+            or any(flt(item.get("qty")) > 1 for item in order_items)
+        )
+    )
+
     can_reduce_items = can_modify and bool(pos_profile.remove_items)
     can_remove_items = can_modify and bool(pos_profile.remove_items)
 
@@ -1267,6 +1287,7 @@ def get_table_order_context(table):
         "transfer_table": can_transfer_table,
         "transfer_captain": can_transfer_captain,
         "print_bill": can_print_bill,
+        "split_bill": can_split_bill,
         "reprint_kot": can_reprint_kot,
         "settle": can_settle,
         "cancel": can_cancel,
