@@ -59,12 +59,17 @@ describe('Guest phone QR', () => {
     expect(post.mock.calls[1][0]).toBe('frappe.utils.print_format_generator.get_qr_code');
     expect(String(post.mock.calls[1][1]?.value)).toContain('/order/#g=grant-one');
     expect(String(post.mock.calls[1][1]?.value)).not.toContain('?g=');
-    expect(container.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/);
+    const firstImage = container.querySelector('img')?.getAttribute('src') ?? '';
+    expect(firstImage).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(atob(firstImage.split(',')[1])).toContain('#g=grant-one');
 
     await act(async () => button('Guest phone QR')?.click());
     expect(post).toHaveBeenNthCalledWith(3, 'ury.ury.api.self_ordering.issue_table_grant', { invoice: 'INV-1' });
     expect(String(post.mock.calls[3][1]?.value)).toContain('/order/#g=grant-two');
-    expect(container.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/);
+    const secondImage = container.querySelector('img')?.getAttribute('src') ?? '';
+    expect(secondImage).not.toBe(firstImage);
+    expect(atob(secondImage.split(',')[1])).toContain('#g=grant-two');
+    expect(atob(secondImage.split(',')[1])).not.toContain('grant-one');
   });
 
   it('shows ERP refusal text verbatim', async () => {
