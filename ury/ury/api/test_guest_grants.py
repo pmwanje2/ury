@@ -54,7 +54,7 @@ class TestGuestGrants(unittest.TestCase):
         self.rollbacks = []
         self.profile = frappe._dict(
             name="Guest Profile", enabled=1, branch="Branch A", pos_profile="Till A",
-            restaurant="Restaurant A", enable_qr_table_ordering=1, enable_guest_assistant=0,
+            restaurant="Restaurant A", enable_qr_table_ordering=1,
             require_guest_invoice_grant=0, allow_add_to_running_table=1, default_customer="Walk In",
             session_idle_timeout_minutes=30,
             enable_request_bill=1, enable_customer_payment=1, enable_payment_link=1,
@@ -610,7 +610,7 @@ class TestGuestGrants(unittest.TestCase):
 
 
 class TestGuestGrantSchema(unittest.TestCase):
-    def test_native_session_grants_are_hidden_readonly_and_assistant_is_default_off(self):
+    def test_native_session_grants_are_hidden_readonly_and_assistant_flag_is_removed(self):
         root = Path(__file__).resolve().parents[1] / "doctype"
         session = json.loads((root / "ury_ordering_session/ury_ordering_session.json").read_text())
         fields = {row["fieldname"]: row for row in session["fields"]}
@@ -621,8 +621,10 @@ class TestGuestGrantSchema(unittest.TestCase):
             self.assertEqual(fields[name].get("no_copy"), 1)
         profile = json.loads((root / "ury_self_ordering_profile/ury_self_ordering_profile.json").read_text())
         fields = {row["fieldname"]: row for row in profile["fields"]}
-        self.assertIn("enable_guest_assistant", fields)
-        self.assertEqual(str(fields["enable_guest_assistant"]["default"]), "0")
+        # Deferred guest chat has no code; its dead switch must not stay on the form.
+        self.assertNotIn("enable_guest_assistant", fields)
+        self.assertNotIn("enable_guest_assistant", profile["field_order"])
+        self.assertGreater(profile["modified"], "2026-10-20", "bump modified so migrate re-syncs the DocType")
         self.assertIn("require_guest_invoice_grant", fields)
         self.assertEqual(str(fields["require_guest_invoice_grant"]["default"]), "0")
 
