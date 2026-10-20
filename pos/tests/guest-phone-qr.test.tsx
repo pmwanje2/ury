@@ -1,8 +1,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { call } from '@ury/core';
-import GuestPhoneQrDialog from '../src/components/GuestPhoneQrDialog';
+import { call, db } from '@ury/core';
+import GuestPhoneQrDialog, { useGuestPhoneQr } from '../src/components/GuestPhoneQrDialog';
 import CaptainActionsMenu from '../src/captain/components/CaptainActionsMenu';
 
 let container: HTMLDivElement;
@@ -90,4 +90,28 @@ it('adds Guest phone QR to the captain actions menu only when enabled', async ()
   expect(button('Guest phone QR')).toBeDefined();
   await act(async () => button('Guest phone QR')?.click());
   expect(onGuestPhoneQr).toHaveBeenCalledTimes(1);
+});
+
+describe('Guest phone QR availability', () => {
+  function Probe(props: { invoice: string | null; table: string | null; canModify?: boolean }) {
+    const state = useGuestPhoneQr(props as Parameters<typeof useGuestPhoneQr>[0]);
+    return <span data-visible={String(state.visible)} />;
+  }
+
+  it.each([true, false])('asks the ERP whether this staff user may issue for the current bill (visible=%s)', async (visible) => {
+    const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { visible } } as never);
+    // A URY Captain has no read on URY Self Ordering Profile (it holds qr_signing_secret).
+    const list = vi.spyOn(db, 'getDocList').mockRejectedValue(new Error('PermissionError'));
+    await act(async () => root.render(<Probe invoice="INV-1" table="T-07" canModify />));
+    expect(post).toHaveBeenCalledWith('ury.ury.api.self_ordering.can_issue_table_grant', { invoice: 'INV-1' });
+    expect(list).not.toHaveBeenCalled();
+    expect(container.querySelector('span')?.dataset.visible).toBe(String(visible));
+  });
+
+  it('does not ask without a current bill', async () => {
+    const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { visible: true } } as never);
+    await act(async () => root.render(<Probe invoice={null} table="T-07" canModify />));
+    expect(post).not.toHaveBeenCalled();
+    expect(container.querySelector('span')?.dataset.visible).toBe('false');
+  });
 });

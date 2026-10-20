@@ -527,6 +527,30 @@ class TestGuestGrants(unittest.TestCase):
         self.assert_denied(lambda: self.method("issue_table_grant")("BILL-1"))
         self.assertEqual(self.sessions, {})
 
+    def test_captain_only_visibility_check_follows_profile_flag_without_issuing(self):
+        # setUp grants this user URY Captain only: no DocPerm on the profile,
+        # which holds qr_signing_secret. The answer must come from the server.
+        check = self.method("can_issue_table_grant")
+        self.assertNotIn(check, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[check], ["POST"])
+        self.set_user("captain@example.test")
+        for flag, expected in ((1, True), (0, False)):
+            with self.subTest(flag=flag):
+                self.profile.require_guest_invoice_grant = flag
+                self.events.clear()
+                frappe.local.message_log = []
+                self.assertEqual(check("BILL-1"), {"visible": expected})
+                self.assertEqual(self.sessions, {})
+                self.assertEqual(frappe.local.message_log, [], "a hidden action must not leak a refusal toast")
+                self.assertFalse(any(event[0] in ("insert", "set", "save-session", "save-invoice") for event in self.events))
+                self.assertFalse(any(event[0] == "load" and event[3] for event in self.events), "visibility must not lock rows")
+        self.profile.require_guest_invoice_grant = 1
+        self.invoice.waiter = "other@example.test"
+        self.assertEqual(check("BILL-1"), {"visible": False})
+        self.invoice.waiter = "captain@example.test"
+        self.set_user("Guest")
+        self.assertEqual(check("BILL-1"), {"visible": False})
+
     def test_menu_only_session_never_looks_up_unbound_payment_links(self):
         self.profile.require_guest_invoice_grant = 1
         token, _session = api._open_session(self.profile, "QR Table", "Table 7")
