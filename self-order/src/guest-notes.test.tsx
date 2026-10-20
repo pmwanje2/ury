@@ -59,7 +59,8 @@ beforeEach(async () => {
   held = []
   serverOrder = emptyOrder
   sent = []
-  vi.spyOn(call, 'get').mockImplementation(async (path: string, params?: Record<string, unknown>) => {
+  // Bill-bearing guest reads travel as POST bodies; only the static bootstrap may use GET.
+  const read = async (path: string, params?: Record<string, unknown>) => {
     if (path.endsWith('get_customer_menu')) return { message: { items: menu, name: 'Test menu', modified_time: null } }
     if (path.endsWith('get_customer_order')) return { message: serverOrder }
     if (path.endsWith('get_customer_product')) {
@@ -77,9 +78,11 @@ beforeEach(async () => {
       }
       return { message: { item_code: params?.item_code, variants: [], addons: params?.item_code === 'Fish' ? addons : [] } }
     }
-    throw new Error(`Unexpected GET ${path}`)
-  })
+    throw new Error(`Unexpected read ${path}`)
+  }
+  vi.spyOn(call, 'get').mockImplementation(async (path: string) => { throw new Error(`Unexpected GET ${path}`) })
   vi.spyOn(call, 'post').mockImplementation(async (path: string, params?: Record<string, unknown>) => {
+    if (/\.get_customer_[a-z_]+$/.test(path)) return read(path, params)
     if (!path.endsWith('add_customer_items')) throw new Error(`Unexpected POST ${path}`)
     sent.push(JSON.parse(String(params?.items)))
     serverOrder = privateOrder
@@ -352,7 +355,8 @@ it('keeps nine stalled optional reads from blocking the required order or a gues
       socketWaiters.shift()?.()
     }
   }
-  vi.spyOn(call, 'get').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+  // Bill-bearing reads are POST bodies; each still occupies one pooled connection.
+  const read = (path: string, params?: Record<string, unknown>) => limited(async () => {
     if (path.endsWith('get_customer_menu')) return { message: { items: menu, name: 'Nine item menu', modified_time: null } }
     if (path.endsWith('get_customer_order')) {
       orderReads += 1
@@ -366,9 +370,10 @@ it('keeps nine stalled optional reads from blocking the required order or a gues
         releaseReads.push(() => resolve({ message: { item_code: itemCode, variants: [], addons: [] } }))
       })
     }
-    throw new Error(`Unexpected GET ${path}`)
-  }))
-  vi.spyOn(call, 'post').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+    throw new Error(`Unexpected read ${path}`)
+  })
+  vi.spyOn(call, 'get').mockImplementation(async (path: string) => { throw new Error(`Unexpected GET ${path}`) })
+  vi.spyOn(call, 'post').mockImplementation((path: string, params?: Record<string, unknown>) => /\.get_customer_[a-z_]+$/.test(path) ? read(path, params) : limited(async () => {
     if (!path.endsWith('add_customer_items')) throw new Error(`Unexpected POST ${path}`)
     sent.push(JSON.parse(String(params?.items)))
     return { message: serverOrder }
@@ -441,7 +446,8 @@ it('places the priced dish while retried add-ons wait behind one held optional r
       socketWaiters.shift()?.()
     }
   }
-  vi.spyOn(call, 'get').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+  // Bill-bearing reads are POST bodies; each still occupies one pooled connection.
+  const read = (path: string, params?: Record<string, unknown>) => limited(async () => {
     if (path.endsWith('get_customer_menu')) return { message: { items: menu, name: 'Nine item menu', modified_time: null } }
     if (path.endsWith('get_customer_order')) return { message: serverOrder }
     if (path.endsWith('get_customer_product')) {
@@ -463,9 +469,10 @@ it('places the priced dish while retried add-ons wait behind one held optional r
       }
       return { message: { item_code: itemCode, variants: [], addons: [] } }
     }
-    throw new Error(`Unexpected GET ${path}`)
-  }))
-  vi.spyOn(call, 'post').mockImplementation((path: string, params?: Record<string, unknown>) => limited(async () => {
+    throw new Error(`Unexpected read ${path}`)
+  })
+  vi.spyOn(call, 'get').mockImplementation(async (path: string) => { throw new Error(`Unexpected GET ${path}`) })
+  vi.spyOn(call, 'post').mockImplementation((path: string, params?: Record<string, unknown>) => /\.get_customer_[a-z_]+$/.test(path) ? read(path, params) : limited(async () => {
     if (!path.endsWith('add_customer_items')) throw new Error(`Unexpected POST ${path}`)
     sent.push(JSON.parse(String(params?.items)))
     return { message: serverOrder }
