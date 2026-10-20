@@ -68,7 +68,7 @@ export const UserPage: React.FC = () => {
 
   const getDisplayRole = (user: UserRecord): string => {
     if (user.roles && Array.isArray(user.roles) && user.roles.length > 0) {
-      return user.roles[0].role;
+      return roleLabel(user.roles[0].role);
     }
     return 'User';
   };
