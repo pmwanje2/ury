@@ -271,6 +271,25 @@ class TestGuestGrants(unittest.TestCase):
 
         self.assert_denied(lambda: self.method("get_granted_ordering_context")(token))
 
+    def test_granted_context_refuses_once_profile_flag_is_turned_off(self):
+        token, session = self.grant()
+        original_expiry = session.expires_at
+        self.profile.require_guest_invoice_grant = 0
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(token))
+        self.assertEqual(session.expires_at, original_expiry, "a refused grant must not be extended")
+
+    def test_granted_context_refuses_a_session_from_another_profile(self):
+        token, session = self.grant()
+        session.ordering_profile = "Other Profile"
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(token))
+
+    def test_granted_context_refuses_a_revoked_grant_after_reissue(self):
+        first, old = self.grant()
+        second, _current = self.grant()
+        self.assertEqual(old.status, "Closed")
+        self.assert_denied(lambda: self.method("get_granted_ordering_context")(first))
+        self.assertEqual(self.method("get_granted_ordering_context")(second)["session"], second)
+
     def test_guest_bill_read_does_not_disclose_private_staff_line_notes(self):
         self.invoice.items.append(frappe._dict(
             item_code="Tea", item_name="Tea", qty=1,
