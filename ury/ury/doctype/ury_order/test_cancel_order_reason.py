@@ -1,15 +1,77 @@
-"""Void-reason regression tests; database and table/KOT writes are isolated."""
+"""Void-reason regression tests; database and table/KOT writes are isolated.
 
-import logging
+Site-less, like test_split_bill_release.py: a stdlib stub stands in for frappe
+only while ury_order is imported. The workflow list runs with plain python3.
+"""
+
+import sys
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import frappe
 
-# Import ERPNext without requiring a bench log directory, as in the customer tests.
-with patch("frappe.logger", return_value=logging.getLogger(__name__)):
+def _site_less_frappe():
+    """The modules ury_order imports at load time. No bench and no frappe."""
+    framework = MagicMock()
+    framework.PermissionError = type("PermissionError", (Exception,), {})
+    framework.ValidationError = type("ValidationError", (Exception,), {})
+    framework._ = lambda *messages: messages[0]
+    framework.whitelist = lambda *args, **kwargs: (lambda function: function)
+    framework.cache = MagicMock()
+    exceptions = ModuleType("frappe.exceptions")
+    exceptions.ValidationError = framework.ValidationError
+    framework.exceptions = exceptions
+
+    def throw(message, exception=None, **kwargs):
+        raise (exception or framework.ValidationError)(message)
+
+    framework.throw = throw
+
+    utils = ModuleType("frappe.utils")
+    utils.cint = lambda value: int(value or 0)
+    utils.flt = lambda value: float(value or 0)
+    utils.get_datetime = lambda value: value
+    utils.get_system_timezone = lambda: "Africa/Kampala"
+    utils.now_datetime = lambda: None
+    document = ModuleType("frappe.model.document")
+    document.Document = object
+    model = ModuleType("frappe.model")
+    model.document = document
+    queries = ModuleType("erpnext.controllers.queries")
+    queries.item_query = MagicMock()
+    controllers = ModuleType("erpnext.controllers")
+    controllers.queries = queries
+    erpnext = ModuleType("erpnext")
+    erpnext.controllers = controllers
+    pos_api = ModuleType("ury.ury_pos.api")
+    pos_api.getBranch = MagicMock(return_value="Branch A")
+    pos_api.getBranchRoom = MagicMock(return_value="Main Hall")
+    pos_api.getRoom = MagicMock(return_value=[{"name": "Main Hall"}])
+    pos_api.posOpening = MagicMock(return_value=0)
+    kot = ModuleType("ury.ury.api.ury_kot_generate")
+    kot.kot_execute = MagicMock()
+    kot.process_items_for_cancel_kot = MagicMock()
+    modules = {
+        "frappe": framework,
+        "frappe.exceptions": exceptions,
+        "frappe.utils": utils,
+        "frappe.model": model,
+        "frappe.model.document": document,
+        "erpnext": erpnext,
+        "erpnext.controllers": controllers,
+        "erpnext.controllers.queries": queries,
+        "ury.ury_pos.api": pos_api,
+        "ury.ury.api.ury_kot_generate": kot,
+    }
+    return framework, modules
+
+
+_framework, _modules = _site_less_frappe()
+with patch.dict(sys.modules, _modules):
     from ury.ury.doctype.ury_order import ury_order
+
+# Tests assert these exception types. They are the stub, never installed frappe.
+frappe = _framework
 
 
 class TestCancelOrderReason(unittest.TestCase):
@@ -62,7 +124,14 @@ class TestCancelOrderReason(unittest.TestCase):
         self.release.assert_not_called()
         self.kot.assert_not_called()
         self.assertEqual(self.invoice.method_calls, [])
-        self.assertEqual(self.framework.db.method_calls, [])
+        # Reading the configured list is not a table, KOT, or invoice write.
+        db_writes = [call[0] for call in self.framework.db.method_calls if call[0] != "get_value"]
+        self.assertEqual(db_writes, [])
+
+    def set_void_reasons(self, raw):
+        self.invoice.pos_profile = "Till A"
+        self.framework.db.get_value.side_effect = None
+        self.framework.db.get_value.return_value = raw
 
     def assert_invalid_reasons(self, reasons):
         for reason in reasons:
@@ -172,3 +241,133 @@ class TestCancelOrderReason(unittest.TestCase):
                 self.release.assert_called_once_with("T1")
                 self.framework.get_meta.assert_called_with("POS Invoice")
 
+
+    def test_unlisted_reason_is_refused_before_table_or_kot(self):
+        self.set_void_reasons("Guest changed mind\nKitchen error\n")
+        for reason in ("Not a listed reason", "kitchen error", None, "Other:abc"):
+            with self.subTest(reason=reason):
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.invoice.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons("Guest changed mind\nKitchen error\n")
+                try:
+                    with self.assertRaisesRegex(frappe.ValidationError, "URY_VOID_REASON_NOT_CONFIGURED"):
+                        ury_order.cancel_order(self.invoice.name, reason)
+                finally:
+                    self.assert_no_mutation()
+
+    def test_listed_reason_is_accepted_and_stored_exactly(self):
+        cases = (
+            ("Bad", "Bad"),
+            ("  Kitchen error  ", "Kitchen error"),
+        )
+        for submitted, stored in cases:
+            with self.subTest(submitted=submitted):
+                self.invoice.docstatus = 0
+                self.invoice.restaurant_table = "T1"
+                self.invoice.reset_mock()
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons("  Kitchen error  \nBad\n")
+                ury_order.cancel_order(self.invoice.name, submitted)
+                self.framework.db.get_value.assert_called_with(
+                    "POS Profile", "Till A", "custom_void_reasons"
+                )
+                self.invoice.db_set.assert_called_with("cancel_reason", stored)
+                self.release.assert_called_once_with("T1")
+
+    def test_other_without_a_note_is_refused_before_release(self):
+        for reason in ("Other", "Other:", "Other: ", "Other: abc", "Other:\tabc", "Other:late order", "Other:ab"):
+            with self.subTest(reason=reason):
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.invoice.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons("Kitchen error")
+                try:
+                    with self.assertRaisesRegex(frappe.ValidationError, "URY_VOID_REASON_NOT_CONFIGURED"):
+                        ury_order.cancel_order(self.invoice.name, reason)
+                finally:
+                    self.assert_no_mutation()
+
+    def test_other_with_a_note_is_accepted_and_stored_exactly(self):
+        self.invoice.reset_mock()
+        self.release.reset_mock()
+        self.set_void_reasons("Kitchen error")
+        ury_order.cancel_order(self.invoice.name, "  Other: late order  ")
+        self.invoice.db_set.assert_called_with("cancel_reason", "Other: late order")
+        self.release.assert_called_once_with("T1")
+
+    def test_empty_list_keeps_the_four_character_rule(self):
+        for raw in ("", " \n\t", None):
+            with self.subTest(raw=raw):
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.invoice.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons(raw)
+                try:
+                    with self.assertRaisesRegex(frappe.ValidationError, "at least 4 characters"):
+                        ury_order.cancel_order(self.invoice.name, "abc")
+                finally:
+                    self.assert_no_mutation()
+                self.invoice.reset_mock()
+                self.release.reset_mock()
+                ury_order.cancel_order(self.invoice.name, " Void ")
+                self.invoice.db_set.assert_called_with("cancel_reason", "Void")
+
+    def set_void_reason_field_present(self, present):
+        invoice_meta = self.framework.get_meta.return_value
+        profile_meta = MagicMock()
+        profile_meta.has_field.return_value = present
+
+        def get_meta(doctype, *args, **kwargs):
+            if doctype == "POS Profile":
+                return profile_meta
+            return invoice_meta
+
+        self.framework.get_meta.side_effect = get_meta
+        return profile_meta
+
+    def test_missing_void_reason_field_keeps_the_four_character_rule(self):
+        self.invoice.pos_profile = "Till A"
+        profile_meta = self.set_void_reason_field_present(False)
+        with self.assertRaisesRegex(frappe.ValidationError, "at least 4 characters"):
+            ury_order.cancel_order(self.invoice.name, "abc")
+        self.assert_no_mutation()
+        self.framework.get_meta.assert_any_call("POS Profile")
+        profile_meta.has_field.assert_called_with("custom_void_reasons")
+        self.framework.db.get_value.assert_not_called()
+        self.invoice.reset_mock()
+        self.release.reset_mock()
+        ury_order.cancel_order(self.invoice.name, "Void")
+        self.invoice.db_set.assert_called_with("cancel_reason", "Void")
+        self.release.assert_called_once_with("T1")
+
+    def test_void_reason_read_error_is_not_treated_as_free_text(self):
+        self.invoice.pos_profile = "Till A"
+        self.set_void_reason_field_present(True)
+        self.framework.db.get_value.side_effect = RuntimeError("database unavailable")
+        with self.assertRaises(RuntimeError):
+            ury_order.cancel_order(self.invoice.name, "Void")
+        self.assert_no_mutation()
+
+    def test_refusal_names_the_configured_reasons(self):
+        self.set_void_reasons("Guest changed mind\nKitchen error\n")
+        with self.assertRaises(frappe.ValidationError) as caught:
+            ury_order.cancel_order(self.invoice.name, "Not a listed reason")
+        message = str(caught.exception)
+        self.assertIn("URY_VOID_REASON_NOT_CONFIGURED", message)
+        self.assertIn("Guest changed mind", message)
+        self.assertIn("Kitchen error", message)
+        self.assert_no_mutation()
+
+    def test_permission_refusal_still_precedes_void_reason_lookup(self):
+        self.set_void_reasons("Kitchen error")
+        self.framework.has_permission.return_value = False
+        with self.assertRaises(frappe.PermissionError):
+            ury_order.cancel_order(self.invoice.name, "Not a listed reason")
+        self.framework.db.get_value.assert_not_called()
+        self.assert_no_mutation()

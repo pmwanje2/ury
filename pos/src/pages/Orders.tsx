@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge } from 'lucide-react';
-import { Badge, Button, Card, CardContent } from '@ury/ui';
+import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@ury/ui';
 import { showToast } from '@ury/ui';
 import OrderStatusSidebar from '../components/OrderStatusSidebar';
@@ -44,6 +44,19 @@ function isOrderEditable(status: string) {
   return status === 'Draft' || status === 'Unbilled';
 }
 
+const OTHER_VOID_REASON = '__other__';
+
+function configuredVoidReasons(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const reasons: string[] = [];
+  for (const line of value.split(/\r?\n/)) {
+    const reason = line.trim();
+    if (!reason || reasons.includes(reason)) continue;
+    reasons.push(reason);
+  }
+  return reasons;
+}
+
 function isSplitBill(order: Pick<POSInvoice, 'split_total' | 'custom_split_group' | 'custom_split_from'>) {
   return (
     (order.split_total ?? 0) >= 2 ||
@@ -79,6 +92,9 @@ export default function Orders() {
   const mounted = useRef(false);
   const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
   const [cancelReason, setCancelReason] = React.useState('');
+  const [voidChoice, setVoidChoice] = React.useState('');
+  const [otherNote, setOtherNote] = React.useState('');
+  const voidReasons = configuredVoidReasons(posStore.posProfile?.custom_void_reasons);
   const [cancelLoading, setCancelLoading] = React.useState(false);
   const [editLoading, setEditLoading] = React.useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = React.useState(false);
@@ -187,22 +203,46 @@ export default function Orders() {
     }
   };
 
+  function voidReasonToSubmit(): string | null {
+    if (voidReasons.length === 0) {
+      const reason = cancelReason.trim();
+      if (reason.length < 4) {
+        showToast.error(t('errors.enter_cancel_reason'));
+        return null;
+      }
+      return reason;
+    }
+    if (voidChoice === OTHER_VOID_REASON) {
+      const note = otherNote.trim();
+      if (note.length < 4) {
+        showToast.error(t('errors.enter_cancel_reason'));
+        return null;
+      }
+      return `Other: ${note}`;
+    }
+    if (!voidReasons.includes(voidChoice)) {
+      showToast.error(t('errors.enter_cancel_reason'));
+      return null;
+    }
+    return voidChoice;
+  }
+
   async function handleCancelOrder() {
     if (!selectedOrder) return;
-    if (cancelReason.trim().length < 4) {
-      showToast.error(t('errors.enter_cancel_reason'));
-      return;
-    }
+    const reason = voidReasonToSubmit();
+    if (!reason) return;
     setCancelLoading(true);
     try {
       await assertOfflineActionAllowed('void');
       await call.post('ury.ury.doctype.ury_order.ury_order.cancel_order', {
         invoice_id: selectedOrder.name,
-        reason: cancelReason.trim()
+        reason
       })
       showToast.success(t('success.order_cancelled'));
       setCancelDialogOpen(false);
       setCancelReason('');
+      setVoidChoice('');
+      setOtherNote('');
       clearSelectedOrder();
       fetchOrders();
     } catch (err) {
@@ -600,7 +640,12 @@ export default function Orders() {
                           type="button"
                           className="inline-flex items-center justify-center rounded-md p-2 bg-gray-100 hover:bg-gray-200 text-red-600 focus:outline-none focus:ring-2 focus:ring-red-500"
                           aria-label="Cancel order"
-                          onClick={() => setCancelDialogOpen(true)}
+                          onClick={() => {
+                            setCancelReason('');
+                            setVoidChoice('');
+                            setOtherNote('');
+                            setCancelDialogOpen(true);
+                          }}
                         >
                           <X className="w-4 h-4" />
                         </button>
@@ -648,10 +693,36 @@ export default function Orders() {
                 <DialogHeader>
                   <DialogTitle>{t('order.cancel_order')}</DialogTitle>
                   <DialogDescription>
-                    {t('errors.enter_cancel_reason')}
+                    {voidReasons.length > 0
+                      ? t('errors.choose_void_reason')
+                      : t('errors.enter_cancel_reason')}
                   </DialogDescription>
                 </DialogHeader>
-                <div className="px-6 mb-3">
+                <div className="px-6 mb-3 space-y-3">
+                {voidReasons.length > 0 ? (
+                  <>
+                    <Select
+                      value={voidChoice}
+                      onValueChange={setVoidChoice}
+                      placeholder={t('order.select_void_reason')}
+                      disabled={cancelLoading}
+                      autoFocus
+                    >
+                      {voidReasons.map((reason) => (
+                        <SelectItem key={reason} value={reason}>{reason}</SelectItem>
+                      ))}
+                      <SelectItem value={OTHER_VOID_REASON}>{t('order.void_reason_other')}</SelectItem>
+                    </Select>
+                    {voidChoice === OTHER_VOID_REASON && (
+                      <Textarea
+                        placeholder={t('order.enter_cancel_reason')}
+                        value={otherNote}
+                        onChange={e => setOtherNote(e.target.value)}
+                        disabled={cancelLoading}
+                      />
+                    )}
+                  </>
+                ) : (
                 <Textarea
                   placeholder={t('order.enter_cancel_reason')}
                   value={cancelReason}
@@ -659,6 +730,7 @@ export default function Orders() {
                   disabled={cancelLoading}
                   autoFocus
                 />
+                )}
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setCancelDialogOpen(false)} disabled={cancelLoading}>

@@ -1,0 +1,70 @@
+ORDER STATUS
+Outstanding
+Draft
+Unbilled
+Recently Paid
+Bill requests: 0 waiting
+Refresh
+
+No bill requests waiting
+
+POS-INV-1001
+
+Table Table 1 • Dine In
+
+Not printed
+Draft
+
+Walk-in Customer
+
+Oct 21, 1:20 PM
+12 min
+
+Okello Waiter
+
+2× Soup
+
+USh 48,000
+Previous
+Page 1
+Next
+POS-INV-1001
+Draft
+Cancel order
+
+Enter a reason for voiding this order (at least 4 characters).
+
+Select a void reason
+Guest changed mind
+Wrong item keyed
+Kitchen error
+Item unavailable
+Quality complaint
+Other
+Cancel
+Confirm Cancel
+Walk-in Customer
+Oct 21, 1:20 PM
+Okello Waiter
+Table 1
+Order Items
+
+Soup
+
+Qty: 2
+
+USh 48,000
+
+Print bill
+Split bill
+Settle bill
+USh 48,000
+
+[select options read from the real dialog select]
+Select a void reason
+Guest changed mind
+Wrong item keyed
+Kitchen error
+Item unavailable
+Quality complaint
+Other
