@@ -60,7 +60,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
-  const [kamraRef, setKamraRef] = useState('');
+  const [roomNumber, setRoomNumber] = useState('');
 
   useEffect(() => {
     fetchPaymentModes();
@@ -173,7 +173,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
             : payments,
           pos_profile: posProfile, table,
-          ...(roomChargeAmount > 0 ? { kamra_ref: kamraRef } : {}),
+          ...(roomChargeAmount > 0 ? { room_number: roomNumber } : {}),
           ...(ids ? { client_order_id: ids.clientOrderId, round_id: ids.roundId } : {}),
         }),
       });
@@ -273,8 +273,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 <Input
                   id="room-charge-reference"
                   type="text"
-                  value={kamraRef}
-                  onChange={e => setKamraRef(e.target.value)}
+                  value={roomNumber}
+                  onChange={e => setRoomNumber(e.target.value)}
                   className="w-full"
                   size="sm"
                   disabled={isProcessing}
