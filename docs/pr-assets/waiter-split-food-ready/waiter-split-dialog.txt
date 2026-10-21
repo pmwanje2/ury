@@ -1,0 +1,77 @@
+Table T-05
+
+Updating order
+
+Menu
+Order
+2
+Related bills
+POS-INV-1001
+Original
+Current
+Split 1 of 3
+Walk In
+UGX 16,000
+POS-INV-1002
+Open
+Split 2 of 3
+Walk In
+UGX 16,000
+Print
+POS-INV-1003
+Open
+Split 3 of 3
+Walk In
+UGX 16,000
+Print
+
+Walk In
+
+Change
+Pax
+-
+2
++
+ALREADY ORDERED
+1 × Luwombo soup
+
+UGX 24,000
+
+1 × Passion juice
+
+UGX 24,000
+
+Total
+UGX 48,000
+Update Order
+Close
+Split bill
+
+Choose items to move to a new bill from POS-INV-1001
+
+Luwombo soup
+
+1 available
+
+UGX 24,000
+
+Passion juice
+
+1 available
+
+UGX 24,000
+
+Customer for new bill
+
+Same customer as original bill
+
+Stays on original bill
+
+UGX 48,000
+
+Moves to new bill
+
+UGX 0
+
+Cancel
+Split bill

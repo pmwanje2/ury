@@ -251,7 +251,12 @@
         "aggregators": "منصات تجميع"
     },
     "bill_split": {
-        "split_bill": "تقسيم الفاتورة"
+        "split_bill": "تقسيم الفاتورة",
+        "split_success": "تم إنشاء الفاتورة الجديدة {{invoice}}"
+    },
+    "notifications": {
+        "kitchen": "المطبخ",
+        "new_food_ready": "طلب جديد جاهز من المطبخ"
     },
     "order_status_types": {
         "outstanding": "Outstanding",

@@ -42,6 +42,7 @@ function getRelativeTime(creationDate: string, serverTimeOffset: number | null):
 interface Props {
   title?: string;
   onOpenCheck?: (kot: string, isCurrentSession: () => boolean) => Promise<boolean>;
+  onNewUnread?: (unreadCount: number) => void;
 }
 
 export default function Notifications(props: Props) {
@@ -52,7 +53,7 @@ export default function Notifications(props: Props) {
   return <UserNotifications key={name} user={name} {...props} />;
 }
 
-function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }: Props & { user: string }) {
+function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, onNewUnread }: Props & { user: string }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [serverTimeOffset, setServerTimeOffset] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +65,14 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }
   const active = useRef(false);
   const requestId = useRef(0);
   const refreshRef = useRef<() => void>(() => {});
+  const seenNotificationNames = useRef(new Set<string>());
+  const hasLoadedNotifications = useRef(false);
+  const onNewUnreadRef = useRef(onNewUnread);
   const isCurrentSession = () => active.current && getSessionUser() === user;
+
+  useEffect(() => {
+    onNewUnreadRef.current = onNewUnread;
+  }, [onNewUnread]);
 
   useEffect(() => {
     active.current = true;
@@ -73,6 +81,8 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }
 
     function clearOldSession() {
       setNotifications([]);
+      seenNotificationNames.current.clear();
+      hasLoadedNotifications.current = false;
       controller?.abort();
       socket?.off('notification', refresh);
       socket?.off('connect', reconnect);
@@ -109,7 +119,17 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck }
         if (!Array.isArray(data.message)) throw new Error('Invalid notification list');
         if (!isCurrentSession()) { if (active.current) clearOldSession(); return; }
         if (id !== requestId.current) return;
-        setNotifications(data.message.filter((item: Notification) => item.for_user === user));
+        const nextNotifications = data.message.filter((item: Notification) => item.for_user === user);
+        const unreadCount = nextNotifications.filter((item: Notification) => !Number(item.read)).length;
+        const newUnreadCount = nextNotifications.filter(
+          (item: Notification) => !Number(item.read) && !seenNotificationNames.current.has(item.name),
+        ).length;
+        if (hasLoadedNotifications.current && newUnreadCount > 0) {
+          onNewUnreadRef.current?.(unreadCount);
+        }
+        nextNotifications.forEach((item: Notification) => seenNotificationNames.current.add(item.name));
+        hasLoadedNotifications.current = true;
+        setNotifications(nextNotifications);
         setFailed(false);
       } catch {
         if (isCurrentSession() && id === requestId.current) setFailed(true);

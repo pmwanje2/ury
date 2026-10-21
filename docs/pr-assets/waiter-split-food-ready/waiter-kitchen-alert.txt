@@ -1,0 +1,22 @@
+New food-ready order
+Tables
+Refresh
+Switch waiter
+Dining
+Kitchen
+Refresh
+
+Realtime disconnected; checking every 30 seconds.
+
+Food ready: Table T-05
+Full notification
+Unread
+just now
+Open record
+Open check
+Mark read
+T-05
+Mine
+14h 52m
+UGX 48,000
+4

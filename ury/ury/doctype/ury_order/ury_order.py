@@ -737,7 +737,13 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             "custom_merged_tables": ["like", f"%{table}%"]
         }
 
-        invoices = frappe.get_all("POS Invoice", filters=filters, or_filters=or_filters, limit=1)
+        invoices = frappe.get_all(
+            "POS Invoice",
+            filters=filters,
+            or_filters=or_filters,
+            order_by="creation asc",
+            limit=1,
+        )
         invoice_name = invoices[0].name if invoices else None
         branch, menu_name, restaurant = get_restaurant_and_menu_name(table)
 
@@ -1138,6 +1144,7 @@ def get_table_order_context(table):
             "restaurant_table": table,
             "custom_merged_tables": ["like", f"%{table}%"],
         },
+        order_by="creation asc",
         limit=1,
     )
     invoice_name = invoices[0].name if invoices else None

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Square } from 'lucide-react';
 import { Button, Spinner, showToast } from '@ury/ui';
+import { call } from '@ury/core';
 import { useCaptainContext } from '../hooks/useCaptainContext';
 import { getRooms, getTables, type Room, type Table } from '../../lib/table-api';
 import { getMergeGroupMembers, sortTablesByMergeGroups } from '../../lib/table-utils';
@@ -17,6 +18,7 @@ import CaptainTableCard, {
 } from '../components/CaptainTableCard';
 import { floorSignOut } from '../../lib/floor-session';
 import { t } from '../../i18n';
+import Notifications from '../../components/Notifications';
 
 /**
  * Captain "Tables" home screen (`/order`). See PLAN.md §5/§6 for the
@@ -180,6 +182,21 @@ export default function CaptainTables() {
     showToast.error(ownerName ? `Assigned to ${ownerName}` : 'This table is occupied');
   };
 
+  const openKitchenCheck = useCallback(async (kotName: string, isCurrentSession: () => boolean) => {
+    try {
+      const response = await call.get<{ message: { restaurant_table?: string | null } }>('frappe.client.get', {
+        doctype: 'URY KOT',
+        name: kotName,
+      });
+      const tableName = response.message?.restaurant_table;
+      if (!isCurrentSession() || !tableName) return false;
+      navigate(`/order/table/${tableName}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [navigate]);
+
   const isLoading = contextLoading || (roomsLoading && branchRooms.length === 0);
   const error = contextError;
 
@@ -234,6 +251,14 @@ export default function CaptainTables() {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="px-3 pt-3">
+        <Notifications
+          title={t('notifications.kitchen')}
+          onOpenCheck={openKitchenCheck}
+          onNewUnread={() => showToast.info(t('notifications.new_food_ready'))}
+        />
       </div>
 
       <div className="flex-1 p-3">
