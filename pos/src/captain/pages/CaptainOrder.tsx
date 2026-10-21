@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ClipboardList, Loader2, UtensilsCrossed } from 'lucide-react';
-import { Button, Spinner, cn, showToast } from '@ury/ui';
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Spinner,
+  cn,
+  showToast,
+} from '@ury/ui';
 import { formatCurrency } from '@ury/core';
 import { usePOSStore } from '../../store/pos-store';
 import { useRootStore, RootState } from '../../store/root-store';
@@ -18,6 +29,7 @@ import { resolvePrintFormat } from '../../lib/invoice-api';
 import type { SplitGroupInvoice } from '../../lib/invoice-api';
 import { getVacantTablesForBranch, Table } from '../../lib/table-api';
 import { DINE_IN } from '../../data/order-types';
+import { floorSignOut, isStaySignedIn } from '../../lib/floor-session';
 import { useTableOrderContext, OrderDeltaLine } from '../hooks/useTableOrderContext';
 import CaptainMenu from '../components/CaptainMenu';
 import CaptainOrderLine from '../components/CaptainOrderLine';
@@ -89,6 +101,7 @@ export default function CaptainOrder() {
   const [editingItemUniqueId, setEditingItemUniqueId] = useState<string | null>(null);
   const [noteEditingLine, setNoteEditingLine] = useState<OrderDeltaLine | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLeaveDialogOpen, setIsLeaveDialogOpen] = useState(false);
 
   // Secondary actions (PLAN.md §5/§6/§10): overflow menu state + the two
   // picker dialogs, reused as-is from the Cashier `Table.tsx` flow.
@@ -248,6 +261,10 @@ export default function CaptainOrder() {
 
       clearTableOrder();
       showToast.success(isUpdatingOrder ? 'Order updated.' : 'Order sent to kitchen.');
+      if (posProfile.floor_signout_after_send === 1 && !isStaySignedIn(user, posProfile)) {
+        await floorSignOut();
+        return;
+      }
       navigate('/order');
     } catch (error) {
       console.error('Failed to sync order:', error);
@@ -413,6 +430,15 @@ export default function CaptainOrder() {
   };
 
   const currentCaptain = context?.assignment?.waiter ?? '';
+
+  const hasUnsentLines = newOrChangedLines.length > 0 || reductionPendingLines.length > 0;
+  const handleBack = () => {
+    if (hasUnsentLines) {
+      setIsLeaveDialogOpen(true);
+      return;
+    }
+    navigate('/order');
+  };
 
   const handleOpenTransferCaptain = () => {
     if (!invoiceId) {
@@ -598,7 +624,7 @@ export default function CaptainOrder() {
       {/* Header */}
       <div className="sticky top-0 z-20 bg-header text-header-foreground border-b border-header-border px-3 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Button onClick={() => navigate('/order')} variant="ghost" size="icon" aria-label="Back to Tables">
+          <Button onClick={handleBack} variant="ghost" size="icon" aria-label="Back to Tables">
             <ChevronLeft className="w-5 h-5" />
           </Button>
           <div>
@@ -826,6 +852,31 @@ export default function CaptainOrder() {
         }
         onConfirm={handleSplitBill}
       />
+
+      <Dialog open={isLeaveDialogOpen} onOpenChange={setIsLeaveDialogOpen}>
+        <DialogContent size="sm" showCloseButton onClose={() => setIsLeaveDialogOpen(false)}>
+          <DialogHeader>
+            <DialogTitle>Unsent items</DialogTitle>
+            <DialogDescription>
+              You have unsent items. Leave without sending them?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsLeaveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setIsLeaveDialogOpen(false);
+                navigate('/order');
+              }}
+            >
+              Leave
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

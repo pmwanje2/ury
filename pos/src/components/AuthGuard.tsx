@@ -11,6 +11,7 @@ import {
   hasFloorSessionMarker,
   isFloorPadActive,
   isStaySignedIn,
+  useFloorIdle,
 } from '../lib/floor-session';
 
 interface Props {
@@ -35,6 +36,8 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   const [isColdBootSigningOut, setIsColdBootSigningOut] = useState(false);
   const floorPadActive = isFloorPadActive();
   const logoutFailed = hasFloorLogoutFailureMarker();
+
+  useFloorIdle(user, posProfile);
 
   const coldBoot = Boolean(
     floorPadActive && user && !user.provisional && posProfile
