@@ -312,5 +312,10 @@
         "lookup_unavailable": "Bill lookup unavailable",
         "lookup_loading": "Finding open bill…",
         "choose_check": "Choose an open check"
+    },
+    "unsent_items": {
+        "title": "عناصر لم تُرسل",
+        "description": "لديك عناصر لم تُرسل. هل تريد المغادرة دون إرسالها؟",
+        "leave": "مغادرة"
     }
 }

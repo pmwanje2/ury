@@ -1,4 +1,9 @@
 {
+  "unsent_items": {
+    "title": "Unsent items",
+    "description": "You have unsent items. Leave without sending them?",
+    "leave": "Leave"
+  },
   "floor_pin": {
     "title": "Staff sign-in",
     "pin_prompt": "Enter your 4-digit PIN",

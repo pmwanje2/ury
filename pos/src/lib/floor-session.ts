@@ -1,6 +1,8 @@
+import { useEffect } from 'react';
 import {
   clearAppStorage,
   disconnectQzPrinter,
+  watchIdle,
 } from '@ury/core';
 import { clearCashierStorage } from '../offline/cashier';
 
@@ -17,8 +19,8 @@ interface FloorUser {
 }
 
 interface StayRoleProfile {
-  [key: string]: unknown;
   custom_floor_stay_signed_in_roles?: Array<{ role?: string }>;
+  floor_idle_signout_seconds?: number;
 }
 
 declare global {
@@ -64,6 +66,19 @@ export function isStaySignedIn(user: FloorUser, profile: unknown): boolean {
     ? ((profile as StayRoleProfile).custom_floor_stay_signed_in_roles ?? [])
     : [];
   return user.roles.some((role) => stayRoles.some((row) => row.role === role));
+}
+
+export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | null): void {
+  useEffect(() => {
+    if (!user || !profile || !isFloorPadActive() || isStaySignedIn(user, profile)) return;
+
+    const seconds = profile.floor_idle_signout_seconds ?? 0;
+    if (seconds <= 0) return;
+
+    return watchIdle(() => {
+      void floorSignOut();
+    }, seconds * 1000);
+  }, [profile, user]);
 }
 
 /**

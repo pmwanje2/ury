@@ -22,6 +22,8 @@ export interface PosProfileLimited {
   owner: string;
   edit_order_type?: number;
   custom_blind_cash_count?: number;
+  floor_idle_signout_seconds?: number;
+  floor_signout_after_send?: number;
 }
 
 export interface PosProfileLimitedResponse {
@@ -71,6 +73,8 @@ export interface PosProfileFull {
   custom_blind_cash_count?: number;
   /** One configured void reason per line. Absent on sites without the field. */
   custom_void_reasons?: string | null;
+  floor_idle_signout_seconds?: number;
+  floor_signout_after_send?: number;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -142,6 +146,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     multiple_cashier: limitedProfile.multiple_cashier,
     edit_order_type: limitedProfile.edit_order_type,
     custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
+    floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
+    floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
   };
 
   return combinedProfile;

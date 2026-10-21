@@ -1,0 +1,51 @@
+Table T-05
+
+Updating order
+
+Menu
+Order
+3
+Related bills
+POS-INV-1001
+Original
+Current
+Split 1 of 3
+Walk In
+UGX 16,000
+POS-INV-1002
+Open
+Split 2 of 3
+Walk In
+UGX 16,000
+Print
+POS-INV-1003
+Open
+Split 3 of 3
+Walk In
+UGX 16,000
+Print
+
+Walk In
+
+Change
+Pax
+-
+2
++
+ALREADY ORDERED
+1 × Luwombo soup
+
+UGX 24,000
+
+1 × Passion juice
+
+UGX 24,000
+
+NEW / CHANGED
++1 × Passion juice
+
+UGX 24,000
+
+Total
+UGX 72,000
+Update Order
