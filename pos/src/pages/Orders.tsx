@@ -693,7 +693,9 @@ export default function Orders() {
                 <DialogHeader>
                   <DialogTitle>{t('order.cancel_order')}</DialogTitle>
                   <DialogDescription>
-                    {t('errors.enter_cancel_reason')}
+                    {voidReasons.length > 0
+                      ? t('errors.choose_void_reason')
+                      : t('errors.enter_cancel_reason')}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="px-6 mb-3 space-y-3">

@@ -2128,10 +2128,9 @@ def _configured_void_reasons(pos_profile):
     """One trimmed reason per line. A missing field or profile keeps free text."""
     if not isinstance(pos_profile, str) or not pos_profile.strip():
         return []
-    try:
-        raw = frappe.db.get_value("POS Profile", pos_profile, "custom_void_reasons")
-    except Exception:
+    if not frappe.get_meta("POS Profile").has_field("custom_void_reasons"):
         return []
+    raw = frappe.db.get_value("POS Profile", pos_profile, "custom_void_reasons")
     if not isinstance(raw, str):
         return []
     return [line.strip() for line in raw.splitlines() if line.strip()]
@@ -2184,7 +2183,9 @@ def cancel_order(invoice_id, reason):
         )
         if candidate not in reasons and (note is None or len(note.strip()) < 4):
             frappe.throw(
-                _(_VOID_REASON_NOT_CONFIGURED),
+                _("{0} Configured reasons: {1}").format(
+                    _VOID_REASON_NOT_CONFIGURED, "; ".join(reasons),
+                ),
                 title=_("Invalid void reason"),
             )
         reason = candidate
