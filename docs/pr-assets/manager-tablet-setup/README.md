@@ -18,8 +18,11 @@ same moment.
 ## Mock disclosure
 
 No live Frappe site, tenant, session, database or deployed endpoint is used.
-The only mocks are [mock-data.json](harness/mock-data.json) and the API
-middleware in [vite.config.mjs](harness/vite.config.mjs):
+The mocks are [mock-data.json](harness/mock-data.json), the API middleware in
+[vite.config.mjs](harness/vite.config.mjs), and the store seeding in
+[pos-entry.tsx](harness/pos-entry.tsx), which sets the signed-in synthetic
+manager and a synthetic POS Profile directly. The entry also borrows the
+capture-only CSS from `../waiter-split-food-ready/harness/visual.css`.
 
 - `frappe.client.has_permission` returns `true` for the synthetic manager,
   which is what shows the two menu entries. The real gate is the server's
