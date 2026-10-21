@@ -2,7 +2,6 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { call } from '@ury/core';
 import Header from '../src/components/Header';
 import PairTabletDialog from '../src/components/PairTabletDialog';
 import StaffPinsDialog from '../src/components/StaffPinsDialog';
