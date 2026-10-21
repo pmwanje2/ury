@@ -1,0 +1,401 @@
+{
+  "boot": {
+    "lang": "en",
+    "sysdefaults": {
+      "currency": "UGX",
+      "number_format": "#,###.##"
+    },
+    "user": {
+      "name": "waiter@example.test",
+      "full_name": "Amina Captain",
+      "roles": [
+        "URY Captain"
+      ]
+    },
+    "ury_brand": {
+      "name": "URY POS",
+      "logo": "/ury_pos.png",
+      "favicon": "/ury.ico"
+    }
+  },
+  "api": {
+    "ury.ury.doctype.ury_order.ury_order.get_captain_context": {
+      "message": {
+        "user": "waiter@example.test",
+        "roles": [
+          "URY Captain"
+        ],
+        "branch": "Kampala Main",
+        "rooms": [
+          {
+            "name": "Dining",
+            "branch": "Kampala Main"
+          }
+        ],
+        "pos_profile": {
+          "name": "Kampala POS",
+          "transfer_role_permissions": true,
+          "role_allowed_for_billing": false,
+          "role_restricted_for_table_order": false,
+          "remove_items": false,
+          "show_image": true,
+          "custom_enable_kot_reprint": true,
+          "custom_enable_multiple_cashier": false
+        },
+        "role_restricted_for_table_order": false,
+        "opening_state": {
+          "pos_open": true
+        }
+      }
+    },
+    "ury.ury.doctype.ury_order.ury_order.get_table_order_context": {
+      "message": {
+        "table": {
+          "name": "T-05",
+          "branch": "Kampala Main",
+          "restaurant_room": "Dining"
+        },
+        "order": {
+          "name": "POS-INV-1001",
+          "invoice_printed": 0,
+          "grand_total": 48000,
+          "rounded_total": 48000,
+          "restaurant_table": "T-05",
+          "waiter": "waiter@example.test",
+          "customer": "Walk In",
+          "customer_name": "Walk In",
+          "mobile_number": "",
+          "status": "Draft",
+          "order_type": "Dine In",
+          "posting_date": "2026-10-20",
+          "posting_time": "13:20:00",
+          "cashier": "cashier@example.test",
+          "net_total": 48000,
+          "total_taxes_and_charges": 0,
+          "custom_split_group": "SPLIT-GROUP-1"
+        },
+        "assignment": {
+          "waiter": "waiter@example.test",
+          "is_mine": true
+        },
+        "permissions": {
+          "view": true,
+          "modify": true,
+          "reduce_items": true,
+          "remove_items": true,
+          "transfer_table": false,
+          "transfer_captain": false,
+          "print_bill": true,
+          "split_bill": true,
+          "reprint_kot": false,
+          "settle": false,
+          "cancel": false
+        }
+      }
+    },
+    "ury.ury.doctype.ury_order.ury_order.get_order_invoice": {
+      "message": {
+        "name": "POS-INV-1001",
+        "invoice_printed": 0,
+        "grand_total": 48000,
+        "rounded_total": 48000,
+        "restaurant_table": "T-05",
+        "waiter": "waiter@example.test",
+        "customer": "Walk In",
+        "customer_name": "Walk In",
+        "mobile_number": "",
+        "status": "Draft",
+        "order_type": "Dine In",
+        "custom_restaurant_room": "Dining",
+        "no_of_pax": 2,
+        "modified": "2026-10-20 13:20:00",
+        "items": [
+          {
+            "name": "ROW-SOUP",
+            "item_code": "ITEM-SOUP",
+            "item_name": "Luwombo soup",
+            "qty": 1,
+            "rate": 24000,
+            "amount": 24000,
+            "image": null,
+            "custom_course": "Main",
+            "comment": ""
+          },
+          {
+            "name": "ROW-JUICE",
+            "item_code": "ITEM-JUICE",
+            "item_name": "Passion juice",
+            "qty": 1,
+            "rate": 24000,
+            "amount": 24000,
+            "image": null,
+            "custom_course": "Drinks",
+            "comment": ""
+          }
+        ]
+      }
+    },
+    "ury.ury_pos.api.get_split_group": {
+      "message": {
+        "invoices": [
+          {
+            "name": "POS-INV-1001",
+            "invoice_printed": 0,
+            "grand_total": 16000,
+            "rounded_total": 16000,
+            "restaurant_table": "T-05",
+            "waiter": "waiter@example.test",
+            "customer": "Walk In",
+            "customer_name": "Walk In",
+            "status": "Draft",
+            "order_type": "Dine In",
+            "posting_date": "2026-10-20",
+            "posting_time": "13:20:00",
+            "net_total": 16000,
+            "total_taxes_and_charges": 0,
+            "split_index": 1,
+            "split_total": 3,
+            "is_original": true,
+            "docstatus": 0
+          },
+          {
+            "name": "POS-INV-1002",
+            "invoice_printed": 0,
+            "grand_total": 16000,
+            "rounded_total": 16000,
+            "restaurant_table": "T-05",
+            "waiter": "waiter@example.test",
+            "customer": "Walk In",
+            "customer_name": "Walk In",
+            "status": "Draft",
+            "order_type": "Dine In",
+            "posting_date": "2026-10-20",
+            "posting_time": "13:20:00",
+            "net_total": 16000,
+            "total_taxes_and_charges": 0,
+            "split_index": 2,
+            "split_total": 3,
+            "is_original": false,
+            "docstatus": 0
+          },
+          {
+            "name": "POS-INV-1003",
+            "invoice_printed": 0,
+            "grand_total": 16000,
+            "rounded_total": 16000,
+            "restaurant_table": "T-05",
+            "waiter": "waiter@example.test",
+            "customer": "Walk In",
+            "customer_name": "Walk In",
+            "status": "Draft",
+            "order_type": "Dine In",
+            "posting_date": "2026-10-20",
+            "posting_time": "13:20:00",
+            "net_total": 16000,
+            "total_taxes_and_charges": 0,
+            "split_index": 3,
+            "split_total": 3,
+            "is_original": false,
+            "docstatus": 0
+          }
+        ],
+        "current": "POS-INV-1001",
+        "group": "SPLIT-GROUP-1"
+      }
+    },
+    "ury.ury.api.ury_server_time.get_server_time": {
+      "message": "2026-10-20 13:25:00"
+    },
+    "ury.ury.api.ury_kot_display.get_site_name": {
+      "message": {
+        "site_name": ""
+      }
+    },
+    "ury.ury.api.ury_table_bookings.get_upcoming_bookings": {
+      "message": {}
+    },
+    "ury.ury_pos.api.getMenuCourses": {
+      "message": [
+        {
+          "name": "Main",
+          "label": "Main"
+        },
+        {
+          "name": "Drinks",
+          "label": "Drinks"
+        }
+      ]
+    },
+    "ury.ury_pos.api.getModeOfPayment": {
+      "message": [
+        {
+          "mode_of_payment": "Cash",
+          "opening_amount": 0
+        }
+      ]
+    },
+    "ury.ury_pos.api.getPosProfile": {
+      "message": {
+        "pos_profile": "Kampala POS",
+        "branch": "Kampala Main",
+        "company": "URY Foods",
+        "waiter": "waiter@example.test",
+        "warehouse": "Main Warehouse",
+        "cashier": "cashier@example.test",
+        "print_format": "Salama Receipt 80mm",
+        "qz_print": 0,
+        "qz_host": null,
+        "printer": null,
+        "print_type": "socket",
+        "tableAttention": 0,
+        "paid_limit": 0,
+        "disable_rounded_total": 0,
+        "enable_discount": 0,
+        "multiple_cashier": 0,
+        "owner": "cashier@example.test"
+      }
+    },
+    "ury.ury.api.getRestaurantMenu": {
+      "message": {
+        "items": [
+          {
+            "item": "ITEM-SOUP",
+            "item_name": "Luwombo soup",
+            "item_image": null,
+            "rate": 24000,
+            "course": "Main",
+            "course_label": "Main"
+          },
+          {
+            "item": "ITEM-JUICE",
+            "item_name": "Passion juice",
+            "item_image": null,
+            "rate": 24000,
+            "course": "Drinks",
+            "course_label": "Drinks"
+          }
+        ]
+      }
+    },
+    "frappe.client.get": {
+      "message": {
+        "restaurant_table": "T-05"
+      }
+    },
+    "ury.ury.doctype.ury_order.ury_order.split_bill": {
+      "message": {
+        "source_invoice": "POS-INV-1001",
+        "new_invoice": "POS-INV-1002"
+      }
+    },
+    "frappe.desk.doctype.notification_log.notification_log.mark_as_read": {
+      "message": null
+    },
+    "ury.ury_pos.api.getRestaurantMenu": {
+      "message": {
+        "items": [
+          {
+            "item": "ITEM-SOUP",
+            "item_name": "Luwombo soup",
+            "item_image": null,
+            "rate": 24000,
+            "course": "Main",
+            "course_label": "Main"
+          },
+          {
+            "item": "ITEM-JUICE",
+            "item_name": "Passion juice",
+            "item_image": null,
+            "rate": 24000,
+            "course": "Drinks",
+            "course_label": "Drinks"
+          }
+        ]
+      }
+    }
+  },
+  "resource": {
+    "URY Room": [
+      {
+        "name": "Dining",
+        "branch": "Kampala Main"
+      }
+    ],
+    "URY Table": [
+      {
+        "name": "T-05",
+        "occupied": 1,
+        "latest_invoice_time": "2026-10-20 13:20:00",
+        "is_take_away": 0,
+        "restaurant_room": "Dining",
+        "table_shape": "Square",
+        "no_of_seats": 4
+      }
+    ],
+    "POS Invoice": [
+      {
+        "name": "POS-INV-1001",
+        "restaurant_table": "T-05",
+        "custom_merged_tables": null,
+        "waiter": "waiter@example.test",
+        "grand_total": 48000,
+        "invoice_printed": 0
+      }
+    ],
+    "User": [
+      {
+        "name": "waiter@example.test",
+        "full_name": "Amina Captain"
+      }
+    ],
+    "POS Profile/Kampala POS": {
+      "name": "Kampala POS",
+      "branch": "Kampala Main",
+      "company": "URY Foods",
+      "restaurant": "URY Foods",
+      "currency": "UGX",
+      "owner": "cashier@example.test",
+      "docstatus": 0,
+      "role_allowed_for_billing": [],
+      "role_restricted_for_table_order": [],
+      "transfer_role_permissions": []
+    },
+    "Currency/UGX": {
+      "name": "UGX",
+      "symbol": "UGX",
+      "fraction": "Cent",
+      "fraction_units": 100,
+      "smallest_currency_fraction_value": 1,
+      "number_format": "#,###.##"
+    }
+  },
+  "notifications": {
+    "initial": [
+      {
+        "name": "KOT-NOTIF-1",
+        "for_user": "waiter@example.test",
+        "subject": "Food ready: Table T-05",
+        "email_content": "Collect the dishes from the kitchen.",
+        "creation": "2026-10-20 13:24:00",
+        "read": 1,
+        "document_type": "URY KOT",
+        "document_name": "KOT-1"
+      }
+    ],
+    "bumped": [
+      {
+        "name": "KOT-NOTIF-2",
+        "for_user": "waiter@example.test",
+        "subject": "Food ready: Table T-05",
+        "email_content": "Collect the dishes from the kitchen.",
+        "creation": "2026-10-20 13:25:00",
+        "read": 0,
+        "document_type": "URY KOT",
+        "document_name": "KOT-1"
+      }
+    ]
+  },
+  "fallback": {
+    "message": null
+  }
+}
