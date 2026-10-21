@@ -65,7 +65,8 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, 
   const active = useRef(false);
   const requestId = useRef(0);
   const refreshRef = useRef<() => void>(() => {});
-  const previousUnreadCount = useRef<number | null>(null);
+  const seenNotificationNames = useRef(new Set<string>());
+  const hasLoadedNotifications = useRef(false);
   const onNewUnreadRef = useRef(onNewUnread);
   const isCurrentSession = () => active.current && getSessionUser() === user;
 
@@ -80,6 +81,8 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, 
 
     function clearOldSession() {
       setNotifications([]);
+      seenNotificationNames.current.clear();
+      hasLoadedNotifications.current = false;
       controller?.abort();
       socket?.off('notification', refresh);
       socket?.off('connect', reconnect);
@@ -118,10 +121,14 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, 
         if (id !== requestId.current) return;
         const nextNotifications = data.message.filter((item: Notification) => item.for_user === user);
         const unreadCount = nextNotifications.filter((item: Notification) => !Number(item.read)).length;
-        if (previousUnreadCount.current !== null && unreadCount > previousUnreadCount.current) {
+        const newUnreadCount = nextNotifications.filter(
+          (item: Notification) => !Number(item.read) && !seenNotificationNames.current.has(item.name),
+        ).length;
+        if (hasLoadedNotifications.current && newUnreadCount > 0) {
           onNewUnreadRef.current?.(unreadCount);
         }
-        previousUnreadCount.current = unreadCount;
+        nextNotifications.forEach((item: Notification) => seenNotificationNames.current.add(item.name));
+        hasLoadedNotifications.current = true;
         setNotifications(nextNotifications);
         setFailed(false);
       } catch {

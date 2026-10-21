@@ -251,7 +251,8 @@
         "aggregators": "منصات تجميع"
     },
     "bill_split": {
-        "split_bill": "تقسيم الفاتورة"
+        "split_bill": "تقسيم الفاتورة",
+        "split_success": "تم إنشاء الفاتورة الجديدة {{invoice}}"
     },
     "notifications": {
         "kitchen": "المطبخ",

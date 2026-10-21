@@ -61,6 +61,7 @@ export default function CaptainOrder() {
     newOrChangedLines,
     reductionPendingLines,
     refetchContext,
+    reloadOrder,
   } = useTableOrderContext(table);
 
   const {
@@ -100,6 +101,7 @@ export default function CaptainOrder() {
   const [isTransferCaptainOpen, setIsTransferCaptainOpen] = useState(false);
   const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
   const [printingSplitInvoice, setPrintingSplitInvoice] = useState<string | null>(null);
+  const [splitGroupRefreshKey, setSplitGroupRefreshKey] = useState(0);
 
   // Default to the Order view for a table that already has a baseline
   // order, Menu for a fresh table — matches PLAN §5 ("free table: menu
@@ -348,6 +350,8 @@ export default function CaptainOrder() {
     const result = await splitBill(invoiceId, payload.itemsToMove, payload.customer);
     showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
     await refetchContext();
+    await reloadOrder();
+    setSplitGroupRefreshKey((key) => key + 1);
   };
 
   const handleOpenSplitInvoice = (invoice: SplitGroupInvoice) => {
@@ -664,9 +668,10 @@ export default function CaptainOrder() {
       {context?.order?.custom_split_group && invoiceId && (
         <div className="px-3 pt-3">
           <SplitGroupPanel
+            key={`${invoiceId}-${splitGroupRefreshKey}`}
             invoiceName={invoiceId}
             onOpenInvoice={handleOpenSplitInvoice}
-            onPrintInvoice={handlePrintSplitInvoice}
+            onPrintInvoice={canPrintBill ? handlePrintSplitInvoice : undefined}
             printingInvoiceName={printingSplitInvoice}
           />
         </div>

@@ -7,6 +7,7 @@ import CaptainTables from '/src/captain/pages/CaptainTables';
 import { initI18n } from '/src/i18n';
 import { usePOSStore } from '/src/store/pos-store';
 import { useRootStore } from '/src/store/root-store';
+import '/src/index.css';
 import './visual.css';
 
 const params = new URLSearchParams(window.location.search);

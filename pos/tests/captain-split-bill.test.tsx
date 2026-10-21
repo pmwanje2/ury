@@ -11,6 +11,7 @@ type CaptainContextTestResult = {
   context: { order: Record<string, unknown> | null; permissions?: Record<string, boolean> };
   permissions: Record<string, boolean>;
   refetchContext: ReturnType<typeof vi.fn>;
+  reloadOrder: ReturnType<typeof vi.fn>;
 };
 
 const boundary = vi.hoisted(() => ({
@@ -155,6 +156,9 @@ beforeEach(async () => {
     newOrChangedLines: [],
     reductionPendingLines: [],
     refetchContext: vi.fn(async () => {}),
+    reloadOrder: vi.fn(async () => {
+      await (boundary.posStore?.loadTableOrder as (table: string) => Promise<void>)('T-05');
+    }),
   };
   boundary.posStore = {
     activeOrders: [

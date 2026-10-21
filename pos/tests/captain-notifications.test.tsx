@@ -188,14 +188,14 @@ describe('captain kitchen notifications', () => {
   });
 
   it('does not toast on the first load even when rows are unread', async () => {
-    await renderNotifications();
+    await renderNotifications({ onNewUnread: () => boundary.toastInfo('New food-ready') });
     await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-05'));
 
     expect(boundary.toastInfo).not.toHaveBeenCalled();
   });
 
   it('does not toast when the same unread rows are fetched again', async () => {
-    await renderNotifications();
+    await renderNotifications({ onNewUnread: () => boundary.toastInfo('New food-ready') });
     await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-05'));
     await waitForRealtimeHandler();
 
@@ -205,7 +205,7 @@ describe('captain kitchen notifications', () => {
   });
 
   it('toasts for a new unread row after an existing row is marked read', async () => {
-    await renderNotifications();
+    await renderNotifications({ onNewUnread: () => boundary.toastInfo('New food-ready') });
     await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-05'));
     await waitForRealtimeHandler();
 
@@ -230,7 +230,7 @@ describe('captain kitchen notifications', () => {
       subject: `Food ready: Table T-${index + 1}`,
     }));
     boundary.rows = initialRows;
-    await renderNotifications();
+    await renderNotifications({ onNewUnread: () => boundary.toastInfo('New food-ready') });
     await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-10'));
     await waitForRealtimeHandler();
 

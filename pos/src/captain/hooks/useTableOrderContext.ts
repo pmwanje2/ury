@@ -51,6 +51,8 @@ export interface UseTableOrderContextResult {
   reductionPendingLines: OrderDeltaLine[];
   /** Re-fetches the per-table permission context (does not reload the order). */
   refetchContext: () => Promise<void>;
+  /** Reloads the current order through the existing POS store loader. */
+  reloadOrder: () => Promise<void>;
 }
 
 /**
@@ -77,6 +79,7 @@ export const useTableOrderContext = (table: string | undefined): UseTableOrderCo
   const orderLoading = usePOSStore((s) => s.orderLoading);
   const activeOrders = usePOSStore((s) => s.activeOrders);
   const setSelectedTable = usePOSStore((s) => s.setSelectedTable);
+  const loadTableOrder = usePOSStore((s) => s.loadTableOrder);
   const clearTableOrder = usePOSStore((s) => s.clearTableOrder);
 
   const prevOrderLoadingRef = useRef(true);
@@ -96,6 +99,14 @@ export const useTableOrderContext = (table: string | undefined): UseTableOrderCo
       setIsContextLoading(false);
     }
   }, [table]);
+
+  const reloadOrder = useCallback(async () => {
+    if (!table) return;
+    baselineCapturedForRef.current = null;
+    prevOrderLoadingRef.current = false;
+    setBaselineItems(null);
+    await loadTableOrder(table);
+  }, [loadTableOrder, table]);
 
   // Fetch the permission context whenever the table changes, and wire the
   // table into pos-store (loadTableOrder + menu fetch) only once we know
@@ -196,6 +207,7 @@ export const useTableOrderContext = (table: string | undefined): UseTableOrderCo
     newOrChangedLines: deltaLines.filter((l) => l.delta > 0),
     reductionPendingLines: deltaLines.filter((l) => l.delta < 0),
     refetchContext: fetchContext,
+    reloadOrder,
   };
 };
 
