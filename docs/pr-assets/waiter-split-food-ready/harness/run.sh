@@ -6,7 +6,7 @@ here="$repo/docs/pr-assets/waiter-split-food-ready/harness"
 out="$repo/docs/pr-assets/waiter-split-food-ready"
 vite="$repo/node_modules/.bin/vite"
 
-cd "$repo"
+cd "$repo/pos"
 "$vite" --config "$here/vite.config.mjs" --port 5187 > /tmp/ury-waiter-split-food-ready-vite.log 2>&1 &
 vite_pid=$!
 trap 'kill "$vite_pid" 2>/dev/null || true' EXIT

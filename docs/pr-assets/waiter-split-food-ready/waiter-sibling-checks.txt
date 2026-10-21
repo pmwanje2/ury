@@ -32,7 +32,7 @@ Pax
 -
 2
 +
-Already Ordered
+ALREADY ORDERED
 1 × Luwombo soup
 
 UGX 24,000
@@ -41,31 +41,6 @@ UGX 24,000
 
 UGX 24,000
 
-All
-Main
-Drinks
-
-No items found.
-
-Walk In
-
-Change
-Pax
--
-2
-+
-Already Ordered
-1 × Luwombo soup
-
-UGX 24,000
-
-1 × Passion juice
-
-UGX 24,000
-
-Total
-UGX 48,000
-Update Order
 Total
 UGX 48,000
 Update Order

@@ -15,6 +15,11 @@ production screenshots.
 Each PNG has a `.txt` sibling containing `document.body.innerText` captured at
 the same time.
 
+The harness imports the app's real `pos/src/index.css` and launches Vite from
+`pos/`, so responsive Tailwind utilities such as `lg:hidden` and `hidden lg:flex`
+match the production layout. Its `visual.css` adds capture-only presentation
+overrides.
+
 ## Mock disclosure
 
 The harness uses no live Frappe site, tenant, session, database,
