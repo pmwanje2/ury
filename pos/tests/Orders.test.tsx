@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
@@ -479,5 +481,15 @@ describe('Orders void reason dialog', () => {
     const dialog = await openCancelDialog();
     expect(dialog.textContent).not.toMatch(/at least 4 characters/i);
     expect(dialog.querySelector('select')).not.toBeNull();
+  });
+
+  it('names the void-reason select and Other in Arabic and French', () => {
+    const localesDir = join(dirname(fileURLToPath(import.meta.url)), '../src/i18n/locales');
+    const arabic = JSON.parse(readFileSync(join(localesDir, 'ar.json'), 'utf8'));
+    const french = JSON.parse(readFileSync(join(localesDir, 'fr.json'), 'utf8'));
+    expect(arabic.order.select_void_reason).toBe('اختر سبب الإلغاء');
+    expect(arabic.order.void_reason_other).toBe('غير ذلك');
+    expect(french.order.select_void_reason).toBe("Sélectionner un motif d'annulation");
+    expect(french.order.void_reason_other).toBe('Autre');
   });
 });
