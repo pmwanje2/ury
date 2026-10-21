@@ -21,6 +21,8 @@ const boundary = vi.hoisted(() => ({
   getSplitGroup: vi.fn(),
   printOrder: vi.fn(),
   floorSignOut: vi.fn(),
+  isStaySignedIn: vi.fn((user: { roles: string[] }, profile: { custom_floor_stay_signed_in_roles?: Array<{ role?: string }> }) =>
+    user.roles.some((role) => profile.custom_floor_stay_signed_in_roles?.some((row) => row.role === role))),
 }));
 
 vi.mock('../src/captain/hooks/useTableOrderContext', () => ({
@@ -54,7 +56,10 @@ vi.mock('../src/lib/invoice-api', async (importOriginal) => {
 });
 
 vi.mock('../src/lib/print', () => ({ printOrder: boundary.printOrder }));
-vi.mock('../src/lib/floor-session', () => ({ floorSignOut: boundary.floorSignOut }));
+vi.mock('../src/lib/floor-session', () => ({
+  floorSignOut: boundary.floorSignOut,
+  isStaySignedIn: boundary.isStaySignedIn,
+}));
 vi.mock('../src/lib/table-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/table-api')>();
   return { ...actual, getVacantTablesForBranch: vi.fn(async () => []) };
@@ -362,7 +367,7 @@ describe('captain floor-session parity', () => {
     expect(container.textContent).toContain('You have unsent items. Leave without sending them?');
 
     await act(async () => button('Cancel')!.click());
-    expect(container.textContent).toContain('Unsent items');
+    expect(container.textContent).toContain('New / Changed');
     expect(container.textContent).not.toContain('tables');
   });
 
