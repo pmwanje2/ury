@@ -6,6 +6,7 @@ import { call } from '@ury/core';
 import { initI18n, t } from '../src/i18n';
 import CaptainActionsMenu from '../src/captain/components/CaptainActionsMenu';
 import CaptainOrder from '../src/captain/pages/CaptainOrder';
+import { syncOrder } from '../src/lib/order-api';
 
 type CaptainContextTestResult = {
   context: { order: Record<string, unknown> | null; permissions?: Record<string, boolean> };
@@ -19,6 +20,7 @@ const boundary = vi.hoisted(() => ({
   posStore: null as Record<string, unknown> | null,
   getSplitGroup: vi.fn(),
   printOrder: vi.fn(),
+  floorSignOut: vi.fn(),
 }));
 
 vi.mock('../src/captain/hooks/useTableOrderContext', () => ({
@@ -52,6 +54,7 @@ vi.mock('../src/lib/invoice-api', async (importOriginal) => {
 });
 
 vi.mock('../src/lib/print', () => ({ printOrder: boundary.printOrder }));
+vi.mock('../src/lib/floor-session', () => ({ floorSignOut: boundary.floorSignOut }));
 vi.mock('../src/lib/table-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/table-api')>();
   return { ...actual, getVacantTablesForBranch: vi.fn(async () => []) };
@@ -129,6 +132,7 @@ async function renderOrder() {
     <MemoryRouter initialEntries={['/order/table/T-05']}>
       <Routes>
         <Route path="/order/table/:table" element={<CaptainOrder />} />
+        <Route path="/order" element={<div>tables</div>} />
       </Routes>
     </MemoryRouter>,
   ));
@@ -173,6 +177,8 @@ beforeEach(async () => {
   };
   boundary.getSplitGroup.mockReset().mockResolvedValue({ invoices: [], current: 'POS-INV-1', group: null });
   boundary.printOrder.mockReset().mockResolvedValue('qz');
+  boundary.floorSignOut.mockReset().mockResolvedValue(undefined);
+  vi.mocked(syncOrder).mockReset();
   vi.spyOn(call, 'post').mockResolvedValue({ message: { source_invoice: 'POS-INV-1', new_invoice: 'POS-INV-2' } } as never);
 });
 
@@ -296,5 +302,76 @@ describe('captain split bill actions', () => {
 
     expect(boundary.printOrder).toHaveBeenNthCalledWith(1, expect.objectContaining({ orderId: 'POS-INV-2' }));
     expect(boundary.printOrder).toHaveBeenNthCalledWith(2, expect.objectContaining({ orderId: 'POS-INV-3' }));
+  });
+});
+
+describe('captain floor-session parity', () => {
+  it('signs out after a successful send when the profile enables it', async () => {
+    boundary.posStore!.posProfile = {
+      ...boundary.posStore!.posProfile,
+      floor_signout_after_send: 1,
+      custom_floor_stay_signed_in_roles: [],
+    };
+    vi.mocked(syncOrder).mockResolvedValue({ message: { name: 'POS-INV-1' } } as never);
+    await renderOrder();
+
+    await act(async () => button('Send Order')!.click());
+
+    await vi.waitFor(() => expect(boundary.floorSignOut).toHaveBeenCalledExactlyOnceWith());
+    expect(container.textContent).not.toContain('tables');
+  });
+
+  it.each([
+    ['the setting is off', { floor_signout_after_send: 0, custom_floor_stay_signed_in_roles: [] }],
+    ['the user is stay-signed-in', { floor_signout_after_send: 1, custom_floor_stay_signed_in_roles: [{ role: 'URY Captain' }] }],
+  ])('returns to the tables when %s', async (_case, profile) => {
+    boundary.posStore!.posProfile = { ...boundary.posStore!.posProfile, ...profile };
+    vi.mocked(syncOrder).mockResolvedValue({ message: { name: 'POS-INV-1' } } as never);
+    await renderOrder();
+
+    await act(async () => button('Send Order')!.click());
+
+    await vi.waitFor(() => expect(container.textContent).toContain('tables'));
+    expect(boundary.floorSignOut).not.toHaveBeenCalled();
+  });
+
+  it('keeps the waiter order when the send is rejected', async () => {
+    boundary.posStore!.posProfile = {
+      ...boundary.posStore!.posProfile,
+      floor_signout_after_send: 1,
+      custom_floor_stay_signed_in_roles: [],
+    };
+    vi.mocked(syncOrder).mockResolvedValue({ message: { status: 'Failure' } } as never);
+    await renderOrder();
+
+    await act(async () => button('Send Order')!.click());
+
+    await vi.waitFor(() => expect(boundary.floorSignOut).not.toHaveBeenCalled());
+    expect(container.textContent).not.toContain('tables');
+  });
+
+  it('asks before leaving when the waiter has unsent lines and keeps them on cancel', async () => {
+    boundary.context!.newOrChangedLines = [{
+      uniqueId: 'u3', id: 'ITEM-3', name: 'Cake', price: 50,
+      baseQty: 0, curQty: 1, delta: 1, confirmedQty: 0,
+    }];
+    await renderOrder();
+
+    await act(async () => button('Back to Tables')!.click());
+    expect(container.textContent).toContain('Unsent items');
+    expect(container.textContent).toContain('You have unsent items. Leave without sending them?');
+
+    await act(async () => button('Cancel')!.click());
+    expect(container.textContent).toContain('Unsent items');
+    expect(container.textContent).not.toContain('tables');
+  });
+
+  it('leaves directly when there are no unsent lines', async () => {
+    await renderOrder();
+
+    await act(async () => button('Back to Tables')!.click());
+
+    expect(container.textContent).toContain('tables');
+    expect(container.textContent).not.toContain('Unsent items');
   });
 });
