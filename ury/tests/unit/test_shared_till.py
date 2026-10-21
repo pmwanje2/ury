@@ -208,34 +208,34 @@ def test_settlement_records_authenticated_operator_not_client_or_original_cashie
     invoice.submit.assert_called_once_with()
 
 
-@pytest.mark.parametrize("has_kamra_ref", [True, False])
-def test_settlement_sets_kamra_ref_only_when_pos_invoice_has_field(runtime, monkeypatch, has_kamra_ref):
+@pytest.mark.parametrize("has_room_number", [True, False])
+def test_settlement_sets_room_number_only_when_pos_invoice_has_field(runtime, monkeypatch, has_room_number):
     invoice = MagicMock()
     invoice.cashier = "cashier@example.com"
     invoice.custom_merged_pos_invoice = None
     invoice.restaurant_table = None
     seen_at_payment = []
     invoice.append.side_effect = lambda *args, **kwargs: seen_at_payment.append(
-        invoice.__dict__.get("kamra_ref")
+        invoice.__dict__.get("room_number")
     )
     runtime.frappe.get_meta = MagicMock()
-    runtime.frappe.get_meta.return_value.has_field.return_value = has_kamra_ref
+    runtime.frappe.get_meta.return_value.has_field.return_value = has_room_number
     monkeypatch.setattr(runtime.order, "get_order_invoice", lambda *args: invoice)
     monkeypatch.setattr(runtime.order, "_validate_additional_discount", lambda *args: None)
 
     runtime.order.make_invoice(
         "Walk-in", [{"mode_of_payment": "Room Charge", "amount": 100}],
         "cashier@example.com", "POS-1", "cashier@example.com", invoice="INV-1",
-        kamra_ref="ROOM-101",
+        room_number="ROOM-101",
     )
 
     runtime.frappe.get_meta.assert_called_once_with("POS Invoice")
-    runtime.frappe.get_meta.return_value.has_field.assert_called_once_with("kamra_ref")
-    assert seen_at_payment == (["ROOM-101"] if has_kamra_ref else [None])
-    if has_kamra_ref:
-        assert invoice.kamra_ref == "ROOM-101"
+    runtime.frappe.get_meta.return_value.has_field.assert_called_once_with("room_number")
+    assert seen_at_payment == (["ROOM-101"] if has_room_number else [None])
+    if has_room_number:
+        assert invoice.room_number == "ROOM-101"
     else:
-        assert "kamra_ref" not in invoice.__dict__
+        assert "room_number" not in invoice.__dict__
 
 
 def test_merged_settlement_attributes_both_paid_invoices_to_operator(runtime, monkeypatch):

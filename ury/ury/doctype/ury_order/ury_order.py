@@ -2286,7 +2286,7 @@ def make_invoice(
     invoice=None,
     client_order_id=None,
     round_id=None,
-    kamra_ref=None,
+    room_number=None,
 ):
     client_order_id = _validate_client_order_id(client_order_id)
     if round_id is not None and not str(round_id).strip():
@@ -2328,8 +2328,8 @@ def make_invoice(
     invoice.pos_profile = pos_profile
     invoice.cashier = frappe.session.user
 
-    if kamra_ref and frappe.get_meta("POS Invoice").has_field("kamra_ref"):
-        invoice.kamra_ref = kamra_ref
+    if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
+        invoice.room_number = room_number
     
     if additionalDiscount:
         discount_val = frappe.utils.flt(additionalDiscount)
