@@ -1,0 +1,40 @@
+@import '../../one-staff-app/harness/visual.css';
+
+body[data-screen="order"] #root > div.min-h-screen { min-height: 100vh; }
+body[data-screen="order"] #root > div.min-h-screen > div:first-child { background: #0f3d56; color: white; }
+body[data-screen="order"] #root > div.min-h-screen > div:first-child button { color: white; }
+body[data-screen="order"] #root > div.min-h-screen > div:nth-child(2) { background: #eff6ff; }
+body[data-screen="order"] #root > div.min-h-screen > div:nth-child(3) { background: white; }
+body[data-screen="order"] #root [role="dialog"] { max-width: min(92vw, 720px); }
+body[data-screen="order"] #root [role="dialog"] button { min-height: 40px; }
+body[data-screen="order"] #root .border-primary-200 { border-color: #93c5fd; }
+body[data-screen="order"] #root .bg-primary-50\/60 { background: #eff6ff; }
+body[data-screen="order"] #root .text-primary { color: #0369a1; }
+body[data-screen="order"] #root .bg-primary { background: #0369a1; }
+body[data-screen="order"] #root .border-primary { border-color: #0284c7; }
+body[data-screen="order"] #root .bg-primary-50\/40 { background: #f0f9ff; }
+body[data-screen="order"] #root .text-header-foreground { color: white; }
+body[data-screen="order"] #root .text-header-title { color: white; }
+body[data-screen="order"] #root .text-header-muted { color: #dbeafe; }
+body[data-screen="order"] #root .bg-header { background: #0f3d56; }
+body[data-screen="order"] #root .border-header-border { border-color: #1e5d7d; }
+body[data-screen="order"] #root .border-gray-200 { border-color: #dbe3ea; }
+body[data-screen="order"] #root .shadow-lg { box-shadow: 0 12px 32px rgb(15 23 42 / 22%); }
+body[data-screen="order"] #root .overflow-y-auto { overflow-y: auto; }
+body[data-screen="order"] #root .max-h-dialog-max-h { max-height: 84vh; }
+body[data-screen="order"] #root .absolute.right-0 { color: #374151; background: white; }
+body[data-screen="order"] #root .absolute.right-0 button { color: #374151 !important; background: white !important; }
+body[data-screen="order"] #root [role="dialog"] { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; }
+body[data-screen="order"] #root [role="dialog"] > .fixed.inset-0 { position: fixed; inset: 0; background: rgb(0 0 0 / 50%); }
+body[data-screen="order"] #root [role="dialog"] > .relative { position: relative; z-index: 51; width: 100%; max-width: 720px; max-height: 84vh; margin: 16px; overflow-y: auto; border-radius: 12px; background: white; color: #111827; box-shadow: 0 20px 48px rgb(15 23 42 / 28%); }
+body[data-screen="order"] #root [role="dialog"] .p-6 { padding: 24px; }
+body[data-screen="order"] #root [role="dialog"] .space-y-3 > * + * { margin-top: 12px; }
+body[data-screen="order"] #root [role="dialog"] .space-y-2 > * + * { margin-top: 8px; }
+body[data-screen="order"] #root [role="dialog"] .grid-cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+body[data-screen="captain"] #root > div.min-h-screen.flex.flex-col > div:nth-child(2) { padding-bottom: 12px; }
+body[data-screen="captain"] #root section[aria-label="Kitchen"] { max-height: none; }
+body[data-screen="captain"] #root .grid { gap: 12px; }
+
+.Toastify__toast-container { z-index: 100; }
+.Toastify__toast { font-size: 16px; min-height: 54px; }
