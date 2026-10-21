@@ -60,7 +60,8 @@
     "cancelling": "Annulation en cours...",
     "confirm_cancel": "Confirmer l'annulation",
     "loading_ury_pos": "Chargement de {{name}}...",
-    "please_wait_setup": "Veuillez patienter pendant que nous préparons tout"
+    "please_wait_setup": "Veuillez patienter pendant que nous préparons tout",
+    "close": "Fermer"
   },
   "header": {
     "search_placeholder_default": "Rechercher commandes, articles ou clients...",
@@ -69,7 +70,32 @@
     "close_shift": "Clôturer la session",
     "switch_to_desk": "Accéder au bureau",
     "clear_cache": "Vider le cache",
-    "logout": "Déconnexion"
+    "logout": "Déconnexion",
+    "pair_tablet": "Appairer cette tablette",
+    "staff_pins": "PIN du personnel"
+  },
+  "staff_pins": {
+    "title": "PIN du personnel",
+    "description": "Attribuez un PIN de salle à un membre du personnel éligible.",
+    "shown_once": "Ce PIN n’est affiché qu’une seule fois. Remettez-le au membre du personnel en privé.",
+    "pin_value": "PIN du personnel attribué",
+    "done": "Terminé",
+    "needs_pin": "PIN requis",
+    "new_pin": "Nouveau PIN",
+    "give_pin": "Donner le PIN",
+        "issue_pin": "Attribuer le PIN",
+    "no_staff": "Aucun membre du personnel éligible trouvé.",
+    "load_failed": "Impossible de charger le personnel.",
+    "issue_failed": "Impossible d’attribuer un PIN. Vérifiez que cette personne peut utiliser un PIN de salle."
+  },
+  "pair_tablet": {
+    "description": "Donnez un nom à cette tablette de salle pour permettre la connexion par PIN.",
+    "label": "Nom de la tablette",
+    "placeholder": "Tablette de salle 1",
+    "label_required": "Saisissez un nom de tablette.",
+    "label_too_long": "Le nom de la tablette doit comporter au maximum 80 caractères.",
+    "submit": "Appairer la tablette",
+    "failed": "Impossible d’appairer cette tablette. Vérifiez que la connexion par PIN est activée."
   },
   "menu": {
     "special_items": "Plats spéciaux"
@@ -267,6 +293,7 @@
     "payment_failed": "Le paiement n'a pas pu être effectué. Veuillez réessayer.",
     "order_modified": "Cette commande a été modifiée. Veuillez recharger la page pour récupérer les dernières modifications.",
     "order_sync_failed": "Impossible de synchroniser cette commande. Veuillez recharger la page et réessayer.",
+        "floor_pin_not_permitted": "Vous n’êtes pas autorisé à gérer les PIN du personnel ou à appairer cette tablette.",
     "posOpening": {
       "permission_denied": "Vous n'avez pas la permission d'ouvrir une session. Contactez votre responsable.",
       "daily_close_pending": "La session d'hier n'a pas été fermée. Contactez votre responsable pour la fermer avant d'ouvrir aujourd'hui.",

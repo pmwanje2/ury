@@ -79,7 +79,8 @@
     "cancelling": "Cancelling...",
     "confirm_cancel": "Confirm Cancel",
     "loading_ury_pos": "Loading {{name}}...",
-    "please_wait_setup": "Please wait while we set things up"
+    "please_wait_setup": "Please wait while we set things up",
+    "close": "Close"
   },
   "header": {
     "search_placeholder_default": "Search orders, menu items, or customers...",
@@ -89,7 +90,32 @@
     "switch_to_desk": "Switch To Desk",
     "clear_cache": "Clear Cache",
     "logout": "Logout",
-    "switch_waiter": "Switch waiter"
+    "switch_waiter": "Switch waiter",
+    "pair_tablet": "Pair this tablet",
+    "staff_pins": "Staff PINs"
+  },
+  "staff_pins": {
+    "title": "Staff PINs",
+    "description": "Issue a floor PIN to an eligible staff member.",
+    "shown_once": "This PIN is shown only once. Give it to the staff member privately.",
+    "pin_value": "Issued staff PIN",
+    "done": "Done",
+    "needs_pin": "Needs PIN",
+    "new_pin": "New PIN",
+    "give_pin": "Give PIN",
+    "issue_pin": "Issue PIN",
+    "no_staff": "No eligible staff found.",
+    "load_failed": "Staff could not be loaded.",
+    "issue_failed": "A PIN could not be issued. Check that this person is eligible for floor PIN sign-in."
+  },
+  "pair_tablet": {
+    "description": "Give this floor tablet a label so staff can sign in with a PIN.",
+    "label": "Tablet label",
+    "placeholder": "Floor tablet 1",
+    "label_required": "Enter a tablet label.",
+    "label_too_long": "Tablet labels must be 80 characters or fewer.",
+    "submit": "Pair tablet",
+    "failed": "This tablet could not be paired. Check that floor PIN sign-in is enabled."
   },
   "menu": {
     "special_items": "Special Items"
@@ -314,6 +340,7 @@
     "payment_failed": "Payment could not be completed. Please try again.",
     "order_modified": "This order has been modified. Please reload the page to retrieve the latest edits.",
     "order_sync_failed": "Could not sync this order. Please reload the page and try again.",
+    "floor_pin_not_permitted": "You do not have permission to manage floor PINs or pair this tablet.",
     "posOpening": {
       "permission_denied": "You don't have permission to open a session. Contact your manager.",
       "daily_close_pending": "Yesterday's session was never closed. Contact your manager to close it before opening today.",
