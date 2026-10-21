@@ -1,0 +1,21 @@
+K
+Grace Manager
+Close
+Staff PINs
+
+Issue a floor PIN to an eligible staff member.
+
+Amina Waiter
+
+New PIN
+
+Brian Waiter
+
+Needs PIN
+
+Give PIN
+
+Carol Waiter
+
+New PIN
+Close
