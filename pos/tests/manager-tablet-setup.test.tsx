@@ -197,19 +197,32 @@ describe('Pair this tablet dialog', () => {
   });
 
   it('posts the selected profile and label, then reloads after pairing succeeds', async () => {
-    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
-    await render(<PairTabletDialog open={true} onOpenChange={vi.fn()} posProfile="POS-1" />);
-    const dialog = container.querySelector('[role="dialog"]')!;
-    const input = dialog.querySelector<HTMLInputElement>('input[name="tablet_label"]')!;
-    setInput(input, 'Floor tablet 1');
+    // jsdom's Location.reload is non-configurable, so stub window.location the
+    // same way pos/tests/floor-session.test.ts does.
+    const reload = vi.fn();
+    const browserWindow = window;
+    vi.stubGlobal('window', new Proxy(browserWindow, {
+      get(target, key) {
+        if (key === 'location') return { reload };
+        return Reflect.get(target, key, target);
+      },
+    }));
+    try {
+      await render(<PairTabletDialog open={true} onOpenChange={vi.fn()} posProfile="POS-1" />);
+      const dialog = container.querySelector('[role="dialog"]')!;
+      const input = dialog.querySelector<HTMLInputElement>('input[name="tablet_label"]')!;
+      setInput(input, 'Floor tablet 1');
 
-    await act(async () => button('Pair tablet', dialog).click());
-    await settle();
+      await act(async () => button('Pair tablet', dialog).click());
+      await settle();
 
-    expect(fixtures.callPost).toHaveBeenCalledExactlyOnceWith(
-      'ury.ury_pos.floor_pin.pair_device', { pos_profile: 'POS-1', label: 'Floor tablet 1' },
-    );
-    expect(reload).toHaveBeenCalledExactlyOnceWith();
+      expect(fixtures.callPost).toHaveBeenCalledExactlyOnceWith(
+        'ury.ury_pos.floor_pin.pair_device', { pos_profile: 'POS-1', label: 'Floor tablet 1' },
+      );
+      expect(reload).toHaveBeenCalledExactlyOnceWith();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('maps URY_FLOOR_PIN_NOT_PERMITTED to stable localized copy', async () => {
