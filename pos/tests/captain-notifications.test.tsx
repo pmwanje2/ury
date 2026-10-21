@@ -132,6 +132,10 @@ async function emit(event: string) {
   });
 }
 
+async function waitForRealtimeHandler() {
+  await vi.waitFor(() => expect(boundary.socketHandlers.get('notification')?.size).toBe(1));
+}
+
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   await initI18n('en');
@@ -175,11 +179,68 @@ describe('captain kitchen notifications', () => {
     boundary.rows = [notification({ read: 1 })];
     await renderTables();
     await vi.waitFor(() => expect(container.querySelector('[aria-label="Kitchen"]')).not.toBeNull());
+    await waitForRealtimeHandler();
 
     boundary.rows = [notification({ name: 'KOT-NOTIF-2', read: 0 }), notification({ read: 1 })];
     await emit('notification');
 
     expect(boundary.toastInfo).toHaveBeenCalledWith(expect.stringMatching(/food-ready|kitchen/i));
+  });
+
+  it('does not toast on the first load even when rows are unread', async () => {
+    await renderNotifications();
+    await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-05'));
+
+    expect(boundary.toastInfo).not.toHaveBeenCalled();
+  });
+
+  it('does not toast when the same unread rows are fetched again', async () => {
+    await renderNotifications();
+    await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-05'));
+    await waitForRealtimeHandler();
+
+    await emit('notification');
+
+    expect(boundary.toastInfo).not.toHaveBeenCalled();
+  });
+
+  it('toasts for a new unread row after an existing row is marked read', async () => {
+    await renderNotifications();
+    await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-05'));
+    await waitForRealtimeHandler();
+
+    const markRead = Array.from(panel().querySelectorAll<HTMLButtonElement>('button'))
+      .find((candidate) => candidate.textContent === 'Mark read');
+    expect(markRead).toBeDefined();
+    await act(async () => markRead!.click());
+    await vi.waitFor(() => expect(panel().textContent).toContain('Read'));
+
+    boundary.rows = [
+      notification({ name: 'KOT-NOTIF-2', subject: 'Food ready: Table T-06' }),
+      notification({ read: 1 }),
+    ];
+    await emit('notification');
+
+    await vi.waitFor(() => expect(boundary.toastInfo).toHaveBeenCalledWith(expect.stringMatching(/food-ready|kitchen/i)));
+  });
+
+  it('toasts when a new unread row replaces one of ten capped rows', async () => {
+    const initialRows = Array.from({ length: 10 }, (_, index) => notification({
+      name: `KOT-NOTIF-${index + 1}`,
+      subject: `Food ready: Table T-${index + 1}`,
+    }));
+    boundary.rows = initialRows;
+    await renderNotifications();
+    await vi.waitFor(() => expect(panel().textContent).toContain('Food ready: Table T-10'));
+    await waitForRealtimeHandler();
+
+    boundary.rows = [
+      ...initialRows.slice(1),
+      notification({ name: 'KOT-NOTIF-11', subject: 'Food ready: Table T-11' }),
+    ];
+    await emit('notification');
+
+    await vi.waitFor(() => expect(boundary.toastInfo).toHaveBeenCalledWith(expect.stringMatching(/food-ready|kitchen/i)));
   });
 
   it('opens a kitchen notification on the KOT restaurant table', async () => {

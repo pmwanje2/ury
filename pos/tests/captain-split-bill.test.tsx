@@ -3,12 +3,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
-import { initI18n } from '../src/i18n';
+import { initI18n, t } from '../src/i18n';
 import CaptainActionsMenu from '../src/captain/components/CaptainActionsMenu';
 import CaptainOrder from '../src/captain/pages/CaptainOrder';
 
 type CaptainContextTestResult = {
-  context: { order: Record<string, unknown> | null };
+  context: { order: Record<string, unknown> | null; permissions?: Record<string, boolean> };
+  permissions: Record<string, boolean>;
   refetchContext: ReturnType<typeof vi.fn>;
 };
 
@@ -161,7 +162,7 @@ beforeEach(async () => {
       { id: 'ITEM-2', name: 'Juice', price: 200, quantity: 1, uniqueId: 'u2', invoiceItemName: 'ROW-2' },
     ],
     removeFromOrder: vi.fn(), updateQuantity: vi.fn(), updateItemComment: vi.fn(), setSelectedItem: vi.fn(),
-    isUpdatingOrder: false, orderId: 'POS-INV-1', posProfile: { name: 'Salama POS', branch: 'Branch A', print_format: 'Receipt', print_type: 'qz', qz_host: 'localhost' },
+    isUpdatingOrder: false, orderId: 'POS-INV-1', loadTableOrder: vi.fn(async () => {}), posProfile: { name: 'Salama POS', branch: 'Branch A', print_format: 'Receipt', print_type: 'qz', qz_host: 'localhost' },
     paymentModes: ['Cash'], orderComment: '', noOfPax: 2, setNoOfPax: vi.fn(), lastModifiedTime: null,
     selectedRoom: 'Dining', selectedCustomer: { id: 'Walk In', name: 'Walk In', phone: '' }, clearTableOrder: vi.fn(),
     isOrderInteractionDisabled: () => false,
@@ -189,6 +190,18 @@ describe('captain split bill actions', () => {
     expect(button('Split bill')).toBeDefined();
   });
 
+  it.each([
+    { splitBill: false, visible: false },
+    { splitBill: true, visible: true },
+  ])('renders Split bill on CaptainOrder according to permissions.split_bill=$splitBill', async ({ splitBill, visible }) => {
+    boundary.context!.permissions = { ...permissions, split_bill: splitBill };
+    await renderOrder();
+    await act(async () => button('More actions')!.click());
+
+    if (visible) expect(button('Split bill')).toBeDefined();
+    else expect(button('Split bill')).toBeUndefined();
+  });
+
   it('submits split_bill for the context invoice and refetches the context', async () => {
     await renderOrder();
     await act(async () => button('More actions')!.click());
@@ -206,6 +219,46 @@ describe('captain split bill actions', () => {
       customer: undefined,
     });
     await vi.waitFor(() => expect(boundary.context.refetchContext).toHaveBeenCalledOnce());
+    expect(boundary.posStore!.loadTableOrder).toHaveBeenCalledWith('T-05');
+  });
+
+  it('reloads the related-bills panel after a split', async () => {
+    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
+    boundary.getSplitGroup.mockResolvedValue({
+      invoices: [sibling('POS-INV-1', 1), sibling('POS-INV-2', 2)],
+      current: 'POS-INV-1',
+      group: 'SPLIT-GROUP-1',
+    });
+    await renderOrder();
+    await vi.waitFor(() => expect(boundary.getSplitGroup).toHaveBeenCalledOnce());
+
+    await act(async () => button('More actions')!.click());
+    await act(async () => button('Split bill')!.click());
+    const item = Array.from(container.querySelectorAll<HTMLElement>('[role="button"]'))
+      .find((candidate) => candidate.textContent?.includes('Soup'));
+    await act(async () => item!.click());
+    await act(async () => button('Split bill')!.click());
+
+    await vi.waitFor(() => expect(boundary.getSplitGroup).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not expose sibling Print when print_bill is false', async () => {
+    boundary.context!.permissions = { ...permissions, print_bill: false };
+    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
+    boundary.getSplitGroup.mockResolvedValue({
+      invoices: [sibling('POS-INV-1', 1), sibling('POS-INV-2', 2)],
+      current: 'POS-INV-1',
+      group: 'SPLIT-GROUP-1',
+    });
+    await renderOrder();
+    await vi.waitFor(() => expect(boundary.getSplitGroup).toHaveBeenCalledOnce());
+
+    expect(Array.from(container.querySelectorAll('button')).filter((candidate) => candidate.textContent?.includes('Print'))).toHaveLength(0);
+  });
+
+  it('has an Arabic split success translation', async () => {
+    await initI18n('ar');
+    expect(t('bill_split.split_success')).not.toBe('bill_split.split_success');
   });
 
   it('renders sibling checks with one Print button per sibling', async () => {
