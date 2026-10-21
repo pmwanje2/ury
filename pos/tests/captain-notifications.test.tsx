@@ -255,4 +255,30 @@ describe('captain kitchen notifications', () => {
     expect(boundary.get).toHaveBeenCalledWith('frappe.client.get', { doctype: 'URY KOT', name: 'KOT-1' });
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order/table/T-05');
   });
+
+  it('does not navigate when the session changes before opening the KOT check', async () => {
+    await renderTables();
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Kitchen"]')).not.toBeNull());
+
+    let resolveKot!: (response: { message: { restaurant_table: string } }) => void;
+    const kotResponse = new Promise<{ message: { restaurant_table: string } }>((resolve) => {
+      resolveKot = resolve;
+    });
+    boundary.get.mockClear().mockImplementation(async (method: string) => {
+      if (method === 'ury.ury.api.ury_server_time.get_server_time') return { message: '2026-10-20 12:05:00' };
+      if (method === 'frappe.client.get') return kotResponse;
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    const openCheck = Array.from(panel().querySelectorAll<HTMLButtonElement>('button'))
+      .find((candidate) => candidate.textContent === 'Open check');
+    expect(openCheck).toBeDefined();
+    await act(async () => openCheck!.click());
+    await vi.waitFor(() => expect(boundary.get).toHaveBeenCalledWith('frappe.client.get', { doctype: 'URY KOT', name: 'KOT-1' }));
+
+    boundary.session = 'other-waiter@example.com';
+    await act(async () => resolveKot({ message: { restaurant_table: 'T-05' } }));
+
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order');
+  });
 });

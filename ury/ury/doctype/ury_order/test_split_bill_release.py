@@ -270,6 +270,46 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
                 result = self.order.get_table_order_context("T1")
                 self.assertEqual(result["permissions"]["split_bill"], expected)
 
+    def test_table_order_lookups_select_the_oldest_open_invoice_after_split(self):
+        original = self._invoice(items=[Row(name="original-line", qty=1)])
+        original.name = "POS-INV-1"
+        sibling = self._invoice(items=[Row(name="sibling-line", qty=1)])
+        sibling.name = "POS-INV-2"
+        table = Doc(
+            name="T1",
+            branch="Branch A",
+            restaurant_room="Main Hall",
+            as_dict=lambda: {"name": "T1", "branch": "Branch A"},
+        )
+        profile = self._profile()
+        invoices = {original.name: original, sibling.name: sibling}
+        self.framework.get_doc.side_effect = lambda doctype, name=None: (
+            table if doctype == "URY Table" else profile if doctype == "POS Profile" else invoices[name]
+        )
+        self.framework.get_all.side_effect = lambda doctype, **kwargs: (
+            [Row(name="POS-INV-1"), Row(name="POS-INV-2")]
+            if doctype == "POS Invoice" and kwargs.get("order_by") == "creation asc"
+            else [Row(name="POS-INV-2"), Row(name="POS-INV-1")]
+            if doctype == "POS Invoice"
+            else []
+        )
+        self.framework.get_value.side_effect = lambda doctype, name, fields: (
+            ("Restaurant A", "Branch A", "Main Hall")
+            if doctype == "URY Table" and isinstance(fields, list)
+            else None
+        )
+        self.framework.db.get_value.side_effect = lambda *args, **kwargs: (
+            "Menu A" if len(args) >= 3 and args[0] == "URY Restaurant" and args[2] == "active_menu" else None
+        )
+        self.framework.db.exists.return_value = "POS Profile"
+        self.order.getBranch.return_value = "Branch A"
+        self.order.getRoom.return_value = [{"name": "Main Hall"}]
+        self.framework.get_roles.return_value = ["URY Captain"]
+        self.enterContext(patch.object(self.order, "_reconcile_invoice_merged_tables", return_value=None))
+
+        self.assertEqual(self.order.get_order_invoice(table="T1").name, "POS-INV-1")
+        self.assertEqual(self.order.get_table_order_context("T1")["order"]["name"], "POS-INV-1")
+
     def _wire_print(self, sibling_open):
         self.invoice_printed = 0
         self.table_occupied = 1

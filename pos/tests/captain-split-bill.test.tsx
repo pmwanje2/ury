@@ -262,7 +262,7 @@ describe('captain split bill actions', () => {
 
   it('has an Arabic split success translation', async () => {
     await initI18n('ar');
-    expect(t('bill_split.split_success')).not.toBe('bill_split.split_success');
+    expect(t('bill_split.split_success', { invoice: 'POS-INV-2' })).toBe('تم إنشاء الفاتورة الجديدة POS-INV-2');
   });
 
   it('renders sibling checks with one Print button per sibling', async () => {
