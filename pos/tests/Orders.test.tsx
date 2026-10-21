@@ -450,4 +450,34 @@ describe('Orders void reason dialog', () => {
       reason: 'Other: late',
     });
   });
+
+  it('refuses an Other note of one to three characters', async () => {
+    state.profile.custom_void_reasons = 'Kitchen error';
+    const dialog = await openCancelDialog();
+    const select = dialog.querySelector('select');
+    expect(select).not.toBeNull();
+    await act(async () => {
+      select!.value = '__other__';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const note = dialog.querySelector('textarea');
+    expect(note).not.toBeNull();
+    const confirm = [...dialog.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Confirm Cancel');
+    for (const noteText of ['a', 'ab', 'abc']) {
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        setter!.call(note, noteText);
+        note!.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => confirm!.click());
+      expect(call.post).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not ask for four characters when a reason list is configured', async () => {
+    state.profile.custom_void_reasons = 'Kitchen error';
+    const dialog = await openCancelDialog();
+    expect(dialog.textContent).not.toMatch(/at least 4 characters/i);
+    expect(dialog.querySelector('select')).not.toBeNull();
+  });
 });
