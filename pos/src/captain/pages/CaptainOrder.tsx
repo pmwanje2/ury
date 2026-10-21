@@ -29,7 +29,7 @@ import { resolvePrintFormat } from '../../lib/invoice-api';
 import type { SplitGroupInvoice } from '../../lib/invoice-api';
 import { getVacantTablesForBranch, Table } from '../../lib/table-api';
 import { DINE_IN } from '../../data/order-types';
-import { floorSignOut, isStaySignedIn } from '../../lib/floor-session';
+import { floorSignOut, isFloorPadActive, isStaySignedIn } from '../../lib/floor-session';
 import { useTableOrderContext, OrderDeltaLine } from '../hooks/useTableOrderContext';
 import CaptainMenu from '../components/CaptainMenu';
 import CaptainOrderLine from '../components/CaptainOrderLine';
@@ -261,7 +261,7 @@ export default function CaptainOrder() {
 
       clearTableOrder();
       showToast.success(isUpdatingOrder ? 'Order updated.' : 'Order sent to kitchen.');
-      if (posProfile.floor_signout_after_send === 1 && !isStaySignedIn(user, posProfile)) {
+      if (posProfile.floor_signout_after_send === 1 && isFloorPadActive() && !isStaySignedIn(user, posProfile)) {
         await floorSignOut();
         return;
       }
@@ -856,14 +856,14 @@ export default function CaptainOrder() {
       <Dialog open={isLeaveDialogOpen} onOpenChange={setIsLeaveDialogOpen}>
         <DialogContent size="sm" showCloseButton onClose={() => setIsLeaveDialogOpen(false)}>
           <DialogHeader>
-            <DialogTitle>Unsent items</DialogTitle>
+            <DialogTitle>{t('unsent_items.title')}</DialogTitle>
             <DialogDescription>
-              You have unsent items. Leave without sending them?
+              {t('unsent_items.description')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsLeaveDialogOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               variant="danger"
@@ -872,7 +872,7 @@ export default function CaptainOrder() {
                 navigate('/order');
               }}
             >
-              Leave
+              {t('unsent_items.leave')}
             </Button>
           </DialogFooter>
         </DialogContent>

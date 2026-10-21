@@ -1,4 +1,9 @@
 {
+  "unsent_items": {
+    "title": "Articles non envoyés",
+    "description": "Vous avez des articles non envoyés. Partir sans les envoyer ?",
+    "leave": "Partir"
+  },
   "hold_fire": {
     "title": "Mise en attente et envoi en cuisine",
     "held": "En attente",
