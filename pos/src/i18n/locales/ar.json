@@ -68,6 +68,8 @@
         "taxes_charges": "الضرائب والرسوم",
         "cancel_order": "إلغاء الطلب",
         "enter_cancel_reason": "أدخل سبب الإلغاء",
+        "select_void_reason": "اختر سبب الإلغاء",
+        "void_reason_other": "غير ذلك",
         "print": "طباعة",
         "printed": "Printed",
         "not_printed": "Not printed",

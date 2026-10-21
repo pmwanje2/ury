@@ -101,6 +101,8 @@
     "taxes_charges": "Taxes et frais",
     "cancel_order": "Annuler la commande",
     "enter_cancel_reason": "Saisir le motif d'annulation",
+    "select_void_reason": "Sélectionner un motif d'annulation",
+    "void_reason_other": "Autre",
     "print": "Imprimer",
     "print_bill": "Imprimer l’addition",
     "print_receipt": "Imprimer le reçu",
