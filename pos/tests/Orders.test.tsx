@@ -483,6 +483,52 @@ describe('Orders void reason dialog', () => {
     expect(dialog.querySelector('select')).not.toBeNull();
   });
 
+  it('refuses a choice that is no longer on the configured list', async () => {
+    state.profile.custom_void_reasons = 'Kitchen error\nGuest changed mind';
+    const dialog = await openCancelDialog();
+    const select = dialog.querySelector('select');
+    expect(select).not.toBeNull();
+    await act(async () => {
+      select!.value = 'Guest changed mind';
+      select!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    state.profile.custom_void_reasons = 'Kitchen error';
+    await renderOrders();
+    const again = container.querySelector('[role="dialog"]');
+    expect(again).not.toBeNull();
+    const confirm = [...again!.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Confirm Cancel');
+    await act(async () => confirm!.click());
+    expect(call.post).not.toHaveBeenCalled();
+  });
+
+  it('clears the previous choice and note when the dialog opens again', async () => {
+    state.profile.custom_void_reasons = 'Kitchen error';
+    const dialog = await openCancelDialog();
+    const select = dialog.querySelector('select');
+    expect(select).not.toBeNull();
+    await act(async () => {
+      select!.value = '__other__';
+      select!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const note = dialog.querySelector('textarea');
+    expect(note).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter!.call(note, 'late order');
+      note!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const cancel = [...dialog.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Cancel');
+    await act(async () => cancel!.click());
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Cancel order"]')!.click();
+    });
+    const reopened = container.querySelector('[role="dialog"]');
+    expect(reopened).not.toBeNull();
+    expect((reopened!.querySelector('select') as HTMLSelectElement).value).toBe('');
+    expect(reopened!.querySelector('textarea')).toBeNull();
+  });
+
   it('names the void-reason select and Other in Arabic and French', () => {
     const localesDir = join(dirname(fileURLToPath(import.meta.url)), '../src/i18n/locales');
     const arabic = JSON.parse(readFileSync(join(localesDir, 'ar.json'), 'utf8'));
