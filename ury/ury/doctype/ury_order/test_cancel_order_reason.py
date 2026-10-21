@@ -1,15 +1,77 @@
-"""Void-reason regression tests; database and table/KOT writes are isolated."""
+"""Void-reason regression tests; database and table/KOT writes are isolated.
 
-import logging
+Site-less, like test_split_bill_release.py: a stdlib stub stands in for frappe
+only while ury_order is imported. The workflow list runs with plain python3.
+"""
+
+import sys
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import frappe
 
-# Import ERPNext without requiring a bench log directory, as in the customer tests.
-with patch("frappe.logger", return_value=logging.getLogger(__name__)):
+def _site_less_frappe():
+    """The modules ury_order imports at load time. No bench and no frappe."""
+    framework = MagicMock()
+    framework.PermissionError = type("PermissionError", (Exception,), {})
+    framework.ValidationError = type("ValidationError", (Exception,), {})
+    framework._ = lambda *messages: messages[0]
+    framework.whitelist = lambda *args, **kwargs: (lambda function: function)
+    framework.cache = MagicMock()
+    exceptions = ModuleType("frappe.exceptions")
+    exceptions.ValidationError = framework.ValidationError
+    framework.exceptions = exceptions
+
+    def throw(message, exception=None, **kwargs):
+        raise (exception or framework.ValidationError)(message)
+
+    framework.throw = throw
+
+    utils = ModuleType("frappe.utils")
+    utils.cint = lambda value: int(value or 0)
+    utils.flt = lambda value: float(value or 0)
+    utils.get_datetime = lambda value: value
+    utils.get_system_timezone = lambda: "Africa/Kampala"
+    utils.now_datetime = lambda: None
+    document = ModuleType("frappe.model.document")
+    document.Document = object
+    model = ModuleType("frappe.model")
+    model.document = document
+    queries = ModuleType("erpnext.controllers.queries")
+    queries.item_query = MagicMock()
+    controllers = ModuleType("erpnext.controllers")
+    controllers.queries = queries
+    erpnext = ModuleType("erpnext")
+    erpnext.controllers = controllers
+    pos_api = ModuleType("ury.ury_pos.api")
+    pos_api.getBranch = MagicMock(return_value="Branch A")
+    pos_api.getBranchRoom = MagicMock(return_value="Main Hall")
+    pos_api.getRoom = MagicMock(return_value=[{"name": "Main Hall"}])
+    pos_api.posOpening = MagicMock(return_value=0)
+    kot = ModuleType("ury.ury.api.ury_kot_generate")
+    kot.kot_execute = MagicMock()
+    kot.process_items_for_cancel_kot = MagicMock()
+    modules = {
+        "frappe": framework,
+        "frappe.exceptions": exceptions,
+        "frappe.utils": utils,
+        "frappe.model": model,
+        "frappe.model.document": document,
+        "erpnext": erpnext,
+        "erpnext.controllers": controllers,
+        "erpnext.controllers.queries": queries,
+        "ury.ury_pos.api": pos_api,
+        "ury.ury.api.ury_kot_generate": kot,
+    }
+    return framework, modules
+
+
+_framework, _modules = _site_less_frappe()
+with patch.dict(sys.modules, _modules):
     from ury.ury.doctype.ury_order import ury_order
+
+# Tests assert these exception types. They are the stub, never installed frappe.
+frappe = _framework
 
 
 class TestCancelOrderReason(unittest.TestCase):
