@@ -101,7 +101,7 @@ test('room charge asks for a raw room or folio reference and sends it with settl
 
   expect(post).toHaveBeenCalledExactlyOnceWith('ury.ury.doctype.ury_order.ury_order.make_invoice', {
     additionalDiscount: null, cashier: 'cashier@example.com', customer: 'Walk-in Customer',
-    invoice: 'BILL-1', kamra_ref: '  ROOM-101  ', owner: 'waiter@example.com',
+    invoice: 'BILL-1', owner: 'waiter@example.com', room_number: '  ROOM-101  ',
     payments: [{ mode_of_payment: 'Room Charge', amount: 100 }],
     pos_profile: 'Till A', table: null,
   });
