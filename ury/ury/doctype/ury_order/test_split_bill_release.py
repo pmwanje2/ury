@@ -310,6 +310,51 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
         self.assertEqual(self.order.get_order_invoice(table="T1").name, "POS-INV-1")
         self.assertEqual(self.order.get_table_order_context("T1")["order"]["name"], "POS-INV-1")
 
+    def test_guest_first_qr_order_after_split_lands_on_the_original_bill(self):
+        """Guest QR add_customer_items shares this lookup (session.invoice is None
+        until the first round). After a waiter split, the guest's first round must
+        land on the original (oldest) open bill, the same one the waiter reloads and
+        URY's merge treats as primary; a guest already bound to a bill keeps it."""
+        original = self._invoice(items=[Row(name="original-line", qty=1)])
+        original.name = "POS-INV-1"
+        sibling = self._invoice(items=[Row(name="sibling-line", qty=1)])
+        sibling.name = "POS-INV-2"
+        invoices = {original.name: original, sibling.name: sibling}
+        seen = []
+
+        def get_all(doctype, **kwargs):
+            if doctype != "POS Invoice":
+                return []
+            seen.append(kwargs)
+            # Frappe's POS Invoice default sort is creation DESC (newest first).
+            newest_first = [Row(name="POS-INV-2"), Row(name="POS-INV-1")]
+            bound = (kwargs.get("filters") or {}).get("name")
+            if bound:
+                newest_first = [row for row in newest_first if row.name == bound]
+            return list(reversed(newest_first)) if kwargs.get("order_by") == "creation asc" else newest_first
+
+        self.framework.get_all.side_effect = get_all
+        self.framework.get_doc.side_effect = lambda doctype, name=None: invoices.get(name, MagicMock())
+        self.framework.get_value.side_effect = lambda doctype, name, fields=None: (
+            ("Restaurant A", "Branch A", "Main Hall") if isinstance(fields, list) else None
+        )
+        self.framework.db.get_value.side_effect = lambda *args, **kwargs: (
+            "Menu A" if len(args) >= 3 and args[2] == "active_menu" else None
+        )
+        self.enterContext(patch.object(self.order, "_reconcile_invoice_merged_tables", return_value=None))
+
+        _invoice, first_round = self.order._resolve_or_create_pos_invoice(
+            table="T1", invoiceNo=None, order_type="Dine In", is_payment=None,
+            check_permission=False, override_branch="Branch A",
+        )
+        self.assertEqual(first_round, "POS-INV-1")
+
+        _invoice, bound = self.order._resolve_or_create_pos_invoice(
+            table="T1", invoiceNo="POS-INV-2", order_type="Dine In", is_payment=None,
+            check_permission=False, override_branch="Branch A",
+        )
+        self.assertEqual(bound, "POS-INV-2")
+
     def _wire_print(self, sibling_open):
         self.invoice_printed = 0
         self.table_occupied = 1
