@@ -69,6 +69,8 @@ export interface PosProfileFull {
   transfer_role_permissions?: RolePermission[];
   paid_limit?: number;
   custom_blind_cash_count?: number;
+  /** One configured void reason per line. Absent on sites without the field. */
+  custom_void_reasons?: string | null;
 }
 
 // Combined POS Profile with both limited and full fields

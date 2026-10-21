@@ -121,6 +121,8 @@
     "taxes_charges": "Taxes & Charges",
     "cancel_order": "Cancel order",
     "enter_cancel_reason": "Enter cancel reason",
+    "select_void_reason": "Select a void reason",
+    "void_reason_other": "Other",
     "print": "Print",
     "print_bill": "Print bill",
     "print_receipt": "Print receipt",

@@ -2117,6 +2117,26 @@ def customer_favourite_item(customer_name):
     return result
 
 
+_OTHER_VOID_PREFIX = "Other: "
+_VOID_REASON_NOT_CONFIGURED = (
+    "URY_VOID_REASON_NOT_CONFIGURED: Choose a configured void reason, "
+    "or Other with a note of at least 4 characters."
+)
+
+
+def _configured_void_reasons(pos_profile):
+    """One trimmed reason per line. A missing field or profile keeps free text."""
+    if not isinstance(pos_profile, str) or not pos_profile.strip():
+        return []
+    try:
+        raw = frappe.db.get_value("POS Profile", pos_profile, "custom_void_reasons")
+    except Exception:
+        return []
+    if not isinstance(raw, str):
+        return []
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
 def _cancel_reason_limit():
     """POS Invoice.cancel_reason is Data; a blank length uses Frappe's 140."""
     length = 0
@@ -2154,12 +2174,27 @@ def cancel_order(invoice_id, reason):
                 frappe.PermissionError,
             )
 
-    if not isinstance(reason, str) or len(reason.strip()) < 4:
+    reasons = _configured_void_reasons(getattr(pos_invoice, "pos_profile", None))
+    if reasons:
+        candidate = reason.strip() if isinstance(reason, str) else None
+        note = (
+            candidate[len(_OTHER_VOID_PREFIX):]
+            if isinstance(candidate, str) and candidate.startswith(_OTHER_VOID_PREFIX)
+            else None
+        )
+        if candidate not in reasons and (note is None or len(note.strip()) < 4):
+            frappe.throw(
+                _(_VOID_REASON_NOT_CONFIGURED),
+                title=_("Invalid void reason"),
+            )
+        reason = candidate
+    elif not isinstance(reason, str) or len(reason.strip()) < 4:
         frappe.throw(
             _("Enter a reason for voiding this order (at least 4 characters)."),
             title=_("Invalid void reason"),
         )
-    reason = reason.strip()
+    else:
+        reason = reason.strip()
     max_length = _cancel_reason_limit()
     if len(reason) > max_length:
         frappe.throw(
