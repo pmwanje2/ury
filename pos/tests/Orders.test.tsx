@@ -85,6 +85,7 @@ beforeEach(async () => {
     creation: '2026-10-03 10:00:00', read: 0, document_type: 'URY KOT', document_name: 'KOT-1',
   }] }) }));
   state.order.custom_split_from = '';
+  delete (state.profile as { custom_void_reasons?: string }).custom_void_reasons;
   state.order.custom_merged_pos_invoice = '';
   state.order.custom_merged_total = 0;
   state.items = [{ name: 'ROW-1', item_name: 'Soup', qty: 2, rate: 20, amount: 40 }];
@@ -357,5 +358,96 @@ describe('cashier workspace reading order', () => {
     expect(detail.compareDocumentPosition(alerts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(buttonIn(actions, 'Settle bill')).toBeDefined();
     expect(detail.textContent).toContain('Soup');
+  });
+});
+
+
+describe('Orders void reason dialog', () => {
+  async function openCancelDialog() {
+    vi.mocked(call.get).mockImplementation(async (method) => {
+      if (method === 'frappe.client.has_permission') return { message: { has_permission: true } };
+      if (method === 'ury.ury_pos.api.getBranch') return { message: 'Branch A' };
+      if (method === 'frappe.client.get_list') return { message: [] };
+      if (method === 'ury.ury_pos.api.getPosInvoiceItems') return { message: [[], []] };
+      if (method === 'ury.ury_pos.api.get_split_group') return { message: { invoices: [], current: 'POS-INV-1', group: null } };
+      throw new Error(`Unexpected Frappe call: ${method}`);
+    });
+    await renderOrders();
+    await vi.waitFor(() => {
+      expect(container.querySelector('button[aria-label="Cancel order"]')).not.toBeNull();
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Cancel order"]')!.click();
+    });
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    return dialog!;
+  }
+
+  function optionValues(dialog: Element) {
+    return [...dialog.querySelectorAll('option')].map((option) => (option as HTMLOptionElement).value);
+  }
+
+  it('keeps free text when the profile lists no void reasons', async () => {
+    state.profile.custom_void_reasons = ' \n\t';
+    const dialog = await openCancelDialog();
+    expect(dialog.querySelector('select')).toBeNull();
+    expect(dialog.querySelector('textarea')).not.toBeNull();
+  });
+
+  it('offers each configured reason once, plus Other, instead of free text', async () => {
+    state.profile.custom_void_reasons = 'Guest changed mind\n\nWrong item keyed\nGuest changed mind\n';
+    const dialog = await openCancelDialog();
+    expect(dialog.querySelector('textarea')).toBeNull();
+    const select = dialog.querySelector('select');
+    expect(select).not.toBeNull();
+    expect(optionValues(dialog).filter(Boolean)).toEqual([
+      'Guest changed mind', 'Wrong item keyed', '__other__',
+    ]);
+    expect([...dialog.querySelectorAll('option')].map((option) => option.textContent)).toContain('Other');
+  });
+
+  it('posts a listed reason exactly', async () => {
+    state.profile.custom_void_reasons = 'Kitchen error';
+    const dialog = await openCancelDialog();
+    const select = dialog.querySelector('select');
+    expect(select).not.toBeNull();
+    await act(async () => {
+      select!.value = 'Kitchen error';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const confirm = [...dialog.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Confirm Cancel');
+    expect(confirm).toBeDefined();
+    await act(async () => confirm!.click());
+    expect(call.post).toHaveBeenCalledWith('ury.ury.doctype.ury_order.ury_order.cancel_order', {
+      invoice_id: 'POS-INV-1',
+      reason: 'Kitchen error',
+    });
+  });
+
+  it('refuses Other without a four-character note and posts Other with one', async () => {
+    state.profile.custom_void_reasons = 'Kitchen error';
+    const dialog = await openCancelDialog();
+    const select = dialog.querySelector('select');
+    expect(select).not.toBeNull();
+    await act(async () => {
+      select!.value = '__other__';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const note = dialog.querySelector('textarea');
+    expect(note).not.toBeNull();
+    const confirm = [...dialog.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Confirm Cancel');
+    await act(async () => confirm!.click());
+    expect(call.post).not.toHaveBeenCalled();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter!.call(note, 'late');
+      note!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => confirm!.click());
+    expect(call.post).toHaveBeenCalledWith('ury.ury.doctype.ury_order.ury_order.cancel_order', {
+      invoice_id: 'POS-INV-1',
+      reason: 'Other: late',
+    });
   });
 });

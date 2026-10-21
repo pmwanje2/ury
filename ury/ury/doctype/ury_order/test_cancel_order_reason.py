@@ -62,7 +62,14 @@ class TestCancelOrderReason(unittest.TestCase):
         self.release.assert_not_called()
         self.kot.assert_not_called()
         self.assertEqual(self.invoice.method_calls, [])
-        self.assertEqual(self.framework.db.method_calls, [])
+        # Reading the configured list is not a table, KOT, or invoice write.
+        db_writes = [call[0] for call in self.framework.db.method_calls if call[0] != "get_value"]
+        self.assertEqual(db_writes, [])
+
+    def set_void_reasons(self, raw):
+        self.invoice.pos_profile = "Till A"
+        self.framework.db.get_value.side_effect = None
+        self.framework.db.get_value.return_value = raw
 
     def assert_invalid_reasons(self, reasons):
         for reason in reasons:
@@ -172,3 +179,104 @@ class TestCancelOrderReason(unittest.TestCase):
                 self.release.assert_called_once_with("T1")
                 self.framework.get_meta.assert_called_with("POS Invoice")
 
+
+    def test_unlisted_reason_is_refused_before_table_or_kot(self):
+        self.set_void_reasons("Guest changed mind\nKitchen error\n")
+        for reason in ("Not a listed reason", "kitchen error", None, "Other:abc"):
+            with self.subTest(reason=reason):
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.invoice.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons("Guest changed mind\nKitchen error\n")
+                try:
+                    with self.assertRaisesRegex(frappe.ValidationError, "URY_VOID_REASON_NOT_CONFIGURED"):
+                        ury_order.cancel_order(self.invoice.name, reason)
+                finally:
+                    self.assert_no_mutation()
+
+    def test_listed_reason_is_accepted_and_stored_exactly(self):
+        cases = (
+            ("Bad", "Bad"),
+            ("  Kitchen error  ", "Kitchen error"),
+        )
+        for submitted, stored in cases:
+            with self.subTest(submitted=submitted):
+                self.invoice.docstatus = 0
+                self.invoice.restaurant_table = "T1"
+                self.invoice.reset_mock()
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons("  Kitchen error  \nBad\n")
+                ury_order.cancel_order(self.invoice.name, submitted)
+                self.framework.db.get_value.assert_called_with(
+                    "POS Profile", "Till A", "custom_void_reasons"
+                )
+                self.invoice.db_set.assert_called_with("cancel_reason", stored)
+                self.release.assert_called_once_with("T1")
+
+    def test_other_without_a_note_is_refused_before_release(self):
+        for reason in ("Other", "Other:", "Other: ", "Other: abc", "Other:\tabc"):
+            with self.subTest(reason=reason):
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.invoice.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons("Kitchen error")
+                try:
+                    with self.assertRaisesRegex(frappe.ValidationError, "URY_VOID_REASON_NOT_CONFIGURED"):
+                        ury_order.cancel_order(self.invoice.name, reason)
+                finally:
+                    self.assert_no_mutation()
+
+    def test_other_with_a_note_is_accepted_and_stored_exactly(self):
+        self.invoice.reset_mock()
+        self.release.reset_mock()
+        self.set_void_reasons("Kitchen error")
+        ury_order.cancel_order(self.invoice.name, "  Other: late order  ")
+        self.invoice.db_set.assert_called_with("cancel_reason", "Other: late order")
+        self.release.assert_called_once_with("T1")
+
+    def test_empty_list_keeps_the_four_character_rule(self):
+        for raw in ("", " \n\t", None):
+            with self.subTest(raw=raw):
+                self.release.reset_mock()
+                self.kot.reset_mock()
+                self.invoice.reset_mock()
+                self.framework.db.reset_mock()
+                self.set_void_reasons(raw)
+                try:
+                    with self.assertRaisesRegex(frappe.ValidationError, "at least 4 characters"):
+                        ury_order.cancel_order(self.invoice.name, "abc")
+                finally:
+                    self.assert_no_mutation()
+                self.invoice.reset_mock()
+                self.release.reset_mock()
+                ury_order.cancel_order(self.invoice.name, " Void ")
+                self.invoice.db_set.assert_called_with("cancel_reason", "Void")
+
+    def test_missing_void_reason_field_keeps_the_four_character_rule(self):
+        self.invoice.pos_profile = "Till A"
+        self.framework.db.get_value.side_effect = RuntimeError(
+            "Unknown column 'custom_void_reasons'"
+        )
+        with self.assertRaisesRegex(frappe.ValidationError, "at least 4 characters"):
+            ury_order.cancel_order(self.invoice.name, "abc")
+        self.assert_no_mutation()
+        self.framework.db.get_value.assert_called_with(
+            "POS Profile", "Till A", "custom_void_reasons"
+        )
+        self.invoice.reset_mock()
+        self.release.reset_mock()
+        ury_order.cancel_order(self.invoice.name, "Void")
+        self.invoice.db_set.assert_called_with("cancel_reason", "Void")
+        self.release.assert_called_once_with("T1")
+
+    def test_permission_refusal_still_precedes_void_reason_lookup(self):
+        self.set_void_reasons("Kitchen error")
+        self.framework.has_permission.return_value = False
+        with self.assertRaises(frappe.PermissionError):
+            ury_order.cancel_order(self.invoice.name, "Not a listed reason")
+        self.framework.db.get_value.assert_not_called()
+        self.assert_no_mutation()
