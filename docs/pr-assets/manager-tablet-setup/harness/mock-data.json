@@ -1,0 +1,21 @@
+{
+  "boot": {
+    "lang": "en",
+    "sysdefaults": { "currency": "UGX", "number_format": "#,###.##" },
+    "user": { "name": "manager@example.test", "full_name": "Grace Manager", "roles": ["URY Manager"] },
+    "ury_brand": { "name": "URY POS", "logo": "/ury_pos.png", "favicon": "/ury.ico" }
+  },
+  "api": {
+    "frappe.client.has_permission": { "message": { "has_permission": true } },
+    "ury.ury_pos.floor_pin.pin_staff": {
+      "message": [
+        { "user": "amina@example.test", "full_name": "Amina Waiter", "has_pin": true },
+        { "user": "brian@example.test", "full_name": "Brian Waiter", "has_pin": false },
+        { "user": "carol@example.test", "full_name": "Carol Waiter", "has_pin": true }
+      ]
+    },
+    "ury.ury_pos.floor_pin.issue_pin": { "message": { "pin": "4821" } },
+    "ury.ury_pos.floor_pin.pair_device": { "message": { "label": "Floor tablet 1" } }
+  },
+  "fallback": { "message": [] }
+}
