@@ -21,6 +21,7 @@ const boundary = vi.hoisted(() => ({
   getSplitGroup: vi.fn(),
   printOrder: vi.fn(),
   floorSignOut: vi.fn(),
+  isFloorPadActive: vi.fn(() => true),
   isStaySignedIn: vi.fn((user: { roles: string[] }, profile: { custom_floor_stay_signed_in_roles?: Array<{ role?: string }> }) =>
     user.roles.some((role) => profile.custom_floor_stay_signed_in_roles?.some((row) => row.role === role))),
 }));
@@ -58,6 +59,7 @@ vi.mock('../src/lib/invoice-api', async (importOriginal) => {
 vi.mock('../src/lib/print', () => ({ printOrder: boundary.printOrder }));
 vi.mock('../src/lib/floor-session', () => ({
   floorSignOut: boundary.floorSignOut,
+  isFloorPadActive: boundary.isFloorPadActive,
   isStaySignedIn: boundary.isStaySignedIn,
 }));
 vi.mock('../src/lib/table-api', async (importOriginal) => {
@@ -338,6 +340,37 @@ describe('captain floor-session parity', () => {
 
     await vi.waitFor(() => expect(container.textContent).toContain('tables'));
     expect(boundary.floorSignOut).not.toHaveBeenCalled();
+  });
+
+  it('returns to the tables on a device that is not a paired floor tablet', async () => {
+    boundary.isFloorPadActive.mockReturnValue(false);
+    boundary.posStore!.posProfile = {
+      ...boundary.posStore!.posProfile,
+      floor_signout_after_send: 1,
+      custom_floor_stay_signed_in_roles: [],
+    };
+    vi.mocked(syncOrder).mockResolvedValue({ message: { name: 'POS-INV-1' } } as never);
+    try {
+      await renderOrder();
+
+      await act(async () => button('Send Order')!.click());
+
+      await vi.waitFor(() => expect(container.textContent).toContain('tables'));
+      expect(boundary.floorSignOut).not.toHaveBeenCalled();
+    } finally {
+      boundary.isFloorPadActive.mockReturnValue(true);
+    }
+  });
+
+  it('has translated unsent-items prompt strings in every locale', async () => {
+    const keys = ['unsent_items.title', 'unsent_items.description', 'unsent_items.leave'];
+    for (const locale of ['en', 'ar', 'fr']) {
+      const messages = (await import(`../src/i18n/locales/${locale}.json`)).default as Record<string, Record<string, string>>;
+      for (const key of keys) {
+        const [group, name] = key.split('.');
+        expect(typeof messages[group]?.[name], `${locale} ${key}`).toBe('string');
+      }
+    }
   });
 
   it('keeps the waiter order when the send is rejected', async () => {
