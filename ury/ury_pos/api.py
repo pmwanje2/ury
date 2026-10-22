@@ -860,7 +860,7 @@ def getPosProfile():
                 {"parent": payment.mode_of_payment, "company": company},
                 "default_account",
             )
-            for payment in pos_profiles.payments
+            for payment in (pos_profiles.get("payments") or [])
         },
         "enable_kot_reprint":enable_kot_reprint,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
