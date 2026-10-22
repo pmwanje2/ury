@@ -26,6 +26,7 @@ class TestClosingConsolidation(unittest.TestCase):
     def setUp(self):
         self.frappe = self.enterContext(patch.object(closing, "frappe"))
         self.enterContext(patch.object(api, "frappe", self.frappe))
+        self.enterContext(patch.object(frappe, "get_system_settings", return_value="Banker's Rounding (legacy)"))
         self.frappe.session.user = "cashier"
         self.frappe.utils.get_datetime.side_effect = frappe.utils.get_datetime
         self.frappe.utils.get_time.side_effect = frappe.utils.get_time
@@ -143,6 +144,7 @@ class TestClosingConsolidation(unittest.TestCase):
                                    seconds=timestamp.second, microseconds=timestamp.microsecond),
             customer="Guest", grand_total=17700, net_total=15000, total_qty=2,
             total_taxes_and_charges=2700, is_return=0, return_against=None,
+            rounded_total=17700, change_amount=0, account_for_change_amount=None,
         )
         row.update(values)
         self.invoices.append(row)
@@ -512,6 +514,53 @@ class TestClosingConsolidation(unittest.TestCase):
             (row.custom_closing_amount, row.closing_amount, row.difference),
             (80000, 100000, 0),
         )
+
+    def test_native_change_fields_are_selected_without_per_invoice_lookup(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 0})
+        self._invoice(
+            "ROUNDED-TIP", grand_total=100, rounded_total=95,
+            change_amount=6, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 101, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "ROUNDED-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=101, account="Card", type="Card"),
+            ],
+        }
+
+        self._validate()
+
+        self.assertEqual(len(self.frappe.get_all.call_args_list), 1)
+        self.assertEqual(
+            set(self.frappe.get_all.call_args.kwargs["fields"]),
+            {
+                "name", "posting_date", "posting_time", "customer", "grand_total",
+                "net_total", "total_qty", "total_taxes_and_charges", "is_return",
+                "return_against", "rounded_total", "change_amount",
+                "account_for_change_amount",
+            },
+        )
+
+    def test_currency_flt_uses_site_rounding_method(self):
+        with patch.object(frappe, "get_system_settings", return_value="Commercial Rounding"):
+            self.assertEqual(closing._currency_flt(2.5, 0), 3)
+
+    def test_change_uses_rounded_total_as_native_threshold(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 0})
+        self._invoice(
+            "ROUNDED-THRESHOLD", grand_total=100, rounded_total=95,
+            change_amount=3, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 98, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "ROUNDED-THRESHOLD"): [
+                frappe._dict(mode_of_payment="Card", amount=98, account="Card", type="Card"),
+            ],
+        }
+
+        self._validate()
+
+        self.assertEqual(self._rows_by_mode()["Cash"].expected_amount, 99997)
 
     def test_change_account_without_one_till_mode_refuses(self):
         self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 95000})
