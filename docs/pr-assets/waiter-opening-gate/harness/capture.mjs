@@ -38,7 +38,7 @@ async function page(debugPort) {
   return { send, close: () => ws.close() };
 }
 
-const waitFor = (text, absent = '') => `(async()=>{const want=${JSON.stringify(text)};const avoid=${JSON.stringify(absent)};for(let attempt=0;attempt<50;attempt+=1){const body=document.body.innerText||'';if(body.includes(want)&&(!avoid||!body.includes(avoid)))return;await new Promise((resolve)=>setTimeout(resolve,250));}throw new Error('missing text '+want+'; body='+(document.body.innerText||'').slice(0,800));})()`;
+const waitFor = (text, absent = '') => `(async()=>{const want=${JSON.stringify(text)};const avoid=${JSON.stringify(absent)};for(let attempt=0;attempt<50;attempt+=1){if(document.readyState==='complete'&&document.body){const body=document.body.innerText||'';if(body.includes(want)&&(!avoid||!body.includes(avoid)))return;}await new Promise((resolve)=>setTimeout(resolve,250));}const seen=document.body&&document.body.innerText||'';throw new Error('missing text '+want+'; body='+seen.slice(0,800));})()`;
 
 const shots = [
   { file: 'waiter-tables-till-open.png', url: '/pos/order?stage=waiter-open', text: 'Tables', absent: 'Loading notifications' },
