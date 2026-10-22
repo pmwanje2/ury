@@ -19,6 +19,7 @@ import POSOpeningScreen from './POSOpeningScreen';
 import ChecklistGateDialog from './ChecklistGateDialog';
 import POSClosingDialog from './POSClosingDialog';
 import { t } from '../i18n';
+import { isFloorOrderPath } from '../lib/home-route';
 
 interface POSOpeningProviderProps {
   children: React.ReactNode;
@@ -32,6 +33,18 @@ export type OpeningBlockingState =
   | 'genericError';
 
 const DESK_ROLES = ['System Manager', 'Desk User'];
+
+
+function isBillingUser(
+  user: User,
+  profile: { role_allowed_for_billing?: Array<{ role?: string | null }> | null },
+): boolean {
+  if (user.name === 'Administrator') return true;
+  const rows = profile.role_allowed_for_billing ?? [];
+  if (rows.length === 0) return true;
+  return user.roles.some((role) => rows.some((row) => row.role === role));
+}
+
 
 function hasDeskAccess(user: User | null): boolean {
   if (!user) return false;
@@ -111,6 +124,8 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const { user } = useRootStore();
 
   const canAccessDesk = useMemo(() => hasDeskAccess(user), [user]);
+  const floorOrder = useMemo(() => !!user && !!posProfile && !isBillingUser(user, posProfile)
+    && isFloorOrderPath(window.location.pathname, user), [user, posProfile]);
   const confirmedOpeningKey = getUserSessionStorageKey('ury_offline_opening', user?.name);
 
   const clearBlockingState = useCallback(() => {
@@ -276,10 +291,18 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   }, [checkPOSStatus, existingEntry]);
 
   useEffect(() => {
+    if (floorOrder) {
+      setIsLoading(false);
+      return;
+    }
     if (posProfile) {
       checkPOSStatus();
     }
-  }, [posProfile, checkPOSStatus]);
+  }, [posProfile, checkPOSStatus, floorOrder]);
+
+  if (floorOrder) {
+    return <>{children}</>;
+  }
 
   if (isLoading) {
     return (
