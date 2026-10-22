@@ -174,6 +174,9 @@ def _set_expected_amounts(doc):
             "mode_of_payment": mode,
             "opening_amount": _currency_flt(opening_by_mode.get(mode, 0), precision),
             "expected_amount": expected_amount,
+            "custom_closing_amount": (
+                _currency_flt(client_row.custom_closing_amount, precision) if client_row else 0
+            ),
             "closing_amount": closing_amount,
             "difference": _currency_flt(closing_amount - expected_amount, precision),
         })
