@@ -211,15 +211,9 @@ export default function CaptainOrder() {
         showToast.error('Add at least one item before sending the order.');
         return;
       }
-      // sync_order requires `customer` as a hard backend parameter (found via
-      // live E2E test — a 500 "missing 1 required positional argument:
-      // 'customer'" — not just a Cashier-UI convention). Match OrderPanel's
-      // exact validate-before-submit gate rather than only omitting the field.
-      if (!selectedCustomer?.name) {
-        showToast.error('Please select a customer before sending the order.');
-        return;
-      }
-
+      // sync_order requires the `customer` parameter, but an empty value is
+      // resolved natively to the POS Profile customer (walk-in), as on the
+      // cashier screen; a waiter never picks a customer for a table order.
       setIsSubmitting(true);
 
       const orderData: SyncOrderRequest = {
@@ -237,7 +231,7 @@ export default function CaptainOrder() {
         order_type: DINE_IN,
         table,
         room: selectedRoom || undefined,
-        customer: selectedCustomer.name,
+        customer: selectedCustomer?.name || '',
         cashier: posProfile.cashier,
         owner: posProfile.owner,
         mode_of_payment: paymentModes[0],
