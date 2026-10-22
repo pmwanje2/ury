@@ -7,7 +7,11 @@ import { getMainCashierPosInvoices, getOpenPosOpeningEntries } from '../src/lib/
 import POSClosingDialog from '../src/components/POSClosingDialog';
 
 const state = vi.hoisted(() => ({
-  profile: { name: 'POS-1', company: 'Test Co', multiple_cashier: 0, custom_blind_cash_count: 1 as number | undefined },
+  profile: {
+    name: 'POS-1', company: 'Test Co', multiple_cashier: 0,
+    custom_blind_cash_count: 1 as number | undefined,
+    payment_mode_accounts: { Cash: 'Cash - SAL', Card: 'Card - SAL' },
+  },
   paymentModes: ['Cash'],
   user: { name: 'cashier@example.com' },
 }));
@@ -204,13 +208,13 @@ describe('non-blind expected cash display', () => {
     vi.mocked(getMainCashierPosInvoices).mockResolvedValue([
       {
         name: 'POS-INV-TIP', grand_total: 50000, net_total: 50000, total_qty: 1,
-        change_amount: 5000, account_for_change_amount: 'Cash', taxes: [],
-        payments: [{ mode_of_payment: 'Card', amount: 55000, account: 'Card' }],
+        change_amount: 5000, account_for_change_amount: 'Cash - SAL', taxes: [],
+        payments: [{ mode_of_payment: 'Card', amount: 55000, account: 'Card - SAL' }],
       },
       {
         name: 'POS-INV-CARD', grand_total: 30000, net_total: 30000, total_qty: 1,
-        change_amount: 0, account_for_change_amount: 'Cash', taxes: [],
-        payments: [{ mode_of_payment: 'Card', amount: 30000, account: 'Card' }],
+        change_amount: 0, account_for_change_amount: 'Cash - SAL', taxes: [],
+        payments: [{ mode_of_payment: 'Card', amount: 30000, account: 'Card - SAL' }],
       },
     ]);
 
