@@ -18,7 +18,7 @@ def before_submit(doc, method):
     from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import get_taxes
     from ury.ury_pos.api import _till_invoice_rows
 
-    start, inside, before, after = _closing_invoice_rows(doc)
+    start, end, inside, before, after = _closing_invoice_rows(doc)
 
     if after:
         frappe.throw("[URY-CLOSE-LATE-INVOICE] Unconsolidated invoices exist after the closing end.")
@@ -73,6 +73,7 @@ def _closing_invoice_rows(doc):
         fields=[
             "name", "posting_date", "posting_time", "customer", "grand_total",
             "net_total", "total_qty", "total_taxes_and_charges", "is_return", "return_against",
+            "change_amount", "account_for_change_amount",
         ],
         order_by="posting_date asc, posting_time asc",
         limit_page_length=0,
@@ -90,7 +91,7 @@ def _closing_invoice_rows(doc):
         else:
             row.doctype = "POS Invoice"
             inside.append(row)
-    return start, inside, before, after
+    return start, end, inside, before, after
 
 
 def _set_expected_amounts(doc):
@@ -102,7 +103,7 @@ def _set_expected_amounts(doc):
         get_payment_rows_by_invoice,
     )
 
-    _, invoices, _, _ = _closing_invoice_rows(doc)
+    _, _, invoices, _, _ = _closing_invoice_rows(doc)
     opening = frappe.get_doc("POS Opening Entry", doc.pos_opening_entry)
     profile = frappe.get_doc("POS Profile", doc.pos_profile)
     precision = frappe.get_precision("POS Closing Entry Detail", "expected_amount")
