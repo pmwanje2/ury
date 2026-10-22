@@ -1,5 +1,6 @@
 import { createElement, act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initI18n } from '../src/i18n';
 import App from '../src/App';
@@ -33,7 +34,17 @@ vi.mock('../src/store/pos-store', () => ({
 vi.mock('../src/components/ScreenSizeProvider', () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock('../src/components/AuthGuard', () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock('../src/components/KotAlertListener', () => ({ default: () => null }));
-vi.mock('../src/captain/pages/CaptainTables', () => ({ default: () => createElement('div', {}, 'Captain page') }));
+vi.mock('../src/captain/pages/CaptainTables', () => ({
+  default: function CaptainTablesStub() {
+    const navigate = useNavigate();
+    return createElement(
+      'div',
+      {},
+      'Captain page',
+      createElement('button', { type: 'button', onClick: () => navigate('/pos') }, 'Open billing'),
+    );
+  },
+}));
 vi.mock('../src/captain/pages/CaptainOrder', () => ({ default: () => createElement('div', {}, 'Captain order') }));
 vi.mock('../src/pages/Orders', () => ({ default: () => createElement('div', {}, 'Settlement page') }));
 vi.mock('../src/pages/Dashboard', () => ({ default: () => createElement('div', {}, 'Analytics page') }));
@@ -125,6 +136,15 @@ async function renderAt(pathname: string) {
   }
 }
 
+async function waitForText(text: string) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if ((container.textContent || '').includes(text)) return;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
 describe('waiter opening gate', () => {
   it('admits a waiter at /pos/order when the cashier till is already open', async () => {
     await renderAt('/pos/order');
@@ -145,5 +165,23 @@ describe('waiter opening gate', () => {
     expect(window.location.pathname).toBe('/pos/order');
     expect(container.textContent).toContain('Captain page');
     expect(container.textContent).not.toContain('Till already open');
+  });
+
+  it('shows the opening gate again after a router push from /pos/order to /pos/pos', async () => {
+    await renderAt('/pos/order');
+    expect(container.textContent).toContain('Captain page');
+    expect(container.textContent).not.toContain('Till already open');
+    expect(checkPOSOpening).not.toHaveBeenCalled();
+
+    const openBilling = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Open billing');
+    expect(openBilling).toBeTruthy();
+    await act(async () => {
+      openBilling!.click();
+    });
+    await waitForText('Till already open');
+
+    expect(window.location.pathname).toBe('/pos/pos');
+    expect(container.textContent).toContain('Till already open');
+    expect(container.textContent).not.toContain('Captain page');
   });
 });
