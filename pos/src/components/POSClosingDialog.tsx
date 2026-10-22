@@ -138,8 +138,14 @@ interface AggregatedTotals {
  * set_form_data): sums grand_total/net_total/total_qty, and for each
  * payment subtracts the invoice's change_amount when the payment account
  * matches account_for_change_amount before accumulating by mode_of_payment.
+ * When a submitted card-only invoice has no payment row on the change account,
+ * the change is paid from the one profile mode mapped to that account.
  */
-function aggregateInvoices(invoices: POSClosingInvoice[]): {
+function aggregateInvoices(
+  invoices: POSClosingInvoice[],
+  paymentModes: string[],
+  paymentModeAccounts: Record<string, string | null> = {},
+): {
   totals: AggregatedTotals;
   expectedByMode: Record<string, number>;
 } {
@@ -151,7 +157,21 @@ function aggregateInvoices(invoices: POSClosingInvoice[]): {
     totals.netTotal += Number(invoice.net_total) || 0;
     totals.totalQty += Number(invoice.total_qty) || 0;
 
-    (invoice.payments || []).forEach((payment) => {
+    const payments = invoice.payments || [];
+    const hasChangePayment = payments.some(
+      (payment) => payment.account === invoice.account_for_change_amount,
+    );
+    if (Number(invoice.change_amount) > 0 && !hasChangePayment) {
+      const changeMode = paymentModes.find(
+        (mode) => paymentModeAccounts[mode] === invoice.account_for_change_amount,
+      );
+      if (changeMode) {
+        expectedByMode[changeMode] =
+          (expectedByMode[changeMode] || 0) - Number(invoice.change_amount);
+      }
+    }
+
+    payments.forEach((payment) => {
       let amount = Number(payment.amount) || 0;
       if (payment.account === invoice.account_for_change_amount) {
         amount -= Number(invoice.change_amount) || 0;
@@ -304,7 +324,11 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted, logoutAction
       ]);
 
       setInvoiceCount(invoices.length);
-      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(invoices);
+      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(
+        invoices,
+        paymentModes,
+        posProfile.payment_mode_accounts,
+      );
       setTotals(aggregatedTotals);
       const paymentRows = buildRows(openingDoc?.balance_details ?? [], expectedByMode, blindCashCount, paymentModes);
       setRows(paymentRows);

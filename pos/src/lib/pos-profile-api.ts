@@ -24,6 +24,7 @@ export interface PosProfileLimited {
   custom_blind_cash_count?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
+  payment_mode_accounts?: Record<string, string | null>;
 }
 
 export interface PosProfileLimitedResponse {
@@ -95,6 +96,7 @@ export interface PosProfileCombined extends PosProfileFull {
   edit_order_type?: number;
   view_all_status?: number;
   custom_daily_pos_close?: number;
+  payment_mode_accounts?: Record<string, string | null>;
 }
 
 export interface Currency {
@@ -146,6 +148,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     multiple_cashier: limitedProfile.multiple_cashier,
     edit_order_type: limitedProfile.edit_order_type,
     custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
+    payment_mode_accounts: limitedProfile.payment_mode_accounts,
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
   };

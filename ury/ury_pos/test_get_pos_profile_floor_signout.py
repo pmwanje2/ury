@@ -46,6 +46,13 @@ class TestFloorSignoutProfile(unittest.TestCase):
         self.assertEqual(result.get("floor_idle_signout_seconds"), 0)
         self.assertEqual(result.get("floor_signout_after_send"), 0)
 
+    def test_profile_without_payment_rows_returns_empty_account_map(self):
+        # A site-less double (and a profile read without child rows) has no
+        # payments list; the till's mode-to-account map must then be empty
+        # instead of raising.
+        result = api.getPosProfile()
+        self.assertEqual(result.get("payment_mode_accounts"), {})
+
     def test_fixture_declares_two_opt_in_profile_fields(self):
         path = Path(__file__).resolve().parents[1] / "fixtures/custom_field.json"
         fields = {field["name"]: field for field in json.loads(path.read_text())}

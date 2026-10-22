@@ -854,6 +854,14 @@ def getPosProfile():
         "multiple_cashier":multiple_cashier,
         "owner":owner,
         "edit_order_type":edit_order_type,
+        "payment_mode_accounts": {
+            payment.mode_of_payment: frappe.db.get_value(
+                "Mode of Payment Account",
+                {"parent": payment.mode_of_payment, "company": company},
+                "default_account",
+            )
+            for payment in (pos_profiles.get("payments") or [])
+        },
         "enable_kot_reprint":enable_kot_reprint,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
         "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
