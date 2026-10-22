@@ -6,3 +6,8 @@ export function homePath(user?: Pick<User, 'name' | 'roles'> | null): '/orders' 
   if (isCaptain && !isCashier) return '/order';
   return isCashier ? '/orders' : '/dashboard';
 }
+
+export function isFloorOrderPath(pathname: string, user?: Pick<User, 'name' | 'roles'> | null): boolean {
+  const path = pathname.replace(/^\/pos(?=\/|$)/, '').replace(/\/+$/, '') || '/';
+  return path === '/order' || path.startsWith('/order/') || (path === '/' && homePath(user) === '/order');
+}

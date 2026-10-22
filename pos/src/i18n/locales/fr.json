@@ -508,5 +508,8 @@
     "lookup_unavailable": "Recherche d’addition indisponible",
     "lookup_loading": "Recherche de l’addition ouverte…",
     "choose_check": "Choisir une addition ouverte"
+  },
+  "captain": {
+    "till_not_open": "La caisse n’est pas ouverte. Demandez au caissier de l’ouvrir."
   }
 }

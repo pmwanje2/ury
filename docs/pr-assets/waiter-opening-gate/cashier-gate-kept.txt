@@ -1,0 +1,14 @@
+Till already open
+SESSION DETAILS
+Company: URY Foods
+Branch: Kampala Main
+Restaurant: URY Foods
+Cashier: Sam Cashier
+Session Start: 10/22/2026, 8:00:00 AM
+POS Profile:
+Kampala POS
+
+Kampala POS is open under Pat Cashier since 10/22/2026, 8:00:00 AM; Pat Cashier must close the shift, or a manager closes it in Desk.
+
+Retry
+Logout

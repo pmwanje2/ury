@@ -555,5 +555,8 @@
     "lookup_unavailable": "Bill lookup unavailable",
     "lookup_loading": "Finding open bill…",
     "choose_check": "Choose an open check"
+  },
+  "captain": {
+    "till_not_open": "The till is not open. Ask the cashier to open it."
   }
 }
