@@ -42,7 +42,6 @@ import { CustomerSelect } from '../../components/CustomerSelect';
 import { HoldFireControls } from '../../components/HoldFireControls';
 import BillSplitDialog, { type BillSplitItem } from '../../components/BillSplitDialog';
 import SplitGroupPanel from '../../components/SplitGroupPanel';
-import { useOutbox } from '../../offline/use-outbox';
 import { t } from '../../i18n';
 
 type Mode = 'menu' | 'order';
@@ -96,13 +95,6 @@ export default function CaptainOrder() {
     clearTableOrder,
     isOrderInteractionDisabled,
   } = usePOSStore();
-  const outboxUserName = user?.name;
-  const outboxUserRoles = user?.roles?.join('\0') || '';
-  const outboxUser = useMemo(
-    () => outboxUserName ? { name: outboxUserName, roles: outboxUserRoles ? outboxUserRoles.split('\0') : [] } : null,
-    [outboxUserName, outboxUserRoles],
-  );
-  const outbox = useOutbox(posProfile, outboxUser);
 
   const [mode, setMode] = useState<Mode>('order');
   const [hasSetInitialMode, setHasSetInitialMode] = useState(false);
@@ -219,15 +211,9 @@ export default function CaptainOrder() {
         showToast.error('Add at least one item before sending the order.');
         return;
       }
-      // sync_order requires `customer` as a hard backend parameter (found via
-      // live E2E test — a 500 "missing 1 required positional argument:
-      // 'customer'" — not just a Cashier-UI convention). Match OrderPanel's
-      // exact validate-before-submit gate rather than only omitting the field.
-      if (!selectedCustomer?.name && outbox.offline && !posProfile.customer) {
-        showToast.error('Please select a customer before sending the order.');
-        return;
-      }
-
+      // sync_order requires the `customer` parameter, but an empty value is
+      // resolved natively to the POS Profile customer (walk-in), as on the
+      // cashier screen; a waiter never picks a customer for a table order.
       setIsSubmitting(true);
 
       const orderData: SyncOrderRequest = {
@@ -245,7 +231,7 @@ export default function CaptainOrder() {
         order_type: DINE_IN,
         table,
         room: selectedRoom || undefined,
-        customer: selectedCustomer?.name || (outbox.offline ? posProfile.customer || undefined : ''),
+        customer: selectedCustomer?.name || '',
         cashier: posProfile.cashier,
         owner: posProfile.owner,
         mode_of_payment: paymentModes[0],
