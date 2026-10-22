@@ -123,7 +123,7 @@ def _set_expected_amounts(doc):
         )
         till_modes_by_account.setdefault(account, []).append(payment_mode.mode_of_payment)
 
-    rows_by_invoice = get_payment_rows_by_invoice(invoices)
+    rows_by_invoice = get_payment_rows_by_invoice(invoices) if invoices else {}
     amounts_by_mode = {}
     fallback_changes = {}
     for invoice in invoices:
