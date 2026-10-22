@@ -140,21 +140,24 @@ describe('Captain Dine In walk-in customer resolution', () => {
     expect(showToast.error).not.toHaveBeenCalledWith(expect.stringMatching(/select a customer/i));
   });
 
-  it('uses the POS profile customer offline when no customer is selected', async () => {
-    state.offline = true;
-
-    await submit();
-
-    expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ order_type: 'Dine In', table: 'T-1', customer: 'Native Walk In' }));
-  });
-
-  it('keeps the existing refusal when offline has no profile customer', async () => {
+  // Captain sends only through syncOrder, which refuses while offline, so the
+  // page needs no outbox of its own: the server resolves the POS Profile
+  // walk-in customer (or answers itself when none is configured).
+  it('leaves walk-in resolution to the server even without a profile customer', async () => {
     state.offline = true;
     state.posProfile.customer = undefined;
 
     await submit();
 
-    expect(syncOrder).not.toHaveBeenCalled();
-    expect(showToast.error).toHaveBeenCalledWith(expect.stringMatching(/select a customer/i));
+    expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ order_type: 'Dine In', table: 'T-1', customer: '' }));
+    expect(showToast.error).not.toHaveBeenCalledWith(expect.stringMatching(/select a customer/i));
+  });
+
+  it('sends the selected customer when the waiter picked one', async () => {
+    state.selectedCustomer = { name: 'TEST Corporate Client' };
+
+    await submit();
+
+    expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ customer: 'TEST Corporate Client' }));
   });
 });
