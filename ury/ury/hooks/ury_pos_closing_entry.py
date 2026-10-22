@@ -129,8 +129,6 @@ def _set_expected_amounts(doc):
     fallback_changes = {}
     for invoice in invoices:
         rows = rows_by_invoice.get(("POS Invoice", invoice.name), [])
-        invoice_total = flt(invoice.get("rounded_total")) or flt(invoice.get("grand_total"))
-        payment_total = sum(flt(row.amount) for row in rows)
         change_amount = flt(invoice.get("change_amount"))
         if change_amount > 0 and not invoice.get("is_return"):
             if row := get_change_payment_row(rows, invoice.account_for_change_amount):
