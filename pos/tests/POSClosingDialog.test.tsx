@@ -190,6 +190,41 @@ describe('blind cash count reconciliation', () => {
   });
 });
 
+describe('non-blind expected cash display', () => {
+  it('moves card-only invoice change to the mapped Cash mode', async () => {
+    state.profile.custom_blind_cash_count = 0;
+    state.paymentModes = ['Cash', 'Card'];
+    vi.mocked(db.getDoc).mockResolvedValue({
+      name: 'POS-OPE-1',
+      balance_details: [
+        { mode_of_payment: 'Cash', opening_amount: 100000 },
+        { mode_of_payment: 'Card', opening_amount: 0 },
+      ],
+    });
+    vi.mocked(getMainCashierPosInvoices).mockResolvedValue([
+      {
+        name: 'POS-INV-TIP', grand_total: 50000, net_total: 50000, total_qty: 1,
+        change_amount: 5000, account_for_change_amount: 'Cash', taxes: [],
+        payments: [{ mode_of_payment: 'Card', amount: 55000, account: 'Card' }],
+      },
+      {
+        name: 'POS-INV-CARD', grand_total: 30000, net_total: 30000, total_qty: 1,
+        change_amount: 0, account_for_change_amount: 'Cash', taxes: [],
+        payments: [{ mode_of_payment: 'Card', amount: 30000, account: 'Card' }],
+      },
+    ]);
+
+    await renderClosing('card-tip-display');
+
+    const rows = Array.from(container.querySelectorAll('tbody tr'));
+    const row = (mode: string) => rows.find(
+      (candidate) => candidate.querySelector('td')?.textContent === mode,
+    )!;
+    expect(row('Cash').querySelectorAll('td')[2].textContent).toContain('95');
+    expect(row('Card').querySelectorAll('td')[2].textContent).toContain('85');
+  });
+});
+
 describe('blind cash count totals', () => {
   it('hides the Grand Total card and its expected amount before the cashier declares', async () => {
     const text = await renderClosing();

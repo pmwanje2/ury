@@ -33,19 +33,39 @@ class TestClosingConsolidation(unittest.TestCase):
         self.invoice_type = "POS Invoice"
         self.frappe.db.get_single_value.side_effect = self._get_setting
         self.frappe.db.get_value.side_effect = self._get_opening_value
+        self.frappe.get_precision.return_value = 2
         self.frappe.get_all.side_effect = self._get_all
         self.frappe.get_list.side_effect = self._get_list
         self.invoices = []
         self.hidden_invoices = set()
+        self.payment_rows = {}
+        self.opening_balance_details = [
+            frappe._dict(mode_of_payment="Cash", opening_amount=100000),
+            frappe._dict(mode_of_payment="Card", opening_amount=0),
+        ]
+        self.profile = frappe._dict(
+            name="Till", company="Company",
+            payments=[
+                frappe._dict(mode_of_payment="Cash"),
+                frappe._dict(mode_of_payment="Card"),
+            ],
+        )
+        self.mode_accounts = {"Cash": "Cash", "Card": "Card"}
         self.start = "2026-10-01 08:00:00"
         self.end = "2026-10-01 18:00:00"
         self.doc = ClosingDocument(
-            pos_profile="Till", user="cashier", owner="cashier",
+            pos_profile="Till", company="Company", user="cashier", owner="cashier",
             pos_opening_entry="OPEN-1", period_start_date=self.start,
             period_end_date=self.end, pos_invoices=[], taxes=[],
             grand_total=999, net_total=999, total_quantity=999,
             total_taxes_and_charges=999, invoice_type="POS Invoice",
+            payment_reconciliation=[],
         )
+        self.frappe.get_doc.side_effect = self._get_doc
+        self.get_payment_rows = self.enterContext(patch(
+            "erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry.get_payment_rows_by_invoice",
+            side_effect=lambda invoices: self.payment_rows,
+        ))
         self.get_taxes = self.enterContext(patch(
             "erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry.get_taxes",
             return_value=[frappe._dict(account_head="VAT", tax_amount=2700)],
@@ -66,9 +86,20 @@ class TestClosingConsolidation(unittest.TestCase):
         return self.invoice_type
 
     def _get_opening_value(self, doctype, name, field):
-        self.assertEqual((doctype, name, field),
-                         ("POS Opening Entry", "OPEN-1", "period_start_date"))
-        return self.start
+        if (doctype, name, field) == ("POS Opening Entry", "OPEN-1", "period_start_date"):
+            return self.start
+        if (doctype, field) == ("POS Profile", "custom_enable_multiple_cashier"):
+            return 0
+        if doctype == "Mode of Payment Account" and field == "default_account":
+            return self.mode_accounts.get(name.get("parent"))
+        self.fail(f"Unexpected get_value call: {(doctype, name, field)}")
+
+    def _get_doc(self, doctype, name):
+        if (doctype, name) == ("POS Opening Entry", "OPEN-1"):
+            return frappe._dict(balance_details=self.opening_balance_details)
+        if (doctype, name) == ("POS Profile", "Till"):
+            return self.profile
+        self.fail(f"Unexpected get_doc call: {(doctype, name)}")
 
     @staticmethod
     def _matches(row, field, condition):
@@ -116,6 +147,16 @@ class TestClosingConsolidation(unittest.TestCase):
         row.update(values)
         self.invoices.append(row)
         return row
+
+    def _reconciliation(self, *rows):
+        self.doc.payment_reconciliation = [frappe._dict(row) for row in rows]
+
+    def _validate(self):
+        self._event("before_validate")
+        self._event("validate")
+
+    def _rows_by_mode(self):
+        return {row.mode_of_payment: row for row in self.doc.payment_reconciliation}
 
     def _event(self, event):
         # Missing registrations mean the lifecycle does nothing, reproducing
@@ -303,6 +344,167 @@ class TestClosingConsolidation(unittest.TestCase):
         self.assertEqual((self.doc.grand_total, self.doc.net_total,
                           self.doc.total_quantity, self.doc.total_taxes_and_charges), (0, 0, 0, 0))
 
+    def test_card_tip_paid_from_till_reduces_cash_expected(self):
+        self.opening_balance_details = [
+            frappe._dict(mode_of_payment="Cash", opening_amount=100000),
+            frappe._dict(mode_of_payment="Card", opening_amount=0),
+        ]
+        self._reconciliation(
+            {"mode_of_payment": "Cash", "closing_amount": 95000,
+             "expected_amount": 999999, "difference": -999999},
+            {"mode_of_payment": "Card", "closing_amount": 85000,
+             "expected_amount": 999999, "difference": -999999},
+        )
+        self._invoice(
+            "CARD-TIP", grand_total=50000, net_total=50000, total_taxes_and_charges=0,
+            change_amount=5000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 55000, "account": "Card"}],
+        )
+        self._invoice(
+            "CARD-EXACT", grand_total=30000, net_total=30000, total_taxes_and_charges=0,
+            payments=[{"mode_of_payment": "Card", "amount": 30000, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "CARD-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=55000, account="Card", type="Card"),
+            ],
+            ("POS Invoice", "CARD-EXACT"): [
+                frappe._dict(mode_of_payment="Card", amount=30000, account="Card", type="Card"),
+            ],
+        }
+
+        self._validate()
+
+        rows = self._rows_by_mode()
+        self.assertEqual((rows["Cash"].expected_amount, rows["Cash"].difference), (95000, 0))
+        self.assertEqual((rows["Card"].expected_amount, rows["Card"].difference), (85000, 0))
+
+    def test_client_sent_expected_is_replaced(self):
+        self._reconciliation({
+            "mode_of_payment": "Cash", "closing_amount": 95000,
+            "expected_amount": 100000, "difference": -5000,
+        })
+        self._invoice(
+            "CARD-TIP", grand_total=50000, net_total=50000, total_taxes_and_charges=0,
+            change_amount=5000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 55000, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "CARD-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=55000, account="Card", type="Card"),
+            ],
+        }
+
+        self._validate()
+
+        row = self._rows_by_mode()["Cash"]
+        self.assertEqual((row.expected_amount, row.difference), (95000, 0))
+
+    def test_surplus_stays_visible(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 100000})
+        self._invoice(
+            "CARD-TIP", grand_total=50000, net_total=50000, total_taxes_and_charges=0,
+            change_amount=5000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 55000, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "CARD-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=55000, account="Card", type="Card"),
+            ],
+        }
+
+        self._validate()
+
+        self.assertEqual(self._rows_by_mode()["Cash"].difference, 5000)
+
+    def test_native_change_is_not_reduced_twice(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 115000})
+        self._invoice(
+            "CARD-TIP", grand_total=50000, net_total=50000, total_taxes_and_charges=0,
+            change_amount=5000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 55000, "account": "Card"}],
+        )
+        self._invoice(
+            "CASH-TIP", grand_total=20000, net_total=20000, total_taxes_and_charges=0,
+            change_amount=3000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Cash", "amount": 23000, "account": "Cash"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "CARD-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=55000, account="Card", type="Card"),
+            ],
+            ("POS Invoice", "CASH-TIP"): [
+                frappe._dict(mode_of_payment="Cash", amount=23000, account="Cash", type="Cash"),
+            ],
+        }
+
+        self._validate()
+
+        self.assertEqual(self._rows_by_mode()["Cash"].expected_amount, 115000)
+
+    def test_sales_invoice_mode_leaves_reconciliation_untouched(self):
+        self.invoice_type = "Sales Invoice"
+        self._reconciliation({
+            "mode_of_payment": "Cash", "closing_amount": 100000,
+            "expected_amount": 120000, "difference": -20000,
+        })
+
+        self._event("validate")
+
+        self.assertEqual(dict(self.doc.payment_reconciliation[0]), {
+            "mode_of_payment": "Cash", "closing_amount": 100000,
+            "expected_amount": 120000, "difference": -20000,
+        })
+
+    def test_empty_till_expected_is_the_opening_float(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 105000})
+
+        self._validate()
+
+        row = self._rows_by_mode()["Cash"]
+        self.assertEqual((row.expected_amount, row.difference), (100000, 5000))
+
+    def test_change_account_without_one_till_mode_refuses(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 95000})
+        self._invoice(
+            "CARD-TIP", grand_total=50000, net_total=50000, total_taxes_and_charges=0,
+            change_amount=5000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 55000, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "CARD-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=55000, account="Card", type="Card"),
+            ],
+        }
+        self.mode_accounts = {}
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError,
+            r"\[URY-CLOSE-CHANGE-NO-TILL-MODE\]",
+        ):
+            self._validate()
+
+    def test_two_till_modes_for_change_account_refuses(self):
+        self.profile.payments.append(frappe._dict(mode_of_payment="Petty Cash"))
+        self.mode_accounts["Petty Cash"] = "Cash"
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 95000})
+        self._invoice(
+            "CARD-TIP", grand_total=50000, net_total=50000, total_taxes_and_charges=0,
+            change_amount=5000, account_for_change_amount="Cash",
+            payments=[{"mode_of_payment": "Card", "amount": 55000, "account": "Card"}],
+        )
+        self.payment_rows = {
+            ("POS Invoice", "CARD-TIP"): [
+                frappe._dict(mode_of_payment="Card", amount=55000, account="Card", type="Card"),
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            frappe.ValidationError,
+            r"\[URY-CLOSE-CHANGE-NO-TILL-MODE\]",
+        ):
+            self._validate()
+
     def test_shared_selection_returns_reference_and_total_fields(self):
         for name, stamp in (
             ("BEFORE", "2026-10-01 07:59:59"), ("START", self.start),
@@ -325,6 +527,13 @@ class TestClosingConsolidation(unittest.TestCase):
         for event in ("before_validate", "before_submit", "before_save", "validate"):
             with self.subTest(event=event):
                 self.assertEqual(events.get(event), f"ury.ury.hooks.ury_pos_closing_entry.{event}")
+
+        calls = []
+        with patch.object(closing, "_set_expected_amounts", side_effect=lambda *args: calls.append("expected"), create=True), \
+             patch.object(closing, "calculate_closing_amount", side_effect=lambda *args: calls.append("closing")), \
+             patch.object(closing, "validate_cashier", side_effect=lambda *args: calls.append("cashier")):
+            closing.validate(self.doc, "validate")
+        self.assertEqual(calls, ["expected", "closing", "cashier"])
 
 
 if __name__ == "__main__":
