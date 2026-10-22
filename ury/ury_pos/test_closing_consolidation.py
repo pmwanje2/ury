@@ -464,6 +464,13 @@ class TestClosingConsolidation(unittest.TestCase):
         row = self._rows_by_mode()["Cash"]
         self.assertEqual((row.expected_amount, row.difference), (100000, 5000))
 
+    def test_empty_till_does_not_query_payment_rows(self):
+        self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 100000})
+
+        self._validate()
+
+        self.get_payment_rows.assert_not_called()
+
     def test_change_account_without_one_till_mode_refuses(self):
         self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 95000})
         self._invoice(
