@@ -73,6 +73,7 @@ def _closing_invoice_rows(doc):
         fields=[
             "name", "posting_date", "posting_time", "customer", "grand_total",
             "net_total", "total_qty", "total_taxes_and_charges", "is_return", "return_against",
+            "rounded_total", "change_amount", "account_for_change_amount",
         ],
         order_by="posting_date asc, posting_time asc",
         limit_page_length=0,
@@ -128,16 +129,11 @@ def _set_expected_amounts(doc):
     fallback_changes = {}
     for invoice in invoices:
         rows = rows_by_invoice.get(("POS Invoice", invoice.name), [])
-        if sum(flt(row.amount) for row in rows) > flt(invoice.grand_total):
-            change_fields = frappe.get_all(
-                "POS Invoice",
-                filters={"name": invoice.name},
-                fields=["change_amount", "account_for_change_amount"],
-                limit_page_length=1,
-            )
-            if change_fields:
-                invoice.update(change_fields[0])
-        change_amount = flt(invoice.get("change_amount"))
+        invoice_total = flt(invoice.get("rounded_total")) or flt(invoice.get("grand_total"))
+        payment_total = sum(flt(row.amount) for row in rows)
+        change_amount = (
+            flt(invoice.get("change_amount")) if payment_total > invoice_total else 0
+        )
         if change_amount > 0 and not invoice.get("is_return"):
             if row := get_change_payment_row(rows, invoice.account_for_change_amount):
                 row.amount = flt(row.amount) - change_amount
@@ -183,7 +179,7 @@ def _set_expected_amounts(doc):
 
 
 def _currency_flt(value, precision):
-    return flt(value, precision, "Banker's Rounding (legacy)")
+    return flt(value, precision)
 
 
 def sub_pos_close_check(doc,method):
