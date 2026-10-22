@@ -9,8 +9,11 @@ import { clearAppStorage } from '../../packages/core/src/storage';
 import { realSdkHttpFailure, realSdkNetworkFailure } from './helpers/sdk-errors';
 
 const state = vi.hoisted(() => ({
-  profile: { name: 'POS-1', company: 'Test Co', custom_daily_pos_close: 1 },
-  user: { name: 'operator@example.com', roles: ['URY Cashier'] },
+  profile: {
+    name: 'POS-1', company: 'Test Co', custom_daily_pos_close: 1,
+    role_allowed_for_billing: [{ role: 'URY Cashier' }] as Array<{ role: string }>,
+  },
+  user: { name: 'operator@example.com', roles: ['URY Cashier'] as string[] },
 }));
 vi.mock('../src/store/root-store', () => ({ useRootStore: () => ({ user: state.user }) }));
 vi.mock('../src/store/pos-store', () => ({ usePOSStore: () => ({
@@ -57,6 +60,9 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  state.user = { name: 'operator@example.com', roles: ['URY Cashier'] };
+  state.profile.role_allowed_for_billing = [{ role: 'URY Cashier' }];
+  window.history.replaceState({}, '', '/');
 });
 
 async function render() {
@@ -229,6 +235,50 @@ describe('offline opening fallback', () => {
     await clearAppStorage();
     vi.mocked(checkPOSOpening).mockRejectedValue(await realSdkNetworkFailure());
     await render();
+    expect(container.textContent).not.toContain('POS workspace');
+  });
+});
+
+describe('floor order routes', () => {
+  it('keeps the opening screen for a waiter on the cashier till route', async () => {
+    state.user = { name: 'Salama Waiter', roles: ['URY Captain'] };
+    vi.mocked(getPOSOpeningContext).mockResolvedValue({
+      ...context,
+      occupied_entry: { ...context.occupied_entry, user_full_name: 'Salama Cashier', joinable: false },
+    });
+    window.history.replaceState({}, '', '/pos/pos');
+    await render();
+    expect(container.textContent).toContain('Till already open');
+    expect(container.textContent).not.toContain('POS workspace');
+    const continued = [...container.querySelectorAll('button')].some((button) => /^Continue/.test(button.textContent || ''));
+    expect(continued).toBe(false);
+  });
+
+  it('keeps the opening gate for a cashier on the floor order route', async () => {
+    state.user = { name: 'cashier@example.com', roles: ['URY Cashier'] };
+    window.history.replaceState({}, '', '/pos/order');
+    await render();
+    expect(checkPOSOpening).toHaveBeenCalledWith('cashier@example.com');
+    expect(container.textContent).toContain('Till already open');
+    expect(container.textContent).not.toContain('POS workspace');
+  });
+
+  it('keeps the opening gate when the billing role table is empty', async () => {
+    state.user = { name: 'Salama Waiter', roles: ['URY Captain'] };
+    state.profile.role_allowed_for_billing = [];
+    window.history.replaceState({}, '', '/pos/order');
+    await render();
+    expect(checkPOSOpening).toHaveBeenCalledWith('Salama Waiter');
+    expect(container.textContent).toContain('Till already open');
+    expect(container.textContent).not.toContain('POS workspace');
+  });
+
+  it('keeps the opening gate for Administrator on the floor order route', async () => {
+    state.user = { name: 'Administrator', roles: ['System Manager'] };
+    window.history.replaceState({}, '', '/pos/order');
+    await render();
+    expect(checkPOSOpening).toHaveBeenCalledWith('Administrator');
+    expect(container.textContent).toContain('Till already open');
     expect(container.textContent).not.toContain('POS workspace');
   });
 });
