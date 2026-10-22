@@ -41,8 +41,8 @@ function App() {
       <KotAlertListener />
       <ScreenSizeProvider>
         <AuthGuard>
-          <POSOpeningProvider>
-            <Router basename="/pos">
+          <Router basename="/pos">
+            <POSOpeningProvider>
               <Routes>
                 <Route element={<AppLayout />}>
                   <Route index element={<Navigate to={user?.provisional ? '/pos' : homePath(user)} replace />} />
@@ -78,8 +78,8 @@ function App() {
                   }
                 />
               </Routes>
-            </Router>
-          </POSOpeningProvider>
+            </POSOpeningProvider>
+          </Router>
         </AuthGuard>
       </ScreenSizeProvider>
     </>
