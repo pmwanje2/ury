@@ -471,6 +471,48 @@ class TestClosingConsolidation(unittest.TestCase):
 
         self.get_payment_rows.assert_not_called()
 
+    def test_multi_cashier_preserves_main_cashier_count(self):
+        self.doc.posting_date = "2026-10-01"
+        self.profile.branch = "Branch"
+        self.profile.applicable_for_users = [
+            frappe._dict(user="sub-cashier", custom_main_cashier=0),
+            frappe._dict(user="cashier", custom_main_cashier=1),
+        ]
+        original_get_value = self.frappe.db.get_value.side_effect
+        original_get_all = self.frappe.get_all.side_effect
+
+        def get_value(doctype, name, field):
+            if (doctype, field) == ("POS Profile", "custom_enable_multiple_cashier"):
+                return 1
+            if (doctype, field) == ("POS Profile", "branch"):
+                return "Branch"
+            if doctype == "Sub POS Closing Payment":
+                return 20000
+            return original_get_value(doctype, name, field)
+
+        def get_all(doctype, **kwargs):
+            if doctype == "Sub POS Closing":
+                return [frappe._dict(name="SUB-CLOSE-1")]
+            if doctype == "POS Opening Entry":
+                return []
+            return original_get_all(doctype, **kwargs)
+
+        self.frappe.db.get_value.side_effect = get_value
+        self.frappe.get_all.side_effect = get_all
+        self._reconciliation({
+            "mode_of_payment": "Cash",
+            "closing_amount": 80000,
+            "custom_closing_amount": 80000,
+        })
+
+        self._validate()
+
+        row = self._rows_by_mode()["Cash"]
+        self.assertEqual(
+            (row.custom_closing_amount, row.closing_amount, row.difference),
+            (80000, 100000, 0),
+        )
+
     def test_change_account_without_one_till_mode_refuses(self):
         self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 95000})
         self._invoice(
