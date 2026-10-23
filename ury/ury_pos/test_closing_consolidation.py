@@ -402,6 +402,27 @@ class TestClosingConsolidation(unittest.TestCase):
         row = self._rows_by_mode()["Cash"]
         self.assertEqual((row.expected_amount, row.difference), (95000, 0))
 
+    def test_existing_reconciliation_rows_are_updated_in_place(self):
+        cash_row = frappe._dict(
+            name="CLOSING-ROW-CASH", mode_of_payment="Cash", closing_amount=25000,
+            expected_amount=999999, difference=-999999,
+        )
+        card_row = frappe._dict(
+            name="CLOSING-ROW-CARD", mode_of_payment="Card", closing_amount=20000,
+            expected_amount=999999, difference=-999999,
+        )
+        self.doc.payment_reconciliation = [cash_row, card_row]
+
+        self._validate()
+
+        rows = self._rows_by_mode()
+        self.assertIs(rows["Cash"], cash_row)
+        self.assertIs(rows["Card"], card_row)
+        self.assertEqual(
+            [(row.name, row.closing_amount) for row in self.doc.payment_reconciliation],
+            [("CLOSING-ROW-CASH", 25000), ("CLOSING-ROW-CARD", 20000)],
+        )
+
     def test_surplus_stays_visible(self):
         self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 100000})
         self._invoice(
