@@ -154,15 +154,17 @@ def _set_expected_amounts(doc):
         expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) - change_amount, precision)
 
     client_rows = {row.mode_of_payment: row for row in doc.payment_reconciliation or []}
-    doc.set("payment_reconciliation", [])
-    modes = list(opening_by_mode)
+    # Existing rows keep their place (and their names); only missing modes are
+    # appended, in opening, then expected order. idx is renumbered 1..n.
+    modes = [row.mode_of_payment for row in doc.payment_reconciliation or [] if client_rows.get(row.mode_of_payment) is row]
+    modes.extend(mode for mode in opening_by_mode if mode not in modes)
     modes.extend(mode for mode in expected_by_mode if mode not in modes)
-    modes.extend(mode for mode in client_rows if mode not in modes)
+    ordered_rows = []
     for mode in modes:
         client_row = client_rows.get(mode)
         closing_amount = _currency_flt(client_row.closing_amount, precision) if client_row else 0
         expected_amount = _currency_flt(expected_by_mode.get(mode, 0), precision)
-        doc.append("payment_reconciliation", {
+        values = {
             "mode_of_payment": mode,
             "opening_amount": _currency_flt(opening_by_mode.get(mode, 0), precision),
             "expected_amount": expected_amount,
@@ -171,7 +173,17 @@ def _set_expected_amounts(doc):
             ),
             "closing_amount": closing_amount,
             "difference": _currency_flt(closing_amount - expected_amount, precision),
-        })
+        }
+        if client_row:
+            for field, value in values.items():
+                setattr(client_row, field, value)
+            row = client_row
+        else:
+            row = doc.append("payment_reconciliation", values)
+        ordered_rows.append(row)
+    doc.payment_reconciliation[:] = ordered_rows
+    for position, row in enumerate(ordered_rows, start=1):
+        row.idx = position
 
 
 def _currency_flt(value, precision):

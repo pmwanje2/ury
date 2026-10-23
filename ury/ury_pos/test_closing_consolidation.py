@@ -18,6 +18,8 @@ class ClosingDocument(frappe._dict):
 
     def append(self, field, value):
         row = frappe._dict(value)
+        if field == "payment_reconciliation":
+            row.idx = len(self[field]) + 1
         self[field].append(row)
         return row
 
@@ -401,6 +403,53 @@ class TestClosingConsolidation(unittest.TestCase):
 
         row = self._rows_by_mode()["Cash"]
         self.assertEqual((row.expected_amount, row.difference), (95000, 0))
+
+    def test_existing_reconciliation_rows_are_updated_in_place(self):
+        cash_row = frappe._dict(
+            name="CLOSING-ROW-CASH", mode_of_payment="Cash", closing_amount=25000,
+            expected_amount=999999, difference=-999999,
+        )
+        card_row = frappe._dict(
+            name="CLOSING-ROW-CARD", mode_of_payment="Card", closing_amount=20000,
+            expected_amount=999999, difference=-999999,
+        )
+        self.doc.payment_reconciliation = [cash_row, card_row]
+
+        self._validate()
+
+        rows = self._rows_by_mode()
+        self.assertIs(rows["Cash"], cash_row)
+        self.assertIs(rows["Card"], card_row)
+        self.assertEqual(
+            [(row.name, row.closing_amount) for row in self.doc.payment_reconciliation],
+            [("CLOSING-ROW-CASH", 25000), ("CLOSING-ROW-CARD", 20000)],
+        )
+
+    def test_existing_rows_keep_their_order_and_idx_is_renumbered(self):
+        card_row = frappe._dict(name="ROW-CARD", idx=1, mode_of_payment="Card", closing_amount=20000)
+        stale_row = frappe._dict(name="ROW-OLD", idx=5, mode_of_payment="Old Mode", closing_amount=0)
+        cash_row = frappe._dict(name="ROW-CASH", idx=9, mode_of_payment="Cash", closing_amount=25000)
+        self.doc.payment_reconciliation = [card_row, stale_row, cash_row]
+
+        self._validate()
+
+        self.assertEqual(
+            [(row.name, row.mode_of_payment, row.idx) for row in self.doc.payment_reconciliation],
+            [("ROW-CARD", "Card", 1), ("ROW-OLD", "Old Mode", 2), ("ROW-CASH", "Cash", 3)],
+        )
+        self.assertEqual(self._rows_by_mode()["Old Mode"].expected_amount, 0)
+        self.assertEqual(self._rows_by_mode()["Cash"].expected_amount, 100000)
+        self.assertEqual(self._rows_by_mode()["Cash"].closing_amount, 25000)
+
+    def test_new_draft_rows_follow_opening_order_with_idx_one_to_n(self):
+        self.doc.payment_reconciliation = []
+
+        self._validate()
+
+        self.assertEqual(
+            [(row.mode_of_payment, row.idx) for row in self.doc.payment_reconciliation],
+            [("Cash", 1), ("Card", 2)],
+        )
 
     def test_surplus_stays_visible(self):
         self._reconciliation({"mode_of_payment": "Cash", "closing_amount": 100000})
