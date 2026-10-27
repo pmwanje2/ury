@@ -83,6 +83,7 @@ class MinimalSetupPermissions(unittest.TestCase):
         self.framework.get_all.return_value = [frappe._dict(name="Company")]
         self.framework.db.exists.return_value = True
         self.enterContext(patch.object(business, "frappe", self.framework))
+        self.enterContext(patch.object(business, "_", lambda message: message))
         self.enterContext(patch.object(organization, "frappe", self.framework))
         self.password = self.enterContext(patch("frappe.utils.password.update_password"))
         self.inner = self.enterContext(patch.object(organization, "setup_complete", return_value={"ok": True}))
@@ -246,6 +247,13 @@ class MinimalSetupPermissions(unittest.TestCase):
         self.assertEqual(company.tax_id, "changed")
         self.assertEqual(company.saved, [False])
         self.framework.db.set_value.assert_not_called()
+
+    def test_tax_write_cannot_silently_skip_an_unreadable_default_company(self):
+        self.framework.get_list.side_effect = lambda doctype, **kwargs: [] if doctype == "Company" else [frappe._dict(name="Branch")]
+        with self.assertRaises(frappe.PermissionError):
+            business.update_business_setup(branch={"name": "Branch", "tax_id": "changed"})
+        self.framework.db.set_value.assert_not_called()
+        self.assertEqual(self.documents.get(("Branch", "Branch")), None)
 
     def test_business_read_checks_and_filters_full_documents(self):
         self.documents[("Branch", "Branch")] = PermissionDocument("Branch", "Branch", private_field="hidden")

@@ -180,9 +180,9 @@ class TestMinimalSetupAuthorization(IntegrationTestCase):
 
     def test_native_permitted_branch_and_restaurant_writes(self):
         frappe.set_user(self.editor)
-        self.assertEqual(business.update_business_setup(branch={"name": self.branch, "branch": self.marker + "-edited"}), {"status": "success"})
+        self.assertEqual(business.update_business_setup(branch={"name": self.branch, "custom_make_unpaid": 1}), {"status": "success"})
         self.assertEqual(business.update_business_setup(restaurant={"name": self.restaurant, "invoice_series_prefix": "EDIT-"}), {"status": "success"})
-        self.assertEqual(frappe.get_doc("Branch", self.branch).branch, self.marker + "-edited")
+        self.assertEqual(frappe.get_doc("Branch", self.branch).custom_make_unpaid, 1)
         self.assertEqual(frappe.get_doc("URY Restaurant", self.restaurant).invoice_series_prefix, "EDIT-")
 
     def test_native_user_permission_denies_other_branch(self):
