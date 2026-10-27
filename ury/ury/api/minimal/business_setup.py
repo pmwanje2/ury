@@ -1,20 +1,33 @@
 import frappe
 from frappe import _
 
+
+def _get_company_name():
+    default = frappe.defaults.get_user_default("Company")
+    companies = frappe.get_list("Company", filters={"name": default} if default else {}, fields=["name"], limit_page_length=1)
+    return companies[0].name if companies else None
+
+
 @frappe.whitelist()
 def get_business_setup():
     if frappe.session.user == "Guest":
         frappe.throw("Not permitted")
 
-    company = frappe.get_all("Company", limit=1)
-    if not company:
+    company_name = _get_company_name()
+    if not company_name:
         frappe.throw(_("No Company found."))
-    company_name = company[0].name
 
-    # Fetch all branches instead of just the default one
-    branches = frappe.get_all("Branch", fields=["*"])
+    branches = []
+    for branch in frappe.get_list("Branch", fields=["name"], limit_page_length=0):
+        doc = frappe.get_doc("Branch", branch.name)
+        doc.check_permission("read")
+        doc.apply_fieldlevel_read_permissions()
+        branches.append(doc.as_dict())
     
     restaurant = frappe.get_doc("URY Restaurant", company_name) if frappe.db.exists("URY Restaurant", company_name) else None
+    if restaurant:
+        restaurant.check_permission("read")
+        restaurant.apply_fieldlevel_read_permissions()
 
     return {
         "status": "success",
@@ -30,10 +43,19 @@ def get_branches():
     if frappe.session.user == "Guest":
         frappe.throw("Not permitted")
 
-    comp = frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
-    tax_id = frappe.db.get_value("Company", comp, "tax_id") if comp else None
+    tax_id = None
+    try:
+        comp = _get_company_name()
+        if comp:
+            company = frappe.get_doc("Company", comp)
+            company.check_permission("read")
+            company.apply_fieldlevel_read_permissions()
+            tax_id = company.get("tax_id")
+    except frappe.PermissionError:
+        # Company access is optional for the ordinary staff branch dropdown.
+        pass
     
-    branches = frappe.get_all("Branch", fields=["name", "branch"])
+    branches = frappe.get_list("Branch", fields=["name", "branch"], limit_page_length=0)
     return [{"id": b.name, "name": b.branch, "tax_id": tax_id} for b in branches]
 
 @frappe.whitelist()
@@ -52,19 +74,25 @@ def update_business_setup(branch=None, restaurant=None):
             branch_name = b_data.get("name") or b_data.get("branch")
             tax_id = b_data.get("tax_id") or b_data.get("taxId")
             if tax_id:
-                comp = frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
-                if comp:
-                    frappe.db.set_value("Company", comp, "tax_id", tax_id)
+                comp = _get_company_name()
+                if not comp:
+                    frappe.throw(_("Not permitted"), frappe.PermissionError)
+                company = frappe.get_doc("Company", comp)
+                company.check_permission("write")
+                company.tax_id = tax_id
+                company.save()
 
             if branch_name and frappe.db.exists("Branch", branch_name):
                 doc = frappe.get_doc("Branch", branch_name)
+                doc.check_permission("write")
                 doc.update(b_data)
-                doc.save(ignore_permissions=True)
+                doc.save()
             elif branch_name:
                 doc = frappe.new_doc("Branch")
+                doc.check_permission("create")
                 doc.branch = branch_name
                 doc.update(b_data)
-                doc.insert(ignore_permissions=True)
+                doc.insert()
             
     if restaurant:
         if isinstance(restaurant, str):
@@ -72,30 +100,28 @@ def update_business_setup(branch=None, restaurant=None):
             
         restaurants_data = restaurant if isinstance(restaurant, list) else [restaurant]
         
-        company = frappe.get_all("Company", limit=1)
-        company_name = company[0].name if company else None
+        company_name = _get_company_name()
         
         for r_data in restaurants_data:
             restaurant_name = r_data.get("name") or r_data.get("restaurant_name") or company_name
             if restaurant_name and frappe.db.exists("URY Restaurant", restaurant_name):
                 rdoc = frappe.get_doc("URY Restaurant", restaurant_name)
+                rdoc.check_permission("write")
                 rdoc.update(r_data)
-                rdoc.save(ignore_permissions=True)
+                rdoc.save()
             elif restaurant_name:
                 rdoc = frappe.new_doc("URY Restaurant")
+                rdoc.check_permission("create")
                 rdoc.name = restaurant_name
                 if not r_data.get("company"):
                     rdoc.company = company_name
                 rdoc.update(r_data)
-                rdoc.insert(ignore_permissions=True)
+                rdoc.insert()
             
     return {"status": "success"}
 
 @frappe.whitelist()
 def create_setup_user(email, name, password=None, role="URY Cashier"):
-    if frappe.db.exists("User", email):
-        return {"status": "exists", "email": email}
-    
     user = frappe.get_doc({
         "doctype": "User",
         "email": email,
@@ -105,7 +131,13 @@ def create_setup_user(email, name, password=None, role="URY Cashier"):
         "user_type": "System User",
         "roles": [{"role": role}]
     })
-    user.insert(ignore_permissions=True)
+    user.check_permission("create")
+    if not user.has_permlevel_access_to("roles", permission_type="write"):
+        frappe.throw(_("Not permitted"), frappe.PermissionError)
+    if frappe.db.exists("User", email):
+        return {"status": "exists", "email": email}
+
+    user.insert()
     if password:
         from frappe.utils.password import update_password
         update_password(user=email, pwd=password)
@@ -113,6 +145,7 @@ def create_setup_user(email, name, password=None, role="URY Cashier"):
 
 @frappe.whitelist()
 def submit_configure_data(data):
+    frappe.only_for("System Manager")
     if isinstance(data, str):
         data = frappe.parse_json(data)
         
@@ -123,7 +156,7 @@ def submit_configure_data(data):
     frappe.publish_realtime("ury_configure_progress", {"step": 0, "status": "loading"}, user=user)
     
     # Derive default company from site defaults or latest created company
-    default_company = frappe.defaults.get_user_default("Company") or frappe.db.get_value("Company", {}, "name")
+    default_company = _get_company_name()
     if not default_company:
         default_company = "Main Company"
         if not frappe.db.exists("Company", default_company):
@@ -132,7 +165,7 @@ def submit_configure_data(data):
                 "company_name": default_company,
                 "default_currency": "INR"
             })
-            comp_doc.insert(ignore_permissions=True)
+            comp_doc.insert()
             
     # Step 0 complete, Step 1 loading: Creating restaurant configuration
     frappe.publish_realtime("ury_configure_progress", {"step": 0, "status": "completed"}, user=user)
@@ -145,7 +178,10 @@ def submit_configure_data(data):
         branch_name = b.get("branchName") or default_company
         tax_id = b.get("taxId")
         if tax_id:
-            frappe.db.set_value("Company", default_company, "tax_id", tax_id)
+            company = frappe.get_doc("Company", default_company)
+            company.check_permission("write")
+            company.tax_id = tax_id
+            company.save()
 
         if not frappe.db.exists("Branch", branch_name):
             branch_doc = frappe.get_doc({
@@ -156,11 +192,14 @@ def submit_configure_data(data):
                 "tax_id": tax_id,
                 "user": [{"user": frappe.session.user}]
             })
-            branch_doc.insert(ignore_permissions=True)
+            branch_doc.insert()
             results["branch"] = branch_doc.name
         else:
             if tax_id:
-                frappe.db.set_value("Branch", branch_name, "tax_id", tax_id)
+                branch_doc = frappe.get_doc("Branch", branch_name)
+                branch_doc.check_permission("write")
+                branch_doc.tax_id = tax_id
+                branch_doc.save()
             results["branch"] = branch_name
 
     # 2. URY Rooms
@@ -180,7 +219,7 @@ def submit_configure_data(data):
                 "branch": branch_name,
                 "room_type": r.get("type", "AC")
             })
-            room_doc.insert(ignore_permissions=True)
+            room_doc.insert()
             results["rooms"].append(room_doc.name)
         else:
             results["rooms"].append(r_name)
@@ -194,7 +233,7 @@ def submit_configure_data(data):
                 "branch": branch_name,
                 "room_type": "AC"
             })
-            room_doc.insert(ignore_permissions=True)
+            room_doc.insert()
             results["rooms"].append(room_doc.name)
 
     # 3. URY Restaurant (Required dependency for URY Table!)
@@ -209,7 +248,7 @@ def submit_configure_data(data):
             "aggregator_series_prefix": data.get("branch", {}).get("aggregatorPrefix", "AGG-"),
             "default_room": first_room_name
         })
-        rest_doc.insert(ignore_permissions=True)
+        rest_doc.insert()
         results["restaurant"] = rest_doc.name
     else:
         results["restaurant"] = restaurant_name
@@ -238,7 +277,7 @@ def submit_configure_data(data):
                 "no_of_seats": int(t.get("seats", 4)),
                 "table_shape": mapped_shape
             })
-            table_doc.insert(ignore_permissions=True)
+            table_doc.insert()
             results["tables"].append(table_doc.name)
             results["tables_created"].append(table_doc.name)
         else:
@@ -261,7 +300,7 @@ def submit_configure_data(data):
     item_group = frappe.db.get_value("Item Group", {"is_group": 0}, "name") or "All Item Groups"
     
     if not frappe.db.exists("UOM", "Unit"):
-        frappe.get_doc({"doctype": "UOM", "uom_name": "Unit", "must_be_whole_number": 0}).insert(ignore_permissions=True)
+        frappe.get_doc({"doctype": "UOM", "uom_name": "Unit", "must_be_whole_number": 0}).insert()
     uom = "Unit"
 
     results["created_items"] = []
@@ -278,7 +317,7 @@ def submit_configure_data(data):
         # 5a. Ensure URY Menu Course exists
         if course_title not in existing_courses:
             c_doc = frappe.get_doc({"doctype": "URY Menu Course", "course": course_title})
-            c_doc.insert(ignore_permissions=True)
+            c_doc.insert()
             existing_courses.add(course_title)
 
         # 5b. PASS 1: Create ERPNext Item DocType record with Maintain Stock (is_stock_item) = 0!
@@ -293,7 +332,7 @@ def submit_configure_data(data):
                 "is_stock_item": 0,  # Maintain Stock == 0
                 "is_sales_item": 1
             })
-            item_doc.insert(ignore_permissions=True)
+            item_doc.insert()
             results["created_items"].append(item_doc.name)
 
         # Build child table row referencing the created ERPNext Item
@@ -314,11 +353,14 @@ def submit_configure_data(data):
             "enabled": 1,
             "items": menu_items_table
         })
-        menu_doc.insert(ignore_permissions=True)
+        menu_doc.insert()
         results["menu"] = menu_doc.name
         
         # Link menu to restaurant
-        frappe.db.set_value("URY Restaurant", restaurant_name, "active_menu", menu_name)
+        rest_doc = frappe.get_doc("URY Restaurant", restaurant_name)
+        rest_doc.check_permission("write")
+        rest_doc.active_menu = menu_name
+        rest_doc.save()
     elif frappe.db.exists("URY Menu", menu_name):
         results["menu"] = menu_name
 
@@ -334,7 +376,7 @@ def submit_configure_data(data):
                 "mode_of_payment": p_name,
                 "type": "General"
             })
-            pm_doc.insert(ignore_permissions=True)
+            pm_doc.insert()
             results["payment_methods"].append(pm_doc.name)
         else:
             results["payment_methods"].append(p_name)
@@ -354,9 +396,12 @@ def submit_configure_data(data):
         
         try:
             b_doc = frappe.get_doc("Branch", branch_name)
+            b_doc.check_permission("write")
             if not any(row.user == u.get("email") for row in b_doc.user):
                 b_doc.append("user", {"user": u.get("email")})
-                b_doc.save(ignore_permissions=True)
+                b_doc.save()
+        except frappe.PermissionError:
+            raise
         except Exception:
             pass
 
@@ -373,7 +418,7 @@ def submit_configure_data(data):
                 "company": default_company,
                 "is_group": 0
             })
-            w_doc.insert(ignore_permissions=True)
+            w_doc.insert()
         
         pos_profile_name = branch_name
         if not frappe.db.exists("POS Profile", pos_profile_name):
@@ -405,7 +450,7 @@ def submit_configure_data(data):
                             "included_in_print_rate": 1 if tax_type == "Inclusive" else 0
                         }]
                     })
-                    stc_doc.insert(ignore_permissions=True)
+                    stc_doc.insert()
                     tax_template_name = stc_doc.name
                 else:
                     tax_template_name = existing_template
@@ -492,9 +537,12 @@ def submit_configure_data(data):
             
             if tax_template_name:
                 if frappe.db.exists("URY Restaurant", restaurant_name):
-                    frappe.db.set_value("URY Restaurant", restaurant_name, "default_tax_template", tax_template_name)
+                    rest_doc = frappe.get_doc("URY Restaurant", restaurant_name)
+                    rest_doc.check_permission("write")
+                    rest_doc.default_tax_template = tax_template_name
+                    rest_doc.save()
                 
-            pos_doc.insert(ignore_permissions=True)
+            pos_doc.insert()
             results["pos_profile"] = pos_doc.name
         else:
             p_doc = frappe.get_doc("POS Profile", pos_profile_name)
@@ -521,7 +569,7 @@ def submit_configure_data(data):
                     setattr(p_doc, k, val)
                 else:
                     setattr(p_doc, k, v)
-            p_doc.save(ignore_permissions=True)
+            p_doc.save()
             results["pos_profile"] = pos_profile_name
 
         # Create URY Production Unit
@@ -535,14 +583,18 @@ def submit_configure_data(data):
                 "warehouse": warehouse_name,
                 "item_groups": [{"item_group": item_group}]
             })
-            prod_doc.insert(ignore_permissions=True)
+            prod_doc.insert()
             results["production_unit"] = prod_doc.name
 
+    except frappe.PermissionError:
+        raise
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Failed to create POS Profile")
         results["pos_profile_error"] = str(e)
 
-    frappe.db.set_single_value("System Settings", "setup_complete", 1)
+    settings = frappe.get_doc("System Settings")
+    settings.setup_complete = 1
+    settings.save()
 
     frappe.publish_realtime("ury_configure_progress", {"step": 3, "status": "completed"}, user=user)
 
