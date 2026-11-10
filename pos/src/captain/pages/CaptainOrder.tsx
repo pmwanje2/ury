@@ -614,7 +614,7 @@ export default function CaptainOrder() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-dvh overflow-hidden bg-gray-50 flex flex-col">
       {/* Header */}
       <div className="sticky top-0 z-20 bg-header text-header-foreground border-b border-header-border px-3 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -698,7 +698,7 @@ export default function CaptainOrder() {
       )}
 
       {/* Mobile layout: toggle-driven single-pane view */}
-      <div className="flex-1 flex flex-col overflow-hidden lg:hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden lg:hidden">
         {canModify && mode === 'menu' ? (
           <CaptainMenu canAddItems={canModify} />
         ) : (
@@ -707,7 +707,7 @@ export default function CaptainOrder() {
       </div>
 
       {/* Tablet layout: side-by-side Menu | Order with primary action */}
-      <div className="hidden lg:flex lg:flex-col lg:flex-1 lg:overflow-hidden">
+      <div className="hidden lg:flex lg:flex-col lg:flex-1 lg:min-h-0 lg:overflow-hidden">
         <div className="flex flex-row gap-4 flex-1 overflow-hidden p-3">
           {canModify && (
             <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-gray-200 bg-white">
