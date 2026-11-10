@@ -12,10 +12,13 @@ import { describe, expect, it } from 'vitest';
 const here = typeof __dirname === 'string' ? __dirname : dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(here, '../src/captain/pages/CaptainOrder.tsx'), 'utf8');
 
-function classesOfLineContaining(marker: string): string[] {
-  const line = source.split('\n').find((candidate) => candidate.includes(marker));
-  expect(line, `line containing ${marker}`).toBeDefined();
-  return (line!.match(/className="([^"]*)"/)?.[1] ?? '').split(/\s+/);
+// The element directly after a layout comment, so the assertion is about that
+// pane however its class list is written.
+function classesAfterComment(comment: string): string[] {
+  const lines = source.split('\n');
+  const at = lines.findIndex((candidate) => candidate.includes(comment));
+  expect(at, `comment ${comment}`).toBeGreaterThanOrEqual(0);
+  return (lines[at + 1].match(/className="([^"]*)"/)?.[1] ?? '').split(/\s+/);
 }
 
 describe('Captain order screen fits the viewport', () => {
@@ -29,9 +32,11 @@ describe('Captain order screen fits the viewport', () => {
   });
 
   it('keeps the tablet panes and the mobile pane inside that height', () => {
-    expect(classesOfLineContaining('flex-1 flex flex-col overflow-hidden')).toEqual(
+    expect(classesAfterComment('{/* Mobile layout: toggle-driven single-pane view */}')).toEqual(
       expect.arrayContaining(['flex-1', 'min-h-0', 'overflow-hidden', 'lg:hidden']),
     );
-    expect(classesOfLineContaining('hidden lg:flex lg:flex-col')).toEqual(expect.arrayContaining(['lg:min-h-0']));
+    expect(classesAfterComment('{/* Tablet layout: side-by-side Menu | Order with primary action */}')).toEqual(
+      expect.arrayContaining(['lg:flex-1', 'lg:min-h-0', 'lg:overflow-hidden']),
+    );
   });
 });
