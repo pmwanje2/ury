@@ -1,7 +1,7 @@
 <template>
   <header class="bg-white p-4 flex justify-between items-center border-b border-gray-200">
     <router-link to="/" class="flex items-center cursor-pointer">
-      <img :src="brand.logo" :alt="brand.name" class="ml-20 w-40 h-15 mr-2">
+      <img :src="brand.logo" :alt="brand.name" class="h-10 w-auto mr-2">
     </router-link>
     <div class="flex items-center gap-4">
       <p v-if="logoutError" role="alert" class="text-sm text-red-600">{{ logoutError }}</p>
