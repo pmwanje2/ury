@@ -3,7 +3,6 @@ import { Card, CardContent } from '@ury/ui';
 import { useState, useEffect } from 'react';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, call } from '@ury/core';
-import HufLogo from '../components/HufLogo';
 import Notifications from '../components/Notifications';
 
 // Helper to format ETA minutes into readable time
@@ -454,21 +453,6 @@ export default function Dashboard() {
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Shift Brief Section (with HUF Logo) */}
-          <Card className="bg-white border border-gray-200">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between gap-2 mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">Shift Brief</h3>
-                <span className="inline-flex items-center justify-center px-2 py-1 bg-purple-50 text-purple-700 border border-purple-200 rounded">
-                  <HufLogo className="h-3.5 w-auto" />
-                </span>
-              </div>
-              <p className="text-sm text-gray-600">
-                AI-written shift summaries are not yet connected. This panel will show HUF&apos;s shift observations once integrated.
-              </p>
             </CardContent>
           </Card>
 
