@@ -18,6 +18,7 @@ class TestKitchenDashboardCounts(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 11, 12, 15)
         self.rows = []
+        self.production_unit = Row(enable_order_type_wise_display_on_mosaic=0)
         self.frappe = MagicMock()
         self.frappe.whitelist.side_effect = lambda **kwargs: lambda function: function
         self.frappe.session.user = 'captain@example.com'
@@ -67,7 +68,7 @@ class TestKitchenDashboardCounts(unittest.TestCase):
 
     def get_doc(self, doctype, name):
         if doctype == 'URY Production Unit':
-            return SimpleNamespace(enable_order_type_wise_display_on_mosaic=0)
+            return self.production_unit
         return next(row for row in self.rows if row.name == name)
 
     def counts(self):
@@ -101,6 +102,29 @@ class TestKitchenDashboardCounts(unittest.TestCase):
         self.ticket('CANCEL', type='Cancelled', verified=1, original_kot=' ORIGINAL, ')
         self.assertEqual(self.display.kot_list()['KOT'], [])
         self.assertEqual(self.counts()['active_orders'], 0)
+
+    def test_counts_preserve_the_forks_production_order_type_filter(self):
+        self.production_unit.update(enable_order_type_wise_display_on_mosaic=1,
+                                    order_type=[SimpleNamespace(order_type='Dine In')])
+        self.frappe.db.get_value.side_effect = lambda doctype, name, field: (
+            {'POS-1': 'Dine In', 'POS-2': 'Take Away'}.get(name)
+            if doctype == 'POS Invoice' else 0
+        )
+        self.ticket('DINE-IN')
+        self.ticket('TAKE-AWAY', invoice='POS-2')
+        self.ticket('SERVED-DINE-IN', order_status='Served')
+        self.ticket('SERVED-TAKE-AWAY', invoice='POS-2', order_status='Served')
+        self.assertEqual(len(self.display.kot_list()['KOT']), 1)
+        self.assertEqual(len(self.display.served_kot_list()['KOT']), 1)
+        self.assertEqual(self.counts(), {'active_orders': 1, 'served_orders': 1, 'total_orders': 2})
+
+    def test_administrator_counts_stay_in_the_same_branch_as_the_fork_board(self):
+        self.frappe.session.user = 'Administrator'
+        self.frappe.get_roles.return_value = ['URY Admin']
+        self.ticket('LOCAL')
+        self.ticket('FOREIGN', branch='Branch B')
+        self.assertEqual(len(self.display.kot_list()['KOT']), 1)
+        self.assertEqual(self.counts()['active_orders'], 1)
 
 
 if __name__ == '__main__':
