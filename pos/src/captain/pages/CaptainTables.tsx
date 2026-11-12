@@ -49,6 +49,7 @@ export default function CaptainTables() {
   const [ownerNames, setOwnerNames] = useState<Map<string, string>>(new Map());
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // `get_captain_context()`'s `rooms` field (from `getRoom()` in
   // `ury/ury_pos/api.py`) reflects the Captain's own room *assignment*, not
@@ -253,15 +254,8 @@ export default function CaptainTables() {
         )}
       </div>
 
-      <div className="px-3 pt-3">
-        <Notifications
-          title={t('notifications.kitchen')}
-          onOpenCheck={openKitchenCheck}
-          onNewUnread={() => showToast.info(t('notifications.new_food_ready'))}
-        />
-      </div>
-
-      <div className="flex-1 p-3">
+      <div className="flex flex-1 flex-col gap-3 p-3 xl:flex-row xl:items-start">
+      <div className="min-w-0 flex-1">
         {branchRooms.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-gray-500">
             <AlertTriangle className="h-8 w-8" />
@@ -304,6 +298,26 @@ export default function CaptainTables() {
             })}
           </div>
         )}
+      </div>
+      <aside className="w-full shrink-0 xl:sticky xl:top-32 xl:w-80">
+        <Button
+          variant="outline"
+          className="w-full xl:hidden"
+          aria-expanded={showNotifications}
+          aria-controls="floor-kitchen-notifications"
+          onClick={() => setShowNotifications(value => !value)}
+        >
+          {t('notifications.kitchen')}
+        </Button>
+        <div id="floor-kitchen-notifications" className={showNotifications ? 'mt-2 xl:mt-0' : 'hidden xl:block'}>
+          <Notifications
+            title={t('notifications.kitchen')}
+            documentType="URY KOT"
+            onOpenCheck={openKitchenCheck}
+            onNewUnread={() => showToast.info(t('notifications.new_food_ready'))}
+          />
+        </div>
+      </aside>
       </div>
     </div>
   );

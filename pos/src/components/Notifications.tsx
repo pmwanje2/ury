@@ -41,6 +41,7 @@ function getRelativeTime(creationDate: string, serverTimeOffset: number | null):
 
 interface Props {
   title?: string;
+  documentType?: string;
   onOpenCheck?: (kot: string, isCurrentSession: () => boolean) => Promise<boolean>;
   onNewUnread?: (unreadCount: number) => void;
 }
@@ -50,10 +51,10 @@ export default function Notifications(props: Props) {
   const name = user?.name;
   // A keyed lifetime prevents even one render of the previous user's rows.
   if (!name || name === 'Guest') return null;
-  return <UserNotifications key={name} user={name} {...props} />;
+  return <UserNotifications key={`${name}:${props.documentType ?? ''}`} user={name} {...props} />;
 }
 
-function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, onNewUnread }: Props & { user: string }) {
+function UserNotifications({ user, title = 'Recent Notifications', documentType, onOpenCheck, onNewUnread }: Props & { user: string }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [serverTimeOffset, setServerTimeOffset] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,7 +110,7 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, 
         // Same native, permission-filtered list as Dashboard; explicit recipient
         // filtering also prevents Administrator's broader permission from leaking rows.
         const params = new URLSearchParams({
-          doctype: 'Notification Log', filters: JSON.stringify({ for_user: user }),
+          doctype: 'Notification Log', filters: JSON.stringify({ for_user: user, ...(documentType ? { document_type: documentType } : {}) }),
           fields: JSON.stringify(['name', 'for_user', 'subject', 'email_content', 'creation', 'read', 'document_type', 'document_name']),
           order_by: 'creation desc', limit_page_length: '10',
         });
@@ -119,7 +120,7 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, 
         if (!Array.isArray(data.message)) throw new Error('Invalid notification list');
         if (!isCurrentSession()) { if (active.current) clearOldSession(); return; }
         if (id !== requestId.current) return;
-        const nextNotifications = data.message.filter((item: Notification) => item.for_user === user);
+        const nextNotifications = data.message.filter((item: Notification) => item.for_user === user && (!documentType || item.document_type === documentType));
         const unreadCount = nextNotifications.filter((item: Notification) => !Number(item.read)).length;
         const newUnreadCount = nextNotifications.filter(
           (item: Notification) => !Number(item.read) && !seenNotificationNames.current.has(item.name),
@@ -164,7 +165,7 @@ function UserNotifications({ user, title = 'Recent Notifications', onOpenCheck, 
       socket?.off('disconnect', disconnect);
       socket?.off('connect_error', disconnect);
     };
-  }, [user]);
+  }, [user, documentType]);
 
   async function markRead(notification: Notification) {
     if (!isCurrentSession()) return;
