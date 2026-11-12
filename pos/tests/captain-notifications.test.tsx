@@ -165,6 +165,47 @@ afterEach(async () => {
 });
 
 describe('captain kitchen notifications', () => {
+  it('places the floor before the compact kitchen section on narrow screens', async () => {
+    vi.stubGlobal('innerWidth', 412);
+    await renderTables();
+    const table = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'T-05');
+    const kitchen = container.querySelector('[aria-label="Kitchen"]');
+    expect(table).toBeDefined();
+    expect(kitchen).not.toBeNull();
+    expect(table!.compareDocumentPosition(kitchen! ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-controls="floor-kitchen-notifications"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => toggle!.click());
+    expect(toggle!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows only KOT notifications on the captain floor, filtering before the ten-row limit', async () => {
+    boundary.rows = [
+      notification(),
+      notification({ name: 'CLOSE', document_type: 'POS Closing Entry', subject: 'POS closed: Queued' }),
+      notification({ name: 'ACCESS', document_type: 'Role Change Request', subject: 'Owner-approved access change' }),
+    ];
+    await renderTables();
+    expect(panel().textContent).toContain('Food ready: Table T-05');
+    expect(panel().textContent).not.toContain('POS closed: Queued');
+    expect(panel().textContent).not.toContain('Owner-approved access change');
+    const request = new URL(boundary.fetchAlerts.mock.calls[0][0], 'http://localhost');
+    expect(JSON.parse(request.searchParams.get('filters')!)).toEqual({
+      for_user: 'waiter@example.com', document_type: 'URY KOT',
+    });
+    await waitForRealtimeHandler();
+    boundary.rows.push(notification({ name: 'ACCESS-NEW', document_type: 'Role Change Request' }));
+    await emit('notification');
+    expect(boundary.toastInfo).not.toHaveBeenCalled();
+  });
+
+  it('keeps other notification types in the shared inbox when no floor scope is requested', async () => {
+    boundary.rows = [notification({ document_type: 'POS Closing Entry', subject: 'POS closed: Queued' })];
+    await renderNotifications();
+    expect(panel().textContent).toContain('POS closed: Queued');
+  });
+
   it('renders only notification rows addressed to the session user', async () => {
     boundary.rows = [notification(), notification({ name: 'OTHER', for_user: 'other@example.com', subject: 'Private other waiter alert' })];
     await renderNotifications();
