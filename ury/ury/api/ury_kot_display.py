@@ -226,17 +226,20 @@ def production_unit_counts(units=None):
     # Keep the fork's branch-bound board authority, including for administrators.
     branch = getBranch()
     cancelled = _get_cancel_confirmed_original_kots(branch)
+    production_filters = {}
 
     def count(order_status):
         rows = frappe.get_list(
             "URY KOT",
-            fields=["name", "production"],
+            fields=["name", "production", "invoice"],
             filters=_kot_display_filters(order_status, branch),
             limit_page_length=0,
         )
         out = {}
         for r in rows:
             if r.name in cancelled or not r.production:
+                continue
+            if not _matches_production_order_type(r, production_filters):
                 continue
             out[r.production] = out.get(r.production, 0) + 1
         return out
@@ -251,6 +254,22 @@ def production_unit_counts(units=None):
         }
         for u in names
     }
+
+
+def _matches_production_order_type(kot, production_filters):
+    """Reuse the fork's station order-type restriction for lists and counts."""
+    if not kot.production:
+        return True
+    if kot.production not in production_filters:
+        prod_doc = frappe.get_doc("URY Production Unit", kot.production)
+        production_filters[kot.production] = (
+            [row.order_type for row in prod_doc.get("order_type", [])]
+            if prod_doc.enable_order_type_wise_display_on_mosaic else None
+        )
+    allowed_order_types = production_filters[kot.production]
+    return allowed_order_types is None or frappe.db.get_value(
+        "POS Invoice", kot.invoice, "order_type"
+    ) in allowed_order_types
 
 
 @frappe.whitelist()
@@ -283,19 +302,8 @@ def kot_list():
             continue
         kotdoc = frappe.get_doc("URY KOT", kot.name)
         
-        if kotdoc.production:
-            if kotdoc.production not in production_filters:
-                prod_doc = frappe.get_doc("URY Production Unit", kotdoc.production)
-                if prod_doc.enable_order_type_wise_display_on_mosaic:
-                    production_filters[kotdoc.production] = [row.order_type for row in prod_doc.get("order_type", [])]
-                else:
-                    production_filters[kotdoc.production] = None
-            
-            allowed_order_types = production_filters[kotdoc.production]
-            if allowed_order_types is not None:
-                invoice_order_type = frappe.db.get_value("POS Invoice", kotdoc.invoice, "order_type")
-                if invoice_order_type not in allowed_order_types:
-                    continue
+        if not _matches_production_order_type(kotdoc, production_filters):
+            continue
 
         kotjson = json.loads(frappe.as_json(kotdoc))
         KOT.append(kotjson)
@@ -339,19 +347,8 @@ def served_kot_list():
         kotdoc = frappe.get_doc("URY KOT", kot.name)
         print(kot.name,".................kotdoc")
         
-        if kotdoc.production:
-            if kotdoc.production not in production_filters:
-                prod_doc = frappe.get_doc("URY Production Unit", kotdoc.production)
-                if prod_doc.enable_order_type_wise_display_on_mosaic:
-                    production_filters[kotdoc.production] = [row.order_type for row in prod_doc.get("order_type", [])]
-                else:
-                    production_filters[kotdoc.production] = None
-            
-            allowed_order_types = production_filters[kotdoc.production]
-            if allowed_order_types is not None:
-                invoice_order_type = frappe.db.get_value("POS Invoice", kotdoc.invoice, "order_type")
-                if invoice_order_type not in allowed_order_types:
-                    continue
+        if not _matches_production_order_type(kotdoc, production_filters):
+            continue
 
         invoice=frappe.db.get_value("URY KOT",kot.name,"invoice")
         print(invoice,".....................invoice")
