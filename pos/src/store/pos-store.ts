@@ -627,7 +627,9 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     
     set({ 
           selectedOrderType: type,
-          orderId: null
+          orderId: null,
+          // Only a Dine In check holds a table.
+          ...(type !== 'Dine In' ? { selectedTable: null, selectedRoom: null } : {}),
     });
     const isCurrentTypeToggleable = selectedOrderType === 'Take Away' || selectedOrderType === 'Delivery';
     const isNewTypeToggleable = type === 'Take Away' || type === 'Delivery';
