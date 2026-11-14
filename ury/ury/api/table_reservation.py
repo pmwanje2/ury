@@ -56,10 +56,21 @@ def reservations_enabled(branch):
 
     A branch that has not enabled them sees no reservation reads or writes on
     its till, order, floor and closing paths.
+
+    Before migrate adds the Branch column (new code already served), the
+    branch reads as disabled instead of failing POS Invoice validate.
     """
     if not branch:
         return False
+    if not frappe.db.has_column("Branch", "custom_enable_reservation"):
+        return False
     return cint(frappe.db.get_value("Branch", branch, "custom_enable_reservation") or 0) == 1
+
+
+def ensure_reservations_enabled(branch):
+    """Refuse a reservation write on a branch that has not switched reservations on."""
+    if not reservations_enabled(branch):
+        frappe.throw(_("Table reservations are switched off for this branch."))
 
 
 def reservations_enabled_for_table(table):
@@ -441,6 +452,8 @@ def create_table_reservation(
     if not branch:
         branch = frappe.db.get_value("URY Table", table, "branch")
 
+    ensure_reservations_enabled(branch)
+
     if not customer_name and customer:
         customer_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
 
@@ -491,6 +504,7 @@ def update_table_reservation(
 
     doc = frappe.get_doc("URY Table Reservation", reservation_name)
     doc.check_permission("write")
+    ensure_reservations_enabled(doc.branch)
 
     if doc.status not in ("Requested", "Confirmed", "Active"):
         frappe.throw(_("Cannot edit reservation in {0} status.").format(doc.status))
@@ -516,6 +530,7 @@ def update_table_reservation(
     if notes is not None:
         doc.comments = notes
 
+    ensure_reservations_enabled(doc.branch)
     doc.save()
     frappe.db.commit()
     return True
@@ -572,6 +587,7 @@ def update_reservation_status(reservation_name, status, pos_invoice=None):
 
     doc = frappe.get_doc("URY Table Reservation", reservation_name)
     doc.check_permission("write")
+    ensure_reservations_enabled(doc.branch or frappe.db.get_value("URY Table", doc.reserved_table, "branch"))
 
     # Validate role permissions for critical status changes
     if status in ("Completed", "Cancelled"):
