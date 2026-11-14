@@ -512,6 +512,7 @@
     "dashboard": "Dashboard",
     "pos": "POS",
     "tables": "Tables",
+    "reservations": "Reservations",
     "orders": "Orders",
     "settings": "Settings"
   },
