@@ -39,6 +39,8 @@ export interface CaptainContext {
   pos_profile: CaptainContextPosProfile | null;
   role_restricted_for_table_order: boolean;
   opening_state: CaptainContextOpeningState | null;
+  /** Branch.custom_enable_reservation (ury-erp/ury#358); absent means off. */
+  reservation_enabled?: boolean;
 }
 
 export interface CaptainContextResponse {

@@ -182,7 +182,7 @@ export function getOrdersTabForInvoice(
     if (options?.viewAllStatus === 1) return 'Paid';
     return 'Recently Paid';
   }
-  if (inv.invoice_printed === 1) return 'Unbilled';
+  if (inv.invoice_printed === 0 && inv.restaurant_table) return 'Unbilled';
   return 'Draft';
 }
 

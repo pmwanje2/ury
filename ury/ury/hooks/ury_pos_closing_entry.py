@@ -70,7 +70,8 @@ def update_branch_avg_times(doc):
             branch = frappe.db.get_value("POS Opening Entry", doc.pos_opening_entry, "branch")
         if not branch and doc.get("pos_profile"):
             branch = frappe.db.get_value("POS Profile", doc.pos_profile, "branch")
-        if branch:
+        # Only branches that use reservations keep table-time averages.
+        if branch and frappe.db.get_value("Branch", branch, "custom_enable_reservation"):
             from ury.ury.report.average_table_time.average_table_time import update_branch_avg_table_times
             update_branch_avg_table_times(branch)
     except Exception as e:

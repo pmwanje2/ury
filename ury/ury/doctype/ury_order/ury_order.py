@@ -789,7 +789,9 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             "Price List", dict(restaurant_menu=menu_name, enabled=1)
         )
 
-        if not getattr(invoice, "customer", None) or invoice.customer == "Guest":
+        if (not getattr(invoice, "customer", None) or invoice.customer == "Guest") and cint(
+            frappe.db.get_value("Branch", branch, "custom_enable_reservation") or 0
+        ):
             from ury.ury.api.table_reservation import get_completed_reservation_for_table
             completed_res = get_completed_reservation_for_table(table, branch)
             if completed_res and completed_res.get("customer"):
@@ -1385,6 +1387,9 @@ def get_captain_context():
         "pos_profile": pos_profile_context,
         "role_restricted_for_table_order": role_restricted_for_table_order,
         "opening_state": opening_state,
+        "reservation_enabled": bool(
+            branch and cint(frappe.db.get_value("Branch", branch, "custom_enable_reservation") or 0)
+        ),
     }
 
 

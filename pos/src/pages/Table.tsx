@@ -87,6 +87,9 @@ const TableView = () => {
   const [cancelReservationLoading, setCancelReservationLoading] = useState(false);
 
   const [isLayoutView, setIsLayoutView] = useState(false);
+  // Reservations are opt-in per Branch; a branch without them never reads,
+  // polls or lock-checks reservations from this floor.
+  const reservationEnabled = Number(branchSettings?.enable_reservation) === 1;
 
   const persistRoomCounts = useCallback((counts: Record<string, number>) => {
     if (!branch) return;
@@ -193,9 +196,9 @@ const TableView = () => {
       if (shouldUseCache && tablesCache[roomName]) {
         setTables(sortTablesByMergeGroups(tablesCache[roomName]));
         setLoadingTables(false);
-        if (branch) {
+        if (branch && reservationEnabled) {
           getActiveReservations(branch)
-            .then((res) => setActiveReservationsList(res || []))
+            .then((res) => setActiveReservationsList(Array.isArray(res) ? res : []))
             .catch(() => setActiveReservationsList([]));
         }
         return;
@@ -208,9 +211,9 @@ const TableView = () => {
         setTables(sortedTables);
         setTablesCache((prev) => ({ ...prev, [roomName]: sortedTables }));
 
-        if (branch) {
+        if (branch && reservationEnabled) {
           getActiveReservations(branch)
-            .then((res) => setActiveReservationsList(res || []))
+            .then((res) => setActiveReservationsList(Array.isArray(res) ? res : []))
             .catch(() => setActiveReservationsList([]));
         }
       } catch (e) {
@@ -221,7 +224,7 @@ const TableView = () => {
         setLoadingTables(false);
       }
     },
-    [branch, tablesCache]
+    [branch, tablesCache, reservationEnabled]
   );
 
   useEffect(() => {
@@ -249,18 +252,21 @@ const TableView = () => {
 
   // Fetch all branch tables for edit dialog dropdown
   useEffect(() => {
-    if (!branch) return;
+    if (!branch || !reservationEnabled) return;
     getVacantTablesForBranch(branch)
       .then((tList) => setAllBranchTables(tList))
       .catch(console.error);
-  }, [branch]);
+  }, [branch, reservationEnabled]);
+  useEffect(() => {
+    if (!reservationEnabled) setActiveReservationsList([]);
+  }, [reservationEnabled]);
   // Derived reservation maps
   const { lockActiveReservationsByTable, upcomingReservationsByTable, allReservationsByTable } = useMemo(() => {
     const lockMap = new Map<string, TableReservation>();
     const upcomingMap = new Map<string, TableReservation>();
     const allMap = new Map<string, TableReservation>();
 
-    for (const res of activeReservationsList) {
+    for (const res of reservationEnabled ? activeReservationsList : []) {
       if (!allMap.has(res.reserved_table)) {
         allMap.set(res.reserved_table, res);
       }
@@ -281,18 +287,18 @@ const TableView = () => {
       upcomingReservationsByTable: upcomingMap,
       allReservationsByTable: allMap,
     };
-  }, [activeReservationsList, branchSettings?.buffer_time]);
+  }, [activeReservationsList, branchSettings?.buffer_time, reservationEnabled]);
 
   // Periodic polling for active reservations so buffer time and status transitions reflect in real-time
   useEffect(() => {
-    if (!branch) return;
+    if (!branch || !reservationEnabled) return;
     let isMounted = true;
 
     const intervalId = setInterval(async () => {
       if (!isMounted) return;
       try {
         const res = await getActiveReservations(branch);
-        if (isMounted && res) {
+        if (isMounted && Array.isArray(res)) {
           setActiveReservationsList(res);
         }
       } catch (_e) {
@@ -304,7 +310,7 @@ const TableView = () => {
       isMounted = false;
       clearInterval(intervalId);
     };
-  }, [branch]);
+  }, [branch, reservationEnabled]);
 
   // Informational notification when a table enters its reservation buffer window
   const notifiedLockReservationsRef = useRef<Set<string>>(new Set());
@@ -325,7 +331,7 @@ const TableView = () => {
     }
   }, [activeReservationsList]);
 
-  const isReservationEnabled = Boolean(branchSettings && Number(branchSettings.enable_reservation) === 1);
+  const isReservationEnabled = reservationEnabled;
 
   const handleNavigateToPOS = async (tableName: string) => {
     if (!selectedRoom) return;
@@ -333,6 +339,13 @@ const TableView = () => {
     // Check if user is restricted from taking table orders
     if (isUserRestrictedFromTableOrders(user, posProfile)) {
       showToast.error(t('errors.dine_in_restricted') || 'Dine In is not available for your role');
+      return;
+    }
+
+    if (!reservationEnabled) {
+      setSelectedOrderType(DINE_IN);
+      setSelectedTable(tableName, selectedRoom);
+      navigate('/pos');
       return;
     }
 

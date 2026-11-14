@@ -383,11 +383,13 @@ def get_branch_reservation_duration(branch, default_duration=90):
     if not branch:
         return default_duration
 
-    last_day_avg = get_branch_last_day_avg_time(branch)
+    # Read-only: the Branch averages are written only by
+    # update_branch_avg_table_times at till close.
+    last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
     if last_day_avg and last_day_avg >= 15: # minimum sensible table time
         return int(round(last_day_avg))
 
-    last_week_avg = get_branch_last_week_avg_time(branch)
+    last_week_avg = get_branch_last_week_avg_time(branch, update_branch=False)
     if last_week_avg and last_week_avg >= 15:
         return int(round(last_week_avg))
 
