@@ -245,6 +245,22 @@ class TestStaleMosaicBundleIsNotShipped(unittest.TestCase):
 		self.assertFalse((ROOT / "public" / "URYMosaic").exists())
 
 
+class TestCustomFieldFixtureHasOneRowPerField(unittest.TestCase):
+	"""ury-erp/ury#358 appended a second copy of 112 Custom Field rows (version-16 has none)."""
+
+	def test_each_custom_field_name_appears_once(self):
+		import json
+		import collections
+
+		rows = json.loads((ROOT / "fixtures" / "custom_field.json").read_text(encoding="utf-8"))
+		repeated = sorted(name for name, count in collections.Counter(row["name"] for row in rows).items() if count > 1)
+		self.assertEqual(repeated, [])
+		names = {row["name"] for row in rows}
+		for field in ("custom_reservation_settings_section", "custom_enable_reservation", "custom_buffer_time",
+				"custom_grace_period", "custom_avg_table_time_last_day", "custom_avg_table_time_last_week"):
+			self.assertIn(f"Branch-{field}", names)
+
+
 def _split_bill_harness():
 	from ury.ury.doctype.ury_order import test_split_bill_release as harness
 	return harness.TestSplitBillAndPrintRelease
