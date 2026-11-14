@@ -57,6 +57,26 @@ def validate(doc, method):
     calculate_closing_amount(doc, method)
     validate_cashier(doc, method)
 
+def on_submit(doc, method=None):
+    update_branch_avg_times(doc)
+
+def on_cancel(doc, method=None):
+    update_branch_avg_times(doc)
+
+def update_branch_avg_times(doc):
+    try:
+        branch = None
+        if doc.get("pos_opening_entry"):
+            branch = frappe.db.get_value("POS Opening Entry", doc.pos_opening_entry, "branch")
+        if not branch and doc.get("pos_profile"):
+            branch = frappe.db.get_value("POS Profile", doc.pos_profile, "branch")
+        # Only branches that use reservations keep table-time averages.
+        if branch and frappe.db.get_value("Branch", branch, "custom_enable_reservation"):
+            from ury.ury.report.average_table_time.average_table_time import update_branch_avg_table_times
+            update_branch_avg_table_times(branch)
+    except Exception as e:
+        frappe.log_error(f"Error updating branch average table times on POS Closing: {str(e)}", "POS Closing Avg Table Time")
+
 
 def _closing_invoice_rows(doc):
     start = frappe.utils.get_datetime(frappe.db.get_value(

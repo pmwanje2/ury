@@ -4,8 +4,9 @@ import { AlertTriangle, Square } from 'lucide-react';
 import { Button, Spinner, showToast } from '@ury/ui';
 import { call } from '@ury/core';
 import { useCaptainContext } from '../hooks/useCaptainContext';
-import { getRooms, getTables, type Room, type Table } from '../../lib/table-api';
-import { getMergeGroupMembers, sortTablesByMergeGroups } from '../../lib/table-utils';
+import { getRooms, getTables, checkTableReservation, type Room, type Table } from '../../lib/table-api';
+import { getTableOrder } from '../../lib/order-api';
+import { getMergeGroupMembers, sortTablesByMergeGroups, formatReservationTime, isReservationLockWindowActive } from '../../lib/table-utils';
 import {
   getActiveTableOrders,
   getUpcomingBookings,
@@ -50,6 +51,9 @@ export default function CaptainTables() {
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
+  // Reservations are opt-in per Branch. Until the branch setting says they
+  // are on, the floor keeps its ownership rules and makes no reservation reads.
+  const reservationEnabled = context?.reservation_enabled === true;
 
   // `get_captain_context()`'s `rooms` field (from `getRoom()` in
   // `ury/ury_pos/api.py`) reflects the Captain's own room *assignment*, not
@@ -164,15 +168,103 @@ export default function CaptainTables() {
     [currentUser]
   );
 
-  const handleTableTap = (table: Table, order: ActiveTableOrder | undefined) => {
+  const handleTableTap = async (table: Table, order: ActiveTableOrder | undefined) => {
     const ownership = resolveOwnership(table, order);
 
-    if (ownership === 'free' || ownership === 'mine') {
+    if (!reservationEnabled) {
+      if (ownership === 'free' || ownership === 'mine' || canAccessOtherCaptainsTables) {
+        navigate(`/order/table/${table.name}`);
+        return;
+      }
+      const ownerName = order ? ownerNames.get(order.waiter) ?? order.waiter : null;
+      showToast.error(ownerName ? `Assigned to ${ownerName}` : 'This table is occupied');
+      return;
+    }
+
+    if (ownership === 'free') {
+      try {
+        const orderRes = await getTableOrder(table.name);
+        const existingInvoice = orderRes?.message;
+        if (
+          existingInvoice &&
+          existingInvoice.name &&
+          existingInvoice.docstatus === 0 &&
+          existingInvoice.invoice_printed !== 1
+        ) {
+          navigate(`/order/table/${table.name}`);
+          return;
+        }
+      } catch {}
+
+      try {
+        const res = await checkTableReservation(table.name);
+        if (
+          res &&
+          (res.is_lock_window_active || isReservationLockWindowActive(res)) &&
+          res.status === 'Confirmed'
+        ) {
+          const timeStr = formatReservationTime(res.reserved_at);
+          showToast.error(`Table ${table.name} is reserved for ${timeStr}. Please choose another table.`);
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+      }
       navigate(`/order/table/${table.name}`);
       return;
     }
 
-    // Occupied by someone else (or occupancy with no resolvable owner):
+    if (ownership === 'mine') {
+      navigate(`/order/table/${table.name}`);
+      return;
+    }
+
+    // Occupied table with NO active order in activeOrders (e.g. Completed reservation table)
+    if (ownership === 'occupied-unknown') {
+      try {
+        const orderRes = await getTableOrder(table.name);
+        const existingInvoice = orderRes?.message;
+        if (
+          existingInvoice &&
+          existingInvoice.name &&
+          existingInvoice.docstatus === 0
+        ) {
+          if (
+            existingInvoice.waiter === currentUser ||
+            canAccessOtherCaptainsTables
+          ) {
+            navigate(`/order/table/${table.name}`);
+            return;
+          }
+          const ownerName = ownerNames.get(existingInvoice.waiter) ?? existingInvoice.waiter;
+          showToast.error(ownerName ? `Assigned to ${ownerName}` : 'This table is occupied');
+          return;
+        }
+      } catch {}
+
+      // Table is occupied but has no active invoice/waiter yet (e.g. Completed reservation).
+      // Verify no active Confirmed reservation lock window before opening table.
+      try {
+        const res = await checkTableReservation(table.name);
+        if (
+          res &&
+          (res.is_lock_window_active || isReservationLockWindowActive(res)) &&
+          res.status === 'Confirmed'
+        ) {
+          const timeStr = formatReservationTime(res.reserved_at);
+          showToast.error(`Table ${table.name} is reserved for ${timeStr}. Please choose another table.`);
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+      }
+
+      // Any permitted Order Taker can access and take the order
+      navigate(`/order/table/${table.name}`);
+      return;
+    }
+
+    // Occupied by someone else:
     // elevated/transfer access overrides the base restriction.
     if (canAccessOtherCaptainsTables) {
       navigate(`/order/table/${table.name}`);

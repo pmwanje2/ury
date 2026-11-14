@@ -30,6 +30,8 @@ vi.mock('react-router-dom', () => ({
   Link: ({ to, children, ...props }: { to: string; children?: ReactNode }) =>
     createElement('a', { ...props, href: to }, children),
   useNavigate: () => vi.fn(),
+  // Upstream ury-erp/ury#358 hides the branch selector on /branch.
+  useLocation: () => ({ pathname: '/dashboard' }),
 }));
 
 vi.mock('../src/context/BranchContext', () => ({

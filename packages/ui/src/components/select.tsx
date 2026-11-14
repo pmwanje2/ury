@@ -2,6 +2,9 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "../lib/cn"
 import { ChevronDown } from "lucide-react"
+// Upstream ury-erp/ury#358 builds its reservation status filter from Radix
+// directly; the shared Select below stays a native <select>.
+import * as RadixSelect from "@radix-ui/react-select"
 
 const selectVariants = cva(
   [
@@ -95,4 +98,4 @@ const SelectItem = React.forwardRef<HTMLOptionElement, SelectItemProps>(
 )
 SelectItem.displayName = "SelectItem"
 
-export { Select, SelectItem, selectVariants }
+export { Select, SelectItem, selectVariants, RadixSelect }
