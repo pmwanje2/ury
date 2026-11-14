@@ -200,7 +200,9 @@ class TestReservationWritesHonourNativePermissions(_Loader):
 		self.reservation_modules()
 		self.doc = MagicMock(status="Confirmed", branch="Branch A", reserved_table="T1")
 		self.frappe.get_doc.return_value = self.doc
-		self.frappe.db.get_value.return_value = "Branch A"
+		# Branch A has switched reservations on.
+		self.frappe.db.get_value.side_effect = lambda doctype, name=None, fields=None, *a, **k: (
+			1 if fields == "custom_enable_reservation" else "Branch A")
 		self.frappe.db.get_all.return_value = []
 
 	def test_create_uses_native_insert_permission(self):
@@ -227,6 +229,68 @@ class TestReservationWritesHonourNativePermissions(_Loader):
 		self.assertNotIn("sync_branch_table_occupancy", whitelisted)
 
 
+SWITCHED_OFF = "Table reservations are switched off for this branch."
+
+
+class TestReservationWritesRefusedWhenBranchDisabled(_Loader):
+	"""A direct API call cannot reserve, edit or seat a table on a branch that has not enabled reservations."""
+
+	def setUp(self):
+		super().setUp()
+		self.reservation_modules()
+		self.doc = MagicMock(status="Confirmed", branch="Branch A", reserved_table="T1")
+		self.frappe.get_doc.return_value = self.doc
+		self.frappe.db.get_value.side_effect = lambda doctype, name=None, fields=None, *a, **k: (
+			0 if fields == "custom_enable_reservation" else "Branch A")
+		self.frappe.db.get_all.return_value = []
+
+	def assert_nothing_written(self):
+		self.frappe.db.set_value.assert_not_called()
+		self.frappe.db.commit.assert_not_called()
+		self.doc.insert.assert_not_called()
+		self.doc.save.assert_not_called()
+
+	def test_create_is_refused(self):
+		with self.assertRaisesRegex(ValueError, SWITCHED_OFF):
+			self.reservation.create_table_reservation("T1", "CUST-1", "2026-11-20 19:00:00",
+				customer_name="Grace", customer_phone="+256772123456", branch="Branch A")
+		self.frappe.get_doc.assert_not_called()
+		self.assert_nothing_written()
+
+	def test_create_without_branch_uses_the_table_branch_and_is_refused(self):
+		with self.assertRaisesRegex(ValueError, SWITCHED_OFF):
+			self.reservation.create_table_reservation("T1", "CUST-1", "2026-11-20 19:00:00")
+		self.frappe.get_doc.assert_not_called()
+		self.assert_nothing_written()
+
+	def test_edit_is_refused(self):
+		with self.assertRaisesRegex(ValueError, SWITCHED_OFF):
+			self.reservation.update_table_reservation("TR-1", notes="Window seat")
+		self.assert_nothing_written()
+
+	def test_edit_cannot_move_a_reservation_onto_a_disabled_branch(self):
+		self.frappe.db.get_value.side_effect = lambda doctype, name=None, fields=None, *a, **k: (
+			int(name == "Branch A") if fields == "custom_enable_reservation" else "Branch B")
+		with self.assertRaisesRegex(ValueError, SWITCHED_OFF):
+			self.reservation.update_table_reservation("TR-1", table="T9")
+		self.assert_nothing_written()
+
+	def test_status_change_is_refused_and_the_table_is_not_marked_occupied(self):
+		for status in ("Completed", "Cancelled", "No Show"):
+			with self.subTest(status=status):
+				self.doc.status = "Confirmed"
+				with patch.object(self.reservation, "is_user_authorized_for_reservation_status_change",
+						return_value=True):
+					with self.assertRaisesRegex(ValueError, SWITCHED_OFF):
+						self.reservation.update_reservation_status("TR-1", status)
+				self.assertEqual(self.doc.status, "Confirmed")
+				self.assert_nothing_written()
+
+
+class MissingColumn(Exception):
+	"""What the database raises for a Branch column that migrate has not added yet."""
+
+
 class TestOrdersSkipReservationsWhenDisabled(_Loader):
 	def test_pos_invoice_validate_does_not_load_reservations_when_disabled(self):
 		self.reservation_modules()
@@ -237,6 +301,22 @@ class TestOrdersSkipReservationsWhenDisabled(_Loader):
 		self.frappe.db.get_value.side_effect = lambda doctype, name=None, fields=None, *a, **k: (
 			1 if fields == "custom_enable_reservation" else "Branch A")
 		self.assertTrue(self.reservation.reservations_enabled_for_table("T1"))
+
+	def test_branch_without_the_reservation_column_reads_as_disabled(self):
+		"""New code served before migrate must not throw out of POS Invoice validate."""
+		self.reservation_modules()
+
+		def get_value(doctype, name=None, fields=None, *a, **k):
+			if fields == "custom_enable_reservation":
+				raise MissingColumn("(1054, \"Unknown column 'custom_enable_reservation' in 'field list'\")")
+			return "Branch A"
+
+		self.frappe.db.get_value.side_effect = get_value
+		self.frappe.db.has_column.side_effect = lambda doctype, column: column != "custom_enable_reservation"
+		self.assertFalse(self.reservation.reservations_enabled("Branch A"))
+		self.assertFalse(self.reservation.reservations_enabled_for_table("T1"))
+		self.assertIsNone(self.reservation.check_table_reservation("T1"))
+		self.frappe.db.commit.assert_not_called()
 
 
 class TestStaleMosaicBundleIsNotShipped(unittest.TestCase):
