@@ -61,3 +61,52 @@ source with the same held installed dependencies and built assets. This is a
 source-only comparison, not an authentic old-dependency or live-tenant result.
 Ad-hoc plain-Node TSX/resolution failures are recorded as harness limitations.
 No framework/database, live printer, customer or production test is claimed.
+
+## Closure checks and lifecycle scripts
+
+After the three frozen installs, run `npm run test:closure`. This entrypoint runs
+the Python source contracts and the real QZ callback controls. The latter use only
+synthetically generated keys, covering both PKCS#8 and PKCS#1 PEM encodings. The
+real private-key module is not inspected; its format is not asserted.
+
+There is no tracked or on-disk `urypos/yarn.lock` or `mosaic/yarn.lock` at either
+the exact a31 base or this carrier. The source contracts reject a stale legacy
+Yarn lock and require exact `https://registry.npmjs.org/` resolution hosts. The
+unused-dependency scans include both legacy `index.html` entries as well as
+source, CSS, scripts and build configuration, without reading private-key modules.
+
+The complete legacy `hasInstallScript: true` list is:
+
+| Closure | Package | Selected version | Why `--ignore-scripts` works on the qualified target |
+| --- | --- | --- | --- |
+| urypos | esbuild | 0.18.20 | npm installs the matching integrity-locked optional `@esbuild/linux-x64` binary; real native transform and all five builds succeed without its installer/fallback download. |
+| urypos | vue-demi | 0.14.10 | The published CommonJS/ESM default is already Vue 3 (`isVue3=true`, `isVue2=false`); the selected Vue is 3.x and the existing Pinia/Vue suites pass. |
+| urypos | fsevents | 2.3.3 | Optional Darwin-only dependency, not installed or used on the qualified Linux target. |
+| mosaic | esbuild | 0.18.20 | Same locked platform-binary mechanism and actual native transform/build proof. |
+| mosaic | fsevents | 2.3.3 | Optional Darwin-only dependency, not installed or used on Linux. |
+
+This qualifies Linux x64, not every architecture. Other architectures must prove
+their matching optional esbuild binary and rerun native builds. If the binary is
+missing, suppressing its installer does not authorize a download fallback or a
+successful build claim. The supported consumer uses the three frozen npm installs
+and one unchanged native build chain; it does not run a floating root Yarn install.
+
+The two entries without `license` metadata in each legacy lock are the root
+application entry (covered by the unchanged repository AGPLv3 LICENSE) and
+`xmlhttprequest-ssl@2.1.2` (the published installed LICENSE contains the MIT grant).
+They are identified rather than silently treated as unknown or MIT application
+relicensing. The exact grant hashes remain in the qualification receipt.
+
+## Historical failure diagnostics
+
+All six changed-closure-scope failure IDs have exact first errors and stacks in
+the review receipt. Four logout assertions expect `/urypos/login`, while the
+unchanged application source redirects to `/urypos`; all four reproduce with
+`urypos/node_modules` physically moved aside and restored in `finally`. Two Header
+branding cases fail because the existing test's dependency map does not provide
+`@/stores/invoiceData.js`: its harness returns `{}` for that unknown alias and the
+real setup calls the missing `useInvoiceDataStore` function. That occurs before a
+branding assertion. Without the entire legacy directory, the branding test cannot
+load Vue at all; this separate harness limitation is retained, not relabelled as
+six identical failures or as old-dependency qualification. No historical test,
+application handler or assertion was altered.
