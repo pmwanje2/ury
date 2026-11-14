@@ -31,15 +31,22 @@ class FrontendBuildClosure(unittest.TestCase):
                 self.assertTrue(sources)
                 self.assertEqual([], [str(p.relative_to(ROOT)) for p in sources if marker.search(p.read_text())])
 
-    def test_every_remaining_direct_dependency_range_is_preserved(self):
+    def test_direct_dependency_ranges_only_have_reviewed_closure_changes(self):
         for name, baseline in BASELINE["legacy"].items():
             project = json.loads((ROOT / name / "package.json").read_text())
             for group in ("dependencies", "devDependencies"):
                 expected = dict(baseline[group])
                 if name == "urypos" and group == "dependencies":
                     expected.pop("@syncfusion/ej2-vue-calendars")
+                    expected["jsrsasign"] = "11.1.3"
                 with self.subTest(frontend=name, group=group):
                     self.assertEqual(project[group], expected)
+
+    def test_legacy_rsa_signing_uses_the_qualified_security_version(self):
+        project = json.loads((ROOT / "urypos/package.json").read_text())
+        modern = json.loads((ROOT / "package-lock.json").read_text())
+        self.assertEqual(project["dependencies"]["jsrsasign"], "11.1.3")
+        self.assertEqual(modern["packages"]["node_modules/jsrsasign"]["version"], "11.1.3")
 
     def test_both_legacy_frontends_have_complete_matching_npm_v3_locks(self):
         for name in BASELINE["legacy"]:
