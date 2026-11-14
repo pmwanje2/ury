@@ -27,7 +27,8 @@ class FrontendBuildClosure(unittest.TestCase):
                 self.assertNotIn("@syncfusion/ej2-vue-calendars", project["dependencies"])
                 sources = [p for p in (ROOT / name / "src").rglob("*")
                            if p.is_file() and p.suffix in {".js", ".ts", ".vue", ".css", ".scss", ".html"}]
-                sources += list((ROOT / name).glob("*.js"))
+                sources += [p for p in (ROOT / name).glob("*config.*") if p.is_file()]
+                sources += [ROOT / name / "proxyOptions.js", ROOT / name / "index.html"]
                 self.assertTrue(sources)
                 self.assertEqual([], [str(p.relative_to(ROOT)) for p in sources if marker.search(p.read_text())])
 
@@ -41,7 +42,7 @@ class FrontendBuildClosure(unittest.TestCase):
             paths = [p for p in (ROOT / name / "src").rglob("*")
                      if p.is_file() and p.suffix in {".js", ".ts", ".vue", ".css", ".scss", ".html"}]
             paths += [p for p in (ROOT / name).glob("*config.*") if p.is_file()]
-            paths += [ROOT / name / "proxyOptions.js"]
+            paths += [ROOT / name / "proxyOptions.js", ROOT / name / "index.html"]
             for marker in forbidden:
                 self.assertFalse(any(marker in p.read_text() for p in paths), (name, marker))
                 self.assertFalse(any(marker in command for command in project["scripts"].values()))
@@ -71,6 +72,7 @@ class FrontendBuildClosure(unittest.TestCase):
             with self.subTest(frontend=name):
                 path = ROOT / name / "package-lock.json"
                 self.assertTrue(path.is_file(), f"Missing immutable legacy lock: {name}")
+                self.assertFalse((ROOT / name / "yarn.lock").exists(), f"Stale legacy Yarn lock: {name}")
                 lock = json.loads(path.read_text())
                 project = json.loads((ROOT / name / "package.json").read_text())
                 self.assertEqual(lock["lockfileVersion"], 3)
@@ -82,7 +84,13 @@ class FrontendBuildClosure(unittest.TestCase):
                         continue
                     self.assertTrue(entry.get("version"), key)
                     self.assertRegex(entry.get("integrity", ""), r"^sha(?:256|384|512)-", key)
-                    self.assertTrue(entry.get("resolved", "").startswith("https://"), key)
+                    self.assertTrue(entry.get("resolved", "").startswith("https://registry.npmjs.org/"), key)
+
+    def test_root_closure_entrypoint_runs_both_guard_harnesses(self):
+        scripts = json.loads((ROOT / "package.json").read_text())["scripts"]
+        self.assertEqual(scripts.get("test:closure"),
+                         "python3 -m unittest discover -s tests -p test_frontend_build_closure.py && "
+                         "node --test tests/qz-signing-compatibility.test.cjs")
 
     def test_native_install_aliases_use_frozen_legacy_project_locks(self):
         scripts = json.loads((ROOT / "package.json").read_text())["scripts"]
