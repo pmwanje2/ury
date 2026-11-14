@@ -31,6 +31,21 @@ class FrontendBuildClosure(unittest.TestCase):
                 self.assertTrue(sources)
                 self.assertEqual([], [str(p.relative_to(ROOT)) for p in sources if marker.search(p.read_text())])
 
+    def test_unused_legacy_package_manager_and_mosaic_wrapper_are_absent(self):
+        for name in BASELINE["legacy"]:
+            project = json.loads((ROOT / name / "package.json").read_text())
+            self.assertNotIn("pnpm", project["dependencies"])
+            forbidden = ["pnpm"] + (["flowbite-vue"] if name == "mosaic" else [])
+            if name == "mosaic":
+                self.assertNotIn("flowbite-vue", project["dependencies"])
+            paths = [p for p in (ROOT / name / "src").rglob("*")
+                     if p.is_file() and p.suffix in {".js", ".ts", ".vue", ".css", ".scss", ".html"}]
+            paths += [p for p in (ROOT / name).glob("*config.*") if p.is_file()]
+            paths += [ROOT / name / "proxyOptions.js"]
+            for marker in forbidden:
+                self.assertFalse(any(marker in p.read_text() for p in paths), (name, marker))
+                self.assertFalse(any(marker in command for command in project["scripts"].values()))
+
     def test_direct_dependency_ranges_only_have_reviewed_closure_changes(self):
         for name, baseline in BASELINE["legacy"].items():
             project = json.loads((ROOT / name / "package.json").read_text())
@@ -38,7 +53,10 @@ class FrontendBuildClosure(unittest.TestCase):
                 expected = dict(baseline[group])
                 if name == "urypos" and group == "dependencies":
                     expected.pop("@syncfusion/ej2-vue-calendars")
+                    expected.pop("pnpm")
                     expected["jsrsasign"] = "11.1.3"
+                if name == "mosaic" and group == "dependencies":
+                    expected.pop("flowbite-vue")
                 with self.subTest(frontend=name, group=group):
                     self.assertEqual(project[group], expected)
 
