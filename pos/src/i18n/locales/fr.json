@@ -77,7 +77,8 @@
     "clear_cache": "Vider le cache",
     "logout": "Déconnexion",
     "pair_tablet": "Appairer cette tablette",
-    "staff_pins": "PIN du personnel"
+    "staff_pins": "PIN du personnel",
+    "floor_pin_off": "La connexion par PIN est désactivée pour cette caisse"
   },
   "staff_pins": {
     "title": "PIN du personnel",
@@ -124,7 +125,9 @@
     "edit_item": "Modifier l'article",
     "add_comment": "Ajouter un commentaire",
     "edit_comment": "Modifier le commentaire",
-    "pax": "Couverts"
+    "pax": "Couverts",
+    "guest_label": "Nom du client (facultatif)",
+    "guest_label_placeholder": "ex. Susan"
   },
   "order": {
     "select_to_view": "Sélectionnez une commande pour voir les détails",
@@ -164,7 +167,14 @@
     "processing": "Traitement...",
     "short_by": "Manque {{amount}}",
     "change_due": "Monnaie à rendre : {{amount}}",
-    "success": "Paiement réussi : {{amount}} reçu"
+    "success": "Paiement réussi : {{amount}} reçu",
+    "room_posting": "Imputation chambre",
+    "check_room": "Vérifier la chambre",
+    "checking_room": "Vérification...",
+    "room_match": "Chambre {{room}} · {{guest}} · départ {{departure}}",
+    "room_no_post": "La note de ce client est fermée aux imputations",
+    "room_check_required": "Vérifiez la chambre avant une imputation",
+    "room_check_failed": "Impossible de vérifier cette chambre"
   },
   "pos": {
     "not_opened_title": "PDV non ouvert",
@@ -438,7 +448,9 @@
     "next_bill": "Addition suivante",
     "split_from": "Divisé depuis {{invoice}}",
     "related": "Additions liées",
-    "open_sibling_failed": "Impossible d'ouvrir l'addition liée"
+    "open_sibling_failed": "Impossible d'ouvrir l'addition liée",
+    "guest_label": "Nom du client pour la nouvelle addition (facultatif)",
+    "guest_label_placeholder": "ex. David"
   },
   "notifications": {
     "kitchen": "Cuisine",

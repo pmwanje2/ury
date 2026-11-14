@@ -104,6 +104,7 @@ interface OrderTabState {
   orderId: string | null;
   isUpdatingOrder: boolean;
   orderComment: string;
+  guestLabel: string;
   originalCartHash: string;
 }
 
@@ -138,6 +139,7 @@ interface POSState {
   tableOrder: TableOrder | null;
   isInitializing: boolean;
   orderComment: string;
+  guestLabel: string;
   originalCartHash: string;
   tabOrder: { id: string, name: string }[];
   activeTabId: string;
@@ -191,6 +193,8 @@ interface POSStore extends POSState {
   resetOrderState: () => void;
   setSelectedAggregator: (aggregator: Aggregator | null) => void;
   setOrderComment: (comment: string) => void;
+  /** A short name for this order (Susan, Seat 2) on kitchen tickets and bills; not a Customer. */
+  setGuestLabel: (label: string) => void;
   addTab: () => void;
   switchTab: (tabId: string) => void;
   closeTab: (tabId: string) => void;
@@ -296,6 +300,7 @@ const getInitialTabsState = () => {
     orderId: null,
     isUpdatingOrder: false,
     orderComment: '',
+    guestLabel: '',
     originalCartHash: '',
   };
 };
@@ -330,6 +335,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   orderId: null,
   showVoluntaryClosing: false,
   orderComment: '',
+  guestLabel: '',
   noOfPax: 1,
   lastModifiedTime: null,
 
@@ -655,6 +661,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   setSelectedItem: (item) => set({ selectedItem: item }),
   setSelectedAggregator: (aggregator) => set({ selectedAggregator: aggregator }),
   setOrderComment: (comment: string) => set({ orderComment: comment }),
+  setGuestLabel: (label: string) => set({ guestLabel: label }),
   setNoOfPax: (pax: number) => set({ noOfPax: pax }),
   setShowVoluntaryClosing: (show: boolean) => set({ showVoluntaryClosing: show }),
 
@@ -826,6 +833,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           noOfPax: order.no_of_pax || 1,
           lastModifiedTime: order.modified || null,
           orderComment: order.custom_comments || '',
+          guestLabel: order.custom_guest_label || '',
         });
       } else {
         if (owner) forgetOpenTableCheck(owner, table);
@@ -842,6 +850,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           noOfPax: order?.no_of_pax || 1,
           lastModifiedTime: order?.modified || null,
           orderComment: order?.custom_comments || '',
+          guestLabel: order?.custom_guest_label || '',
         });
       }
     } catch (error) {
@@ -859,6 +868,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         noOfPax: 1,
         lastModifiedTime: null,
         orderComment: '',
+        guestLabel: '',
       });
     } finally {
       set({ orderLoading: false });
@@ -875,6 +885,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       noOfPax: 1,
       lastModifiedTime: null,
       orderComment: '',
+      guestLabel: '',
     });
   },
 
@@ -910,6 +921,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         orderId: targetTabState.orderId,
         isUpdatingOrder: targetTabState.isUpdatingOrder,
         orderComment: targetTabState.orderComment,
+        guestLabel: targetTabState.guestLabel ?? '',
         originalCartHash: targetTabState.originalCartHash,
         selectedItem: null,
         orderLoading: false,
@@ -932,6 +944,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         orderId: null,
         isUpdatingOrder: false,
         orderComment: '',
+        guestLabel: '',
         originalCartHash: '',
         selectedItem: null,
         orderLoading: false,
@@ -954,6 +967,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: state.orderId,
       isUpdatingOrder: state.isUpdatingOrder,
       orderComment: state.orderComment,
+      guestLabel: state.guestLabel,
       originalCartHash: state.originalCartHash,
     };
     
@@ -974,6 +988,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: null,
       isUpdatingOrder: false,
       orderComment: '',
+      guestLabel: '',
       originalCartHash: '',
       noOfPax: 1,
       lastModifiedTime: null,
@@ -1011,6 +1026,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: state.orderId,
       isUpdatingOrder: state.isUpdatingOrder,
       orderComment: state.orderComment,
+      guestLabel: state.guestLabel,
       originalCartHash: state.originalCartHash,
     };
 
@@ -1029,6 +1045,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: targetTabState.orderId,
       isUpdatingOrder: targetTabState.isUpdatingOrder,
       orderComment: targetTabState.orderComment,
+      guestLabel: targetTabState.guestLabel ?? '',
         originalCartHash: targetTabState.originalCartHash,
     });
   },
@@ -1057,6 +1074,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         orderId: null,
         isUpdatingOrder: false,
         orderComment: '',
+        guestLabel: '',
         originalCartHash: '',
         selectedItem: null,
         orderLoading: false,
@@ -1086,6 +1104,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         orderId: targetTabState.orderId,
         isUpdatingOrder: targetTabState.isUpdatingOrder,
         orderComment: targetTabState.orderComment,
+        guestLabel: targetTabState.guestLabel ?? '',
         originalCartHash: targetTabState.originalCartHash,
         selectedItem: null,
         orderLoading: false,
@@ -1123,6 +1142,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         orderId: state.orderId,
         isUpdatingOrder: state.isUpdatingOrder,
         orderComment: state.orderComment,
+        guestLabel: state.guestLabel,
       originalCartHash: state.originalCartHash,
       };
       const newHeldTabs = { ...state.heldTabs, [state.activeTabId]: currentTabState };
@@ -1139,6 +1159,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         orderId: targetTabState.orderId,
         isUpdatingOrder: targetTabState.isUpdatingOrder,
         orderComment: targetTabState.orderComment,
+        guestLabel: targetTabState.guestLabel ?? '',
         originalCartHash: targetTabState.originalCartHash,
       });
       return;
@@ -1155,6 +1176,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: state.orderId,
       isUpdatingOrder: state.isUpdatingOrder,
       orderComment: state.orderComment,
+      guestLabel: state.guestLabel,
       originalCartHash: state.originalCartHash,
     };
 
@@ -1177,6 +1199,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: draft.orderId,
       isUpdatingOrder: true,
       orderComment: '',
+      guestLabel: '',
       originalCartHash: generateCartHash({ activeOrders: draft.items, selectedCustomer: draft.customer, orderComment: '' }),
       selectedItem: null,
       error: null,
@@ -1212,6 +1235,7 @@ usePOSStore.subscribe((state) => {
       orderId: state.orderId,
       isUpdatingOrder: state.isUpdatingOrder,
       orderComment: state.orderComment,
+      guestLabel: state.guestLabel,
       originalCartHash: state.originalCartHash,
     }
   };

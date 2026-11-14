@@ -39,7 +39,15 @@ const Header = () => {
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
   const posProfileName = posProfile?.name;
-  const managerSetupVisible = canManagePins;
+  // Staff PINs / Pair this tablet need both: write on this POS Profile and
+  // floor PIN sign-in switched on for it (the server refuses them otherwise).
+  // A manager on a till with PIN sign-in off sees why, not dead actions.
+  // getPosProfile always reports the flag; a profile that does not carry it
+  // keeps the permission-only behaviour.
+  const floorPinFlag = (posProfile as { custom_floor_pin_login?: unknown } | null)?.custom_floor_pin_login;
+  const floorPinOff = floorPinFlag !== undefined && floorPinFlag !== null && Number(floorPinFlag) !== 1;
+  const managerSetupVisible = canManagePins && !floorPinOff;
+  const floorPinOffNotice = canManagePins && floorPinOff;
 
   useEffect(() => {
     let cancelled = false;
@@ -267,6 +275,12 @@ const Header = () => {
                         {t('header.staff_pins')}
                       </Button>
                     </>
+                  )}
+                  {floorPinOffNotice && (
+                    <p role="note" className="flex items-center w-full px-4 py-2 text-sm text-gray-500">
+                      <Lock className="w-4 h-4 me-3" />
+                      {t('header.floor_pin_off')}
+                    </p>
                   )}
                   <Button
                     variant="ghost"

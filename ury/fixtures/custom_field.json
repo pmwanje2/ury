@@ -7133,6 +7133,26 @@
 		"module": "URY", "docstatus": 0
 	},
 	{
+		"doctype": "Custom Field", "dt": "POS Profile", "name": "POS Profile-custom_room_lookup_method",
+		"fieldname": "custom_room_lookup_method", "fieldtype": "Data",
+		"label": "Room lookup method", "insert_after": "custom_floor_device_epoch",
+		"description": "Optional. A whitelisted method the till calls with pos_profile and room before a Room Charge, e.g. a hotel system's one-room guest lookup. Blank keeps the free-text room box.",
+		"module": "URY", "docstatus": 0
+	},
+	{
+		"doctype": "Custom Field", "dt": "POS Invoice", "name": "POS Invoice-custom_guest_label",
+		"fieldname": "custom_guest_label", "fieldtype": "Data", "length": 40,
+		"label": "Guest label", "insert_after": "custom_comments",
+		"description": "A short name for this order or check (Susan, Seat 2), shown on kitchen tickets and bills. Not a customer record.",
+		"module": "URY", "docstatus": 0
+	},
+	{
+		"doctype": "Custom Field", "dt": "URY KOT", "name": "URY KOT-custom_guest_label",
+		"fieldname": "custom_guest_label", "fieldtype": "Data", "length": 40, "read_only": 1,
+		"label": "Guest label", "insert_after": "customer_name",
+		"module": "URY", "docstatus": 0
+	},
+	{
 		"alignment": "",
 		"allow_bulk_edit": 0,
 		"allow_in_quick_entry": 0,

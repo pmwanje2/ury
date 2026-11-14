@@ -87,6 +87,7 @@ export default function CaptainOrder() {
     posProfile,
     paymentModes,
     orderComment,
+    guestLabel,
     noOfPax,
     setNoOfPax,
     lastModifiedTime,
@@ -240,6 +241,7 @@ export default function CaptainOrder() {
         invoice: isUpdatingOrder ? orderId : null,
         waiter: user.name,
         comments: orderComment || undefined,
+        ...(guestLabel?.trim() ? { guest_label: guestLabel.trim() } : {}),
       };
 
       const result = await syncOrder(orderData);
@@ -354,11 +356,12 @@ export default function CaptainOrder() {
   const handleSplitBill = async (payload: {
     itemsToMove: Array<{ name: string; qty: number }>;
     customer?: string;
+    guestLabel?: string;
   }) => {
     if (!invoiceId) {
       throw new Error('No active order to split.');
     }
-    const result = await splitBill(invoiceId, payload.itemsToMove, payload.customer);
+    const result = await splitBill(invoiceId, payload.itemsToMove, payload.customer, payload.guestLabel);
     showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
     await refetchContext();
     await reloadOrder();

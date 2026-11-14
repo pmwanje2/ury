@@ -39,7 +39,8 @@
         "clear_cache": "مسح ذاكرة التخزين المؤقت",
         "logout": "تسجيل الخروج",
         "pair_tablet": "إقران هذا الجهاز اللوحي",
-        "staff_pins": "أرقام PIN للموظفين"
+        "staff_pins": "أرقام PIN للموظفين",
+        "floor_pin_off": "تسجيل الدخول برقم PIN متوقف لهذا الصندوق"
     },
     "staff_pins": {
         "title": "أرقام PIN للموظفين",
@@ -86,7 +87,9 @@
         "edit_item": "تعديل العنصر",
         "add_comment": "إضافة تعليق",
         "edit_comment": "تعديل التعليق",
-        "pax": "عدد الأشخاص"
+        "pax": "عدد الأشخاص",
+        "guest_label": "اسم النزيل (اختياري)",
+        "guest_label_placeholder": "مثال: سوزان"
     },
     "order": {
         "select_to_view": "حدد طلبًا لعرض التفاصيل",
@@ -125,7 +128,14 @@
         "processing": "جاري المعالجة...",
         "short_by": "ناقص {{amount}}",
         "change_due": "الباقي: {{amount}}",
-        "success": "تم الدفع بنجاح: تم استلام {{amount}}"
+        "success": "تم الدفع بنجاح: تم استلام {{amount}}",
+        "room_posting": "ترحيل إلى الغرفة",
+        "check_room": "تحقق من الغرفة",
+        "checking_room": "جارٍ التحقق...",
+        "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
+        "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
+        "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
+        "room_check_failed": "تعذر التحقق من هذه الغرفة"
     },
     "pos": {
         "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -286,7 +296,9 @@
     },
     "bill_split": {
         "split_bill": "تقسيم الفاتورة",
-        "split_success": "تم إنشاء الفاتورة الجديدة {{invoice}}"
+        "split_success": "تم إنشاء الفاتورة الجديدة {{invoice}}",
+        "guest_label": "اسم النزيل للفاتورة الجديدة (اختياري)",
+        "guest_label_placeholder": "مثال: ديفيد"
     },
     "notifications": {
         "kitchen": "المطبخ",

@@ -20,6 +20,19 @@ from frappe import cache
 class URYOrder(Document):
     pass
 
+
+GUEST_LABEL_MAX = 40
+
+
+def _guest_label(value):
+    """A short name for an order or check (Susan, Seat 2): trimmed, at most
+    GUEST_LABEL_MAX characters, None when blank. It names the check for the
+    kitchen and the bill; it is not a Customer and never creates one."""
+    label = (value or "").strip()
+    if len(label) > GUEST_LABEL_MAX:
+        frappe.throw(_("A guest label can be at most {0} characters.").format(GUEST_LABEL_MAX))
+    return label or None
+
 @frappe.whitelist()
 def merge_free_tables(table1, table2):
     """Merges two tables in the same room; allows one occupied and one free."""
@@ -535,10 +548,11 @@ def _copy_invoice_item_fields(item_row, qty):
 
 
 @frappe.whitelist()
-def split_bill(source_invoice, items_to_move, customer=None):
+def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
     if isinstance(items_to_move, str):
         items_to_move = json.loads(items_to_move)
+    guest_label = _guest_label(guest_label)
 
     source = frappe.get_doc("POS Invoice", source_invoice)
 
@@ -626,6 +640,9 @@ def split_bill(source_invoice, items_to_move, customer=None):
     new_invoice.custom_split_group = split_group
     new_invoice.invoice_printed = 0
     new_invoice.invoice_created = 0
+    # the new check is named for who it is for; without a name it keeps the
+    # source bill's label
+    new_invoice.custom_guest_label = guest_label or source.get("custom_guest_label")
 
     if customer:
         new_invoice.customer = customer
@@ -1539,8 +1556,10 @@ def sync_order(
     captured_at=None,
     offline_printed=0,
     expected_total=None,
+    guest_label=None,
 ):
     append = cint(append) == 1
+    guest_label = _guest_label(guest_label)
     client_order_id = _validate_client_order_id(client_order_id)
     if round_id is not None and not str(round_id).strip():
         frappe.throw(_("Round ID must not be empty."))
@@ -1812,6 +1831,8 @@ def sync_order(
     invoice.mobile_number = customerdoc.mobile_number
     if comments:
         invoice.custom_comments = comments
+    if guest_label:
+        invoice.custom_guest_label = guest_label
     invoice.no_of_pax = no_of_pax
     invoice.pos_profile = pos_profile
     

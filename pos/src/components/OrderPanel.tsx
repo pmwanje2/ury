@@ -41,6 +41,8 @@ const OrderPanel = () => {
     orderId,
     orderComment,
     setOrderComment,
+    guestLabel,
+    setGuestLabel,
     noOfPax,
     setNoOfPax,
     lastModifiedTime
@@ -134,7 +136,8 @@ const OrderPanel = () => {
         last_modified_time: isUpdatingOrder ? (lastModifiedTime || undefined) : undefined,
         invoice: isUpdatingOrder ? orderId : null,
         waiter: user.name,
-        comments: orderComment || undefined
+        comments: orderComment || undefined,
+        ...(guestLabel?.trim() ? { guest_label: guestLabel.trim() } : {}),
       };
 
       const hasHeld = activeOrders.some(item => item.ury_held);
@@ -352,6 +355,20 @@ const OrderPanel = () => {
           </div>
           
           <div className="p-4 border-t border-gray-200 flex-shrink-0 bg-white">
+            <label className="mb-3 block text-sm text-gray-600">
+              <span className="sr-only">{t('cart.guest_label')}</span>
+              <input
+                type="text"
+                name="guest_label"
+                maxLength={40}
+                value={guestLabel ?? ''}
+                onChange={(e) => setGuestLabel(e.target.value)}
+                placeholder={t('cart.guest_label')}
+                aria-label={t('cart.guest_label')}
+                className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+                disabled={isInteractionDisabled}
+              />
+            </label>
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <Button

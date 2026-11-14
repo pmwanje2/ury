@@ -335,9 +335,10 @@ export default function Orders() {
   async function handleSplitBill(payload: {
     itemsToMove: Array<{ name: string; qty: number }>;
     customer?: string;
+    guestLabel?: string;
   }) {
     if (!selectedOrder) return;
-    const result = await splitBill(selectedOrder.name, payload.itemsToMove, payload.customer);
+    const result = await splitBill(selectedOrder.name, payload.itemsToMove, payload.customer, payload.guestLabel);
     showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
 
     const childOnUnbilledTab =

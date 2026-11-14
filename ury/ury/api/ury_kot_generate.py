@@ -51,6 +51,7 @@ def create_kot_doc(
             "restaurant_table": restaurant_table,
             "custom_merged_tables": pos_invoice.get("custom_merged_tables"),
             "customer_name": customer,
+            "custom_guest_label": getattr(pos_invoice, "custom_guest_label", None) or None,
             "pos_profile": pos_profile_id,
             "comments": comments,
             "type": kot_type,

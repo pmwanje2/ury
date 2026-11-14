@@ -25,6 +25,9 @@ export interface PosProfileLimited {
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   payment_mode_accounts?: Record<string, string | null>;
+  /** Optional whitelisted method the till calls before a Room Charge; "" = free-text room. */
+  room_lookup_method?: string;
+  custom_floor_pin_login?: number;
 }
 
 export interface PosProfileLimitedResponse {
@@ -76,6 +79,8 @@ export interface PosProfileFull {
   custom_void_reasons?: string | null;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
+  /** Floor PIN sign-in on this till (POS Profile.custom_floor_pin_login). */
+  custom_floor_pin_login?: number;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -97,6 +102,7 @@ export interface PosProfileCombined extends PosProfileFull {
   view_all_status?: number;
   custom_daily_pos_close?: number;
   payment_mode_accounts?: Record<string, string | null>;
+  room_lookup_method?: string;
 }
 
 export interface Currency {
@@ -151,6 +157,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
+    room_lookup_method: limitedProfile.room_lookup_method ?? '',
+    custom_floor_pin_login: limitedProfile.custom_floor_pin_login ?? fullProfile.custom_floor_pin_login,
   };
 
   return combinedProfile;

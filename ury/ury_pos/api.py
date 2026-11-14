@@ -866,6 +866,9 @@ def getPosProfile():
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
         "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
+        # optional PMS room lookup before a Room Charge; blank = free-text room
+        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
+        "custom_floor_pin_login": 1 if pos_profiles.get("custom_floor_pin_login") else 0,
 
     }
 
