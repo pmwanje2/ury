@@ -183,26 +183,110 @@ def _print_format_html(folder):
 
 
 class TestGuestLabelOnPrints(unittest.TestCase):
-    """Waiter slips and the bill print the check's guest label when it has one."""
+    """Waiter slips and the bill print the check's guest label escaped against HTML/XSS."""
 
-    def test_waiter_order_slip_prints_the_label_when_set(self):
+    def test_waiter_order_slip_prints_the_label_escaped_when_set(self):
         html = _print_format_html("ury_waiter_order_slip")
-        self.assertTrue("{% if doc.custom_guest_label %}" in html, "{% if doc.custom_guest_label %}")
-        self.assertTrue("{{ doc.custom_guest_label }}" in html, "{{ doc.custom_guest_label }}")
+        self.assertIn("{% if doc.custom_guest_label %}", html)
+        self.assertIn("{{ doc.custom_guest_label | e }}", html)
+        self.assertNotIn("{{ doc.custom_guest_label }}", html)
 
-    def test_merged_bill_prints_the_label_when_set(self):
+    def test_merged_bill_prints_the_label_escaped_when_set(self):
         html = _print_format_html("merged_pos_invoice_format")
-        self.assertTrue("{% if doc.custom_guest_label %}" in html, "{% if doc.custom_guest_label %}")
-        self.assertTrue("{{ doc.custom_guest_label }}" in html, "{{ doc.custom_guest_label }}")
+        self.assertIn("{% if doc.custom_guest_label %}", html)
+        self.assertIn("{{ doc.custom_guest_label | e }}", html)
+        self.assertNotIn("{{ doc.custom_guest_label }}", html)
 
-    def test_print_formats_still_render_as_jinja(self):
-        try:
-            import jinja2
-        except ImportError:  # pragma: no cover - the bench image ships jinja2
-            self.skipTest("jinja2 unavailable")
+    def test_print_formats_escape_guest_label_markup_under_frappe_autoescape_off(self):
+        import jinja2
+        from types import SimpleNamespace
+        payload = "<img src=x onerror=alert(1)>"
+        env = jinja2.Environment(autoescape=False)
+        env.globals["_"] = lambda x: x
+        env.globals["frappe"] = frappe._dict(
+            db=frappe._dict(get_value=lambda *a, **k: None),
+            utils=frappe._dict(flt=float, cint=int, format_date=str, formatdate=str, format_time=str, fmt_money=lambda v, **k: str(v)),
+            format_value=lambda v, *a, **k: str(v),
+        )
+        doc = SimpleNamespace(
+            name="INV-001",
+            status="Paid",
+            custom_guest_label=payload,
+            customer_name="Walk In",
+            customer="Walk In",
+            restaurant_table="T-1",
+            order_type="Dine In",
+            posting_date="2026-11-15",
+            posting_time="12:00:00",
+            owner="waiter@example.com",
+            kot_items=[],
+            items=[],
+            taxes=[],
+            payments=[],
+            total_qty=1,
+            net_total=1000,
+            grand_total=1000,
+            rounded_total=1000,
+            paid_amount=1000,
+            change_amount=0,
+            discount_amount=0,
+            additional_discount_percentage=0,
+            currency="UGX",
+            invoice="INV-001",
+            order_no=None,
+            waiter=None,
+            mobile_number="",
+            update_billed_amount_in_delivery_note=0,
+            restaurant="Grill",
+            branch="Main",
+            due_date=None,
+            no_of_pax=2,
+            cashier="Cashier",
+            invoice_created=1,
+            custom_merged_pos_invoice=None,
+            get_formatted=lambda field, *a, **k: str(getattr(doc, field, "")),
+        )
         for folder in ("ury_waiter_order_slip", "merged_pos_invoice_format"):
             with self.subTest(folder=folder):
-                jinja2.Environment().parse(_print_format_html(folder))
+                rendered = env.from_string(_print_format_html(folder)).render(doc=doc)
+                self.assertNotIn(payload, rendered)
+                self.assertIn("&lt;img src=x onerror=alert(1)&gt;", rendered)
+
+
+class TestDuplicateKotRecoveryCarriesGuestLabel(unittest.TestCase):
+    def test_duplicate_recovery_kot_carries_custom_guest_label(self):
+        from ury.ury.api import ury_kot_validation as kv
+        inv = frappe._dict(
+            name="POS-INV-1",
+            restaurant_table="T-2",
+            customer="Walk In",
+            custom_guest_label="Susan",
+            order_no="0042",
+        )
+        created = []
+
+        class FakeDoc(dict):
+            def __getattr__(self, k):
+                return self.get(k)
+            def append(self, table, row):
+                self.setdefault(table, []).append(row)
+            def insert(self, *a, **k):
+                return self
+            def submit(self):
+                return self
+            def db_set(self, k, v):
+                self[k] = v
+
+        def fake_new_doc(dt):
+            d = FakeDoc(doctype=dt, name=f"{dt}-1")
+            created.append(d)
+            return d
+
+        with patch.object(kv.frappe, "get_doc", return_value=inv),              patch.object(kv.frappe, "new_doc", side_effect=fake_new_doc):
+            kv.create_kot("POS-INV-1", frappe._dict(name="Grill POS"), "THI-KOT-", [], "waiter@example.com", "Kitchen")
+
+        kot = next(d for d in created if d["doctype"] == "URY KOT")
+        self.assertEqual(kot.get("custom_guest_label"), "Susan")
 
 
 class TestGuestLabelOnKitchenDisplay(unittest.TestCase):
