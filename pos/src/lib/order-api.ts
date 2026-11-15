@@ -97,6 +97,7 @@ export interface SyncOrderRequest {
   last_invoice: string | null;
   last_modified_time?: string;
   comments?: string | null;
+  /** absent = keep the order's label; "" = clear it */
   guest_label?: string;
   room?: string;
   client_order_id?: string;

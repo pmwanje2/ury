@@ -39,11 +39,19 @@ def order_delay_notification(id):
         order_by="idx",
     )
 
+    # the short name of the check (Susan, Seat 2), so the floor knows whose
+    # order it is; escaped: it is typed at the till
+    guest_label = (kot_doc.get("custom_guest_label") or "").strip()
+    guest = frappe.utils.escape_html(guest_label) if guest_label else ""
+
     subject = f"""Order # {order_id} Delayed"""
+    if guest:
+        subject += f" · {guest}"
 
     message = f"""
             <ul>
                 <li><b> Table : </b> {tableOrTakeaway}</li>
+                {f"<li><b> Guest : </b> {guest}</li>" if guest else ""}
                 <li><b> Order Type : </b> {kot_type}</li>
                 
             

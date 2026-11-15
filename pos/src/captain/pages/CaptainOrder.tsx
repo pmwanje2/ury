@@ -88,6 +88,7 @@ export default function CaptainOrder() {
     paymentModes,
     orderComment,
     guestLabel,
+    setGuestLabel,
     noOfPax,
     setNoOfPax,
     lastModifiedTime,
@@ -241,7 +242,8 @@ export default function CaptainOrder() {
         invoice: isUpdatingOrder ? orderId : null,
         waiter: user.name,
         comments: orderComment || undefined,
-        ...(guestLabel?.trim() ? { guest_label: guestLabel.trim() } : {}),
+        // an existing order always sends its label, so clearing the box clears it
+        ...(guestLabel?.trim() || isUpdatingOrder ? { guest_label: guestLabel?.trim() ?? '' } : {}),
       };
 
       const result = await syncOrder(orderData);
@@ -474,6 +476,22 @@ export default function CaptainOrder() {
       )}
 
       {canModify && <HoldFireControls />}
+      {canModify && (
+        <label className="block bg-white border border-gray-200 rounded-lg px-3 py-3">
+          <span className="sr-only">{t('cart.guest_label')}</span>
+          <input
+            type="text"
+            name="guest_label"
+            maxLength={40}
+            value={guestLabel ?? ''}
+            onChange={(e) => setGuestLabel(e.target.value)}
+            placeholder={t('cart.guest_label')}
+            aria-label={t('cart.guest_label')}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            disabled={isInteractionDisabled}
+          />
+        </label>
+      )}
       {canModify && (
         <div className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-3 py-3">
           <span className="text-sm font-medium text-gray-700">Pax</span>

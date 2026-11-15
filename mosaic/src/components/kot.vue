@@ -127,6 +127,10 @@
                   <span v-if="kot.is_aggregator" class="text-black-500 ml-2 font-semibold"
                     >{{ kot.aggregator_id }}
                   </span><br v-if="kot.is_aggregator"/>
+                  <template v-if="kot.custom_guest_label">
+                    <span class="text-sm font-medium text-[#6B7280]">Guest</span>
+                    <span class="kot-guest text-black-500 ml-2 font-semibold">{{ kot.custom_guest_label }}</span><br />
+                  </template>
                   <span class="text-sm font-medium text-[#6B7280]">Order</span>
                   <span class="text-black-500 ml-2 font-semibold"
                     >{{ this.daily_order_number ? kot.order_no : kot.invoice.slice(-4) }}
@@ -259,6 +263,7 @@
             <span v-if="!daily_order_number">Invoice: {{ kotErrorAlert.invoice.slice(-4) }}</span>
             <span v-else>Order #: {{ kotErrorAlert.order_no }}</span>
             | Table: {{ kotErrorAlert.tableortakeaway }} | Time: {{ kotErrorAlert.timestamp }}
+            <span v-if="kotErrorAlert.guest_label"> | Guest: {{ kotErrorAlert.guest_label }}</span>
           </p>
         </div>
       </div>
@@ -858,6 +863,7 @@ export default {
               invoice: doc.invoice,
               tableortakeaway: matchingKot?.tableortakeaway || 'Table/Takeaway info unavailable',
               order_no: matchingKot?.order_no || 'N/A',
+              guest_label: matchingKot?.custom_guest_label || '',
               timestamp: new Date().toLocaleTimeString()
             };
             this.showKotErrorAlert = true;

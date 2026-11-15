@@ -1559,6 +1559,9 @@ def sync_order(
     guest_label=None,
 ):
     append = cint(append) == 1
+    # None = the caller did not send a label (keep the order's); any string,
+    # blank included, is the label the order has now ("" clears it)
+    clear_guest_label = guest_label is not None and not str(guest_label).strip()
     guest_label = _guest_label(guest_label)
     client_order_id = _validate_client_order_id(client_order_id)
     if round_id is not None and not str(round_id).strip():
@@ -1831,7 +1834,9 @@ def sync_order(
     invoice.mobile_number = customerdoc.mobile_number
     if comments:
         invoice.custom_comments = comments
-    if guest_label:
+    if clear_guest_label:
+        invoice.custom_guest_label = ""
+    elif guest_label:
         invoice.custom_guest_label = guest_label
     invoice.no_of_pax = no_of_pax
     invoice.pos_profile = pos_profile

@@ -137,7 +137,8 @@ const OrderPanel = () => {
         invoice: isUpdatingOrder ? orderId : null,
         waiter: user.name,
         comments: orderComment || undefined,
-        ...(guestLabel?.trim() ? { guest_label: guestLabel.trim() } : {}),
+        // an existing order always sends its label, so clearing the box clears it
+        ...(guestLabel?.trim() || isUpdatingOrder ? { guest_label: guestLabel?.trim() ?? '' } : {}),
       };
 
       const hasHeld = activeOrders.some(item => item.ury_held);

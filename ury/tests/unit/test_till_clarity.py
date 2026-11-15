@@ -136,6 +136,8 @@ class TestGuestLabelOnDelayNotification(unittest.TestCase):
         self.notification = notification
         self.framework = self.enterContext(patch.object(notification, "frappe"))
         self.framework.has_permission.return_value = True
+        from frappe.utils.html_utils import escape_html
+        self.framework.utils.escape_html.side_effect = escape_html
         self.kot = frappe._dict(name="KOT-1", restaurant_table="T-05", custom_guest_label=None)
         self.framework.get_doc.return_value = self.kot
         self.framework.db.get_value.side_effect = lambda doctype, name, field: {
@@ -163,8 +165,6 @@ class TestGuestLabelOnDelayNotification(unittest.TestCase):
 
     def test_delay_alert_label_is_escaped(self):
         self.kot.custom_guest_label = "<b>Bob</b>"
-        self.framework.utils.escape_html.side_effect = lambda value: (
-            value.replace("<", "&lt;").replace(">", "&gt;"))
         self.notification.order_delay_notification("KOT-1")
         subject, message = self.sent[0]
         self.assertNotIn("<b>Bob</b>", message)

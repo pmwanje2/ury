@@ -205,6 +205,8 @@ interface POSStore extends POSState {
     table: string | null;
     room: string | null;
     items: OrderItem[];
+    /** the draft's saved label, so editing the order keeps it */
+    guestLabel?: string | null;
   }) => void;
   reorderTabs: (sourceIndex: number, destinationIndex: number) => void;
   setNoOfPax: (pax: number) => void;
@@ -1199,7 +1201,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       orderId: draft.orderId,
       isUpdatingOrder: true,
       orderComment: '',
-      guestLabel: '',
+      guestLabel: draft.guestLabel || '',
       originalCartHash: generateCartHash({ activeOrders: draft.items, selectedCustomer: draft.customer, orderComment: '' }),
       selectedItem: null,
       error: null,

@@ -301,6 +301,7 @@ def create_cancel_kot_doc(
             "original_kot": set_kots,
             "restaurant_table": restaurant_table,
             "customer_name": customer,
+            "custom_guest_label": getattr(pos_invoice, "custom_guest_label", None) or None,
             "type": kot_type,
             "invoice": invoice_id,
             "pos_profile": pos_profile_id,
