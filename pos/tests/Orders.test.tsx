@@ -363,6 +363,30 @@ describe('cashier workspace reading order', () => {
   });
 });
 
+describe('M03 guest label on the cashier order list and bill', () => {
+  afterEach(() => {
+    delete (state.order as { custom_guest_label?: string | null }).custom_guest_label;
+    state.order.customer = 'Customer';
+  });
+
+  it('names the check on its card and in the bill detail, ahead of the walk-in customer', async () => {
+    Object.assign(state.order, { custom_guest_label: 'Susan', customer: 'Walk In' });
+    await renderOrders();
+    const card = Array.from(container.querySelectorAll('p')).find((p) => p.textContent?.includes('Walk In'));
+    expect(card?.textContent).toBe('Susan · Walk In');
+    const detail = container.querySelector('.sticky.bottom-0')!.parentElement!;
+    expect(detail.textContent).toContain('Susan · Walk In');
+  });
+
+  it('without a label the card and detail show the customer as before', async () => {
+    Object.assign(state.order, { custom_guest_label: '', customer: 'Walk In' });
+    await renderOrders();
+    const card = Array.from(container.querySelectorAll('p')).find((p) => p.textContent?.includes('Walk In'));
+    expect(card?.textContent).toBe('Walk In');
+    expect(container.textContent).not.toContain(' · Walk In');
+  });
+});
+
 
 describe('Orders void reason dialog', () => {
   async function openCancelDialog() {

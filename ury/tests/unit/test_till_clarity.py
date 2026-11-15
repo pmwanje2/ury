@@ -111,6 +111,152 @@ class TestGuestLabelOnKot(unittest.TestCase):
         self.assertEqual(len(self.cases.tickets), 1)
         self.assertIsNone(getattr(self.cases.tickets[0], "custom_guest_label", None))
 
+    def test_cancel_kot_carries_the_order_guest_label(self):
+        self.cases.invoice.custom_guest_label = "Susan"
+        self.cases.kot.create_cancel_kot_doc(
+            self.cases.invoice.name, None, [self.cases.line()], "Partially cancelled", "Walk-in",
+            None, "POS A", "CNCL-.#####", [self.cases.line()], "Kitchen",
+        )
+        self.assertEqual([t.custom_guest_label for t in self.cases.tickets], ["Susan"])
+
+    def test_cancel_kot_without_a_label_is_unchanged(self):
+        self.cases.kot.create_cancel_kot_doc(
+            self.cases.invoice.name, None, [self.cases.line()], "Partially cancelled", "Walk-in",
+            None, "POS A", "CNCL-.#####", [self.cases.line()], "Kitchen",
+        )
+        self.assertIsNone(getattr(self.cases.tickets[0], "custom_guest_label", None))
+
+
+class TestGuestLabelOnDelayNotification(unittest.TestCase):
+    """The kitchen's order-delayed alert names the check it is about."""
+
+    def setUp(self):
+        from ury.ury.api import ury_kot_notification as notification
+
+        self.notification = notification
+        self.framework = self.enterContext(patch.object(notification, "frappe"))
+        self.framework.has_permission.return_value = True
+        self.kot = frappe._dict(name="KOT-1", restaurant_table="T-05", custom_guest_label=None)
+        self.framework.get_doc.return_value = self.kot
+        self.framework.db.get_value.side_effect = lambda doctype, name, field: {
+            "order_status": "Ready For Prepare", "invoice": "POS-INV-00042",
+            "type": "New Order", "pos_profile": "POS A",
+        }[field]
+        self.framework.get_all.side_effect = lambda doctype, **kwargs: {
+            "URY KOT Items": [],
+            "URY Notification Recipient": [frappe._dict(receiver_by_role="URY Captain")],
+            "Has Role": [{"user": "waiter@example.com"}],
+            "User": [frappe._dict(name="waiter@example.com")],
+        }[doctype]
+        self.sent = []
+        self.enterContext(patch.object(
+            notification, "create_system_notification",
+            side_effect=lambda message, user, subject: self.sent.append((subject, message))))
+
+    def test_delay_alert_names_the_guest(self):
+        self.kot.custom_guest_label = "Susan"
+        self.notification.order_delay_notification("KOT-1")
+        self.assertEqual(len(self.sent), 1)
+        subject, message = self.sent[0]
+        self.assertEqual(subject, "Order # 00042 Delayed · Susan")
+        self.assertIn("<b> Guest : </b> Susan", message)
+
+    def test_delay_alert_label_is_escaped(self):
+        self.kot.custom_guest_label = "<b>Bob</b>"
+        self.framework.utils.escape_html.side_effect = lambda value: (
+            value.replace("<", "&lt;").replace(">", "&gt;"))
+        self.notification.order_delay_notification("KOT-1")
+        subject, message = self.sent[0]
+        self.assertNotIn("<b>Bob</b>", message)
+        self.assertIn("&lt;b&gt;Bob&lt;/b&gt;", message)
+
+    def test_delay_alert_without_a_label_is_unchanged(self):
+        self.notification.order_delay_notification("KOT-1")
+        subject, message = self.sent[0]
+        self.assertEqual(subject, "Order # 00042 Delayed")
+        self.assertNotIn("Guest", message)
+
+
+def _print_format_html(folder):
+    path = ROOT / "ury" / "print_format" / folder / f"{folder}.json"
+    return json.loads(path.read_text())["html"]
+
+
+class TestGuestLabelOnPrints(unittest.TestCase):
+    """Waiter slips and the bill print the check's guest label when it has one."""
+
+    def test_waiter_order_slip_prints_the_label_when_set(self):
+        html = _print_format_html("ury_waiter_order_slip")
+        self.assertTrue("{% if doc.custom_guest_label %}" in html, "{% if doc.custom_guest_label %}")
+        self.assertTrue("{{ doc.custom_guest_label }}" in html, "{{ doc.custom_guest_label }}")
+
+    def test_merged_bill_prints_the_label_when_set(self):
+        html = _print_format_html("merged_pos_invoice_format")
+        self.assertTrue("{% if doc.custom_guest_label %}" in html, "{% if doc.custom_guest_label %}")
+        self.assertTrue("{{ doc.custom_guest_label }}" in html, "{{ doc.custom_guest_label }}")
+
+    def test_print_formats_still_render_as_jinja(self):
+        try:
+            import jinja2
+        except ImportError:  # pragma: no cover - the bench image ships jinja2
+            self.skipTest("jinja2 unavailable")
+        for folder in ("ury_waiter_order_slip", "merged_pos_invoice_format"):
+            with self.subTest(folder=folder):
+                jinja2.Environment().parse(_print_format_html(folder))
+
+
+class TestGuestLabelOnKitchenDisplay(unittest.TestCase):
+    """Mosaic (the KDS) has no JS test runner: pin the template source."""
+
+    def setUp(self):
+        self.source = (ROOT.parent / "mosaic" / "src" / "components" / "kot.vue").read_text()
+
+    def test_ticket_shows_the_label_for_every_order_type(self):
+        self.assertTrue('v-if="kot.custom_guest_label"' in self.source, 'v-if="kot.custom_guest_label"')
+        self.assertTrue("{{ kot.custom_guest_label }}" in self.source, "{{ kot.custom_guest_label }}")
+
+    def test_delayed_order_banner_shows_the_label(self):
+        self.assertTrue("guest_label: matchingKot?.custom_guest_label" in self.source, "guest_label: matchingKot?.custom_guest_label")
+        self.assertTrue('v-if="kotErrorAlert.guest_label"' in self.source, 'v-if="kotErrorAlert.guest_label"')
+        self.assertTrue("{{ kotErrorAlert.guest_label }}" in self.source, "{{ kotErrorAlert.guest_label }}")
+
+    def test_kds_list_sends_whole_kot_documents(self):
+        # kot_list / the realtime push serialise the full URY KOT, so the
+        # custom field arrives without a field list to extend
+        display = (ROOT / "ury" / "api" / "ury_kot_display.py").read_text()
+        self.assertTrue('kotjson = json.loads(frappe.as_json(kotdoc))' in display, 'kotjson = json.loads(frappe.as_json(kotdoc))')
+
+
+class TestGuestLabelInCashierLists(unittest.TestCase):
+    """The cashier's order list and the split-group panel get the label."""
+
+    def setUp(self):
+        self.framework = self.enterContext(patch.object(api, "frappe"))
+        self.enterContext(patch.object(api, "getBranch", return_value="Branch A"))
+        self.enterContext(patch.object(api, "_enrich_split_group_meta", side_effect=lambda rows: rows))
+        self.framework.db.sql.return_value = []
+
+    def test_every_order_list_query_selects_the_label(self):
+        for status in ("Outstanding", "Draft", "Unbilled", "Recently Paid", "Paid"):
+            with self.subTest(status=status):
+                api.getPosInvoice(status, 2, 0)
+                select = self.framework.db.sql.call_args.args[0].split("FROM")[0]
+                self.assertIn("custom_guest_label", select)
+
+    def test_order_search_selects_the_label(self):
+        self.framework.get_all.return_value = []
+        api.searchPosInvoice("Susan", "Draft")
+        self.assertIn("custom_guest_label", self.framework.get_all.call_args.kwargs["fields"])
+
+    def test_split_group_selects_the_label(self):
+        invoice = frappe._dict(name="POS-1", branch="Branch A", custom_split_group="SG-1")
+        self.framework.get_doc.return_value = invoice
+        self.framework.has_permission.return_value = True
+        self.framework.get_all.return_value = []
+        api.get_split_group("POS-1")
+        fields = self.framework.get_all.call_args_list[0].kwargs["fields"]
+        self.assertIn("custom_guest_label", fields)
+
 
 class _SplitHarness(split_harness.TestSplitBillAndPrintRelease):
     """The split-bill site-less harness, without re-running its own tests."""
@@ -181,6 +327,13 @@ class TestGuestLabelOnSyncOrder(unittest.TestCase):
         self.cases.invoice.custom_guest_label = "David"
         self.cases.send("")
         self.assertEqual(self.cases.invoice.custom_guest_label, "David")
+
+    def test_an_explicit_blank_label_clears_it(self):
+        for blank in ("", "   "):
+            with self.subTest(blank=blank):
+                self.cases.invoice.custom_guest_label = "David"
+                self.cases.send("", guest_label=blank)
+                self.assertEqual(self.cases.invoice.custom_guest_label, "")
 
     def test_a_label_over_forty_characters_is_refused(self):
         with self.assertRaisesRegex(frappe.ValidationError, "40"):
