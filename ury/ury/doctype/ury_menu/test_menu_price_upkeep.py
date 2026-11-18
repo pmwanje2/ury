@@ -204,6 +204,13 @@ class TestMenuSaveKeepsPriceHistory(unittest.TestCase):
         self.assertEqual(self.prices.inserted, [])
         self.assertEqual(self.prices.rate_of(pending["name"]), 130)
 
+    def test_release_workflow_does_not_duplicate_an_earlier_pending_proposal(self):
+        self.prices.use_workflow()
+        self.prices.add("Fish", 100, "2026-01-01", state="Approved")
+        self.prices.add("Fish", 120, "2026-11-17", state="Draft")
+        self.save_menu(Fish=120)
+        self.assertEqual((self.prices.inserted, self.prices.saved), ([], []))
+
     def test_release_workflow_refuses_to_change_a_price_released_today(self):
         self.prices.use_workflow()
         released = self.prices.add("Fish", 100, "2026-11-18", state="Approved")
