@@ -320,6 +320,15 @@ def get_custom_fields():
 				"insert_after": "restaurant_info",
 			},
 			{
+				"fieldname": "ury_kds_display_window_hours",
+				"fieldtype": "Int",
+				"label": "Kitchen Display Window (Hours)",
+				"default": "3",
+				"non_negative": 1,
+				"description": "Kitchen and bar screens show tickets created within this many hours (1-24). Empty or 0 uses 3.",
+				"insert_after": "ury_enable_hold_fire",
+			},
+			{
 				"fieldname": "restaurant",
 				"fieldtype": "Link",
 				"insert_after": "restaurant_info",

@@ -185,7 +185,8 @@ def _get_cancel_confirmed_original_kots(branch):
     return original_names
 
 
-KOT_DISPLAY_WINDOW_HOURS = 3
+KOT_DISPLAY_WINDOW_HOURS = 3  # default when the POS Profile sets no window
+KOT_DISPLAY_WINDOW_MAX_HOURS = 24
 KOT_DISPLAY_TYPES = [
     "New Order",
     "Order Modified",
@@ -193,6 +194,20 @@ KOT_DISPLAY_TYPES = [
     "Cancelled",
     "Partially cancelled",
 ]
+
+
+def _kot_display_window_hours(branch):
+    """Hours of KOTs the board shows: the branch POS Profile setting, default 3, at most 24."""
+    hours = None
+    if branch:
+        hours = frappe.db.get_value("POS Profile", {"branch": branch}, "ury_kds_display_window_hours")
+    try:
+        hours = int(hours or 0)
+    except (TypeError, ValueError):
+        hours = 0
+    if hours <= 0:
+        return KOT_DISPLAY_WINDOW_HOURS
+    return min(hours, KOT_DISPLAY_WINDOW_MAX_HOURS)
 
 
 def _kot_display_filters(order_status, branch=None):
@@ -209,7 +224,7 @@ def _kot_display_filters(order_status, branch=None):
         "creation": (
             ">=",
             frappe.utils.add_to_date(
-                frappe.utils.now(), hours=-KOT_DISPLAY_WINDOW_HOURS
+                frappe.utils.now(), hours=-_kot_display_window_hours(branch)
             ),
         ),
     }
