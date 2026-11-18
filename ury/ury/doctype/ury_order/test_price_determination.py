@@ -71,6 +71,7 @@ def _site_less_frappe():
 
 _framework, _modules = _site_less_frappe()
 with patch.dict(sys.modules, _modules):
+    from ury.ury.api import item_price
     from ury.ury.doctype.ury_order import ury_order
 
 
@@ -127,9 +128,10 @@ class TestPriceDetermination(unittest.TestCase):
         self.framework.throw = _framework.throw
         self.framework.utils.getdate = getdate
         self.book = FakePriceBook(self.framework)
-        patcher = patch.object(ury_order, "frappe", self.framework)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for module in (ury_order, item_price):
+            patcher = patch.object(module, "frappe", self.framework)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def bill(self, posting_date=None):
         extra = {"posting_date": posting_date} if posting_date else {}
