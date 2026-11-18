@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { usePOSStore } from '../src/store/pos-store';
 import { getMenuCourses } from '../src/lib/menu-course-api';
+import { getRestaurantMenu } from '../src/lib/menu-api';
 
 vi.mock('../src/lib/menu-course-api', () => ({ getMenuCourses: vi.fn() }));
 vi.mock('../src/lib/menu-api', () => ({ getRestaurantMenu: vi.fn(async () => []), getAggregatorMenu: vi.fn(async () => []) }));
@@ -48,4 +49,16 @@ it('falls back to the courses on the loaded menu items when the course list is e
     ['Mains', 'Mains'],
     ['Spirits', 'Spirits'],
   ]);
+});
+
+it('fills empty categories from the menu when the menu loads after the course list', async () => {
+  vi.mocked(getMenuCourses).mockResolvedValue([]);
+  await usePOSStore.getState().fetchCategories();
+  vi.mocked(getRestaurantMenu).mockResolvedValueOnce([
+    { item: 'A', item_name: 'Rib-Eye', rate: 1, course: 'Mains', course_label: 'Mains' },
+    { item: 'B', item_name: 'Gin', rate: 1, course: 'Spirits', course_label: 'Spirits' },
+  ] as never);
+  usePOSStore.setState({ posProfile: { name: 'Till A', restaurant: 'R1' } as never });
+  await usePOSStore.getState().fetchMenuItems();
+  expect(usePOSStore.getState().categories.map((c) => c.name)).toEqual(['Mains', 'Spirits']);
 });
