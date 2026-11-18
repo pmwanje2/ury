@@ -44,7 +44,6 @@ def _site_less_frappe():
 
 _framework, _modules = _site_less_frappe()
 with patch.dict(sys.modules, _modules):
-    from ury.ury.api import item_price
     from ury.ury.doctype.ury_menu import ury_menu
 
 
@@ -136,8 +135,10 @@ class TestMenuSaveKeepsPriceHistory(unittest.TestCase):
         self.framework.throw = _framework.throw
         self.framework.utils.getdate = getdate
         self.prices = FakeItemPrices(self.framework)
-        for module in (ury_menu, item_price):
-            patcher = patch.object(module, "frappe", self.framework)
+        # Patch the item_price module that ury_menu bound; another suite may have loaded its own copy.
+        shared = ury_menu.price_valid_on.__globals__
+        for namespace in (vars(ury_menu), shared):
+            patcher = patch.dict(namespace, {"frappe": self.framework})
             patcher.start()
             self.addCleanup(patcher.stop)
         self.menu = ury_menu.URYMenu.__new__(ury_menu.URYMenu)
