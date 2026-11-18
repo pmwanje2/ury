@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { usePOSStore } from '../src/store/pos-store';
 import { getMenuCourses } from '../src/lib/menu-course-api';
-import { getRestaurantMenu } from '../src/lib/menu-api';
+import { getAggregatorMenu, getRestaurantMenu } from '../src/lib/menu-api';
 
 vi.mock('../src/lib/menu-course-api', () => ({ getMenuCourses: vi.fn() }));
 vi.mock('../src/lib/menu-api', () => ({ getRestaurantMenu: vi.fn(async () => []), getAggregatorMenu: vi.fn(async () => []) }));
@@ -137,4 +137,24 @@ it('keeps a cached server list over item courses when revalidation fails', async
   vi.mocked(getRestaurantMenu).mockResolvedValueOnce(menu(['Soup', 'Starters']) as never);
   await usePOSStore.getState().fetchMenuItems();
   expect(usePOSStore.getState().categories.map((c) => c.name)).toEqual(['Mains', 'Spirits']);
+});
+
+it('re-derives fallback categories and clears a stale selection when an aggregator menu loads', async () => {
+  usePOSStore.setState({ posProfile: { name: 'Till A', restaurant: 'R1' } as never, selectedCategory: 'Mains' });
+  vi.mocked(getRestaurantMenu).mockResolvedValueOnce(menu(['Rib-Eye', 'Mains']) as never);
+  await usePOSStore.getState().fetchMenuItems();
+  vi.mocked(getAggregatorMenu).mockResolvedValueOnce(menu(['Gin', 'Spirits']) as never);
+  await usePOSStore.getState().fetchAggregatorMenu('Glovo');
+  expect(usePOSStore.getState().categories.map((c) => c.name)).toEqual(['Spirits']);
+  expect(usePOSStore.getState().selectedCategory).toBe('');
+});
+
+it('keeps the server course list when an aggregator menu loads', async () => {
+  vi.mocked(getMenuCourses).mockResolvedValue(courses as never);
+  await usePOSStore.getState().fetchCategories();
+  usePOSStore.setState({ selectedCategory: 'Mains' });
+  vi.mocked(getAggregatorMenu).mockResolvedValueOnce(menu(['Gin', 'Spirits']) as never);
+  await usePOSStore.getState().fetchAggregatorMenu('Glovo');
+  expect(usePOSStore.getState().categories).toEqual(courses);
+  expect(usePOSStore.getState().selectedCategory).toBe('Mains');
 });
