@@ -70,7 +70,8 @@ class FakeItemPrices:
         return row
 
     def use_workflow(self):
-        self.workflow = {"Draft": "", "Approved": "Success"}
+        # Frappe's standard Workflow State styles (frappe/utils/install.py): Approved Success, Rejected Danger.
+        self.workflow = {"Draft": "", "Approved": "Success", "Rejected": "Danger"}
 
     def rate_of(self, name):
         return next(r for r in self.rows if r["name"] == name)["price_list_rate"]
@@ -218,6 +219,14 @@ class TestMenuSaveKeepsPriceHistory(unittest.TestCase):
             self.save_menu(Fish=120)
         self.assertEqual((self.prices.inserted, self.prices.saved), ([], []))
         self.assertEqual(self.prices.rate_of(released["name"]), 100)
+
+    def test_rejected_rate_can_be_proposed_again(self):
+        self.prices.use_workflow()
+        self.prices.add("Fish", 100, "2026-01-01", state="Approved")
+        self.prices.add("Fish", 120, "2026-11-17", state="Rejected")
+        self.save_menu(Fish=120)
+        self.assertEqual([(r["price_list_rate"], r["workflow_state"], getdate(r["valid_from"]))
+                          for r in self.prices.inserted], [(120, "Draft", TODAY)])
 
     def test_menu_rate_equal_to_released_price_leaves_pending_proposal(self):
         self.prices.use_workflow()

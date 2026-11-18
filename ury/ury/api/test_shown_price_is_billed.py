@@ -1,0 +1,209 @@
+"""A price shown to a guest or an aggregator till is the price billed; site-less like test_price_determination.py.
+
+SAP basis: every channel uses one price determination, so the quoted price is the
+billed price. Here that is ury.ury.api.item_price.price_valid_on, which billing
+(price_items_for_invoice) already uses: the Item Price valid on the pricing date,
+released by the Item Price workflow if one is active.
+"""
+
+import importlib.util
+import sys
+import unittest
+from datetime import date
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+TODAY = date(2026, 11, 18)
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def getdate(value=None):
+    if value is None:
+        return TODAY
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+class Row(dict):
+    __getattr__ = dict.get
+
+
+class PriceBook:
+    """Item Price rows in creation order plus an optional release workflow; other reads are scripted."""
+
+    def __init__(self, framework):
+        self.rows = []
+        self.workflow = None
+        self.values = {}
+        framework.db.get_list.side_effect = self.get_list
+        framework.get_all.side_effect = self.get_all
+        framework.db.get_value.side_effect = self.get_value
+        framework.get_cached_doc.side_effect = lambda doctype, name: Row(
+            states=[Row(state=state) for state in self.workflow["states"]])
+
+    def add(self, item, rate, valid_from=None, valid_upto=None, state=None, price_list="Menu A", uom="Nos"):
+        self.rows.append(Row(
+            name=f"IP-{len(self.rows) + 1}", item_code=item, item_name=item, price_list=price_list,
+            price_list_rate=rate, valid_from=valid_from, valid_upto=valid_upto, workflow_state=state,
+            uom=uom, customer=None, supplier=None, batch_no=None, selling=1,
+        ))
+
+    def use_workflow(self):
+        self.workflow = {"field": "workflow_state", "states": {"Draft": "", "Approved": "Success"}}
+
+    def item_prices(self, filters, fields):
+        rows = [r for r in self.rows if all(r.get(k) == v for k, v in (filters or {}).items())]
+        return [Row({f: r.get(f) for f in fields}) for r in rows] if fields else rows
+
+    def get_list(self, doctype, filters=None, fields=None, **kwargs):
+        assert doctype == "Item Price", doctype
+        return self.item_prices(filters, fields)
+
+    def get_all(self, doctype, filters=None, fields=None, pluck=None, **kwargs):
+        if doctype == "Workflow State":
+            return [n for n in filters["name"][1] if self.workflow["states"].get(n) == filters["style"]]
+        if doctype == "Item Price":
+            return self.item_prices(filters, fields)
+        return self.values.get(("get_all", doctype), [])
+
+    def get_value(self, doctype, filters=None, fieldname=None, *args, **kwargs):
+        if doctype == "Workflow":
+            if not self.workflow:
+                return None
+            return {"workflow_state_field": self.workflow["field"], "name": "Menu Price Release"}[fieldname]
+        if doctype == "Item Price":
+            # The pre-fix lookup: the first row on the price list, whatever its validity.
+            rows = self.item_prices(filters, None)
+            return rows[0][fieldname] if rows else None
+        if doctype == "Item" and fieldname == "stock_uom":
+            return "Nos"
+        return self.values.get((doctype, fieldname))
+
+
+def _framework():
+    framework = MagicMock()
+    framework.ValidationError = type("ValidationError", (Exception,), {})
+    framework.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+    framework._ = lambda text, *args: text
+    framework.whitelist = lambda *args, **kwargs: (lambda function: function)
+    framework.session = SimpleNamespace(user="Guest")
+
+    def throw(message, exception=None, **kwargs):
+        raise (exception or framework.ValidationError)(message)
+
+    framework.throw = throw
+    framework.utils.getdate = getdate
+    return framework
+
+
+class Loaded(unittest.TestCase):
+    def setUp(self):
+        self.framework = _framework()
+        self.book = PriceBook(self.framework)
+        utils = ModuleType("frappe.utils")
+        utils.getdate = getdate
+        utils.cint = lambda value: int(value or 0)
+        utils.flt = lambda value: float(value or 0)
+        for name in ("add_to_date", "now_datetime", "get_datetime", "nestedset", "validate_phone_number",
+                     "today", "datetime", "get_system_timezone"):
+            setattr(utils, name, MagicMock())
+        rate_limiter = ModuleType("frappe.rate_limiter")
+        rate_limiter.rate_limit = lambda **kwargs: lambda function: function
+        order = ModuleType("ury.ury.doctype.ury_order.ury_order")
+        order._resolve_or_create_pos_invoice = MagicMock()
+        order.invoice_pricing_date = MagicMock()
+        order.price_items_for_invoice = MagicMock()
+        kot = ModuleType("ury.ury.api.ury_kot_generate")
+        kot.kot_execute = MagicMock()
+        dashboard = ModuleType("ury.ury.api.ury_dashboard")
+        dashboard._business_day_bounds = MagicMock()
+        self.enterContext(patch.dict(sys.modules, {
+            "frappe": self.framework, "frappe.utils": utils, "frappe.rate_limiter": rate_limiter,
+            "ury.ury.doctype.ury_order.ury_order": order, "ury.ury.api.ury_kot_generate": kot,
+            "ury.ury.api.ury_dashboard": dashboard,
+        }))
+        self.item_price = self.load("ury.ury.api.item_price", "ury/api/item_price.py")
+        self.pos_api = self.load("ury.ury_pos.api", "ury_pos/api.py")
+        self.guest = self.load("ury.ury.api.self_ordering", "ury/api/self_ordering.py")
+
+    def load(self, name, relative):
+        spec = importlib.util.spec_from_file_location(name, ROOT / relative)
+        module = importlib.util.module_from_spec(spec)
+        self.enterContext(patch.dict(sys.modules, {name: module}))
+        spec.loader.exec_module(module)
+        return module
+
+
+class TestGuestOptionPrices(Loaded):
+    """A variant or add-on priced on an invoice price list shows the rate billing uses on that list."""
+
+    def setUp(self):
+        super().setUp()
+        self.framework.db.exists.return_value = True
+        self.framework.db.get_value.side_effect = self.value
+        self.framework.get_all.side_effect = lambda doctype, **kwargs: (
+            [Row(item="Chips")] if doctype == "Item Add On" else self.book.get_all(doctype, **kwargs))
+
+    def value(self, doctype, filters=None, fieldname=None, *args, **kwargs):
+        if doctype == "Item" and isinstance(fieldname, list):
+            return Row(item_code=filters, item_name=filters, image=None)
+        return self.book.get_value(doctype, filters, fieldname, *args, **kwargs)
+
+    def addon_rate(self):
+        options = self.guest._linked_item_options("Item Add On", "Fish", invoice_price_list="Menu A")
+        return [option["rate"] for option in options]
+
+    def test_addon_shows_the_price_valid_today(self):
+        self.book.add("Chips", 5, "2026-01-01")
+        self.book.add("Chips", 7, "2026-11-01")
+        self.assertEqual(self.addon_rate(), [7])
+
+    def test_addon_does_not_show_an_unreleased_price(self):
+        self.book.use_workflow()
+        self.book.add("Chips", 9, "2026-11-10", state="Draft")
+        self.book.add("Chips", 5, "2026-01-01", state="Approved")
+        self.assertEqual(self.addon_rate(), [5])
+
+    def test_addon_without_a_valid_price_shows_no_rate(self):
+        self.book.add("Chips", 5, "2027-01-01")
+        self.assertEqual(self.addon_rate(), [None])
+
+    def test_addon_without_an_invoice_price_list_shows_no_rate(self):
+        self.book.add("Chips", 5, "2026-01-01")
+        options = self.guest._linked_item_options("Item Add On", "Fish", invoice_price_list=None)
+        self.assertEqual([option["rate"] for option in options], [None])
+
+
+class TestAggregatorItemPrices(Loaded):
+    """The aggregator till lists each item once, at the rate sync_order bills on the aggregator price list."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch.object(self.pos_api, "getBranch", return_value="Branch A"))
+        self.book.values[("Aggregator Settings", "price_list")] = "Menu A"
+
+    def listed(self):
+        return {row["item"]: row["rate"] for row in self.pos_api.getAggregatorItem("Glovo")}
+
+    def test_each_item_is_listed_once_at_the_price_valid_today(self):
+        self.book.add("Fish", 100, "2026-01-01")
+        self.book.add("Fish", 130, "2026-11-01")
+        rows = self.pos_api.getAggregatorItem("Glovo")
+        self.assertEqual([(row["item"], row["rate"]) for row in rows], [("Fish", 130)])
+
+    def test_unreleased_price_is_not_listed(self):
+        self.book.use_workflow()
+        self.book.add("Fish", 100, "2026-01-01", state="Approved")
+        self.book.add("Fish", 150, "2026-11-10", state="Draft")
+        self.assertEqual(self.listed(), {"Fish": 100})
+
+    def test_item_without_a_valid_price_is_not_listed(self):
+        self.book.add("Fish", 100, "2026-01-01")
+        self.book.add("Tea", 20, "2027-01-01")
+        self.assertEqual(self.listed(), {"Fish": 100})
+
+
+if __name__ == "__main__":
+    unittest.main()

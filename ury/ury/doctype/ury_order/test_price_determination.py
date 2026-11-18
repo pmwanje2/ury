@@ -85,10 +85,12 @@ class FakePriceBook:
         framework.get_all.side_effect = self.get_all
         framework.get_cached_doc.side_effect = self.get_cached_doc
 
-    def add(self, rate, valid_from=None, valid_upto=None, state=None, item="Fish", price_list="Menu A"):
+    def add(self, rate, valid_from=None, valid_upto=None, state=None, item="Fish", price_list="Menu A",
+            uom="Nos", customer=None, supplier=None, batch_no=None):
         self.rows.append(Row(
             name=f"IP-{len(self.rows) + 1}", item_code=item, price_list=price_list,
             price_list_rate=rate, valid_from=valid_from, valid_upto=valid_upto, workflow_state=state,
+            uom=uom, customer=customer, supplier=supplier, batch_no=batch_no,
         ))
 
     def use_workflow(self, states, field="workflow_state"):
@@ -107,6 +109,8 @@ class FakePriceBook:
             return {"workflow_state_field": self.workflow["field"], "name": self.workflow["name"]}[fieldname]
         if doctype == "POS Profile":
             return "CC"
+        if doctype == "Item" and fieldname == "stock_uom":
+            return "Nos"
         return None
 
     def get_cached_doc(self, doctype, name):
@@ -134,8 +138,10 @@ class TestPriceDetermination(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def bill(self, posting_date=None):
+    def bill(self, posting_date=None, customer=None):
         extra = {"posting_date": posting_date} if posting_date else {}
+        if customer:
+            extra["customer"] = customer
         rows = ury_order.price_items_for_invoice(
             [{"item": "Fish", "item_name": "Fish", "qty": 1}], "Menu A", "POS A", "Branch A", "Menu", **extra,
         )
@@ -211,6 +217,72 @@ class TestPriceDetermination(unittest.TestCase):
         self.book.add(100, "2026-01-01", state="Draft")
         self.assertEqual(self.bill(), 100)
 
+    def test_record_valid_from_the_pricing_date_is_used(self):
+        self.book.add(100, "2026-01-01")
+        self.book.add(130, "2026-11-18")
+        self.assertEqual(self.bill(), 130)
+
+    # ERPNext get_item_price (erpnext/stock/get_item_details.py, _get_item_price_query and
+    # _order_item_prices at v16.55.0) is the native rule the till must match.
+
+    def test_price_in_another_uom_is_not_used(self):
+        self.book.add(100, "2026-01-01")
+        self.book.add(60, "2026-11-01", uom="Plate")
+        self.assertEqual(self.bill(), 100)
+
+    def test_price_without_a_uom_is_used(self):
+        self.book.add(100, "2026-01-01", uom=None)
+        self.assertEqual(self.bill(), 100)
+
+    def test_another_customers_price_is_not_used(self):
+        self.book.add(100, "2026-01-01")
+        self.book.add(80, "2026-11-01", customer="Glovo")
+        self.assertEqual(self.bill(customer="Walk-in"), 100)
+
+    def test_a_bill_without_a_customer_uses_only_party_less_prices(self):
+        self.book.add(100, "2026-01-01")
+        self.book.add(80, "2026-11-01", customer="Glovo")
+        self.assertEqual(self.bill(), 100)
+
+    def test_supplier_price_is_not_used_for_a_sale(self):
+        self.book.add(100, "2026-01-01")
+        self.book.add(70, "2026-11-01", supplier="Fresh Fish Ltd")
+        self.assertEqual(self.bill(customer="Walk-in"), 100)
+
+    def test_this_customers_price_wins_over_a_newer_general_price(self):
+        self.book.add(100, "2026-11-10")
+        self.book.add(80, "2026-01-01", customer="Glovo")
+        self.assertEqual(self.bill(customer="Glovo"), 80)
+
+    def test_batch_price_is_not_used_for_a_line_without_a_batch(self):
+        self.book.add(100, "2026-01-01")
+        self.book.add(50, "2026-11-01", batch_no="B-1")
+        self.assertEqual(self.bill(), 100)
+
+
+class TestReleaseStates(unittest.TestCase):
+    """item_price_release_states itself refuses, so no caller can bill through an unreleasable workflow."""
+
+    def setUp(self):
+        self.framework = MagicMock()
+        self.framework.ValidationError = _framework.ValidationError
+        self.framework.throw = _framework.throw
+        self.framework._ = _framework._
+        self.book = FakePriceBook(self.framework)
+        self.item_price = ury_order.price_valid_on.__globals__
+        patcher = patch.dict(self.item_price, {"frappe": self.framework})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_workflow_without_a_released_state_refuses(self):
+        self.book.use_workflow({"Draft": "", "Pending": "Warning"})
+        with self.assertRaisesRegex(_framework.ValidationError, "no released"):
+            self.item_price["item_price_release_states"]()
+
+    def test_workflow_with_a_released_state_returns_its_field_and_states(self):
+        self.book.use_workflow({"Draft": "", "Approved": "Success"}, field="custom_release")
+        self.assertEqual(self.item_price["item_price_release_states"](), ("custom_release", {"Approved"}))
+
 
 class TestInvoicePricingDate(unittest.TestCase):
     def setUp(self):
@@ -241,6 +313,7 @@ class TestCallersPassThePricingDate(unittest.TestCase):
             self.assertTrue(calls, relative)
             for call in calls:
                 self.assertIn("posting_date", [k.arg for k in call.keywords], relative)
+                self.assertIn("customer", [k.arg for k in call.keywords], relative)
 
 
 if __name__ == "__main__":
