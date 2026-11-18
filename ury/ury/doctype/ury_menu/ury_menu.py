@@ -48,7 +48,25 @@ class URYMenu(Document):
             current = price_valid_on(d.item, price_list.name, today, release_field, released)
             if current and flt(current.price_list_rate) == rate:
                 continue
+            if release_field and self.has_pending_proposal(d.item, price_list.name, rate, today, release_field, released):
+                continue
             self.set_todays_item_price(d.item, price_list.name, rate, today, release_field, released)
+
+    def has_pending_proposal(self, item_code, price_list, rate, today, release_field, released):
+        """An unreleased Item Price at this rate, valid by today, already waits for release."""
+        rows = frappe.db.get_list(
+            "Item Price",
+            filters={"item_code": item_code, "price_list": price_list},
+            fields=["price_list_rate", "valid_from", "valid_upto", release_field],
+        )
+        getdate = frappe.utils.getdate
+        return any(
+            flt(row.price_list_rate) == rate
+            and row.get(release_field) not in released
+            and (not row.valid_from or getdate(row.valid_from) <= today)
+            and (not row.valid_upto or getdate(row.valid_upto) >= today)
+            for row in rows
+        )
 
     def set_todays_item_price(self, item_code, price_list, rate, today, release_field, released):
         fields = ["name", "price_list_rate"] + ([release_field] if release_field else [])
