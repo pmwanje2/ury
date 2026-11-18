@@ -13,6 +13,7 @@ from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury.api.ury_kot_generate import kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 from frappe import cache
 
@@ -882,27 +883,37 @@ def get_order_invoice(table=None, invoiceNo=None, order_type=None, is_payment=No
     return invoice
 
 
-def price_items_for_invoice(items, price_list, pos_profile, branch, menu):
+def invoice_pricing_date(invoice):
+    """The pricing date of an invoice: its posting date.
+
+    ERPNext resets posting_date to today on validate unless set_posting_time
+    is on, so an open till invoice prices on today.
+    """
+    if cint(getattr(invoice, "set_posting_time", 0)) and getattr(invoice, "posting_date", None):
+        return frappe.utils.getdate(invoice.posting_date)
+    return frappe.utils.getdate()
+
+
+def price_items_for_invoice(items, price_list, pos_profile, branch, menu, posting_date=None):
     """Resolve course and price for each item and build the invoice item dicts.
 
     Returns a list of dicts in the same shape previously passed directly to
     `invoice.append("items", ...)` inside `sync_order`. Does not append to
-    the invoice itself.
+    the invoice itself. The price is the Item Price valid on posting_date
+    (default today) and released by the site's Item Price workflow, if any.
     """
     priced_items = []
+    posting_date = frappe.utils.getdate(posting_date) if posting_date else frappe.utils.getdate()
+    release_field, released = item_price_release_states()
 
     for d in items:
 
         course = frappe.db.get_value("URY Menu Item", {"item": d.get("item"), "parent": menu}, "course")
 
-        item_prices = frappe.db.get_list(
-            "Item Price",
-            filters={"item_code": d.get("item"), "price_list": price_list},
-            fields=["price_list_rate"],
-        )
+        item_price = price_valid_on(d.get("item"), price_list, posting_date, release_field, released)
 
-        if not item_prices:
-            frappe.throw(_("No item price found for Item: {0} in Price List: {1}. Please check the price list settings.").format(d.get("item"), price_list))
+        if not item_price:
+            frappe.throw(_("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(d.get("item"), price_list, posting_date))
 
         else:
             priced_items.append(
@@ -912,9 +923,9 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu):
                     qty=d.get("qty"),
                     **({"custom_course": course} if course else {}),
                     comment=d.get("comment"),
-                    rate = item_prices[0].price_list_rate,
-                    price_list_rate = item_prices[0].price_list_rate,
-                    base_price_list_rate = item_prices[0].price_list_rate,
+                    rate = item_price.price_list_rate,
+                    price_list_rate = item_price.price_list_rate,
+                    base_price_list_rate = item_price.price_list_rate,
                     cost_center = frappe.db.get_value(
                         "POS Profile", pos_profile, "cost_center"
                         ),
@@ -1901,7 +1912,9 @@ def sync_order(
 
     menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
 
-    priced_items = price_items_for_invoice(items, price_list, pos_profile, invoice.branch, menu)
+    priced_items = price_items_for_invoice(
+        items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
+    )
     for source, item_dict in zip(items, priced_items, strict=True):
         if source.get("name"):
             item_dict["name"] = source["name"]
