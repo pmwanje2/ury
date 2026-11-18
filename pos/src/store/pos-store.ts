@@ -69,6 +69,14 @@ export interface Category {
   icon?: string;
 }
 
+function categoriesFromItems(items: MenuItem[]): Category[] {
+  const seen = new Map<string, string>();
+  for (const item of items) {
+    if (item.course && !seen.has(item.course)) seen.set(item.course, item.course_label || item.course);
+  }
+  return Array.from(seen, ([name, label]) => ({ name, label }));
+}
+
 export interface Order {
   id: string;
   cartId: string;
@@ -464,7 +472,10 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         tax_rate: 0,
       }));
 
-      set({ menuItems });
+      set((state) => ({
+        menuItems,
+        categories: state.categories.length ? state.categories : categoriesFromItems(menuItems),
+      }));
     } catch (error) {
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
@@ -496,16 +507,19 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   fetchCategories: async () => {
     try {
+      // Serve the shared cache, then always revalidate: a list cached before the
+      // menu had courses would otherwise hide them for the whole session.
       const cached = sessionStorage.getItem('menuCategories');
-      if (cached) {
-        const categories = JSON.parse(cached);
-        set({ categories });
-        return;
+      if (cached) set({ categories: JSON.parse(cached) });
+      let courses: Category[];
+      try {
+        courses = await getMenuCourses();
+      } catch (error) {
+        if (cached) return;
+        throw error;
       }
-
-      const courses = await getMenuCourses();
       sessionStorage.setItem('menuCategories', JSON.stringify(courses));
-      set({ categories: courses });
+      set({ categories: courses.length ? courses : categoriesFromItems(get().menuItems) });
     } catch (error) {
       set({ error: 'Failed to load menu categories' });
       throw error;
