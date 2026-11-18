@@ -151,6 +151,11 @@ class TestPriceDetermination(unittest.TestCase):
         self.book.add(110, "2026-07-01")
         self.assertEqual(self.bill(), 110)
 
+    def test_expired_promotion_falls_back_to_the_base_price(self):
+        self.book.add(110, "2026-01-01")
+        self.book.add(90, "2026-11-01", valid_upto="2026-11-10")
+        self.assertEqual(self.bill(), 110)
+
     def test_record_valid_through_the_pricing_date_is_used(self):
         self.book.add(90, "2025-01-01", valid_upto="2026-11-18")
         self.assertEqual(self.bill(), 90)
