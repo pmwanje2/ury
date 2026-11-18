@@ -77,6 +77,10 @@ function categoriesFromItems(items: MenuItem[]): Category[] {
   return Array.from(seen, ([name, label]) => ({ name, label }));
 }
 
+function keepSelection(selected: string, categories: Category[]): string {
+  return !selected || categories.some((c) => c.name === selected) ? selected : '';
+}
+
 export interface Order {
   id: string;
   cartId: string;
@@ -119,6 +123,7 @@ interface OrderTabState {
 interface POSState {
   menuItems: MenuItem[];
   categories: Category[];
+  categoriesDerived: boolean;
   activeOrders: OrderItem[];
   selectedCategory: string;
   selectedTable: string | null;
@@ -322,6 +327,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   menuItems: [],
   categories: [],
+  categoriesDerived: false,
   selectedCategory: '',
   searchQuery: '',
   quickFilter: "all",
@@ -472,10 +478,14 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         tax_rate: 0,
       }));
 
-      set((state) => ({
-        menuItems,
-        categories: state.categories.length ? state.categories : categoriesFromItems(menuItems),
-      }));
+      set((state) => {
+        const categories = state.categories.length && !state.categoriesDerived
+          ? state.categories : categoriesFromItems(menuItems);
+        return {
+          menuItems, categories, categoriesDerived: categories !== state.categories,
+          selectedCategory: keepSelection(state.selectedCategory, categories),
+        };
+      });
     } catch (error) {
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
@@ -510,7 +520,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       // Serve the shared cache, then always revalidate: a list cached before the
       // menu had courses would otherwise hide them for the whole session.
       const cached = sessionStorage.getItem('menuCategories');
-      if (cached) set({ categories: JSON.parse(cached) });
+      if (cached) set({ categories: JSON.parse(cached), categoriesDerived: false });
       let courses: Category[];
       try {
         courses = await getMenuCourses();
@@ -519,7 +529,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         throw error;
       }
       sessionStorage.setItem('menuCategories', JSON.stringify(courses));
-      set({ categories: courses.length ? courses : categoriesFromItems(get().menuItems) });
+      const categories = courses.length ? courses : categoriesFromItems(get().menuItems);
+      set((state) => ({
+        categories, categoriesDerived: !courses.length,
+        selectedCategory: keepSelection(state.selectedCategory, categories),
+      }));
     } catch (error) {
       set({ error: 'Failed to load menu categories' });
       throw error;
