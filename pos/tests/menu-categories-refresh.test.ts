@@ -16,7 +16,7 @@ const courses = [
 beforeEach(() => {
   sessionStorage.clear();
   vi.mocked(getMenuCourses).mockReset();
-  usePOSStore.setState({ categories: [], menuItems: [] });
+  usePOSStore.setState({ categories: [], menuItems: [], selectedCategory: '' });
 });
 afterEach(() => sessionStorage.clear());
 
@@ -61,4 +61,49 @@ it('fills empty categories from the menu when the menu loads after the course li
   usePOSStore.setState({ posProfile: { name: 'Till A', restaurant: 'R1' } as never });
   await usePOSStore.getState().fetchMenuItems();
   expect(usePOSStore.getState().categories.map((c) => c.name)).toEqual(['Mains', 'Spirits']);
+});
+
+it('keeps the server course list when the menu loads, even for courses with no items', async () => {
+  const withIcons = [
+    { name: 'Starters', label: 'Starters', icon: 'soup' },
+    { name: 'Mains', label: 'Mains', icon: 'utensils' },
+  ];
+  vi.mocked(getMenuCourses).mockResolvedValue(withIcons as never);
+  await usePOSStore.getState().fetchCategories();
+  vi.mocked(getRestaurantMenu).mockResolvedValueOnce([
+    { item: 'A', item_name: 'Rib-Eye', rate: 1, course: 'Mains', course_label: 'Mains' },
+  ] as never);
+  usePOSStore.setState({ posProfile: { name: 'Till A', restaurant: 'R1' } as never });
+  await usePOSStore.getState().fetchMenuItems();
+  expect(usePOSStore.getState().categories).toEqual(withIcons);
+});
+
+it('re-derives fallback categories when a menu switch loads different courses', async () => {
+  vi.mocked(getMenuCourses).mockResolvedValue([]);
+  usePOSStore.setState({ posProfile: { name: 'Till A', restaurant: 'R1' } as never });
+  vi.mocked(getRestaurantMenu).mockResolvedValueOnce([
+    { item: 'A', item_name: 'Rib-Eye', rate: 1, course: 'Mains', course_label: 'Mains' },
+  ] as never);
+  await usePOSStore.getState().fetchMenuItems();
+  await usePOSStore.getState().fetchCategories();
+  vi.mocked(getRestaurantMenu).mockResolvedValueOnce([
+    { item: 'B', item_name: 'Gin', rate: 1, course: 'Spirits', course_label: 'Spirits' },
+  ] as never);
+  await usePOSStore.getState().fetchMenuItems();
+  expect(usePOSStore.getState().categories.map((c) => c.name)).toEqual(['Spirits']);
+});
+
+it('clears a selected category that the refreshed list no longer has', async () => {
+  sessionStorage.setItem('menuCategories', JSON.stringify([{ name: 'Old', label: 'Old' }]));
+  usePOSStore.setState({ selectedCategory: 'Old' });
+  vi.mocked(getMenuCourses).mockResolvedValue(courses as never);
+  await usePOSStore.getState().fetchCategories();
+  expect(usePOSStore.getState().selectedCategory).toBe('');
+});
+
+it('keeps a selected category that the refreshed list still has', async () => {
+  usePOSStore.setState({ selectedCategory: 'Mains' });
+  vi.mocked(getMenuCourses).mockResolvedValue(courses as never);
+  await usePOSStore.getState().fetchCategories();
+  expect(usePOSStore.getState().selectedCategory).toBe('Mains');
 });
