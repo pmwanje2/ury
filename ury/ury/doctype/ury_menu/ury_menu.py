@@ -6,7 +6,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
-from ury.ury.api.item_price import item_price_release_states, price_valid_on
+from ury.ury.api.item_price import item_price_rejected_states, item_price_release_states, price_valid_on
 
 
 class URYMenu(Document):
@@ -53,7 +53,11 @@ class URYMenu(Document):
             self.set_todays_item_price(d.item, price_list.name, rate, today, release_field, released)
 
     def has_pending_proposal(self, item_code, price_list, rate, today, release_field, released):
-        """An unreleased Item Price at this rate, valid by today, already waits for release."""
+        """An unreleased, unrejected Item Price at this rate, valid by today, already waits for release.
+
+        A Rejected row (Workflow State style Danger) is a closed proposal, so the same rate can be proposed again.
+        """
+        rejected = item_price_rejected_states()
         rows = frappe.db.get_list(
             "Item Price",
             filters={"item_code": item_code, "price_list": price_list},
@@ -63,6 +67,7 @@ class URYMenu(Document):
         return any(
             flt(row.price_list_rate) == rate
             and row.get(release_field) not in released
+            and row.get(release_field) not in rejected
             and (not row.valid_from or getdate(row.valid_from) <= today)
             and (not row.valid_upto or getdate(row.valid_upto) >= today)
             for row in rows

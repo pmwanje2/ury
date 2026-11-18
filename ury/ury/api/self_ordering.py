@@ -41,6 +41,7 @@ from ury.ury.doctype.ury_order.ury_order import (
     price_items_for_invoice,
 )
 from ury.ury.api.ury_kot_generate import kot_execute
+from ury.ury.api.item_price import item_price_release_states, price_valid_on, selling_uom
 
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
@@ -440,6 +441,9 @@ def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
         fields=["item"],
     )
 
+    # The rate billing would charge today (price_items_for_invoice): one price determination for every channel.
+    release_field, released = item_price_release_states() if invoice_price_list else (None, None)
+    today = frappe.utils.getdate()
     options = []
     for row in rows:
         linked = frappe.db.get_value("Item", row.item, ["item_code", "item_name", "image"], as_dict=True)
@@ -447,9 +451,11 @@ def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
             continue
         price = None
         if invoice_price_list:
-            price = frappe.db.get_value(
-                "Item Price", {"item_code": linked.item_code, "price_list": invoice_price_list}, "price_list_rate"
+            item_price = price_valid_on(
+                linked.item_code, invoice_price_list, today, release_field, released,
+                uom=selling_uom(linked.item_code),
             )
+            price = item_price.price_list_rate if item_price else None
         options.append({
             "item_code": linked.item_code,
             "item_name": linked.item_name,
@@ -642,7 +648,7 @@ def add_customer_items(session, items):
         menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
         priced_items = price_items_for_invoice(
             clean_items, invoice.selling_price_list, profile.pos_profile, invoice.branch, menu,
-            posting_date=invoice_pricing_date(invoice),
+            posting_date=invoice_pricing_date(invoice), customer=invoice.customer,
         )
         for item_dict in priced_items:
             invoice.append("items", item_dict)
