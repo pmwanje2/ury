@@ -101,6 +101,8 @@ class OrderingCases:
 
     @staticmethod
     def get_value(doctype, filters, field):
+        if doctype == "Workflow":
+            return None  # the fixture site has no Item Price release workflow
         return {"item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
                 "active_menu": "Menu A"}.get(field)
 

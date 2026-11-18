@@ -37,6 +37,7 @@ from frappe.utils import add_to_date, cint, flt, now_datetime
 from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
     _resolve_or_create_pos_invoice,
+    invoice_pricing_date,
     price_items_for_invoice,
 )
 from ury.ury.api.ury_kot_generate import kot_execute
@@ -641,6 +642,7 @@ def add_customer_items(session, items):
         menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
         priced_items = price_items_for_invoice(
             clean_items, invoice.selling_price_list, profile.pos_profile, invoice.branch, menu,
+            posting_date=invoice_pricing_date(invoice),
         )
         for item_dict in priced_items:
             invoice.append("items", item_dict)

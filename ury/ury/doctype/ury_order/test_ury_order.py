@@ -362,6 +362,8 @@ class TestPriceItemsForInvoicePhase1(unittest.TestCase):
         mock_get_value.side_effect = get_value_side_effect
         mock_price = MagicMock()
         mock_price.price_list_rate = 150
+        mock_price.valid_from = None
+        mock_price.valid_upto = None
         mock_get_list.return_value = [mock_price]
 
         items = [{"item": "Biryani", "item_name": "Biryani", "qty": 2, "comment": "less spicy"}]
