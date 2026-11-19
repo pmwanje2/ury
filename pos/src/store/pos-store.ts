@@ -81,6 +81,19 @@ function keepSelection(selected: string, categories: Category[]): string {
   return !selected || categories.some((c) => c.name === selected) ? selected : '';
 }
 
+// A server course list wins; a list derived from items follows each menu load.
+function withMenuItems(
+  state: { categories: Category[]; categoriesDerived: boolean; selectedCategory: string },
+  menuItems: MenuItem[],
+) {
+  const categories = state.categories.length && !state.categoriesDerived
+    ? state.categories : categoriesFromItems(menuItems);
+  return {
+    menuItems, categories, categoriesDerived: categories !== state.categories,
+    selectedCategory: keepSelection(state.selectedCategory, categories),
+  };
+}
+
 export interface Order {
   id: string;
   cartId: string;
@@ -478,14 +491,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         tax_rate: 0,
       }));
 
-      set((state) => {
-        const categories = state.categories.length && !state.categoriesDerived
-          ? state.categories : categoriesFromItems(menuItems);
-        return {
-          menuItems, categories, categoriesDerived: categories !== state.categories,
-          selectedCategory: keepSelection(state.selectedCategory, categories),
-        };
-      });
+      set((state) => withMenuItems(state, menuItems));
     } catch (error) {
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
@@ -508,7 +514,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         category: item.course
       }));
 
-      set({ menuItems, menuLoading: false });
+      set((state) => ({ ...withMenuItems(state, menuItems), menuLoading: false }));
     } catch (error) {
       set({ error: 'Failed to load aggregator menu', menuLoading: false });
       console.error('Error loading aggregator menu:', error);
