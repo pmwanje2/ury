@@ -56,12 +56,22 @@
         <h2 id="station-print-title" class="text-xl font-bold">Manager station printing settings</h2>
         <p class="mt-2 text-sm text-gray-600">{{ production }} · This browser only. Use one station per unit. New tickets print from the time this is enabled.</p>
         <p v-if="stationSettingsError" role="alert" class="mt-3 text-red-700">{{ stationSettingsError }}</p>
-        <label class="mt-4 block font-semibold">Printer host
-          <input v-model="stationSettings.host" class="mt-1 w-full rounded border p-2" type="text" autocomplete="off" required>
+        <label class="mt-4 block font-semibold">Printer
+          <select v-model="stationSettings.printer" class="mt-1 w-full rounded border p-2">
+            <option value="">Network printer (host and port)</option>
+            <option v-if="stationSettings.printer && !installedPrinters.includes(stationSettings.printer)" :value="stationSettings.printer">{{ stationSettings.printer }} (saved, not found)</option>
+            <option v-for="name in installedPrinters" :key="name" :value="name">{{ name }}</option>
+          </select>
         </label>
-        <label class="mt-3 block font-semibold">Printer port
-          <input v-model.number="stationSettings.port" class="mt-1 w-full rounded border p-2" type="number" min="1" max="65535" required>
-        </label>
+        <p v-if="printerListError" class="mt-1 text-sm text-gray-600">{{ printerListError }}</p>
+        <template v-if="!stationSettings.printer">
+          <label class="mt-3 block font-semibold">Printer host
+            <input v-model="stationSettings.host" class="mt-1 w-full rounded border p-2" type="text" autocomplete="off" required>
+          </label>
+          <label class="mt-3 block font-semibold">Printer port
+            <input v-model.number="stationSettings.port" class="mt-1 w-full rounded border p-2" type="number" min="1" max="65535" required>
+          </label>
+        </template>
         <label class="mt-3 block font-semibold">Print format
           <input v-model="stationSettings.printFormat" class="mt-1 w-full rounded border p-2" type="text" required>
         </label>
@@ -388,7 +398,9 @@ export default {
       serverTimeOffset: 0,
       timeInterval: null,
       stationPrinter: null,
-      stationSettings: { enabled: false, enabledAt: null, host: "", port: 9100, printFormat: "" },
+      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "" },
+      installedPrinters: [],
+      printerListError: "",
       failedPrints: [],
       printingKots: [],
       printedKots: [],
@@ -440,14 +452,26 @@ export default {
         this.setupStationPrinting();
         this.stationSettingsError = "";
         this.showPrintSettings = true;
+        this.loadInstalledPrinters();
       } catch (error) {
         this.printError = kitchenErrorMessage(error, "Could not open station printing settings.");
+      }
+    },
+    async loadInstalledPrinters() {
+      this.printerListError = "";
+      try {
+        const names = await this.stationPrinter.listPrinters();
+        this.installedPrinters = Array.isArray(names) ? names : [names].filter(Boolean);
+      } catch (error) {
+        this.printerListError = kitchenErrorMessage(error, "Installed printers are unavailable. Start QZ Tray, or use a network printer.");
       }
     },
     savePrintSettings() {
       if (!this.canManagePrintSettings) return;
       try {
-        this.stationSettings = this.stationPrinter.configure(this.stationSettings);
+        const next = { ...this.stationSettings };
+        if (next.printer) next.host = "";
+        this.stationSettings = this.stationPrinter.configure(next);
         this.showPrintSettings = false;
       } catch (error) {
         this.stationSettingsError = error.message;

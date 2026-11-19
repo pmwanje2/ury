@@ -19,7 +19,7 @@ export function createStationPrinter({
     try { return JSON.parse(storage.getItem(`${prefix}:${key}`)) ?? fallback; }
     catch { return fallback; }
   };
-  let settings = { enabled: false, enabledAt: null, host: "", port: 9100, printFormat: "", ...read("settings", {}) };
+  let settings = { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", ...read("settings", {}) };
   const printed = new Set(read("printed", []));
   const attempted = new Set();
   const failures = new Map();
@@ -94,7 +94,9 @@ export function createStationPrinter({
       const bridge = await connectQz();
       if (expired) return;
       const data = `${message.style ? `<style>${message.style}</style>` : ""}${message.html}`;
-      await bridge.print(bridge.configs.create({ host: settings.host, port: Number(settings.port) }), [
+      // QZ resolves a name to an OS print queue (USB or installed network printer); host is a raw socket.
+      const target = settings.printer || { host: settings.host, port: Number(settings.port) };
+      await bridge.print(bridge.configs.create(target), [
         { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS" } },
         { type: "raw", format: "command", flavor: "plain", data: "\n\n\n\x1dV\x00" },
       ]);
@@ -111,7 +113,8 @@ export function createStationPrinter({
       storage.setItem(`${prefix}:printed`, JSON.stringify([...printed]));
       failures.delete(kot.name);
       outcome = { printed: true };
-    } catch {
+    } catch (error) {
+      if (code === "QZ_UNAVAILABLE" && /Cannot find printer/i.test(String(error?.message ?? error))) code = "PRINTER_NOT_FOUND";
       failures.set(kot.name, kot);
       outcome = { printed: false, code };
     } finally {
@@ -126,11 +129,21 @@ export function createStationPrinter({
   return {
     get settings() { return { ...settings }; },
     configure(next) {
-      if (next.enabled && (!next.host?.trim() || !next.printFormat?.trim() || !Number.isInteger(Number(next.port)) || Number(next.port) < 1 || Number(next.port) > 65535)) throw Error("Enter a printer host, port (1–65535), and print format.");
+      const printer = String(next.printer ?? "").trim();
+      const host = String(next.host ?? "").trim();
+      const port = Number(next.port);
+      const validPort = Number.isInteger(port) && port >= 1 && port <= 65535;
+      if (printer && host) throw Error("Choose an installed printer or a network host, not both.");
+      if (next.enabled && !printer && !host) throw Error("Choose an installed printer or enter a network host and port.");
+      if (next.enabled && (!next.printFormat?.trim() || (host && !validPort))) throw Error(printer ? "Enter a print format." : "Enter a printer host, port (1–65535), and print format.");
       const enabledAt = next.enabled && !settings.enabled ? new Date(now()).toISOString() : settings.enabledAt;
-      settings = { enabled: !!next.enabled, enabledAt, host: next.host.trim(), port: Number(next.port), printFormat: next.printFormat.trim() };
+      settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim() };
       storage.setItem(`${prefix}:settings`, JSON.stringify(settings));
       return { ...settings };
+    },
+    async listPrinters() {
+      const bridge = await connectQz();
+      return bridge.printers.find();
     },
     process,
     failed: () => [...failures.keys()],
