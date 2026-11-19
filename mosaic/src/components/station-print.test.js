@@ -358,6 +358,80 @@ test("opening settings lists installed printers and saving a printer clears the 
   assert.equal(vm.stationSettingsError, "");
 });
 
+test("qz.printers.find() rejecting shows printerListError and changes no ticket state", async () => {
+  const qzValue = qzDouble();
+  qzValue.qz.printers.find = async () => { throw Error("Unable to establish connection with QZ"); };
+  const call = callDouble();
+  const changes = [];
+  const { printer } = await makePrinter({ call, qzDouble: qzValue, onChange: state => changes.push(state) });
+
+  await assert.rejects(printer.listPrinters(), { message: "Unable to establish connection with QZ" });
+  assert.deepEqual(changes, []);
+  assert.deepEqual(printer.failed(), []);
+  assert.equal(call.calls.some(({ method }) => method === "frappe.desk.form.utils.add_comment"), false);
+
+  const component = componentDefinition();
+  const failedPrints = [ticket("WAITING")];
+  const vm = {
+    ...component.data(), production: "Kitchen", loggeduser: "Administrator",
+    call: { get: async () => ({ message: { roles: [] } }), post: async () => ({ message: {} }) },
+    stationPrinter: printer, failedPrints, printingKots: ["PENDING"], printedKots: ["DONE"],
+  };
+  for (const [name, method] of Object.entries(component.methods)) vm[name] = method.bind(vm);
+
+  await vm.openPrintSettings();
+  await new Promise(setImmediate);
+
+  assert.equal(vm.showPrintSettings, true);
+  assert.equal(vm.printerListError, "Unable to establish connection with QZ");
+  assert.deepEqual(vm.installedPrinters, []);
+  assert.equal(vm.printError, "");
+  assert.equal(vm.failedPrints, failedPrints);
+  assert.deepEqual(vm.printingKots, ["PENDING"]);
+  assert.deepEqual(vm.printedKots, ["DONE"]);
+
+  const app = Vue.createSSRApp({
+    ...component, props: [],
+    data: () => ({
+      ...component.data(), production: "Kitchen", loadingKots: false, kot: [],
+      showPrintSettings: true, canManagePrintSettings: true, stationSettings: settings(),
+      installedPrinters: [], printerListError: vm.printerListError, socketStale: false,
+    }),
+    render,
+  });
+  assert.match(await renderToString(app), /Unable to establish connection with QZ/);
+});
+
+test("Kitchen and Bar each print only to their own installed printer", async () => {
+  const device = storage({
+    "ury:mosaic:station-print:Kitchen:settings": JSON.stringify(settings({ host: "", printer: "KITCHEN-RAW" })),
+    "ury:mosaic:station-print:Bar:settings": JSON.stringify(settings({ host: "", printer: "BAR-RAW" })),
+  });
+  const kitchenQz = qzDouble();
+  const barQz = qzDouble();
+  const kitchen = await makePrinter({ storage: device, qzDouble: kitchenQz });
+  const bar = await makePrinter({ storage: device, qzDouble: barQz, production: "Bar" });
+  const food = ticket("FOOD", "Kitchen");
+  const drink = ticket("DRINK", "Bar");
+
+  for (const station of [kitchen.printer, bar.printer]) {
+    await station.process(food);
+    await station.process(drink);
+  }
+
+  assert.deepEqual(kitchenQz.calls.configs, ["KITCHEN-RAW"]);
+  assert.deepEqual(kitchenQz.calls.prints.map(({ config }) => config), ["KITCHEN-RAW"]);
+  assert.deepEqual(barQz.calls.configs, ["BAR-RAW"]);
+  assert.deepEqual(barQz.calls.prints.map(({ config }) => config), ["BAR-RAW"]);
+  const rendered = ({ call }) => call.calls
+    .filter(({ method }) => method === "frappe.www.printview.get_html_and_style")
+    .map(({ args }) => args.name);
+  assert.deepEqual(rendered(kitchen), ["FOOD"]);
+  assert.deepEqual(rendered(bar), ["DRINK"]);
+  assert.equal(kitchen.printer.settings.printer, "KITCHEN-RAW");
+  assert.equal(bar.printer.settings.printer, "BAR-RAW");
+});
+
 test("a URY Manager without System Manager opens settings from session roles", async () => {
   const requests = [];
   const call = {
