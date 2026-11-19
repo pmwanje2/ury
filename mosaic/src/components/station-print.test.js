@@ -332,6 +332,22 @@ test("the settings dialog offers installed printers plus a manual network host o
   assert.match(manual, /Printer port/);
 });
 
+test("a saved printer missing from the installed list stays selectable as saved, not found", async () => {
+  const html = await renderSettings(settings({ host: "", printer: "OLD-KITCHEN" }), ["KITCHEN-RAW"]);
+
+  assert.match(html, /<option value="OLD-KITCHEN"[^>]*>OLD-KITCHEN \(saved, not found\)<\/option>/);
+  assert.match(html, /<option value="KITCHEN-RAW"[^>]*>KITCHEN-RAW<\/option>/);
+  assert.doesNotMatch(html, /Printer host/);
+  assert.equal(html.match(/<option value="OLD-KITCHEN"/g).length, 1);
+
+  const installed = await renderSettings(settings({ host: "", printer: "KITCHEN-RAW" }), ["KITCHEN-RAW"]);
+  assert.doesNotMatch(installed, /saved, not found/);
+  assert.equal(installed.match(/<option value="KITCHEN-RAW"/g).length, 1);
+
+  const network = await renderSettings(settings({ printer: "" }), ["KITCHEN-RAW"]);
+  assert.doesNotMatch(network, /saved, not found/);
+});
+
 test("opening settings lists installed printers and saving a printer clears the host", async () => {
   const component = componentDefinition();
   const configured = [];
