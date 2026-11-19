@@ -134,7 +134,7 @@ export function createStationPrinter({
       const port = Number(next.port);
       const validPort = Number.isInteger(port) && port >= 1 && port <= 65535;
       if (printer && host) throw Error("Choose an installed printer or a network host, not both.");
-      if (!printer && !host) throw Error("Choose an installed printer or enter a network host and port.");
+      if (next.enabled && !printer && !host) throw Error("Choose an installed printer or enter a network host and port.");
       if (next.enabled && (!next.printFormat?.trim() || (host && !validPort))) throw Error(printer ? "Enter a print format." : "Enter a printer host, port (1–65535), and print format.");
       const enabledAt = next.enabled && !settings.enabled ? new Date(now()).toISOString() : settings.enabledAt;
       settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim() };
