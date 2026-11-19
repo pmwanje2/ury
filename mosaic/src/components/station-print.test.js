@@ -207,6 +207,23 @@ test("configure requires exactly one of an installed printer or a network host",
   assert.equal(network.host, "192.0.2.10");
 });
 
+test("a fresh device saves with printing disabled and no target, but never with both targets", async () => {
+  const { printer } = await makePrinter({ storage: storage() });
+
+  const saved = printer.configure({ ...printer.settings, enabled: false });
+  assert.equal(saved.enabled, false);
+  assert.equal(saved.printer, "");
+  assert.equal(saved.host, "");
+  assert.throws(
+    () => printer.configure(settings({ enabled: false, printer: "KITCHEN-RAW", host: "192.0.2.10" })),
+    { message: "Choose an installed printer or a network host, not both." },
+  );
+  assert.throws(
+    () => printer.configure(settings({ printer: "", host: "" })),
+    { message: "Choose an installed printer or enter a network host and port." },
+  );
+});
+
 test("listPrinters returns the printers the OS has installed through qz.printers.find()", async () => {
   const { printer, qz } = await makePrinter();
 
