@@ -37,6 +37,8 @@ from frappe.utils import add_to_date, cint, flt, now_datetime
 from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
     _resolve_or_create_pos_invoice,
+    get_menu_name,
+    get_restaurant_and_menu_name,
     invoice_pricing_date,
     price_items_for_invoice,
 )
@@ -436,15 +438,17 @@ def _guest_pricing(session, profile):
     """The price list and customer add_customer_items bills this guest with, read without creating anything.
 
     After the first order they are the guest invoice's own. Before it, the menu price list that
-    _resolve_or_create_pos_invoice sets on a new guest invoice, and the profile's default customer that
+    _resolve_or_create_pos_invoice sets on a new guest invoice (the table's room-wise menu with a table, the
+    order-type menu of the profile branch without one), and the profile's default customer that
     add_customer_items sets on it.
     """
     if session.invoice:
         invoice = frappe.get_doc("POS Invoice", session.invoice)
         return invoice.selling_price_list, invoice.customer or profile.default_customer
-    menu = resolve_restaurant_menu(
-        branch=profile.branch, room=None, order_type="Dine In" if session.table else "Take Away", cashier=False,
-    )["name"]
+    if session.table:
+        menu = get_restaurant_and_menu_name(session.table)[1]
+    else:
+        menu = get_menu_name("Take Away", branch=profile.branch)
     return frappe.db.get_value("Price List", {"restaurant_menu": menu, "enabled": 1}), profile.default_customer
 
 

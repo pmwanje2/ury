@@ -116,6 +116,10 @@ class Loaded(unittest.TestCase):
         order._resolve_or_create_pos_invoice = MagicMock()
         order.invoice_pricing_date = MagicMock()
         order.price_items_for_invoice = MagicMock()
+        # The menu resolvers _resolve_or_create_pos_invoice uses: by table (room-wise) and by order type.
+        order.get_restaurant_and_menu_name = MagicMock(return_value=("Branch A", "Menu Room", "Restaurant A"))
+        order.get_menu_name = MagicMock(return_value="Menu Pickup")
+        self.order = order
         kot = ModuleType("ury.ury.api.ury_kot_generate")
         kot.kot_execute = MagicMock()
         dashboard = ModuleType("ury.ury.api.ury_dashboard")
@@ -240,8 +244,8 @@ class TestGuestProductPricedLikeTheBill(Loaded):
         if doctype == "Item" and isinstance(fieldname, list):
             return Row(item_code=filters, item_name=filters, image=None, description=None)
         if doctype == "Price List":
-            assert filters == {"restaurant_menu": "Menu A", "enabled": 1}, filters
-            return "Menu A"
+            assert set(filters) == {"restaurant_menu", "enabled"} and filters["enabled"] == 1, filters
+            return {"Menu Room": "Menu A", "Menu Pickup": "Menu P"}[filters["restaurant_menu"]]
         return self.book.get_value(doctype, filters, fieldname, *args, **kwargs)
 
     def shown(self):
@@ -262,6 +266,46 @@ class TestGuestProductPricedLikeTheBill(Loaded):
         self.book.add("Chips", 9, "2026-01-01", price_list="Menu B")
         self.book.add("Chips", 7, "2026-01-01", price_list="Menu B", customer="Glovo")
         self.assertEqual(self.shown(), [7])
+
+
+class TestGuestPricingFollowsTheInvoiceMenu(TestGuestProductPricedLikeTheBill):
+    """Before the first order the option price list is the one the new invoice will get: the table's (room-wise)
+    menu with a table, the order-type menu of the profile branch without one. Reading it writes nothing."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("set_value", "sql", "delete", "commit"):
+            getattr(self.framework.db, name).side_effect = AssertionError(f"guest pricing wrote: db.{name}")
+        for name in ("new_doc", "delete_doc"):
+            getattr(self.framework, name).side_effect = AssertionError(f"guest pricing wrote: {name}")
+        self.ensure_mapping = self.enterContext(patch.object(
+            self.guest, "_ensure_admin_branch_mapping", side_effect=AssertionError("guest pricing wrote a Branch")))
+
+    def test_a_table_guest_uses_the_tables_menu(self):
+        self.book.add("Chips", 5, "2026-01-01")
+        self.assertEqual(self.shown(), [5])
+        self.order.get_restaurant_and_menu_name.assert_called_once_with("T1")
+
+    def test_a_pickup_guest_uses_the_order_type_menu_of_the_profile_branch(self):
+        self.session.table = None
+        self.book.add("Chips", 6, "2026-01-01", price_list="Menu P")
+        self.assertEqual(self.shown(), [6])
+        self.order.get_menu_name.assert_called_once_with("Take Away", branch="Branch A")
+
+    def test_pricing_creates_and_saves_nothing(self):
+        self.book.add("Chips", 5, "2026-01-01")
+        self.shown()
+        self.session.invoice = "POS-1"
+        self.book.add("Chips", 9, "2026-01-01", price_list="Menu B")
+        self.shown()
+        self.order._resolve_or_create_pos_invoice.assert_not_called()
+        self.ensure_mapping.assert_not_called()
+
+
+class TestOneUomRule(unittest.TestCase):
+    def test_the_selling_uom_rule_lives_only_inside_price_valid_on(self):
+        source = (ROOT / "ury/api/item_price.py").read_text()
+        self.assertNotIn("def selling_uom(", source, "dead helper: price_valid_on derives the UOM itself")
 
 
 if __name__ == "__main__":

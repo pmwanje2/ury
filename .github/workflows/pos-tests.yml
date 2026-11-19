@@ -45,3 +45,7 @@ jobs:
           ury.ury.doctype.ury_order.test_split_bill_release
           ury.ury.doctype.ury_order.test_cancel_order_reason
           ury.ury_pos.test_floor_pin
+          ury.ury.doctype.ury_order.test_price_determination
+          ury.ury.doctype.ury_menu.test_menu_price_upkeep
+          ury.ury.api.test_shown_price_is_billed
+          ury.ury.api.test_kds_display_window

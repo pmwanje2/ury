@@ -335,5 +335,41 @@ class TestCallersPassThePricingDate(unittest.TestCase):
                 self.assertIn("customer", [k.arg for k in call.keywords], relative)
 
 
+class TestMenuNameForABranch(unittest.TestCase):
+    """get_menu_name(order_type, branch=...) resolves the menu of that branch, so a guest invoice
+    (override_branch) and its pre-order price use the profile branch, not the elevated user's."""
+
+    def setUp(self):
+        self.framework = MagicMock()
+        restaurants = {"Branch A": "Restaurant A", "Branch B": "Restaurant B"}
+        self.framework.get_value.side_effect = lambda doctype, filters, field: restaurants[filters["branch"]]
+        menus = {("Restaurant A", "active_menu"): "Menu A", ("Restaurant B", "active_menu"): "Menu B",
+                 ("Restaurant A", "order_type_wise_menu"): 0, ("Restaurant B", "order_type_wise_menu"): 1}
+        self.framework.db.get_value.side_effect = lambda doctype, filters, field: (
+            "Menu B Pickup" if doctype == "Order Type Menu" else menus[(filters, field)])
+        patcher = patch.object(ury_order, "frappe", self.framework)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        branch = patch.object(ury_order, "getBranch", return_value="Branch A")
+        branch.start()
+        self.addCleanup(branch.stop)
+
+    def test_named_branch_wins_over_the_session_users_branch(self):
+        self.assertEqual(ury_order.get_menu_name("Take Away", branch="Branch B"), "Menu B Pickup")
+
+    def test_without_a_branch_the_session_users_branch_is_used(self):
+        self.assertEqual(ury_order.get_menu_name("Take Away"), "Menu A")
+
+    def test_guest_invoice_resolves_its_menu_for_the_override_branch(self):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "ury_order/ury_order.py").read_text())
+        resolver = next(node for node in ast.walk(tree)
+                        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_or_create_pos_invoice")
+        calls = [node for node in ast.walk(resolver)
+                 if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "get_menu_name"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([k.arg for k in calls[0].keywords], ["branch"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
