@@ -79,6 +79,7 @@ class FakePriceBook:
 
     def __init__(self, framework):
         self.rows = []
+        self.sales_uom = None
         self.workflow = None  # {"name", "field", "states": {state: style}}
         framework.db.get_list.side_effect = self.get_list
         framework.db.get_value.side_effect = self.get_value
@@ -109,8 +110,8 @@ class FakePriceBook:
             return {"workflow_state_field": self.workflow["field"], "name": self.workflow["name"]}[fieldname]
         if doctype == "POS Profile":
             return "CC"
-        if doctype == "Item" and fieldname == "stock_uom":
-            return "Nos"
+        if doctype == "Item":
+            return {"stock_uom": "Nos", "sales_uom": self.sales_uom}[fieldname]
         return None
 
     def get_cached_doc(self, doctype, name):
@@ -253,6 +254,30 @@ class TestPriceDetermination(unittest.TestCase):
         self.book.add(100, "2026-11-10")
         self.book.add(80, "2026-01-01", customer="Glovo")
         self.assertEqual(self.bill(customer="Glovo"), 80)
+
+    def test_same_valid_from_prefers_the_row_in_the_line_uom_over_a_uom_less_row(self):
+        # ERPNext _order_item_prices: ... valid_from desc, then uom desc (a UOM row before an empty one).
+        self.book.add(105, "2026-11-01", uom="Nos")
+        self.book.add(100, "2026-11-01", uom=None)
+        self.assertEqual(self.bill(), 105)
+
+    def test_same_valid_from_and_uom_takes_the_first_row(self):
+        # ERPNext orders no further after uom and takes LIMIT 1; the database returns rows in creation order here.
+        self.book.add(100, "2026-11-01")
+        self.book.add(105, "2026-11-01")
+        self.assertEqual(self.bill(), 100)
+
+    def test_no_price_in_the_sales_uom_retries_in_the_stock_uom(self):
+        # ERPNext get_price_list_rate_for: no row for the line UOM -> retry with the stock UOM.
+        self.book.sales_uom = "Plate"
+        self.book.add(100, "2026-01-01", uom="Nos")
+        self.assertEqual(self.bill(), 100)
+
+    def test_a_price_in_the_sales_uom_wins_over_the_stock_uom(self):
+        self.book.sales_uom = "Plate"
+        self.book.add(100, "2026-01-01", uom="Nos")
+        self.book.add(160, "2026-01-01", uom="Plate")
+        self.assertEqual(self.bill(), 160)
 
     def test_batch_price_is_not_used_for_a_line_without_a_batch(self):
         self.book.add(100, "2026-01-01")

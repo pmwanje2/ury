@@ -63,9 +63,12 @@ class FakeItemPrices:
         framework.db.sql.side_effect = AssertionError("a menu save must not run raw SQL on Item Price")
         framework.delete_doc.side_effect = AssertionError("a menu save must not delete an Item Price")
 
-    def add(self, item, rate, valid_from, state=None):
+    def add(self, item, rate, valid_from, state=None, uom="Nos"):
+        # Item Price.uom is mandatory and fetched from item_code.stock_uom (ERPNext item_price.json); every live
+        # Salama and Tank Hill row carries one.
         row = Row(name=f"IP-{len(self.rows) + 1}", item_code=item, price_list="Menu A",
-                  price_list_rate=rate, valid_from=valid_from, valid_upto=None, workflow_state=state)
+                  price_list_rate=rate, valid_from=valid_from, valid_upto=None, workflow_state=state, uom=uom,
+                  customer=None, supplier=None, batch_no=None)
         self.rows.append(row)
         return row
 
@@ -96,6 +99,8 @@ class FakeItemPrices:
         return [Row({f: r.get(f) for f in fields}) for r in self.rows if self.matches(r, filters)]
 
     def get_value(self, doctype, filters, fieldname=None, *args, **kwargs):
+        if doctype == "Item":
+            return {"stock_uom": "Nos", "sales_uom": None}[fieldname]
         assert doctype == "Workflow", doctype
         if not self.workflow:
             return None
@@ -227,6 +232,17 @@ class TestMenuSaveKeepsPriceHistory(unittest.TestCase):
         self.save_menu(Fish=120)
         self.assertEqual([(r["price_list_rate"], r["workflow_state"], getdate(r["valid_from"]))
                           for r in self.prices.inserted], [(120, "Draft", TODAY)])
+
+    def test_unchanged_rate_with_a_real_uom_on_the_row_writes_nothing(self):
+        self.prices.add("Fish", 100, "2026-01-01", uom="Nos")
+        self.save_menu(Fish=100)
+        self.assertEqual((self.prices.inserted, self.prices.saved), ([], []))
+
+    def test_unchanged_rate_under_release_workflow_queues_no_proposal(self):
+        self.prices.use_workflow()
+        self.prices.add("Fish", 100, "2026-01-01", state="Approved", uom="Nos")
+        self.save_menu(Fish=100)
+        self.assertEqual((self.prices.inserted, self.prices.saved), ([], []))
 
     def test_menu_rate_equal_to_released_price_leaves_pending_proposal(self):
         self.prices.use_workflow()

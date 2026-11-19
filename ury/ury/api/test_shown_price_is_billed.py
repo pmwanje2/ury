@@ -43,11 +43,12 @@ class PriceBook:
         framework.get_cached_doc.side_effect = lambda doctype, name: Row(
             states=[Row(state=state) for state in self.workflow["states"]])
 
-    def add(self, item, rate, valid_from=None, valid_upto=None, state=None, price_list="Menu A", uom="Nos"):
+    def add(self, item, rate, valid_from=None, valid_upto=None, state=None, price_list="Menu A", uom="Nos",
+            customer=None):
         self.rows.append(Row(
             name=f"IP-{len(self.rows) + 1}", item_code=item, item_name=item, price_list=price_list,
             price_list_rate=rate, valid_from=valid_from, valid_upto=valid_upto, workflow_state=state,
-            uom=uom, customer=None, supplier=None, batch_no=None, selling=1,
+            uom=uom, customer=customer, supplier=None, batch_no=None, selling=1,
         ))
 
     def use_workflow(self):
@@ -77,8 +78,8 @@ class PriceBook:
             # The pre-fix lookup: the first row on the price list, whatever its validity.
             rows = self.item_prices(filters, None)
             return rows[0][fieldname] if rows else None
-        if doctype == "Item" and fieldname == "stock_uom":
-            return "Nos"
+        if doctype == "Item" and fieldname in ("stock_uom", "sales_uom"):
+            return {"stock_uom": "Nos", "sales_uom": None}[fieldname]
         return self.values.get((doctype, fieldname))
 
 
@@ -199,10 +200,68 @@ class TestAggregatorItemPrices(Loaded):
         self.book.add("Fish", 150, "2026-11-10", state="Draft")
         self.assertEqual(self.listed(), {"Fish": 100})
 
+    def test_the_aggregators_own_price_is_listed(self):
+        self.book.add("Fish", 100, "2026-11-10")
+        self.book.add("Fish", 115, "2026-01-01", customer="Glovo")
+        self.book.add("Fish", 90, "2026-01-01", customer="SafeBoda")
+        self.assertEqual(self.listed(), {"Fish": 115})
+
     def test_item_without_a_valid_price_is_not_listed(self):
         self.book.add("Fish", 100, "2026-01-01")
         self.book.add("Tea", 20, "2027-01-01")
         self.assertEqual(self.listed(), {"Fish": 100})
+
+
+class TestGuestProductPricedLikeTheBill(Loaded):
+    """get_customer_product shows each option at the rate add_customer_items bills: the guest invoice's price list
+    and customer, the menu price list and profile default customer when no invoice exists yet."""
+
+    def setUp(self):
+        super().setUp()
+        self.profile = SimpleNamespace(default_customer="Walk-in", branch="Branch A", show_item_descriptions=0,
+                                       show_item_images=0)
+        self.session = SimpleNamespace(ordering_profile="Guest Profile", table="T1", invoice=None)
+        self.framework.get_doc.side_effect = self.get_doc
+        self.framework.db.exists.return_value = True
+        self.framework.get_all.side_effect = lambda doctype, **kwargs: (
+            [Row(item="Chips")] if doctype == "Item Add On" else self.book.get_all(doctype, **kwargs))
+        self.framework.db.get_value.side_effect = self.value
+        self.enterContext(patch.object(self.guest, "_resolve_session", return_value=self.session))
+        self.enterContext(patch.object(self.guest, "_elevated", MagicMock()))
+        self.invoice = SimpleNamespace(customer="Glovo", selling_price_list="Menu B")
+
+    def get_doc(self, doctype, name=None):
+        if doctype == "URY Self Ordering Profile":
+            return self.profile
+        assert (doctype, name) == ("POS Invoice", "POS-1"), (doctype, name)
+        return self.invoice
+
+    def value(self, doctype, filters=None, fieldname=None, *args, **kwargs):
+        if doctype == "Item" and isinstance(fieldname, list):
+            return Row(item_code=filters, item_name=filters, image=None, description=None)
+        if doctype == "Price List":
+            assert filters == {"restaurant_menu": "Menu A", "enabled": 1}, filters
+            return "Menu A"
+        return self.book.get_value(doctype, filters, fieldname, *args, **kwargs)
+
+    def shown(self):
+        self.enterContext(patch.object(self.pos_api, "resolve_restaurant_menu",
+                                       return_value={"items": [], "name": "Menu A"}))
+        self.guest.resolve_restaurant_menu = self.pos_api.resolve_restaurant_menu
+        return [option["rate"] for option in self.guest.get_customer_product("SESSION", "Fish")["addons"]]
+
+    def test_before_the_first_order_options_show_the_menu_price_for_the_default_customer(self):
+        self.book.add("Chips", 5, "2026-01-01")
+        self.book.add("Chips", 4, "2026-01-01", customer="Walk-in")
+        self.book.add("Chips", 9, "2026-01-01", price_list="Menu B")
+        self.assertEqual(self.shown(), [4])
+
+    def test_after_the_first_order_options_show_the_invoice_price_for_the_invoice_customer(self):
+        self.session.invoice = "POS-1"
+        self.book.add("Chips", 5, "2026-01-01")
+        self.book.add("Chips", 9, "2026-01-01", price_list="Menu B")
+        self.book.add("Chips", 7, "2026-01-01", price_list="Menu B", customer="Glovo")
+        self.assertEqual(self.shown(), [7])
 
 
 if __name__ == "__main__":
