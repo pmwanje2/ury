@@ -24,8 +24,8 @@ function storage(initial = {}) {
   };
 }
 
-function qzDouble({ print = async () => {}, active = true } = {}) {
-  const calls = { configs: [], prints: [], security: {} };
+function qzDouble({ print = async () => {}, active = true, installed = ["KITCHEN-RAW", "BAR-RAW"] } = {}) {
+  const calls = { configs: [], prints: [], security: {}, finds: [] };
   const qz = {
     security: {
       setCertificatePromise: callback => { calls.security.certificate = callback; },
@@ -38,6 +38,9 @@ function qzDouble({ print = async () => {}, active = true } = {}) {
     },
     configs: {
       create: config => { calls.configs.push(config); return config; },
+    },
+    printers: {
+      find: async (...args) => { calls.finds.push(args); return installed; },
     },
     print: async (config, data) => {
       calls.prints.push({ config, data });
@@ -165,6 +168,72 @@ test("missed tickets print once after reconnect and the job targets host:port wi
   assert.ok(call.calls.some(({ method, args }) => method === "ury.ury.api.ury_print.signature_promise" && args.toSign === "payload"));
 });
 
+test("an installed printer name is the QZ config and the job keeps the ESC/POS cut", async () => {
+  const device = storage({
+    "ury:mosaic:station-print:Kitchen:settings": JSON.stringify(settings({ host: "", printer: "KITCHEN-RAW" })),
+  });
+  const { printer, qz } = await makePrinter({ storage: device });
+
+  assert.deepEqual(await printer.process(ticket("USB")), { printed: true });
+
+  assert.deepEqual(qz.calls.configs, ["KITCHEN-RAW"]);
+  assert.equal(qz.calls.prints[0].config, "KITCHEN-RAW");
+  assert.match(qz.calls.prints[0].data[1].data, /\u001dV/);
+});
+
+test("configure requires exactly one of an installed printer or a network host", async () => {
+  const { printer } = await makePrinter({ storage: storage() });
+
+  assert.throws(
+    () => printer.configure(settings({ printer: "KITCHEN-RAW", host: "192.0.2.10" })),
+    { message: "Choose an installed printer or a network host, not both." },
+  );
+  assert.throws(
+    () => printer.configure(settings({ printer: "", host: "" })),
+    { message: "Choose an installed printer or enter a network host and port." },
+  );
+  assert.throws(
+    () => printer.configure(settings({ printer: "   ", host: undefined })),
+    { message: "Choose an installed printer or enter a network host and port." },
+  );
+  assert.equal(printer.settings.enabled, false);
+
+  const saved = printer.configure(settings({ printer: " KITCHEN-RAW ", host: "", port: "" }));
+  assert.equal(saved.printer, "KITCHEN-RAW");
+  assert.equal(saved.host, "");
+  assert.equal(saved.enabled, true);
+  const network = printer.configure(settings({ printer: "" }));
+  assert.equal(network.printer, "");
+  assert.equal(network.host, "192.0.2.10");
+});
+
+test("listPrinters returns the printers the OS has installed through qz.printers.find()", async () => {
+  const { printer, qz } = await makePrinter();
+
+  assert.deepEqual(await printer.listPrinters(), ["KITCHEN-RAW", "BAR-RAW"]);
+  assert.deepEqual(qz.calls.finds, [[]]);
+});
+
+test("a missing installed printer writes PRINTER_NOT_FOUND and stays retryable", async () => {
+  const call = callDouble();
+  let missing = true;
+  const device = storage({
+    "ury:mosaic:station-print:Kitchen:settings": JSON.stringify(settings({ host: "", printer: "KITCHEN-RAW" })),
+  });
+  const { printer } = await makePrinter({
+    call, storage: device,
+    qzDouble: qzDouble({ print: async () => { if (missing) throw Error('Cannot find printer with name "KITCHEN-RAW"'); } }),
+  });
+
+  assert.deepEqual(await printer.process(ticket("UNPLUGGED")), { printed: false, code: "PRINTER_NOT_FOUND" });
+  assert.deepEqual(printer.failed(), ["UNPLUGGED"]);
+  assert.ok(call.calls.some(({ method, args }) => method === "frappe.desk.form.utils.add_comment" && args.content === "[KOT-PRINT-FAILED] PRINTER_NOT_FOUND"));
+
+  missing = false;
+  await printer.retry();
+  assert.deepEqual(printer.failed(), []);
+});
+
 test("render failure writes RENDER_FAILED without marking the KOT printed", async () => {
   const call = callDouble({ html: undefined });
   call.get = async (method, args) => {
@@ -215,6 +284,60 @@ test("each KOT card has Print, failures show the retry banner, and managers can 
   assert.match(html, />Print</);
   assert.match(html, /Manager station printing settings/);
   assert.match(html, /Printer host/);
+});
+
+async function renderSettings(stationSettings, installedPrinters) {
+  const component = componentDefinition();
+  const app = Vue.createSSRApp({
+    ...component, props: [],
+    data: () => ({
+      ...component.data(), production: "Kitchen", loadingKots: false, kot: [],
+      showPrintSettings: true, canManagePrintSettings: true,
+      stationSettings, installedPrinters, socketStale: false,
+    }),
+    render,
+  });
+  return renderToString(app);
+}
+
+test("the settings dialog offers installed printers plus a manual network host option", async () => {
+  const html = await renderSettings(settings({ host: "", printer: "KITCHEN-RAW" }), ["KITCHEN-RAW", "BAR-RAW"]);
+
+  assert.match(html, /<select[^>]*>/);
+  assert.match(html, /<option value=""[^>]*>Network printer \(host and port\)<\/option>/);
+  assert.match(html, /<option value="KITCHEN-RAW"[^>]*selected[^>]*>KITCHEN-RAW<\/option>/);
+  assert.match(html, /<option value="BAR-RAW"[^>]*>BAR-RAW<\/option>/);
+  assert.doesNotMatch(html, /Printer host/);
+
+  const manual = await renderSettings(settings({ printer: "" }), ["KITCHEN-RAW"]);
+  assert.match(manual, /Printer host/);
+  assert.match(manual, /Printer port/);
+});
+
+test("opening settings lists installed printers and saving a printer clears the host", async () => {
+  const component = componentDefinition();
+  const configured = [];
+  const vm = {
+    ...component.data(), production: "Kitchen", loggeduser: "Administrator",
+    call: { get: async () => ({ message: { roles: [] } }), post: async () => ({ message: {} }) },
+    stationPrinter: {
+      settings: settings(),
+      listPrinters: async () => ["KITCHEN-RAW"],
+      configure: next => { configured.push(next); return next; },
+    },
+  };
+  for (const [name, method] of Object.entries(component.methods)) vm[name] = method.bind(vm);
+
+  await vm.openPrintSettings();
+  await new Promise(setImmediate);
+  assert.deepEqual(vm.installedPrinters, ["KITCHEN-RAW"]);
+  assert.equal(vm.showPrintSettings, true);
+
+  vm.stationSettings = { ...vm.stationSettings, printer: "KITCHEN-RAW" };
+  vm.savePrintSettings();
+  assert.equal(configured[0].printer, "KITCHEN-RAW");
+  assert.equal(configured[0].host, "");
+  assert.equal(vm.stationSettingsError, "");
 });
 
 test("a URY Manager without System Manager opens settings from session roles", async () => {
