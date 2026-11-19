@@ -894,13 +894,14 @@ def invoice_pricing_date(invoice):
     return frappe.utils.getdate()
 
 
-def price_items_for_invoice(items, price_list, pos_profile, branch, menu, posting_date=None):
+def price_items_for_invoice(items, price_list, pos_profile, branch, menu, posting_date=None, customer=None):
     """Resolve course and price for each item and build the invoice item dicts.
 
     Returns a list of dicts in the same shape previously passed directly to
     `invoice.append("items", ...)` inside `sync_order`. Does not append to
     the invoice itself. The price is the Item Price valid on posting_date
-    (default today) and released by the site's Item Price workflow, if any.
+    (default today) and released by the site's Item Price workflow, if any,
+    chosen for the invoice customer and the item's selling UOM as ERPNext does.
     """
     priced_items = []
     posting_date = frappe.utils.getdate(posting_date) if posting_date else frappe.utils.getdate()
@@ -910,7 +911,10 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
 
         course = frappe.db.get_value("URY Menu Item", {"item": d.get("item"), "parent": menu}, "course")
 
-        item_price = price_valid_on(d.get("item"), price_list, posting_date, release_field, released)
+        item_price = price_valid_on(
+            d.get("item"), price_list, posting_date, release_field, released,
+            customer=customer,
+        )
 
         if not item_price:
             frappe.throw(_("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(d.get("item"), price_list, posting_date))
@@ -1914,6 +1918,7 @@ def sync_order(
 
     priced_items = price_items_for_invoice(
         items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
+        customer=invoice.customer,
     )
     for source, item_dict in zip(items, priced_items, strict=True):
         if source.get("name"):

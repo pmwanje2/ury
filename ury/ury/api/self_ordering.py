@@ -41,6 +41,7 @@ from ury.ury.doctype.ury_order.ury_order import (
     price_items_for_invoice,
 )
 from ury.ury.api.ury_kot_generate import kot_execute
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
@@ -417,8 +418,9 @@ def get_customer_product(session, item_code):
         # itself a priced Item) — see ury/ury/doctype/{pos_item_variants,
         # item_add_on}/*.json. Resolve each linked item's own price rather
         # than trusting any client-supplied amount.
-        variants = _linked_item_options("POS Item Variants", item_code, invoice_price_list=None)
-        addons = _linked_item_options("Item Add On", item_code, invoice_price_list=None)
+        price_list, customer = _guest_pricing(session, profile)
+        variants = _linked_item_options("POS Item Variants", item_code, price_list, customer)
+        addons = _linked_item_options("Item Add On", item_code, price_list, customer)
 
     return {
         "item_code": item.item_code,
@@ -430,7 +432,23 @@ def get_customer_product(session, item_code):
     }
 
 
-def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
+def _guest_pricing(session, profile):
+    """The price list and customer add_customer_items bills this guest with, read without creating anything.
+
+    After the first order they are the guest invoice's own. Before it, the menu price list that
+    _resolve_or_create_pos_invoice sets on a new guest invoice, and the profile's default customer that
+    add_customer_items sets on it.
+    """
+    if session.invoice:
+        invoice = frappe.get_doc("POS Invoice", session.invoice)
+        return invoice.selling_price_list, invoice.customer or profile.default_customer
+    menu = resolve_restaurant_menu(
+        branch=profile.branch, room=None, order_type="Dine In" if session.table else "Take Away", cashier=False,
+    )["name"]
+    return frappe.db.get_value("Price List", {"restaurant_menu": menu, "enabled": 1}), profile.default_customer
+
+
+def _linked_item_options(child_doctype, parent_item_code, invoice_price_list, customer=None):
     if not frappe.db.exists("DocType", child_doctype):
         return []
 
@@ -440,6 +458,9 @@ def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
         fields=["item"],
     )
 
+    # The rate billing would charge today (price_items_for_invoice): one price determination for every channel.
+    release_field, released = item_price_release_states() if invoice_price_list else (None, None)
+    today = frappe.utils.getdate()
     options = []
     for row in rows:
         linked = frappe.db.get_value("Item", row.item, ["item_code", "item_name", "image"], as_dict=True)
@@ -447,9 +468,10 @@ def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
             continue
         price = None
         if invoice_price_list:
-            price = frappe.db.get_value(
-                "Item Price", {"item_code": linked.item_code, "price_list": invoice_price_list}, "price_list_rate"
+            item_price = price_valid_on(
+                linked.item_code, invoice_price_list, today, release_field, released, customer=customer,
             )
+            price = item_price.price_list_rate if item_price else None
         options.append({
             "item_code": linked.item_code,
             "item_name": linked.item_name,
@@ -642,7 +664,7 @@ def add_customer_items(session, items):
         menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
         priced_items = price_items_for_invoice(
             clean_items, invoice.selling_price_list, profile.pos_profile, invoice.branch, menu,
-            posting_date=invoice_pricing_date(invoice),
+            posting_date=invoice_pricing_date(invoice), customer=invoice.customer,
         )
         for item_dict in priced_items:
             invoice.append("items", item_dict)

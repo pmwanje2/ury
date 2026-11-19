@@ -4,6 +4,7 @@ from frappe import _
 from datetime import datetime
 from frappe.utils import nestedset, validate_phone_number
 from ury.ury.api.ury_dashboard import _business_day_bounds
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 
 #GetTable  decripted temporarily
@@ -954,19 +955,27 @@ def getAggregatorItem(aggregator):
     )
     aggregatorItem = frappe.get_all(
         "Item Price",
-        fields=["item_code", "item_name", "price_list_rate"],
+        fields=["item_code", "item_name"],
         filters={"selling": 1, "price_list": priceList},
     )
-    aggregatorItemList = [
-        {
-            "item": item.item_code,
-            "item_name": item.item_name,
-            "rate": item.price_list_rate,
-            "item_image": frappe.db.get_value("Item", item.item, "image"),
-        }
-        for item in aggregatorItem
-        if not frappe.db.get_value("Item", item.item_code, "disabled")
-    ]
+    # List each item once, at the rate sync_order bills the aggregator (price_items_for_invoice).
+    names = {}
+    for item in aggregatorItem:
+        names.setdefault(item.item_code, item.item_name)
+    release_field, released = item_price_release_states()
+    today = frappe.utils.getdate()
+    for item_code, item_name in names.items():
+        if frappe.db.get_value("Item", item_code, "disabled"):
+            continue
+        price = price_valid_on(item_code, priceList, today, release_field, released, customer=aggregator)
+        if not price:
+            continue
+        aggregatorItemList.append({
+            "item": item_code,
+            "item_name": item_name,
+            "rate": price.price_list_rate,
+            "item_image": frappe.db.get_value("Item", item_code, "image"),
+        })
     return aggregatorItemList
 
 @frappe.whitelist()
