@@ -261,12 +261,6 @@ class TestPriceDetermination(unittest.TestCase):
         self.book.add(100, "2026-11-01", uom=None)
         self.assertEqual(self.bill(), 105)
 
-    def test_same_valid_from_and_uom_takes_the_first_row(self):
-        # ERPNext orders no further after uom and takes LIMIT 1; the database returns rows in creation order here.
-        self.book.add(100, "2026-11-01")
-        self.book.add(105, "2026-11-01")
-        self.assertEqual(self.bill(), 100)
-
     def test_no_price_in_the_sales_uom_retries_in_the_stock_uom(self):
         # ERPNext get_price_list_rate_for: no row for the line UOM -> retry with the stock UOM.
         self.book.sales_uom = "Plate"

@@ -4,7 +4,7 @@ from frappe import _
 from datetime import datetime
 from frappe.utils import nestedset, validate_phone_number
 from ury.ury.api.ury_dashboard import _business_day_bounds
-from ury.ury.api.item_price import item_price_release_states, price_valid_on, selling_uom
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 
 #GetTable  decripted temporarily
@@ -967,8 +967,7 @@ def getAggregatorItem(aggregator):
     for item_code, item_name in names.items():
         if frappe.db.get_value("Item", item_code, "disabled"):
             continue
-        price = price_valid_on(item_code, priceList, today, release_field, released,
-                               customer=aggregator, uom=selling_uom(item_code))
+        price = price_valid_on(item_code, priceList, today, release_field, released, customer=aggregator)
         if not price:
             continue
         aggregatorItemList.append({

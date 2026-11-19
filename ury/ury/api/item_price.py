@@ -3,7 +3,7 @@
 SAP basis: price determination uses the condition record valid on the pricing
 date, and a condition record is used only once released. Candidate filtering
 and priority follow ERPNext get_item_price (erpnext/stock/get_item_details.py,
-_get_item_price_query and _order_item_prices): the UOM, the party, no batch, the priority.
+_get_item_price_query, _order_item_prices and the stock-UOM retry in get_price_list_rate_for).
 """
 
 from datetime import date
@@ -48,12 +48,19 @@ def selling_uom(item_code):
     return frappe.db.get_value("Item", item_code, "sales_uom") or frappe.db.get_value("Item", item_code, "stock_uom")
 
 
-def price_valid_on(item_code, price_list, posting_date, release_field, released, customer=None, uom=None):
-    """The Item Price ERPNext would price with on posting_date, released by the workflow if one is active.
+def price_valid_on(item_code, price_list, posting_date, release_field, released, customer=None):
+    """The Item Price ERPNext get_price_list_rate_for would use on posting_date, released by the workflow if any.
 
-    Candidates, as in ERPNext: UOM empty or uom, party-less or this customer's (never a supplier's),
-    no batch (URY lines carry none), valid on posting_date. Priority, as in ERPNext: this customer's
-    row, then the latest valid_from, then the latest created.
+    Follows erpnext/stock/get_item_details.py at v16.55.0. The line UOM is the item's selling UOM
+    (sales_uom, else stock_uom), so every caller gets the same UOM. Candidates (_get_item_price_query):
+    UOM empty or the line UOM; party-less or this customer's row, never a supplier's; no batch (URY lines
+    carry none); valid on posting_date. Priority (_order_item_prices): this customer's row, then batch
+    (always empty here), then the latest valid_from, then a row in a UOM before a UOM-less one. ERPNext orders
+    no further; its Item Price check_duplicates refuses a second row with the same UOM, valid_from, party and
+    batch, so that tie cannot occur in valid data. Here the latest created row breaks it. When no row matches the selling
+    UOM and it differs from the stock UOM, ERPNext retries with the stock UOM; so does this.
+    Not modelled: packing units and multiplying a stock-UOM rate by the conversion factor (URY sells each
+    menu line in one UOM, and no live Salama or Tank Hill item has a sales UOM different from its stock UOM).
     """
     fields = ["price_list_rate", "valid_from", "valid_upto", "uom", "customer", "supplier", "batch_no"]
     if release_field:
@@ -64,13 +71,23 @@ def price_valid_on(item_code, price_list, posting_date, release_field, released,
         fields=fields,
         order_by="creation asc",
     )
+    stock_uom = frappe.db.get_value("Item", item_code, "stock_uom")
+    uom = frappe.db.get_value("Item", item_code, "sales_uom") or stock_uom
+    found = _best_row(rows, uom, posting_date, release_field, released, customer)
+    if found is None and uom != stock_uom:
+        found = _best_row(rows, stock_uom, posting_date, release_field, released, customer)
+    return found
+
+
+def _best_row(rows, uom, posting_date, release_field, released, customer):
     getdate = frappe.utils.getdate
     candidates = []
     for position, row in enumerate(rows):
         valid_from = getattr(row, "valid_from", None)
         valid_upto = getattr(row, "valid_upto", None)
+        row_uom = getattr(row, "uom", None) or ""
         row_customer = getattr(row, "customer", None)
-        if (getattr(row, "uom", None) or "") not in ("", uom):
+        if row_uom not in ("", uom):
             continue
         if getattr(row, "supplier", None) or getattr(row, "batch_no", None):
             continue
@@ -82,7 +99,8 @@ def price_valid_on(item_code, price_list, posting_date, release_field, released,
             continue
         if release_field and getattr(row, release_field, None) not in released:
             continue
-        candidates.append(((bool(row_customer), getdate(valid_from) if valid_from else date.min, position), row))
+        priority = (bool(row_customer), getdate(valid_from) if valid_from else date.min, bool(row_uom), position)
+        candidates.append((priority, row))
     if not candidates:
         return None
     return max(candidates, key=lambda candidate: candidate[0])[1]

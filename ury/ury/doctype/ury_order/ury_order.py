@@ -13,7 +13,7 @@ from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury.api.ury_kot_generate import kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
-from ury.ury.api.item_price import item_price_release_states, price_valid_on, selling_uom
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 from frappe import cache
 
@@ -913,7 +913,7 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
 
         item_price = price_valid_on(
             d.get("item"), price_list, posting_date, release_field, released,
-            customer=customer, uom=selling_uom(d.get("item")),
+            customer=customer,
         )
 
         if not item_price:
