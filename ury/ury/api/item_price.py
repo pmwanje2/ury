@@ -43,11 +43,6 @@ def item_price_rejected_states():
     return _states_styled(workflow, "Danger") if workflow else set()
 
 
-def selling_uom(item_code):
-    """ERPNext's selling UOM default (get_item_details: the Item's sales UOM, else its stock UOM)."""
-    return frappe.db.get_value("Item", item_code, "sales_uom") or frappe.db.get_value("Item", item_code, "stock_uom")
-
-
 def price_valid_on(item_code, price_list, posting_date, release_field, released, customer=None):
     """The Item Price ERPNext get_price_list_rate_for would use on posting_date, released by the workflow if any.
 

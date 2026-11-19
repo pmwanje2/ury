@@ -857,7 +857,7 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
         branch = override_branch or getBranch()
         restaurant = frappe.db.get_value("URY Restaurant", {"branch": branch}, "name")
 
-        menu=get_menu_name(order_type)
+        menu = get_menu_name(order_type, branch=branch)
 
         if (order_type == "Aggregators" and frappe.db.get_value("Branch", branch, "custom_no_taxes") == 0) or order_type != "Aggregators":
             invoice.taxes_and_charges = frappe.db.get_value("URY Restaurant", restaurant, "default_tax_template")
@@ -2022,8 +2022,8 @@ def get_restaurant_and_menu_name(table):
     return branch, menu, restaurant
 
 @frappe.whitelist()
-def get_menu_name(order_type):
-    branch = getBranch()
+def get_menu_name(order_type, branch=None):
+    branch = branch or getBranch()
     restaurant = frappe.get_value(
         "URY Restaurant",
         {"branch": branch},
