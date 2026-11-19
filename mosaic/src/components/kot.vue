@@ -59,6 +59,7 @@
         <label class="mt-4 block font-semibold">Printer
           <select v-model="stationSettings.printer" class="mt-1 w-full rounded border p-2">
             <option value="">Network printer (host and port)</option>
+            <option v-if="stationSettings.printer && !installedPrinters.includes(stationSettings.printer)" :value="stationSettings.printer">{{ stationSettings.printer }} (saved, not found)</option>
             <option v-for="name in installedPrinters" :key="name" :value="name">{{ name }}</option>
           </select>
         </label>
