@@ -189,7 +189,7 @@ class TestOrderingContextArea(unittest.TestCase):
         profile.session_idle_timeout_minutes = 30
         for flag in ("enable_product_detail_page", "show_item_images", "show_item_descriptions", "enable_item_notes",
                      "enable_request_bill", "enable_customer_payment", "enable_payment_link",
-                     "enable_pay_at_counter", "allow_add_to_running_table"):
+                     "enable_pay_at_counter", "allow_add_to_running_table", "enable_feedback"):
             setattr(profile, flag, 0)
         return profile
 
