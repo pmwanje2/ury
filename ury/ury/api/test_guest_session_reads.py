@@ -220,13 +220,48 @@ class TestGuestSessionReads(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.api._resolve_session(TOKEN)
 
-    def test_expired_session_is_refused_and_marked_expired(self):
-        self.stored["expires_at"] = NOW - timedelta(seconds=1)
-        with self.assertRaises(self.frappe.PermissionError):
-            self.api._resolve_session(TOKEN)
-        self.assertEqual(self.loaded[0].status, "Expired")
-        self.loaded[0].save.assert_called_once_with(ignore_permissions=True)
+    def refusal(self, token=TOKEN):
+        with self.assertRaises(self.frappe.PermissionError) as caught:
+            self.api._resolve_session(token)
+        return type(caught.exception).__name__, str(caught.exception)
+
+    def assert_no_session_write(self):
+        self.assertEqual(self.saves(), 0)
         self.frappe.db.set_value.assert_not_called()
+        self.frappe.db.savepoint.assert_not_called()
+
+    def test_expired_session_is_refused_without_writing_the_session_row(self):
+        # The request rolls back on the refusal, so an "Expired" write never persists; it can only clash.
+        for expires_at in (NOW - timedelta(seconds=1), None):
+            with self.subTest(expires_at=expires_at):
+                self.stored["expires_at"] = expires_at
+                self.assertEqual(self.refusal()[0], "URYGuestSessionInvalid")
+                self.assert_no_session_write()
+
+    def test_expiry_refusal_survives_a_concurrent_writer_on_the_session_row(self):
+        # add_customer_items changed the row: a FOR UPDATE re-read raises 1020 under snapshot isolation.
+        self.conflict_on_slide(self.frappe.QueryDeadlockError)
+        self.stored["expires_at"] = NOW - timedelta(seconds=1)
+        self.assertEqual(self.refusal()[0], "URYGuestSessionInvalid")
+        self.assert_no_session_write()
+
+    def test_every_unusable_token_gets_one_refusal(self):
+        # Enumeration-safe: an expired real token reads exactly like an unknown one.
+        refusals = {"too long": self.refusal("x" * 513)}
+        self.stored["status"] = "Closed"
+        refusals["unknown or closed"] = self.refusal()
+        self.stored["status"] = "Active"
+        self.stored["expires_at"] = NOW - timedelta(seconds=1)
+        refusals["expired"] = self.refusal()
+        self.stored["expires_at"] = None
+        refusals["no expiry"] = self.refusal()
+        self.stored["expires_at"] = NOW + timedelta(minutes=5)
+        self.frappe.db.get_value.side_effect = lambda doctype, filters=None, fieldname=None, *a, **k: (
+            "S1" if doctype == "URY Ordering Session" else 0)
+        refusals["profile disabled"] = self.refusal()
+        self.assertEqual(set(refusals.values()), {(
+            "URYGuestSessionInvalid", "Ordering session expired or invalid. Please rescan the QR code.",
+        )}, refusals)
 
     def test_token_and_profile_checks_are_unchanged(self):
         with self.assertRaises(self.frappe.PermissionError):
