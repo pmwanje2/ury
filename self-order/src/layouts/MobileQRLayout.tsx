@@ -1,7 +1,9 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { formatCurrency, resolveBrand } from '@ury/core'
 import { hasPrice, useOrderingSession } from '../hooks/useOrderingSession'
 import GuestNoteDialog from '../components/GuestNoteDialog'
 import GuestAddons from '../components/GuestAddons'
+import CategoryMenu from './shared/CategoryMenu'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
@@ -42,6 +44,17 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     cartTotal,
   } = ordering
 
+  // The category chips stick below this sticky header, whose height
+  // changes with the brand line and the language switcher.
+  const headerRef = useRef<HTMLElement>(null)
+  const [headerHeight, setHeaderHeight] = useState(0)
+  useLayoutEffect(() => {
+    const measure = () => setHeaderHeight(headerRef.current?.offsetHeight ?? 0)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  })
+
   function handleStartOver() {
     if (window.confirm(t('confirm.start_over'))) {
       resetSession()
@@ -74,7 +87,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
   return (
     <div className="min-h-screen pb-28">
-      <header className="sticky top-0 z-10 border-b bg-background/95 px-4 py-3 backdrop-blur">
+      <header ref={headerRef} className="sticky top-0 z-20 border-b bg-background/95 px-4 py-3 backdrop-blur">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             {(brand.name || brand.logo) && <div className="flex items-center gap-2 text-sm font-medium">
@@ -161,29 +174,38 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
         </section>
       )}
 
-      <section className="mx-4 mt-4 grid grid-cols-2 gap-3">
-        {menu.map((item) => (
-          <div key={item.item} className="overflow-hidden rounded-lg border">
-          <button
-            disabled={!hasPrice(item)}
-            onClick={() => addToCart(item)}
-            className="flex w-full flex-col text-left transition active:scale-[0.98] disabled:opacity-60"
-          >
-            {context?.capabilities.show_item_images && item.item_image && (
-              <img src={item.item_image} alt={item.item_name} className="h-24 w-full object-cover" />
-            )}
-            <div className="p-2">
-              <div className="text-sm font-medium">{item.item_name}</div>
-              <div className="text-sm text-muted-foreground tabular-nums">{hasPrice(item) ? formatCurrency(item.rate) : t('item.price_unavailable')}</div>
-              {cart[item.item] && (
-                <div className="mt-1 text-xs font-semibold text-primary">{t('cart.in_cart', { qty: cart[item.item].qty })}</div>
-              )}
-            </div>
-          </button>
-          <GuestAddons state={addonsByItem[item.item]} onAdd={addToCart} onRetry={() => retryAddons(item.item)} />
+      <CategoryMenu
+        menu={menu}
+        allLabel={t('menu.all_items')}
+        otherLabel={t('menu.other')}
+        className="mx-4 mt-2"
+        stickyTop={headerHeight}
+        renderItems={(items) => (
+          <div className="grid grid-cols-2 gap-3">
+            {items.map((item) => (
+              <div key={item.item} data-menu-item={item.item} className="overflow-hidden rounded-lg border">
+              <button
+                disabled={!hasPrice(item)}
+                onClick={() => addToCart(item)}
+                className="flex w-full flex-col text-left transition active:scale-[0.98] disabled:opacity-60"
+              >
+                {context?.capabilities.show_item_images && item.item_image && (
+                  <img src={item.item_image} alt={item.item_name} className="h-24 w-full object-cover" />
+                )}
+                <div className="p-2">
+                  <div className="text-sm font-medium">{item.item_name}</div>
+                  <div className="text-sm text-muted-foreground tabular-nums">{hasPrice(item) ? formatCurrency(item.rate) : t('item.price_unavailable')}</div>
+                  {cart[item.item] && (
+                    <div className="mt-1 text-xs font-semibold text-primary">{t('cart.in_cart', { qty: cart[item.item].qty })}</div>
+                  )}
+                </div>
+              </button>
+              <GuestAddons state={addonsByItem[item.item]} onAdd={addToCart} onRetry={() => retryAddons(item.item)} />
+              </div>
+            ))}
           </div>
-        ))}
-      </section>
+        )}
+      />
 
       {cartCount > 0 && (
         <div className="fixed inset-x-0 bottom-0 border-t bg-background p-4">

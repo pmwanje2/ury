@@ -6,6 +6,7 @@ import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
+import CategoryMenu from './shared/CategoryMenu'
 import MenuGrid from './shared/MenuGrid'
 import GuestNoteDialog from '../components/GuestNoteDialog'
 
@@ -118,16 +119,23 @@ function TabletLayout({ initialContext }: LayoutProps) {
 
       <div className="flex flex-1 overflow-hidden">
         <main className="w-[68%] overflow-y-auto p-6">
-          <MenuGrid
+          <CategoryMenu
             menu={menu}
-            cart={cart}
-            capabilities={context?.capabilities}
-            onAdd={addToCart}
-            addonsByItem={addonsByItem}
-            onRetryAddons={retryAddons}
-            gridClassName="grid grid-cols-3 gap-4 lg:grid-cols-4"
-            cardClassName="flex min-w-[150px] flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
-            imageClassName="h-32 w-full object-cover"
+            allLabel={t('menu.all_items')}
+            otherLabel={t('menu.other')}
+            renderItems={(items) => (
+              <MenuGrid
+                menu={items}
+                cart={cart}
+                capabilities={context?.capabilities}
+                onAdd={addToCart}
+                addonsByItem={addonsByItem}
+                onRetryAddons={retryAddons}
+                gridClassName="grid grid-cols-3 gap-4 lg:grid-cols-4"
+                cardClassName="flex min-w-[150px] flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
+                imageClassName="h-32 w-full object-cover"
+              />
+            )}
           />
         </main>
 
