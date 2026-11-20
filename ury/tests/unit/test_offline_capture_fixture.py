@@ -12,6 +12,8 @@ OFFLINE_FIELDS = {
     "POS Invoice-ury_client_order_id": ("POS Invoice", "ury_client_order_id", "Data", None, 1, 1),
     "POS Invoice-ury_last_round_id": ("POS Invoice", "ury_last_round_id", "Data", None, 0, 1),
     "POS Invoice-ury_offline_captured_at": ("POS Invoice", "ury_offline_captured_at", "Datetime", None, 0, 1),
+    # Every applied round id with its payload digest, so any earlier round's retry replays.
+    "POS Invoice-ury_applied_rounds": ("POS Invoice", "ury_applied_rounds", "Long Text", None, 0, 1),
     "URY KOT-ury_offline_printed": ("URY KOT", "ury_offline_printed", "Check", "0", 0, 1),
 }
 

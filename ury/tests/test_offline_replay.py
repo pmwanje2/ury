@@ -9,7 +9,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 from frappe.utils import get_datetime, get_system_timezone, get_time, now_datetime
 
-from ury.tests.offline_pos_utils import make_offline_pos, send_order
+from ury.tests.offline_pos_utils import make_made_to_order_item, make_offline_pos, send_order
 
 
 class TestOfflineReplay(IntegrationTestCase):
@@ -31,6 +31,44 @@ class TestOfflineReplay(IntegrationTestCase):
         filters = {"pos_profile": self.pos.profile.name}
         self.assertEqual(frappe.db.count("POS Invoice", filters), 0)
         self.assertEqual(frappe.db.count("URY KOT", filters), 0)
+
+    def test_offline_fields_are_refused_on_a_till_without_offline_capture(self):
+        frappe.db.set_value("POS Profile", self.pos.profile.name, "ury_offline_capture", 0)
+        for kwargs in ({"offline_printed": 1}, {"captured_at": str(now_datetime())}, {"append": 1}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                frappe.ValidationError, "URY_OFFLINE_CAPTURE_DISABLED"
+            ):
+                self.send(**kwargs)
+        self.assert_no_order()
+
+    def test_append_on_a_till_without_offline_capture_leaves_the_order_unchanged(self):
+        first = self.send()
+        frappe.db.set_value("POS Profile", self.pos.profile.name, "ury_offline_capture", 0)
+        with self.assertRaisesRegex(frappe.ValidationError, "URY_OFFLINE_CAPTURE_DISABLED"):
+            self.send(append=1, round_id="2", invoice=first.name,
+                      last_invoice=first.name, last_modified_time=str(first.modified))
+        self.assertEqual([row.qty for row in frappe.get_doc("POS Invoice", first.name).items], [1])
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": first.name}), 1)
+        self.assertEqual(frappe.db.get_value("POS Invoice", first.name, "ury_last_round_id"), "1")
+
+    def test_direct_kot_execute_cannot_mark_offline_printed_without_offline_capture(self):
+        from ury.ury.api.ury_kot_generate import kot_execute
+
+        first = self.send()
+        frappe.db.set_value("POS Profile", self.pos.profile.name, "ury_offline_capture", 0)
+        item = {"item": self.pos.item.name, "item_name": "Offline Tea", "qty": 2}
+        with self.assertRaisesRegex(frappe.ValidationError, "URY_OFFLINE_CAPTURE_DISABLED"):
+            frappe.call(kot_execute, invoice_id=first.name, customer=self.pos.customer.name,
+                        current_items=[item], previous_items=[dict(item, qty=1)], offline_printed=1)
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": first.name}), 1)
+
+    def test_till_without_offline_capture_keeps_idempotent_online_orders(self):
+        frappe.db.set_value("POS Profile", self.pos.profile.name, "ury_offline_capture", 0)
+        first = self.send(offline_printed=0, append=0)
+        retry = self.send(offline_printed="0", append="0")
+        self.assertEqual(retry.name, first.name)
+        kots = frappe.get_all("URY KOT", filters={"invoice": first.name}, fields=["ury_offline_printed"])
+        self.assertEqual([row.ury_offline_printed for row in kots], [0])
 
     def test_append_preserves_existing_lines_and_creates_only_round_kot(self):
         first = self.send(items=[{"item": self.pos.item.name, "item_name": "Offline Tea", "qty": 2}])
@@ -233,6 +271,29 @@ class TestOfflineReplay(IntegrationTestCase):
         self.assertEqual(first.name, second.name)
         print_output.assert_not_called()
         slip_output.assert_not_called()
+        self.assertFalse(any(str(call.args[0]).startswith("kot_update_")
+                             for call in realtime_output.call_args_list))
+
+    def test_offline_printed_made_to_order_round_goes_through_ready_before_served(self):
+        # A station-printed ticket is still a fired ticket: READY must attach the
+        # production posting intent, exactly as the kitchen serve path does.
+        dish = make_made_to_order_item(self.pos)
+        with patch(
+            "ury.ury.printing.custom_network_printer_settings.CustomNetworkPrinterSettings.print_doc"
+        ) as print_output, patch("frappe.publish_realtime") as realtime_output:
+            order = self.send(offline_printed=1,
+                              items=[{"item": dish.name, "item_name": dish.item_name, "qty": 1}])
+        kot = frappe.get_doc("URY KOT", frappe.get_all("URY KOT", filters={"invoice": order.name}, pluck="name")[0])
+        self.assertEqual((kot.docstatus, kot.order_status, kot.ury_offline_printed), (1, "Served", 1))
+        states = frappe.get_all("URY KOT Item Execution", filters={"kot": kot.name}, pluck="state")
+        self.assertTrue(states)
+        self.assertTrue(set(states) <= {"READY", "SERVED"}, f"Item execution stayed {states}")
+        intents = frappe.get_all("URY Fulfilment Posting Intent", filters={"kot": kot.name},
+                                 fields=["production_policy"])
+        self.assertEqual([row.production_policy for row in intents], ["MADE_TO_ORDER"])
+        self.assertTrue(kot.start_time_serv, "Served must carry the serve time like any other serve")
+        self.assertNotIn(kot.production_time, (None, ""))
+        print_output.assert_not_called()
         self.assertFalse(any(str(call.args[0]).startswith("kot_update_")
                              for call in realtime_output.call_args_list))
 

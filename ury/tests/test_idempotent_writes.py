@@ -153,6 +153,72 @@ class TestIdempotentWrites(IntegrationTestCase):
         self.assertEqual(frappe.db.get_value("POS Invoice", order["name"], "ury_last_round_id"), "2")
         self.assertEqual(frappe.db.count("URY KOT", {"invoice": order["name"]}), 2)
 
+    def test_retry_of_an_earlier_append_round_returns_saved_order_without_reapplying(self):
+        order = self.send()
+        for round_id in ("2", "3"):
+            send_order(self.pos, client_order_id=self.client_order_id, round_id=round_id, append=1,
+                       invoice=order.name, last_invoice=order.name, last_modified_time=str(order.modified))
+        late = send_order(self.pos, client_order_id=self.client_order_id, round_id="2", append=1,
+                          invoice=order.name, last_invoice=order.name, last_modified_time=str(order.modified))
+        self.assertEqual(late.get("name"), order.name)
+        self.assertEqual([row.qty for row in frappe.get_doc("POS Invoice", order.name).items], [1, 1, 1])
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": order.name}), 3)
+        self.assertEqual(frappe.db.get_value("POS Invoice", order.name, "ury_last_round_id"), "3")
+
+    def test_retry_of_the_first_round_after_later_rounds_returns_saved_order(self):
+        order = self.send()
+        send_order(self.pos, client_order_id=self.client_order_id, round_id="2", append=1,
+                   invoice=order.name, last_invoice=order.name, last_modified_time=str(order.modified))
+        late = self.send()
+        self.assertEqual(late.get("name"), order.name)
+        self.assertEqual([row.qty for row in frappe.get_doc("POS Invoice", order.name).items], [1, 1])
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": order.name}), 2)
+
+    def test_late_retry_of_an_order_round_after_settlement_returns_saved_order(self):
+        order = self.send()
+        settle_order(self.pos, order.name, client_order_id=self.client_order_id, round_id="2")
+        late = self.send()
+        self.assertEqual(late.get("name"), order.name)
+        self.assertEqual(frappe.db.get_value("POS Invoice", order.name, "docstatus"), 1)
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": order.name}), 1)
+
+    def test_settle_retry_with_client_order_id_alone_returns_submitted_invoice(self):
+        order = self.send()
+        settle_order(self.pos, order.name, client_order_id=self.client_order_id, round_id="2")
+        retry = settle_order(self.pos, order.name, client_order_id=self.client_order_id)
+        self.assertEqual(retry, {"name": order.name, "status": "Submitted"})
+        self.assertEqual(frappe.db.count("POS Invoice", {"pos_profile": self.pos.profile.name}), 1)
+
+    def test_same_round_with_different_items_is_refused_with_stable_id(self):
+        order = self.send()
+        with self.assertRaisesRegex(frappe.ValidationError, "URY_ROUND_PAYLOAD_MISMATCH"):
+            self.send(items=[{"item": self.pos.item.name, "item_name": self.pos.item.item_name, "qty": 5}])
+        self.assertEqual([row.qty for row in frappe.get_doc("POS Invoice", order.name).items], [1])
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": order.name}), 1)
+
+    def test_same_round_retry_ignores_client_rate_and_line_order_noise(self):
+        order = self.send()
+        retry = self.send(items=[{"item": self.pos.item.name, "item_name": "renamed", "qty": "1", "rate": 999}])
+        self.assertEqual(retry.get("name"), order.name)
+
+    def test_concurrent_first_send_collision_is_refused_with_stable_id(self):
+        from ury.ury.doctype.ury_order import ury_order
+
+        real = ury_order._client_order_invoice
+        calls = []
+
+        def miss_once(*args, **kwargs):
+            # The racing worker's lookup ran before the winner committed.
+            calls.append(1)
+            return None if len(calls) == 1 else real(*args, **kwargs)
+
+        self.send()
+        with patch.object(ury_order, "_client_order_invoice", miss_once), self.assertRaisesRegex(
+            frappe.ValidationError, "URY_CLIENT_ORDER_ID_IN_USE"
+        ):
+            self.send()
+        self.assertEqual(frappe.db.count("POS Invoice", {"pos_profile": self.pos.profile.name}), 1)
+
     def test_settled_client_order_cannot_take_a_new_round(self):
         order = self.send()
         settle_order(self.pos, order.name, client_order_id=self.client_order_id, round_id="2")
@@ -189,5 +255,8 @@ class TestOfflineRefusalVocabulary(IntegrationTestCase):
                 "URY_OFFLINE_OUTSIDE_SHIFT",
                 "URY_OFFLINE_TOTAL_MISMATCH",
                 "URY_OFFLINE_APPEND_QTY",
+                "URY_OFFLINE_CAPTURE_DISABLED",
+                "URY_ROUND_PAYLOAD_MISMATCH",
+                "URY_CLIENT_ORDER_ID_IN_USE",
             ),
         )
