@@ -2,6 +2,8 @@ import frappe
 from frappe.utils import today, add_days, getdate
 from collections import defaultdict
 
+from ury.ury.api.dashboard import MODULE_RECORD_DOCTYPES
+
 @frappe.whitelist()
 def get_dashboard_summary(branch=None):
     filters = {"docstatus": 1, "posting_date": today()}
@@ -158,15 +160,15 @@ def get_recent_transactions(branch=None, limit=10):
 
 @frappe.whitelist()
 def get_module_records(doctype, branch=None):
-    if doctype not in ["URY Menu", "URY Menu Course", "URY Table", "URY Room", "Item", "POS Invoice", "User"]:
-        return []
-    
+    # Maximus fork (T0): same guard as ury.ury.api.dashboard.get_module_records.
+    if doctype not in MODULE_RECORD_DOCTYPES:
+        frappe.throw("Not permitted", frappe.PermissionError)
+
     filters = {}
     if branch and branch != 'all':
-        if doctype == "User":
-            pass # users might not have branch
-        else:
-            # handle branching for records if the doctype has branch field.
-            pass
-            
-    return frappe.db.get_all(doctype, fields=["*"])
+        meta = frappe.get_meta(doctype)
+        if meta.has_field("branch"):
+            filters["branch"] = branch
+
+    fields = ["name", "full_name", "enabled", "user_type"] if doctype == "User" else ["*"]
+    return frappe.get_list(doctype, filters=filters, fields=fields, limit_page_length=500)

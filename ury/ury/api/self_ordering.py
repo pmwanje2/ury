@@ -258,6 +258,8 @@ def _open_session(profile, source, table, device=None):
 def _resolve_session(session_token):
     if not session_token:
         frappe.throw(_("Missing ordering session"), frappe.PermissionError)
+    if not isinstance(session_token, str) or len(session_token) > 512:
+        frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
 
     token_hash = hashlib.sha256(session_token.encode()).hexdigest()
     session_name = frappe.db.get_value(
@@ -270,7 +272,11 @@ def _resolve_session(session_token):
 
     with _elevated():
         session = frappe.get_doc("URY Ordering Session", session_name)
-        if session.expires_at and session.expires_at < now_datetime():
+        # Native table-QR only: switching the ordering profile off ends every
+        # live guest session, and a session without an expiry is never valid.
+        if not frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "enabled"):
+            frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
+        if not session.expires_at or session.expires_at < now_datetime():
             session.status = "Expired"
             session.save(ignore_permissions=True)
             frappe.throw(_("Ordering session expired. Please rescan the QR code."), frappe.PermissionError)
@@ -285,6 +291,10 @@ def _resolve_session(session_token):
         session.save(ignore_permissions=True)
 
     return session
+
+
+def _guest_retry():
+    frappe.throw(_("URY_GUEST_RETRY: Another request is finishing. Please try again."), frappe.ValidationError)
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +402,7 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
 # Menu / product (customer-safe DTOs)
 # ---------------------------------------------------------------------------
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_customer_menu(session):
     session = _resolve_session(session)
     order_type = "Dine In" if session.table else "Take Away"
@@ -410,7 +420,7 @@ def get_customer_menu(session):
     return menu
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_customer_product(session, item_code):
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
@@ -512,7 +522,10 @@ def _sanitize_invoice_for_customer(invoice):
                 "item_code": row.item_code,
                 "item_name": row.item_name,
                 "qty": row.qty,
-                "comment": row.comment,
+                # The native line comment has no guest provenance: it may
+                # contain internal kitchen/staff instructions. Keep it on the
+                # invoice/KOT, never in guest reads or append responses.
+                "comment": None,
                 "rate": row.rate,
                 "amount": row.amount,
             }
@@ -523,7 +536,7 @@ def _sanitize_invoice_for_customer(invoice):
     }
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_customer_order(session):
     session = _resolve_session(session)
     if not session.invoice:
@@ -725,6 +738,8 @@ def add_customer_items(session, items):
 
         try:
             invoice.save(ignore_permissions=True)
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            _guest_retry()
         except Exception as e:
             frappe.throw(_("Error while placing order: {0}").format(e))
 
@@ -811,7 +826,7 @@ def request_bill(session):
 # Status
 # ---------------------------------------------------------------------------
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_order_status(session):
     session = _resolve_session(session)
     result = {"session_status": session.status, "invoice": session.invoice}
@@ -933,7 +948,7 @@ def create_payment_request(session):
     }
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_payment_status(session):
     session = _resolve_session(session)
     if not session.invoice:
@@ -987,6 +1002,8 @@ def share_payment_link(session, recipient):
     so validate it's at least non-empty before handing it to the provider.
     """
     session = _resolve_session(session)
+    if not session.invoice:
+        frappe.throw(_("No active order for this session"), frappe.ValidationError)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
     if not profile.enable_payment_link:
         frappe.throw(_("Payment links are not enabled"), frappe.ValidationError)

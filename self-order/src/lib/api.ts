@@ -152,12 +152,12 @@ export async function assignDeviceTable(
 }
 
 export async function getMenu(session: string): Promise<MenuResponse> {
-  const response = await call.get<FrappeResponse<MenuResponse>>(`${M}.get_customer_menu`, { session })
+  const response = await call.post<FrappeResponse<MenuResponse>>(`${M}.get_customer_menu`, { session })
   return response.message
 }
 
 export async function getCurrentOrder(session: string): Promise<CustomerOrder> {
-  const response = await call.get<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
+  const response = await call.post<FrappeResponse<CustomerOrder>>(`${M}.get_customer_order`, { session })
   return response.message
 }
 
@@ -193,7 +193,7 @@ export interface ProductDetail {
 }
 
 export async function getCustomerProduct(session: string, itemCode: string): Promise<ProductDetail> {
-  const response = await call.get<FrappeResponse<ProductDetail>>(`${M}.get_customer_product`, {
+  const response = await call.post<FrappeResponse<ProductDetail>>(`${M}.get_customer_product`, {
     session,
     item_code: itemCode,
   })
@@ -206,7 +206,7 @@ export async function requestBill(session: string): Promise<{ status: string; re
 }
 
 export async function getStatus(session: string): Promise<OrderStatus> {
-  const response = await call.get<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
+  const response = await call.post<FrappeResponse<OrderStatus>>(`${M}.get_order_status`, { session })
   return response.message
 }
 
@@ -230,7 +230,7 @@ export async function createPaymentRequest(session: string): Promise<PaymentRequ
 }
 
 export async function getPaymentStatus(session: string): Promise<PaymentStatusResult> {
-  const response = await call.get<FrappeResponse<PaymentStatusResult>>(`${M}.get_payment_status`, { session })
+  const response = await call.post<FrappeResponse<PaymentStatusResult>>(`${M}.get_payment_status`, { session })
   return response.message
 }
 
