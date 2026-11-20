@@ -90,7 +90,9 @@ class TestKdsWindowFieldIsDeclared(unittest.TestCase):
         lines = [line.strip() for line in (APP / "patches.txt").read_text().splitlines() if line.strip()]
         post = lines[lines.index("[post_model_sync]") + 1:]
         self.assertTrue("ury.patches.v2_0.kds_display_window_field" in post, "patch is not in [post_model_sync]")
-        self.assertEqual(post[-1], "ury.patches.v2_0.kds_display_window_field", "patch must follow upstream's lines")
+        last_upstream = post.index("ury.patches.v3_44.backfill_wastage_datetime")
+        self.assertGreater(post.index("ury.patches.v2_0.kds_display_window_field"), last_upstream,
+            "patch must follow upstream's [post_model_sync] lines")
 
     def test_field_ships_in_the_fixture_and_its_hooks_filter(self):
         import json

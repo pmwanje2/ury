@@ -87,8 +87,10 @@ class TestServeKot(FrappeTestCase):
 			serve_kot("KOT-0001")
 
 		mock_get_doc.assert_called_once_with("URY KOT", "KOT-0001")
-		# 15 minutes of production time
-		calls = {call.args[2]: call.args[3] for call in mock_set_value.call_args_list}
+		# 15 minutes of production time, written once through the document (db_set).
+		mock_set_value.assert_not_called()
+		mock_kot_doc.db_set.assert_called_once()
+		calls = mock_kot_doc.db_set.call_args.args[0]
 		self.assertEqual(calls["order_status"], "Served")
 		self.assertEqual(calls["start_time_serv"], "12:15:00")
 		self.assertAlmostEqual(calls["production_time"], 15.0)
@@ -129,7 +131,9 @@ class TestServeKotEnsuresReadyBeforeServe(FrappeTestCase):
 			patch(f"{MODULE}.get_datetime", return_value=datetime(2026, 1, 1, 12, 15, 0)), \
 			patch(f"{MODULE}.frappe.db.set_value") as mock_set_value:
 			serve_kot("KOT-0001")
-		return {call.args[2]: call.args[3] for call in mock_set_value.call_args_list}
+		mock_set_value.assert_not_called()
+		mock_kot_doc.db_set.assert_called_once()
+		return mock_kot_doc.db_set.call_args.args[0]
 
 	def test_pending_rows_are_marked_ready_before_serve(self):
 		with patch(f"{MODULE}.frappe.get_all", return_value=["URYKOTITM00180"]), \

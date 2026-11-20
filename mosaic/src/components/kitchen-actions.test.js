@@ -290,7 +290,7 @@ test("elapsed time drives the LATE cue and delay notification on the site clock"
   state.updateTimeRemaining();
   assert.equal(ticket.timeRemaining, "0 : 15");
   assert.equal(ticket.late, true);
-  assert.equal(ticket.timecolor, "text-[#DC0000]");
+  assert.equal(ticket.timecolor, "text-[var(--rd)]");
   assert.deepEqual(requests, [{
     method: "ury.ury.api.ury_kot_notification.order_delay_notification", args: { id: "KOT-001" },
   }]);
