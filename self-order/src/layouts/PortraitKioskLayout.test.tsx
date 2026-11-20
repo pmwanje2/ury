@@ -221,6 +221,24 @@ describe("PortraitKioskLayout", () => {
     expect(screen.getByText(/Checkout|Order for Pickup/)).toBeInTheDocument()
   })
 
+  it("shows the guest phone payment outcome on the checkout screen", () => {
+    useOrderingSessionMock.mockReturnValue(
+      createMockOrderingSession({
+        screen: "checkout" as const,
+        cartItems: [{ item: mockMenuItems[0], qty: 1 }],
+        cartCount: 1,
+        cartTotal: 250,
+        paymentRequest: {
+          payment_request: "PR-1", amount: 250, currency: "UGX", payment_url: null,
+          status: "Paid", paid_amount: 250, remaining_amount: 0,
+        },
+      })
+    )
+
+    render(<PortraitKioskLayout />)
+    expect(screen.getByRole("status")).toHaveTextContent("Paid (250 UGX) — thank you.")
+  })
+
   it("shows status screen when screen === status", () => {
     useOrderingSessionMock.mockReturnValue(
       createMockOrderingSession({ 

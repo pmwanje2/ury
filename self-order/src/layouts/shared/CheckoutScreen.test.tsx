@@ -229,4 +229,34 @@ describe("CheckoutScreen", () => {
 
     expect(onRequestBill).toHaveBeenCalled()
   })
+  const onlineCapabilities = {
+    customer_payment_enabled: true,
+    pay_at_counter_enabled: false,
+    request_bill_enabled: false,
+  }
+  const paidRequest = {
+    payment_request: "PR-1", amount: 12000, currency: "UGX", payment_url: null,
+    status: "Paid", paid_amount: 12000, remaining_amount: 0,
+  }
+
+  it("tells the guest a Paid phone payment is paid, not that staff will assist", () => {
+    render(<CheckoutScreen {...baseProps} capabilities={onlineCapabilities} paymentRequest={paidRequest} />)
+
+    expect(screen.getByRole("status")).toHaveTextContent("Paid (12000 UGX) — thank you.")
+    expect(screen.queryByText(/Payment request created/)).not.toBeInTheDocument()
+  })
+
+  it("sends the remaining balance after a phone payment to the counter", () => {
+    render(
+      <CheckoutScreen
+        {...baseProps}
+        capabilities={onlineCapabilities}
+        paymentRequest={{ ...paidRequest, remaining_amount: 3000 }}
+      />
+    )
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "You've paid 12000 UGX by phone. Please pay the remaining 3000 UGX at the counter."
+    )
+  })
 })
