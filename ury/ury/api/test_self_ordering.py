@@ -1175,7 +1175,8 @@ class TestCreatePaymentRequest(unittest.TestCase):
         def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
-            invoice_reads.append(kwargs)
+            if doctype == "POS Invoice":
+                invoice_reads.append(kwargs)
             return invoice
 
         mock_get_doc.side_effect = get_doc_side_effect
