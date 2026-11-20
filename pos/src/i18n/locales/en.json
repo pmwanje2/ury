@@ -74,7 +74,8 @@
     "add_comment": "Add comment",
     "edit_comment": "Edit comment",
     "pax": "Pax",
-    "insufficient_capacity": "Insufficient capacity to add more of this item"
+    "insufficient_capacity": "Insufficient capacity to add more of this item",
+    "guest_label": "Guest name (optional)"
   },
   "order": {
     "select_to_view": "Select an order to view details",
@@ -481,7 +482,9 @@
     "next_bill": "Next bill",
     "split_from": "Split from {{invoice}}",
     "related": "Related bills",
-    "open_sibling_failed": "Could not open related bill"
+    "open_sibling_failed": "Could not open related bill",
+    "guest_label": "Guest name for the new bill (optional)",
+    "guest_label_placeholder": "e.g. David"
   },
   "bill_merge": {
     "merge_bill": "Merge bill",

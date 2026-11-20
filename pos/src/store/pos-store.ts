@@ -157,6 +157,8 @@ interface POSState {
   tableOrder: TableOrder | null;
   isInitializing: boolean;
   orderComment: string;
+  /** Short name for the order or check (Susan, Seat 2); not a Customer. */
+  guestLabel: string;
   noOfPax: number;
   lastModifiedTime: string | null;
   /**
@@ -207,6 +209,7 @@ interface POSStore extends POSState {
   resetOrderState: () => void;
   setSelectedAggregator: (aggregator: Aggregator | null) => void;
   setOrderComment: (comment: string) => void;
+  setGuestLabel: (label: string) => void;
   setNoOfPax: (pax: number) => void;
   /**
    * Updates only the comment/note on an existing cart line, leaving quantity
@@ -266,6 +269,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   orderId: null,
   showVoluntaryClosing: false,
   orderComment: '',
+  guestLabel: '',
   noOfPax: 1,
   lastModifiedTime: null,
 
@@ -581,6 +585,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   setSelectedItem: (item) => set({ selectedItem: item }),
   setSelectedAggregator: (aggregator) => set({ selectedAggregator: aggregator }),
   setOrderComment: (comment: string) => set({ orderComment: comment }),
+  setGuestLabel: (label: string) => set({ guestLabel: label }),
   setNoOfPax: (pax: number) => set({ noOfPax: pax }),
   setShowVoluntaryClosing: (show: boolean) => set({ showVoluntaryClosing: show }),
 
@@ -740,6 +745,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           noOfPax: order.no_of_pax || 1,
           lastModifiedTime: order.modified || null,
           orderComment: order.custom_comments || '',
+          guestLabel: order.custom_guest_label || '',
         });
       } else {
         const state = get();
@@ -765,6 +771,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           noOfPax: order?.no_of_pax || 1,
           lastModifiedTime: order?.modified || null,
           orderComment: order?.custom_comments || '',
+          guestLabel: order?.custom_guest_label || '',
         });
       }
     } catch (error) {
@@ -779,6 +786,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         noOfPax: 1,
         lastModifiedTime: null,
         orderComment: '',
+        guestLabel: '',
       });
     } finally {
       set({ orderLoading: false });
@@ -797,6 +805,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       noOfPax: 1,
       lastModifiedTime: null,
       orderComment: '',
+      guestLabel: '',
     });
   },
 
@@ -825,6 +834,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       error: null,
       selectedOrderType: DEFAULT_ORDER_TYPE,
       orderComment: '',
+      guestLabel: '',
       noOfPax: 1,
       lastModifiedTime: null,
     });

@@ -46,6 +46,8 @@ const OrderPanel = () => {
     orderId,
     orderComment,
     setOrderComment,
+    guestLabel,
+    setGuestLabel,
     noOfPax,
     setNoOfPax,
     lastModifiedTime
@@ -165,7 +167,9 @@ const OrderPanel = () => {
         last_modified_time: isUpdatingOrder ? (lastModifiedTime || undefined) : undefined,
         invoice: isUpdatingOrder ? orderId : null,
         waiter: user.name,
-        comments: orderComment || undefined
+        comments: orderComment || undefined,
+        // an existing order always sends its label, so clearing the box clears it
+        ...(guestLabel?.trim() || isUpdatingOrder ? { guest_label: guestLabel?.trim() ?? '' } : {}),
       };
 
       const result = await syncOrder(orderData);
@@ -381,6 +385,17 @@ const OrderPanel = () => {
           </div>
           
           <div className="p-4 border-t border-border flex-shrink-0 bg-white">
+            <input
+              type="text"
+              name="guest_label"
+              maxLength={40}
+              value={guestLabel ?? ''}
+              onChange={(e) => setGuestLabel(e.target.value)}
+              placeholder={t('cart.guest_label')}
+              aria-label={t('cart.guest_label')}
+              className="mb-3 w-full rounded-md border border-border px-3 py-1.5 text-sm"
+              disabled={isInteractionDisabled}
+            />
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <Button

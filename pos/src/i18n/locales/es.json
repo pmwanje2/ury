@@ -59,7 +59,8 @@
     "add_comment": "Agregar comentario",
     "edit_comment": "Editar comentario",
     "pax": "Pax",
-    "insufficient_capacity": "Capacidad insuficiente para agregar más de este artículo"
+    "insufficient_capacity": "Capacidad insuficiente para agregar más de este artículo",
+    "guest_label": "Nombre del huésped (opcional)"
   },
   "order": {
     "select_to_view": "Selecciona un pedido para ver el detalle",
@@ -444,7 +445,9 @@
     "next_bill": "Cuenta siguiente",
     "split_from": "Dividida desde {{invoice}}",
     "related": "Cuentas relacionadas",
-    "open_sibling_failed": "No se pudo abrir la cuenta relacionada"
+    "open_sibling_failed": "No se pudo abrir la cuenta relacionada",
+    "guest_label": "Nombre del huésped para la nueva cuenta (opcional)",
+    "guest_label_placeholder": "p. ej. David"
   },
   "bill_merge": {
     "merge_bill": "Unir cuentas",

@@ -59,7 +59,8 @@
     "add_comment": "Ajouter un commentaire",
     "edit_comment": "Modifier le commentaire",
     "pax": "Couverts",
-    "insufficient_capacity": "Capacité insuffisante pour ajouter cet article"
+    "insufficient_capacity": "Capacité insuffisante pour ajouter cet article",
+    "guest_label": "Nom du client (facultatif)"
   },
   "order": {
     "select_to_view": "Sélectionnez une commande pour voir les détails",
@@ -393,7 +394,9 @@
     "next_bill": "Addition suivante",
     "split_from": "Divisé depuis {{invoice}}",
     "related": "Additions liées",
-    "open_sibling_failed": "Impossible d'ouvrir l'addition liée"
+    "open_sibling_failed": "Impossible d'ouvrir l'addition liée",
+    "guest_label": "Nom du client pour la nouvelle addition (facultatif)",
+    "guest_label_placeholder": "ex. David"
   },
   "bill_merge": {
     "merge_bill": "Fusionner l'addition",
