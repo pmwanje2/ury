@@ -156,7 +156,7 @@ test("missed tickets print once after reconnect and the job targets host:port wi
   assert.deepEqual(qz.calls.configs[1], { host: "192.0.2.10", port: 9100 });
   assert.deepEqual(qz.calls.prints[1].data[0], {
     type: "raw", format: "html", flavor: "plain", data: "<div>Kitchen ticket</div>",
-    options: { language: "ESCPOS", pageWidth: 576 },
+    options: { language: "ESCPOS", pageWidth: 576, dotDensity: "double" },
   });
   assert.equal(qz.calls.prints[1].data[1].type, "raw");
   assert.match(qz.calls.prints[1].data[1].data, /\u001dV/);
@@ -191,7 +191,7 @@ test("the HTML raw element carries pageWidth 576 for saved settings without a pa
 
   printer.configure({ ...printer.settings, pageWidth: 384 });
   await printer.process(ticket("NARROW", "Kitchen", "2026-10-01T12:02:00.000Z"));
-  assert.deepEqual(qz.calls.prints[1].data[0].options, { language: "ESCPOS", pageWidth: 384 });
+  assert.deepEqual(qz.calls.prints[1].data[0].options, { language: "ESCPOS", pageWidth: 384, dotDensity: "double" });
   assert.equal(qz.calls.prints[1].data[1].options, undefined);
 });
 
@@ -582,4 +582,14 @@ test("QZ loads only Frappe's existing copy without a new npm dependency", async 
   assert.equal(scripts[0].src, "/assets/frappe/node_modules/qz-tray/qz-tray.js");
   const dependencies = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8")).dependencies;
   assert.equal(dependencies["qz-tray"], undefined);
+});
+
+// QZ 2.3.0 defaults ESC/POS images to 24-dot single density (ESC * 32), which prints every column twice as wide:
+// a 576-dot ticket comes out 1152 dots wide and loses its right half (live Tank Hill BOT, 20 Nov). Double density
+// (ESC * 33) prints one dot per column, as QZ's ESC/POS example does.
+test("the HTML raw element asks QZ for double-density ESC/POS images so an 80 mm ticket is not stretched", async () => {
+  const { printer, qz } = await makePrinter();
+  await printer.process(ticket("DENSE"));
+  assert.equal(qz.calls.prints[0].data[0].format, "html");
+  assert.equal(qz.calls.prints[0].data[0].options.dotDensity, "double");
 });

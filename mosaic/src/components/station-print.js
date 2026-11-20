@@ -97,8 +97,9 @@ export function createStationPrinter({
       // QZ resolves a name to an OS print queue (USB or installed network printer); host is a raw socket.
       const target = settings.printer || { host: settings.host, port: Number(settings.port) };
       await bridge.print(bridge.configs.create(target), [
-        // QZ rasterises raw HTML at pageWidth dots; without it the ticket is an 8-dot blank strip.
-        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth } },
+        // QZ rasterises raw HTML at pageWidth dots (without it the ticket is an 8-dot blank strip). Double density
+        // prints one dot per column; QZ's single-density default prints each column twice and cuts the ticket in half.
+        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth, dotDensity: "double" } },
         { type: "raw", format: "command", flavor: "plain", data: "\n\n\n\x1dV\x00" },
       ]);
     };
