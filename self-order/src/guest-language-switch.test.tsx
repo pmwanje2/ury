@@ -135,8 +135,9 @@ describe('guest language switch', () => {
     await click(button('Luganda'), 'Luganda')
     expect(container.textContent).toContain('Mu kikapu: 1')
     expect(container.textContent).not.toContain('In cart: 1')
-    await click(buttonStarting('View Cart'), 'cart bar')
-    await click(button('Proceed to checkout'), 'Proceed to checkout')
+    // The cart bar and the cart page now follow the language too (review B2).
+    await click(buttonStarting('Laba ekikapu'), 'cart bar')
+    await click(button('Genda omalirize oda'), 'Proceed to checkout')
     expect(button('Teeka oda')).toBeDefined()
     expect(button('Place Order')).toBeUndefined()
   })
