@@ -53,6 +53,11 @@ SESSION_ACTIVITY_GRANULARITY = timedelta(seconds=60)
 SESSION_SLIDE_SAVEPOINT = "ury_guest_session_slide"
 
 
+class URYGuestSessionInvalid(frappe.PermissionError):
+    """Stable refusal id (exc_type) for every unusable guest session token: one sentence, so
+    an expired real token cannot be told apart from an unknown one."""
+
+
 # ---------------------------------------------------------------------------
 # Elevation helper
 # ---------------------------------------------------------------------------
@@ -255,11 +260,15 @@ def _log_skipped_slide(error, session_name):
     )
 
 
+def _refuse_session():
+    frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), URYGuestSessionInvalid)
+
+
 def _resolve_session(session_token):
     if not session_token:
         frappe.throw(_("Missing ordering session"), frappe.PermissionError)
     if not isinstance(session_token, str) or len(session_token) > 512:
-        frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
+        _refuse_session()
 
     token_hash = hashlib.sha256(session_token.encode()).hexdigest()
     session_name = frappe.db.get_value(
@@ -268,18 +277,18 @@ def _resolve_session(session_token):
         "name",
     )
     if not session_name:
-        frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
+        _refuse_session()
 
     with _elevated():
         session = frappe.get_doc("URY Ordering Session", session_name)
         # Native table-QR only: switching the ordering profile off ends every
         # live guest session, and a session without an expiry is never valid.
         if not frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "enabled"):
-            frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), frappe.PermissionError)
+            _refuse_session()
+        # No write: the refusal rolls the request back, so marking the row Expired never
+        # persisted, and its FOR UPDATE re-read raised 1020 against a concurrent order.
         if not session.expires_at or session.expires_at < now_datetime():
-            session.status = "Expired"
-            session.save(ignore_permissions=True)
-            frappe.throw(_("Ordering session expired. Please rescan the QR code."), frappe.PermissionError)
+            _refuse_session()
 
         # Sliding idle expiry without a full save: save() re-reads the row FOR
         # UPDATE, and concurrent guest reads then fail with QueryDeadlockError
