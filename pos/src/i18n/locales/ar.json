@@ -811,6 +811,8 @@
     "call_waiter": "استدعاء النادل",
     "bill": "الفاتورة",
     "minutes_waiting": "{{minutes}} د",
-    "acknowledge": "تأكيد الاستلام"
+    "acknowledge": "تأكيد الاستلام",
+    "resolve": "تم الحل",
+    "acknowledged": "تم الاستلام"
   }
 }

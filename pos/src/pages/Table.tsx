@@ -36,7 +36,7 @@ import TableUnmergeDialog from '../components/TableUnmergeDialog';
 import TableTransferDialog from '../components/TableTransferDialog';
 import CaptainTransferDialog from '../components/CaptainTransferDialog';
 import TableCard from '../components/TableCard';
-import { useOpenServiceRequestTables } from '../components/ServiceRequestAlert';
+import { resolveTableServiceRequest, useOpenServiceRequestTables } from '../components/ServiceRequestAlert';
 import MergeLinkConnector from '../components/MergeLinkConnector';
 import TableReservationDialog, { type ReservationFormData } from '../components/TableReservationDialog';
 
@@ -583,6 +583,10 @@ const TableView = () => {
       onPreview={(event) => handlePreviewTable(table, event)}
       onPrint={(event) => handlePrintTable(table, event)}
       serviceRequest={serviceRequestTables.get(table.name) ?? null}
+      onResolveServiceRequest={() => {
+        const request = serviceRequestTables.get(table.name);
+        if (request) void resolveTableServiceRequest(request.name).catch(() => {});
+      }}
       isPrinting={printingTable === table.name}
     />
     );

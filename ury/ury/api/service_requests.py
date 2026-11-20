@@ -13,12 +13,33 @@
 import frappe
 from frappe.utils import cint, now_datetime
 
+# Maximus: every endpoint is limited to staff of the request's branch (the
+# branch's URY User list). System Manager is exempt.
+BRANCH_EXEMPT_ROLES = ("System Manager",)
+
+
+def _staff_branches():
+	if frappe.session.user == "Administrator" or set(frappe.get_roles()) & set(BRANCH_EXEMPT_ROLES):
+		return None
+	return set(frappe.get_all("URY User", filters={"user": frappe.session.user, "parenttype": "Branch"}, pluck="parent"))
+
+
+def _require_branch_staff(branch):
+	branches = _staff_branches()
+	if branches is not None and (not branch or branch not in branches):
+		frappe.throw(frappe._("URY_SERVICE_REQUEST_OTHER_BRANCH"), frappe.PermissionError)
+
+
+def _require_request_branch(req):
+	_require_branch_staff(frappe.db.get_value("URY Table", req.table, "branch") if req.table else None)
+
 
 @frappe.whitelist()
 def list_open_service_requests(branch):
 	"""Open/Acknowledged service requests for tables in `branch`, oldest first."""
 	if not branch:
 		return []
+	_require_branch_staff(branch)
 
 	tables = frappe.get_all("URY Table", filters={"branch": branch}, pluck="name")
 	if not tables:
@@ -37,6 +58,7 @@ def acknowledge_service_request(name):
 	req = frappe.get_doc("URY Service Request", name)
 	if not frappe.has_permission("URY Service Request", "write", doc=req):
 		frappe.throw(frappe._("Not permitted"), frappe.PermissionError)
+	_require_request_branch(req)
 	req.status = "Acknowledged"
 	req.save()
 	return {"name": req.name, "status": req.status}
@@ -47,6 +69,7 @@ def resolve_service_request(name):
 	req = frappe.get_doc("URY Service Request", name)
 	if not frappe.has_permission("URY Service Request", "write", doc=req):
 		frappe.throw(frappe._("Not permitted"), frappe.PermissionError)
+	_require_request_branch(req)
 	req.status = "Resolved"
 	req.resolved_at = now_datetime()
 	req.resolved_by = frappe.session.user
@@ -62,10 +85,7 @@ DEFAULT_ESCALATE_MINUTES = 3
 @frappe.whitelist()
 def get_service_request_alert_settings(branch):
 	"""Staff alert settings from the branch's POS Profile: chime on/off and escalation minutes."""
-	if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles():
-		branches = frappe.get_all("URY User", filters={"user": frappe.session.user, "parenttype": "Branch"}, pluck="parent")
-		if not branch or branch not in branches:
-			frappe.throw(frappe._("URY_SERVICE_REQUEST_OTHER_BRANCH"), frappe.PermissionError)
+	_require_branch_staff(branch)
 	values = frappe.db.get_value(
 		"POS Profile",
 		{"branch": branch, "disabled": 0},

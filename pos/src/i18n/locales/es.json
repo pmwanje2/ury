@@ -619,6 +619,8 @@
     "call_waiter": "Llamar al camarero",
     "bill": "Cuenta",
     "minutes_waiting": "{{minutes}} min",
-    "acknowledge": "Confirmar"
+    "acknowledge": "Confirmar",
+    "resolve": "Resolver",
+    "acknowledged": "Confirmado"
   }
 }
