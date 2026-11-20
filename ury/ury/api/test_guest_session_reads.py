@@ -167,6 +167,28 @@ class TestGuestSessionReads(unittest.TestCase):
         savepoint = self.frappe.db.savepoint.call_args.args[0]
         self.frappe.db.rollback.assert_called_once_with(save_point=savepoint)
 
+    def test_a_skipped_slide_is_logged_without_an_error_log(self):
+        # The swallowed conflict stays observable in the app log, not as Error Log rows.
+        for error in (self.frappe.QueryDeadlockError, self.frappe.QueryTimeoutError):
+            with self.subTest(error=error.__name__):
+                self.frappe.logger.reset_mock()
+                self.frappe.log_error.reset_mock()
+                self.conflict_on_slide(error)
+                self.api._resolve_session(TOKEN)
+                self.frappe.logger.assert_called_once_with("ury")
+                warning = self.frappe.logger.return_value.warning
+                warning.assert_called_once()
+                message = warning.call_args.args[0] % warning.call_args.args[1:]
+                self.assertIn(error.__name__, message)
+                self.assertIn("S1", message)
+                self.assertNotIn(TOKEN, message)
+                self.frappe.log_error.assert_not_called()
+
+    def test_a_slide_that_succeeds_logs_nothing(self):
+        self.stored["last_activity"] = NOW - timedelta(minutes=2)
+        self.api._resolve_session(TOKEN)
+        self.frappe.logger.assert_not_called()
+
     def test_short_idle_timeout_slides_before_half_of_it_has_passed(self):
         # A 1-minute timeout polled every 50 s must not expire while the guest is active.
         self.idle_minutes = 1
