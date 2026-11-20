@@ -232,6 +232,31 @@ describe('guest language switch', () => {
   it('keeps the server refusal text when the language changes', async () => {
     writes.mockRejectedValue({
       _server_messages: JSON.stringify([
+        JSON.stringify({ message: '[SAL-QR-UNLISTED] Please ask a waiter about this table.' }),
+      ]),
+    })
+    await render(<MobileQRLayout initialContext={context} />)
+    const soup = [...container.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Soup'))
+    expect(soup).toBeDefined()
+    await act(async () => {
+      soup!.click()
+    })
+    await act(async () => {
+      button('Place Order')!.click()
+    })
+    expect(container.textContent).toContain('Please ask a waiter about this table.')
+    expect(container.textContent).not.toContain('[SAL-QR-UNLISTED]')
+    await act(async () => {
+      button('Kiswahili')!.click()
+    })
+    expect(container.textContent).toContain('Please ask a waiter about this table.')
+    expect(container.textContent).not.toContain('Imeshindwa kuweka oda')
+    expect(button('Weka oda')).toBeDefined()
+  })
+
+  it('re-renders a known refusal next step in the newly chosen language', async () => {
+    writes.mockRejectedValue({
+      _server_messages: JSON.stringify([
         JSON.stringify({ message: '[SAL-QR-WAITER-OPENS-TABLE] Please ask a waiter to open your table first.' }),
       ]),
     })
@@ -244,13 +269,14 @@ describe('guest language switch', () => {
     await act(async () => {
       button('Place Order')!.click()
     })
-    expect(container.textContent).toContain('Please ask a waiter to open your table first.')
+    expect(container.textContent).toContain('Your table is not open for orders yet.')
     expect(container.textContent).not.toContain('[SAL-QR-WAITER-OPENS-TABLE]')
     await act(async () => {
       button('Kiswahili')!.click()
     })
-    expect(container.textContent).toContain('Please ask a waiter to open your table first.')
-    expect(container.textContent).not.toContain('Imeshindwa kuweka oda')
+    expect(container.textContent).toContain('Meza yako bado haijafunguliwa kwa oda.')
+    expect(container.textContent).not.toContain('Your table is not open for orders yet.')
+    expect(container.textContent).not.toContain('Please ask a waiter to open your table first.')
     expect(button('Weka oda')).toBeDefined()
   })
 
