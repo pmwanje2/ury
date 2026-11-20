@@ -77,12 +77,18 @@ class TestGuestPhonePayment(unittest.TestCase):
 
     def test_unconfigured_refusal_shows_guest_copy_and_logs_staff_detail(self):
         frappe.db.delete("Payment Gateway Account", {"name": self.gateway.name})
-        with patch.object(frappe, "log_error") as log_error:
+        translated = []
+        with patch.object(frappe, "log_error") as log_error, patch(
+            "ury.ury.api.self_ordering._", side_effect=lambda text, *a, **k: translated.append(text) or text,
+        ):
             with self.assertRaises(frappe.ValidationError) as raised:
                 create_payment_request(self.token)
         message = str(raised.exception)
-        self.assertIn("URY-PAYMENT-NOT-CONFIGURED", message)
+        self.assertTrue(message.startswith("[URY-PAYMENT-NOT-CONFIGURED] "))
         self.assertIn("Please pay at the counter", message)
+        # The guest copy is the base text the Arabic catalogue already translates.
+        self.assertEqual(translated,
+            ["Online payment isn't set up for this restaurant yet. Please pay at the counter."])
         self.assertNotIn("Payment Gateway Account", message)
         self.assertNotIn("POS Profile", message)
         log_error.assert_called_once()

@@ -931,7 +931,26 @@ class TestRequestBill(unittest.TestCase):
         self.assertEqual(result["request"], "SR-EXISTING")
 
 
+def _catalogued_sources():
+    import csv
+    import os
+
+    path = os.path.join(os.path.dirname(frappe.get_app_path("ury")), "ury", "translations", "ar.csv")
+    with open(path, encoding="utf-8") as catalog:
+        return {row[0] for row in csv.reader(catalog) if row}
+
+
 class TestCreatePaymentRequest(unittest.TestCase):
+    def assert_refusal_keeps_translation(self, refusal_id, call):
+        """The stable id stays outside the translated text, so the existing
+        guest catalogue still translates the human part of the refusal."""
+        translated = []
+        with patch(f"{MOD}._", side_effect=lambda text, *a, **k: translated.append(text) or text):
+            with self.assertRaisesRegex(frappe.ValidationError, rf"^\[{refusal_id}\] "):
+                call()
+        self.assertTrue(translated)
+        self.assertEqual(set(translated) - _catalogued_sources(), set(), "text missing from ar.csv")
+
     def setUp(self):
         pos_profile = MagicMock()
         pos_profile.payments = [frappe._dict(mode_of_payment="P2 Phone")]
@@ -1015,8 +1034,8 @@ class TestCreatePaymentRequest(unittest.TestCase):
         profile.enable_payment_link = 0
         mock_get_doc.return_value = profile
 
-        with self.assertRaisesRegex(frappe.ValidationError, r"^\[URY-PAYMENT-DISABLED\] "):
-            create_payment_request("session-token")
+        self.assert_refusal_keeps_translation(
+            "URY-PAYMENT-DISABLED", lambda: create_payment_request("session-token"))
 
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
@@ -1030,7 +1049,9 @@ class TestCreatePaymentRequest(unittest.TestCase):
         profile.enable_payment_link = 0
         mock_get_doc.return_value = profile
 
-        with self.assertRaisesRegex(frappe.ValidationError, r"^\[URY-PAYMENT-NO-ORDER\] ") as ctx:
+        self.assert_refusal_keeps_translation(
+            "URY-PAYMENT-NO-ORDER", lambda: create_payment_request("session-token"))
+        with self.assertRaises(frappe.ValidationError) as ctx:
             create_payment_request("session-token")
         self.assertNotIsInstance(ctx.exception, frappe.PermissionError)
 
@@ -1059,8 +1080,8 @@ class TestCreatePaymentRequest(unittest.TestCase):
 
         mock_get_doc.side_effect = get_doc_side_effect
 
-        with self.assertRaisesRegex(frappe.ValidationError, r"^\[URY-PAYMENT-SETTLED\] "):
-            create_payment_request("session-token")
+        self.assert_refusal_keeps_translation(
+            "URY-PAYMENT-SETTLED", lambda: create_payment_request("session-token"))
         mock_make_pr.assert_not_called()
 
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
