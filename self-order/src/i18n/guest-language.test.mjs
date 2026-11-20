@@ -594,6 +594,35 @@ test('guest wording, waiter copy, and footer follow the catalog', async (t) => {
     }
   })
 
+  await t.test('every catalog key, including the refusal next steps, is in en, sw and lg', () => {
+    const catalogs = { en: readLocale('en'), sw: readLocale('sw'), lg: readLocale('lg') }
+    const paths = leafPaths(catalogs.en).sort()
+    assert.deepEqual(leafPaths(catalogs.sw).sort(), paths, 'sw keys differ from en')
+    assert.deepEqual(leafPaths(catalogs.lg).sort(), paths, 'lg keys differ from en')
+    const refusalKeys = ['waiter_opens_table', 'bill_printed', 'qty']
+    for (const code of ['en', 'sw', 'lg']) {
+      const refusal = catalogs[code].errors && catalogs[code].errors.refusal
+      assert.deepEqual(Object.keys(refusal || {}).sort(), [...refusalKeys].sort(), `${code} errors.refusal`)
+    }
+    for (const key of refusalKeys) {
+      assert.notEqual(catalogs.sw.errors.refusal[key], catalogs.en.errors.refusal[key], `sw ${key} is still English`)
+      assert.notEqual(catalogs.lg.errors.refusal[key], catalogs.en.errors.refusal[key], `lg ${key} is still English`)
+    }
+    for (const key of ['waiter_opens_table', 'bill_printed']) {
+      assert.match(catalogs.en.errors.refusal[key], /Your basket is kept\.$/, key)
+      assert.match(catalogs.sw.errors.refusal[key], /Kikapu chako kimehifadhiwa\.$/, key)
+      assert.match(catalogs.lg.errors.refusal[key], /Ebiri mu kikapu kyo bikyaliwo\.$/, key)
+    }
+    assert.equal(catalogs.en.errors.refusal.waiter_opens_table.includes(catalogs.en.assistance.call), true)
+    assert.equal(catalogs.sw.errors.refusal.waiter_opens_table.includes(catalogs.sw.assistance.call), true)
+    assert.equal(catalogs.lg.errors.refusal.waiter_opens_table.includes(catalogs.lg.assistance.call), true)
+    const session = readSource('hooks/useOrderingSession.ts')
+    for (const id of ['SAL-QR-WAITER-OPENS-TABLE', 'SAL-QR-BILL-PRINTED', 'SAL-QR-QTY']) {
+      assert.equal(session.includes(`'${id}'`), true, `refusal id ${id} missing from the closed list`)
+    }
+    assert.equal(session.includes('Your basket is kept'), false, 'refusal copy is hard-coded')
+  })
+
   await t.test('the visible footer words follow the guest language and keep the licence line', async () => {
     const i18n = await loadModule('./index.ts')
     assert.equal(typeof i18n.applyStaticGuestCopy, 'function')
