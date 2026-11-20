@@ -801,6 +801,23 @@ class TestFeedbackForm(unittest.TestCase):
                     response = self.api._ordering_context_response("SESSION", "QR Table", profile, "Table 7", "Mobile")
                 self.assertEqual(response["capabilities"]["feedback_enabled"], expected)
 
+    def test_feedback_capability_is_off_until_the_bill_link_field_exists(self):
+        # Without the tenant bill-link field every submit would be refused,
+        # so the guest must not be offered "Rate your visit".
+        profile = SimpleNamespace(
+            restaurant="Restaurant A", enable_product_detail_page=0, show_item_images=0,
+            show_item_descriptions=0, enable_item_notes=0, enable_request_bill=0,
+            enable_customer_payment=0, enable_payment_link=0, enable_pay_at_counter=0,
+            allow_add_to_running_table=0, enable_feedback=1, feedback_template="Guest Meal",
+            branch="Branch A", session_idle_timeout_minutes=30,
+        )
+        for has_field, expected in ((True, True), (False, False)):
+            with self.subTest(has_field=has_field):
+                self.meta.has_field.side_effect = lambda field, present=has_field: present and field == "custom_pos_invoice"
+                with patch(f"{MOD}.frappe.db.get_value", return_value="Company A"):
+                    response = self.api._ordering_context_response("SESSION", "QR Table", profile, "Table 7", "Mobile")
+                self.assertEqual(response["capabilities"]["feedback_enabled"], expected)
+
     def _get_feedback_form(self, **kwargs):
         method = getattr(self.api, "get_feedback_form", None)
         self.assertTrue(callable(method), "Guest feedback form reader is missing")
