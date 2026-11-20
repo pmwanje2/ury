@@ -114,6 +114,14 @@ def make_offline_pos():
         "pos_profile": profile.name, "branch": branch.name, "warehouse": warehouse,
         "item_groups": [{"item_group": group}],
     }).insert()
+    # The URY POS stock gate on a version-16 bench without ERPNext's batched
+    # check also refuses non-stock items; the native "Always Available"
+    # configuration bypasses it.
+    frappe.get_doc({
+        "doctype": "URY Item Production Configuration", "item": item.name,
+        "branch": branch.name, "availability_mode": "Always Available", "active": 1,
+        "department": department.name, "production_unit": production.name,
+    }).insert()
     opening = frappe.get_doc({
         "doctype": "POS Opening Entry", "company": company, "pos_profile": profile.name,
         "user": user.name, "branch": branch.name, "restaurant": restaurant.name,
