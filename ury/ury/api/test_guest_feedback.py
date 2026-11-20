@@ -450,6 +450,26 @@ class TestGuestFeedback(unittest.TestCase):
         self.feedback.insert.assert_not_called()
         self.sql.assert_not_called()
 
+    def test_link_refusals_carry_the_stable_permission_id(self):
+        # Authorization denials keep one append-only id, distinct from the
+        # URY_FEEDBACK_* validation refusals, so guest copy never parses prose.
+        expiry = _epoch(FIXED_NOW) + 3600
+        attempts = {
+            "no_credential": {},
+            "forged": {"receipt_token": "not-a-token"},
+            "bill_purpose": {"receipt_token": _expected_grant("Profile A", "bill", "POS-1", expiry)},
+        }
+        for name, kwargs in attempts.items():
+            with self.subTest(attempt=name):
+                with self.assertRaises(frappe.PermissionError) as caught:
+                    self.submit(ratings=RATINGS, **kwargs)
+                self.assertIn("URY_FEEDBACK_LINK_INVALID", str(caught.exception))
+        self.invoice.pos_profile = "Other Till"
+        with self.assertRaises(frappe.PermissionError) as caught:
+            self.submit(session="opaque-session", ratings=RATINGS)
+        self.assertIn("URY_FEEDBACK_LINK_INVALID", str(caught.exception))
+        self.feedback.insert.assert_not_called()
+
     def test_malformed_signature_is_a_permission_refusal_not_a_server_error(self):
         body = f"Profile A|feedback|POS-1|{_epoch(FIXED_NOW) + 60}"
         for signature in ("é" * 64, "☃", "", "0" * 63, "0" * 65, "g" * 64):
