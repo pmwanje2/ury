@@ -2,6 +2,8 @@ import { Route } from "workbox-routing";
 import { NetworkFirst } from "workbox-strategies";
 import type { WorkboxPlugin } from "workbox-core/types.js";
 import { matchOfflineRequest, READ_CACHE, SHELL_CACHE } from "./runtime-caching";
+// Direct file import: the @ury/core barrel also exports the Frappe client
+// (frappe-js-sdk, axios), which must stay out of the service worker bundle.
 import { isGatewayUnreachableStatus } from "../../../packages/core/src/gateway-status";
 
 export const SESSION_CACHE = "ury-pos-session";
