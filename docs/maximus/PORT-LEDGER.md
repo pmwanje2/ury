@@ -809,3 +809,10 @@ only the fork-specific part is **port**.
 | `28d5db61` | 2026-11-20 | #98 | T6 | superseded | test(self-order): RED Mobile category chips stay below the sticky header | version-16 MobileQRLayout header is `z-20` above CategoryTabs; re-check on the v16 layout |
 | `4d33f2dd` | 2026-11-20 | #98 | T10 | dropped | test(self-order): lint the RED category test | test lint only |
 | `ddcb74b1` | 2026-11-20 | #98 | T6 | superseded (part) | feat(self-order): GREEN guest menu by category in the menu's configured order | port `resolve_restaurant_menu` `course_priority`/`menu_order` and the sort by `custom_serving_priority` then menu row; version-16 orders categories by first appearance in an item-name-sorted list |
+| `edd08bd3` | 2026-11-20 | #101 | T6 | superseded (part) | test: call waiter alerts every staff screen until acknowledged (RED) | upstream `100c43fe` has the staff API (`ury/ury/api/service_requests.py`), `pos/src/lib/service-request-api.ts` and the Captain `ServiceRequestPanel`; the alert, realtime, escalation and branch tests are the fork part, carried as #102 |
+| `013160d4` | 2026-11-20 | #101 | T6 | port | test: fix the call-waiter RED harness and retire the old dedupe assertion (still RED) | the per-table Assistance dedupe and guest rate limit carry with `756c4923` (`request_assistance`, which upstream does not have) |
+| `c06e5757` | 2026-11-20 | #101 | T6 | superseded (part) | feat: call waiter alerts every staff screen until acknowledged (GREEN) | `service_requests.py` list/acknowledge/resolve and `service-request-api.ts` are upstream `100c43fe` verbatim; realtime publish, profile settings and banners are #102; the branch check on acknowledge/resolve and the guest limits carry with `756c4923` |
+
+The `URY Service Request` model, the staff API and the Captain panel are native on `version-16`
+(`100c43fe`). Our only additions on that line are the very visible alert, realtime push and
+escalation, in #102 (`maximus/service-request-staff-alert`).
