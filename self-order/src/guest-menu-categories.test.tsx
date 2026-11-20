@@ -57,7 +57,7 @@ describe('menuCategories', () => {
   })
 
   it('treats a missing priority and menu order as unconfigured and keeps the API order', async () => {
-    const plain = menu.map(({ menu_order: _m, course_priority: _p, ...rest }) => rest)
+    const plain = menu.map((item) => ({ ...item, menu_order: undefined, course_priority: undefined }))
     expect((await menuCategories(plain)).map((g: { course: string | null }) => g.course)).toEqual(['Beers', 'Mains', 'Coffee', 'Starters', null])
   })
 
