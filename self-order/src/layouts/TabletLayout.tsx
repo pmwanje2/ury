@@ -249,6 +249,8 @@ function TabletLayout({ initialContext }: LayoutProps) {
               menuItem={currentMenuItem}
               onAddToCart={addToCart}
               onBack={goToMenu}
+              menu={menu}
+              itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
             />
           ) : (
             <div className="flex h-full flex-col p-6">

@@ -217,6 +217,8 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
         menuItem={menuItem}
         onAddToCart={addToCart}
         onBack={goToMenu}
+        menu={menu}
+        itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
       />
     )
   }

@@ -319,6 +319,8 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
                   menuItem={detailProduct}
                   onAddToCart={addToCart}
                   onBack={goToMenu}
+                  menu={menu}
+                  itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
                 />
               </div>
             </div>
