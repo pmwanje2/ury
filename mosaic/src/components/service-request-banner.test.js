@@ -82,7 +82,19 @@ const callWaiter = (overrides = {}) => ({
   name: "SR-1", table: "T-2", request_type: "Assistance", status: "Open", requested_at: "2026-11-20 14:56:00",
   ...overrides,
 });
-const banner = markup => markup.match(/<div[^>]*data-testid="service-request-alert"[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? "";
+// The banner element through its matching close tag (balanced <div> count).
+function banner(markup) {
+  const start = markup.search(/<div[^>]*data-testid="service-request-alert"/);
+  if (start < 0) return "";
+  const tags = /<\/?div\b[^>]*>/g;
+  tags.lastIndex = start;
+  let depth = 0;
+  for (let tag; (tag = tags.exec(markup));) {
+    depth += tag[0].startsWith("</") ? -1 : 1;
+    if (depth === 0) return markup.slice(start, tags.lastIndex);
+  }
+  return markup.slice(start);
+}
 
 test("the board shows a full-width call-waiter banner with table, type and minutes waiting", async t => {
   const env = board({ open: [callWaiter()] });

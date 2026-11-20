@@ -101,6 +101,7 @@ class TestStaffActionsAreBranchScoped(unittest.TestCase):
 		self.doc.name = "SR-1"
 		self.enterContext(patch(f"{STAFF_MOD}.frappe.get_doc", return_value=self.doc))
 		self.enterContext(patch(f"{STAFF_MOD}.frappe.has_permission", return_value=True))
+		self.enterContext(patch(f"{STAFF_MOD}.now_datetime", return_value=datetime.datetime(2026, 11, 20, 15, 0)))
 		self.roles = self.enterContext(patch(f"{STAFF_MOD}.frappe.get_roles", return_value=["URY Captain"]))
 		self.session = self.enterContext(patch(f"{STAFF_MOD}.frappe.session", SimpleNamespace(user="waiter@a.test")))
 		self.table_branch = "Branch A"
@@ -214,7 +215,7 @@ class TestAlertSettingsOnTheProfile(unittest.TestCase):
 				self.assertIn(name, fields)
 				self.assertEqual(fields[name]["fieldtype"], fieldtype)
 				self.assertEqual(str(fields[name]["default"]), default)
-				named = [f for entry in hooks.fixtures if entry.get("doctype") == "Custom Field"
+				named = [f for entry in hooks.fixtures if isinstance(entry, dict) and entry.get("doctype") == "Custom Field"
 					for flt in entry.get("filters", []) for f in flt[2]]
 				self.assertIn(name, named, "Fixture row is not named in hooks.fixtures, so migrate drops it")
 

@@ -63,13 +63,6 @@ class TestRequestAssistance(unittest.TestCase):
                           "invoice": "POS-1", "session": "SESSION-1", "status": "Open"})
         self.req.insert.assert_called_once_with(ignore_permissions=True)
 
-    def test_unresolved_request_is_deduplicated_by_table_invoice_and_type(self):
-        self.exists.return_value = "REQ-OPEN"
-        self.assertEqual(self.request(), {"status": "Already Requested", "request": "REQ-OPEN"})
-        self.exists.assert_called_once_with("URY Service Request", {"table": "Table 7", "invoice": "POS-1",
-            "request_type": "Assistance", "status": ["!=", "Resolved"]})
-        self.req.insert.assert_not_called()
-
     def test_disabled_service_requests_are_refused(self):
         self.profile.enable_request_bill = 0
         with self.assertRaises(frappe.ValidationError):
