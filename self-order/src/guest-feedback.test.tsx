@@ -113,27 +113,27 @@ describe('guest feedback route', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     first.unmount()
 
-    feedbackError = new Error('URY_FEEDBACK_RETRY: try again')
+    feedbackError = new Error('[URY-FEEDBACK-RETRY] try again')
     render(<App />)
     expect(await screen.findByText('Another request is finishing. Please try again.')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('URY_FEEDBACK_')
+    expect(document.body.textContent).not.toContain('URY-FEEDBACK-')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
   it('maps every stable refusal id to guest copy and never shows the raw id', async () => {
     const cases: [string, string][] = [
-      ['URY_FEEDBACK_DISABLED', 'Feedback is not available right now.'],
-      ['URY_FEEDBACK_TEMPLATE', 'Feedback is not available right now.'],
-      ['URY_FEEDBACK_BILL_LINK_MISSING', 'Feedback is not available right now.'],
-      ['URY_FEEDBACK_RATINGS', 'Feedback is not available right now.'],
-      ['URY_FEEDBACK_NOT_ELIGIBLE', 'Feedback is not available for this bill.'],
-      ['URY_FEEDBACK_LINK_INVALID', 'This feedback link is not valid.'],
+      ['[URY-FEEDBACK-DISABLED]', 'Feedback is not available right now.'],
+      ['[URY-FEEDBACK-TEMPLATE]', 'Feedback is not available right now.'],
+      ['[URY-FEEDBACK-BILL-LINK-MISSING]', 'Feedback is not available right now.'],
+      ['[URY-FEEDBACK-RATINGS]', 'Feedback is not available right now.'],
+      ['[URY-FEEDBACK-NOT-ELIGIBLE]', 'Feedback is not available for this bill.'],
+      ['[URY-FEEDBACK-LINK-INVALID]', 'This feedback link is not valid.'],
     ]
     for (const [code, expected] of cases) {
       feedbackError = new Error(code)
       const view = render(<App />)
       expect(await screen.findByText(expected), code).toBeInTheDocument()
-      expect(document.body.textContent, code).not.toContain('URY_FEEDBACK_')
+      expect(document.body.textContent, code).not.toContain('URY-FEEDBACK-')
       expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
       view.unmount()
     }
