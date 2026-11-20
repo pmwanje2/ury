@@ -163,27 +163,28 @@ describe('useOrderingSession', () => {
       act(() => view.result.current.addToCart(item))
 
       expect(view.result.current.cart[item.item]).toEqual({
+        key: item.item,
         item,
         qty: 1,
         comment: undefined,
         variant: undefined,
-        addons: undefined,
       })
       expect(view.result.current.cartCount).toBe(1)
     })
 
-    it('increments qty and keeps prior comment/variant/addons when re-adding without options', async () => {
+    it('keeps a noted line separate from a plain re-add; the plain dish never inherits the note', async () => {
       const view = await renderReady()
       const item = buildMenuItem()
 
       act(() => view.result.current.addToCart(item, { comment: 'no sugar', variant: 'Large' }))
       act(() => view.result.current.addToCart(item))
+      act(() => view.result.current.addToCart(item, { comment: 'no sugar' }))
 
-      expect(view.result.current.cart[item.item]).toMatchObject({
-        qty: 2,
-        comment: 'no sugar',
-        variant: 'Large',
-      })
+      expect(view.result.current.cartItems.map((line) => [line.comment, line.qty, line.variant])).toEqual([
+        ['no sugar', 2, 'Large'],
+        [undefined, 1, undefined],
+      ])
+      expect(view.result.current.cart[item.item]).toMatchObject({ qty: 1, comment: undefined })
     })
 
     it('computes cartCount and cartTotal across multiple lines', async () => {

@@ -1,8 +1,7 @@
 import { formatCurrency } from '@ury/core'
+import type { CartEntry } from '../../hooks/useOrderingSession'
 import type { CustomerOrder, MenuItem, OrderingContext, PaymentRequestResult } from '../../lib/api'
 import { paymentNoticeFor } from '../../lib/payment-outcome'
-
-type CartEntry = { item: MenuItem; qty: number }
 
 interface CartPanelProps {
   context: OrderingContext | null
@@ -14,8 +13,10 @@ interface CartPanelProps {
   billRequested: boolean
   payingOnline: boolean
   paymentRequest?: PaymentRequestResult | null
-  onIncrement: (item: MenuItem) => void
-  onDecrement: (itemCode: string) => void
+  /** Called with the line's note so + adds to the same noted line. */
+  onIncrement: (item: MenuItem, options?: { comment?: string }) => void
+  /** Called with the line's cart key (the item code for a plain line). */
+  onDecrement: (lineKey: string) => void
   onSubmit: () => void
   onRequestBill: () => void
   onPayOnline: () => void
@@ -75,11 +76,16 @@ function CartPanel({
           ) : (
             <ul className="space-y-2 text-sm">
               {cartItems.map((entry) => (
-                <li key={entry.item.item} className="flex items-center justify-between gap-2">
-                  <span className="flex-1">{entry.item.item_name}</span>
+                <li key={entry.key ?? entry.item.item} className="flex items-center justify-between gap-2">
+                  <span className="flex-1">
+                    {entry.item.item_name}
+                    {context?.capabilities.item_notes_enabled && entry.comment && (
+                      <span className="block text-xs text-muted-foreground">Note: {entry.comment}</span>
+                    )}
+                  </span>
                   <span className="flex items-center gap-2">
                     <button
-                      onClick={() => onDecrement(entry.item.item)}
+                      onClick={() => onDecrement(entry.key ?? entry.item.item)}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
                       aria-label={`Remove one ${entry.item.item_name}`}
                     >
@@ -87,7 +93,7 @@ function CartPanel({
                     </button>
                     <span className="w-4 text-center">{entry.qty}</span>
                     <button
-                      onClick={() => onIncrement(entry.item)}
+                      onClick={() => onIncrement(entry.item, { comment: entry.comment })}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
                       aria-label={`Add one more ${entry.item.item_name}`}
                     >

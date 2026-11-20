@@ -16,6 +16,8 @@ export interface POSInvoice {
   total_taxes_and_charges: number;
   customer: string;
   customer_name?: string;
+  /** a short name for this check (Susan, Seat 2); not a Customer */
+  custom_guest_label?: string | null;
   status: 'Draft' | 'Unbilled' | 'Recently Paid' | 'Paid' | 'Consolidated' | 'Return';
   mobile_number: string;
   posting_date: string;
@@ -197,6 +199,8 @@ export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInv
     posting_time: inv.posting_time,
     total_taxes_and_charges: inv.total_taxes_and_charges ?? 0,
     customer: inv.customer,
+    customer_name: inv.customer_name,
+    custom_guest_label: inv.custom_guest_label ?? null,
     status: inv.status,
     mobile_number: inv.mobile_number ?? '',
     posting_date: inv.posting_date,

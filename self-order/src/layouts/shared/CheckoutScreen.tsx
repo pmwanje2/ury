@@ -80,7 +80,7 @@ function CheckoutScreen({
         <h2 className="mb-2 text-sm font-medium text-muted-foreground">Order Summary</h2>
         <ul className="space-y-1 text-sm">
           {cartItems.map((entry) => (
-            <li key={entry.item.item} className="flex justify-between">
+            <li key={entry.key ?? entry.item.item} className="flex justify-between">
               <span>
                 {entry.item.item_name} × {entry.qty}
               </span>
