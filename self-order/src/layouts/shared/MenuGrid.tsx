@@ -21,7 +21,7 @@ interface MenuGridProps {
 }
 
 /**
- * Category-free scrollable grid of menu items. Shared visual language
+ * Scrollable grid of one category's menu items. Shared visual language
  * between TabletLayout and LandscapeKioskLayout — only the sizing classes
  * differ (larger cards, more columns on the kiosk).
  */
@@ -29,7 +29,7 @@ function MenuGrid({ menu, cart, capabilities, onAdd, addonsByItem, onRetryAddons
   return (
     <div className={gridClassName}>
       {menu.map((item) => (
-        <div key={item.item} className="min-w-0 overflow-hidden rounded-xl border">
+        <div key={item.item} data-menu-item={item.item} className="min-w-0 overflow-hidden rounded-xl border">
         <button disabled={!hasPrice(item)} onClick={() => onAdd(item)} className={`${cardClassName} w-full disabled:opacity-60`}>
           {capabilities?.show_item_images && item.item_image && (
             <img

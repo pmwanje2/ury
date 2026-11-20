@@ -6,6 +6,7 @@ import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
+import CategoryMenu from './shared/CategoryMenu'
 import MenuGrid from './shared/MenuGrid'
 import GuestNoteDialog from '../components/GuestNoteDialog'
 
@@ -120,16 +121,23 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
 
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-y-auto p-10">
-          <MenuGrid
+          <CategoryMenu
             menu={menu}
-            cart={cart}
-            capabilities={context?.capabilities}
-            onAdd={addToCart}
-            addonsByItem={addonsByItem}
-            onRetryAddons={retryAddons}
-            gridClassName="grid grid-cols-4 gap-6 xl:grid-cols-5"
-            cardClassName="flex min-w-[180px] flex-col overflow-hidden rounded-2xl border text-left text-lg transition active:scale-[0.97]"
-            imageClassName="h-40 w-full object-cover"
+            allLabel={t('menu.all_items')}
+            otherLabel={t('menu.other')}
+            renderItems={(items) => (
+              <MenuGrid
+                menu={items}
+                cart={cart}
+                capabilities={context?.capabilities}
+                onAdd={addToCart}
+                addonsByItem={addonsByItem}
+                onRetryAddons={retryAddons}
+                gridClassName="grid grid-cols-4 gap-6 xl:grid-cols-5"
+                cardClassName="flex min-w-[180px] flex-col overflow-hidden rounded-2xl border text-left text-lg transition active:scale-[0.97]"
+                imageClassName="h-40 w-full object-cover"
+              />
+            )}
           />
         </main>
 

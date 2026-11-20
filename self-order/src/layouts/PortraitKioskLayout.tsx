@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { formatCurrency } from '@ury/core'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@ury/ui'
 import { useIdleReset } from '../hooks/useIdleReset'
@@ -7,12 +7,11 @@ import GuestAddons from '../components/GuestAddons'
 import GuestNoteDialog from '../components/GuestNoteDialog'
 import { t } from '../i18n'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
+import CategoryMenu from './shared/CategoryMenu'
 import type { MenuItem, OrderingContext } from '../lib/api'
 
 const IDLE_WARN_MS = 60000
 const IDLE_RESET_GRACE_MS = 15000
-
-const ALL_CATEGORY = '__all__'
 
 interface LayoutProps {
   initialContext?: OrderingContext
@@ -62,7 +61,6 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     cartTotal,
   } = ordering
 
-  const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY)
   const [cartExpanded, setCartExpanded] = useState(false)
   const [showIdleWarning, setShowIdleWarning] = useState(false)
   const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -92,23 +90,6 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     clearTimeout(idleResetTimerRef.current)
     setShowIdleWarning(false)
   }
-
-  const categories = useMemo(() => {
-    const seen = new Map<string, string | null>()
-    for (const item of menu) {
-      const key = item.course ?? ALL_CATEGORY
-      if (key === ALL_CATEGORY) continue
-      if (!seen.has(key)) {
-        seen.set(key, item.course_label ?? item.course ?? null)
-      }
-    }
-    return Array.from(seen.entries()).map(([course, label]) => ({ course, label }))
-  }, [menu, t])
-
-  const visibleMenu = useMemo(() => {
-    if (selectedCategory === ALL_CATEGORY) return menu
-    return menu.filter((item) => (item.course ?? ALL_CATEGORY) === selectedCategory)
-  }, [menu, selectedCategory])
 
   if (loading) {
     return (
@@ -184,50 +165,28 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
         </section>
       )}
 
-      <div className="flex flex-1 gap-4 px-6 pt-4">
-        <nav
-          aria-label={t('menu.categories')}
-          className="flex w-40 shrink-0 flex-col gap-2 self-start rounded-lg border p-2"
-        >
-          <button
-            onClick={() => setSelectedCategory(ALL_CATEGORY)}
-            className={`rounded-md px-3 py-3 text-left text-sm font-medium transition ${
-              selectedCategory === ALL_CATEGORY
-                ? 'bg-primary text-primary-foreground'
-                : 'text-foreground hover:bg-muted'
-            }`}
-          >
-            {t('menu.all_items')}
-          </button>
-          {categories.map((category) => (
-            <button
-              key={category.course}
-              onClick={() => setSelectedCategory(category.course)}
-              className={`rounded-md px-3 py-3 text-left text-sm font-medium transition ${
-                selectedCategory === category.course
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-foreground hover:bg-muted'
-              }`}
-            >
-              {category.label ?? t('menu.other')}
-            </button>
-          ))}
-        </nav>
-
-        <section className="grid flex-1 grid-cols-2 gap-4 self-start">
-          {visibleMenu.map((item) => (
-            <div key={item.item} className="min-w-0 overflow-hidden rounded-xl border">
-            <MenuCard
-              item={item}
-              qtyInCart={cart[item.item]?.qty ?? 0}
-              showImage={context?.capabilities.show_item_images ?? false}
-              onAdd={() => addToCart(item)}
-            />
-            <GuestAddons state={addonsByItem[item.item]} onAdd={addToCart} onRetry={() => retryAddons(item.item)} />
-            </div>
-          ))}
-        </section>
-      </div>
+      <CategoryMenu
+        menu={menu}
+        allLabel={t('menu.all_items')}
+        otherLabel={t('menu.other')}
+        variant="rail"
+        className="flex flex-1 gap-4 px-6 pt-4"
+        renderItems={(items) => (
+          <div className="grid grid-cols-2 gap-4">
+            {items.map((item) => (
+              <div key={item.item} data-menu-item={item.item} className="min-w-0 overflow-hidden rounded-xl border">
+              <MenuCard
+                item={item}
+                qtyInCart={cart[item.item]?.qty ?? 0}
+                showImage={context?.capabilities.show_item_images ?? false}
+                onAdd={() => addToCart(item)}
+              />
+              <GuestAddons state={addonsByItem[item.item]} onAdd={addToCart} onRetry={() => retryAddons(item.item)} />
+              </div>
+            ))}
+          </div>
+        )}
+      />
 
       {cartCount > 0 && (
         <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-background shadow-lg">
