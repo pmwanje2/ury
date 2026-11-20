@@ -48,6 +48,9 @@ from ury.ury.api.item_price import item_price_release_states, price_valid_on
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
 MAX_COMMENT_LEN = 140  # Data fields: POS Invoice Item.comment and URY KOT Items.comments.
+# The idle timeout is in minutes, so last_activity is only rewritten once a minute.
+SESSION_ACTIVITY_GRANULARITY = timedelta(seconds=60)
+SESSION_SLIDE_SAVEPOINT = "ury_guest_session_slide"
 
 
 # ---------------------------------------------------------------------------
@@ -271,14 +274,30 @@ def _resolve_session(session_token):
             session.save(ignore_permissions=True)
             frappe.throw(_("Ordering session expired. Please rescan the QR code."), frappe.PermissionError)
 
-        session.last_activity = now_datetime()
-        session.expires_at = add_to_date(
-            now_datetime(),
-            minutes=frappe.db.get_value(
-                "URY Self Ordering Profile", session.ordering_profile, "session_idle_timeout_minutes"
-            ) or 30,
-        )
-        session.save(ignore_permissions=True)
+        # Sliding idle expiry without a full save: save() re-reads the row FOR
+        # UPDATE, and concurrent guest reads then fail with QueryDeadlockError
+        # (ER_CHECKREAD under MariaDB innodb_snapshot_isolation).
+        now = now_datetime()
+        if session.last_activity and now - session.last_activity < SESSION_ACTIVITY_GRANULARITY:
+            return session
+        values = {
+            "last_activity": now,
+            "expires_at": add_to_date(
+                now,
+                minutes=frappe.db.get_value(
+                    "URY Self Ordering Profile", session.ordering_profile, "session_idle_timeout_minutes"
+                ) or 30,
+            ),
+        }
+        frappe.db.savepoint(SESSION_SLIDE_SAVEPOINT)
+        try:
+            frappe.db.set_value("URY Ordering Session", session.name, values, update_modified=False)
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            # Still valid: another request is extending this session right now.
+            frappe.db.rollback(save_point=SESSION_SLIDE_SAVEPOINT)
+            return session
+        frappe.db.release_savepoint(SESSION_SLIDE_SAVEPOINT)
+        session.update(values)
 
     return session
 
