@@ -421,7 +421,6 @@ describe('guest ordering languages', () => {
     const mobile = readSource('layouts/MobileQRLayout.tsx')
     for (const needle of [
       'LanguageSwitcher',
-      "t('bill.request')",
       'locationLabel(context.table, context.area)',
       "t('header.pickup')",
       'row.item_name',
@@ -445,6 +444,12 @@ describe('guest ordering languages', () => {
     expect(cart.includes("t('cart.title')")).toBe(true)
     expect(cart.includes("t('cart.empty')")).toBe(true)
     expect(cart.includes('item.item_name')).toBe(true)
+
+    // v16 Mobile requests the bill and places the order on the shared checkout screen.
+    const checkout = readSource('layouts/shared/CheckoutScreen.tsx')
+    for (const key of ["t('bill.request')", "t('order.place')", "t('payment.pay_online')"]) {
+      expect(checkout.includes(key), `CheckoutScreen missing ${key}`).toBe(true)
+    }
 
     const card = readSource('layouts/shared/ProductCard.tsx')
     expect(card.includes("t('cart.in_cart'")).toBe(true)
