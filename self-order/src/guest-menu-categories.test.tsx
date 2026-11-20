@@ -147,3 +147,17 @@ for (const [name, Layout] of Object.entries({ Mobile, Tablet, Landscape, Portrai
     })
   }
 }
+
+describe('Mobile category row while scrolling', () => {
+  it('sticks just below the sticky header, whatever height the header has', async () => {
+    // jsdom has no layout; give the header a measured height like a phone would.
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.tagName === 'HEADER' ? 105 : 0
+    })
+    await act(async () => { root.render(<Mobile initialContext={context} />) })
+    const row = nav('Menu categories')
+    expect(row.className).toContain('sticky')
+    expect(row.style.top, 'category chips must not slide under the header').toBe('105px')
+    height.mockRestore()
+  })
+})
