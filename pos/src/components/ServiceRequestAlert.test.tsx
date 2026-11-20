@@ -39,6 +39,7 @@ let container: HTMLDivElement;
 let open: Array<Record<string, string>>;
 let settings: { sound: number; escalate_minutes: number };
 let acknowledged: string[];
+let resolved: string[];
 
 const NOW = new Date('2026-11-20T14:58:00');
 
@@ -57,6 +58,11 @@ async function serverWrite(method: string, args: any = {}) {
     acknowledged.push(args.name);
     open = open.map(row => row.name === args.name ? { ...row, status: 'Acknowledged' } : row);
     return { message: { name: args.name, status: 'Acknowledged' } };
+  }
+  if (method === 'ury.ury.api.service_requests.resolve_service_request') {
+    resolved.push(args.name);
+    open = open.filter(row => row.name !== args.name);
+    return { message: { name: args.name, status: 'Resolved' } };
   }
   throw Error(`Unexpected write ${method}`);
 }
@@ -80,6 +86,7 @@ beforeEach(async () => {
   open = [{ name: 'SR-1', table: 'T-2', request_type: 'Assistance', status: 'Open', requested_at: '2026-11-20 14:56:00' }];
   settings = { sound: 1, escalate_minutes: 3 };
   acknowledged = [];
+  resolved = [];
   vi.spyOn(call, 'get').mockImplementation(serverRead);
   vi.spyOn(call, 'post').mockImplementation(serverWrite);
   container = document.createElement('div');
@@ -127,6 +134,37 @@ describe('service request staff alert', () => {
     expect(banner()).toBeNull();
   });
 
+  it('keeps an acknowledged request on the till, calm and silent, until someone resolves it', async () => {
+    await render();
+    await click('Acknowledge');
+    const pending = container.querySelector('[data-testid="service-request-acknowledged"]');
+    expect(pending, 'An acknowledged request vanishes: nobody can resolve it from the till').not.toBeNull();
+    expect(pending!.getAttribute('role')).not.toBe('alert');
+    expect(pending!.textContent).toContain('T-2');
+    const chimes = plays.count;
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    expect(plays.count, 'An acknowledged request must not keep ringing').toBe(chimes);
+    await click('Resolve');
+    expect(resolved).toEqual(['SR-1']);
+    expect(container.querySelector('[data-testid="service-request-acknowledged"]')).toBeNull();
+  });
+
+  it('can resolve an open request straight from the alert', async () => {
+    await render();
+    await click('Resolve');
+    expect(resolved).toEqual(['SR-1']);
+    expect(banner()).toBeNull();
+  });
+
+  it('refreshes after a reconnect so a missed event is not lost', async () => {
+    open = [];
+    await render();
+    open = [{ name: 'SR-4', table: 'T-4', request_type: 'Assistance', status: 'Open', requested_at: '2026-11-20 14:58:00' }];
+    await act(async () => { socket.fire('connect', undefined); });
+    await act(async () => { await Promise.resolve(); });
+    expect(banner()?.textContent).toContain('T-4');
+  });
+
   it('turns to the escalation colour after the profile minutes', async () => {
     open = [{ ...open[0], requested_at: '2026-11-20 14:54:00' }];
     await render();
@@ -154,11 +192,12 @@ describe('service request staff alert', () => {
     expect(plays.count).toBe(0);
   });
 
-  it('subscribes to realtime and shows a new request at once, without waiting for the poll', async () => {
+  it('shows a new request at once from the user-room event, without joining a shared room', async () => {
     open = [];
     await render();
     expect(banner()).toBeNull();
-    expect(socket.emitted).toContainEqual(['doctype_subscribe', 'URY Service Request']);
+    expect(socket.emitted.filter(([event]) => event === 'doctype_subscribe'),
+      'The server publishes to each staff user; a shared doctype room leaks other branches').toEqual([]);
     open = [{ name: 'SR-9', table: 'T-5', request_type: 'Bill', status: 'Open', requested_at: '2026-11-20 14:58:00' }];
     await act(async () => {
       socket.fire('ury_service_request', { name: 'SR-9', table: 'T-5', branch: 'Branch A', request_type: 'Bill', status: 'Open' });
@@ -206,6 +245,43 @@ describe('table card pulse', () => {
     const card = container.querySelector('[data-service-request]');
     expect(card, 'Table card shows no call-waiter state').not.toBeNull();
     expect(card!.className).toContain('animate-pulse');
+  });
+
+  it('offers Resolve on the table card of an acknowledged request, without opening the table', async () => {
+    const { default: TableCard } = await import('./TableCard');
+    const onNavigate = vi.fn();
+    const onResolve = vi.fn();
+    const props = {
+      table: { name: 'T-2', occupied: 0, latest_invoice_time: null, is_take_away: 0, restaurant_room: 'Grill Room', table_shape: 'Square' },
+      menuOpen: false, onMenuOpenChange: () => {}, onMerge: () => {}, onUnmerge: () => {}, onNavigate,
+      onPreview: () => {}, onPrint: () => {}, isPrinting: false,
+    } as any;
+    await act(async () => {
+      root.render(<TableCard {...props}
+        serviceRequest={{ name: 'SR-1', request_type: 'Assistance', status: 'Acknowledged', escalated: false }}
+        onResolveServiceRequest={onResolve} />);
+    });
+    const card = container.querySelector('[data-service-request]');
+    expect(card, 'An acknowledged request disappears from the table card').not.toBeNull();
+    expect(card!.className).not.toContain('animate-pulse');
+    await click('Resolve');
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('the floor plan store carries each table request name and status, open or acknowledged', async () => {
+    open = [
+      { name: 'SR-1', table: 'T-2', request_type: 'Assistance', status: 'Open', requested_at: '2026-11-20 14:56:00' },
+      { name: 'SR-3', table: 'T-3', request_type: 'Bill', status: 'Acknowledged', requested_at: '2026-11-20 14:50:00' },
+    ];
+    const mod = await import('./ServiceRequestAlert');
+    let seen: ReadonlyMap<string, any> = new Map();
+    function Probe() { seen = mod.useOpenServiceRequestTables(); return null; }
+    await act(async () => { root.render(<><Alert /><Probe /></>); });
+    await act(async () => { await Promise.resolve(); });
+    expect(seen.get('T-2')).toMatchObject({ name: 'SR-1', status: 'Open' });
+    expect(seen.get('T-3'), 'Acknowledged tables drop off the floor plan, so the table view cannot resolve them')
+      .toMatchObject({ name: 'SR-3', status: 'Acknowledged' });
   });
 });
 

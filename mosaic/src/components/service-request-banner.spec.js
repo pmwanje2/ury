@@ -87,9 +87,10 @@ describe("Mosaic call-waiter banner", () => {
     expect(banner().text()).toContain("2 min");
   });
 
-  it("joins the permission-checked room and refreshes on its own branch only", async () => {
+  it("gets events in the user's own room and refreshes on its own branch only", async () => {
     await board();
-    expect(socket.emitted).toContainEqual(["doctype_subscribe", "URY Service Request"]);
+    expect(socket.emitted.filter(([event]) => event === "doctype_subscribe"),
+      "The shared doctype room admits every branch's readers; the server publishes per staff user").toEqual([]);
     const reads = () => server.reads.filter(r => r.method === `${SR}.list_open_service_requests`).length;
     const before = reads();
     socket.fire("ury_service_request", { name: "SR-X", table: "X-1", branch: "Branch B", status: "Open" });
@@ -119,6 +120,16 @@ describe("Mosaic call-waiter banner", () => {
     vi.advanceTimersByTime(10000);
     expect(chimes.length).toBeGreaterThan(first);
     expect(banner().find('[data-escalated="true"]').exists()).toBe(true);
+  });
+
+  it("re-reads open requests after a reconnect, still without a shared room", async () => {
+    await board();
+    const reads = () => server.reads.filter(r => r.method === `${SR}.list_open_service_requests`).length;
+    const before = reads();
+    socket.fire("connect");
+    await flushPromises(); await flushPromises();
+    expect(reads()).toBeGreaterThan(before);
+    expect(socket.emitted.filter(([event]) => event === "doctype_subscribe")).toEqual([]);
   });
 
   it("stays silent when the profile turns sound off", async () => {
