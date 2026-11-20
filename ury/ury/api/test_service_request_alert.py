@@ -446,6 +446,32 @@ class TestGuestRequestLimits(unittest.TestCase):
 		self.assertEqual(payload["session"], "SESSION-1")
 		self.req.insert.assert_called_once_with(ignore_permissions=True)
 
+	def test_guest_requests_are_post_only(self):
+		# Both guest writes travel as POST; a GET (link prefetch, crawler) cannot create a request.
+		for name in ("request_assistance", "request_bill"):
+			with self.subTest(name=name):
+				fn = self.guest(name)
+				self.assertIn(fn, frappe.guest_methods)
+				self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(fn), ["POST"])
+
+	def test_refusals_carry_stable_ids_and_stay_validation_errors(self):
+		# Closed, append-only refusal ids; a refusal is a validation error, never an authorization denial.
+		cases = [
+			("request_assistance", "capability", "[URY-GUEST-ASSISTANCE-DISABLED]"),
+			("request_bill", "capability", "[URY-GUEST-BILL-DISABLED]"),
+			("request_assistance", "order", "[URY-GUEST-NO-ACTIVE-ORDER]"),
+			("request_bill", "order", "[URY-GUEST-NO-ACTIVE-ORDER]"),
+		]
+		for name, cause, refusal_id in cases:
+			with self.subTest(name=name, cause=cause):
+				self.profile.enable_request_bill = 0 if cause == "capability" else 1
+				self.session.invoice = None if cause == "order" else "POS-1"
+				with self.assertRaises(frappe.ValidationError) as caught:
+					self.guest(name)("opaque")
+				self.assertIn(refusal_id, str(caught.exception))
+				self.assertNotIsInstance(caught.exception, frappe.PermissionError)
+				self.req.insert.assert_not_called()
+
 	def test_guest_endpoints_accept_only_the_session_token(self):
 		import inspect
 
