@@ -122,7 +122,7 @@ test('boot registers the service worker from the loaded till flag, not the empty
     name: 'Demo Profile',
     ury_offline_capture: 1,
   });
-  expect(registered).toEqual(['/sw.js']);
+  expect(registered).toEqual(['/ury-pos-sw.js']);
 });
 
 test('boot leaves offline capture off when the loaded till flag is missing', async () => {

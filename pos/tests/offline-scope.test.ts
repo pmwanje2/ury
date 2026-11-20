@@ -55,22 +55,35 @@ afterEach(() => {
 test('the POS worker is registered for the /pos scope only', async () => {
   const { syncOfflineCapture } = await lazyModule('src/pwa/register-offline.ts', 'opt-in service worker registration');
   await syncOfflineCapture({ ury_offline_capture: 1 });
-  expect(registered).toEqual([{ url: '/sw.js', scope: '/pos' }]);
+  expect(registered).toEqual([{ url: '/ury-pos-sw.js', scope: '/pos' }]);
+});
+
+// Another app on the same site may own the root /sw.js (POS Awesome registers
+// /sw.js?v=<build> at scope /). The URY worker uses its own name so neither
+// app's registration or Service-Worker-Allowed header replaces the other's.
+test('the POS worker never claims the site-wide /sw.js another app may own', async () => {
+  const { syncOfflineCapture } = await lazyModule('src/pwa/register-offline.ts', 'opt-in service worker registration');
+  await syncOfflineCapture({ ury_offline_capture: 1 });
+  expect(registered.map((entry) => new URL(entry.url, ORIGIN).pathname)).not.toContain('/sw.js');
+  const page = readPage();
+  expect(page).not.toMatch(/self\.path == ["']sw\.js["']/);
+  const viteConfig = readFileSync(resolve('vite.config.ts'), 'utf8');
+  expect(viteConfig).not.toMatch(/served from \/sw\.js/);
 });
 
 const readPage = () => {
-  expect(existsSync(resolve('../ury/offline_sw.py')), 'the /sw.js page renderer is not implemented').toBe(true);
+  expect(existsSync(resolve('../ury/offline_sw.py')), 'the /ury-pos-sw.js page renderer is not implemented').toBe(true);
   return readFileSync(resolve('../ury/offline_sw.py'), 'utf8');
 };
 
-test('the /sw.js response cannot widen the worker beyond /pos', () => {
+test('the /ury-pos-sw.js response cannot widen the worker beyond /pos', () => {
   const page = readPage();
   expect(page).toContain('response.headers["Service-Worker-Allowed"] = "/pos"');
 });
 
 test('hooks.py describes the service worker scope as /pos', () => {
   const hooks = readFileSync(resolve('../ury/hooks.py'), 'utf8');
-  const start = hooks.indexOf('# /sw.js is the POS service worker.');
+  const start = hooks.indexOf('# /ury-pos-sw.js is the POS service worker.');
   expect(start).toBeGreaterThanOrEqual(0);
   const comment = hooks.slice(start, hooks.indexOf('page_renderer', start));
   expect(comment).toContain('"/pos"');
@@ -88,20 +101,21 @@ test('the POS worker and the v16 Serve worker do not claim each other\'s scope',
   const { syncOfflineCapture } = await lazyModule('src/pwa/register-offline.ts', 'opt-in service worker registration');
   await syncOfflineCapture({ ury_offline_capture: 1 });
   const pos = registered[0];
-  expect(pos).toEqual({ url: '/sw.js', scope: '/pos' });
+  expect(pos).toEqual({ url: '/ury-pos-sw.js', scope: '/pos' });
   const inScope = (scope: string, path: string) => path === scope.replace(/\/$/, '') || path.startsWith(scope.endsWith('/') ? scope : scope + '/');
   // The POS worker cannot control Serve pages, and Serve cannot control /pos.
   expect(inScope(pos.scope!, SERVE_SCOPE)).toBe(false);
   expect(inScope(pos.scope!, '/ury/serve/tables')).toBe(false);
   expect(inScope(SERVE_SCOPE, '/pos')).toBe(false);
   expect(inScope(SERVE_SCOPE, '/pos/tables')).toBe(false);
-  // Distinct scripts: the Serve after_request tagging never touches /sw.js,
-  // and the POS page renderer serves only sw.js with its own /pos ceiling.
+  // Distinct scripts: the Serve after_request tagging never touches the POS
+  // worker, and the POS page renderer serves only ury-pos-sw.js with its own /pos ceiling.
   expect(pos.url).not.toBe(SERVE_SW_URL);
   const servePaths = servePython.slice(servePython.indexOf('_SERVE_SW_PATHS'), servePython.indexOf('def after_request'));
   expect(servePaths).toContain('"/ury/serve/sw.js"');
   expect(servePaths).not.toMatch(/["']\/?sw\.js["']/);
-  expect(page).toContain('return self.path == "sw.js"');
+  expect(servePaths).not.toMatch(/ury-pos-sw/);
+  expect(page).toContain('return self.path == "ury-pos-sw.js"');
   expect(page).toContain('response.headers["Service-Worker-Allowed"] = "/pos"');
   // The Serve worker only deletes ury-serve- caches; the POS purge only ury-pos-.
   expect(serveWorker).toContain('CACHE_PREFIX = "ury-serve-"');

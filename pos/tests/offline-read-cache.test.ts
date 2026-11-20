@@ -93,10 +93,10 @@ test('offline capture registers the service worker only when the till flag is on
   await syncOfflineCapture({ ury_offline_capture: 0 });
   expect(registered).toEqual([]);
   await syncOfflineCapture({ ury_offline_capture: 1 });
-  expect(registered).toEqual(['/sw.js']);
+  expect(registered).toEqual(['/ury-pos-sw.js']);
 });
 
-test('precache URLs are rooted at the POS asset base because /sw.js is not served from that directory', async () => {
+test('precache URLs are rooted at the POS asset base because /ury-pos-sw.js is not served from that directory', async () => {
   const caching = await lazyModule('src/pwa/runtime-caching.ts', 'the offline read allowlist');
   expect(caching.precacheURLForServiceWorker('ury_pos.png')).toBe('/assets/ury/pos/ury_pos.png');
   expect(caching.precacheURLForServiceWorker('ury.ico')).toBe('/assets/ury/pos/ury.ico');

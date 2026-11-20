@@ -9,7 +9,7 @@ let messages: unknown[];
 
 function worker() {
   return {
-    scriptURL: ORIGIN + '/sw.js',
+    scriptURL: ORIGIN + '/ury-pos-sw.js',
     postMessage(message: { type: string }, ports: MessagePort[]) {
       messages.push(message);
       steps.push('message:' + message.type);
