@@ -203,7 +203,10 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
 
-        mock_db_get_value.return_value = "Menu A"
+        # The guest line is named from the Item (as staff lines are), never from its code.
+        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
+            "Club sandwich" if (doctype, field) == ("Item", "item_name") else "Menu A"
+        )
 
         result = add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -215,7 +218,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # only, no client-supplied rate ever reaches invoice construction.
         mock_price_items.assert_called_once()
         called_items = mock_price_items.call_args[0][0]
-        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Sandwich", "qty": 1.0, "comment": ""}])
+        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": ""}])
         # KOT still invoked (existing kitchen pipeline untouched) — and
         # crucially, current_items passed to it is the FULL aggregated
         # per-item state (old Biryani row + new Sandwich row), not just the
@@ -693,7 +696,9 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         priced_biryani = {"item_code": "Biryani", "item_name": "Biryani", "qty": 1, "comment": "",
                            "rate": 100, "price_list_rate": 100, "base_price_list_rate": 100, "cost_center": "CC"}
         mock_price_items.return_value = [priced_biryani]
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
+            "Chicken biryani" if (doctype, field) == ("Item", "item_name") else "Menu A"
+        )
         mock_reconcile.return_value = None  # available -- no rejection
 
         add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
@@ -705,7 +710,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_reconcile.assert_called_once()
         _, kwargs = mock_reconcile.call_args
         self.assertEqual(kwargs["order_ref"], "POS-INV-100")
-        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Biryani", "qty": 1.0, "comment": ""}])
+        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Chicken biryani", "qty": 1.0, "comment": ""}])
         self.assertEqual(kwargs["previous_items"], [])
         self.assertEqual(kwargs["branch"], "Branch A")
         self.assertEqual(kwargs["company"], "Test Company")
@@ -874,6 +879,93 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
             with self.assertRaises(Exception) as ctx:
                 add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
             self.assertNotIn("already has an order in progress", str(ctx.exception))
+
+
+class TestGuestItemName(unittest.TestCase):
+    """A guest line carries the Item's name, like a staff line (Oracle Simphony:
+    the check line names the menu item). Live Tank Hill THI00057 saved
+    item_name=CF0001 for Americano and the guest view showed "CF0001 x 1"."""
+
+    ITEM_NAMES = {"Fish": "Grilled tilapia", "Tea": "African tea"}
+
+    def setUp(self):
+        patcher = patch(f"{MOD}.get_branch_stock_policy", return_value=StockPolicy(True, False, False))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _add(self, items, existing_rows=()):
+        """Run add_customer_items with a pricing stub that copies item_name as
+        price_items_for_invoice does; return (result, invoice, kot_execute mock)."""
+        session = MagicMock(table="Table 7", invoice="POS-INV-100", source="QR Table", device=None)
+        session.name = "SESSION-1"
+        session.ordering_profile = "Profile A"
+        profile = MagicMock(enabled=1, allow_add_to_running_table=1, branch="Branch A",
+                            pos_profile="POS Profile A", default_customer="Walk-in Customer")
+
+        invoice = MagicMock()
+        invoice.customer = "Walk-in Customer"
+        invoice.items = list(existing_rows)
+        invoice.invoice_created = 1
+        invoice.invoice_printed = 0
+        invoice.restaurant_table = "Table 7"
+        invoice.branch = "Branch A"
+        invoice.company = "Test Company"
+        invoice.selling_price_list = "Standard Selling"
+        invoice.grand_total = 100
+        invoice.name = "POS-INV-100"
+        invoice.append.side_effect = lambda fieldname, row: invoice.items.append(MagicMock(
+            item_code=row["item_code"], item_name=row["item_name"], qty=row["qty"], rate=100, amount=100,
+        )) if fieldname == "items" else None
+
+        def get_value(doctype, name, field=None, *args, **kwargs):
+            if (doctype, field) == ("Item", "item_name"):
+                return self.ITEM_NAMES.get(name)
+            return "Menu A"
+
+        def price(lines, *args, **kwargs):
+            return [{"item_code": d["item"], "item_name": d.get("item_name"), "qty": d["qty"],
+                     "comment": d.get("comment"), "rate": 100} for d in lines]
+
+        with patch(f"{MOD}._resolve_session", return_value=session), \
+             patch(f"{MOD}.frappe.get_doc", side_effect=lambda doctype, name=None: profile), \
+             patch(f"{MOD}.resolve_restaurant_menu", return_value={"items": [{"item": "Fish"}, {"item": "Tea"}]}), \
+             patch(f"{MOD}._resolve_or_create_pos_invoice", return_value=(invoice, "POS-INV-100")), \
+             patch(f"{MOD}.price_items_for_invoice", side_effect=price), \
+             patch(f"{MOD}.frappe.db.get_value", side_effect=get_value), \
+             patch(f"{MOD}.frappe.db.exists", return_value=True), \
+             patch(f"{MOD}.frappe.db.set_value"), \
+             patch(f"{MOD}.frappe.set_user"), \
+             patch(f"{MOD}.reconcile_order_reservations"), \
+             patch(f"{MOD}.kot_execute") as mock_kot:
+            result = add_customer_items("session-token", items)
+        return result, invoice, mock_kot
+
+    def test_guest_line_saves_the_item_name_not_the_code(self):
+        _, invoice, _ = self._add([{"item": "Fish", "qty": 1}])
+        self.assertEqual([row.item_name for row in invoice.items], ["Grilled tilapia"])
+
+    def test_guest_order_view_shows_the_item_name(self):
+        result, _, _ = self._add([{"item": "Fish", "qty": 1}])
+        self.assertEqual([row["item_name"] for row in result["items"]], ["Grilled tilapia"])
+
+    def test_kitchen_ticket_input_carries_the_item_name(self):
+        _, _, mock_kot = self._add([{"item": "Fish", "qty": 1}])
+        current_items = mock_kot.call_args[0][3]
+        self.assertEqual([(row["item_code"], row["item_name"]) for row in current_items],
+                         [("Fish", "Grilled tilapia")])
+
+    def test_guest_dish_added_to_a_staff_order_keeps_both_names(self):
+        staff_row = MagicMock(item_code="Tea", item_name="African tea", qty=1, rate=100, amount=100)
+        result, _, mock_kot = self._add([{"item": "Fish", "qty": 1}], existing_rows=[staff_row])
+        self.assertEqual([row["item_name"] for row in result["items"]], ["African tea", "Grilled tilapia"])
+        current_items, past_items = mock_kot.call_args[0][3], mock_kot.call_args[0][4]
+        self.assertEqual([(row["item_code"], row["item_name"]) for row in current_items],
+                         [("Tea", "African tea"), ("Fish", "Grilled tilapia")])
+        self.assertEqual([(row["item_code"], row["item_name"]) for row in past_items], [("Tea", "African tea")])
+
+    def test_client_supplied_item_name_is_ignored(self):
+        _, invoice, _ = self._add([{"item": "Fish", "item_name": "Free beer", "qty": 1}])
+        self.assertEqual([row.item_name for row in invoice.items], ["Grilled tilapia"])
 
 
 class TestRequestBill(unittest.TestCase):
