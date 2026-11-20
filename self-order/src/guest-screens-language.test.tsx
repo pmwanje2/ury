@@ -38,7 +38,8 @@ const ENGLISH = [
   'Back to cart', 'Checkout', 'Order Summary', 'Payment Method', 'Pay at Counter', 'View Cart',
   'Order confirmed', 'Thanks', 'Pickup code', 'Order status', 'Submitted', 'Bill status', 'Not billed yet',
   'Open service requests', 'Assistance', 'Add more items', 'Done',
-  'Variants', 'Add-ons', 'Add to cart', 'Back', 'Loading item',
+  'Variants', 'Add-ons', 'Add to cart', 'Back', 'Loading item', 'Note for the kitchen', 'For example', 'Retry',
+  'Rate your visit',
   ' item', ' items',
 ]
 const SEARCH_ENGLISH = ['Search menu', 'Clear search']
@@ -101,8 +102,8 @@ function expectNoEnglish(screen: string) {
 }
 
 describe.each([
-  ['sw', { cart: 'Kikapu chako', checkout: 'Kamilisha oda', confirmed: 'Oda imethibitishwa', search: 'Tafuta kwenye menyu...', addToCart: 'Weka kikapuni' }],
-  ['lg', { cart: 'Ekikapu kyo', checkout: 'Malirizza oda', confirmed: 'Oda ekakasiddwa', search: 'Noonya ku menyu...', addToCart: 'Teeka mu kikapu' }],
+  ['sw', { cart: 'Kikapu chako', checkout: 'Kamilisha oda', confirmed: 'Oda imethibitishwa', search: 'Tafuta kwenye menyu...', addToCart: 'Weka kikapuni', notePlaceholder: 'Kwa mfano, bila vitunguu' }],
+  ['lg', { cart: 'Ekikapu kyo', checkout: 'Malirizza oda', confirmed: 'Oda ekakasiddwa', search: 'Noonya ku menyu...', addToCart: 'Teeka mu kikapu', notePlaceholder: 'Okugeza, tewali butungulu' }],
 ])('a %s guest sees every Mobile screen in their language', (language, copy) => {
   it('menu, cart page, checkout and order status', async () => {
     await initI18n(language)
@@ -132,6 +133,7 @@ describe.each([
     await render({ ...context, capabilities: { ...context.capabilities, product_detail_enabled: true } })
     await click(buttonStarting('Soup'), 'Soup card')
     expect(container.textContent).toContain('Soup Large')
+    expect(container.querySelector('textarea')?.getAttribute('placeholder')).toBe(copy.notePlaceholder)
     expect([...container.querySelectorAll('button')].some(b => b.textContent?.trim() === copy.addToCart)).toBe(true)
     expectNoEnglish('product detail')
   })

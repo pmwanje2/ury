@@ -203,3 +203,35 @@ describe('in-session feedback entry (MobileQRLayout)', () => {
     expect(screen.queryByText('Rate your visit')).toBeNull()
   })
 })
+
+describe('guest feedback in the guest language (T6d review B2)', () => {
+  async function useLanguage(code: string) {
+    const i18n = await import('./i18n')
+    await i18n.initI18n(code, { setCookie() {} })
+  }
+  afterEach(async () => {
+    await useLanguage('en')
+  })
+
+  it.each([
+    ['sw', 'Pima ziara yako', 'Tuma maoni', 'First label 5 kati ya 5', 'Asante kwa maoni yako.'],
+    ['lg', 'Pima ku luwummula lwo', 'Wereza okuteesa', 'First label 5 ku 5', "Weebale olw'okuteesa kwo."],
+  ])('a %s guest rates and submits in their language', async (code, title, submitLabel, rating, thanks) => {
+    await useLanguage(code)
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: rating }))
+    await userEvent.click(screen.getByRole('button', { name: rating.replace('First', 'Second').replace(' 5 ', ' 3 ') }))
+    await userEvent.click(screen.getByRole('button', { name: submitLabel }))
+    expect(await screen.findByText(thanks)).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/Rate your visit|Submit feedback|Thank you/)
+  })
+
+  it('a Swahili refusal and its Retry follow the guest language', async () => {
+    await useLanguage('sw')
+    feedbackError = new Error('[URY-FEEDBACK-RETRY] try again')
+    render(<App />)
+    expect(await screen.findByText('Ombi lingine linamalizika. Tafadhali jaribu tena.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Jaribu tena' })).toBeInTheDocument()
+  })
+})

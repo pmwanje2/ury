@@ -138,7 +138,10 @@ const en = {
     "addons": "Add-ons",
     "decrease": "Decrease quantity",
     "increase": "Increase quantity",
-    "add_to_cart": "Add to cart"
+    "add_to_cart": "Add to cart",
+    "note_label": "Note for the kitchen",
+    "note_placeholder": "For example, no onions",
+    "price_unavailable": "Price unavailable"
   },
   "search": {
     "placeholder": "Search menu...",
@@ -152,6 +155,24 @@ const en = {
     "sold_out": "Sold out",
     "temporarily": "Temporarily unavailable",
     "unavailable": "Currently unavailable"
+  },
+  "feedback": {
+    "title": "Rate your visit",
+    "rate_visit": "Rate your visit",
+    "loading": "Loading feedback…",
+    "submit": "Submit feedback",
+    "submitting": "Submitting…",
+    "thanks": "Thank you for your feedback.",
+    "already_received": "Already received",
+    "not_eligible": "Feedback is not available for this bill.",
+    "retry": "Retry",
+    "load_error": "Could not load feedback.",
+    "unavailable": "Feedback is not available right now.",
+    "retry_later": "Another request is finishing. Please try again.",
+    "rating": "{{parameter}} {{rating}} out of 5",
+    "invalid_link": "This feedback link is not valid.",
+    "ratings_again": "Please rate every question again.",
+    "rate_limited": "Too many attempts. Please wait a few minutes and try again."
   }
 }
 
@@ -283,7 +304,10 @@ const sw = {
     "addons": "Nyongeza",
     "decrease": "Punguza idadi",
     "increase": "Ongeza idadi",
-    "add_to_cart": "Weka kikapuni"
+    "add_to_cart": "Weka kikapuni",
+    "note_label": "Ujumbe kwa jikoni",
+    "note_placeholder": "Kwa mfano, bila vitunguu",
+    "price_unavailable": "Bei haipatikani"
   },
   "search": {
     "placeholder": "Tafuta kwenye menyu...",
@@ -297,6 +321,24 @@ const sw = {
     "sold_out": "Imeisha",
     "temporarily": "Haipatikani kwa muda",
     "unavailable": "Haipatikani kwa sasa"
+  },
+  "feedback": {
+    "title": "Pima ziara yako",
+    "rate_visit": "Pima ziara yako",
+    "loading": "Inapakia maoni…",
+    "submit": "Tuma maoni",
+    "submitting": "Inatuma…",
+    "thanks": "Asante kwa maoni yako.",
+    "already_received": "Tayari yamepokelewa",
+    "not_eligible": "Maoni hayapatikani kwa bili hii.",
+    "retry": "Jaribu tena",
+    "load_error": "Imeshindwa kupakia maoni.",
+    "unavailable": "Maoni hayapatikani kwa sasa.",
+    "retry_later": "Ombi lingine linamalizika. Tafadhali jaribu tena.",
+    "rating": "{{parameter}} {{rating}} kati ya 5",
+    "invalid_link": "Kiungo hiki cha maoni si halali.",
+    "ratings_again": "Tafadhali pima kila swali tena.",
+    "rate_limited": "Majaribio mengi mno. Tafadhali subiri dakika chache kisha ujaribu tena."
   }
 }
 
@@ -428,7 +470,10 @@ const lg = {
     "addons": "Ebyongerwako",
     "decrease": "Kendeeza omuwendo",
     "increase": "Yongera omuwendo",
-    "add_to_cart": "Teeka mu kikapu"
+    "add_to_cart": "Teeka mu kikapu",
+    "note_label": "Ekiwandiiko eri mu kyumba ky'emmere",
+    "note_placeholder": "Okugeza, tewali butungulu",
+    "price_unavailable": "Omuwendo tegulabika"
   },
   "search": {
     "placeholder": "Noonya ku menyu...",
@@ -442,6 +487,24 @@ const lg = {
     "sold_out": "Kiweddeyo",
     "temporarily": "Tekiriiwo kaseera kano",
     "unavailable": "Tekiriiwo kati"
+  },
+  "feedback": {
+    "title": "Pima ku luwummula lwo",
+    "rate_visit": "Pima ku luwummula lwo",
+    "loading": "Etikka okuteesa…",
+    "submit": "Wereza okuteesa",
+    "submitting": "Etuma…",
+    "thanks": "Weebale olw'okuteesa kwo.",
+    "already_received": "Kumaze okuweerezebwa",
+    "not_eligible": "Okuteesa tekuli ku bili eno.",
+    "retry": "Gezaako nate",
+    "load_error": "Okuteesa tekutikkiddwa.",
+    "unavailable": "Okuteesa tekuli kati.",
+    "retry_later": "Okusaba okulala kukyaggwa. Nsaba ogezeeko nate.",
+    "rating": "{{parameter}} {{rating}} ku 5",
+    "invalid_link": "Link eno ey'okuteesa si ntuufu.",
+    "ratings_again": "Nsaba opime buli kibuuzo nate.",
+    "rate_limited": "Ogezezzaako emirundi mingi. Nsaba olinde eddakiika ntono oddemu ogezeeko."
   }
 }
 
