@@ -140,3 +140,31 @@ test('the pure read matcher is same-origin and rejects ambiguous parameters', as
   expect(caching.requestMatchesRuntimeCache(origin + '/api/method/frappe.client.get_list?doctype=URY+Table', 'GET', origin)).toBe(true);
 });
 
+
+// Review #110 item 3: the boot path awaits syncOfflineCapture before the till
+// profile is set. The /pos shell warm-up is still sent, but a slow or hung
+// response must not hold the till on the loader.
+test('the /pos shell warm-up is sent but boot does not wait for its response', async () => {
+  const fetches: Array<{ url: string; init?: RequestInit }> = [];
+  vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+    fetches.push({ url, init });
+    return new Promise<Response>(() => undefined);
+  }));
+  vi.stubGlobal('navigator', {
+    serviceWorker: {
+      controller: {},
+      register: async () => ({}),
+      ready: Promise.resolve({}),
+      addEventListener: () => undefined,
+      getRegistrations: async () => [],
+    },
+  });
+  vi.stubGlobal('caches', { keys: async () => [], delete: async () => true });
+  const { syncOfflineCapture } = await lazyModule('src/pwa/register-offline.ts', 'opt-in service worker registration');
+  const result = await Promise.race([
+    syncOfflineCapture({ ury_offline_capture: 1 }).then(() => 'done'),
+    new Promise((resolve) => setTimeout(() => resolve('blocked'), 500)),
+  ]);
+  expect(fetches).toEqual([{ url: '/pos', init: { credentials: 'same-origin', cache: 'reload' } }]);
+  expect(result).toBe('done');
+});
