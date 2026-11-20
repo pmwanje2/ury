@@ -47,6 +47,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     error,
     billRequested,
     payingOnline,
+    paymentRequest,
     addToCart,
     decrementCart,
     submitCart,
@@ -248,7 +249,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             submitting={submitting}
             payingOnline={payingOnline}
             billRequested={billRequested}
-            paymentRequest={null}
+            paymentRequest={paymentRequest}
             onSubmitCart={() => {
               submitCart().then((success) => {
                 if (success) goToStatus()

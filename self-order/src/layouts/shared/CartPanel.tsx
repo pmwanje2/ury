@@ -1,5 +1,6 @@
 import { formatCurrency } from '@ury/core'
-import type { CustomerOrder, MenuItem, OrderingContext } from '../../lib/api'
+import type { CustomerOrder, MenuItem, OrderingContext, PaymentRequestResult } from '../../lib/api'
+import { paymentNoticeFor } from '../../lib/payment-outcome'
 
 type CartEntry = { item: MenuItem; qty: number }
 
@@ -12,6 +13,7 @@ interface CartPanelProps {
   submitting: boolean
   billRequested: boolean
   payingOnline: boolean
+  paymentRequest?: PaymentRequestResult | null
   onIncrement: (item: MenuItem) => void
   onDecrement: (itemCode: string) => void
   onSubmit: () => void
@@ -34,6 +36,7 @@ function CartPanel({
   submitting,
   billRequested,
   payingOnline,
+  paymentRequest,
   onIncrement,
   onDecrement,
   onSubmit,
@@ -41,6 +44,7 @@ function CartPanel({
   onPayOnline,
   className,
 }: CartPanelProps) {
+  const paymentNotice = paymentNoticeFor(paymentRequest)
   return (
     <aside className={className}>
       <div className="flex-1 overflow-y-auto">
@@ -119,6 +123,11 @@ function CartPanel({
           >
             {payingOnline ? 'Starting payment…' : 'Pay Online'}
           </button>
+        )}
+        {paymentNotice && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            {paymentNotice}
+          </p>
         )}
         {context?.capabilities.request_bill_enabled && order && !order.billed && (
           <button
