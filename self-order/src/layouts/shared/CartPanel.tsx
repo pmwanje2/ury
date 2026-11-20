@@ -77,7 +77,7 @@ function CartPanel({
                   <span className="flex-1">
                     {entry.item.item_name}
                     {context?.capabilities.item_notes_enabled && entry.comment && (
-                      <span className="block text-xs text-muted-foreground">Note: {entry.comment}</span>
+                      <span className="block text-xs text-muted-foreground">{t('cart.note', { note: entry.comment })}</span>
                     )}
                   </span>
                   <span className="flex items-center gap-2">

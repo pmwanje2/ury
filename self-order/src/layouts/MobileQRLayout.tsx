@@ -196,7 +196,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
                 href="/order/feedback"
                 className="mt-3 block w-full rounded-md border py-2 text-center text-sm font-medium"
               >
-                Rate your visit
+                {t('feedback.rate_visit')}
               </a>
             )}
           </section>

@@ -126,7 +126,10 @@
     "addons": "Ebyongerwako",
     "decrease": "Kendeeza omuwendo",
     "increase": "Yongera omuwendo",
-    "add_to_cart": "Teeka mu kikapu"
+    "add_to_cart": "Teeka mu kikapu",
+    "note_label": "Ekiwandiiko eri mu kyumba ky'emmere",
+    "note_placeholder": "Okugeza, tewali butungulu",
+    "price_unavailable": "Omuwendo tegulabika"
   },
   "search": {
     "placeholder": "Noonya ku menyu...",
@@ -140,5 +143,23 @@
     "sold_out": "Kiweddeyo",
     "temporarily": "Tekiriiwo kaseera kano",
     "unavailable": "Tekiriiwo kati"
+  },
+  "feedback": {
+    "title": "Pima ku luwummula lwo",
+    "rate_visit": "Pima ku luwummula lwo",
+    "loading": "Etikka okuteesa…",
+    "submit": "Wereza okuteesa",
+    "submitting": "Etuma…",
+    "thanks": "Weebale olw'okuteesa kwo.",
+    "already_received": "Kumaze okuweerezebwa",
+    "not_eligible": "Okuteesa tekuli ku bili eno.",
+    "retry": "Gezaako nate",
+    "load_error": "Okuteesa tekutikkiddwa.",
+    "unavailable": "Okuteesa tekuli kati.",
+    "retry_later": "Okusaba okulala kukyaggwa. Nsaba ogezeeko nate.",
+    "rating": "{{parameter}} {{rating}} ku 5",
+    "invalid_link": "Link eno ey'okuteesa si ntuufu.",
+    "ratings_again": "Nsaba opime buli kibuuzo nate.",
+    "rate_limited": "Ogezezzaako emirundi mingi. Nsaba olinde eddakiika ntono oddemu ogezeeko."
   }
 }

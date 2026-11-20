@@ -121,7 +121,7 @@ function ProductDetail({
         <div className="text-destructive">{error ?? (failed ? t('item.load_error') : t('item.not_found'))}</div>
         {failed && (
           <button onClick={() => setAttempt((n) => n + 1)} className="rounded-full border px-4 py-2 text-sm font-medium">
-            Retry
+            {t('feedback.retry')}
           </button>
         )}
         <button onClick={onBack} className="rounded-full border px-4 py-2 text-sm font-medium">
@@ -190,14 +190,14 @@ function ProductDetail({
         {itemNotesEnabled && (
           <div className="flex flex-col gap-1">
             <label htmlFor="guest-item-note" className="text-sm font-semibold">
-              Note for the kitchen
+              {t('item.note_label')}
             </label>
             <textarea
               id="guest-item-note"
               maxLength={MAX_NOTE_LENGTH}
               value={note}
               onChange={(event) => setNote(event.target.value.slice(0, MAX_NOTE_LENGTH))}
-              placeholder="For example, no onions"
+              placeholder={t('item.note_placeholder')}
               className="min-h-20 w-full rounded-md border bg-background p-3 text-base"
             />
             <p className="text-right text-xs text-muted-foreground">
@@ -269,7 +269,7 @@ function OptionRow({ option, selected, onSelect, disabled = false }: OptionRowPr
       }`}
     >
       <span>{option.item_name}</span>
-      <span className="text-muted-foreground">{option.rate ?? (disabled ? 'Price unavailable' : '—')}</span>
+      <span className="text-muted-foreground">{option.rate ?? (disabled ? t('item.price_unavailable') : '—')}</span>
     </button>
   )
 }

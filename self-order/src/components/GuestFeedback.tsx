@@ -1,26 +1,30 @@
 import { useEffect, useState } from 'react'
 import { parseFrappeError } from '@ury/core'
 import { getFeedbackForm, getStoredContext, submitFeedback, type FeedbackForm, type FeedbackRating } from '../lib/api'
+import { t } from '../i18n'
+import { useGuestLanguage } from './LanguageSwitcher'
 
 type FeedbackCredential = { session?: string; receiptToken?: string }
 type FeedbackOutcome = 'thanks' | 'received' | 'not_eligible'
-type ShownError = { text: string; retryable: boolean }
+// `key` is a catalog key; the sentence is looked up when shown.
+type ShownError = { key: string; retryable: boolean }
 
+// Catalog keys, read with t() at render so a language switch applies at once.
 const COPY = {
-  title: 'Rate your visit',
-  loading: 'Loading feedback…',
-  submit: 'Submit feedback',
-  submitting: 'Submitting…',
-  thanks: 'Thank you for your feedback.',
-  alreadyReceived: 'Already received',
-  notEligible: 'Feedback is not available for this bill.',
-  unavailable: 'Feedback is not available right now.',
-  invalidLink: 'This feedback link is not valid.',
-  retryLater: 'Another request is finishing. Please try again.',
-  ratingsAgain: 'Please rate every question again.',
-  rateLimited: 'Too many attempts. Please wait a few minutes and try again.',
-  loadError: 'Could not load feedback.',
-  retry: 'Retry',
+  title: 'feedback.title',
+  loading: 'feedback.loading',
+  submit: 'feedback.submit',
+  submitting: 'feedback.submitting',
+  thanks: 'feedback.thanks',
+  alreadyReceived: 'feedback.already_received',
+  notEligible: 'feedback.not_eligible',
+  unavailable: 'feedback.unavailable',
+  invalidLink: 'feedback.invalid_link',
+  retryLater: 'feedback.retry_later',
+  ratingsAgain: 'feedback.ratings_again',
+  rateLimited: 'feedback.rate_limited',
+  loadError: 'feedback.load_error',
+  retry: 'feedback.retry',
 }
 
 // Stable server refusal ids become guest copy; the raw id is never shown.
@@ -47,18 +51,19 @@ function readCredential(): FeedbackCredential | null {
 }
 
 function errorText(error: unknown): ShownError {
-  const parsed = parseFrappeError(error, COPY.loadError)
+  const parsed = parseFrappeError(error, '')
   const code = parsed.match(/\[(URY-FEEDBACK-[A-Z-]+)\]/)?.[1]
-  if (!code) return { text: COPY.loadError, retryable: false }
-  return { text: REFUSALS[code] ?? COPY.unavailable, retryable: RETRYABLE.has(code) }
+  if (!code) return { key: COPY.loadError, retryable: false }
+  return { key: REFUSALS[code] ?? COPY.unavailable, retryable: RETRYABLE.has(code) }
 }
 
 function ratingLabel(label: string, rating: number) {
-  return `${label} ${rating} out of 5`
+  return t('feedback.rating', { parameter: label, rating })
 }
 
 /** Guest feedback for one bill, reached from the receipt QR or the in-session link. */
 function GuestFeedback() {
+  useGuestLanguage()
   const [credential] = useState<FeedbackCredential | null>(readCredential)
   const [form, setForm] = useState<FeedbackForm | null>(null)
   const [ratings, setRatings] = useState<Record<string, number>>({})
@@ -76,7 +81,7 @@ function GuestFeedback() {
       setForm(null)
       setOutcome(null)
       if (!credential) {
-        setError({ text: COPY.invalidLink, retryable: false })
+        setError({ key: COPY.invalidLink, retryable: false })
         setLoading(false)
         return
       }
@@ -126,21 +131,21 @@ function GuestFeedback() {
 
   return (
     <main className="flex min-h-screen flex-col gap-4 p-6">
-      <h1 className="text-2xl font-semibold">{COPY.title}</h1>
-      {loading && <p role="status">{COPY.loading}</p>}
+      <h1 className="text-2xl font-semibold">{t(COPY.title)}</h1>
+      {loading && <p role="status">{t(COPY.loading)}</p>}
       {error && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          <p role="status">{error.text}</p>
+          <p role="status">{t(error.key)}</p>
           {error.retryable && (
             <button className="mt-3 rounded-md border px-3 py-2" onClick={() => setRetry((value) => value + 1)}>
-              {COPY.retry}
+              {t(COPY.retry)}
             </button>
           )}
         </div>
       )}
-      {!loading && !error && outcome === 'thanks' && <p role="status">{COPY.thanks}</p>}
-      {!loading && !error && outcome === 'received' && <p role="status">{COPY.alreadyReceived}</p>}
-      {!loading && !error && outcome === 'not_eligible' && <p role="status">{COPY.notEligible}</p>}
+      {!loading && !error && outcome === 'thanks' && <p role="status">{t(COPY.thanks)}</p>}
+      {!loading && !error && outcome === 'received' && <p role="status">{t(COPY.alreadyReceived)}</p>}
+      {!loading && !error && outcome === 'not_eligible' && <p role="status">{t(COPY.notEligible)}</p>}
       {showForm &&
         form.parameters.map((row) => (
           <fieldset key={row.parameter} className="rounded-lg border p-4">
@@ -168,7 +173,7 @@ function GuestFeedback() {
           onClick={() => void handleSubmit()}
           className="rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
         >
-          {submitting ? COPY.submitting : COPY.submit}
+          {submitting ? t(COPY.submitting) : t(COPY.submit)}
         </button>
       )}
     </main>

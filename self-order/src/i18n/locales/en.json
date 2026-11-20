@@ -126,7 +126,10 @@
     "addons": "Add-ons",
     "decrease": "Decrease quantity",
     "increase": "Increase quantity",
-    "add_to_cart": "Add to cart"
+    "add_to_cart": "Add to cart",
+    "note_label": "Note for the kitchen",
+    "note_placeholder": "For example, no onions",
+    "price_unavailable": "Price unavailable"
   },
   "search": {
     "placeholder": "Search menu...",
@@ -140,5 +143,23 @@
     "sold_out": "Sold out",
     "temporarily": "Temporarily unavailable",
     "unavailable": "Currently unavailable"
+  },
+  "feedback": {
+    "title": "Rate your visit",
+    "rate_visit": "Rate your visit",
+    "loading": "Loading feedback…",
+    "submit": "Submit feedback",
+    "submitting": "Submitting…",
+    "thanks": "Thank you for your feedback.",
+    "already_received": "Already received",
+    "not_eligible": "Feedback is not available for this bill.",
+    "retry": "Retry",
+    "load_error": "Could not load feedback.",
+    "unavailable": "Feedback is not available right now.",
+    "retry_later": "Another request is finishing. Please try again.",
+    "rating": "{{parameter}} {{rating}} out of 5",
+    "invalid_link": "This feedback link is not valid.",
+    "ratings_again": "Please rate every question again.",
+    "rate_limited": "Too many attempts. Please wait a few minutes and try again."
   }
 }

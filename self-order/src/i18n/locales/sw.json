@@ -126,7 +126,10 @@
     "addons": "Nyongeza",
     "decrease": "Punguza idadi",
     "increase": "Ongeza idadi",
-    "add_to_cart": "Weka kikapuni"
+    "add_to_cart": "Weka kikapuni",
+    "note_label": "Ujumbe kwa jikoni",
+    "note_placeholder": "Kwa mfano, bila vitunguu",
+    "price_unavailable": "Bei haipatikani"
   },
   "search": {
     "placeholder": "Tafuta kwenye menyu...",
@@ -140,5 +143,23 @@
     "sold_out": "Imeisha",
     "temporarily": "Haipatikani kwa muda",
     "unavailable": "Haipatikani kwa sasa"
+  },
+  "feedback": {
+    "title": "Pima ziara yako",
+    "rate_visit": "Pima ziara yako",
+    "loading": "Inapakia maoni…",
+    "submit": "Tuma maoni",
+    "submitting": "Inatuma…",
+    "thanks": "Asante kwa maoni yako.",
+    "already_received": "Tayari yamepokelewa",
+    "not_eligible": "Maoni hayapatikani kwa bili hii.",
+    "retry": "Jaribu tena",
+    "load_error": "Imeshindwa kupakia maoni.",
+    "unavailable": "Maoni hayapatikani kwa sasa.",
+    "retry_later": "Ombi lingine linamalizika. Tafadhali jaribu tena.",
+    "rating": "{{parameter}} {{rating}} kati ya 5",
+    "invalid_link": "Kiungo hiki cha maoni si halali.",
+    "ratings_again": "Tafadhali pima kila swali tena.",
+    "rate_limited": "Majaribio mengi mno. Tafadhali subiri dakika chache kisha ujaribu tena."
   }
 }
