@@ -11,7 +11,7 @@
 # endpoints are deliberately NOT allow_guest.
 
 import frappe
-from frappe.utils import now_datetime
+from frappe.utils import cint, now_datetime
 
 
 @frappe.whitelist()
@@ -52,3 +52,29 @@ def resolve_service_request(name):
 	req.resolved_by = frappe.session.user
 	req.save()
 	return {"name": req.name, "status": req.status}
+
+
+# Maximus: staff alert settings for the very visible banner (sound on/off and
+# escalation minutes) live on the branch POS Profile.
+DEFAULT_ESCALATE_MINUTES = 3
+
+
+@frappe.whitelist()
+def get_service_request_alert_settings(branch):
+	"""Staff alert settings from the branch's POS Profile: chime on/off and escalation minutes."""
+	if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles():
+		branches = frappe.get_all("URY User", filters={"user": frappe.session.user, "parenttype": "Branch"}, pluck="parent")
+		if not branch or branch not in branches:
+			frappe.throw(frappe._("URY_SERVICE_REQUEST_OTHER_BRANCH"), frappe.PermissionError)
+	values = frappe.db.get_value(
+		"POS Profile",
+		{"branch": branch, "disabled": 0},
+		["custom_service_request_sound", "custom_service_request_escalate_minutes"],
+		as_dict=True,
+	) or {}
+	sound = values.get("custom_service_request_sound")
+	minutes = cint(values.get("custom_service_request_escalate_minutes"))
+	return {
+		"sound": 1 if sound is None else cint(sound),
+		"escalate_minutes": minutes if minutes > 0 else DEFAULT_ESCALATE_MINUTES,
+	}

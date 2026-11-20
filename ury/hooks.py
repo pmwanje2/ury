@@ -736,6 +736,8 @@ fixtures = [
                     "POS Profile-custom_section_break_bmczy",
                     "POS Profile-custom_ury_pos_configurations",
                     "POS Profile-custom_disable_print_status_tracking",
+                    "POS Profile-custom_service_request_sound",
+                    "POS Profile-custom_service_request_escalate_minutes",
                     "Network Printer Settings-custom_printer_queue_name"
                 },
             ]

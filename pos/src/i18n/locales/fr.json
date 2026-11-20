@@ -607,5 +607,11 @@
     "eta_holds": "En attente",
     "session_ago_mins": "il y a {{m}} min",
     "session_ago_hours": "il y a {{h}} h {{m}} min"
+  },
+  "service_requests": {
+    "call_waiter": "Appel serveur",
+    "bill": "Addition",
+    "minutes_waiting": "{{minutes}} min",
+    "acknowledge": "Accuser réception"
   }
 }

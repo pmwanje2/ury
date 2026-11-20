@@ -36,6 +36,7 @@ import TableUnmergeDialog from '../components/TableUnmergeDialog';
 import TableTransferDialog from '../components/TableTransferDialog';
 import CaptainTransferDialog from '../components/CaptainTransferDialog';
 import TableCard from '../components/TableCard';
+import { useOpenServiceRequestTables } from '../components/ServiceRequestAlert';
 import MergeLinkConnector from '../components/MergeLinkConnector';
 import TableReservationDialog, { type ReservationFormData } from '../components/TableReservationDialog';
 
@@ -548,6 +549,7 @@ const TableView = () => {
   }, [unmergeSourceTable, tablesToDisplay]);
 
   const tableRenderGroups = useMemo(() => getTableRenderGroups(tablesToDisplay), [tablesToDisplay]);
+  const serviceRequestTables = useOpenServiceRequestTables();
 
   const renderTableCard = (table: Table, className?: string) => {
     const mergeMembers = getMergeGroupMembers(table, tables);
@@ -580,6 +582,7 @@ const TableView = () => {
       onNavigate={() => handleNavigateToPOS(table.name)}
       onPreview={(event) => handlePreviewTable(table, event)}
       onPrint={(event) => handlePrintTable(table, event)}
+      serviceRequest={serviceRequestTables.get(table.name) ?? null}
       isPrinting={printingTable === table.name}
     />
     );

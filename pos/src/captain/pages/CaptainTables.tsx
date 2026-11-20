@@ -12,6 +12,7 @@ import {
   getUserFullNames,
   type ActiveTableOrder,
 } from '../lib/captain-table-api';
+import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
 import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
@@ -24,6 +25,7 @@ import CaptainTableCard, {
  */
 export default function CaptainTables() {
   const navigate = useNavigate();
+  const serviceRequestTables = useOpenServiceRequestTables();
   const {
     context,
     capabilities,
@@ -331,6 +333,7 @@ export default function CaptainTables() {
                   ownerName={ownership === 'mine' ? undefined : ownerName}
                   mergePartners={mergePartners}
                   onTap={() => handleTableTap(table, order)}
+                  serviceRequest={serviceRequestTables.get(table.name) ?? null}
                 />
               );
             })}

@@ -35,6 +35,7 @@ interface TableCardProps {
   onPrint: (event: MouseEvent<HTMLButtonElement>) => void;
   isPrinting: boolean;
   onReserve?: () => void;
+  serviceRequest?: { request_type: string; escalated: boolean } | null;
 }
 
 const TableCard = ({
@@ -56,6 +57,7 @@ const TableCard = ({
   onPrint,
   isPrinting,
   onReserve,
+  serviceRequest = null,
 }: TableCardProps) => {
   const isOccupied = table.occupied === 1;
   const isLockedByReservation =
@@ -66,6 +68,7 @@ const TableCard = ({
 
   return (
     <div
+      data-service-request={serviceRequest ? serviceRequest.request_type : undefined}
       role={isOccupied ? 'group' : 'button'}
       tabIndex={isOccupied ? -1 : 0}
       onClick={() => {
@@ -81,6 +84,7 @@ const TableCard = ({
             ? cn(TABLE_STATE_STYLES.reserved, 'cursor-pointer hover:shadow-md')
             : cn(TABLE_STATE_STYLES.available, 'cursor-pointer hover:shadow-md'),
         menuOpen ? 'z-20' : 'z-0',
+        serviceRequest && cn('animate-pulse ring-4', serviceRequest.escalated ? 'ring-red-600' : 'ring-amber-500'),
         className
       )}
     >
