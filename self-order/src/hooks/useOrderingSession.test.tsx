@@ -444,6 +444,37 @@ describe('useOrderingSession', () => {
       expect(window.location.href).toBe('https://pay.example/pr-1')
     })
 
+    it('payOnline never sends a guest whose phone payment is Paid back to checkout', async () => {
+      const view = await renderReady()
+      createPaymentRequestMock.mockResolvedValueOnce({
+        payment_request: 'PR-1', amount: 500, currency: 'INR', payment_url: 'https://pay.example/pr-1',
+        status: 'Paid', paid_amount: 500, remaining_amount: 0,
+      })
+      vi.stubGlobal('location', { ...window.location, href: '' })
+
+      await act(async () => {
+        await view.result.current.payOnline()
+      })
+
+      expect(window.location.href).toBe('')
+      expect(view.result.current.paymentRequest?.status).toBe('Paid')
+    })
+
+    it('payOnline sends growth after a phone payment to the counter, not to checkout', async () => {
+      const view = await renderReady()
+      createPaymentRequestMock.mockResolvedValueOnce({
+        payment_request: 'PR-1', amount: 500, currency: 'INR', payment_url: 'https://pay.example/pr-1',
+        status: 'Requested', paid_amount: 500, remaining_amount: 200,
+      })
+      vi.stubGlobal('location', { ...window.location, href: '' })
+
+      await act(async () => {
+        await view.result.current.payOnline()
+      })
+
+      expect(window.location.href).toBe('')
+    })
+
     it('payOnline surfaces the graceful "not set up" error without redirecting', async () => {
       const view = await renderReady()
       createPaymentRequestMock.mockRejectedValueOnce(new Error("online payment isn't set up yet"))
