@@ -30,6 +30,8 @@ export interface PosProfileLimited {
   custom_blind_cash_count?: number;
   /** Mode of Payment -> default account for the profile's company. */
   payment_mode_accounts?: Record<string, string | null>;
+  /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
+  room_lookup_method?: string;
 }
 
 export interface PosProfileLimitedResponse {
@@ -111,6 +113,7 @@ export interface PosProfileCombined extends PosProfileFull {
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
   payment_mode_accounts?: Record<string, string | null>;
+  room_lookup_method?: string;
 }
 
 export interface Currency {
@@ -180,6 +183,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
     custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
+    room_lookup_method: limitedProfile.room_lookup_method ?? '',
   };
 
   return combinedProfile;

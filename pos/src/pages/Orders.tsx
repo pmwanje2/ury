@@ -49,6 +49,13 @@ function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom
   return formatMergedTableLabel(order.restaurant_table, order.custom_merged_tables);
 }
 
+// The check's guest label leads, so two splits on one walk-in customer
+// ("Susan · Walk In", "David · Walk In") are told apart.
+function checkName(order: Pick<POSInvoice, 'customer' | 'custom_guest_label'>) {
+  const label = order.custom_guest_label?.trim();
+  return label ? `${label} · ${order.customer}` : order.customer;
+}
+
 function isOrderEditable(status: string) {
   return status === 'Draft' || status === 'Unbilled' || status === 'Recently Paid';
 }
@@ -309,6 +316,7 @@ export default function Orders() {
         posStore.setSelectedTable(order.restaurant_table, order.custom_restaurant_room || null,true);
       }
       posStore.setSelectedCustomer({ id: order.customer, name: order.customer_name, phone: order.mobile_number });
+      posStore.setGuestLabel(order.custom_guest_label || '');
       // Fill cart
       const items = (order.items || []).map((item: any) => ({
         id: item.item_code,
@@ -411,9 +419,10 @@ export default function Orders() {
   async function handleSplitBill(payload: {
     itemsToMove: Array<{ name: string; qty: number }>;
     customer?: string;
+    guestLabel?: string;
   }) {
     if (!selectedOrder) return;
-    const result = await splitBill(selectedOrder.name, payload.itemsToMove, payload.customer);
+    const result = await splitBill(selectedOrder.name, payload.itemsToMove, payload.customer, payload.guestLabel);
     showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
 
     const childOnUnbilledTab =
@@ -581,7 +590,7 @@ export default function Orders() {
                     {/* Content section - matches MenuCard padding and structure */}
                     <div className="flex-1 p-3 flex flex-col">
                       <div className="">
-                        <p className="text-sm text-gray-900">{order.customer}</p>
+                        <p className="text-sm text-gray-900">{checkName(order)}</p>
                       </div>
 
                       <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -792,7 +801,7 @@ export default function Orders() {
                   <div className="space-y-3">
                     <div className="flex items-center gap-3 text-sm">
                       <User className="w-4 h-4 text-gray-500" />
-                      <span className="text-gray-900 font-medium">{selectedOrder.customer}</span>
+                      <span className="text-gray-900 font-medium">{checkName(selectedOrder)}</span>
                     </div>
                     <div className="flex items-center gap-3 text-sm">
                       <Clock className="w-4 h-4 text-gray-500" />

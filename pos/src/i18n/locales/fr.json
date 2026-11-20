@@ -59,7 +59,8 @@
     "add_comment": "Ajouter un commentaire",
     "edit_comment": "Modifier le commentaire",
     "pax": "Couverts",
-    "insufficient_capacity": "Capacité insuffisante pour ajouter cet article"
+    "insufficient_capacity": "Capacité insuffisante pour ajouter cet article",
+    "guest_label": "Nom du client (facultatif)"
   },
   "order": {
     "select_to_view": "Sélectionnez une commande pour voir les détails",
@@ -91,7 +92,15 @@
     "change_due": "Monnaie à rendre : {{amount}}",
     "success": "Paiement réussi : {{amount}} reçu",
     "print_invoice": "Imprimer la facture",
-    "payment_not_processed": "Le paiement n'a pas été traité."
+    "payment_not_processed": "Le paiement n'a pas été traité.",
+    "room_folio": "Chambre / Folio",
+    "room_posting": "Imputation chambre",
+    "check_room": "Vérifier la chambre",
+    "checking_room": "Vérification...",
+    "room_match": "Chambre {{room}} · {{guest}} · départ {{departure}}",
+    "room_no_post": "La note de ce client est fermée aux imputations",
+    "room_check_required": "Vérifiez la chambre avant une imputation",
+    "room_check_failed": "Impossible de vérifier cette chambre"
   },
   "pos": {
     "not_opened_title": "PDV non ouvert",
@@ -388,7 +397,9 @@
     "next_bill": "Addition suivante",
     "split_from": "Divisé depuis {{invoice}}",
     "related": "Additions liées",
-    "open_sibling_failed": "Impossible d'ouvrir l'addition liée"
+    "open_sibling_failed": "Impossible d'ouvrir l'addition liée",
+    "guest_label": "Nom du client pour la nouvelle addition (facultatif)",
+    "guest_label_placeholder": "ex. David"
   },
   "bill_merge": {
     "merge_bill": "Fusionner l'addition",

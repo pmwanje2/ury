@@ -32,6 +32,8 @@ interface BillSplitDialogProps {
   onConfirm: (payload: {
     itemsToMove: Array<{ name: string; qty: number }>;
     customer?: string;
+    /** Short name for the new check (David, Seat 2); no Customer is created. */
+    guestLabel?: string;
   }) => Promise<void>;
 }
 
@@ -48,12 +50,14 @@ const BillSplitDialog = ({
   const [error, setError] = useState<string | null>(null);
   const [sameAsOriginal, setSameAsOriginal] = useState(true);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [guestLabel, setGuestLabel] = useState('');
 
   useEffect(() => {
     if (open) {
       setSameAsOriginal(true);
       setSelectedCustomer(sourceCustomer ?? null);
       setMoveQtyByRow({});
+      setGuestLabel('');
       setError(null);
     }
   }, [open, sourceCustomer, invoiceName]);
@@ -130,6 +134,7 @@ const BillSplitDialog = ({
       await onConfirm({
         itemsToMove,
         customer: sameAsOriginal ? undefined : customerId,
+        guestLabel: guestLabel.trim() || undefined,
       });
       resetState();
       onOpenChange(false);
@@ -270,6 +275,19 @@ const BillSplitDialog = ({
               disabled={isSubmitting}
             />
           )}
+          <label className="block space-y-1 text-sm text-gray-700">
+            <span>{t('bill_split.guest_label')}</span>
+            <input
+              type="text"
+              name="guest_label"
+              maxLength={40}
+              value={guestLabel}
+              onChange={(e) => setGuestLabel(e.target.value)}
+              placeholder={t('bill_split.guest_label_placeholder')}
+              className="w-full rounded-md border border-border px-3 py-2 text-sm"
+              disabled={isSubmitting}
+            />
+          </label>
         </div>
 
         <div className="mx-6 mb-2 grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-4 text-sm">

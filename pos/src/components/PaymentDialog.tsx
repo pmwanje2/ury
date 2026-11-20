@@ -66,6 +66,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
+  const [roomNumber, setRoomNumber] = useState('');
+  // Optional room lookup from this till's POS Profile. Blank: free-text room
+  // box. Set: Pay waits for a verified match of the room as typed now.
+  const roomLookupMethod = (storePosProfile?.name === posProfile && storePosProfile?.room_lookup_method) || '';
+  const [roomCheck, setRoomCheck] = useState<{
+    room: string; label?: string; ok: boolean; error?: string;
+  } | null>(null);
+  const [checkingRoom, setCheckingRoom] = useState(false);
 
   useEffect(() => {
     fetchPaymentModes();
@@ -108,6 +116,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     })
     .filter(Boolean);
   const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
+  const roomChargeAmount = parseFloat(paymentInputs['Room Charge'] || '');
+  const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
+    || (!!roomCheck?.ok && roomCheck.room === roomNumber.trim());
+  const roomFields = roomChargeAmount > 0 ? { room_number: roomNumber } : {};
   const shortfall = finalTotal - paymentsTotal;
   const isShort = shortfall > 0.005;
   // A named (non-default) customer on a profile with allow_partial_payment
@@ -124,10 +136,37 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
-  const paymentDisabled = isProcessing || ((payments.length === 0 || isShort) && !canPayOnAccount);
+  // Both rules hold: a Room Charge waits for a verified room, and only a named
+  // account may settle short.
+  const paymentDisabled = isProcessing || !roomVerified
+    || ((payments.length === 0 || isShort) && !canPayOnAccount);
   const settlementPayments = payments.length === 0 && canPayOnAccount
     ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
     : payments;
+
+  const handleCheckRoom = async () => {
+    const room = roomNumber.trim();
+    if (!room || !roomLookupMethod) return;
+    setCheckingRoom(true);
+    setRoomCheck(null);
+    try {
+      const res = await call.get(roomLookupMethod, { pos_profile: posProfile, room });
+      const match = (res as { message?: { room_number?: string; guest_name?: string; departure?: string; no_post?: unknown } } | null)?.message;
+      if (!match || !match.guest_name) {
+        setRoomCheck({ room, ok: false, error: t('payment.room_check_failed') });
+      } else if (match.no_post && Number(match.no_post) !== 0) {
+        setRoomCheck({ room, ok: false, error: t('payment.room_no_post') });
+      } else {
+        setRoomCheck({ room, ok: true, label: t('payment.room_match', {
+          room: match.room_number || room, guest: match.guest_name, departure: match.departure || '',
+        }) });
+      }
+    } catch (err) {
+      setRoomCheck({ room, ok: false, error: parseFrappeError(err, t('payment.room_check_failed')) });
+    } finally {
+      setCheckingRoom(false);
+    }
+  };
 
   const finalAdjustment = finalTotal - discountedTotal;
   const roundedFinalAdjustment = Math.round(finalAdjustment * 100) / 100;
@@ -190,6 +229,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           pos_profile: posProfile,
           table,
           submit_invoice: 0,
+          ...roomFields,
         });
 
         // Step 2: Print invoice with discount and payment modes included
@@ -225,6 +265,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           pos_profile: posProfile,
           table,
           submit_invoice: 1,
+          ...roomFields,
         });
       }
       showToast.success(t('payment.success', { amount: formatCurrency(paymentsTotal) }));
@@ -308,6 +349,43 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 );
               })}
             </div>
+            {roomChargeAmount > 0 && (
+              <div className="space-y-2">
+                <label htmlFor="room-charge-reference" className="text-sm font-medium">
+                  {roomLookupMethod ? t('payment.room_posting') : t('payment.room_folio')}
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    id="room-charge-reference"
+                    type="text"
+                    value={roomNumber}
+                    onChange={e => setRoomNumber(e.target.value)}
+                    className="w-full"
+                    size="sm"
+                    disabled={isProcessing}
+                  />
+                  {roomLookupMethod && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCheckRoom}
+                      disabled={isProcessing || checkingRoom || !roomNumber.trim()}
+                    >
+                      {checkingRoom ? t('payment.checking_room') : t('payment.check_room')}
+                    </Button>
+                  )}
+                </div>
+                {roomLookupMethod && roomCheck && roomCheck.room === roomNumber.trim() && (
+                  <p role="status" className={`text-sm font-medium ${roomCheck.ok ? 'text-green-700' : 'text-red-700'}`}>
+                    {roomCheck.ok ? roomCheck.label : roomCheck.error}
+                  </p>
+                )}
+                {roomLookupMethod && !roomVerified && !(roomCheck && roomCheck.room === roomNumber.trim()) && (
+                  <p className="text-sm text-amber-700">{t('payment.room_check_required')}</p>
+                )}
+              </div>
+            )}
             <div className="flex justify-between mt-2 text-sm">
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
