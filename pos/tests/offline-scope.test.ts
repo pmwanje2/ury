@@ -98,7 +98,9 @@ test('the POS worker and the v16 Serve worker do not claim each other\'s scope',
   // Distinct scripts: the Serve after_request tagging never touches /sw.js,
   // and the POS page renderer serves only sw.js with its own /pos ceiling.
   expect(pos.url).not.toBe(SERVE_SW_URL);
-  expect(servePython).not.toMatch(/["']\/?sw\.js["']/);
+  const servePaths = servePython.slice(servePython.indexOf('_SERVE_SW_PATHS'), servePython.indexOf('def after_request'));
+  expect(servePaths).toContain('"/ury/serve/sw.js"');
+  expect(servePaths).not.toMatch(/["']\/?sw\.js["']/);
   expect(page).toContain('return self.path == "sw.js"');
   expect(page).toContain('response.headers["Service-Worker-Allowed"] = "/pos"');
   // The Serve worker only deletes ury-serve- caches; the POS purge only ury-pos-.
