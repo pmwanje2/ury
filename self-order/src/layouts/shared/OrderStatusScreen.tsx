@@ -1,4 +1,20 @@
 import type { OrderStatus } from '../../lib/api'
+import { t } from '../../i18n'
+import { useGuestLanguage } from '../../components/LanguageSwitcher'
+
+// URY Service Request options -> catalog keys; an unknown option shows as sent.
+const REQUEST_LABELS: Record<string, string> = {
+  Bill: 'requests.bill',
+  Assistance: 'requests.assistance',
+  Open: 'requests.open',
+  Acknowledged: 'requests.acknowledged',
+  Resolved: 'requests.resolved',
+}
+
+function requestLabel(value: string): string {
+  const key = REQUEST_LABELS[value]
+  return key ? t(key) : value
+}
 
 interface OrderStatusScreenProps {
   status: OrderStatus | null
@@ -16,18 +32,19 @@ interface OrderStatusScreenProps {
  * (preparing/ready) on the backend, so this does not fabricate one.
  */
 function OrderStatusScreen({ status, isPickup, pickupCode, canAddMore, onAddMore, onDone }: OrderStatusScreenProps) {
+  useGuestLanguage()
   const openRequests = status?.open_requests ?? []
 
   return (
     <div className="flex min-h-screen flex-col items-center px-4 py-8 text-center">
-      <h1 className="text-xl font-semibold">Order confirmed</h1>
+      <h1 className="text-xl font-semibold">{t('status_screen.confirmed')}</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Thanks — your order has been sent to the restaurant.
+        {t('status_screen.sent')}
       </p>
 
       {isPickup && pickupCode && (
         <div className="mt-6 w-full max-w-xs rounded-lg border bg-muted p-4">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Pickup code</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">{t('status_screen.pickup_code')}</div>
           <div className="mt-1 text-3xl font-bold">{pickupCode}</div>
         </div>
       )}
@@ -35,24 +52,24 @@ function OrderStatusScreen({ status, isPickup, pickupCode, canAddMore, onAddMore
       <div className="mt-6 w-full max-w-xs space-y-2 text-left text-sm">
         {status?.submitted !== undefined && (
           <div className="flex justify-between rounded-md border p-2">
-            <span className="text-muted-foreground">Order status</span>
-            <span className="font-medium">{status.submitted ? 'Submitted' : 'Pending'}</span>
+            <span className="text-muted-foreground">{t('status_screen.order_status')}</span>
+            <span className="font-medium">{status.submitted ? t('status_screen.submitted') : t('status_screen.pending')}</span>
           </div>
         )}
         {status?.billed !== undefined && (
           <div className="flex justify-between rounded-md border p-2">
-            <span className="text-muted-foreground">Bill status</span>
-            <span className="font-medium">{status.billed ? 'Billed' : 'Not billed yet'}</span>
+            <span className="text-muted-foreground">{t('status_screen.bill_status')}</span>
+            <span className="font-medium">{status.billed ? t('status_screen.billed') : t('status_screen.not_billed')}</span>
           </div>
         )}
         {openRequests.length > 0 && (
           <div className="rounded-md border p-2">
-            <div className="mb-1 text-muted-foreground">Open service requests</div>
+            <div className="mb-1 text-muted-foreground">{t('status_screen.open_requests')}</div>
             <ul className="space-y-1">
               {openRequests.map((request) => (
                 <li key={request.name} className="flex justify-between">
-                  <span>{request.request_type}</span>
-                  <span className="font-medium">{request.status}</span>
+                  <span>{requestLabel(request.request_type)}</span>
+                  <span className="font-medium">{requestLabel(request.status)}</span>
                 </li>
               ))}
             </ul>
@@ -66,12 +83,12 @@ function OrderStatusScreen({ status, isPickup, pickupCode, canAddMore, onAddMore
             onClick={onAddMore}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground"
           >
-            Add more items
+            {t('status_screen.add_more')}
           </button>
         )}
         {onDone && (
           <button onClick={onDone} className="w-full rounded-md border py-3 font-medium">
-            Done
+            {t('status_screen.done')}
           </button>
         )}
       </div>

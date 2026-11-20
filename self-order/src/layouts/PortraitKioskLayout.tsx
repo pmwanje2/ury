@@ -334,7 +334,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
         {/* Search bar and category rail */}
         <div className="flex gap-4">
           <div className="w-40 shrink-0">
-            <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search..." />
+            <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={t('search.placeholder_short')} />
           </div>
           <nav
             aria-label={t('menu.categories')}
@@ -429,7 +429,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
               disabled={cartCount === 0}
               className="rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground disabled:opacity-50"
             >
-              Checkout
+              {t('checkout.title')}
             </button>
           </div>
         </div>

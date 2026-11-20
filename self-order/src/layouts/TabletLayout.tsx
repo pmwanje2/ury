@@ -148,11 +148,11 @@ function TabletLayout({ initialContext }: LayoutProps) {
           <button
             onClick={goToMenu}
             className="rounded-md border px-3 py-2 text-sm font-medium"
-            aria-label="Back to menu"
+            aria-label={t('nav.back_to_menu')}
           >
-            ← Back to menu
+            ← {t('nav.back_to_menu')}
           </button>
-          <h1 className="flex-1 text-center text-lg font-semibold">Checkout</h1>
+          <h1 className="flex-1 text-center text-lg font-semibold">{t('checkout.title')}</h1>
           <span className="w-[92px]" aria-hidden="true" />
         </header>
         <div className="flex-1 overflow-y-auto pb-4">

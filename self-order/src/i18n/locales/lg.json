@@ -45,7 +45,8 @@
   "payment": {
     "pay_online": "Sasula ku yintaneeti",
     "starting": "Ntandika okusasula…",
-    "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula."
+    "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.",
+    "pay_at_counter": "Sasula ku kaunta"
   },
   "bill": {
     "request": "Saba bili",
@@ -60,12 +61,20 @@
     "count_one": "Ekintu {{count}}",
     "count_many": "Ebintu {{count}}",
     "still_there": "Okyali wano?",
-    "still_here": "Nkyali wano"
+    "still_here": "Nkyali wano",
+    "your_cart": "Ekikapu kyo",
+    "page_empty": "Ekikapu kyo kikalu.",
+    "note": "Ekiwandiiko: {{note}}",
+    "proceed": "Genda omalirize oda",
+    "view": "Laba ekikapu ({{items}}) • {{total}}"
   },
   "menu": {
     "all_items": "Ebintu byonna",
     "other": "Ebirala",
-    "categories": "Ebika bya menyu"
+    "categories": "Ebika bya menyu",
+    "all": "Byonna",
+    "no_match": "Tewali kintu kikwatagana n'ky'onoonya.",
+    "empty": "Tewali bintu biriwo."
   },
   "errors": {
     "missing_code": "Link eno terina koodi y'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.",
@@ -76,5 +85,60 @@
     "call_waiter": "Omuweereza tayitiddwa. Nsaba obuuze abaweereza.",
     "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abaweereza.",
     "device_bootstrap": "Ekyuma kino tekinatandika."
+  },
+  "nav": {
+    "back": "Ddayo",
+    "back_to_menu": "Ddayo ku menyu",
+    "back_to_cart": "Ddayo ku kikapu",
+    "browse_menu": "Laba menyu"
+  },
+  "checkout": {
+    "title": "Malirizza oda",
+    "summary": "Ebifunze ku oda",
+    "payment_method": "Engeri y'okusasula"
+  },
+  "status_screen": {
+    "confirmed": "Oda ekakasiddwa",
+    "sent": "Weebale — oda yo eweerezeddwa ku wooteeri.",
+    "pickup_code": "Koodi y'okutwala",
+    "order_status": "Embeera y'oda",
+    "submitted": "Eweerezeddwa",
+    "pending": "Erindiridde",
+    "bill_status": "Embeera ya bili",
+    "billed": "Bili efulumiziddwa",
+    "not_billed": "Bili tennaba kufulumizibwa",
+    "open_requests": "Okusaba okukyali okuggule",
+    "add_more": "Yongerako ebirala",
+    "done": "Kiwedde"
+  },
+  "requests": {
+    "bill": "Bili",
+    "assistance": "Omuweereza",
+    "open": "Kiggule",
+    "acknowledged": "Kikkiriziddwa",
+    "resolved": "Kikoleddwa"
+  },
+  "item": {
+    "loading": "Ekintu kitikkibwa...",
+    "load_error": "Ekintu kino tekitikkiddwa. Nsaba ogezeeko nate.",
+    "not_found": "Ekintu tekirabise.",
+    "variants": "Ebika",
+    "addons": "Ebyongerwako",
+    "decrease": "Kendeeza omuwendo",
+    "increase": "Yongera omuwendo",
+    "add_to_cart": "Teeka mu kikapu"
+  },
+  "search": {
+    "placeholder": "Noonya ku menyu...",
+    "placeholder_short": "Noonya...",
+    "label": "Noonya ku menyu",
+    "clear": "Sangula okunoonya"
+  },
+  "availability": {
+    "available": "Kiriwo",
+    "not_today": "Tekiriiwo leero",
+    "sold_out": "Kiweddeyo",
+    "temporarily": "Tekiriiwo kaseera kano",
+    "unavailable": "Tekiriiwo kati"
   }
 }

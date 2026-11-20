@@ -45,7 +45,8 @@
   "payment": {
     "pay_online": "Lipa mtandaoni",
     "starting": "Inaanzisha malipo…",
-    "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa."
+    "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.",
+    "pay_at_counter": "Lipa kwenye kaunta"
   },
   "bill": {
     "request": "Omba bili",
@@ -60,12 +61,20 @@
     "count_one": "Bidhaa {{count}}",
     "count_many": "Bidhaa {{count}}",
     "still_there": "Bado uko?",
-    "still_here": "Bado niko"
+    "still_here": "Bado niko",
+    "your_cart": "Kikapu chako",
+    "page_empty": "Kikapu chako ni tupu.",
+    "note": "Ujumbe: {{note}}",
+    "proceed": "Endelea kukamilisha oda",
+    "view": "Tazama kikapu ({{items}}) • {{total}}"
   },
   "menu": {
     "all_items": "Vitu vyote",
     "other": "Nyingine",
-    "categories": "Makundi ya menyu"
+    "categories": "Makundi ya menyu",
+    "all": "Vyote",
+    "no_match": "Hakuna bidhaa inayolingana na utafutaji wako.",
+    "empty": "Hakuna bidhaa zinazopatikana."
   },
   "errors": {
     "missing_code": "Kiungo hiki hakina msimbo wa oda. Tafadhali skani tena msimbo wa QR ulio mezani.",
@@ -76,5 +85,60 @@
     "call_waiter": "Imeshindwa kuita mhudumu. Tafadhali waombe wahudumu msaada.",
     "device_start": "Kifaa hiki hakikuweza kuanzishwa. Tafadhali wasiliana na wahudumu.",
     "device_bootstrap": "Imeshindwa kuanzisha kifaa hiki."
+  },
+  "nav": {
+    "back": "Rudi",
+    "back_to_menu": "Rudi kwenye menyu",
+    "back_to_cart": "Rudi kwenye kikapu",
+    "browse_menu": "Tazama menyu"
+  },
+  "checkout": {
+    "title": "Kamilisha oda",
+    "summary": "Muhtasari wa oda",
+    "payment_method": "Njia ya malipo"
+  },
+  "status_screen": {
+    "confirmed": "Oda imethibitishwa",
+    "sent": "Asante — oda yako imetumwa kwa mgahawa.",
+    "pickup_code": "Msimbo wa kuchukua",
+    "order_status": "Hali ya oda",
+    "submitted": "Imetumwa",
+    "pending": "Inasubiri",
+    "bill_status": "Hali ya bili",
+    "billed": "Bili imetolewa",
+    "not_billed": "Bili bado haijatolewa",
+    "open_requests": "Maombi ya huduma yaliyo wazi",
+    "add_more": "Ongeza vitu zaidi",
+    "done": "Imekamilika"
+  },
+  "requests": {
+    "bill": "Bili",
+    "assistance": "Mhudumu",
+    "open": "Wazi",
+    "acknowledged": "Imepokelewa",
+    "resolved": "Imeshughulikiwa"
+  },
+  "item": {
+    "loading": "Inapakia bidhaa...",
+    "load_error": "Imeshindwa kupakia bidhaa hii. Tafadhali jaribu tena.",
+    "not_found": "Bidhaa haikupatikana.",
+    "variants": "Aina",
+    "addons": "Nyongeza",
+    "decrease": "Punguza idadi",
+    "increase": "Ongeza idadi",
+    "add_to_cart": "Weka kikapuni"
+  },
+  "search": {
+    "placeholder": "Tafuta kwenye menyu...",
+    "placeholder_short": "Tafuta...",
+    "label": "Tafuta kwenye menyu",
+    "clear": "Futa utafutaji"
+  },
+  "availability": {
+    "available": "Inapatikana",
+    "not_today": "Haipatikani leo",
+    "sold_out": "Imeisha",
+    "temporarily": "Haipatikani kwa muda",
+    "unavailable": "Haipatikani kwa sasa"
   }
 }

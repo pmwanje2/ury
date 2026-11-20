@@ -76,7 +76,7 @@ function CheckoutScreen({
   return (
     <div className="mx-4 mt-4">
       <section className="rounded-lg border p-3">
-        <h2 className="mb-2 text-sm font-medium text-muted-foreground">Order Summary</h2>
+        <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('checkout.summary')}</h2>
         <ul className="space-y-1 text-sm">
           {cartItems.map((entry) => (
             <li key={entry.item.item} className="flex justify-between">
@@ -88,16 +88,14 @@ function CheckoutScreen({
           ))}
         </ul>
         <div className="mt-2 flex justify-between border-t pt-2 text-sm font-semibold">
-          <span>
-            {cartCount} item{cartCount > 1 ? 's' : ''}
-          </span>
+          <span>{t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount })}</span>
           <span>{cartTotal}</span>
         </div>
       </section>
 
       {hasAnyPaymentOption && (
         <section className="mt-4 rounded-lg border p-3">
-          <h2 className="mb-2 text-sm font-medium text-muted-foreground">Payment Method</h2>
+          <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('checkout.payment_method')}</h2>
           <div className="space-y-2">
             {showPayOnline && (
               <button
@@ -118,7 +116,7 @@ function CheckoutScreen({
                   selectedMethod === 'counter' ? 'border-primary bg-primary/10' : ''
                 }`}
               >
-                Pay at Counter
+                {t('payment.pay_at_counter')}
               </button>
             )}
             {showRequestBill && (

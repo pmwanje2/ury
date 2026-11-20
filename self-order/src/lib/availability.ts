@@ -1,4 +1,5 @@
 import { call } from '@ury/core'
+import { t } from '../i18n'
 
 const M = 'ury.ury.api.ury_availability'
 
@@ -72,28 +73,34 @@ export interface GetItemAvailabilityParams {
   department?: string
 }
 
-/** Reason code -> user-facing message. Codes taken verbatim from
+/** Reason code -> catalog key. Codes taken verbatim from
  * `ury/ury/api/ury_availability.py` — no invented codes. */
-export const AVAILABILITY_REASON_MESSAGES: Record<string, string> = {
-  AVAILABLE: 'Available',
-  NOT_PRODUCED: 'Not available today',
-  PLAN_EXHAUSTED: 'Sold out',
-  FG_OUT_OF_STOCK: 'Sold out',
-  NO_ACTIVE_PLAN: 'Not available today',
-  BLOCKING_COMPONENT: 'Temporarily unavailable',
-  MISSING_BOM: 'Temporarily unavailable',
-  MISSING_PRODUCTION_UNIT: 'Temporarily unavailable',
-  PRODUCTION_UNIT_DISABLED: 'Temporarily unavailable',
-  MISSING_DEPARTMENT: 'Temporarily unavailable',
-  DEPARTMENT_DISABLED: 'Temporarily unavailable',
-  CONFIGURATION_ERROR: 'Temporarily unavailable',
+const AVAILABILITY_REASON_KEYS: Record<string, string> = {
+  AVAILABLE: 'availability.available',
+  NOT_PRODUCED: 'availability.not_today',
+  PLAN_EXHAUSTED: 'availability.sold_out',
+  FG_OUT_OF_STOCK: 'availability.sold_out',
+  NO_ACTIVE_PLAN: 'availability.not_today',
+  BLOCKING_COMPONENT: 'availability.temporarily',
+  MISSING_BOM: 'availability.temporarily',
+  MISSING_PRODUCTION_UNIT: 'availability.temporarily',
+  PRODUCTION_UNIT_DISABLED: 'availability.temporarily',
+  MISSING_DEPARTMENT: 'availability.temporarily',
+  DEPARTMENT_DISABLED: 'availability.temporarily',
+  CONFIGURATION_ERROR: 'availability.temporarily',
 }
 
-const DEFAULT_UNAVAILABLE_MESSAGE = 'Currently unavailable'
+/** Reason code -> user-facing message in the guest's language, read when shown. */
+export const AVAILABILITY_REASON_MESSAGES: Record<string, string> = Object.defineProperties(
+  {},
+  Object.fromEntries(
+    Object.entries(AVAILABILITY_REASON_KEYS).map(([code, key]) => [code, { enumerable: true, get: () => t(key) }]),
+  ),
+)
 
 export function getAvailabilityMessage(reasonCode: string | null | undefined): string {
-  if (!reasonCode) return DEFAULT_UNAVAILABLE_MESSAGE
-  return AVAILABILITY_REASON_MESSAGES[reasonCode] ?? DEFAULT_UNAVAILABLE_MESSAGE
+  const key = reasonCode ? AVAILABILITY_REASON_KEYS[reasonCode] : undefined
+  return t(key ?? 'availability.unavailable')
 }
 
 interface FrappeResponse<T> {

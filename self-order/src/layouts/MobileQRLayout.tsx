@@ -203,7 +203,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
         />
 
         <div className="mx-4 mt-4">
-          <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search menu..." />
+          <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={t('search.placeholder')} />
         </div>
 
         {/* MenuGrid layers V3-44 availability gating (sold-out badge/disabled
@@ -227,7 +227,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               onClick={goToCart}
               className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground"
             >
-              View Cart ({cartCount} item{cartCount > 1 ? 's' : ''}) • {cartTotal}
+              {t('cart.view', { items: t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount }), total: cartTotal })}
             </button>
           </div>
         )}
@@ -241,7 +241,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     if (!menuItem) {
       return (
         <div className="flex h-screen items-center justify-center text-destructive">
-          Item not found
+          {t('item.not_found')}
         </div>
       )
     }
@@ -281,11 +281,11 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
           <button
             onClick={goToCart}
             className="rounded-md border px-3 py-2 text-sm font-medium"
-            aria-label="Back to cart"
+            aria-label={t('nav.back_to_cart')}
           >
-            ← Back to cart
+            ← {t('nav.back_to_cart')}
           </button>
-          <h1 className="flex-1 text-center text-lg font-semibold">Checkout</h1>
+          <h1 className="flex-1 text-center text-lg font-semibold">{t('checkout.title')}</h1>
           <span className="w-[92px]" aria-hidden="true" />
         </header>
         <div className="mx-4 mt-2">

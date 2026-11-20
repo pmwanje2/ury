@@ -56,7 +56,7 @@ function CategoryTabs({ categories, activeCourse, onSelect, allLabel, stickyTop 
             : 'border bg-background text-foreground hover:bg-muted'
         }`}
       >
-        {allLabel ?? 'All'}
+        {allLabel ?? t('menu.all')}
       </button>
 
       {/* Category chips */}

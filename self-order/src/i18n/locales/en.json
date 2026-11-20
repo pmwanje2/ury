@@ -45,7 +45,8 @@
   "payment": {
     "pay_online": "Pay Online",
     "starting": "Starting payment…",
-    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment."
+    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.",
+    "pay_at_counter": "Pay at Counter"
   },
   "bill": {
     "request": "Request Bill",
@@ -60,12 +61,20 @@
     "count_one": "{{count}} item",
     "count_many": "{{count}} items",
     "still_there": "Still there?",
-    "still_here": "I'm still here"
+    "still_here": "I'm still here",
+    "your_cart": "Your Cart",
+    "page_empty": "Your cart is empty.",
+    "note": "Note: {{note}}",
+    "proceed": "Proceed to checkout",
+    "view": "View Cart ({{items}}) • {{total}}"
   },
   "menu": {
     "all_items": "All Items",
     "other": "Other",
-    "categories": "Menu categories"
+    "categories": "Menu categories",
+    "all": "All",
+    "no_match": "No items match your search.",
+    "empty": "No items available."
   },
   "errors": {
     "missing_code": "This link is missing an ordering code. Please rescan the QR code on your table.",
@@ -76,5 +85,60 @@
     "call_waiter": "Could not call a waiter. Please ask staff for help.",
     "device_start": "This device could not be started. Please contact staff.",
     "device_bootstrap": "Unable to bootstrap this device."
+  },
+  "nav": {
+    "back": "Back",
+    "back_to_menu": "Back to menu",
+    "back_to_cart": "Back to cart",
+    "browse_menu": "Browse the menu"
+  },
+  "checkout": {
+    "title": "Checkout",
+    "summary": "Order Summary",
+    "payment_method": "Payment Method"
+  },
+  "status_screen": {
+    "confirmed": "Order confirmed",
+    "sent": "Thanks — your order has been sent to the restaurant.",
+    "pickup_code": "Pickup code",
+    "order_status": "Order status",
+    "submitted": "Submitted",
+    "pending": "Pending",
+    "bill_status": "Bill status",
+    "billed": "Billed",
+    "not_billed": "Not billed yet",
+    "open_requests": "Open service requests",
+    "add_more": "Add more items",
+    "done": "Done"
+  },
+  "requests": {
+    "bill": "Bill",
+    "assistance": "Waiter",
+    "open": "Open",
+    "acknowledged": "Acknowledged",
+    "resolved": "Resolved"
+  },
+  "item": {
+    "loading": "Loading item...",
+    "load_error": "Could not load this item. Please try again.",
+    "not_found": "Item not found.",
+    "variants": "Variants",
+    "addons": "Add-ons",
+    "decrease": "Decrease quantity",
+    "increase": "Increase quantity",
+    "add_to_cart": "Add to cart"
+  },
+  "search": {
+    "placeholder": "Search menu...",
+    "placeholder_short": "Search...",
+    "label": "Search menu",
+    "clear": "Clear search"
+  },
+  "availability": {
+    "available": "Available",
+    "not_today": "Not available today",
+    "sold_out": "Sold out",
+    "temporarily": "Temporarily unavailable",
+    "unavailable": "Currently unavailable"
   }
 }

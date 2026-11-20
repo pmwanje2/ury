@@ -305,7 +305,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
           />
         </div>
         <div className="mt-3 w-80">
-          <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search menu..." />
+          <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={t('search.placeholder')} />
         </div>
       </div>
 
@@ -342,7 +342,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
 
           {visibleMenu.length === 0 && (
             <div className="flex items-center justify-center py-20 text-muted-foreground">
-              {searchQuery ? 'No items match your search.' : 'No items available.'}
+              {searchQuery ? t('menu.no_match') : t('menu.empty')}
             </div>
           )}
         </main>

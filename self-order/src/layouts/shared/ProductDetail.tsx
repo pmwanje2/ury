@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getCustomerProduct, type MenuItem, type ProductDetail as ProductDetailData, type ProductOption } from '../../lib/api'
+import { t } from '../../i18n'
+import { useGuestLanguage } from '../../components/LanguageSwitcher'
 
 export interface ProductDetailProps {
   /** Session token for the `get_customer_product` lookup. */
@@ -26,8 +28,11 @@ export interface ProductDetailProps {
  * `onAddToCart` to whatever the hosting layout's navigation is.
  */
 function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: ProductDetailProps) {
+  useGuestLanguage()
   const [loading, setLoading] = useState(true)
+  // null with failed=true shows the catalog sentence, translated each render.
   const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
   const [detail, setDetail] = useState<ProductDetailData | null>(null)
   const [qty, setQty] = useState(1)
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null)
@@ -37,6 +42,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
     let cancelled = false
     setLoading(true)
     setError(null)
+    setFailed(false)
     setDetail(null)
     setQty(1)
     setSelectedVariant(null)
@@ -48,7 +54,8 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load this item. Please try again.')
+          setFailed(true)
+          setError(err instanceof Error ? err.message : null)
         }
       })
       .finally(() => {
@@ -79,9 +86,9 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
   if (loading) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
-        <div className="text-muted-foreground">Loading item...</div>
+        <div className="text-muted-foreground">{t('item.loading')}</div>
         <button onClick={onBack} className="text-sm underline">
-          Back
+          {t('nav.back')}
         </button>
       </div>
     )
@@ -90,9 +97,9 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
   if (error || !detail) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="text-destructive">{error ?? 'Item not found.'}</div>
+        <div className="text-destructive">{error ?? (failed ? t('item.load_error') : t('item.not_found'))}</div>
         <button onClick={onBack} className="rounded-full border px-4 py-2 text-sm font-medium">
-          Back to menu
+          {t('nav.back_to_menu')}
         </button>
       </div>
     )
@@ -104,7 +111,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="flex items-center gap-2 p-4">
         <button onClick={onBack} className="text-sm underline">
-          Back
+          {t('nav.back')}
         </button>
       </div>
 
@@ -120,7 +127,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
 
         {detail.variants.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold">Variants</div>
+            <div className="text-sm font-semibold">{t('item.variants')}</div>
             <div className="flex flex-col gap-2">
               {detail.variants.map((variant) => (
                 <OptionRow
@@ -138,7 +145,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
 
         {detail.addons.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold">Add-ons</div>
+            <div className="text-sm font-semibold">{t('item.addons')}</div>
             <div className="flex flex-col gap-2">
               {detail.addons.map((addon) => (
                 <OptionRow
@@ -156,7 +163,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           <button
             onClick={() => setQty((q) => Math.max(1, q - 1))}
             className="h-9 w-9 rounded-full border font-semibold"
-            aria-label="Decrease quantity"
+            aria-label={t('item.decrease')}
           >
             -
           </button>
@@ -164,7 +171,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           <button
             onClick={() => setQty((q) => q + 1)}
             className="h-9 w-9 rounded-full border font-semibold"
-            aria-label="Increase quantity"
+            aria-label={t('item.increase')}
           >
             +
           </button>
@@ -174,7 +181,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           onClick={handleAddToCart}
           className="mt-2 rounded-full bg-primary px-4 py-3 font-semibold text-primary-foreground"
         >
-          Add to cart
+          {t('item.add_to_cart')}
         </button>
       </div>
     </div>
