@@ -98,10 +98,11 @@ class TestN1AnalyticsAccessGate(FrappeTestCase):
 	def test_apply_grants_nothing_when_gate_absent(self):
 		self._new_manager("n1-apply@example.invalid")
 		before = frappe.db.count("Has Role", {"role": "Insights User"})
+		marker = frappe.db.get_default(self.aa.MARKER_KEY)
 		result = self.aa.apply()
 		self.assertTrue(result.get("skipped"), result)
 		self.assertEqual(frappe.db.count("Has Role", {"role": "Insights User"}), before)
-		self.assertIsNone(frappe.db.get_default(self.aa.MARKER_KEY))
+		self.assertEqual(frappe.db.get_default(self.aa.MARKER_KEY), marker)
 
 
 class TestN2NoReportOverride(FrappeTestCase):
