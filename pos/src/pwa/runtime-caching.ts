@@ -65,7 +65,7 @@ export function matchOfflineRequest(url: URL, method: string, origin: string): s
   return undefined;
 }
 
-// The worker is served from /sw.js, outside the Vite asset directory.
+// The worker is served from /ury-pos-sw.js, outside the Vite asset directory.
 // Workbox precache paths are relative to the worker script, so they must
 // be rooted at the POS asset base or install 404s and never activates.
 export const POS_ASSET_BASE = "/assets/ury/pos/";

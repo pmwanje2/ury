@@ -5,11 +5,13 @@ from werkzeug.wrappers import Response
 
 
 class OfflineServiceWorkerPage:
-	"""Serve the POS service worker from /sw.js for the /pos scope only.
+	"""Serve the POS service worker from /ury-pos-sw.js for the /pos scope only.
 
 	A worker under /assets/ury/pos/ could not control /pos pages. Served from
 	the root, Service-Worker-Allowed pins the maximum scope to /pos so it can
-	never control Desk, login, Serve (/ury/serve/) or other apps.
+	never control Desk, login, Serve (/ury/serve/) or other apps. The URL is
+	URY-specific because page renderers run before StaticPage: claiming /sw.js
+	would take over another app's root worker (POS Awesome ships www/sw.js).
 	"""
 
 	def __init__(self, path, http_status_code=None):
@@ -17,7 +19,7 @@ class OfflineServiceWorkerPage:
 		self.http_status_code = http_status_code or 200
 
 	def can_render(self):
-		return self.path == "sw.js"
+		return self.path == "ury-pos-sw.js"
 
 	def render(self):
 		script = frappe.get_app_path("ury", "public", "pos", "sw.js")

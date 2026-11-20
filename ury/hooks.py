@@ -449,8 +449,9 @@ before_request = [
 ]
 after_request = ["ury.ury.controllers.serve_pwa.after_request"]
 
-# /sw.js is the POS service worker. Scope "/pos" needs Service-Worker-Allowed, which
-# /assets cannot send. Registration stays opt-in in the POS client.
+# /ury-pos-sw.js is the POS service worker. Scope "/pos" needs Service-Worker-Allowed, which
+# /assets cannot send. The root /sw.js stays free for other apps.
+# Registration stays opt-in in the POS client.
 page_renderer = ["ury.offline_sw.OfflineServiceWorkerPage"]
 
 website_redirects = [
