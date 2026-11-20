@@ -8,6 +8,7 @@ import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat, type POSInvoice } from '../lib/invoice-api';
+import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 
 
 interface PaymentDialogProps {
@@ -110,15 +111,19 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const shortfall = finalTotal - paymentsTotal;
   const isShort = shortfall > 0.005;
   // A named (non-default) customer on a profile with allow_partial_payment
-  // may settle short; the balance stays owed on the invoice. The submitted
-  // payment list keeps one native mode row, at zero when nothing was tendered.
+  // may settle short; the balance stays owed on the invoice. Profile, order-type
+  // and profile-level default customers are not named accounts; a profile that
+  // predates the default-customer keys fails closed. The submitted payment list
+  // keeps one native mode row, at zero when nothing was tendered.
   const accountPaymentMode = paymentModes
     .map((mode: string | { id: string }) => (typeof mode === 'string' ? mode : mode.id))
     .find(Boolean);
   const canPayOnAccount = isShort && !!accountPaymentMode
     && storePosProfile?.name === posProfile
     && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
-    && !!customer.trim() && customer !== storePosProfile.customer;
+    && !!customer.trim() && customer !== storePosProfile.customer
+    && !profileLacksDefaultCustomerConfig(storePosProfile)
+    && !isConfiguredDefaultCustomer(customer, storePosProfile);
   const paymentDisabled = isProcessing || ((payments.length === 0 || isShort) && !canPayOnAccount);
   const settlementPayments = payments.length === 0 && canPayOnAccount
     ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]

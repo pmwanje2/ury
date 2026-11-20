@@ -56,3 +56,17 @@ export function resolveDefaultCustomer(
 export function profileLacksDefaultCustomerConfig(profile: object | null | undefined): boolean {
   return !profile || !('order_type_customer_map' in profile);
 }
+
+/**
+ * True when `customer` is any default customer the profile resolves: an
+ * order-type entry or the profile-level default. Such customers are not named
+ * accounts, whatever the order's type.
+ */
+export function isConfiguredDefaultCustomer(
+  customer: string | null | undefined,
+  config: DefaultCustomerConfig | null | undefined
+): boolean {
+  if (!customer || !config) return false;
+  if (config.default_customer?.customer === customer) return true;
+  return Object.values(config.order_type_customer_map ?? {}).some((entry) => entry?.customer === customer);
+}
