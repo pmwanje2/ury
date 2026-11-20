@@ -18,7 +18,9 @@
   "header": {
     "order": "Oda",
     "pickup": "Oda ya kuchukua",
-    "table": "Meza {{table}}"
+    "table": "Meza {{table}}",
+    "location": "{{table}}",
+    "area_location": "{{area}} · {{table}}"
   },
   "actions": {
     "start_over": "Anza upya",

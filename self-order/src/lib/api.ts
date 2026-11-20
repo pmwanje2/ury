@@ -22,6 +22,7 @@ export interface OrderingContext {
   source: string
   restaurant: string
   table: string | null
+  area?: string | null
   layout: OrderingLayout
   capabilities: OrderingCapabilities
 }

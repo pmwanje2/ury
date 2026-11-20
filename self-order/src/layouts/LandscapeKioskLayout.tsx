@@ -4,6 +4,7 @@ import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import MenuGrid from './shared/MenuGrid'
@@ -103,7 +104,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     <div className="flex h-screen flex-col overflow-hidden text-lg">
       <header className="flex items-center justify-between border-b bg-background/95 px-10 py-6">
         <h1 className="text-3xl font-semibold">
-          {context?.table ? t('header.table', { table: context.table }) : t('header.pickup')}
+          {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
         </h1>
         <button
           onClick={handleReset}
