@@ -799,5 +799,13 @@
     "send": "Send message",
     "open": "Open assistant chat",
     "send_failed": "Sorry, that message didn't go through. Try again in a moment."
+  },
+  "service_requests": {
+    "call_waiter": "Call waiter",
+    "bill": "Bill",
+    "minutes_waiting": "{{minutes}} min",
+    "acknowledge": "Acknowledge",
+    "resolve": "Resolve",
+    "acknowledged": "Acknowledged"
   }
 }

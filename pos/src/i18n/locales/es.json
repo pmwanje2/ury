@@ -614,5 +614,13 @@
     "eta_holds": "En espera",
     "session_ago_mins": "hace {{m}} min",
     "session_ago_hours": "hace {{h}} h {{m}} min"
+  },
+  "service_requests": {
+    "call_waiter": "Llamar al camarero",
+    "bill": "Cuenta",
+    "minutes_waiting": "{{minutes}} min",
+    "acknowledge": "Confirmar",
+    "resolve": "Resolver",
+    "acknowledged": "Confirmado"
   }
 }

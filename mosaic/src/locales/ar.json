@@ -63,5 +63,7 @@
   "selective Job Card usage (batch-eligible, opted in)": "استخدام بطاقة العمل الانتقائي (مؤهل للدفعات، مفعّل)",
   "From": "من",
   "To": "إلى",
-  "Log Chef Time": "تسجيل وقت الطاهي"
+  "Log Chef Time": "تسجيل وقت الطاهي",
+  "Call waiter": "استدعاء النادل",
+  "Bill": "الفاتورة"
 }

@@ -806,5 +806,13 @@
     "send": "إرسال الرسالة",
     "open": "فتح محادثة المساعد",
     "send_failed": "عذراً، لم يتم إرسال الرسالة. حاول مرة أخرى بعد قليل."
+  },
+  "service_requests": {
+    "call_waiter": "استدعاء النادل",
+    "bill": "الفاتورة",
+    "minutes_waiting": "{{minutes}} د",
+    "acknowledge": "تأكيد الاستلام",
+    "resolve": "تم الحل",
+    "acknowledged": "تم الاستلام"
   }
 }

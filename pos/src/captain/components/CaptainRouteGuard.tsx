@@ -2,6 +2,7 @@ import React from 'react';
 import { Spinner } from '@ury/ui';
 import { useCaptainContext } from '../hooks/useCaptainContext';
 import ServiceRequestPanel from './ServiceRequestPanel';
+import ServiceRequestAlert from '../../components/ServiceRequestAlert';
 import { t } from '../../i18n';
 
 interface Props {
@@ -67,6 +68,9 @@ const CaptainRouteGuard: React.FC<Props> = ({ children }) => {
 
   return (
     <>
+      <div className="sticky top-0 z-30">
+        <ServiceRequestAlert />
+      </div>
       {children}
       <ServiceRequestPanel branch={branch} />
     </>

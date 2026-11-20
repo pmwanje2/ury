@@ -16,6 +16,7 @@ export interface CaptainTableCardProps {
   /** Names of other tables merged into this one's cluster (excludes `table.name` itself). */
   mergePartners?: string[];
   onTap: () => void;
+  serviceRequest?: { request_type: string; escalated: boolean; status?: string } | null;
 }
 
 const elapsedLabel = (isoTimestamp: string | null): string | null => {
@@ -49,7 +50,9 @@ const CaptainTableCard = ({
   ownerName,
   mergePartners,
   onTap,
+  serviceRequest = null,
 }: CaptainTableCardProps) => {
+  const callingNow = serviceRequest && serviceRequest.status !== 'Acknowledged';
   const isOccupied = table.occupied === 1;
   const isBilled = Boolean(order?.invoicePrinted);
   const hasMergePartners = Boolean(mergePartners && mergePartners.length > 0);
@@ -85,9 +88,11 @@ const CaptainTableCard = ({
     <button
       type="button"
       onClick={onTap}
+      data-service-request={serviceRequest ? serviceRequest.request_type : undefined}
       className={cn(
         'flex min-h-[7.5rem] flex-col items-stretch rounded-xl border-2 p-3 text-left transition-all active:scale-[0.98]',
-        colorClasses
+        colorClasses,
+        callingNow && cn('animate-pulse ring-4', serviceRequest.escalated ? 'ring-red-600' : 'ring-amber-500')
       )}
     >
       <div className="flex items-start justify-between gap-2">
