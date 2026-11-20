@@ -42,9 +42,7 @@ def list_open_service_requests(branch):
 	"""Open/Acknowledged service requests for tables in `branch`, oldest first."""
 	if not branch:
 		return []
-	branches = _staff_branches()
-	if branches is not None and branch not in branches:
-		return []
+	_require_branch_staff(branch)
 
 	tables = frappe.get_all("URY Table", filters={"branch": branch}, pluck="name")
 	if not tables:

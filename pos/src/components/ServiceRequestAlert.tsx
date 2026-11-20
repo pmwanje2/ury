@@ -1,36 +1,55 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { BellRing } from 'lucide-react';
 import { call } from '@ury/core';
-import { acknowledgeServiceRequest, listOpenServiceRequests, type ServiceRequest } from '../lib/service-request-api';
+import {
+  acknowledgeServiceRequest, listOpenServiceRequests, resolveServiceRequest, type ServiceRequest,
+} from '../lib/service-request-api';
 import { getRealtimeSocket } from '../lib/realtime';
 import { t } from '../i18n';
 
 // Guest calls stay on every open staff screen until someone acknowledges them
-// (Oracle Simphony guest-request alerts). Realtime refreshes at once; the 15 s
-// poll is the fallback. Sound and escalation minutes come from the POS Profile.
+// (Oracle Simphony guest-request alerts), then stay listed, silent, until someone
+// resolves them: Open -> Acknowledged -> Resolved. The server publishes each
+// change to every floor/till user of the branch in their own user room, so no
+// shared room is joined; the 15 s poll is the fallback. Sound and escalation
+// minutes come from the POS Profile.
 
 const POLL_MS = 15_000;
 const CHIME_MS = 10_000;
 const CHIME = '/assets/frappe/sounds/alert.mp3';
 const EVENT = 'ury_service_request';
-const DOCTYPE = 'URY Service Request';
 
 interface AlertSettings { sound: number; escalate_minutes: number }
 interface RealtimeRequest { branch?: string | null }
 
-let openTables: ReadonlyMap<string, { request_type: string; escalated: boolean }> = new Map();
+export interface TableServiceRequest {
+  name: string;
+  request_type: string;
+  status: ServiceRequest['status'];
+  escalated: boolean;
+}
+
+let openTables: ReadonlyMap<string, TableServiceRequest> = new Map();
 const listeners = new Set<() => void>();
 function publishOpenTables(next: typeof openTables) {
   openTables = next;
   listeners.forEach(listener => listener());
 }
 
-/** Tables with an unacknowledged guest request, for pulsing floor-plan cards. */
+/** Tables with an Open or Acknowledged guest request: Open pulses, Acknowledged offers Resolve. */
 export function useOpenServiceRequestTables() {
   return useSyncExternalStore(
     listener => { listeners.add(listener); return () => listeners.delete(listener); },
     () => openTables,
   );
+}
+
+const refreshers = new Set<() => void>();
+
+/** Resolve from a floor-plan card; the mounted alert re-reads the list at once. */
+export async function resolveTableServiceRequest(name: string) {
+  await resolveServiceRequest(name);
+  refreshers.forEach(refresh => refresh());
 }
 
 function minutesWaiting(requestedAt: string, offset: number) {
@@ -72,6 +91,8 @@ export default function ServiceRequestAlert() {
 
   useEffect(() => {
     active.current = true;
+    const rerun = () => void refresh();
+    refreshers.add(rerun);
     void refresh();
     const poll = setInterval(() => void refresh(), POLL_MS);
     const clock = setInterval(() => setTick(n => n + 1), 30_000);
@@ -80,17 +101,16 @@ export default function ServiceRequestAlert() {
       if (payload?.branch && branch.current && payload.branch !== branch.current) return;
       void refresh();
     };
-    const join = () => socket?.emit('doctype_subscribe', DOCTYPE);
-    const onConnect = () => { join(); void refresh(); };
+    const onConnect = () => { void refresh(); };
     getRealtimeSocket().then(s => {
       if (!active.current) return;
       socket = s;
       s.on(EVENT, onEvent);
       s.on('connect', onConnect);
-      join();
     }).catch(() => {});
     return () => {
       active.current = false;
+      refreshers.delete(rerun);
       ++refreshId.current;
       clearInterval(poll);
       clearInterval(clock);
@@ -101,12 +121,14 @@ export default function ServiceRequestAlert() {
   }, [refresh]);
 
   const open = requests.filter(request => request.status === 'Open');
+  const acknowledged = requests.filter(request => request.status === 'Acknowledged');
   const escalated = (request: ServiceRequest) =>
     minutesWaiting(request.requested_at, offset) >= settings.escalate_minutes;
 
   useEffect(() => {
-    publishOpenTables(new Map(open.map(request => [request.table, {
-      request_type: request.request_type, escalated: escalated(request),
+    // Acknowledged first, so an Open request at the same table wins the card.
+    publishOpenTables(new Map([...acknowledged, ...open].map(request => [request.table, {
+      name: request.name, request_type: request.request_type, status: request.status, escalated: escalated(request),
     }])));
   });
 
@@ -119,21 +141,35 @@ export default function ServiceRequestAlert() {
     return () => clearInterval(timer);
   }, [ringing]);
 
-  async function acknowledge(name: string) {
+  async function change(name: string, action: 'acknowledge' | 'resolve') {
     setBusy(name);
     try {
-      await acknowledgeServiceRequest(name);
-      if (active.current) setRequests(rows => rows.map(row => row.name === name ? { ...row, status: 'Acknowledged' } : row));
+      if (action === 'acknowledge') await acknowledgeServiceRequest(name);
+      else await resolveServiceRequest(name);
+      if (active.current) {
+        setRequests(rows => action === 'resolve'
+          ? rows.filter(row => row.name !== name)
+          : rows.map(row => row.name === name ? { ...row, status: 'Acknowledged' } : row));
+      }
       void refresh();
     } catch {
-      // The banner stays until the server records the acknowledgement.
+      // The row stays until the server records the change.
     } finally {
       if (active.current) setBusy(null);
     }
   }
 
-  if (open.length === 0) return null;
+  const resolveButton = (request: ServiceRequest, tone: string) => (
+    <button type="button" disabled={busy === request.name} onClick={() => void change(request.name, 'resolve')}
+      className={`min-h-11 rounded-md px-4 text-lg font-bold disabled:opacity-60 ${tone}`}>
+      {t('service_requests.resolve')}
+    </button>
+  );
+
+  if (open.length === 0 && acknowledged.length === 0) return null;
   return (
+    <>
+    {open.length > 0 && (
     <div data-testid="service-request-alert" role="alert"
       className="w-full shrink-0 border-b-4 border-red-800 bg-red-600 px-4 py-2 text-white shadow-lg">
       <ul className="flex flex-col gap-2">
@@ -147,14 +183,32 @@ export default function ServiceRequestAlert() {
               <span>{request.table}</span>
               <span>{request.request_type === 'Bill' ? t('service_requests.bill') : t('service_requests.call_waiter')}</span>
               <span>{t('service_requests.minutes_waiting', { minutes: minutesWaiting(request.requested_at, offset) })}</span>
-              <button type="button" disabled={busy === request.name} onClick={() => void acknowledge(request.name)}
+              <button type="button" disabled={busy === request.name} onClick={() => void change(request.name, 'acknowledge')}
                 className="ms-auto min-h-11 rounded-md bg-white px-4 text-lg font-bold text-red-700 disabled:opacity-60">
                 {t('service_requests.acknowledge')}
               </button>
+              {resolveButton(request, 'border-2 border-white text-white')}
             </li>
           );
         })}
       </ul>
     </div>
+    )}
+    {acknowledged.length > 0 && (
+    <div data-testid="service-request-acknowledged" role="status"
+      className="w-full shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-1 text-gray-900">
+      <ul className="flex flex-wrap gap-2">
+        {acknowledged.map(request => (
+          <li key={request.name} className="flex items-center gap-3 rounded-md bg-white px-3 py-1 text-base font-semibold shadow-sm">
+            <span>{request.table}</span>
+            <span>{request.request_type === 'Bill' ? t('service_requests.bill') : t('service_requests.call_waiter')}</span>
+            <span className="text-sm font-normal text-gray-600">{t('service_requests.acknowledged')}</span>
+            {resolveButton(request, 'bg-emerald-600 text-white')}
+          </li>
+        ))}
+      </ul>
+    </div>
+    )}
+    </>
   );
 }

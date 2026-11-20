@@ -515,8 +515,9 @@ export default {
       audio.play();
     },
     // Guest calls (Oracle Simphony guest-request alerts): shown on every board
-    // until the floor acknowledges them. Realtime refreshes at once; the 15 s
-    // poll is the fallback. Sound and escalation come from the POS Profile.
+    // until the floor acknowledges them. The server publishes to each branch staff
+    // user's own room, so the board joins no shared room; the 15 s poll is the
+    // fallback. Sound and escalation come from the POS Profile.
     async refreshServiceRequests() {
       if (!this.branch) return;
       try {
@@ -537,9 +538,6 @@ export default {
       clearInterval(this.serviceRequestPoll);
       this.serviceRequestPoll = setInterval(this.refreshServiceRequests, 15000);
       await this.refreshServiceRequests();
-    },
-    joinServiceRequestRoom() {
-      if (socket) socket.emit("doctype_subscribe", "URY Service Request");
     },
     openServiceRequests() {
       return this.serviceRequests.filter(request => request.status === "Open");
@@ -921,7 +919,6 @@ export default {
           }
           this.socketHandlers = {
             connect: () => {
-              this.joinServiceRequestRoom();
               this.refreshServiceRequests();
               const generation = ++this.resyncGeneration;
               this.socketStale = true;
@@ -983,7 +980,6 @@ export default {
             this.refreshServiceRequests();
           };
           for (const [channel, handler] of Object.entries(this.socketHandlers)) socket.on(channel, handler);
-          this.joinServiceRequestRoom();
           this.startServiceRequests();
         });
       })

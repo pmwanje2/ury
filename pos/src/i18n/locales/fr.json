@@ -532,6 +532,8 @@
     "call_waiter": "Appel serveur",
     "bill": "Addition",
     "minutes_waiting": "{{minutes}} min",
-    "acknowledge": "Accuser réception"
+    "acknowledge": "Accuser réception",
+    "resolve": "Résoudre",
+    "acknowledged": "Pris en charge"
   }
 }
