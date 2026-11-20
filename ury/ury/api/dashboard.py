@@ -2,6 +2,14 @@ import frappe
 
 from ury.ury.api.ury_dashboard import get_dashboard_stats
 
+# Masters the Desk-free dashboard (frontend/src) reads through get_module_records.
+MODULE_RECORD_DOCTYPES = frozenset((
+	"Branch", "Company", "Cost Center", "Customer", "Item", "Item Group",
+	"Network Printer Settings", "POS Profile", "URY Item Production Configuration", "URY Menu",
+	"URY Menu Course", "URY Production Department", "URY Production Unit", "URY Restaurant",
+	"URY Room", "URY Self Ordering Profile", "URY Table", "User", "Warehouse",
+))
+
 
 @frappe.whitelist()
 def get_dashboard_summary(branch=None, company=None):
@@ -108,18 +116,16 @@ def get_recent_transactions(branch=None, limit=10, company=None):
 
 @frappe.whitelist()
 def get_module_records(doctype, branch=None):
-	if not frappe.db.exists("DocType", doctype):
-		return []
+	# Maximus fork (T0): only the masters the dashboard lists, through native read and
+	# User Permissions. Permission failures propagate; results are bounded.
+	if doctype not in MODULE_RECORD_DOCTYPES:
+		frappe.throw("Not permitted", frappe.PermissionError)
 
 	filters = {}
 	if branch and branch != "all":
 		meta = frappe.get_meta(doctype)
 		if meta.has_field("branch"):
 			filters["branch"] = branch
-		elif meta.has_field("custom_branch"):
-			filters["custom_branch"] = branch
 
-	try:
-		return frappe.get_all(doctype, filters=filters, fields=["*"])
-	except Exception:
-		return []
+	fields = ["name", "full_name", "enabled", "user_type"] if doctype == "User" else ["*"]
+	return frappe.get_list(doctype, filters=filters, fields=fields, limit_page_length=500)

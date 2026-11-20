@@ -217,9 +217,8 @@ def get_setup_progress_status():
 
 @frappe.whitelist()
 def submit_setup(payload=None, **kwargs):
+    frappe.only_for("System Manager")
     from frappe.utils import cint
-    if frappe.session.user == "Guest":
-        frappe.throw("Not permitted")
 
     if cint(frappe.db.get_single_value("System Settings", "setup_complete")):
         frappe.throw("Setup already completed")
@@ -255,7 +254,7 @@ def complete_wizard_setup(payload=None, **kwargs):
 @frappe.whitelist()
 def get_wizard_status():
     if frappe.session.user == "Guest":
-        frappe.throw("Not permitted")
+        frappe.throw("Not permitted", frappe.PermissionError)
 
     return {
         "step1_complete": bool(frappe.db.exists("Company", {})),

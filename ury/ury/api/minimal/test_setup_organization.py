@@ -113,7 +113,8 @@ class TestGetSetupDefaults(unittest.TestCase):
     @patch("ury.ury.api.minimal.setup_organization.frappe.session")
     def test_wizard_status_guest_rejected(self, mock_session):
         mock_session.user = "Guest"
-        with self.assertRaises(frappe.exceptions.ValidationError):
+        # Maximus fork (T0, d9457602): Guest is refused with PermissionError.
+        with self.assertRaises(frappe.PermissionError):
             get_wizard_status()
 
     @patch("frappe.db.exists")

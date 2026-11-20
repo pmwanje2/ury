@@ -23,8 +23,10 @@ class TestSubmitConfigureDataGuard(unittest.TestCase):
     @patch("ury.ury.api.minimal.business_setup.is_ury_setup_complete")
     def test_guest_user_is_rejected(self, mock_setup_complete):
         # Guest guard must fire before the setup-complete check even runs.
+        # Maximus fork (T0): a Guest is an authorization denial (PermissionError), not a
+        # validation error.
         with patch("ury.ury.api.minimal.business_setup.frappe.session", frappe._dict({"user": "Guest"})):
-            with self.assertRaises(frappe.exceptions.ValidationError) as ctx:
+            with self.assertRaises(frappe.PermissionError) as ctx:
                 submit_configure_data(data="{}")
 
         self.assertIn("Not permitted", str(ctx.exception))
@@ -161,7 +163,8 @@ class TestPrepareAndInsertItem(unittest.TestCase):
         _prepare_and_insert_item(item_data)
 
         self.assertEqual(item_data.get("gst_hsn_code"), "999512")
-        mock_doc.insert.assert_called_once_with(ignore_permissions=True)
+        # Maximus fork (T0, #75): menu Items are created with native permission checks.
+        mock_doc.insert.assert_called_once_with()
 
 
 if __name__ == "__main__":
