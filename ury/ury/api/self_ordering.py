@@ -47,7 +47,7 @@ from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
-MAX_COMMENT_LEN = 200
+MAX_COMMENT_LEN = 140  # Data fields: POS Invoice Item.comment and URY KOT Items.comments.
 
 
 # ---------------------------------------------------------------------------
