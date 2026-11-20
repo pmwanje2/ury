@@ -25,6 +25,7 @@ const NOT_COPY = new Set([
   'Portrait Kiosk',
   'QR Pickup',
   'Already Requested',
+  'Already Received',
   'Content-Type',
 ])
 
