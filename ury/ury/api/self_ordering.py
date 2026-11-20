@@ -99,9 +99,13 @@ def _ensure_admin_branch_mapping(branch):
 # Stateless QR token (table / pickup) — signed, not stored per-table
 # ---------------------------------------------------------------------------
 
-def _get_profile_secret(profile_name):
+def _get_profile_secret(profile_name, refuse=None):
+    """`refuse` lets a guest-facing reader deny a missing profile or secret the
+    same way as a bad signature, so the refusal does not reveal profile names."""
     secret = frappe.db.get_value("URY Self Ordering Profile", profile_name, "qr_signing_secret")
     if not secret:
+        if refuse:
+            refuse()
         frappe.throw(_("Self ordering is not configured for this restaurant"), frappe.ValidationError)
     return secret
 
@@ -1096,7 +1100,7 @@ def read_signed_invoice_grant(token, purpose):
     if not profile_name or not invoice_name or token_purpose != purpose:
         _feedback_link_invalid()
 
-    secret = _get_profile_secret(profile_name)
+    secret = _get_profile_secret(profile_name, refuse=_feedback_link_invalid)
     expected = _sign(f"{profile_name}|{token_purpose}|{invoice_name}|{expiry_ts}", secret)
     if not hmac.compare_digest(expected, signature):
         _feedback_link_invalid()
