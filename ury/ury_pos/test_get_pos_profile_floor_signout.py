@@ -1,0 +1,131 @@
+"""Site-less contracts for opt-in floor-tablet sign-out settings (theme T4, fork #29 U1, #32 U6)."""
+
+import json
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import frappe
+from ury import hooks
+from ury.ury_pos import api
+
+FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/custom_field.json"
+
+
+def _fields():
+    return {field["name"]: field for field in json.loads(FIXTURE.read_text())}
+
+
+def _custom_field_names():
+    fixture = next(row for row in hooks.fixtures if row.get("doctype", row.get("dt")) == "Custom Field")
+    return next(row[2] for row in fixture["filters"] if row[:2] == ["name", "in"])
+
+
+class Row(frappe._dict):
+    def as_dict(self):
+        return dict(self)
+
+
+class TestFloorSignoutProfile(unittest.TestCase):
+    def setUp(self):
+        self.framework = self.enterContext(patch.object(api, "frappe"))
+        self.enterContext(patch.object(api, "getBranch", return_value="Branch A"))
+        self.framework.session.user = "waiter@example.com"
+        self.framework.db.exists.return_value = "Floor POS"
+        self.framework.get_single.return_value = frappe._dict(disable_rounded_total=0)
+        self.profile = frappe._dict(
+            name="Floor POS", branch="Branch A", warehouse="Stores", company="Company A",
+            table_attention_time=10, print_format="Receipt", paid_limit=0,
+            custom_enable_discount=0, custom_enable_multiple_cashier=0,
+            custom_edit_order_type=0, custom_enable_kot_reprint=0, qz_print=0,
+            applicable_for_users=[frappe._dict(user="cashier@example.com")],
+            printer_settings=[],
+            role_allowed_for_billing=[], role_restricted_for_table_order=[],
+            transfer_role_permissions=[],
+        )
+        self.framework.get_doc.return_value = self.profile
+
+    def test_returns_configured_floor_settings(self):
+        self.profile.custom_floor_idle_signout_seconds = 60
+        self.profile.custom_floor_signout_after_send = 1
+        result = api.getPosProfile()
+        self.assertEqual(result.get("floor_idle_signout_seconds"), 60)
+        self.assertEqual(result.get("floor_signout_after_send"), 1)
+
+    def test_unset_floor_settings_default_to_disabled(self):
+        result = api.getPosProfile()
+        self.assertIn("floor_idle_signout_seconds", result)
+        self.assertIn("floor_signout_after_send", result)
+        self.assertEqual(result["floor_idle_signout_seconds"], 0)
+        self.assertEqual(result["floor_signout_after_send"], 0)
+
+    def test_explicitly_disabled_floor_settings_stay_disabled(self):
+        self.profile.custom_floor_idle_signout_seconds = 0
+        self.profile.custom_floor_signout_after_send = 0
+        result = api.getPosProfile()
+        self.assertEqual(result.get("floor_idle_signout_seconds"), 0)
+        self.assertEqual(result.get("floor_signout_after_send"), 0)
+
+    def test_full_profile_carries_stay_signed_in_roles_for_the_pos_client(self):
+        # v16 /pos reads POS Profile through this whitelisted subset, not a raw doc read.
+        self.profile.custom_floor_stay_signed_in_roles = [Row(role="URY Manager")]
+        result = api.getPosProfileFull("Floor POS")
+        self.assertEqual(result.get("custom_floor_stay_signed_in_roles"), [{"role": "URY Manager"}])
+
+    def test_full_profile_stay_roles_default_to_empty(self):
+        result = api.getPosProfileFull("Floor POS")
+        self.assertIn("custom_floor_stay_signed_in_roles", result)
+        self.assertEqual(result["custom_floor_stay_signed_in_roles"], [])
+
+
+class TestFloorSignoutFixtures(unittest.TestCase):
+    def test_fixture_declares_two_opt_in_profile_fields(self):
+        fields = _fields()
+        for name, fieldtype in (
+            ("custom_floor_idle_signout_seconds", "Int"),
+            ("custom_floor_signout_after_send", "Check"),
+        ):
+            with self.subTest(field=name):
+                field = fields.get(f"POS Profile-{name}", {})
+                self.assertEqual(field.get("dt"), "POS Profile")
+                self.assertEqual(field.get("fieldname"), name)
+                self.assertEqual(field.get("fieldtype"), fieldtype)
+                self.assertEqual(field.get("default"), "0")
+
+    def test_fixture_export_includes_both_fields(self):
+        names = _custom_field_names()
+        self.assertIn("POS Profile-custom_floor_idle_signout_seconds", names)
+        self.assertIn("POS Profile-custom_floor_signout_after_send", names)
+
+    def test_fixture_declares_stay_signed_in_roles_multiselect(self):
+        field = _fields().get("POS Profile-custom_floor_stay_signed_in_roles", {})
+        self.assertEqual(field.get("dt"), "POS Profile")
+        self.assertEqual(field.get("fieldname"), "custom_floor_stay_signed_in_roles")
+        self.assertEqual(field.get("fieldtype"), "Table MultiSelect")
+        self.assertEqual(field.get("options"), "Role Permitted")
+        self.assertEqual(field.get("permlevel"), 0)
+        self.assertEqual(field.get("label"), "Stay Signed-in Roles")
+        self.assertEqual(field.get("insert_after"), "custom_floor_signout_after_send")
+        self.assertEqual(
+            field.get("description"),
+            "Staff with one of these roles stay signed in. Everyone else on the floor screen is signed out after the idle time or after each send.",
+        )
+
+    def test_hooks_ship_stay_signed_in_roles(self):
+        self.assertIn("POS Profile-custom_floor_stay_signed_in_roles", _custom_field_names())
+
+    def test_signout_descriptions_name_stay_roles_not_billing(self):
+        fields = _fields()
+        for name in (
+            "POS Profile-custom_floor_idle_signout_seconds",
+            "POS Profile-custom_floor_signout_after_send",
+        ):
+            with self.subTest(field=name):
+                description = fields.get(name, {}).get("description") or ""
+                self.assertIn("users without a Stay Signed-in Role", description)
+                self.assertNotIn("non-billing", description)
+                self.assertNotIn("Billing users", description)
+
+
+if __name__ == "__main__":
+    unittest.main()
