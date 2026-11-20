@@ -1,6 +1,7 @@
 """Site-less regressions for the dashboard guards and wizard-status shim."""
 
 import importlib.util
+import re
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -63,6 +64,20 @@ class ModuleRecordsCases:
             "Branch", "URY Room", "URY Table", "URY Menu", "URY Menu Course",
             "Item", "Item Group", "URY Production Unit", "User",
         ):
+            with self.subTest(doctype=doctype):
+                self.assertEqual(len(self.module.get_module_records(doctype)), 1)
+
+    def test_every_doctype_the_version16_dashboard_requests_is_available(self):
+        # version-16's Desk-free dashboard (frontend/src) lists more masters than the nine of
+        # version-2; each one stays behind native read permission via get_list.
+        frontend = Path(dashboard.__file__).resolve().parents[3] / "frontend" / "src"
+        pattern = re.compile(r"getModuleRecords(?:<[^()]*?>)?\(\s*'([^']+)'", re.S)
+        requested = set()
+        for path in frontend.rglob("*.ts*"):
+            if ".test." not in path.name:
+                requested.update(pattern.findall(path.read_text()))
+        self.assertGreaterEqual(len(requested), 19)
+        for doctype in sorted(requested):
             with self.subTest(doctype=doctype):
                 self.assertEqual(len(self.module.get_module_records(doctype)), 1)
 
