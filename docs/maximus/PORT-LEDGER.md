@@ -795,3 +795,17 @@ T0 notes on rows marked "port" in the rows below:
 | `1c72ca62` | 2026-11-20 | #91 | T3 | port | test(mosaic): cover printer-list failure and per-unit installed printers |  |
 | `50184832` | 2026-11-20 | #91 | T3 | port | test(mosaic): RED a saved printer missing from the list stays selectable |  |
 | `483c74dd` | 2026-11-20 | #91 | T3 | port | fix(mosaic): GREEN show a saved printer missing from the list as "saved, not found" |  |
+
+## Carrier PRs opened after the freeze (urgent-fix rule)
+
+Rows for fixes opened on the version-2 carrier (`codex/ury-build-closure-20261114`) while the port
+runs. A row whose behaviour `version-16` already has is **superseded** with the upstream commit;
+only the fork-specific part is **port**.
+
+| Fork commit | Date | Source | Theme | Status | Subject | Note |
+|---|---|---|---|---|---|---|
+| `2742264b` | 2026-11-20 | #98 | T6 | superseded (part) | test(self-order): RED guest menu by category in the menu's configured order | grouping and CategoryTabs are upstream `100c43fe` (`self-order/src/layouts/shared/CategoryTabs.tsx`, `TabletLayout.tsx` 64-81, `MobileQRLayout.tsx`); port only the ordering assertions (`course_priority`, `menu_order`) |
+| `9c23ba59` | 2026-11-20 | #98 | T6 | port | test(self-order): RED move the translated-category-label pin to the shared category menu | carries with the T6 guest-language pins |
+| `28d5db61` | 2026-11-20 | #98 | T6 | superseded | test(self-order): RED Mobile category chips stay below the sticky header | version-16 MobileQRLayout header is `z-20` above CategoryTabs; re-check on the v16 layout |
+| `4d33f2dd` | 2026-11-20 | #98 | T10 | dropped | test(self-order): lint the RED category test | test lint only |
+| `ddcb74b1` | 2026-11-20 | #98 | T6 | superseded (part) | feat(self-order): GREEN guest menu by category in the menu's configured order | port `resolve_restaurant_menu` `course_priority`/`menu_order` and the sort by `custom_serving_priority` then menu row; version-16 orders categories by first appearance in an item-name-sorted list |
