@@ -67,7 +67,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY)
   const [cartExpanded, setCartExpanded] = useState(false)
   const [showIdleWarning, setShowIdleWarning] = useState(false)
-  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const idleWarnMs = (context?.session_idle_timeout_minutes ?? 30) * 60000
   const [searchQuery, setSearchQuery] = useState('')
 

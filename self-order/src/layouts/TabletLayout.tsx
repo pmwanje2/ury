@@ -58,7 +58,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
   } = useOrderingSession(initialContext)
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
-  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const idleWarnMs = (context?.session_idle_timeout_minutes ?? 30) * 60000
 
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
