@@ -64,7 +64,8 @@ async function readyHook(notes = true, items: MenuItem[] = menu) {
 async function submit(view: Awaited<ReturnType<typeof readyHook>>) {
   addItemsMock.mockResolvedValueOnce(emptyOrder)
   await act(async () => { await view.result.current.submitCart() })
-  return addItemsMock.mock.calls.at(-1)?.[1]
+  const calls = addItemsMock.mock.calls
+  return calls[calls.length - 1]?.[1]
 }
 
 beforeEach(() => {
@@ -86,7 +87,7 @@ describe('guest notes in the cart (useOrderingSession)', () => {
     const lines = view.result.current.cartItems
     expect(lines.map(line => [line.comment, line.qty])).toEqual([['no onions', 2], ['extra chili', 1]])
     const [noOnions, chili] = lines
-    act(() => view.result.current.decrementCart(noOnions.key))
+    act(() => view.result.current.decrementCart(noOnions.key!))
     act(() => view.result.current.addToCart(chili.item, { comment: chili.comment }))
     expect(await submit(view)).toEqual([
       { item: 'Fish', qty: 1, comment: 'no onions' },
@@ -218,7 +219,7 @@ describe('noted cart lines (CartPage, MenuGrid)', () => {
     fireEvent.click(first.querySelector('button[aria-label^="Add one more"]')!)
     fireEvent.click(first.querySelector('button[aria-label^="Remove one"]')!)
     expect(onIncrement).toHaveBeenCalledWith(fish, { comment: 'no onions' })
-    expect(onDecrement).toHaveBeenCalledWith(lines[0].key)
+    expect(onDecrement).toHaveBeenCalledWith(lines[0].key!)
   })
 
   it('badges the menu card with every line of that dish', async () => {
