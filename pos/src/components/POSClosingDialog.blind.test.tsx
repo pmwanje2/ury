@@ -30,6 +30,11 @@ vi.mock('../lib/pos-closing-api', async (importOriginal) => ({
 
 let container: HTMLDivElement;
 let root: Root;
+// Frappe SDK doc typings require audit fields the dialog never reads.
+type AnyDoc = never;
+const openingDoc = (balance_details: Array<{ mode_of_payment: string; opening_amount: number }>) =>
+  ({ name: 'POS-OPE-1', balance_details }) as AnyDoc;
+const savedDoc = { name: 'POS-CLO-1' } as AnyDoc;
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -45,9 +50,7 @@ beforeEach(async () => {
     change_amount: 0, account_for_change_amount: 'Cash', taxes: [],
     payments: [{ mode_of_payment: 'Cash', amount: 654.32, account: 'Cash' }],
   } as never]);
-  vi.spyOn(db, 'getDoc').mockResolvedValue({
-    name: 'POS-OPE-1', balance_details: [{ mode_of_payment: 'Cash', opening_amount: 10 }],
-  });
+  vi.spyOn(db, 'getDoc').mockResolvedValue(openingDoc([{ mode_of_payment: 'Cash', opening_amount: 10 }]));
   vi.spyOn(call, 'get').mockImplementation(async <T,>(method: string): Promise<T> => {
     if (method === 'ury.ury.api.ury_server_time.get_server_time') {
       return { message: '2026-10-01T10:12:13.123456' } as T;
@@ -138,13 +141,13 @@ describe('blind cash count reconciliation', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     // The browser clock precedes opening; both blind-close payloads must still use server time.
     vi.setSystemTime(new Date('2026-10-01T06:31:00'));
-    const createDoc = vi.spyOn(db, 'createDoc').mockResolvedValue({ name: 'POS-CLO-1' });
-    const updateDoc = vi.spyOn(db, 'updateDoc').mockResolvedValue({ name: 'POS-CLO-1' });
+    const createDoc = vi.spyOn(db, 'createDoc').mockResolvedValue(savedDoc);
+    const updateDoc = vi.spyOn(db, 'updateDoc').mockResolvedValue(savedDoc);
 
     const dialogMarkup = () => {
       // Remounting changes React's generated title ID, not the cashier-visible UI.
       const titleId = container.querySelector('[role="dialog"]')!.getAttribute('aria-labelledby')!;
-      return container.innerHTML.replaceAll(titleId, 'closing-dialog-title');
+      return container.innerHTML.split(titleId).join('closing-dialog-title');
     };
     const renderedDialogs: string[][] = [];
 
@@ -205,13 +208,10 @@ describe('non-blind expected cash display', () => {
   it('moves card-only invoice change to the mode mapped to the change account', async () => {
     state.profile.custom_blind_cash_count = 0;
     state.paymentModes = ['Cash', 'Card'];
-    vi.mocked(db.getDoc).mockResolvedValue({
-      name: 'POS-OPE-1',
-      balance_details: [
+    vi.mocked(db.getDoc).mockResolvedValue(openingDoc([
         { mode_of_payment: 'Cash', opening_amount: 100000 },
         { mode_of_payment: 'Card', opening_amount: 0 },
-      ],
-    });
+      ]));
     vi.mocked(getMainCashierPosInvoices).mockResolvedValue([
       {
         name: 'POS-INV-TIP', grand_total: 50000, net_total: 50000, total_qty: 1,
@@ -285,13 +285,10 @@ describe('blind cash count totals', () => {
 });
 
 async function countPayments(cardSales: number, cashOpening = 10, cashCount = 100, cardCount = 0) {
-  vi.mocked(db.getDoc).mockResolvedValue({
-    name: 'POS-OPE-1',
-    balance_details: [
+  vi.mocked(db.getDoc).mockResolvedValue(openingDoc([
       { mode_of_payment: 'Cash', opening_amount: cashOpening },
       { mode_of_payment: 'Card', opening_amount: 0 },
-    ],
-  });
+    ]));
   vi.mocked(getMainCashierPosInvoices).mockResolvedValue([{
     name: 'POS-INV-1', grand_total: 100 + cardSales, net_total: 100 + cardSales, total_qty: 1,
     change_amount: 0, account_for_change_amount: 'Cash', taxes: [],
@@ -347,13 +344,10 @@ describe('blind cash count zero-row warnings', () => {
 async function renderCountedClose({ blind, cashSales }: { blind: boolean; cashSales: number }) {
   state.profile.custom_blind_cash_count = blind ? 1 : 0;
   state.paymentModes = ['Cash', 'Card'];
-  vi.mocked(db.getDoc).mockResolvedValue({
-    name: 'POS-OPE-1',
-    balance_details: [
+  vi.mocked(db.getDoc).mockResolvedValue(openingDoc([
       { mode_of_payment: 'Cash', opening_amount: 0 },
       { mode_of_payment: 'Card', opening_amount: 0 },
-    ],
-  });
+    ]));
   vi.mocked(getMainCashierPosInvoices).mockResolvedValue(
     (cashSales === 0
       ? [

@@ -175,7 +175,7 @@ describe('opening screen logout', () => {
 
   it.each([false, true])('logs out once from the opening screen (occupied=%s)', async (occupied) => {
     let finish!: () => void;
-    vi.mocked(core.logout).mockImplementation(() => new Promise((resolve) => { finish = () => resolve(undefined); }));
+    vi.mocked(core.logout).mockImplementation(() => new Promise<false | void>((resolve) => { finish = () => resolve(); }));
     await renderContext({ ...context, occupied_entry: occupied ? context.occupied_entry : null });
     const button = logoutButton();
     expect(button, 'Opening and occupied screens must expose Log out').toBeDefined();
