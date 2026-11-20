@@ -122,6 +122,8 @@ class TestRequestAssistance(unittest.TestCase):
         self.get_doc = self.enterContext(patch(f"{MOD}.frappe.get_doc"))
         self.exists = self.enterContext(patch(f"{MOD}.frappe.db.exists", return_value=None))
         self.user = self.enterContext(patch(f"{MOD}.frappe.set_user"))
+        # now_datetime reads System Settings through the patched frappe.get_doc on v16.
+        self.enterContext(patch(f"{MOD}.now_datetime"))
         self.req = MagicMock()
         self.req.name = "REQ-ASSIST"
         self.get_doc.side_effect = lambda doctype, name=None: self.req if isinstance(doctype, dict) else self.profile
