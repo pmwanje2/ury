@@ -38,6 +38,7 @@ class FakeFrappe(types.ModuleType):
 	def __init__(self):
 		super().__init__("frappe")
 		self.installed = ["frappe", "insights"]
+		self.conf = {"ury_analytics_access": 1}  # Maximus fork gate; TestGateOff covers the default
 		self.users = {}  # name -> dict(enabled,user_type,roles)
 		self.roles = {"Insights User", "URY Owner", "URY Admin", "Accounts Manager"}
 		self.dashboards = {}  # title -> (name, workbook)
@@ -385,6 +386,37 @@ class TestUserHooks(Base):
 	def test_update_skips_admin(self):
 		d = self.make("Administrator", ["URY Owner"])
 		self.m.on_user_update(d)
+		self.assertFalse(self.fk.shares)
+
+
+class TestGateOff(Base):
+	"""Maximus fork: without site config `ury_analytics_access` nothing is granted."""
+
+	def setUp(self):
+		super().setUp()
+		self.fk.conf = {}
+
+	def test_apply_is_a_noop(self):
+		self.assertEqual(self.m.apply(), {"skipped": True})
+		self.assertFalse(self.fk.shares)
+		self.assertFalse(self.fk.perms)
+		self.assertNotIn(self.m.MARKER_KEY, self.fk.defaults)
+		self.assertNotIn("Insights User", self.fk.users["mgr@x"]["roles"])
+
+	def test_user_hooks_are_noops(self):
+		d = Doc(name="n@x", enabled=1, user_type="System User")
+		d.append("roles", {"role": "URY Owner"})
+		self.m.on_user_validate(d)
+		self.m.on_user_update(d)
+		self.assertEqual([r.role for r in d["roles"]], ["URY Owner"])
+		self.assertFalse(self.fk.shares)
+
+	def test_revert_still_works(self):
+		self.fk.conf = {"ury_analytics_access": 1}
+		self.m.apply()
+		self.fk.conf = {}
+		self.m.revert()
+		self.assertNotIn(self.m.MARKER_KEY, self.fk.defaults)
 		self.assertFalse(self.fk.shares)
 
 

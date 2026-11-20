@@ -223,7 +223,8 @@ override_doctype_class = {
 	"POS Invoice Merge Log": "ury.ury.class_overrides.pos_invoice_merge_log.CustomPOSInvoiceMergeLog",
 	"Network Printer Settings": "ury.ury.printing.custom_network_printer_settings.CustomNetworkPrinterSettings",
 	"POS Invoice": "ury.ury.class_overrides.pos_invoice.CustomPOSInvoice",
-	"Report": "ury.ury.class_overrides.report.CustomReport",
+	# Maximus fork: no global "Report" override. It changed every query report on the
+	# site; each URY report now supplies its own optional-filter defaults instead.
 }
 
 # HUF-optional: seeds/self-heals the "URY Dashboard Assistant" Agent record
@@ -231,7 +232,8 @@ override_doctype_class = {
 # function itself no-ops when "huf" isn't in the installed apps list.
 after_migrate = [
     "ury.ury.ai_tools.agent_seeding.after_migrate",
-    "ury.setup_customizations.hide_setup_sidebar_options",
+    # Maximus fork: hide_setup_sidebar_options is not run on migrate. On every migrate it hid
+    # Role Permissions, User Permissions and Data Import, which site governance depends on.
     "ury.ury.desk_islands.after_migrate",
     "ury.ury.brief_admin.ensure_default",
 ]
