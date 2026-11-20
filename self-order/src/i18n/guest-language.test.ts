@@ -57,7 +57,8 @@ const en = {
   "payment": {
     "pay_online": "Pay Online",
     "starting": "Starting payment…",
-    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment."
+    "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.",
+    "pay_at_counter": "Pay at Counter"
   },
   "bill": {
     "request": "Request Bill",
@@ -72,12 +73,20 @@ const en = {
     "count_one": "{{count}} item",
     "count_many": "{{count}} items",
     "still_there": "Still there?",
-    "still_here": "I'm still here"
+    "still_here": "I'm still here",
+    "your_cart": "Your Cart",
+    "page_empty": "Your cart is empty.",
+    "note": "Note: {{note}}",
+    "proceed": "Proceed to checkout",
+    "view": "View Cart ({{items}}) • {{total}}"
   },
   "menu": {
     "all_items": "All Items",
     "other": "Other",
-    "categories": "Menu categories"
+    "categories": "Menu categories",
+    "all": "All",
+    "no_match": "No items match your search.",
+    "empty": "No items available."
   },
   "errors": {
     "missing_code": "This link is missing an ordering code. Please rescan the QR code on your table.",
@@ -88,6 +97,61 @@ const en = {
     "call_waiter": "Could not call a waiter. Please ask staff for help.",
     "device_start": "This device could not be started. Please contact staff.",
     "device_bootstrap": "Unable to bootstrap this device."
+  },
+  "nav": {
+    "back": "Back",
+    "back_to_menu": "Back to menu",
+    "back_to_cart": "Back to cart",
+    "browse_menu": "Browse the menu"
+  },
+  "checkout": {
+    "title": "Checkout",
+    "summary": "Order Summary",
+    "payment_method": "Payment Method"
+  },
+  "status_screen": {
+    "confirmed": "Order confirmed",
+    "sent": "Thanks — your order has been sent to the restaurant.",
+    "pickup_code": "Pickup code",
+    "order_status": "Order status",
+    "submitted": "Submitted",
+    "pending": "Pending",
+    "bill_status": "Bill status",
+    "billed": "Billed",
+    "not_billed": "Not billed yet",
+    "open_requests": "Open service requests",
+    "add_more": "Add more items",
+    "done": "Done"
+  },
+  "requests": {
+    "bill": "Bill",
+    "assistance": "Waiter",
+    "open": "Open",
+    "acknowledged": "Acknowledged",
+    "resolved": "Resolved"
+  },
+  "item": {
+    "loading": "Loading item...",
+    "load_error": "Could not load this item. Please try again.",
+    "not_found": "Item not found.",
+    "variants": "Variants",
+    "addons": "Add-ons",
+    "decrease": "Decrease quantity",
+    "increase": "Increase quantity",
+    "add_to_cart": "Add to cart"
+  },
+  "search": {
+    "placeholder": "Search menu...",
+    "placeholder_short": "Search...",
+    "label": "Search menu",
+    "clear": "Clear search"
+  },
+  "availability": {
+    "available": "Available",
+    "not_today": "Not available today",
+    "sold_out": "Sold out",
+    "temporarily": "Temporarily unavailable",
+    "unavailable": "Currently unavailable"
   }
 }
 
@@ -138,7 +202,8 @@ const sw = {
   "payment": {
     "pay_online": "Lipa mtandaoni",
     "starting": "Inaanzisha malipo…",
-    "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa."
+    "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.",
+    "pay_at_counter": "Lipa kwenye kaunta"
   },
   "bill": {
     "request": "Omba bili",
@@ -153,12 +218,20 @@ const sw = {
     "count_one": "Bidhaa {{count}}",
     "count_many": "Bidhaa {{count}}",
     "still_there": "Bado uko?",
-    "still_here": "Bado niko"
+    "still_here": "Bado niko",
+    "your_cart": "Kikapu chako",
+    "page_empty": "Kikapu chako ni tupu.",
+    "note": "Ujumbe: {{note}}",
+    "proceed": "Endelea kukamilisha oda",
+    "view": "Tazama kikapu ({{items}}) • {{total}}"
   },
   "menu": {
     "all_items": "Vitu vyote",
     "other": "Nyingine",
-    "categories": "Makundi ya menyu"
+    "categories": "Makundi ya menyu",
+    "all": "Vyote",
+    "no_match": "Hakuna bidhaa inayolingana na utafutaji wako.",
+    "empty": "Hakuna bidhaa zinazopatikana."
   },
   "errors": {
     "missing_code": "Kiungo hiki hakina msimbo wa oda. Tafadhali skani tena msimbo wa QR ulio mezani.",
@@ -169,6 +242,61 @@ const sw = {
     "call_waiter": "Imeshindwa kuita mhudumu. Tafadhali waombe wahudumu msaada.",
     "device_start": "Kifaa hiki hakikuweza kuanzishwa. Tafadhali wasiliana na wahudumu.",
     "device_bootstrap": "Imeshindwa kuanzisha kifaa hiki."
+  },
+  "nav": {
+    "back": "Rudi",
+    "back_to_menu": "Rudi kwenye menyu",
+    "back_to_cart": "Rudi kwenye kikapu",
+    "browse_menu": "Tazama menyu"
+  },
+  "checkout": {
+    "title": "Kamilisha oda",
+    "summary": "Muhtasari wa oda",
+    "payment_method": "Njia ya malipo"
+  },
+  "status_screen": {
+    "confirmed": "Oda imethibitishwa",
+    "sent": "Asante — oda yako imetumwa kwa mgahawa.",
+    "pickup_code": "Msimbo wa kuchukua",
+    "order_status": "Hali ya oda",
+    "submitted": "Imetumwa",
+    "pending": "Inasubiri",
+    "bill_status": "Hali ya bili",
+    "billed": "Bili imetolewa",
+    "not_billed": "Bili bado haijatolewa",
+    "open_requests": "Maombi ya huduma yaliyo wazi",
+    "add_more": "Ongeza vitu zaidi",
+    "done": "Imekamilika"
+  },
+  "requests": {
+    "bill": "Bili",
+    "assistance": "Mhudumu",
+    "open": "Wazi",
+    "acknowledged": "Imepokelewa",
+    "resolved": "Imeshughulikiwa"
+  },
+  "item": {
+    "loading": "Inapakia bidhaa...",
+    "load_error": "Imeshindwa kupakia bidhaa hii. Tafadhali jaribu tena.",
+    "not_found": "Bidhaa haikupatikana.",
+    "variants": "Aina",
+    "addons": "Nyongeza",
+    "decrease": "Punguza idadi",
+    "increase": "Ongeza idadi",
+    "add_to_cart": "Weka kikapuni"
+  },
+  "search": {
+    "placeholder": "Tafuta kwenye menyu...",
+    "placeholder_short": "Tafuta...",
+    "label": "Tafuta kwenye menyu",
+    "clear": "Futa utafutaji"
+  },
+  "availability": {
+    "available": "Inapatikana",
+    "not_today": "Haipatikani leo",
+    "sold_out": "Imeisha",
+    "temporarily": "Haipatikani kwa muda",
+    "unavailable": "Haipatikani kwa sasa"
   }
 }
 
@@ -219,7 +347,8 @@ const lg = {
   "payment": {
     "pay_online": "Sasula ku yintaneeti",
     "starting": "Ntandika okusasula…",
-    "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula."
+    "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.",
+    "pay_at_counter": "Sasula ku kaunta"
   },
   "bill": {
     "request": "Saba bili",
@@ -234,12 +363,20 @@ const lg = {
     "count_one": "Ekintu {{count}}",
     "count_many": "Ebintu {{count}}",
     "still_there": "Okyali wano?",
-    "still_here": "Nkyali wano"
+    "still_here": "Nkyali wano",
+    "your_cart": "Ekikapu kyo",
+    "page_empty": "Ekikapu kyo kikalu.",
+    "note": "Ekiwandiiko: {{note}}",
+    "proceed": "Genda omalirize oda",
+    "view": "Laba ekikapu ({{items}}) • {{total}}"
   },
   "menu": {
     "all_items": "Ebintu byonna",
     "other": "Ebirala",
-    "categories": "Ebika bya menyu"
+    "categories": "Ebika bya menyu",
+    "all": "Byonna",
+    "no_match": "Tewali kintu kikwatagana n'ky'onoonya.",
+    "empty": "Tewali bintu biriwo."
   },
   "errors": {
     "missing_code": "Link eno terina koodi y'oda. Nsaba oskane nate koodi ya QR eri ku mmeeza.",
@@ -250,6 +387,61 @@ const lg = {
     "call_waiter": "Omuweereza tayitiddwa. Nsaba obuuze abaweereza.",
     "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abaweereza.",
     "device_bootstrap": "Ekyuma kino tekinatandika."
+  },
+  "nav": {
+    "back": "Ddayo",
+    "back_to_menu": "Ddayo ku menyu",
+    "back_to_cart": "Ddayo ku kikapu",
+    "browse_menu": "Laba menyu"
+  },
+  "checkout": {
+    "title": "Malirizza oda",
+    "summary": "Ebifunze ku oda",
+    "payment_method": "Engeri y'okusasula"
+  },
+  "status_screen": {
+    "confirmed": "Oda ekakasiddwa",
+    "sent": "Weebale — oda yo eweerezeddwa ku wooteeri.",
+    "pickup_code": "Koodi y'okutwala",
+    "order_status": "Embeera y'oda",
+    "submitted": "Eweerezeddwa",
+    "pending": "Erindiridde",
+    "bill_status": "Embeera ya bili",
+    "billed": "Bili efulumiziddwa",
+    "not_billed": "Bili tennaba kufulumizibwa",
+    "open_requests": "Okusaba okukyali okuggule",
+    "add_more": "Yongerako ebirala",
+    "done": "Kiwedde"
+  },
+  "requests": {
+    "bill": "Bili",
+    "assistance": "Omuweereza",
+    "open": "Kiggule",
+    "acknowledged": "Kikkiriziddwa",
+    "resolved": "Kikoleddwa"
+  },
+  "item": {
+    "loading": "Ekintu kitikkibwa...",
+    "load_error": "Ekintu kino tekitikkiddwa. Nsaba ogezeeko nate.",
+    "not_found": "Ekintu tekirabise.",
+    "variants": "Ebika",
+    "addons": "Ebyongerwako",
+    "decrease": "Kendeeza omuwendo",
+    "increase": "Yongera omuwendo",
+    "add_to_cart": "Teeka mu kikapu"
+  },
+  "search": {
+    "placeholder": "Noonya ku menyu...",
+    "placeholder_short": "Noonya...",
+    "label": "Noonya ku menyu",
+    "clear": "Sangula okunoonya"
+  },
+  "availability": {
+    "available": "Kiriwo",
+    "not_today": "Tekiriiwo leero",
+    "sold_out": "Kiweddeyo",
+    "temporarily": "Tekiriiwo kaseera kano",
+    "unavailable": "Tekiriiwo kati"
   }
 }
 
