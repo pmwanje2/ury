@@ -169,11 +169,15 @@ ury_demo_transaction_doctypes = [
 # Jinja
 # ----------
 
-# add methods and filters to jinja environment
-# jinja = {
-# 	"methods": "ury.utils.jinja_methods",
-# 	"filters": "ury.utils.jinja_filters"
-# }
+# Receipt print formats call feedback_receipt_link(invoice) and
+# feedback_receipt_qr(invoice, base_url). Neither is a guest endpoint;
+# submit_feedback and get_feedback_form are the only guest entries.
+jinja = {
+    "methods": [
+        "ury.ury.api.self_ordering.feedback_receipt_link",
+        "ury.ury.api.self_ordering.feedback_receipt_qr",
+    ],
+}
 
 # Installation
 # ------------

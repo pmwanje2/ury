@@ -11,6 +11,7 @@
   "profile_info_tab",
   "profile_name",
   "restaurant",
+  "guest_display_name",
   "branch",
   "column_break_profile_info",
   "pos_profile",
@@ -34,6 +35,9 @@
   "column_break_billing_payment",
   "enable_payment_link",
   "enable_pay_at_counter",
+  "feedback_section",
+  "enable_feedback",
+  "feedback_template",
   "session_section",
   "session_idle_timeout_minutes",
   "qr_signing_secret",
@@ -58,6 +62,12 @@
    "label": "Restaurant",
    "options": "URY Restaurant",
    "reqd": 1
+  },
+  {
+   "description": "Optional guest-page name. Leave blank to keep the site brand. The guest logo uses the linked URY Restaurant image.",
+   "fieldname": "guest_display_name",
+   "fieldtype": "Data",
+   "label": "Guest Display Name"
   },
   {
    "fetch_from": "restaurant.branch",
@@ -190,6 +200,25 @@
    "label": "Enable Pay at Counter"
   },
   {
+   "fieldname": "feedback_section",
+   "fieldtype": "Section Break",
+   "label": "Feedback"
+  },
+  {
+   "default": "0",
+   "description": "Off until a Quality Feedback Template is chosen. Guests still cannot submit until the bill is printed or paid.",
+   "fieldname": "enable_feedback",
+   "fieldtype": "Check",
+   "label": "Enable Feedback"
+  },
+  {
+   "depends_on": "eval:doc.enable_feedback",
+   "fieldname": "feedback_template",
+   "fieldtype": "Link",
+   "label": "Feedback Template",
+   "options": "Quality Feedback Template"
+  },
+  {
    "fieldname": "session_section",
    "fieldtype": "Section Break",
    "label": "Session"
@@ -222,7 +251,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-19 00:00:00.000000",
+ "modified": "2026-11-20 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Self Ordering Profile",
