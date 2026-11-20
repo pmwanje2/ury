@@ -26,6 +26,7 @@ beforeEach(async () => {
     fetchPaymentModes: async () => {},
     posProfile: {
       name: 'Till A', customer: 'Walk-in Customer', allow_partial_payment: 1,
+      order_type_customer_map: {}, default_customer: null,
     } as unknown as Profile,
   });
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -98,6 +99,45 @@ test.each([
   expect(payButton().disabled).toBe(true);
   await act(async () => payButton().click());
   expect(post).not.toHaveBeenCalled();
+});
+
+// v16 resolves a default customer per order type (custom_order_type_customers)
+// and at profile level; neither is a named account, whatever the order type.
+test.each([
+  ['an order-type default customer', {
+    order_type_customer_map: { 'Dine In': { customer: 'Table Guest' }, 'Take Away': { customer: 'Counter Guest' } },
+  }, 'Table Guest'],
+  ['another order type\'s default customer', {
+    order_type_customer_map: { 'Dine In': { customer: 'Table Guest' }, 'Take Away': { customer: 'Counter Guest' } },
+  }, 'Counter Guest'],
+  ['the profile-level default customer', { default_customer: { customer: 'Profile Guest' } }, 'Profile Guest'],
+  ['a profile without the default-customer keys', {
+    order_type_customer_map: undefined, default_customer: undefined,
+  }, 'House Account'],
+] as const)('short payment stays disabled for %s', async (_reason, fields, customer) => {
+  const profile: Record<string, unknown> = { ...usePOSStore.getState().posProfile!, ...fields };
+  for (const key of Object.keys(fields)) if (profile[key] === undefined) delete profile[key];
+  usePOSStore.setState({ posProfile: profile as unknown as Profile });
+  const post = vi.spyOn(call, 'post');
+  await render(customer);
+  await enter('0');
+  expect(payButton().disabled).toBe(true);
+  await act(async () => payButton().click());
+  expect(post).not.toHaveBeenCalled();
+});
+
+test('a named account still settles short when order-type defaults are configured', async () => {
+  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!,
+    order_type_customer_map: { 'Dine In': { customer: 'Table Guest' } },
+    default_customer: { customer: 'Profile Guest' } } as unknown as Profile });
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
+  await render('House Account');
+  await enter('40');
+  expect(payButton().disabled).toBe(false);
+  await act(async () => payButton().click());
+  expect(post.mock.calls[0][1]).toMatchObject({
+    customer: 'House Account', payments: [{ mode_of_payment: 'Cash', amount: 40 }],
+  });
 });
 
 test('short payment stays disabled before the profile is loaded', async () => {
