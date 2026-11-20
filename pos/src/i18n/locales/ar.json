@@ -336,5 +336,13 @@
     },
     "captain": {
         "till_not_open": "الصندوق غير مفتوح. اطلب من أمين الصندوق فتحه."
+    },
+    "service_requests": {
+        "call_waiter": "استدعاء النادل",
+        "bill": "الفاتورة",
+        "minutes_waiting": "{{minutes}} د",
+        "acknowledge": "تأكيد الاستلام",
+        "resolve": "تم الحل",
+        "acknowledged": "تم الاستلام"
     }
 }

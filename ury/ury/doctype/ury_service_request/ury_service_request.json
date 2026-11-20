@@ -15,6 +15,8 @@
   "status_section",
   "status",
   "requested_at",
+  "acknowledged_at",
+  "acknowledged_by",
   "resolved_at",
   "resolved_by"
  ],
@@ -65,6 +67,19 @@
    "read_only": 1
   },
   {
+   "fieldname": "acknowledged_at",
+   "fieldtype": "Datetime",
+   "label": "Acknowledged At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "acknowledged_by",
+   "fieldtype": "Link",
+   "label": "Acknowledged By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
    "fieldname": "resolved_at",
    "fieldtype": "Datetime",
    "label": "Resolved At",
@@ -80,7 +95,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-19 02:25:00.000000",
+ "modified": "2026-11-20 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Service Request",
@@ -101,7 +116,6 @@
   },
   {
    "create": 1,
-   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,
@@ -114,7 +128,6 @@
   },
   {
    "create": 1,
-   "delete": 1,
    "email": 1,
    "export": 1,
    "print": 1,

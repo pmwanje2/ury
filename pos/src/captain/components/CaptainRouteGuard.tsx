@@ -3,6 +3,7 @@ import { Button, Spinner } from '@ury/ui';
 import { t } from '../../i18n';
 import { floorSignOut } from '../../lib/floor-session';
 import { useCaptainContext } from '../hooks/useCaptainContext';
+import ServiceRequestAlert from '../../components/ServiceRequestAlert';
 
 interface Props {
   children: React.ReactNode;
@@ -82,7 +83,14 @@ const CaptainRouteGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      <div className="sticky top-0 z-30">
+        <ServiceRequestAlert />
+      </div>
+      {children}
+    </>
+  );
 };
 
 export default CaptainRouteGuard;

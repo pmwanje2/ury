@@ -398,10 +398,12 @@ test("leaving a station detaches both listeners without disturbing shared subscr
   assert.equal(old.showKotErrorAlert, false, "An unmounted station must not receive delay alerts");
   assert.equal(observed, 1, "Unmount must preserve another consumer of the shared socket");
   assert.equal(k.intervals.size, 0, "The station's minute timer must still be cleaned up");
+  const before = k.requests.length;
   k.disconnect();
   k.connect();
   await settle();
-  assert.equal(k.requests.length, 1, "An old station must not resync on reconnect");
+  assert.equal(k.requests.length, before, "An old station must not read anything on reconnect");
+  assert.equal(k.requests.filter(r => r.method === "ury.ury.api.ury_kot_display.kot_list").length, 1, "An old station must not resync on reconnect");
 });
 
 test("station to root to station produces exactly one chime and one card", async () => {
@@ -444,7 +446,8 @@ test("reconnect resyncs the server clock and chimes once for all missed station 
   k.connect();
   await settle();
   assert.deepEqual(state.kot.map(kot => kot.name), ["MISSED", "MISSED-2", "KNOWN"], "Socket.IO does not replay disconnected tickets");
-  assert.deepEqual(k.requests, Array.from({ length: 2 }, () => ({ method: "ury.ury.api.ury_kot_display.kot_list", args: {} })));
+  assert.deepEqual(k.requests.filter(r => r.method === "ury.ury.api.ury_kot_display.kot_list"),
+    Array.from({ length: 2 }, () => ({ method: "ury.ury.api.ury_kot_display.kot_list", args: {} })));
   assert.equal(state.serverTimeOffset, 3600000, "Reconnect must also refresh the site-clock offset");
   assert.equal(state.calculateTimeRemaining("13:00:00"), "0 : 5");
   assert.deepEqual(k.chimes, ["https://test/snapshot-alert.wav"], "Reconnect must combine missed station tickets into one chime using the snapshot sound");
@@ -533,7 +536,8 @@ test("an older resync cannot clear staleness or update the board while a newer r
   const state = k.mount();
   await settle();
   const finishes = [];
-  k.call.get = () => new Promise(resolve => finishes.push(resolve));
+  // Hold KOT resyncs; guest service-request reads on reconnect stay pending.
+  k.call.get = method => method === "ury.ury.api.ury_kot_display.kot_list" ? new Promise(resolve => finishes.push(resolve)) : new Promise(() => {});
   k.disconnect();
   k.connect();
   k.disconnect();
@@ -557,7 +561,8 @@ test("an older resync finishing last cannot overwrite the latest board, clock or
   const state = k.mount();
   await settle();
   const finishes = [];
-  k.call.get = () => new Promise(resolve => finishes.push(resolve));
+  // Hold KOT resyncs; guest service-request reads on reconnect stay pending.
+  k.call.get = method => method === "ury.ury.api.ury_kot_display.kot_list" ? new Promise(resolve => finishes.push(resolve)) : new Promise(() => {});
   k.disconnect();
   k.connect();
   k.disconnect();

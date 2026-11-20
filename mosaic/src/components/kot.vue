@@ -3,6 +3,27 @@
     <div v-if="socketStale" role="status" class="fixed bottom-0 inset-x-0 p-3 bg-red-600 text-white text-center z-50">
       Realtime offline or resyncing — board may be stale.
     </div>
+    <div
+      v-if="openServiceRequests().length"
+      data-testid="service-request-alert"
+      role="alert"
+      class="fixed top-0 inset-x-0 w-full z-50 border-b-4 border-red-800 bg-red-600 px-4 py-2 text-white shadow-lg"
+    >
+      <div
+        v-for="request in openServiceRequests()"
+        :key="request.name"
+        :data-escalated="serviceRequestEscalated(request) ? 'true' : 'false'"
+        :class="[
+          'my-1 flex flex-wrap items-center gap-4 rounded-md px-3 py-2 text-2xl font-bold',
+          serviceRequestEscalated(request) ? 'animate-pulse bg-red-900 ring-4 ring-yellow-300' : 'bg-amber-500 text-gray-950',
+        ]"
+      >
+        <span aria-hidden="true">🔔</span>
+        <span>{{ request.table }}</span>
+        <span>{{ request.request_type === "Bill" ? "Bill" : "Call waiter" }}</span>
+        <span>{{ serviceRequestMinutes(request) }} min</span>
+      </div>
+    </div>
     <!-- Alert Modal div start-->
     <div
       v-if="this.showModal"
@@ -414,6 +435,10 @@ export default {
       canManagePrintSettings: false,
       showPrintSettings: false,
       stationSettingsError: "",
+      serviceRequests: [],
+      serviceRequestSettings: { sound: 1, escalate_minutes: 3 },
+      serviceRequestPoll: null,
+      serviceRequestChime: null,
     };
   },
   methods: {
@@ -488,6 +513,53 @@ export default {
       var audio_path = currentDomain + path;
       const audio = new Audio(audio_path);
       audio.play();
+    },
+    // Guest calls (Oracle Simphony guest-request alerts): shown on every board
+    // until the floor acknowledges them. The server publishes to each branch staff
+    // user's own room, so the board joins no shared room; the 15 s poll is the
+    // fallback. Sound and escalation come from the POS Profile.
+    async refreshServiceRequests() {
+      if (!this.branch) return;
+      try {
+        const { message } = await this.call.get("ury.ury.api.service_requests.list_open_service_requests", { branch: this.branch });
+        if (this.socketActive) this.serviceRequests = Array.isArray(message) ? message : [];
+      } catch (error) {
+        console.error("Service requests unavailable:", error);
+      }
+      this.updateServiceRequestChime();
+    },
+    async startServiceRequests() {
+      try {
+        const { message } = await this.call.get("ury.ury.api.service_requests.get_service_request_alert_settings", { branch: this.branch });
+        if (message) this.serviceRequestSettings = message;
+      } catch (error) {
+        console.error("Service request settings unavailable:", error);
+      }
+      clearInterval(this.serviceRequestPoll);
+      this.serviceRequestPoll = setInterval(this.refreshServiceRequests, 15000);
+      await this.refreshServiceRequests();
+    },
+    openServiceRequests() {
+      return this.serviceRequests.filter(request => request.status === "Open");
+    },
+    serviceRequestMinutes(request) {
+      const at = new Date(String(request.requested_at).replace(" ", "T")).getTime();
+      if (!Number.isFinite(at)) return 0;
+      return Math.max(0, Math.floor((Date.now() + this.serverTimeOffset - at) / 60000));
+    },
+    serviceRequestEscalated(request) {
+      return this.serviceRequestMinutes(request) >= Number(this.serviceRequestSettings.escalate_minutes || 3);
+    },
+    updateServiceRequestChime() {
+      const ringing = this.openServiceRequests().length > 0 && Number(this.serviceRequestSettings.sound) === 1;
+      if (ringing && !this.serviceRequestChime) {
+        const chime = () => { try { this.playAlertSound("/assets/frappe/sounds/alert.mp3"); } catch (error) { console.error(error); } };
+        chime();
+        this.serviceRequestChime = setInterval(chime, 10000);
+      } else if (!ringing && this.serviceRequestChime) {
+        clearInterval(this.serviceRequestChime);
+        this.serviceRequestChime = null;
+      }
     },
     auth() {
       return new Promise((resolve, reject) => {
@@ -847,6 +919,7 @@ export default {
           }
           this.socketHandlers = {
             connect: () => {
+              this.refreshServiceRequests();
               const generation = ++this.resyncGeneration;
               this.socketStale = true;
               this.fetchKOT(true).then(() => {
@@ -902,7 +975,12 @@ export default {
               this.hideKotErrorAlert();
             }, 8000);
           };
+          this.socketHandlers.ury_service_request = (doc) => {
+            if (doc && doc.branch && doc.branch !== this.branch) return;
+            this.refreshServiceRequests();
+          };
           for (const [channel, handler] of Object.entries(this.socketHandlers)) socket.on(channel, handler);
+          this.startServiceRequests();
         });
       })
       .catch((error) => {
@@ -917,6 +995,9 @@ export default {
     for (const [channel, handler] of Object.entries(this.socketHandlers)) socket.off(channel, handler);
     this.cancelPendingServes();
     clearInterval(this.timeInterval);
+    clearInterval(this.serviceRequestPoll);
+    clearInterval(this.serviceRequestChime);
+    this.serviceRequestChime = null;
     window.removeEventListener("resize", this.masonryLoading);
     window.removeEventListener("online", this.handleOnline);
     window.removeEventListener("offline", this.handleOffline);

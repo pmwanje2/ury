@@ -413,6 +413,8 @@ fixtures = [
                     "POS Profile-custom_floor_pin_roles",
                     "POS Profile-custom_floor_device_epoch",
                     "POS Profile-custom_room_lookup_method",
+                    "POS Profile-custom_service_request_sound",
+                    "POS Profile-custom_service_request_escalate_minutes",
                     "POS Invoice-custom_guest_label",
                     "URY KOT-custom_guest_label",
                     "POS Profile-custom_checklist_items",

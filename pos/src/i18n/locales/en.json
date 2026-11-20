@@ -574,5 +574,13 @@
   },
   "captain": {
     "till_not_open": "The till is not open. Ask the cashier to open it."
+  },
+  "service_requests": {
+    "call_waiter": "Call waiter",
+    "bill": "Bill",
+    "minutes_waiting": "{{minutes}} min",
+    "acknowledge": "Acknowledge",
+    "resolve": "Resolve",
+    "acknowledged": "Acknowledged"
   }
 }

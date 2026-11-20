@@ -726,6 +726,7 @@ def add_customer_items(session, items):
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=5, seconds=60)
 def request_bill(session):
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
@@ -738,7 +739,8 @@ def request_bill(session):
     with _elevated():
         existing = frappe.db.exists(
             "URY Service Request",
-            {"table": session.table, "invoice": session.invoice, "request_type": "Bill", "status": ["!=", "Resolved"]},
+            # Only an Open request suppresses a new one; after staff acknowledge, a new tap alerts again.
+            {"table": session.table, "invoice": session.invoice, "request_type": "Bill", "status": "Open"},
         )
         if existing:
             return {"status": "Already Requested", "request": existing}
@@ -758,6 +760,7 @@ def request_bill(session):
 
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=5, seconds=60)
 def request_assistance(session):
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
@@ -770,7 +773,9 @@ def request_assistance(session):
     with _elevated():
         existing = frappe.db.exists(
             "URY Service Request",
-            {"table": session.table, "invoice": session.invoice, "request_type": "Assistance", "status": ["!=", "Resolved"]},
+            # One Open call per table, whichever guest session or check raised it. An
+            # Acknowledged call does not count: calling again must alert staff again.
+            {"table": session.table, "request_type": "Assistance", "status": "Open"},
         )
         if existing:
             return {"status": "Already Requested", "request": existing}

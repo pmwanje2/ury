@@ -20,6 +20,7 @@ import CaptainTableCard, {
 import { floorSignOut } from '../../lib/floor-session';
 import { t } from '../../i18n';
 import Notifications from '../../components/Notifications';
+import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
 
 /**
  * Captain "Tables" home screen (`/order`). See PLAN.md §5/§6 for the
@@ -29,6 +30,7 @@ import Notifications from '../../components/Notifications';
  */
 export default function CaptainTables() {
   const navigate = useNavigate();
+  const serviceRequestTables = useOpenServiceRequestTables();
   const {
     context,
     capabilities,
@@ -385,6 +387,7 @@ export default function CaptainTables() {
                   ownerName={ownership === 'mine' ? undefined : ownerName}
                   mergePartners={mergePartners}
                   onTap={() => handleTableTap(table, order)}
+                  serviceRequest={serviceRequestTables.get(table.name) ?? null}
                 />
               );
             })}

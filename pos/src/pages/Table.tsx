@@ -42,6 +42,7 @@ import MergeLinkConnector from '../components/MergeLinkConnector';
 import TableReservationDialog, { type ReservationFormData } from '../components/TableReservationDialog';
 import TableReservationEditDialog, { type EditReservationFormData } from '../components/TableReservationEditDialog';
 import TableReservationCancelDialog from '../components/TableReservationCancelDialog';
+import { resolveTableServiceRequest, useOpenServiceRequestTables } from '../components/ServiceRequestAlert';
 
 const TableView = () => {
   const navigate = useNavigate();
@@ -683,6 +684,7 @@ const TableView = () => {
   }, [unmergeSourceTable, tablesToDisplay]);
 
   const tableRenderGroups = useMemo(() => getTableRenderGroups(tablesToDisplay), [tablesToDisplay]);
+  const serviceRequestTables = useOpenServiceRequestTables();
 
   const renderTableCard = (table: Table, className?: string) => {
     const mergeMembers = getMergeGroupMembers(table, tables);
@@ -718,6 +720,11 @@ const TableView = () => {
         onNavigate={() => handleNavigateToPOS(table.name)}
         onPreview={(event) => handlePreviewTable(table, event)}
         onPrint={(event) => handlePrintTable(table, event)}
+        serviceRequest={serviceRequestTables.get(table.name) ?? null}
+        onResolveServiceRequest={() => {
+          const request = serviceRequestTables.get(table.name);
+          if (request) void resolveTableServiceRequest(request.name).catch(() => {});
+        }}
         isPrinting={printingTable === table.name}
         isRestricted={isRestricted}
       />

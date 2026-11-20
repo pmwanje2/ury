@@ -7399,5 +7399,43 @@
 		"translatable": 0,
 		"unique": 0,
 		"width": null
+	},
+	{
+		"default": "1",
+		"depends_on": null,
+		"description": "Staff screens repeat a chime while a guest call-waiter or bill request is unacknowledged.",
+		"docstatus": 0,
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"fetch_from": null,
+		"fieldname": "custom_service_request_sound",
+		"fieldtype": "Check",
+		"insert_after": "custom_room_lookup_method",
+		"label": "Repeat Service Request Chime",
+		"mandatory_depends_on": null,
+		"modified": "2026-11-20 15:00:00.000000",
+		"module": "URY",
+		"name": "POS Profile-custom_service_request_sound",
+		"options": null,
+		"read_only_depends_on": null
+	},
+	{
+		"default": "3",
+		"depends_on": null,
+		"description": "An unacknowledged guest request turns to the escalation colour after this many minutes.",
+		"docstatus": 0,
+		"doctype": "Custom Field",
+		"dt": "POS Profile",
+		"fetch_from": null,
+		"fieldname": "custom_service_request_escalate_minutes",
+		"fieldtype": "Int",
+		"insert_after": "custom_service_request_sound",
+		"label": "Service Request Escalation (Minutes)",
+		"mandatory_depends_on": null,
+		"modified": "2026-11-20 15:00:00.000000",
+		"module": "URY",
+		"name": "POS Profile-custom_service_request_escalate_minutes",
+		"options": null,
+		"read_only_depends_on": null
 	}
 ]

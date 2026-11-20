@@ -37,6 +37,8 @@ interface TableCardProps {
   isPrinting: boolean;
   onReserve?: () => void;
   isRestricted?: boolean;
+  serviceRequest?: { request_type: string; escalated: boolean; status?: string } | null;
+  onResolveServiceRequest?: () => void;
 }
 
 const TableCard = ({
@@ -60,7 +62,10 @@ const TableCard = ({
   isPrinting,
   onReserve,
   isRestricted = false,
+  serviceRequest = null,
+  onResolveServiceRequest,
 }: TableCardProps) => {
+  const callingNow = serviceRequest && serviceRequest.status !== 'Acknowledged';
   const isOccupied = table.occupied === 1;
   const isLockedByReservation =
     isReserved &&
@@ -70,6 +75,7 @@ const TableCard = ({
 
   return (
     <div
+      data-service-request={serviceRequest ? serviceRequest.request_type : undefined}
       role={isOccupied ? 'group' : 'button'}
       tabIndex={isOccupied ? -1 : 0}
       onClick={() => {
@@ -87,6 +93,7 @@ const TableCard = ({
               ? TABLE_STATE_STYLES.restricted
               : cn(TABLE_STATE_STYLES.available, 'cursor-pointer hover:shadow-md'),
         menuOpen ? 'z-20' : 'z-0',
+        callingNow && cn('animate-pulse ring-4', serviceRequest.escalated ? 'ring-red-600' : 'ring-amber-500'),
         className
       )}
     >
@@ -241,6 +248,15 @@ const TableCard = ({
           </>
         ) : null}
       </div>
+      {serviceRequest?.status === 'Acknowledged' && onResolveServiceRequest && (
+        <button
+          type="button"
+          onClick={(event) => { event.stopPropagation(); onResolveServiceRequest(); }}
+          className="mt-2 min-h-11 rounded-md bg-emerald-600 px-3 text-sm font-bold text-white"
+        >
+          {t('service_requests.resolve')}
+        </button>
+      )}
     </div>
   );
 };
