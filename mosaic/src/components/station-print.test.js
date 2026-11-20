@@ -209,6 +209,47 @@ test("configure keeps 576 or 384 dots and rejects any other paper width", async 
   assert.equal(reloaded.printer.settings.pageWidth, 384);
 });
 
+// Generic ESC/POS clones (Tank Hill's PP-260L) can mishandle ESC * images; GS v 0 raster is near-universal.
+// QZ 2.3.0 selects the encoder per raw HTML element with options.imageEncoding (EscPos.ImageEncoding).
+test("saved settings without a command mode print Standard: double-density ESC * and no imageEncoding", async () => {
+  const { printer, qz } = await makePrinter();
+  assert.equal(printer.settings.commandMode, "standard");
+  await printer.process(ticket("STANDARD"));
+  assert.deepEqual(qz.calls.prints[0].data[0].options, { language: "ESCPOS", pageWidth: 576, dotDensity: "double" });
+  assert.equal("imageEncoding" in qz.calls.prints[0].data[0].options, false);
+});
+
+test("Raster mode sends imageEncoding GS_V_0 without dotDensity and keeps the paper width and cut", async () => {
+  const { printer, qz } = await makePrinter();
+  printer.configure({ ...printer.settings, commandMode: "raster" });
+  await printer.process(ticket("RASTER"));
+  assert.deepEqual(qz.calls.prints[0].data[0].options, { language: "ESCPOS", pageWidth: 576, imageEncoding: "GS_V_0" });
+  assert.equal(qz.calls.prints[0].data[1].data, "\n\n\n\x1dV\x00");
+
+  printer.configure({ ...printer.settings, pageWidth: 384 });
+  await printer.process(ticket("RASTER-58", "Kitchen", "2026-10-01T12:02:00.000Z"));
+  assert.deepEqual(qz.calls.prints[1].data[0].options, { language: "ESCPOS", pageWidth: 384, imageEncoding: "GS_V_0" });
+
+  printer.configure({ ...printer.settings, commandMode: "standard" });
+  await printer.process(ticket("BACK", "Kitchen", "2026-10-01T12:03:00.000Z"));
+  assert.deepEqual(qz.calls.prints[2].data[0].options, { language: "ESCPOS", pageWidth: 384, dotDensity: "double" });
+});
+
+test("configure keeps standard or raster and rejects any other command mode", async () => {
+  const device = storage();
+  const { printer } = await makePrinter({ storage: device });
+
+  assert.equal(printer.configure(settings()).commandMode, "standard");
+  assert.equal(printer.configure(settings({ commandMode: "raster" })).commandMode, "raster");
+  assert.equal(printer.configure(settings({ pageWidth: 384 })).commandMode, "raster");
+  for (const commandMode of ["", "Raster", "RASTER", "GS_V_0", "ESC_ASTERISK", "GS_L", "escpos", 1, true]) {
+    assert.throws(() => printer.configure(settings({ commandMode })), { message: "Choose a printer command mode: Standard (ESC *) or Raster (GS v 0)." });
+  }
+  assert.equal(printer.settings.commandMode, "raster");
+  const reloaded = await makePrinter({ storage: device });
+  assert.equal(reloaded.printer.settings.commandMode, "raster");
+});
+
 test("configure requires exactly one of an installed printer or a network host", async () => {
   const { printer } = await makePrinter({ storage: storage() });
 
@@ -358,6 +399,14 @@ test("the settings dialog offers installed printers plus a manual network host o
   const manual = await renderSettings(settings({ printer: "" }), ["KITCHEN-RAW"]);
   assert.match(manual, /Printer host/);
   assert.match(manual, /Printer port/);
+});
+
+test("the settings dialog offers Printer command mode Standard (ESC *) and Raster (GS v 0)", async () => {
+  const html = await renderSettings(settings({ host: "", printer: "KITCHEN-RAW", pageWidth: 576, commandMode: "standard" }), ["KITCHEN-RAW"]);
+
+  assert.match(html, /Printer command mode/);
+  assert.match(html, /<option value="standard"[^>]*>Standard \(ESC \*\)<\/option>/);
+  assert.match(html, /<option value="raster"[^>]*>Raster \(GS v 0\)<\/option>/);
 });
 
 test("the settings dialog offers Paper width 80 mm (576 dots) and 58 mm (384 dots)", async () => {
