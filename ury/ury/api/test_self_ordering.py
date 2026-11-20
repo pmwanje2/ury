@@ -262,7 +262,10 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
 
-        mock_db_get_value.return_value = "Menu A"
+        # The guest line is named from the Item (as staff lines are), never from its code.
+        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
+            "Club sandwich" if (doctype, field) == ("Item", "item_name") else "Menu A"
+        )
 
         result = add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -274,7 +277,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # only, no client-supplied rate ever reaches invoice construction.
         mock_price_items.assert_called_once()
         called_items = mock_price_items.call_args[0][0]
-        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Sandwich", "qty": 1.0, "comment": ""}])
+        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": ""}])
         # KOT still invoked (existing kitchen pipeline untouched) — and
         # crucially, current_items passed to it is the FULL aggregated
         # per-item state (old Biryani row + new Sandwich row), not just the
