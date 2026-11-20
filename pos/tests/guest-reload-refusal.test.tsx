@@ -149,6 +149,8 @@ describe('guest reload', () => {
   })
 })
 
+// An id outside the guest catalogue's closed list keeps the server's own
+// (already translated) sentence; known ids are covered in guest-ordering.
 describe('translated ERP refusals', () => {
   const refusals = [
     ['en', 'Please ask a waiter to open your table first.', 'Place Order'],
@@ -158,8 +160,8 @@ describe('translated ERP refusals', () => {
   it.each(refusals)('shows the %s server sentence once without the legacy wrapper', async (language, sentence, placeOrder) => {
     await initI18n(language, { setCookie() {} })
     writes.mockRejectedValue({ _server_messages: JSON.stringify([
-      JSON.stringify({ message: `[SAL-QR-WAITER-OPENS-TABLE] ${sentence}` }),
-      JSON.stringify({ message: `Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] ${sentence}` }),
+      JSON.stringify({ message: `[SAL-QR-UNLISTED] ${sentence}` }),
+      JSON.stringify({ message: `Error while placing order: [SAL-QR-UNLISTED] ${sentence}` }),
     ]) })
     await render()
     await act(async () => [...container.querySelectorAll('button')].find(candidate => candidate.textContent?.startsWith('Soup'))!.click())
@@ -172,7 +174,7 @@ describe('translated ERP refusals', () => {
 
   it.each(refusals)('removes the legacy wrapper from an exception-only %s refusal', async (language, sentence, placeOrder) => {
     await initI18n(language, { setCookie() {} })
-    writes.mockRejectedValue({ exception: `frappe.exceptions.ValidationError: Error while placing order: [SAL-QR-WAITER-OPENS-TABLE] ${sentence}` })
+    writes.mockRejectedValue({ exception: `frappe.exceptions.ValidationError: Error while placing order: [SAL-QR-UNLISTED] ${sentence}` })
     await render()
     await act(async () => [...container.querySelectorAll('button')].find(candidate => candidate.textContent?.startsWith('Soup'))!.click())
     await act(async () => button(placeOrder)!.click())

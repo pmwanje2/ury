@@ -103,6 +103,11 @@
     "pay_online": "Imeshindwa kuanzisha malipo mtandaoni. Tafadhali lipa kwenye kaunta.",
     "call_waiter": "Imeshindwa kuita mhudumu. Tafadhali waombe wahudumu msaada.",
     "device_start": "Kifaa hiki hakikuweza kuanzishwa. Tafadhali wasiliana na wahudumu.",
-    "device_bootstrap": "Imeshindwa kuanzisha kifaa hiki."
+    "device_bootstrap": "Imeshindwa kuanzisha kifaa hiki.",
+    "refusal": {
+      "waiter_opens_table": "Meza yako bado haijafunguliwa kwa oda. Tafadhali mwombe mhudumu aifungue, kisha weka oda yako tena. Kikapu chako kimehifadhiwa.",
+      "bill_printed": "Bili yako tayari imechapishwa, kwa hivyo bidhaa mpya haziwezi kuongezwa hapa. Tafadhali mwombe mhudumu akuongezee. Kikapu chako kimehifadhiwa.",
+      "qty": "Tafadhali chagua idadi kamili kati ya 1 na 20."
+    }
   }
 }
