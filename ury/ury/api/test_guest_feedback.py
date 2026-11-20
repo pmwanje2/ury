@@ -23,6 +23,8 @@ from ury.ury.api import self_ordering
 
 
 MOD = "ury.ury.api.self_ordering"
+# Captured before any test patches it, so a test can run the real secret lookup.
+_REAL_GET_PROFILE_SECRET = self_ordering._get_profile_secret
 FIXED_NOW = datetime(2026, 10, 16, 12, 0, 0)
 GRANT_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 SECRET = "test-secret"
@@ -468,6 +470,47 @@ class TestGuestFeedback(unittest.TestCase):
         with self.assertRaises(frappe.PermissionError) as caught:
             self.submit(session="opaque-session", ratings=RATINGS)
         self.assertIn("URY_FEEDBACK_LINK_INVALID", str(caught.exception))
+        self.feedback.insert.assert_not_called()
+
+    def test_every_invalid_receipt_token_gets_one_enumeration_safe_refusal(self):
+        # A guest must not learn which profile names exist. An unknown profile,
+        # a profile without a secret, a wrong signature, an expired and a
+        # malformed token all get the same denial class and the same text.
+        self.enterContext(patch(f"{MOD}._get_profile_secret", _REAL_GET_PROFILE_SECRET))
+        secrets = {"Profile A": SECRET, "Profile Blank": ""}
+
+        def get_value(doctype, filters, fieldname="name", **kwargs):
+            if doctype == "URY Self Ordering Profile" and fieldname == "qr_signing_secret":
+                return secrets.get(filters)
+            return self._get_value(doctype, filters, fieldname, **kwargs)
+
+        self.get_value.side_effect = get_value
+        expiry = _epoch(FIXED_NOW) + 3600
+        valid = _expected_grant("Profile A", "feedback", "POS-1", expiry)
+        self.assertEqual(self.api.read_signed_invoice_grant(valid, "feedback"), ("Profile A", "POS-1"))
+        cases = {
+            "unknown_profile": _expected_grant("Profile Z", "feedback", "POS-1", expiry),
+            "profile_without_secret": _expected_grant("Profile Blank", "feedback", "POS-1", expiry),
+            "wrong_signature": _expected_grant("Profile A", "feedback", "POS-1", expiry, secret="other-secret"),
+            "expired": _expected_grant("Profile A", "feedback", "POS-1", _epoch(FIXED_NOW)),
+            "malformed": "not-a-token",
+        }
+        calls = {
+            "get_feedback_form": lambda token: self.api.get_feedback_form(receipt_token=token),
+            "submit_feedback": lambda token: self.submit(receipt_token=token, ratings=RATINGS),
+        }
+        self.maxDiff = None
+        refusals = {}
+        for endpoint, call in calls.items():
+            for name, token in cases.items():
+                try:
+                    call(token)
+                except Exception as error:
+                    refusals[(endpoint, name)] = (type(error).__name__, str(error))
+                else:
+                    self.fail(f"{endpoint} accepted the {name} token")
+        expected = ("PermissionError", "URY_FEEDBACK_LINK_INVALID: Invalid feedback link")
+        self.assertEqual(refusals, {key: expected for key in refusals})
         self.feedback.insert.assert_not_called()
 
     def test_malformed_signature_is_a_permission_refusal_not_a_server_error(self):
