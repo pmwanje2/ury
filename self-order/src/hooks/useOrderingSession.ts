@@ -374,7 +374,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       await requestBill(context.session)
       setBillRequested(true)
     } catch (err) {
-      setShownError(serverTextOrCatalog(err, 'request_bill'))
+      setShownError(serverTextOrCatalog(err, 'request_bill', true))
     }
   }
 
@@ -389,7 +389,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setAssistanceStatus(result.status)
       setAssistanceCooldown(true)
     } catch (err) {
-      setShownError(serverTextOrCatalog(err, 'call_waiter'))
+      setShownError(serverTextOrCatalog(err, 'call_waiter', true))
     } finally {
       assistanceInFlight.current = false
       setRequestingAssistance(false)

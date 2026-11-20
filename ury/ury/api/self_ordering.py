@@ -792,17 +792,19 @@ def add_customer_items(session, items):
 # ---------------------------------------------------------------------------
 # Request bill
 # ---------------------------------------------------------------------------
+# Guest service-request refusal ids (append-only, ValidationError):
+# URY-GUEST-BILL-DISABLED, URY-GUEST-ASSISTANCE-DISABLED, URY-GUEST-NO-ACTIVE-ORDER.
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 @rate_limit(limit=5, seconds=60)
 def request_bill(session):
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not profile.enable_request_bill:
-        frappe.throw(_("Requesting the bill is not enabled"), frappe.ValidationError)
+        frappe.throw(_("[URY-GUEST-BILL-DISABLED] Requesting the bill is not enabled"), frappe.ValidationError)
     if not session.table or not session.invoice:
-        frappe.throw(_("No active order for this table"), frappe.ValidationError)
+        frappe.throw(_("[URY-GUEST-NO-ACTIVE-ORDER] No active order for this table"), frappe.ValidationError)
 
     with _elevated():
         existing = frappe.db.exists(
@@ -834,9 +836,9 @@ def request_assistance(session):
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not profile.enable_request_bill:
-        frappe.throw(_("Requesting staff assistance is not enabled"), frappe.ValidationError)
+        frappe.throw(_("[URY-GUEST-ASSISTANCE-DISABLED] Requesting staff assistance is not enabled"), frappe.ValidationError)
     if not session.table or not session.invoice:
-        frappe.throw(_("No active order for this table"), frappe.ValidationError)
+        frappe.throw(_("[URY-GUEST-NO-ACTIVE-ORDER] No active order for this table"), frappe.ValidationError)
 
     with _elevated():
         existing = frappe.db.exists(
