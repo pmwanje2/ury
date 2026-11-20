@@ -16,6 +16,10 @@ This module opens those gates, additively and read-only:
 Everything created is recorded in a marker (a DefaultValue, key MARKER_KEY) so `revert()` removes
 exactly that. Rows that already existed before this module ran are never recorded or removed.
 Nothing happens unless the `insights` app is installed.
+
+Maximus fork: nothing happens either unless site config `ury_analytics_access` is truthy (default
+off). Role assignment is a governed change, never a side effect of saving a user or of migrate.
+`revert()` stays available whatever the gate says.
 """
 
 import json
@@ -23,6 +27,7 @@ import json
 import frappe
 
 INSIGHTS_ROLE = "Insights User"
+SITE_CONFIG_GATE = "ury_analytics_access"
 MARKER_KEY = "ury_analytics_access_marker"
 NEVER_USERS = ("Administrator", "Guest")
 DASHBOARD_DOCTYPE = "Insights Dashboard v3"
@@ -107,6 +112,14 @@ _WRITE_PTYPES = ("write", "create", "delete", "submit", "cancel", "amend")
 def insights_installed():
 	try:
 		return "insights" in (frappe.get_installed_apps() or [])
+	except Exception:
+		return False
+
+
+def access_enabled():
+	"""Site config opt-in; absent or falsy means the auto-grant never runs."""
+	try:
+		return bool(frappe.conf.get(SITE_CONFIG_GATE))
 	except Exception:
 		return False
 
@@ -304,6 +317,9 @@ def _grant_reads(marker):
 # ----------------------------------------------------------------------------- entry points
 def apply():
 	"""Idempotent. Adds Insights User, read-only dashboard shares and read-only doctype perms."""
+	if not access_enabled():
+		_log(f"site config {SITE_CONFIG_GATE!r} is off; nothing to do")
+		return {"skipped": True}
 	if not insights_installed():
 		_log("insights app not installed; nothing to do")
 		return {"skipped": True}
@@ -356,7 +372,7 @@ def _doc_roles(doc):
 def on_user_validate(doc, method=None):
 	"""Add `Insights User` (add only) to eligible users holding a trigger role. Never raises."""
 	try:
-		if not insights_installed():
+		if not access_enabled() or not insights_installed():
 			return
 		if not is_eligible_user(doc.name, doc.get("enabled"), doc.get("user_type") or "System User"):
 			return
@@ -374,7 +390,7 @@ def on_user_validate(doc, method=None):
 def on_user_update(doc, method=None):
 	"""Record a role added by on_user_validate and add the user's read-only dashboard shares."""
 	try:
-		if not insights_installed():
+		if not access_enabled() or not insights_installed():
 			return
 		if not is_eligible_user(doc.name, doc.get("enabled"), doc.get("user_type") or "System User"):
 			return

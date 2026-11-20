@@ -31,10 +31,12 @@ def ensure_role_permissions():
 	Re-running both patch bodies here (they are idempotent) gives a fresh
 	install the same permission state a migrated one has.
 	"""
-	from ury.patches.v2_0 import default_permissions
 	from ury.patches.v3_26 import grant_item_yield_standard_permlevel
+	from ury.role_permissions import setup_role_permissions
 
-	default_permissions.execute()
+	# Maximus fork: ury.role_permissions carries the version-2 map, which equals
+	# patches/v2_0/default_permissions for Captain, Cashier and Manager and adds URY Admin.
+	setup_role_permissions()
 	grant_item_yield_standard_permlevel.execute()
 	frappe.db.commit()
 
