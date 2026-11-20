@@ -101,6 +101,11 @@
     "pay_online": "Okusasula ku yintaneeti tekutandise. Nsaba osasule ku kaunta.",
     "call_waiter": "Omuweereza tayitiddwa. Nsaba obuuze abaweereza.",
     "device_start": "Ekyuma kino tekinatandika. Nsaba owulize abaweereza.",
-    "device_bootstrap": "Ekyuma kino tekinatandika."
+    "device_bootstrap": "Ekyuma kino tekinatandika.",
+    "refusal": {
+      "waiter_opens_table": "Emmeeza yo tennaggulwawo kuteekako oda. Nyiga Yita omuweereza oba osabe omu ku baweereza agiggulewo, oluvannyuma oddemu oteeke oda yo. Ebiri mu kikapu kyo bikyaliwo.",
+      "bill_printed": "Bili yo yamaze okukubibwa, n'olwekyo ebintu ebipya tebiyinza kwongerwako wano. Nsaba osabe omuweereza abikwongerereko. Ebiri mu kikapu kyo bikyaliwo.",
+      "qty": "Nsaba olonde obungi obujjuvu wakati wa 1 ne 20."
+    }
   }
 }

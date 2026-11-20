@@ -101,6 +101,11 @@
     "pay_online": "Could not start online payment. Please pay at the counter.",
     "call_waiter": "Could not call a waiter. Please ask staff for help.",
     "device_start": "This device could not be started. Please contact staff.",
-    "device_bootstrap": "Unable to bootstrap this device."
+    "device_bootstrap": "Unable to bootstrap this device.",
+    "refusal": {
+      "waiter_opens_table": "Your table is not open for orders yet. Tap Call waiter or ask a member of staff to open it, then place your order again. Your basket is kept.",
+      "bill_printed": "Your bill has already been printed, so new items cannot be added here. Please ask a waiter to add them for you. Your basket is kept.",
+      "qty": "Please choose whole quantities between 1 and 20."
+    }
   }
 }

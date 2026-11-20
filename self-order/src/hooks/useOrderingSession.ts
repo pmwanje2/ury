@@ -29,9 +29,38 @@ type CatalogErrorKey =
   | 'call_waiter'
   | 'pay_online'
 
+// Closed list of ERP refusal ids that have guest catalogue copy (errors.refusal).
+const REFUSAL_KEYS = {
+  'SAL-QR-WAITER-OPENS-TABLE': 'waiter_opens_table',
+  'SAL-QR-BILL-PRINTED': 'bill_printed',
+  'SAL-QR-QTY': 'qty',
+} as const
+
+type RefusalKey = (typeof REFUSAL_KEYS)[keyof typeof REFUSAL_KEYS]
+
 type ShownError =
   | { source: 'catalog'; key: CatalogErrorKey }
+  | { source: 'refusal'; key: RefusalKey }
   | { source: 'server'; text: string }
+
+function refusalError(key: RefusalKey): string {
+  switch (key) {
+    case 'waiter_opens_table':
+      return t('errors.refusal.waiter_opens_table')
+    case 'bill_printed':
+      return t('errors.refusal.bill_printed')
+    case 'qty':
+      return t('errors.refusal.qty')
+  }
+}
+
+function knownRefusal(text: string): RefusalKey | null {
+  for (const match of text.matchAll(/\[([A-Z][A-Z0-9_-]*)\]/g)) {
+    const id = match[1]
+    if (Object.prototype.hasOwnProperty.call(REFUSAL_KEYS, id)) return REFUSAL_KEYS[id as keyof typeof REFUSAL_KEYS]
+  }
+  return null
+}
 
 function catalogError(key: CatalogErrorKey): string {
   switch (key) {
@@ -53,6 +82,8 @@ function catalogError(key: CatalogErrorKey): string {
 function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = false): ShownError {
   const parsed = parseFrappeError(err, CATALOG_FALLBACK)
   if (parsed === CATALOG_FALLBACK) return { source: 'catalog', key }
+  const refusal = stripCodes ? knownRefusal(parsed) : null
+  if (refusal) return { source: 'refusal', key: refusal }
   // Older ERP responses contain both the refusal and a wrapped copy.
   // Remove that legacy wrapper, not the translated reason or other errors.
   const text = stripCodes ? [...new Set(parsed
@@ -388,7 +419,9 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     ? null
     : shownError.source === 'server'
       ? shownError.text
-      : catalogError(shownError.key)
+      : shownError.source === 'refusal'
+        ? refusalError(shownError.key)
+        : catalogError(shownError.key)
   const assistanceMessage = assistanceStatus == null
     ? null
     : assistanceStatus === 'Already Requested'
