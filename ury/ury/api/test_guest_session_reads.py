@@ -85,6 +85,7 @@ class TestGuestSessionReads(unittest.TestCase):
         self.stored = {"name": "S1", "ordering_profile": "P1", "status": "Active",
                        "last_activity": NOW - timedelta(minutes=5), "expires_at": NOW + timedelta(minutes=25)}
         self.loaded = []
+        self.idle_minutes = IDLE_MINUTES
         self.frappe.get_doc.side_effect = self.get_doc
         self.frappe.db.get_value.side_effect = self.get_value
         self.frappe.db.set_value.side_effect = self.set_value
@@ -100,7 +101,7 @@ class TestGuestSessionReads(unittest.TestCase):
         if doctype == "URY Ordering Session":
             return "S1" if self.stored["status"] == "Active" else None
         self.assertEqual((doctype, filters), ("URY Self Ordering Profile", "P1"))
-        return {"enabled": 1, "session_idle_timeout_minutes": IDLE_MINUTES}[fieldname]
+        return {"enabled": 1, "session_idle_timeout_minutes": self.idle_minutes}[fieldname]
 
     def set_value(self, doctype, name, values, *args, **kwargs):
         self.stored.update(values)
@@ -132,26 +133,58 @@ class TestGuestSessionReads(unittest.TestCase):
         self.frappe.db.release_savepoint.assert_called_once_with(savepoint)
         self.frappe.db.rollback.assert_not_called()
 
-    def test_lock_conflict_on_the_slide_does_not_fail_the_read(self):
+    def conflict_on_slide(self, error):
         self.stored["last_activity"] = NOW - timedelta(minutes=2)
-        for error in (self.frappe.QueryDeadlockError, self.frappe.QueryTimeoutError):
-            with self.subTest(error=error.__name__):
-                self.frappe.db.reset_mock()
-                self.loaded.clear()
-                self.frappe.db.get_value.side_effect = self.get_value
-                self.frappe.db.set_value.side_effect = error(1020, "Record has changed since last read")
-                original_get_doc = self.get_doc
+        self.frappe.db.set_value.side_effect = error(1020, "Record has changed since last read")
+        original_get_doc = self.get_doc
 
-                def get_doc_whose_save_conflicts(doctype, name=None, **kwargs):
-                    doc = original_get_doc(doctype, name, **kwargs)
-                    doc.save.side_effect = error(1020, "Record has changed since last read")
-                    return doc
+        def get_doc_whose_save_conflicts(doctype, name=None, **kwargs):
+            doc = original_get_doc(doctype, name, **kwargs)
+            doc.save.side_effect = error(1020, "Record has changed since last read")
+            return doc
 
-                self.frappe.get_doc.side_effect = get_doc_whose_save_conflicts
-                session = self.api._resolve_session(TOKEN)
-                self.assertEqual(session.name, "S1")
-                savepoint = self.frappe.db.savepoint.call_args.args[0]
-                self.frappe.db.rollback.assert_called_once_with(save_point=savepoint)
+        self.frappe.get_doc.side_effect = get_doc_whose_save_conflicts
+
+    def test_deadlock_on_the_slide_rolls_back_the_whole_transaction_and_still_reads(self):
+        # MariaDB aborts the whole transaction on 1020 (ER_CHECKREAD) and 1213, so
+        # the savepoint is gone: ROLLBACK TO SAVEPOINT would fail with 1305.
+        def rollback(*args, save_point=None, **kwargs):
+            if save_point is not None:
+                raise RuntimeError(f"(1305, 'SAVEPOINT {save_point} does not exist')")
+
+        self.frappe.db.rollback.side_effect = rollback
+        self.conflict_on_slide(self.frappe.QueryDeadlockError)
+        session = self.api._resolve_session(TOKEN)
+        self.assertEqual(session.name, "S1")
+        self.frappe.db.rollback.assert_called_once_with()
+        self.frappe.db.release_savepoint.assert_not_called()
+
+    def test_lock_wait_timeout_on_the_slide_rolls_back_to_the_savepoint_and_still_reads(self):
+        # 1205 rolls back only the statement, so the savepoint survives.
+        self.conflict_on_slide(self.frappe.QueryTimeoutError)
+        session = self.api._resolve_session(TOKEN)
+        self.assertEqual(session.name, "S1")
+        savepoint = self.frappe.db.savepoint.call_args.args[0]
+        self.frappe.db.rollback.assert_called_once_with(save_point=savepoint)
+
+    def test_short_idle_timeout_slides_before_half_of_it_has_passed(self):
+        # A 1-minute timeout polled every 50 s must not expire while the guest is active.
+        self.idle_minutes = 1
+        self.stored["last_activity"] = NOW - timedelta(seconds=50)
+        self.stored["expires_at"] = NOW + timedelta(seconds=10)
+        self.api._resolve_session(TOKEN)
+        self.frappe.db.set_value.assert_called_once_with(
+            "URY Ordering Session", "S1",
+            {"last_activity": NOW, "expires_at": NOW + timedelta(minutes=1)},
+            update_modified=False,
+        )
+
+    def test_short_idle_timeout_skips_the_write_within_half_of_it(self):
+        self.idle_minutes = 1
+        self.stored["last_activity"] = NOW - timedelta(seconds=20)
+        self.stored["expires_at"] = NOW + timedelta(seconds=40)
+        self.api._resolve_session(TOKEN)
+        self.frappe.db.set_value.assert_not_called()
 
     def test_other_errors_on_the_slide_still_fail(self):
         self.stored["last_activity"] = NOW - timedelta(minutes=2)
