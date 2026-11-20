@@ -93,6 +93,13 @@ type Cart = Record<string, CartEntry>
 // across layout shells that each render a completely different chrome.
 export type Screen = 'menu' | 'detail' | 'cart' | 'checkout' | 'status'
 
+// The server refused the session itself (expired, closed or unknown): an
+// authorization denial, never a validation or transport failure.
+function isSessionRefused(err: unknown): boolean {
+  const e = err as { httpStatus?: number; exc_type?: string } | null
+  return e?.httpStatus === 403 || (typeof e?.exc_type === 'string' && e.exc_type.endsWith('PermissionError'))
+}
+
 function useQueryToken(): string | null {
   const params = new URLSearchParams(window.location.search)
   return params.get('t')
@@ -143,10 +150,13 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setLoading(true)
     try {
       let ctx: OrderingContext
+      let resumed = false
       if (initialContext) {
         ctx = initialContext
       } else if (token) {
+        const storedSession = getStoredContext()?.session
         ctx = await bootstrap(token)
+        resumed = !!storedSession && storedSession === ctx.session
       } else {
         const storedContext = getStoredContext()
         if (storedContext) {
@@ -162,9 +172,20 @@ export function useOrderingSession(initialContext?: OrderingContext) {
           return
         }
       }
-      const menuResponse = await getMenu(ctx.session)
-      setMenu(menuResponse.items.filter((item) => !item.disabled))
-      await loadOrder(ctx.session)
+      const load = async (session: string) => {
+        const menuResponse = await getMenu(session)
+        setMenu(menuResponse.items.filter((item) => !item.disabled))
+        await loadOrder(session)
+      }
+      try {
+        await load(ctx.session)
+      } catch (err) {
+        // A resumed session the server no longer accepts: start once from the
+        // QR still in the URL, so a reload or rescan in the same tab recovers.
+        if (!resumed || !token || !isSessionRefused(err)) throw err
+        ctx = await bootstrap(token, { resume: false })
+        await load(ctx.session)
+      }
       // Only a session the server still accepts shows its table and order.
       setContext(ctx)
     } catch (err) {

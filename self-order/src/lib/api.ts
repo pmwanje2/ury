@@ -130,12 +130,19 @@ interface FrappeResponse<T> {
   message: T
 }
 
-export async function bootstrap(token: string): Promise<OrderingContext> {
+export async function bootstrap(token: string, options: { resume?: boolean } = {}): Promise<OrderingContext> {
   // A reload keeps the QR in the URL. Resume only the context from that
   // same QR; a different table/link must still bootstrap its own session.
   // Menu/order reads continue to validate the opaque session server-side.
-  const stored = getStoredContext()
-  if (stored?.session && sessionStorage.getItem(QR_TOKEN_KEY) === token) return stored
+  // `resume: false` drops the stored session first (the server refused it).
+  if (options.resume === false) {
+    sessionStorage.removeItem(SESSION_KEY)
+    sessionStorage.removeItem(CONTEXT_KEY)
+    sessionStorage.removeItem(QR_TOKEN_KEY)
+  } else {
+    const stored = getStoredContext()
+    if (stored?.session && sessionStorage.getItem(QR_TOKEN_KEY) === token) return stored
+  }
   const response = await call.get<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, { token })
   storeContext(response.message, token)
   return response.message
