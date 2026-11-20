@@ -615,5 +615,13 @@
     "acknowledge": "Accuser réception",
     "resolve": "Résoudre",
     "acknowledged": "Pris en charge"
+  },
+  "offline": {
+    "kot": "Ticket de cuisine",
+    "provisional": "Addition provisoire — ce n’est pas un reçu fiscal",
+    "client_order": "Commande client",
+    "captured": "Saisie",
+    "no_fdn": "Saisie hors ligne ; aucun numéro fiscal.",
+    "refused": "{{action}} est refusé hors ligne. Reconnectez-vous au serveur."
   }
 }

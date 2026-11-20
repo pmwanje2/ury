@@ -904,6 +904,7 @@ def getPosProfileFull(pos_profile):
         "print_format": profile.print_format,
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
+        "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
         **get_default_customer_config(profile),
     }
 

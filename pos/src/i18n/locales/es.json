@@ -622,5 +622,13 @@
     "acknowledge": "Confirmar",
     "resolve": "Resolver",
     "acknowledged": "Confirmado"
+  },
+  "offline": {
+    "kot": "Comanda de cocina",
+    "provisional": "Cuenta provisional — no es un recibo fiscal",
+    "client_order": "Pedido del cliente",
+    "captured": "Capturado",
+    "no_fdn": "Captura sin conexión; sin número fiscal.",
+    "refused": "{{action}} no está permitido sin conexión. Vuelva a conectarse al servidor primero."
   }
 }
