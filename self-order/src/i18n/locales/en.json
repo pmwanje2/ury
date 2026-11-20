@@ -18,7 +18,9 @@
   "header": {
     "order": "Order",
     "pickup": "Order for Pickup",
-    "table": "Table {{table}}"
+    "table": "Table {{table}}",
+    "location": "{{table}}",
+    "area_location": "{{area}} · {{table}}"
   },
   "actions": {
     "start_over": "Start Over",

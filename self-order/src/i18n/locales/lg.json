@@ -18,7 +18,9 @@
   "header": {
     "order": "Oda",
     "pickup": "Oda ey'okutwala",
-    "table": "Emmeeza {{table}}"
+    "table": "Emmeeza {{table}}",
+    "location": "{{table}}",
+    "area_location": "{{area}} · {{table}}"
   },
   "actions": {
     "start_over": "Tandika buto",

@@ -471,7 +471,7 @@ test('guest ordering languages', async (t) => {
       'LanguageSwitcher',
       "t('order.place')",
       "t('bill.request')",
-      "t('header.table'",
+      'locationLabel(context.table, context.area)',
       "t('header.pickup')",
       "t('cart.in_cart'",
       'item.item_name',

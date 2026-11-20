@@ -4,6 +4,7 @@ import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import CategoryMenu from './shared/CategoryMenu'
@@ -102,7 +103,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
     <div className="flex h-screen flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b bg-background/95 px-6 py-4">
         <h1 className="text-xl font-semibold">
-          {context?.table ? t('header.table', { table: context.table }) : t('header.pickup')}
+          {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
         </h1>
         <button
           onClick={handleReset}

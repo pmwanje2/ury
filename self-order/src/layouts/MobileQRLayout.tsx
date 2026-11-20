@@ -6,6 +6,7 @@ import GuestAddons from '../components/GuestAddons'
 import CategoryMenu from './shared/CategoryMenu'
 import type { OrderingContext } from '../lib/api'
 import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 
 interface LayoutProps {
@@ -95,7 +96,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               <span className="break-words">{brand.name}</span>
             </div>}
             <h1 className="text-lg font-semibold">
-              {isPickup ? t('header.pickup') : context?.table ? t('header.table', { table: context.table }) : t('header.order')}
+              {isPickup ? t('header.pickup') : context?.table ? locationLabel(context.table, context.area) : t('header.order')}
             </h1>
           </div>
           <button

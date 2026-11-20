@@ -138,6 +138,39 @@ class TestQRTokenRoundtrip(unittest.TestCase):
             _verify_qr_token("not-a-valid-token")
 
 
+class TestOrderingContextArea(unittest.TestCase):
+    """Simphony MOP: a QR code is a location with a subtype; the guest header shows the table's area."""
+
+    def _profile(self):
+        profile = MagicMock()
+        profile.restaurant = "Outlet"
+        for flag in ("enable_product_detail_page", "show_item_images", "show_item_descriptions", "enable_item_notes",
+                     "enable_request_bill", "enable_customer_payment", "enable_payment_link",
+                     "enable_pay_at_counter", "allow_add_to_running_table", "enable_feedback"):
+            setattr(profile, flag, 0)
+        profile.feedback_template = None
+        return profile
+
+    @patch(f"{MOD}.frappe.db.get_value")
+    def test_table_context_carries_its_area(self, mock_get_value):
+        from ury.ury.api.self_ordering import _ordering_context_response
+
+        mock_get_value.side_effect = lambda doctype, name, field: (
+            "In-Room Dining" if (doctype, name, field) == ("URY Table", "Room 103", "restaurant_room") else None)
+        context = _ordering_context_response("raw", "QR Table", self._profile(), "Room 103", "Mobile")
+        self.assertEqual(context["area"], "In-Room Dining")
+        self.assertEqual(context["table"], "Room 103")
+        self.assertEqual(set(context), {"session", "source", "restaurant", "table", "area", "layout", "capabilities"})
+
+    @patch(f"{MOD}.frappe.db.get_value")
+    def test_pickup_context_has_no_area_and_reads_nothing(self, mock_get_value):
+        from ury.ury.api.self_ordering import _ordering_context_response
+
+        context = _ordering_context_response("raw", "QR Pickup", self._profile(), None, "Mobile")
+        self.assertIsNone(context["area"])
+        mock_get_value.assert_not_called()
+
+
 class TestGuestBrandMalformedLink(unittest.TestCase):
     def test_non_ascii_qr_signature_does_not_break_guest_page_identity(self):
         from ury.brand import get_brand

@@ -300,6 +300,8 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
         "source": source,
         "restaurant": profile.restaurant,
         "table": table,
+        # The table's URY Room (area), so a room reads "In-Room Dining · Room 103".
+        "area": frappe.db.get_value("URY Table", table, "restaurant_room") if table else None,
         # "Mobile" for QR sessions (no device involved); otherwise the
         # provisioned URY Ordering Device's configured layout (Tablet /
         # Landscape Kiosk / Portrait Kiosk) — the frontend layout shell

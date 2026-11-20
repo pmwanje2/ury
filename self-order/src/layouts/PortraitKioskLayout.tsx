@@ -6,6 +6,7 @@ import { hasPrice, useOrderingSession } from '../hooks/useOrderingSession'
 import GuestAddons from '../components/GuestAddons'
 import GuestNoteDialog from '../components/GuestNoteDialog'
 import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
 import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CategoryMenu from './shared/CategoryMenu'
 import type { MenuItem, OrderingContext } from '../lib/api'
@@ -113,7 +114,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     <div className="flex min-h-screen flex-col pb-24">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-6 py-4 backdrop-blur">
         <h1 className="text-2xl font-semibold">
-          {context?.table ? t('header.table', { table: context.table }) : t('header.pickup')}
+          {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
         </h1>
         <button
           onClick={handleReset}
