@@ -8,9 +8,9 @@
     "serve"
   ],
   "scripts": {
-    "ury-pos-install": "cd urypos && yarn install --check-files",
+    "ury-pos-install": "npm --prefix urypos ci --workspaces=false --ignore-scripts --no-audit --no-fund",
     "ury-pos-build": "cd urypos && yarn build",
-    "ury-mosaic-install": "cd mosaic && yarn install --check-files",
+    "ury-mosaic-install": "npm --prefix mosaic ci --workspaces=false --ignore-scripts --no-audit --no-fund",
     "ury-mosaic-build": "cd mosaic && yarn build",
     "ury-posv2-install": "cd pos && yarn install --check-files",
     "ury-posv2-build": "cd pos && yarn build",
@@ -18,7 +18,8 @@
     "ury-self-order-build": "cd self-order && yarn build",
     "ury-serve-build": "cd serve && yarn build",
     "postinstall": "yarn ury-pos-install && yarn ury-mosaic-install",
-    "build": "yarn ury-pos-build && yarn ury-mosaic-build && yarn ury-posv2-build && yarn ury-frontend-build && yarn ury-self-order-build && yarn ury-serve-build"
+    "build": "yarn ury-pos-build && yarn ury-mosaic-build && yarn ury-posv2-build && yarn ury-frontend-build && yarn ury-self-order-build && yarn ury-serve-build",
+    "test:closure": "python3 -m unittest discover -s tests -p test_frontend_build_closure.py && node --test tests/qz-signing-compatibility.test.cjs"
   },
   "resolutions": {
     "vite": "^6.2.0",
