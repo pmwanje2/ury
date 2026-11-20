@@ -94,20 +94,36 @@ class TestDuplicateGuestGrantLayerRemoved(unittest.TestCase):
             enabled=1,
             session_idle_timeout_minutes=30,
         )
+        session.last_activity = None
+
         def get_doc(doctype, name=None, **kwargs):
             return session if doctype == "URY Ordering Session" else profile
 
+        def get_value(doctype, filters=None, fieldname=None, *args, **kwargs):
+            if doctype == "URY Ordering Session":
+                return "SESSION-1"
+            return getattr(profile, fieldname)
+
+        now = datetime(2026, 10, 20, 12)
         with (
             patch(f"{MOD}.frappe.get_doc", side_effect=get_doc),
-            patch(f"{MOD}.frappe.db.get_value", return_value="SESSION-1"),
+            patch(f"{MOD}.frappe.db.get_value", side_effect=get_value),
+            patch(f"{MOD}.frappe.db.set_value") as mock_set_value,
             patch(f"{MOD}.frappe.set_user"),
-            patch(f"{MOD}.now_datetime", return_value=datetime(2026, 10, 20, 12)),
+            patch(f"{MOD}.now_datetime", return_value=now),
             patch(f"{MOD}.add_to_date", return_value="slid-expiry"),
             patch(f"{MOD}.get_datetime", return_value=datetime(2099, 1, 1), create=True),
         ):
             result = self_ordering._resolve_session("raw-table-session")
 
         self.assertIs(result, session)
-        self.assertEqual(session.expires_at, "slid-expiry")
-        session.save.assert_called_once_with(ignore_permissions=True)
+        # The slide is a two-column update, not a full save (no row lock on read).
+        mock_set_value.assert_called_once_with(
+            "URY Ordering Session",
+            session.name,
+            {"last_activity": now, "expires_at": "slid-expiry"},
+            update_modified=False,
+        )
+        session.update.assert_called_once_with({"last_activity": now, "expires_at": "slid-expiry"})
+        session.save.assert_not_called()
 
