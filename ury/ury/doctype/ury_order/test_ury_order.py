@@ -918,6 +918,9 @@ class TestPriceItemsForInvoicePhase1(unittest.TestCase):
         mock_get_value.side_effect = get_value_side_effect
         mock_price = MagicMock()
         mock_price.price_list_rate = 150
+        # An Item Price row with no validity, UOM, party or batch (price determination reads them).
+        for field in ("valid_from", "valid_upto", "uom", "customer", "supplier", "batch_no"):
+            setattr(mock_price, field, None)
         mock_get_list.return_value = [mock_price]
 
         items = [{"item": "Biryani", "item_name": "Biryani", "qty": 2, "comment": "less spicy", "reservation_line_key": "ref:Biryani:POS-1"}]
