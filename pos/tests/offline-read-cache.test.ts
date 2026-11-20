@@ -9,6 +9,8 @@ const REGISTER_OFFLINE = resolve('src/pwa/register-offline.ts');
 const ALLOWED_GETS = [
   'https://ury.localhost/api/method/ury.ury_pos.api.getRestaurantMenu?pos_profile=Bar&order_type=Take+Away',
   'https://ury.localhost/api/method/ury.ury_pos.api.getPosProfile',
+  // v16 reads the full till profile through this whitelisted method.
+  'https://ury.localhost/api/method/ury.ury_pos.api.getPosProfileFull?pos_profile=Bar',
   'https://ury.localhost/api/method/ury.ury_pos.api.getModeOfPayment',
   'https://ury.localhost/api/resource/URY%20Table?fields=%5B%22name%22%5D',
   'https://ury.localhost/api/resource/URY%20Table/T-1',
@@ -22,6 +24,7 @@ const ALLOWED_GETS = [
 const DENIED: Array<[string, string]> = [
   ['https://ury.localhost/api/method/ury.ury_pos.api.getRestaurantMenu', 'POST'],
   ['https://ury.localhost/api/method/ury.ury_pos.api.getPosProfile', 'POST'],
+  ['https://ury.localhost/api/method/ury.ury_pos.api.getPosProfileFull?pos_profile=Bar', 'POST'],
   ['https://ury.localhost/api/method/ury.ury_pos.api.getModeOfPayment', 'PUT'],
   ['https://ury.localhost/api/resource/URY%20Table', 'POST'],
   ['https://ury.localhost/api/resource/URY%20Table/T-1', 'PUT'],
