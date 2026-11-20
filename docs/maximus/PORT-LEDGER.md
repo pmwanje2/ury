@@ -20,6 +20,7 @@ not change any row. A base move only adds a "base" entry below.
 | Date | From | To | PR |
 |---|---|---|---|
 | 2026-11-20 | — | `100c43fe` | branch cut (no merge) |
+| 2026-11-20 (P1 re-check) | `100c43fe` | `100c43fe` | no move: `git ls-remote` still `100c43fe`, so no merge-forward PR |
 
 ## Scope and method
 
@@ -76,12 +77,31 @@ Notes:
 - The urgent-fix rule: a fix made on `maximus/v2-final`'s line during the port is added here as
   a new row and carried as a separate theme PR.
 
+## Theme PRs
+
+A row is closed when its theme PR merges into `maximus/v16-integration`. Until then it lists
+the open PR.
+
+| Theme | PR | RED | GREEN | State |
+|---|---|---|---|---|
+| T1 | #93 | `5b5b34da` | `664d8ff4` | open, draft. `pos-tests.yml` (#51, `00b79383`) waits on B5 |
+| N | #95 | `8b6aa8a0`, `80f70004`, `1f98feff` | `042c8e29` | open, draft (new work, no fork rows) |
+| T0 | #96 | `ba3154e3`, `1747bae1`, `6692547b`, `7f0f931e`, `a7578aaf` | `b0d12217` | open, draft |
+
+T0 notes on rows marked "port" in the rows below:
+- `04099204`, `fc2a3970`: carried as tests only where they apply; the duplicate guest-grant
+  layer they remove (#56/#59) never reached `version-16`, so nothing is removed.
+- `016938a0`: the `pos/tests` guest specs it edits do not exist on `version-16`; the POST
+  contract is covered by `self-order/src/lib/api-http.test.ts` and `api.test.ts` in #96.
+- `d9457602`: the `load_country` part is superseded by `version-16`'s own guard; the
+  dashboard and wizard-status parts are in #96.
+
 ## Rows (oldest first)
 
 | Fork commit | Date | Source | Theme | Status | Subject | Note |
 |---|---|---|---|---|---|---|
-| `0bc10600` | 2026-10-01 | direct | T0 | port | test(csrf): cover session token for urypos and mosaic |  |
-| `ce3a4e14` | 2026-10-01 | direct | T0 | port | fix(csrf): render session token for urypos and mosaic |  |
+| `0bc10600` | 2026-10-01 | direct | T0 | port | test(csrf): cover session token for urypos and mosaic | PR #96 |
+| `ce3a4e14` | 2026-10-01 | direct | T0 | port | fix(csrf): render session token for urypos and mosaic | PR #96 |
 | `492ac51d` | 2026-10-01 | direct | T9 | port | test(pos): reproduce waiter send-to-kitchen failures |  |
 | `7dec3e97` | 2026-10-01 | direct | T9 | port | test(pos): accept equivalent blank Pax HTML attributes |  |
 | `7d18b8b1` | 2026-10-01 | direct | T9 | port | fix(pos): streamline waiter sends to kitchen |  |
@@ -196,8 +216,8 @@ Notes:
 | `a7b1ad05` | 2026-10-02 | direct | T9 | port | test(pos): bind Orders harness to the till branch read |  |
 | `c0fb83a4` | 2026-10-02 | direct | T2 | port | test(pos): expose daily-close business-day regressions (RED) |  |
 | `ee393dd3` | 2026-10-02 | direct | T2 | port | fix(pos): daily close check uses the business day (GREEN) |  |
-| `7d758811` | 2026-10-02 | direct | T0 | port | test: reproduce dashboard guards and wizard status gaps (RED) |  |
-| `d9457602` | 2026-10-02 | direct | T0 | port | fix: native dashboard guards and v16 wizard status (GREEN) |  |
+| `7d758811` | 2026-10-02 | direct | T0 | port | test: reproduce dashboard guards and wizard status gaps (RED) | PR #96 |
+| `d9457602` | 2026-10-02 | direct | T0 | port | fix: native dashboard guards and v16 wizard status (GREEN) | PR #96 |
 | `2d5d6ed5` | 2026-10-03 | direct | T9 | port | test(pos): cashier Home native notifications contracts (RED) |  |
 | `bab890ba` | 2026-10-03 | direct | T9 | port | test(pos): retain offline socket boundary across mock restoration |  |
 | `f049f262` | 2026-10-03 | direct | T9 | port | feat(pos): share native notifications on cashier Home (GREEN) |  |
@@ -222,9 +242,9 @@ Notes:
 | `e2cf79c4` | 2026-10-05 | #4 | T7 | port | fix: JSON-escape native app_name in SPA entries (GREEN) |  |
 | `004a7673` | 2026-10-05 | #4 | T7 | port | test: make branding render harness independent of fork logout tests |  |
 | `f60b1138` | 2026-10-05 | #4 | T7 | port | test: preserve native session context in upstream branding renders |  |
-| `90da9b1a` | 2026-10-05 | #4 | T1 | port | chore: keep base lock identity and existing dependency records | root lock identity; regenerated for v16 workspaces |
+| `90da9b1a` | 2026-10-05 | #4 | T1 | port | chore: keep base lock identity and existing dependency records | root lock identity; regenerated for v16 workspaces; PR #93 |
 | `50937297` | 2026-10-05 | #4 | T7 | port | docs: explain site identity defaults and public source configuration |  |
-| `9ec19ca8` | 2026-10-05 | #4 | T1 | port | chore: prune unrelated lock additions outside test dependency closure | root lock pruning; regenerated for v16 workspaces |
+| `9ec19ca8` | 2026-10-05 | #4 | T1 | port | chore: prune unrelated lock additions outside test dependency closure | root lock pruning; regenerated for v16 workspaces; PR #93 |
 | `46971662` | 2026-10-05 | #5 | T7 | port | test: define staff branding hook precedence (RED) |  |
 | `0859e0e3` | 2026-10-05 | #5 | T7 | port | feat: support app branding hooks on staff POS surfaces (GREEN) |  |
 | `23c175ea` | 2026-10-05 | #5 | T7 | port | test: malformed staff branding hooks fall back instead of failing (RED) |  |
@@ -639,16 +659,16 @@ Notes:
 | `c6eaa679` | 2026-10-20 | #64 | T3 | port | fix: enforce split ownership and retain open tables |  |
 | `f2ac2fcc` | 2026-10-20 | #64 | T3 | port | test: Desk print keeps a split table occupied; KOT double exposes the release helper (RED) |  |
 | `949e41f6` | 2026-10-20 | #64 | T3 | port | fix: Desk print path keeps a table occupied while a sibling check is open (GREEN) |  |
-| `04099204` | 2026-10-20 | #63 | T0 | port | test: specify removal of duplicate guest grants |  |
+| `04099204` | 2026-10-20 | #63 | T0 | port | test: specify removal of duplicate guest grants | PR #96 (see Theme PRs notes) |
 | `969e2258` | 2026-10-20 | #63 | T6 | dropped | Revert "Merge pull request #59 from pmwanje2/codex/salama-g1-guest-phone" | revert of PR #59 (net zero with #59) |
 | `042b2a48` | 2026-10-20 | #63 | T6 | dropped | Revert "Merge pull request #56 from pmwanje2/codex/salama-g1-guest-grants" | revert of PR #56 (net zero with #56) |
-| `fc2a3970` | 2026-10-20 | #63 | T0 | port | test: support legacy session clock seam |  |
+| `fc2a3970` | 2026-10-20 | #63 | T0 | port | test: support legacy session clock seam | PR #96 (see Theme PRs notes) |
 | `27b8448e` | 2026-10-20 | #63 | T10 | dropped | docs: dev-server evidence that the waiter menu no longer offers Guest phone QR | docs/evidence or docs/pr-assets only |
-| `8f2b6dee` | 2026-10-20 | #63 | T0 | port | test: restore native guest hardening contracts |  |
-| `abeb1472` | 2026-10-20 | #63 | T0 | port | fix: restore native guest ordering hardening |  |
-| `016938a0` | 2026-10-20 | #63 | T0 | port | test: restore guest POST transport coverage |  |
-| `89c7b3b2` | 2026-10-20 | #63 | T0 | port | test: refuse guest sessions on a disabled profile or without expiry (RED) |  |
-| `bd2b5cea` | 2026-10-20 | #63 | T0 | port | fix: end guest sessions when the ordering profile is off or has no expiry (GREEN) |  |
+| `8f2b6dee` | 2026-10-20 | #63 | T0 | port | test: restore native guest hardening contracts | PR #96 |
+| `abeb1472` | 2026-10-20 | #63 | T0 | port | fix: restore native guest ordering hardening | PR #96 |
+| `016938a0` | 2026-10-20 | #63 | T0 | port | test: restore guest POST transport coverage | PR #96 (see Theme PRs notes) |
+| `89c7b3b2` | 2026-10-20 | #63 | T0 | port | test: refuse guest sessions on a disabled profile or without expiry (RED) | PR #96 |
+| `bd2b5cea` | 2026-10-20 | #63 | T0 | port | fix: end guest sessions when the ordering profile is off or has no expiry (GREEN) | PR #96 |
 | `f920af12` | 2026-10-20 | #62 | T4 | port | test: RED one-staff floor tablet session |  |
 | `e8d8aae8` | 2026-10-20 | #62 | T4 | port | test: RED paired Guest stays in floor pad |  |
 | `e77f750f` | 2026-10-20 | #62 | T4 | port | feat(pos): add paired floor tablet sign-in |  |
@@ -728,7 +748,7 @@ Notes:
 | `2a3de9e5` | 2026-10-23 | #74 | T2 | port | fix(pos): update closing rows in place (GREEN) |  |
 | `3ce66ba9` | 2026-10-23 | #74 | T2 | port | test(pos): closing rows keep their order and idx is 1..n (RED, Opus r1 F1/F2) |  |
 | `3f4a792c` | 2026-10-23 | #74 | T2 | port | fix(pos): closing rows keep their order; missing modes appended; idx 1..n (GREEN) |  |
-| `18862880` | 2026-10-28 | #75 | T0 | port | enforce native permissions in minimal setup API (#75) |  |
+| `18862880` | 2026-10-28 | #75 | T0 | port | enforce native permissions in minimal setup API (#75) | PR #96 |
 | `939af8fa` | 2026-11-10 | #77 | T7 | port | test(mosaic): RED kitchen header logo is height-bounded like the POS header |  |
 | `c78422d9` | 2026-11-10 | #77 | T7 | port | fix(mosaic): GREEN size the kitchen header logo like the POS header |  |
 | `8d84fa3f` | 2026-11-10 | #78 | T9 | port | test(pos): RED captain order screen fits the viewport |  |
@@ -749,12 +769,12 @@ Notes:
 | `71a1152f` | 2026-11-14 | direct | T2 | superseded | fix: drop the repeated Custom Field fixture rows from ury-erp/ury#358 (GREEN) | version-16 custom_field.json has 215 rows, no repeated names |
 | `96637608` | 2026-11-14 | direct | T9 | port | test: reservation writes refuse a branch that has not enabled them (RED) |  |
 | `a31a11b8` | 2026-11-14 | direct | T9 | port | fix: reservation writes refuse a branch that has not enabled them (GREEN) |  |
-| `9df80663` | 2026-11-14 | direct | T1 | port | test: require frozen permissive legacy frontend closures |  |
-| `f6c00c41` | 2026-11-14 | direct | T1 | port | test: require qualified legacy RSA signing dependency |  |
-| `ac6dfa07` | 2026-11-14 | direct | T1 | port | test: reject unused legacy package manager and wrapper dependencies |  |
-| `0d619408` | 2026-11-14 | direct | T1 | port | build: freeze legacy frontend closures and remove unused restricted dependencies |  |
-| `b2ce8b35` | 2026-11-14 | direct | T1 | port | test: require reachable closure runner and strengthen source guards |  |
-| `5af4a169` | 2026-11-14 | direct | T1 | port | build: expose closure checks and document lifecycle qualifications |  |
+| `9df80663` | 2026-11-14 | direct | T1 | port | test: require frozen permissive legacy frontend closures | PR #93 |
+| `f6c00c41` | 2026-11-14 | direct | T1 | port | test: require qualified legacy RSA signing dependency | PR #93 |
+| `ac6dfa07` | 2026-11-14 | direct | T1 | port | test: reject unused legacy package manager and wrapper dependencies | PR #93 |
+| `0d619408` | 2026-11-14 | direct | T1 | port | build: freeze legacy frontend closures and remove unused restricted dependencies | PR #93 |
+| `b2ce8b35` | 2026-11-14 | direct | T1 | port | test: require reachable closure runner and strengthen source guards | PR #93 |
+| `5af4a169` | 2026-11-14 | direct | T1 | port | build: expose closure checks and document lifecycle qualifications | PR #93 |
 | `d4ae531c` | 2026-11-15 | direct | T8 | port | test(pos): room lookup before Room Charge, guest labels, floor PIN menu state (RED) |  |
 | `8ccefdac` | 2026-11-15 | direct | T8 | port | feat(pos): room lookup before Room Charge, guest labels, floor PIN menu state (GREEN) |  |
 | `2c68899e` | 2026-11-15 | direct | T3 | port | test(pos): carry the guest label through kitchen, alerts, prints and split lists (RED) |  |
