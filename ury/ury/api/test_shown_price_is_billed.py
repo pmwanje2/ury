@@ -132,6 +132,9 @@ class Loaded(unittest.TestCase):
         self.order = order
         self.enterContext(patch.dict(sys.modules, {
             "frappe": self.framework, "frappe.utils": utils,
+            # self_ordering decorates the guest feedback endpoints with the native limiter.
+            "frappe.rate_limiter": _stub("frappe.rate_limiter",
+                                         rate_limit=lambda *args, **kwargs: (lambda function: function)),
             "ury.ury.doctype.ury_order.ury_order": order,
             "ury.ury.api.ury_kot_generate": _stub("ury.ury.api.ury_kot_generate", kot_execute=MagicMock()),
             "ury.ury.api.ury_order_reservation_service": _stub(

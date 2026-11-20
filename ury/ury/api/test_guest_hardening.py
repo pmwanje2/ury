@@ -119,6 +119,7 @@ class TestGuestHardening(unittest.TestCase):
             patch.object(api.frappe.db, "get_value", return_value="Menu A"),
             patch.object(api, "resolve_restaurant_menu", return_value={"items": [{"item": "Tea"}]}),
             patch.object(api, "price_items_for_invoice", side_effect=price),
+            patch.object(api, "invoice_pricing_date", return_value=None),
             patch.object(api, "_resolve_or_create_pos_invoice", return_value=(invoice, invoice.name)),
             patch.object(api, "_ensure_admin_branch_mapping"),
             patch.object(api, "get_branch_stock_policy",
