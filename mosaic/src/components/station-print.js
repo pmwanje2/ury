@@ -19,7 +19,7 @@ export function createStationPrinter({
     try { return JSON.parse(storage.getItem(`${prefix}:${key}`)) ?? fallback; }
     catch { return fallback; }
   };
-  let settings = { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", ...read("settings", {}) };
+  let settings = { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576, ...read("settings", {}) };
   const printed = new Set(read("printed", []));
   const attempted = new Set();
   const failures = new Map();
@@ -97,7 +97,8 @@ export function createStationPrinter({
       // QZ resolves a name to an OS print queue (USB or installed network printer); host is a raw socket.
       const target = settings.printer || { host: settings.host, port: Number(settings.port) };
       await bridge.print(bridge.configs.create(target), [
-        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS" } },
+        // QZ rasterises raw HTML at pageWidth dots; without it the ticket is an 8-dot blank strip.
+        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth } },
         { type: "raw", format: "command", flavor: "plain", data: "\n\n\n\x1dV\x00" },
       ]);
     };
@@ -133,11 +134,14 @@ export function createStationPrinter({
       const host = String(next.host ?? "").trim();
       const port = Number(next.port);
       const validPort = Number.isInteger(port) && port >= 1 && port <= 65535;
+      // 80 mm and 58 mm ESC/POS heads at 203 dpi.
+      const pageWidth = next.pageWidth ?? settings.pageWidth;
+      if (pageWidth !== 576 && pageWidth !== 384) throw Error("Choose a paper width: 80 mm or 58 mm.");
       if (printer && host) throw Error("Choose an installed printer or a network host, not both.");
       if (next.enabled && !printer && !host) throw Error("Choose an installed printer or enter a network host and port.");
       if (next.enabled && (!next.printFormat?.trim() || (host && !validPort))) throw Error(printer ? "Enter a print format." : "Enter a printer host, port (1–65535), and print format.");
       const enabledAt = next.enabled && !settings.enabled ? new Date(now()).toISOString() : settings.enabledAt;
-      settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim() };
+      settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim(), pageWidth };
       storage.setItem(`${prefix}:settings`, JSON.stringify(settings));
       return { ...settings };
     },

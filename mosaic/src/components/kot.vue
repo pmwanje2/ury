@@ -75,6 +75,12 @@
         <label class="mt-3 block font-semibold">Print format
           <input v-model="stationSettings.printFormat" class="mt-1 w-full rounded border p-2" type="text" required>
         </label>
+        <label class="mt-3 block font-semibold">Paper width
+          <select v-model.number="stationSettings.pageWidth" class="mt-1 w-full rounded border p-2">
+            <option value="576">80 mm</option>
+            <option value="384">58 mm</option>
+          </select>
+        </label>
         <label class="mt-4 flex items-center gap-2 font-semibold">
           <input v-model="stationSettings.enabled" type="checkbox"> Enable station printing
         </label>
@@ -398,7 +404,7 @@ export default {
       serverTimeOffset: 0,
       timeInterval: null,
       stationPrinter: null,
-      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "" },
+      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576 },
       installedPrinters: [],
       printerListError: "",
       failedPrints: [],
