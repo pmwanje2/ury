@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import json
 from datetime import timedelta
+from functools import wraps
 
 import frappe
 from frappe import _
@@ -1058,7 +1059,7 @@ def share_payment_link(session, recipient):
 # Refusal ids (append-only): URY-FEEDBACK-LINK-INVALID (PermissionError);
 # URY-FEEDBACK-DISABLED, URY-FEEDBACK-TEMPLATE, URY-FEEDBACK-BILL-LINK-MISSING,
 # URY-FEEDBACK-NOT-ELIGIBLE, URY-FEEDBACK-RATINGS, URY-FEEDBACK-RETRY
-# (ValidationError).
+# (ValidationError); URY-FEEDBACK-RATE-LIMITED (RateLimitExceededError).
 # ---------------------------------------------------------------------------
 
 FEEDBACK_BILL_FIELD = "custom_pos_invoice"
@@ -1068,6 +1069,18 @@ _FEEDBACK_RATINGS = {"1", "2", "3", "4", "5"}
 
 def _feedback_link_invalid():
     frappe.throw(_("[URY-FEEDBACK-LINK-INVALID] Invalid feedback link"), frappe.PermissionError)
+
+
+def _feedback_rate_limit_id(fn):
+    """Give the native limiter's free-text refusal the stable feedback id."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except frappe.RateLimitExceededError:
+            frappe.clear_last_message()
+            frappe.throw(_("[URY-FEEDBACK-RATE-LIMITED] Too many attempts. Please try again later."), frappe.RateLimitExceededError)
+    return wrapper
 
 
 def _utc_epoch(moment):
@@ -1254,6 +1267,7 @@ def _feedback_bill_check(profile, invoice_doc):
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+@_feedback_rate_limit_id
 @rate_limit(limit=5, seconds=600)
 def get_feedback_form(session=None, receipt_token=None):
     """Read the current guest feedback labels for one verified bill."""
@@ -1277,6 +1291,7 @@ def get_feedback_form(session=None, receipt_token=None):
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+@_feedback_rate_limit_id
 @rate_limit(limit=5, seconds=600)
 def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None, template=None):
     """Store one Quality Feedback for this session bill, or for a signed receipt.

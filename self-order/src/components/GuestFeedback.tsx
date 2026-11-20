@@ -17,6 +17,8 @@ const COPY = {
   unavailable: 'Feedback is not available right now.',
   invalidLink: 'This feedback link is not valid.',
   retryLater: 'Another request is finishing. Please try again.',
+  ratingsAgain: 'Please rate every question again.',
+  rateLimited: 'Too many attempts. Please wait a few minutes and try again.',
   loadError: 'Could not load feedback.',
   retry: 'Retry',
 }
@@ -29,8 +31,12 @@ const REFUSALS: Record<string, string> = {
   'URY-FEEDBACK-DISABLED': COPY.unavailable,
   'URY-FEEDBACK-TEMPLATE': COPY.unavailable,
   'URY-FEEDBACK-BILL-LINK-MISSING': COPY.unavailable,
-  'URY-FEEDBACK-RATINGS': COPY.unavailable,
+  'URY-FEEDBACK-RATINGS': COPY.ratingsAgain,
+  'URY-FEEDBACK-RATE-LIMITED': COPY.rateLimited,
 }
+
+// Retry reloads the form: a lock conflict clears, and a ratings refusal starts the form again.
+const RETRYABLE = new Set(['URY-FEEDBACK-RETRY', 'URY-FEEDBACK-RATINGS'])
 
 /** The receipt token travels only in the URL fragment, which is never sent to the server. */
 function readCredential(): FeedbackCredential | null {
@@ -44,7 +50,7 @@ function errorText(error: unknown): ShownError {
   const parsed = parseFrappeError(error, COPY.loadError)
   const code = parsed.match(/\[(URY-FEEDBACK-[A-Z-]+)\]/)?.[1]
   if (!code) return { text: COPY.loadError, retryable: false }
-  return { text: REFUSALS[code] ?? COPY.unavailable, retryable: code === 'URY-FEEDBACK-RETRY' }
+  return { text: REFUSALS[code] ?? COPY.unavailable, retryable: RETRYABLE.has(code) }
 }
 
 function ratingLabel(label: string, rating: number) {
