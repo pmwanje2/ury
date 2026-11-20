@@ -39,6 +39,16 @@ export interface POSOpeningPermissions {
   submit: boolean;
 }
 
+/** Another holder's open entry on the selected profile; no email is ever returned. */
+export interface POSOpeningOccupiedEntry {
+  /** Present only when the caller may read the entry. */
+  name?: string;
+  /** True when this operator may continue on the holder's till. */
+  joinable?: boolean;
+  user_full_name: string | null;
+  period_start_date: string;
+}
+
 export interface POSOpeningContext {
   company: string;
   company_currency?: string;
@@ -55,6 +65,7 @@ export interface POSOpeningContext {
   daily_close_pending: boolean;
   multi_cashier: POSOpeningMultiCashierFlags;
   permissions: POSOpeningPermissions;
+  occupied_entry?: POSOpeningOccupiedEntry | null;
 }
 
 export interface POSOpeningContextResponse {

@@ -8,17 +8,12 @@
  * Backend sources:
  * - ury/ury/ury/doctype/sub_pos_closing/sub_pos_closing.py
  *   (get_pos_profile, get_cashiers, get_pos_invoices)
- * - ury/ury/ury_pos/api.py (get_open_pos_opening_entries)
- * - erpnext/accounts/doctype/pos_closing_entry/pos_closing_entry.py
- *   (get_cashiers, get_pos_invoices)
+ * - ury/ury/ury_pos/api.py (get_open_pos_opening_entries, get_till_invoices)
  *
- * Note: ERPNext v16's `get_invoices(start, end, pos_profile, user)` on the
- * POS Closing Entry module returns a pre-aggregated
- * {invoices, payments, taxes} object: `payments` is already grouped by
- * mode_of_payment with change_amount already deducted server-side, and
- * payment/tax rows carry no `parent` field. Older/Sub POS Closing paths
- * return a plain list of full POS Invoice dicts (POSClosingInvoice[]).
- * getMainCashierPosInvoices therefore returns POSClosingData | POSClosingInvoice[].
+ * The main close reads the whole till through URY's `get_till_invoices`,
+ * which returns full POS Invoice dicts (POSClosingInvoice[]). ERPNext v16's
+ * `get_invoices` selects by invoice owner and misses other cashiers' bills on
+ * the same till. The pre-aggregated POSClosingData shape is still accepted.
  */
 
 import { call, db } from '@ury/core';
@@ -245,12 +240,8 @@ export async function getSubCashierPosInvoices(
 }
 
 /**
- * Main-cashier / single-cashier path.
- * Wraps erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry.get_invoices(start, end, pos_profile, user).
- *
- * ERPNext v16 returns {invoices, payments, taxes} with payments pre-aggregated
- * by mode_of_payment (change_amount already deducted server-side). Legacy
- * responses that are a bare array of invoice dicts are returned as-is.
+ * Main-cashier / single-cashier path: every bill on the holder's open till.
+ * Wraps ury.ury_pos.api.get_till_invoices(start, end, pos_profile, user).
  */
 export async function getMainCashierPosInvoices(
   start: string,
@@ -260,7 +251,7 @@ export async function getMainCashierPosInvoices(
 ): Promise<POSClosingData | POSClosingInvoice[]> {
   try {
     const response = await call.get<{ message: POSClosingData | POSClosingInvoice[] }>(
-      'erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry.get_invoices',
+      'ury.ury_pos.api.get_till_invoices',
       { start, end, pos_profile: posProfile, user }
     );
 
