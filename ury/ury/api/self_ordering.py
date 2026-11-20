@@ -605,7 +605,9 @@ def add_customer_items(session, items):
         if qty <= 0:
             frappe.throw(_("Invalid quantity for item {0}").format(item_code), frappe.ValidationError)
 
-        clean_items.append({"item": item_code, "item_name": item_code, "qty": qty, "comment": comment})
+        # The check line, KOT and guest view name the dish as staff lines do; never the client's text.
+        item_name = frappe.db.get_value("Item", item_code, "item_name")
+        clean_items.append({"item": item_code, "item_name": item_name, "qty": qty, "comment": comment})
 
     order_type = "Dine In" if session.table else "Take Away"
 
