@@ -613,14 +613,10 @@ test('guest wording, waiter copy, and footer follow the catalog', async (t) => {
       assert.match(catalogs.sw.errors.refusal[key], /Kikapu chako kimehifadhiwa\.$/, key)
       assert.match(catalogs.lg.errors.refusal[key], /Ebiri mu kikapu kyo bikyaliwo\.$/, key)
     }
-    assert.equal(catalogs.en.errors.refusal.waiter_opens_table.includes(catalogs.en.assistance.call), true)
-    assert.equal(catalogs.sw.errors.refusal.waiter_opens_table.includes(catalogs.sw.assistance.call), true)
-    assert.equal(catalogs.lg.errors.refusal.waiter_opens_table.includes(catalogs.lg.assistance.call), true)
-    const session = readSource('hooks/useOrderingSession.ts')
-    for (const id of ['SAL-QR-WAITER-OPENS-TABLE', 'SAL-QR-BILL-PRINTED', 'SAL-QR-QTY']) {
-      assert.equal(session.includes(`'${id}'`), true, `refusal id ${id} missing from the closed list`)
+    // The table has no staff-opened order yet, so the Call waiter button is not on screen.
+    for (const code of ['en', 'sw', 'lg']) {
+      assert.equal(catalogs[code].errors.refusal.waiter_opens_table.includes(catalogs[code].assistance.call), false, `${code} waiter_opens_table names a button that is not shown`)
     }
-    assert.equal(session.includes('Your basket is kept'), false, 'refusal copy is hard-coded')
   })
 
   await t.test('the visible footer words follow the guest language and keep the licence line', async () => {

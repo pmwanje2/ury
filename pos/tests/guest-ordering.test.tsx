@@ -94,17 +94,17 @@ const SERVER_TEXT = {
 const PLACE = { en: 'Place Order', sw: 'Weka oda', lg: 'Teeka oda' } as const;
 const NEXT_STEPS = {
   en: {
-    'SAL-QR-WAITER-OPENS-TABLE': 'Your table is not open for orders yet. Tap Call waiter or ask a member of staff to open it, then place your order again. Your basket is kept.',
+    'SAL-QR-WAITER-OPENS-TABLE': 'Your table is not open for orders yet. Please ask a member of staff to open it, then place your order again. Your basket is kept.',
     'SAL-QR-BILL-PRINTED': 'Your bill has already been printed, so new items cannot be added here. Please ask a waiter to add them for you. Your basket is kept.',
     'SAL-QR-QTY': 'Please choose whole quantities between 1 and 20.',
   },
   sw: {
-    'SAL-QR-WAITER-OPENS-TABLE': 'Meza yako bado haijafunguliwa kwa oda. Gusa Ita mhudumu au mwombe mhudumu aifungue, kisha weka oda yako tena. Kikapu chako kimehifadhiwa.',
+    'SAL-QR-WAITER-OPENS-TABLE': 'Meza yako bado haijafunguliwa kwa oda. Tafadhali mwombe mhudumu aifungue, kisha weka oda yako tena. Kikapu chako kimehifadhiwa.',
     'SAL-QR-BILL-PRINTED': 'Bili yako tayari imechapishwa, kwa hivyo bidhaa mpya haziwezi kuongezwa hapa. Tafadhali mwombe mhudumu akuongezee. Kikapu chako kimehifadhiwa.',
     'SAL-QR-QTY': 'Tafadhali chagua idadi kamili kati ya 1 na 20.',
   },
   lg: {
-    'SAL-QR-WAITER-OPENS-TABLE': 'Emmeeza yo tennaggulwawo kuteekako oda. Nyiga Yita omuweereza oba osabe omu ku baweereza agiggulewo, oluvannyuma oddemu oteeke oda yo. Ebiri mu kikapu kyo bikyaliwo.',
+    'SAL-QR-WAITER-OPENS-TABLE': 'Emmeeza yo tennaggulwawo kuteekako oda. Nsaba osabe omu ku baweereza agiggulewo, oluvannyuma oddemu oteeke oda yo. Ebiri mu kikapu kyo bikyaliwo.',
     'SAL-QR-BILL-PRINTED': "Bili yo yamaze okukubibwa, n'olwekyo ebintu ebipya tebiyinza kwongerwako wano. Nsaba osabe omuweereza abikwongerereko. Ebiri mu kikapu kyo bikyaliwo.",
     'SAL-QR-QTY': 'Nsaba olonde obungi obujjuvu wakati wa 1 ne 20.',
   },
@@ -131,6 +131,23 @@ describe('ERP refusal text', () => {
     if (language !== 'en' || code !== 'SAL-QR-QTY') expect(container.textContent).not.toContain(SERVER_TEXT[code]);
     expect(container.textContent).not.toContain('Could not place the order');
     expect(button(PLACE[language])).toBeDefined();
+    expect(cartBar()).toContain('Soup');
+  });
+  const CALL_WAITER = { en: 'Call waiter', sw: 'Ita mhudumu', lg: 'Yita omuweereza' } as const;
+  it.each(['en', 'sw', 'lg'] as const)('only names on-screen actions when an unopened %s table is refused', async language => {
+    // SAL-QR-WAITER-OPENS-TABLE means no staff-opened order exists, so the guest's bill is empty.
+    vi.mocked(call.post).mockImplementation(async (path: string, args?: Record<string, unknown>) => {
+      if (path.endsWith('get_customer_menu')) return { message: menu };
+      if (/\.get_[a-z_]+$/.test(path)) return { message: { invoice: null, items: [], grand_total: 0, billed: false } };
+      return writes(path, args);
+    });
+    await initI18n(language, { setCookie() {} });
+    writes.mockRejectedValue(serverMessages('SAL-QR-WAITER-OPENS-TABLE', SERVER_TEXT['SAL-QR-WAITER-OPENS-TABLE']));
+    await render(); await addSoup();
+    await click(PLACE[language]);
+    expect(container.textContent).toContain(NEXT_STEPS[language]['SAL-QR-WAITER-OPENS-TABLE']);
+    expect(button(CALL_WAITER[language])).toBeUndefined();
+    expect(container.textContent).not.toContain(CALL_WAITER[language]);
     expect(cartBar()).toContain('Soup');
   });
   it.each([
