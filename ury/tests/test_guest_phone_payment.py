@@ -69,8 +69,9 @@ class TestGuestPhonePayment(unittest.TestCase):
 
     def test_missing_gateway_refuses_with_stable_id_without_creating_request(self):
         frappe.db.delete("Payment Gateway Account", {"name": self.gateway.name})
-        with self.assertRaisesRegex(frappe.ValidationError, "URY-PAYMENT-NOT-CONFIGURED"):
+        with self.assertRaisesRegex(frappe.ValidationError, "URY-PAYMENT-NOT-CONFIGURED") as raised:
             create_payment_request(self.token)
+        self.assertNotIsInstance(raised.exception, frappe.PermissionError)
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 0)
         self.assertEqual(frappe.session.user, "Guest")
 
@@ -259,6 +260,8 @@ class TestGuestPhonePayment(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError) as raised:
             create_payment_request(self.token)
         self.assertIn("A payment for this order is already in progress", str(raised.exception))
+        self.assertIn("URY-PAYMENT-IN-PROGRESS", str(raised.exception))
+        self.assertNotIsInstance(raised.exception, frappe.PermissionError)
         self.assertNotIn("Another Payment Request", str(raised.exception))
         self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"], "docstatus"), 1)
         self.assertEqual(frappe.session.user, "Guest")
@@ -278,6 +281,7 @@ class TestGuestPhonePayment(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError) as raised:
             create_payment_request(self.token)
         self.assertIn("A payment for this order is already in progress", str(raised.exception))
+        self.assertIn("URY-PAYMENT-IN-PROGRESS", str(raised.exception))
         self.assertEqual(frappe.db.get_value("Payment Request", cashier.name, ["docstatus", "status"]),
             (1, "Requested"))
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
