@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
 import { showToast } from '@ury/ui';
-import { initI18n } from '../i18n';
+import { initI18n, t } from '../i18n';
 import Orders from './Orders';
 
 const state = vi.hoisted(() => ({
@@ -48,6 +48,8 @@ vi.mock('../components/MergedBillPanel', () => ({ default: () => null }));
 let container: HTMLDivElement;
 let root: Root;
 const cancelMethod = 'ury.ury.doctype.ury_order.ury_order.cancel_order';
+const cancelOrderButton = () =>
+  container.querySelector<HTMLButtonElement>(`button[aria-label="${t('orders.cancel_order')}"]`);
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -82,10 +84,10 @@ async function renderOrders() {
 async function openCancelDialog() {
   await renderOrders();
   await vi.waitFor(() => {
-    expect(container.querySelector('button[aria-label="Cancel order"]')).not.toBeNull();
+    expect(cancelOrderButton()).not.toBeNull();
   });
   await act(async () => {
-    container.querySelector<HTMLButtonElement>('button[aria-label="Cancel order"]')!.click();
+    cancelOrderButton()!.click();
   });
   const dialog = container.querySelector('[role="dialog"]');
   expect(dialog).not.toBeNull();
