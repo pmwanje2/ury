@@ -19,7 +19,7 @@ export function createStationPrinter({
     try { return JSON.parse(storage.getItem(`${prefix}:${key}`)) ?? fallback; }
     catch { return fallback; }
   };
-  let settings = { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576, ...read("settings", {}) };
+  let settings = { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576, commandMode: "standard", ...read("settings", {}) };
   const printed = new Set(read("printed", []));
   const attempted = new Set();
   const failures = new Map();
@@ -96,10 +96,12 @@ export function createStationPrinter({
       const data = `${message.style ? `<style>${message.style}</style>` : ""}${message.html}`;
       // QZ resolves a name to an OS print queue (USB or installed network printer); host is a raw socket.
       const target = settings.printer || { host: settings.host, port: Number(settings.port) };
+      // QZ rasterises raw HTML at pageWidth dots (without it the ticket is an 8-dot blank strip). Double density
+      // prints one dot per column; QZ's single-density default prints each column twice and cuts the ticket in half.
+      // Raster mode is for generic ESC/POS clones that mishandle ESC * images: QZ sends GS v 0 instead.
+      const image = settings.commandMode === "raster" ? { imageEncoding: "GS_V_0" } : { dotDensity: "double" };
       await bridge.print(bridge.configs.create(target), [
-        // QZ rasterises raw HTML at pageWidth dots (without it the ticket is an 8-dot blank strip). Double density
-        // prints one dot per column; QZ's single-density default prints each column twice and cuts the ticket in half.
-        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth, dotDensity: "double" } },
+        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth, ...image } },
         { type: "raw", format: "command", flavor: "plain", data: "\n\n\n\x1dV\x00" },
       ]);
     };
@@ -138,11 +140,13 @@ export function createStationPrinter({
       // 80 mm and 58 mm ESC/POS heads at 203 dpi.
       const pageWidth = next.pageWidth ?? settings.pageWidth;
       if (pageWidth !== 576 && pageWidth !== 384) throw Error("Choose a paper width: 80 mm or 58 mm.");
+      const commandMode = next.commandMode ?? settings.commandMode;
+      if (commandMode !== "standard" && commandMode !== "raster") throw Error("Choose a printer command mode: Standard (ESC *) or Raster (GS v 0).");
       if (printer && host) throw Error("Choose an installed printer or a network host, not both.");
       if (next.enabled && !printer && !host) throw Error("Choose an installed printer or enter a network host and port.");
       if (next.enabled && (!next.printFormat?.trim() || (host && !validPort))) throw Error(printer ? "Enter a print format." : "Enter a printer host, port (1–65535), and print format.");
       const enabledAt = next.enabled && !settings.enabled ? new Date(now()).toISOString() : settings.enabledAt;
-      settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim(), pageWidth };
+      settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim(), pageWidth, commandMode };
       storage.setItem(`${prefix}:settings`, JSON.stringify(settings));
       return { ...settings };
     },

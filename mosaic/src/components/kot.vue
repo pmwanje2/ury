@@ -106,6 +106,12 @@
             <option value="384">58 mm</option>
           </select>
         </label>
+        <label class="mt-3 block font-semibold">{{ __("Printer command mode") }}
+          <select v-model="stationSettings.commandMode" class="mt-1 w-full rounded border p-2">
+            <option value="standard">Standard (ESC *)</option>
+            <option value="raster">Raster (GS v 0)</option>
+          </select>
+        </label>
         <label class="mt-4 flex items-center gap-2 font-semibold">
           <input v-model="stationSettings.enabled" type="checkbox"> {{ __("Enable station printing") }}
         </label>
@@ -477,7 +483,7 @@ export default {
       loadingServed: false,
       timeInterval: null,
       stationPrinter: null,
-      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576 },
+      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576, commandMode: "standard" },
       installedPrinters: [],
       printerListError: "",
       failedPrints: [],
