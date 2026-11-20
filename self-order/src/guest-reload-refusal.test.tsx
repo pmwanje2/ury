@@ -156,7 +156,30 @@ describe('guest reload', () => {
     expect.soft(container.querySelector('header')).toBeNull()
     expect(container.textContent).not.toContain('T-05')
     expect(container.textContent).not.toContain('Soup')
-    expect(bootstraps).toBe(1)
+    // One fresh start from the QR in the URL, refused as well: no loop.
+    expect(bootstraps).toBe(2)
+  })
+
+  it('starts a fresh session from the same QR when the resumed session is refused', async () => {
+    await render()
+    const ok = reads
+    reads = async (path, args) => {
+      if (args?.session === 'session-a') throw {
+        httpStatus: 403, exc_type: 'PermissionError',
+        _server_messages: JSON.stringify([JSON.stringify({ message: 'Ordering session expired. Please rescan the QR code.' })]),
+      }
+      return ok(path, args)
+    }
+    await reload()
+    expect(bootstraps).toBe(2)
+    expect(container.querySelector('h1')?.textContent).toBe('T-06')
+    expect(container.textContent).not.toContain('Ordering session expired')
+    expect(buttonStarting('Soup')).toBeDefined()
+    expect(sessionStorage.getItem('ury_order_session')).toBe('session-b')
+    // The next reload resumes the new session.
+    await reload()
+    expect(bootstraps).toBe(2)
+    expect(container.querySelector('h1')?.textContent).toBe('T-06')
   })
 
   it('keeps the translated transport fallback without a cached table on a failed reload', async () => {
@@ -170,6 +193,8 @@ describe('guest reload', () => {
     await reload()
     expect(container.textContent).toContain('Imeshindwa kupakia menyu. Tafadhali skani tena msimbo wa QR.')
     expect(container.querySelector('header')).toBeNull()
+    // Only an authorization refusal ends the stored session; a transport failure keeps it.
+    expect(bootstraps).toBe(1)
   })
 })
 
