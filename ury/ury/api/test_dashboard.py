@@ -478,7 +478,8 @@ class TestGetModuleRecords(FrappeTestCase):
         with patch(f"{MODULE}.frappe.get_list") as mock_get_list:
             with self.assertRaises(frappe.PermissionError):
                 get_module_records("Account")
-            mock_get_list.assert_not_called()
+            # frappe.throw may look up Translation through the same patched get_list.
+            self.assertNotIn("Account", [c.args[0] for c in mock_get_list.call_args_list if c.args])
 
     def test_module_records_permission_error_propagates(self):
         with patch(f"{MODULE}.frappe.get_list", side_effect=frappe.PermissionError):

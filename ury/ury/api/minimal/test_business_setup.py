@@ -23,8 +23,10 @@ class TestSubmitConfigureDataGuard(unittest.TestCase):
     @patch("ury.ury.api.minimal.business_setup.is_ury_setup_complete")
     def test_guest_user_is_rejected(self, mock_setup_complete):
         # Guest guard must fire before the setup-complete check even runs.
+        # Maximus fork (T0): a Guest is an authorization denial (PermissionError), not a
+        # validation error.
         with patch("ury.ury.api.minimal.business_setup.frappe.session", frappe._dict({"user": "Guest"})):
-            with self.assertRaises(frappe.exceptions.ValidationError) as ctx:
+            with self.assertRaises(frappe.PermissionError) as ctx:
                 submit_configure_data(data="{}")
 
         self.assertIn("Not permitted", str(ctx.exception))
