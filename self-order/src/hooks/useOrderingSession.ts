@@ -67,24 +67,46 @@ function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = fa
 const SESSION_KEY = 'ury_order_session'
 const CONTEXT_KEY = 'ury_order_context'
 
-// `comment`/`variant`/`addons` extend the original `{item, qty}` shape so a
-// cart line can carry the per-item note the backend already accepts
-// (`add_customer_items`'s `items[].comment`, see api.ts's `addItems`) plus
-// the variant/add-on selections a Phase 1 product-detail screen will let
-// customers pick. Only `comment` has a server-side field today — `variant`/
-// `addons` are carried for display/UI purposes in this cart model and are
-// NOT sent to `add_customer_items` (which has no such params); see
-// self_ordering.py's `add_customer_items` docstring for the exact payload
-// shape it accepts.
+// One cart line per (item, kitchen note): the same dish with different notes
+// stays on separate lines, equal notes merge. `comment` is the only per-line
+// field `add_customer_items` accepts; `variant` is display-only. Selected
+// add-ons become their own priced lines (see addToCart), never a hidden extra.
 export interface CartEntry {
+  key?: string
   item: MenuItem
   qty: number
   comment?: string
   variant?: string
-  addons?: string[]
 }
 
 type Cart = Record<string, CartEntry>
+
+/** Native comment fields (POS Invoice Item.comment / URY KOT Items.comments) are Data. */
+export const MAX_NOTE_LENGTH = 140
+
+/** A missing or non-finite rate is unknown, never free; a real zero is allowed. */
+export function hasPrice(item: MenuItem): boolean {
+  return typeof item.rate === 'number' && Number.isFinite(item.rate) && item.rate >= 0
+}
+
+function lineKey(itemCode: string, note: string): string {
+  return note ? JSON.stringify([itemCode, note]) : itemCode
+}
+
+function addLine(cart: Cart, item: MenuItem, note: string, variant?: string): Cart {
+  const key = lineKey(item.item, note)
+  const existing = cart[key]
+  return {
+    ...cart,
+    [key]: {
+      key,
+      item,
+      qty: (existing?.qty ?? 0) + 1,
+      comment: note || undefined,
+      variant: variant ?? existing?.variant,
+    },
+  }
+}
 
 // Screen state machine shared by all 4 layout shells (Mobile/Tablet/
 // Landscape Kiosk/Portrait Kiosk) instead of a router — deliberate per the
@@ -249,18 +271,19 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     item: MenuItem,
     options?: { comment?: string; variant?: string; addons?: string[] },
   ) {
+    if (item.disabled || !hasPrice(item)) return
+    const note = context?.capabilities.item_notes_enabled
+      ? (options?.comment ?? '').trim().slice(0, MAX_NOTE_LENGTH)
+      : ''
+    // Add-ons are billed as their own menu lines at the server menu price;
+    // off-menu, disabled or unpriced add-ons are not orderable.
+    const addons = (options?.addons ?? [])
+      .map((code) => menu.find((candidate) => candidate.item === code))
+      .filter((addon): addon is MenuItem => !!addon && !addon.disabled && hasPrice(addon))
     setCart((prev) => {
-      const existing = prev[item.item]
-      return {
-        ...prev,
-        [item.item]: {
-          item,
-          qty: (existing?.qty ?? 0) + 1,
-          comment: options?.comment ?? existing?.comment,
-          variant: options?.variant ?? existing?.variant,
-          addons: options?.addons ?? existing?.addons,
-        },
-      }
+      let next = addLine(prev, item, note, options?.variant)
+      for (const addon of addons) next = addLine(next, addon, '')
+      return next
     })
   }
 
@@ -302,16 +325,17 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     loadStatus()
   }
 
-  function decrementCart(itemCode: string) {
+  /** `lineKey` is a cart key: the item code for a plain line, or the noted line's key. */
+  function decrementCart(lineKey: string) {
     setCart((prev) => {
-      const existing = prev[itemCode]
+      const existing = prev[lineKey]
       if (!existing) return prev
       if (existing.qty <= 1) {
         const rest = { ...prev }
-        delete rest[itemCode]
+        delete rest[lineKey]
         return rest
       }
-      return { ...prev, [itemCode]: { ...existing, qty: existing.qty - 1 } }
+      return { ...prev, [lineKey]: { ...existing, qty: existing.qty - 1 } }
     })
   }
 
@@ -351,10 +375,11 @@ export function useOrderingSession(initialContext?: OrderingContext) {
         }
       }
 
+      const notesEnabled = context.capabilities.item_notes_enabled
       const payload = cartItems.map((entry) => ({
         item: entry.item.item,
         qty: entry.qty,
-        comment: entry.comment,
+        ...(notesEnabled && entry.comment ? { comment: entry.comment } : {}),
       }))
       const updated = await addItems(context.session, payload)
       setOrder(updated)

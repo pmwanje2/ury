@@ -191,6 +191,14 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
                 {assistanceMessage && <p role="status" className="mt-2 text-sm">{assistanceMessage}</p>}
               </>
             )}
+            {context?.capabilities.feedback_enabled && order.billed && (
+              <a
+                href="/order/feedback"
+                className="mt-3 block w-full rounded-md border py-2 text-center text-sm font-medium"
+              >
+                Rate your visit
+              </a>
+            )}
           </section>
         )}
 
@@ -252,6 +260,8 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
         menuItem={menuItem}
         onAddToCart={addToCart}
         onBack={goToMenu}
+        menu={menu}
+        itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
       />
     )
   }

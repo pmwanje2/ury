@@ -8,8 +8,10 @@ interface CartPageProps {
   cartCount: number
   cartTotal: number
   itemNotesEnabled?: boolean
-  onIncrement: (item: MenuItem) => void
-  onDecrement: (itemCode: string) => void
+  /** Called with the line's note so + adds to the same noted line. */
+  onIncrement: (item: MenuItem, options?: { comment?: string }) => void
+  /** Called with the line's cart key (the item code for a plain line). */
+  onDecrement: (lineKey: string) => void
   onBack: () => void
   onCheckout: () => void
   className?: string
@@ -61,12 +63,12 @@ function CartPage({
         ) : (
           <ul className="space-y-3 text-sm">
             {cartItems.map((entry) => (
-              <li key={entry.item.item} className="rounded-lg border p-3">
+              <li key={entry.key ?? entry.item.item} className="rounded-lg border p-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex-1 font-medium">{entry.item.item_name}</span>
                   <span className="flex items-center gap-2">
                     <button
-                      onClick={() => onDecrement(entry.item.item)}
+                      onClick={() => onDecrement(entry.key ?? entry.item.item)}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
                       aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                     >
@@ -74,7 +76,7 @@ function CartPage({
                     </button>
                     <span className="w-4 text-center">{entry.qty}</span>
                     <button
-                      onClick={() => onIncrement(entry.item)}
+                      onClick={() => onIncrement(entry.item, { comment: entry.comment })}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
                       aria-label={t('cart.add_one', { name: entry.item.item_name })}
                     >

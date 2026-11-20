@@ -438,7 +438,12 @@ class TestSessionGate(SelfOrderingSessionFixtures):
 			get_order_status(raw)
 
 	def test_successful_call_slides_the_expiry_window(self):
-		raw, _doc = self.insert_session_at_state(status="Active", expires_in_minutes=1)
+		raw, doc = self.insert_session_at_state(status="Active", expires_in_minutes=1)
+		# Reads slide at most once a minute, so the last activity must be older than that.
+		frappe.db.set_value(
+			"URY Ordering Session", doc.name, "last_activity",
+			add_to_date(now_datetime(), minutes=-2), update_modified=False,
+		)
 		before = frappe.db.get_value("URY Ordering Session", self.session_doc(raw).name, "expires_at")
 
 		get_order_status(raw)

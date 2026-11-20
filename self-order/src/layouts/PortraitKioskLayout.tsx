@@ -73,7 +73,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY)
   const [cartExpanded, setCartExpanded] = useState(false)
   const [showIdleWarning, setShowIdleWarning] = useState(false)
-  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const idleWarnMs = (context?.session_idle_timeout_minutes ?? 30) * 60000
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -185,6 +185,8 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
           menuItem={detailItem}
           onAddToCart={addToCart}
           onBack={goToMenu}
+          menu={menu}
+          itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
         />
       </div>
     )
@@ -388,11 +390,11 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             <div className="max-h-[50vh] overflow-y-auto border-b p-4">
               <ul className="space-y-2 text-base">
                 {cartItems.map((entry) => (
-                  <li key={entry.item.item} className="flex items-center justify-between">
+                  <li key={entry.key ?? entry.item.item} className="flex items-center justify-between">
                     <span>{entry.item.item_name}</span>
                     <span className="flex items-center gap-3">
                       <button
-                        onClick={() => decrementCart(entry.item.item)}
+                        onClick={() => decrementCart(entry.key ?? entry.item.item)}
                         className="h-8 w-8 rounded-full border text-base leading-none"
                         aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                       >
@@ -400,7 +402,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
                       </button>
                       {entry.qty}
                       <button
-                        onClick={() => addToCart(entry.item)}
+                        onClick={() => addToCart(entry.item, { comment: entry.comment })}
                         className="h-8 w-8 rounded-full border text-base leading-none"
                         aria-label={t('cart.add_one', { name: entry.item.item_name })}
                       >
