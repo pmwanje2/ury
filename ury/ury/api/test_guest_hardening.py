@@ -151,4 +151,10 @@ class TestGuestHardening(unittest.TestCase):
     def test_valid_guest_session_on_enabled_profile_still_slides(self):
         result, session = self._resolve_with(enabled=1, expires_at=datetime(2026, 10, 20, 12, 10))
         self.assertIs(result, session)
-        session.save.assert_called_once_with(ignore_permissions=True)
+        # Two columns only: a full save re-reads the row FOR UPDATE and clashes with concurrent writers.
+        session.save.assert_not_called()
+        frappe.db.set_value.assert_called_once_with(
+            "URY Ordering Session", "S1",
+            {"last_activity": datetime(2026, 10, 20, 12), "expires_at": datetime(2026, 10, 20, 12, 30)},
+            update_modified=False,
+        )
