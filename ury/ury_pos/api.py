@@ -82,9 +82,22 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
     menu_items = frappe.get_all(
         "URY Menu Item",
         filters={"parent": menu, "disabled": 0},
-        fields=["item", "item_name", "rate", "special_dish", "disabled", "course"],
+        fields=["item", "item_name", "rate", "special_dish", "disabled", "course", "idx"],
         order_by="item_name asc"
     )
+
+    # Guest screens order categories by the menu's own configuration
+    # (Simphony SLU order): course serving priority, then menu row order.
+    # 0 is the Int default, so it means "not configured".
+    courses = {item.course for item in menu_items if item.course}
+    course_priority = {
+        row.name: row.custom_serving_priority or None
+        for row in frappe.get_all(
+            "URY Menu Course",
+            filters={"name": ["in", list(courses)]},
+            fields=["name", "custom_serving_priority"],
+        )
+    } if courses else {}
 
     menu_items_with_image = [
         {
@@ -96,6 +109,8 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
             "item_image": frappe.db.get_value("Item", item.item, "image"),
             "course": item.course,
             "course_label": _(item.course) if item.course else item.course,
+            "course_priority": course_priority.get(item.course),
+            "menu_order": item.idx,
         }
         for item in menu_items
     ]

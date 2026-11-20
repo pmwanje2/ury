@@ -3,6 +3,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
+import { menuCategories } from '../lib/menu-categories'
+import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import CartPage from './shared/CartPage'
 import CategoryTabs from './shared/CategoryTabs'
@@ -13,6 +17,7 @@ import ProductDetail from './shared/ProductDetail'
 import SearchBar from './shared/SearchBar'
 
 const IDLE_RESET_GRACE_MS = 15000
+const OTHER = '__other__'
 
 interface LayoutProps {
   initialContext?: OrderingContext
@@ -34,6 +39,7 @@ interface LayoutProps {
  * (dims/disables out-of-stock items) on top of the shared ProductCard.
  */
 function LandscapeKioskLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -71,7 +77,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
   const [searchQuery, setSearchQuery] = useState('')
 
   function handleReset() {
-    if (window.confirm('Start a new order? Current cart will be cleared.')) {
+    if (window.confirm(t('confirm.new_order'))) {
       resetSession()
     }
   }
@@ -96,25 +102,17 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     setShowIdleWarning(false)
   }
 
-  // Build unique categories from menu
-  const categories = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const item of menu) {
-      const key = item.course
-      if (key && !seen.has(key)) {
-        seen.set(key, item.course_label ?? key)
-      }
-    }
-    return Array.from(seen.entries()).map(([course, label]) => ({ course, course_label: label }))
-  }, [menu])
+  // Categories in the menu's configured order (#98); "Other" is translated per render.
+  const groups = useMemo(() => menuCategories(menu), [menu])
+  const categories = groups.map((group) => ({ course: group.course ?? OTHER, course_label: group.label ?? t('menu.other') }))
 
   // Filter menu by category and search
   const visibleMenu = useMemo(() => {
-    let filtered = menu
+    let filtered = groups.flatMap((group) => group.items)
 
     // Filter by category
     if (selectedCategory !== null) {
-      filtered = filtered.filter((item) => item.course === selectedCategory)
+      filtered = groups.find((group) => (group.course ?? OTHER) === selectedCategory)?.items ?? []
     }
 
     // Filter by search
@@ -128,7 +126,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     }
 
     return filtered
-  }, [menu, selectedCategory, searchQuery])
+  }, [groups, selectedCategory, searchQuery])
 
   // Find the detail product
   const detailProduct = useMemo(
@@ -152,16 +150,18 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-xl text-muted-foreground">
-        Loading menu…
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-xl text-muted-foreground">
+        <LanguageSwitcher />
+        {t('status.loading_menu')}
       </div>
     )
   }
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-10 text-center text-xl text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-10 text-center text-xl">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -172,13 +172,13 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex h-screen flex-col">
         <header className="flex items-center justify-between border-b bg-background/95 px-10 py-6">
           <h1 className="text-3xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-4 py-2 text-base font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
         <div className="flex-1">
@@ -203,13 +203,13 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex h-screen flex-col">
         <header className="flex items-center justify-between border-b bg-background/95 px-10 py-6">
           <h1 className="text-3xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-4 py-2 text-base font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
         <div className="flex-1 overflow-y-auto">
@@ -251,13 +251,13 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex h-screen flex-col">
         <header className="flex items-center justify-between border-b bg-background/95 px-10 py-6">
           <h1 className="text-3xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-4 py-2 text-base font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
         <div className="flex-1">
@@ -279,13 +279,14 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
     <div className="flex h-screen flex-col overflow-hidden text-lg">
       <header className="flex items-center justify-between border-b bg-background/95 px-10 py-6">
         <h1 className="text-3xl font-semibold">
-          {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+          {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
         </h1>
+        <LanguageSwitcher />
         <button
           onClick={handleReset}
           className="rounded-md border px-4 py-2 text-base font-medium text-muted-foreground"
         >
-          New Order
+          {t('actions.new_order')}
         </button>
       </header>
 
@@ -300,6 +301,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
             categories={categories}
             activeCourse={selectedCategory}
             onSelect={setSelectedCategory}
+            allLabel={t('menu.all_items')}
           />
         </div>
         <div className="mt-3 w-80">
@@ -367,16 +369,16 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
       </div>
 
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
-        <DialogContent onClose={handleStillHere}>
+        <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
-            <DialogTitle>Still there?</DialogTitle>
+            <DialogTitle>{t('cart.still_there')}</DialogTitle>
           </DialogHeader>
           <DialogFooter>
             <button
               onClick={handleStillHere}
               className="w-full rounded-md bg-primary py-3 text-base font-medium text-primary-foreground"
             >
-              I'm still here
+              {t('cart.still_here')}
             </button>
           </DialogFooter>
         </DialogContent>

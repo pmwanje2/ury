@@ -1,4 +1,16 @@
 <template>
+  <section v-if="!table.serviceRequestsDenied" aria-label="Service requests" class="mb-4 rounded border border-gray-200 bg-white p-3 text-left">
+    <h2 aria-live="polite" class="font-semibold">
+      {{ table.serviceRequestsLoading ? 'Loading requests' : table.serviceRequestsUnavailable ? 'Requests unavailable' : `Requests waiting: ${table.serviceRequests.length}` }}
+    </h2>
+    <ul v-if="!table.serviceRequestsLoading && !table.serviceRequestsUnavailable" class="mt-2 space-y-2">
+      <li v-for="request in table.serviceRequests" :key="request.name" class="flex flex-wrap items-center gap-2 text-sm">
+        <span class="rounded bg-yellow-100 px-2 py-1 text-yellow-800">{{ request.request_type }}</span>
+        <span>{{ request.table }} · {{ request.status }} · {{ request.requested_at }}</span>
+        <a :href="`/app/ury-service-request/${encodeURIComponent(request.name)}`" class="inline-flex min-h-[44px] items-center text-blue-700 underline">Open request</a>
+      </li>
+    </ul>
+  </section>
   <div
     class="grid grid-cols-2 md:grid-cols-4"
     :class="[
@@ -536,6 +548,7 @@
 </template>
 
 <script>
+import { onMounted, onUnmounted } from "vue";
 import { useTableStore } from "@/stores/Table.js";
 import { useAuthStore } from "@/stores/Auth.js";
 import { useMenuStore } from "@/stores/Menu.js";
@@ -554,7 +567,12 @@ export default {
     const auth = useAuthStore();
     const menu = useMenuStore();
     const recentOrders = usetoggleRecentOrder();
-    
+    let requestsInterval;
+    onMounted(() => {
+      requestsInterval = setInterval(() => table.fetchServiceRequests(), 30 * 1000);
+    });
+    onUnmounted(() => clearInterval(requestsInterval));
+
     return { table, invoiceData, auth, menu,recentOrders };
   },
 };

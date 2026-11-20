@@ -13,6 +13,12 @@ import { usetoggleRecentOrder } from "./recentOrder.js";
 export const useTableStore = defineStore("table", {
   state: () => ({
     tables: [],
+    serviceRequests: [],
+    serviceRequestsLoading: true,
+    serviceRequestsUnavailable: false,
+    serviceRequestsDenied: false,
+    serviceRequestsRead: 0,
+    serviceRequestsRoom: null,
     selectedTable: null,
     previousOrderdItem: [],
     invoiceNo: "",
@@ -157,6 +163,11 @@ export const useTableStore = defineStore("table", {
       });
     },
     fetchTable() {
+      const room = this.selectedRoom;
+      let tableListLoaded = false;
+      this.serviceRequests = [];
+      this.serviceRequestsLoading = true;
+      ++this.serviceRequestsRead;
       this.db
         .getDocList("URY Table", {
           fields: [
@@ -176,13 +187,52 @@ export const useTableStore = defineStore("table", {
           limit: 0,
         })
         .then((tables) => {
+          if (room !== this.selectedRoom) return;
+          tableListLoaded = true;
           this.tables = tables.sort((a, b) => {
             return a.name.localeCompare(b.name, undefined, {
               numeric: true,
               sensitivity: "base",
             });
           });
+          this.serviceRequestsRoom = room;
+          this.fetchServiceRequests();
+        })
+        .catch((error) => {
+          if (!tableListLoaded && room === this.selectedRoom) {
+            this.serviceRequestsLoading = false;
+            this.serviceRequestsUnavailable = true;
+            this.serviceRequestsDenied = false;
+          }
+          console.error(error);
         });
+    },
+    // Guest Bill and Assistance requests for the loaded room, read through the
+    // native permission-filtered list. A permission denial hides the cue; any
+    // other failure shows "Requests unavailable", never a false zero.
+    async fetchServiceRequests() {
+      const room = this.selectedRoom;
+      if (this.serviceRequestsRoom !== room) return;
+      const read = ++this.serviceRequestsRead;
+      const tableNames = this.tables.map((table) => table.name);
+      try {
+        const requests = tableNames.length ? await this.db.getDocList("URY Service Request", {
+          fields: ["name", "table", "invoice", "request_type", "status", "requested_at"],
+          filters: [["table", "in", tableNames], ["request_type", "in", ["Bill", "Assistance"]], ["status", "!=", "Resolved"]],
+          orderBy: { field: "requested_at", order: "asc" }, limit: 0,
+        }) : [];
+        if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
+        this.serviceRequests = requests;
+        this.serviceRequestsUnavailable = false;
+        this.serviceRequestsDenied = false;
+      } catch (error) {
+        if (read !== this.serviceRequestsRead || room !== this.selectedRoom) return;
+        this.serviceRequests = [];
+        this.serviceRequestsUnavailable = true;
+        this.serviceRequestsDenied = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
+      } finally {
+        if (read === this.serviceRequestsRead && room === this.selectedRoom) this.serviceRequestsLoading = false;
+      }
     },
     async getMenu() {
       const getMenuIem = {

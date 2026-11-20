@@ -29,6 +29,7 @@ import json
 
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import add_to_date, now_datetime
 
 from ury.ury_pos.api import resolve_restaurant_menu
@@ -315,6 +316,8 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
         # does (see this file's invoice.company fallback), never guessed client-side.
         "company": frappe.db.get_value("Branch", profile.branch, "company"),
         "table": table,
+        # The table's URY Room (area), so a room reads "In-Room Dining · Room 103".
+        "area": frappe.db.get_value("URY Table", table, "restaurant_room") if table else None,
         # "Mobile" for QR sessions (no device involved); otherwise the
         # provisioned URY Ordering Device's configured layout (Tablet /
         # Landscape Kiosk / Portrait Kiosk) — the frontend layout shell
@@ -791,6 +794,7 @@ def add_customer_items(session, items):
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist(allow_guest=True)
+@rate_limit(limit=5, seconds=60)
 def request_bill(session):
     session = _resolve_session(session)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
@@ -803,7 +807,8 @@ def request_bill(session):
     with _elevated():
         existing = frappe.db.exists(
             "URY Service Request",
-            {"table": session.table, "invoice": session.invoice, "request_type": "Bill", "status": ["!=", "Resolved"]},
+            # Only an Open request suppresses a new one; after staff acknowledge, a new tap alerts again.
+            {"table": session.table, "invoice": session.invoice, "request_type": "Bill", "status": "Open"},
         )
         if existing:
             return {"status": "Already Requested", "request": existing}
@@ -811,6 +816,41 @@ def request_bill(session):
         req = frappe.get_doc({
             "doctype": "URY Service Request",
             "request_type": "Bill",
+            "table": session.table,
+            "invoice": session.invoice,
+            "session": session.name,
+            "status": "Open",
+            "requested_at": now_datetime(),
+        })
+        req.insert(ignore_permissions=True)
+
+    return {"status": "Requested", "request": req.name}
+
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+@rate_limit(limit=5, seconds=60)
+def request_assistance(session):
+    session = _resolve_session(session)
+    profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
+
+    if not profile.enable_request_bill:
+        frappe.throw(_("Requesting staff assistance is not enabled"), frappe.ValidationError)
+    if not session.table or not session.invoice:
+        frappe.throw(_("No active order for this table"), frappe.ValidationError)
+
+    with _elevated():
+        existing = frappe.db.exists(
+            "URY Service Request",
+            # One Open call per table, whichever guest session or check raised it. An
+            # Acknowledged call does not count: calling again must alert staff again.
+            {"table": session.table, "request_type": "Assistance", "status": "Open"},
+        )
+        if existing:
+            return {"status": "Already Requested", "request": existing}
+
+        req = frappe.get_doc({
+            "doctype": "URY Service Request",
+            "request_type": "Assistance",
             "table": session.table,
             "invoice": session.invoice,
             "session": session.name,

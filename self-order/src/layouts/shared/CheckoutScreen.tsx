@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CartEntry } from '../../hooks/useOrderingSession'
 import type { OrderingCapabilities, PaymentRequestResult } from '../../lib/api'
+import { t } from '../../i18n'
 
 // Local, UI-only concept — `pay_at_counter_enabled` has no backend action of
 // its own (see useOrderingSession's payOnline/handleRequestBill: neither
@@ -39,12 +40,12 @@ export interface CheckoutScreenProps {
 
 /**
  * Controlled checkout screen: order summary + payment method picker. Mirrors
- * the inline Pay Online / Request Bill wiring in MobileQRLayout.tsx, but
+ * the inline pay-online / request-bill wiring in MobileQRLayout.tsx, but
  * takes everything as props instead of calling useOrderingSession directly
  * so it can be reused across layout shells.
  *
  * When no payment capability is enabled at all (gateway disabled), the
- * picker renders nothing and "Place Order" simply submits the cart — the
+ * picker renders nothing and the place-order button simply submits the cart — the
  * pure "pay/settle at counter later" path the plan requires.
  */
 function CheckoutScreen({
@@ -106,7 +107,7 @@ function CheckoutScreen({
                   selectedMethod === 'online' ? 'border-primary bg-primary/10' : ''
                 }`}
               >
-                Pay Online
+                {t('payment.pay_online')}
               </button>
             )}
             {showPayAtCounter && (
@@ -132,14 +133,13 @@ function CheckoutScreen({
                   selectedMethod === 'bill' ? 'border-primary bg-primary/10' : ''
                 }`}
               >
-                {billRequested ? 'Bill requested — staff notified' : 'Request Bill'}
+                {billRequested ? t('bill.requested') : t('bill.request')}
               </button>
             )}
           </div>
           {paymentRequest && !paymentRequest.payment_url && (
             <p className="mt-2 text-xs text-muted-foreground">
-              Payment request created ({paymentRequest.amount} {paymentRequest.currency}) — a staff
-              member will assist with payment.
+              {t('payment.request_created', { amount: paymentRequest.amount, currency: paymentRequest.currency })}
             </p>
           )}
         </section>
@@ -153,7 +153,7 @@ function CheckoutScreen({
             disabled={payingOnline}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
-            {payingOnline ? 'Starting payment…' : 'Pay Online'}
+            {payingOnline ? t('payment.starting') : t('payment.pay_online')}
           </button>
         ) : (
           <button
@@ -162,7 +162,7 @@ function CheckoutScreen({
             disabled={submitting || cartItems.length === 0}
             className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
           >
-            {submitting ? 'Placing order…' : 'Place Order'}
+            {submitting ? t('order.placing') : t('order.place')}
           </button>
         )}
       </div>
