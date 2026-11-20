@@ -33,9 +33,7 @@ export async function syncOfflineCapture(
     });
   }
   if (!serviceWorker.controller || typeof fetch !== "function") return;
-  try {
-    await fetch("/pos", { credentials: "same-origin", cache: "reload" });
-  } catch {
-    // A failed warm-up must not block the till. The next controlled load caches the shell.
-  }
+  // Not awaited: a slow or failed warm-up must not hold boot. The next
+  // controlled load caches the shell.
+  void fetch("/pos", { credentials: "same-origin", cache: "reload" }).catch(() => undefined);
 }
