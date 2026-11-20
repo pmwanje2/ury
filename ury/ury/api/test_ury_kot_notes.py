@@ -555,3 +555,40 @@ class TestSentNotePermissions(OrderingCases, TestCase):
         self.assertEqual(self.invoice_state(), before)
         self.invoice.save.assert_not_called()
         self.assertEqual(self.tickets, [])
+
+
+class TestGuestItemName(OrderingCases, TestCase):
+    """A guest line carries the Item's name, like a staff line (Simphony: the check line names the menu item)."""
+
+    ITEM_NAMES = {"Fish": "Grilled tilapia", "Tea": "African tea"}
+
+    def get_value(self, doctype, filters, field):
+        if doctype == "Item" and field == "item_name":
+            return self.ITEM_NAMES.get(filters)
+        return super().get_value(doctype, filters, field)
+
+    def test_guest_line_saves_the_item_name_not_the_code(self):
+        self.add(code="Fish")
+        self.assertEqual([row.item_name for row in self.invoice.items], ["Grilled tilapia"])
+
+    def test_guest_order_view_shows_the_item_name(self):
+        result = self.add(code="Fish")
+        self.assertEqual([row["item_name"] for row in result["items"]], ["Grilled tilapia"])
+
+    def test_kitchen_ticket_carries_the_item_name(self):
+        self.add(code="Fish")
+        self.assertEqual([(row.item, row.item_name) for ticket in self.tickets for row in ticket.kot_items],
+                         [("Fish", "Grilled tilapia")])
+
+    def test_guest_dish_added_to_a_staff_order_keeps_both_names(self):
+        self.invoice.items.append(SimpleNamespace(
+            item_code="Tea", item_name="African tea", qty=1, comment="", rate=100, amount=100,
+        ))
+        result = self.add(code="Fish")
+        self.assertEqual([row["item_name"] for row in result["items"]], ["African tea", "Grilled tilapia"])
+        self.assertEqual([(row.item, row.item_name) for ticket in self.tickets for row in ticket.kot_items],
+                         [("Fish", "Grilled tilapia")])
+
+    def test_client_supplied_item_name_is_ignored(self):
+        self.guest.add_customer_items("test-session", [{"item": "Fish", "item_name": "Free beer", "qty": 1}])
+        self.assertEqual([row.item_name for row in self.invoice.items], ["Grilled tilapia"])
