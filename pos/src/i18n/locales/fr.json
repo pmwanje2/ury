@@ -527,5 +527,11 @@
   },
   "captain": {
     "till_not_open": "La caisse n’est pas ouverte. Demandez au caissier de l’ouvrir."
+  },
+  "service_requests": {
+    "call_waiter": "Appel serveur",
+    "bill": "Addition",
+    "minutes_waiting": "{{minutes}} min",
+    "acknowledge": "Accuser réception"
   }
 }
