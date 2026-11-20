@@ -23,12 +23,14 @@
 # Frappe user session. Elevation is always narrow and wrapped in try/finally.
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
 
 import frappe
 from frappe import _
+from frappe.rate_limiter import rate_limit
 from frappe.utils import add_to_date, flt, now_datetime
 
 from ury.ury_pos.api import resolve_restaurant_menu
@@ -864,15 +866,69 @@ def get_order_status(session):
 # ---------------------------------------------------------------------------
 
 _CLOSED_REQUEST_STATUSES = ["Paid", "Partially Paid", "Cancelled", "Failed"]
+# (requests, seconds) per ordering session; guests at one venue share an IP.
+_PAYMENT_REQUEST_LIMIT = (10, 600)
+_PAYMENT_STATUS_LIMIT = (60, 600)
+
+
+def _limit_guest_payment(endpoint, session_name, limit):
+    """Charge Frappe's native limiter on the verified ordering session."""
+    if not frappe.request:
+        return
+    original_form = frappe.local.form_dict
+    try:
+        # A guest-supplied budget key in the request is replaced, never trusted.
+        frappe.local.form_dict = frappe._dict(original_form)
+        frappe.form_dict._ury_payment_budget = f"payment:{session_name}"
+        rate_limit(
+            key="_ury_payment_budget", limit=limit[0], seconds=limit[1], ip_based=False,
+            endpoint=f"ury.ury.api.self_ordering.{endpoint}",
+        )(lambda: None)()
+    finally:
+        frappe.local.form_dict = original_form
+
+
+def _retry_on_lock_conflict(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+            _guest_retry()
+
+    return wrapper
 
 
 def _payment_url(pr):
+    """Ask the gateway for the checkout link (create path only) and keep it on
+    the native Payment Request field, so a status poll never calls the gateway."""
     try:
-        return pr.get_payment_url()
+        url = pr.get_payment_url()
     except Exception as e:
         # The Payment Request is real; only the gateway link is unavailable.
         frappe.log_error(f"Payment Request has no payment URL available: {e}", "Self-Order Payment")
         return None
+    if url and url != pr.get("payment_url"):
+        pr.db_set("payment_url", url, update_modified=False)
+    return url
+
+
+def _refuse_unconfigured_payment(pos_profile_name):
+    frappe.log_error(
+        title="[URY-PAYMENT-NOT-CONFIGURED] Guest phone payment is not configured",
+        message=(
+            "Add a Phone mode of payment to this POS Profile whose account has a "
+            "Phone Payment Gateway Account for the invoice company."
+        ),
+        reference_doctype="POS Profile",
+        reference_name=pos_profile_name,
+        # The refusal rolls the request back; a deferred log survives it.
+        defer_insert=True,
+    )
+    frappe.throw(
+        _("[URY-PAYMENT-NOT-CONFIGURED] Online payment isn't available here yet. Please pay at the counter."),
+        frappe.ValidationError,
+    )
 
 
 def _phone_gateway(pos_profile_name, company):
@@ -902,21 +958,24 @@ def _phone_gateway(pos_profile_name, company):
 
 
 @frappe.whitelist(allow_guest=True)
+@_retry_on_lock_conflict
 def create_payment_request(session):
     session = _resolve_session(session)
+    _limit_guest_payment("create_payment_request", session.name, _PAYMENT_REQUEST_LIMIT)
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not (profile.enable_customer_payment or profile.enable_payment_link):
-        frappe.throw(_("Online payment is not enabled"), frappe.ValidationError)
+        frappe.throw(_("[URY-PAYMENT-DISABLED] Online payment is not enabled"), frappe.ValidationError)
     if not session.invoice:
-        frappe.throw(_("No active order for this session"), frappe.ValidationError)
+        frappe.throw(_("[URY-PAYMENT-NO-ORDER] No active order for this session"), frappe.ValidationError)
 
     with _elevated():
         from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
 
-        invoice = frappe.get_doc("POS Invoice", session.invoice)
+        # Serialises a double tap on the check before any request is read or made.
+        invoice = frappe.get_doc("POS Invoice", session.invoice, for_update=True)
         if invoice.docstatus == 1:
-            frappe.throw(_("This order is already settled"), frappe.ValidationError)
+            frappe.throw(_("[URY-PAYMENT-SETTLED] This order is already settled"), frappe.ValidationError)
 
         # ERPNext v16 get_amount() for a POS Invoice reads only the Phone
         # payment row whose account matches the gateway's payment account.
@@ -924,13 +983,7 @@ def create_payment_request(session):
             profile.pos_profile, invoice.company
         )
         if not mode_of_payment:
-            frappe.throw(
-                _(
-                    "[URY-PAYMENT-NOT-CONFIGURED] Configure a Phone payment method "
-                    "with a Payment Gateway Account for this POS Profile."
-                ),
-                frappe.ValidationError,
-            )
+            _refuse_unconfigured_payment(profile.pos_profile)
 
         # ERPNext populates outstanding_amount only when submitting POS
         # invoices; an unpaid draft normally still has zero in that field.
@@ -953,7 +1006,7 @@ def create_payment_request(session):
             filters={**request_filters, "payment_channel": "Phone", "payment_request_type": "Inward",
                 "company": invoice.company, "currency": invoice.currency,
                 "status": ["in", ["Paid", "Partially Paid"]]},
-            fields=["name", "currency", "grand_total", "outstanding_amount"],
+            fields=["name", "currency", "grand_total", "outstanding_amount", "status"],
             order_by="creation desc",
         )
         paid_amount = flt(sum(flt(p.grand_total) - flt(p.outstanding_amount) for p in paid_requests))
@@ -964,7 +1017,7 @@ def create_payment_request(session):
                 "amount": paid_amount,
                 "currency": paid_requests[0].currency,
                 "payment_url": None,
-                "status": "Paid",
+                "status": paid_requests[0].status,
                 "paid_amount": paid_amount,
                 "remaining_amount": max(0, remaining_amount),
             }
@@ -983,7 +1036,7 @@ def create_payment_request(session):
         )
         if existing:
             pr = frappe.get_doc("Payment Request", existing)
-            return _payment_request_response(pr, _payment_url(pr), paid_amount)
+            return _payment_request_response(pr, _payment_url(pr), paid_amount, remaining_amount)
 
         # A stale unpaid guest link is replaced only if its checkout never
         # started (no Integration Request). Any checkout, even one marked
@@ -1019,7 +1072,7 @@ def create_payment_request(session):
                 frappe.throw(busy, frappe.ValidationError)
             if checkout:
                 pr = frappe.get_doc("Payment Request", open_request.name)
-                return _payment_request_response(pr, _payment_url(pr), paid_amount)
+                return _payment_request_response(pr, _payment_url(pr), paid_amount, remaining_amount)
         for open_request in open_requests:
             pr = frappe.get_doc("Payment Request", open_request.name)
             pr.flags.ignore_permissions = True
@@ -1053,10 +1106,10 @@ def create_payment_request(session):
         )
         payment_url = _payment_url(pr)
 
-    return _payment_request_response(pr, payment_url, paid_amount)
+    return _payment_request_response(pr, payment_url, paid_amount, remaining_amount)
 
 
-def _payment_request_response(pr, payment_url, paid_amount):
+def _payment_request_response(pr, payment_url, paid_amount, remaining_amount):
     return {
         "payment_request": pr.name,
         "amount": pr.grand_total,
@@ -1064,13 +1117,15 @@ def _payment_request_response(pr, payment_url, paid_amount):
         "payment_url": payment_url,
         "status": pr.status,
         "paid_amount": paid_amount,
-        "remaining_amount": pr.grand_total,
+        # The check balance; after growth it can exceed a kept request.
+        "remaining_amount": max(0, remaining_amount),
     }
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_payment_status(session):
     session = _resolve_session(session)
+    _limit_guest_payment("get_payment_status", session.name, _PAYMENT_STATUS_LIMIT)
     if not session.invoice:
         return {"status": None}
 
@@ -1078,15 +1133,12 @@ def get_payment_status(session):
         pr = frappe.db.get_value(
             "Payment Request",
             {"reference_doctype": "POS Invoice", "reference_name": session.invoice},
-            ["name", "status", "grand_total"],
+            ["name", "status", "grand_total", "payment_url"],
             as_dict=True,
             order_by="creation desc",
         )
-        payment_url = (
-            _payment_url(frappe.get_doc("Payment Request", pr.name))
-            if pr and pr.status not in _CLOSED_REQUEST_STATUSES
-            else None
-        )
+        # A poll is a read: it returns the link the create path stored.
+        payment_url = pr.payment_url if pr and pr.status not in _CLOSED_REQUEST_STATUSES else None
 
     if not pr:
         return {"status": None}
