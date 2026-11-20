@@ -245,6 +245,8 @@ QZ_SIGNING_ROLES = {
     "URY Admin",
     "URY Manager",
     "URY Cashier",
+    # Kitchen station screens print their own KOTs through QZ (Mosaic station printing).
+    "Restaurant Kitchen",
 }
 
 

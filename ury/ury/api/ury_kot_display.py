@@ -1,4 +1,7 @@
 import json
+from datetime import timedelta
+from math import isfinite
+
 import frappe
 from ury.ury_pos.api import getBranch
 from frappe.utils import get_datetime
@@ -27,9 +30,69 @@ def serve_kot(name, time=None):
 
     server_time_str = current_time.strftime("%H:%M:%S")
 
-    frappe.db.set_value("URY KOT", name, "start_time_serv", server_time_str)
-    frappe.db.set_value("URY KOT", name, "production_time", production_time_minutes)
-    frappe.db.set_value("URY KOT", name, "order_status", "Served")
+    # One document write, so on_change and Value Change notifications see the serve.
+    kot_doc.db_set({
+        "start_time_serv": server_time_str,
+        "production_time": production_time_minutes,
+        "order_status": "Served",
+    })
+
+
+KOT_RECALL_WINDOW_MINUTES = 15
+
+
+@frappe.whitelist(methods=["POST"])
+def recall_kot(name):
+    """Return a KOT served in the last 15 minutes to the kitchen board.
+
+    Refusal ids ([URY-KOT-RECALL-*]) are append-only; never renumber or reuse one.
+    """
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw(_("[URY-KOT-RECALL-POST-ONLY] POST requests only"), frappe.PermissionError)
+
+    kot_doc = frappe.get_doc("URY KOT", name)
+    if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
+        frappe.throw(
+            _("[URY-KOT-RECALL-NOT-PERMITTED] You do not have permission to modify this KOT."),
+            frappe.PermissionError,
+        )
+
+    try:
+        session_branch = getBranch()
+    except Exception:
+        if frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles():
+            session_branch = None
+        else:
+            raise
+
+    if session_branch and kot_doc.branch != session_branch:
+        frappe.throw(
+            _("[URY-KOT-RECALL-OTHER-BRANCH] You do not have permission to modify KOTs from other branches."),
+            frappe.PermissionError,
+        )
+
+    if kot_doc.order_status != "Served":
+        frappe.throw(_("[URY-KOT-RECALL-NOT-SERVED] Only Served KOTs can be recalled."), frappe.ValidationError)
+
+    # production_time is minutes from creation to serving; unlike modified it is not
+    # extended by a later edit and carries the date across midnight.
+    try:
+        production_minutes = float(kot_doc.production_time)
+        if not isfinite(production_minutes) or production_minutes < 0:
+            raise ValueError
+        served_at = get_datetime(kot_doc.creation) + timedelta(minutes=production_minutes)
+    except (TypeError, ValueError, OverflowError):
+        frappe.throw(_("[URY-KOT-RECALL-NO-SERVE-TIME] This KOT has no valid serving time."), frappe.ValidationError)
+
+    elapsed = (get_datetime() - served_at).total_seconds()
+    if not 0 <= elapsed <= KOT_RECALL_WINDOW_MINUTES * 60:
+        frappe.throw(
+            _("[URY-KOT-RECALL-WINDOW-CLOSED] KOTs can only be recalled within 15 minutes of serving."),
+            frappe.ValidationError,
+        )
+
+    kot_doc.db_set("order_status", "Ready For Prepare")
+    kot_doc.add_comment("Comment", _("Recalled by {0}").format(frappe.session.user))
 
 
 def _ensure_ready_before_serve(kot_name):
@@ -190,7 +253,8 @@ def _get_cancel_confirmed_original_kots(branch):
     return original_names
 
 
-KOT_DISPLAY_WINDOW_HOURS = 3
+KOT_DISPLAY_WINDOW_HOURS = 3  # default when the POS Profile sets no window
+KOT_DISPLAY_WINDOW_MAX_HOURS = 24
 KOT_DISPLAY_TYPES = [
     "New Order",
     "Order Modified",
@@ -198,6 +262,20 @@ KOT_DISPLAY_TYPES = [
     "Cancelled",
     "Partially cancelled",
 ]
+
+
+def _kot_display_window_hours(branch):
+    """Hours of KOTs the board shows: the branch POS Profile setting, default 3, at most 24."""
+    hours = None
+    if branch:
+        hours = frappe.db.get_value("POS Profile", {"branch": branch}, "ury_kds_display_window_hours")
+    try:
+        hours = int(hours or 0)
+    except (TypeError, ValueError):
+        hours = 0
+    if hours <= 0:
+        return KOT_DISPLAY_WINDOW_HOURS
+    return min(hours, KOT_DISPLAY_WINDOW_MAX_HOURS)
 
 
 def _kot_display_filters(order_status, branch=None):
@@ -214,7 +292,7 @@ def _kot_display_filters(order_status, branch=None):
         "creation": (
             ">=",
             frappe.utils.add_to_date(
-                frappe.utils.now(), hours=-KOT_DISPLAY_WINDOW_HOURS
+                frappe.utils.now(), hours=-_kot_display_window_hours(branch)
             ),
         ),
     }
@@ -233,17 +311,20 @@ def production_unit_counts(units=None):
     if not (user == "Administrator" or "URY Admin" in frappe.get_roles(user)):
         branch = getBranch()
     cancelled = _get_cancel_confirmed_original_kots(branch)
+    production_filters = {}
 
     def count(order_status):
         rows = frappe.get_list(
             "URY KOT",
-            fields=["name", "production"],
+            fields=["name", "production", "invoice"],
             filters=_kot_display_filters(order_status, branch),
             limit_page_length=0,
         )
         out = {}
         for r in rows:
             if r.name in cancelled or not r.production:
+                continue
+            if not _matches_production_order_type(r, production_filters):
                 continue
             out[r.production] = out.get(r.production, 0) + 1
         return out
@@ -258,6 +339,22 @@ def production_unit_counts(units=None):
         }
         for u in names
     }
+
+
+def _matches_production_order_type(kot, production_filters):
+    """The per-unit order-type restriction kot_list and served_kot_list apply, for the counts."""
+    if not kot.production:
+        return True
+    if kot.production not in production_filters:
+        prod_doc = frappe.get_doc("URY Production Unit", kot.production)
+        production_filters[kot.production] = (
+            [row.order_type for row in prod_doc.get("order_type", [])]
+            if prod_doc.enable_order_type_wise_display_on_mosaic else None
+        )
+    allowed_order_types = production_filters[kot.production]
+    return allowed_order_types is None or frappe.db.get_value(
+        "POS Invoice", kot.invoice, "order_type"
+    ) in allowed_order_types
 
 
 @frappe.whitelist()
@@ -285,6 +382,9 @@ def kot_list():
     three_hours_ago = frappe.utils.add_to_date(today, hours=-3)
     audio_alert = frappe.db.get_value(
         "POS Profile", pos_profile_filters, "custom_kot_alert"
+    )
+    audio_file = frappe.db.get_value(
+        "POS Profile", pos_profile_filters, "custom_kot_alert_sound"
     )
 
     filters = _kot_display_filters("Ready For Prepare", branch)
@@ -326,8 +426,10 @@ def kot_list():
         "KOT": KOT,
         "Dashboard": dashboard,
         "Branch": branch,
+        "server_time": today,
         "kot_alert_time": kot_alert_time,
         "audio_alert": audio_alert,
+        "audio_file": audio_file,
         "daily_order_number":daily_order_number
     }
 

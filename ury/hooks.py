@@ -675,6 +675,7 @@ fixtures = [
                     "POS Profile-custom_kot_alert",
                     "POS Profile-custom_kot_alert_sound",
                     "POS Profile-custom_kot_warning_time",
+                    "POS Profile-ury_kds_display_window_hours",
                     "POS Profile-custom_cl",
                     "POS Profile-custom_notify_kot_delay",
                     "POS Profile-custom_recipients",
