@@ -359,6 +359,7 @@ def get_split_group(invoice):
         "grand_total",
         "customer",
         "customer_name",
+        "custom_guest_label",
         "status",
         "docstatus",
         "posting_date",
@@ -529,7 +530,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number, 
                 posting_date, rounded_total, order_type,
-                custom_split_group, custom_split_from,
+                custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
                 additional_discount_percentage, discount_amount
             FROM `tabPOS Invoice` 
@@ -552,7 +553,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number, 
                 posting_date, rounded_total, order_type,
-                custom_split_group, custom_split_from,
+                custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
                 additional_discount_percentage, discount_amount
             FROM `tabPOS Invoice` 
@@ -574,7 +575,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
-                discount_amount, custom_split_group, custom_split_from,
+                discount_amount, custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
@@ -594,7 +595,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
-                discount_amount, custom_split_group, custom_split_from,
+                discount_amount, custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
@@ -668,6 +669,7 @@ def searchPosInvoice(query,status):
             "total_taxes_and_charges",
             "custom_split_group",
             "custom_split_from",
+            "custom_guest_label",
             "custom_merged_pos_invoice",
             "custom_merged_total",
             "additional_discount_percentage",
@@ -857,6 +859,8 @@ def getPosProfile():
         "custom_invoice_warning_time":invoice_warning_time,
         "enable_payment_without_printing":enable_payment_without_printing,
         "custom_disable_print_status_tracking":disable_print_status_tracking,
+        # optional room lookup before a Room Charge; blank keeps free-text room
+        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),
     }
 

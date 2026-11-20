@@ -114,6 +114,7 @@ def create_kot(
             "type": "Duplicate",
             "pos_profile": pos_profile.name,
             "customer_name": posInvoice.customer,
+            "custom_guest_label": posInvoice.get("custom_guest_label") or None,
             "production": production_name,
             "order_no": posInvoice.order_no
             if hasattr(posInvoice, "order_no")

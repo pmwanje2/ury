@@ -70,11 +70,18 @@ def order_delay_notification(id):
         order_by="idx",
     )
 
+    # the check's short name, typed at the till, so escaped
+    guest_label = (kot_doc.get("custom_guest_label") or "").strip()
+    guest = frappe.utils.escape_html(guest_label) if guest_label else ""
+
     subject = f"""Order # {order_id} Delayed"""
+    if guest:
+        subject += f" · {guest}"
 
     message = f"""
             <ul>
                 <li><b> Table : </b> {tableOrTakeaway}</li>
+                {f"<li><b> Guest : </b> {guest}</li>" if guest else ""}
                 <li><b> Order Type : </b> {kot_type}</li>
                 
             

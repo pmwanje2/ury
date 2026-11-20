@@ -27,6 +27,8 @@ export interface PosProfileLimited {
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
+  /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
+  room_lookup_method?: string;
 }
 
 export interface PosProfileLimitedResponse {
@@ -103,6 +105,7 @@ export interface PosProfileCombined extends PosProfileFull {
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
+  room_lookup_method?: string;
 }
 
 export interface Currency {
@@ -170,6 +173,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
+    room_lookup_method: limitedProfile.room_lookup_method ?? '',
   };
 
   return combinedProfile;

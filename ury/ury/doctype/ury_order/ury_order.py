@@ -569,11 +569,27 @@ def _copy_invoice_item_fields(item_row, qty):
     )
 
 
+GUEST_LABEL_MAX = 40
+
+
+def _guest_label(value):
+    """A short name for an order or check (Susan, Seat 2): trimmed, at most
+    GUEST_LABEL_MAX characters, None when blank. It is not a Customer."""
+    label = (value or "").strip()
+    if len(label) > GUEST_LABEL_MAX:
+        frappe.throw(
+            _("[URY-GUEST-LABEL-TOO-LONG] A guest label can be at most {0} characters.").format(GUEST_LABEL_MAX),
+            frappe.ValidationError,
+        )
+    return label or None
+
+
 @frappe.whitelist()
-def split_bill(source_invoice, items_to_move, customer=None):
+def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
     if isinstance(items_to_move, str):
         items_to_move = json.loads(items_to_move)
+    guest_label = _guest_label(guest_label)
 
     source = frappe.get_doc("POS Invoice", source_invoice)
 
@@ -661,6 +677,8 @@ def split_bill(source_invoice, items_to_move, customer=None):
     new_invoice.custom_split_group = split_group
     new_invoice.invoice_printed = 0
     new_invoice.invoice_created = 0
+    # the new check is named for who it is for, else keeps the source label
+    new_invoice.custom_guest_label = guest_label or source.get("custom_guest_label")
 
     if customer:
         new_invoice.customer = customer
@@ -1902,9 +1920,13 @@ def sync_order(
     order_type=None,
     aggregator_id=None,
     room=None,
-    merged_tables=None
+    merged_tables=None,
+    guest_label=None,
 ):
-    
+    # None keeps the order's label; any string, blank included, replaces it
+    clear_guest_label = guest_label is not None and not str(guest_label).strip()
+    guest_label = _guest_label(guest_label)
+
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
     
@@ -2088,6 +2110,10 @@ def sync_order(
     invoice.mobile_number = customerdoc.mobile_number
     if comments is not None:
         invoice.custom_comments = comments
+    if clear_guest_label:
+        invoice.custom_guest_label = ""
+    elif guest_label:
+        invoice.custom_guest_label = guest_label
     effective_order_type = order_type or invoice.order_type
     invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
     invoice.pos_profile = pos_profile
@@ -2709,7 +2735,7 @@ def _validate_additional_discount(additional_discount, pos_profile):
 
 # Method for URY POS
 @frappe.whitelist()
-def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1):
+def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
@@ -2722,6 +2748,11 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.customer = customer
     invoice.pos_profile = pos_profile
+
+    # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
+    # POS Invoice.room_number; set before payments so its hooks can read it.
+    if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
+        invoice.room_number = room_number
     
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     invoice.company = pos_prof.company

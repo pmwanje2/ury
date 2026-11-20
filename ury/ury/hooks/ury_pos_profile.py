@@ -8,6 +8,29 @@ def validate(doc, method):
     validate_bill_check(doc, method)
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
+    validate_room_lookup_method(doc, method)
+
+
+def validate_room_lookup_method(doc, method=None):
+    """The till calls custom_room_lookup_method before a Room Charge, so it
+    must be a method the request handler would run: an enabled API Server
+    Script or a whitelisted Python method. Blank keeps the free-text box."""
+    from frappe.core.doctype.server_script.server_script_utils import get_server_script_map
+
+    path = (doc.get("custom_room_lookup_method") or "").strip()
+    if not path:
+        return
+    if path in (get_server_script_map().get("_api") or {}):
+        return
+    try:
+        fn = frappe.get_attr(path)
+    except Exception:
+        fn = None
+    if fn is None or fn not in frappe.whitelisted:
+        frappe.throw(
+            _("[URY-ROOM-LOOKUP-METHOD-INVALID] Room lookup method {0} is not a whitelisted method or an enabled API Server Script.").format(path),
+            frappe.ValidationError,
+        )
 
 
 def validate_bill_check(doc, method):
