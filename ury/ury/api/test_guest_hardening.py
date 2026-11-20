@@ -83,6 +83,52 @@ class TestGuestHardening(unittest.TestCase):
                     with self.assertRaisesRegex(frappe.ValidationError, "URY_GUEST_RETRY"):
                         api.add_customer_items("session-token", [{"item": "Tea", "qty": 1}])
 
+    def test_guest_line_notes_are_capped_at_the_native_data_width(self):
+        # POS Invoice Item.comment and URY KOT Items.comments are Data (140).
+        # The self-order client caps notes at 140; a direct caller gets the same cap.
+        session = SimpleNamespace(
+            name="SESSION-1", ordering_profile="Profile A", table="Table 7",
+            invoice="POS-1", source="QR Table", device=None,
+        )
+        profile = SimpleNamespace(
+            name="Profile A", enabled=1, allow_add_to_running_table=1,
+            branch="Branch A", pos_profile="POS A", default_customer="Walk-in",
+        )
+        invoice = SimpleNamespace(
+            name="POS-1", restaurant_table="Table 7", order_type="Dine In",
+            customer="Walk-in", branch="Branch A", pos_profile="POS A",
+            selling_price_list="Standard Selling", invoice_created=1,
+            invoice_printed=0, grand_total=20, creation=datetime(2026, 10, 20, 12),
+            items=[], company="Company A",
+        )
+
+        class Priced(Exception):
+            pass
+
+        seen = []
+
+        def price(items, *args, **kwargs):
+            seen.extend(items)
+            raise Priced
+
+        with (
+            patch.object(api, "_resolve_session", return_value=session),
+            patch.object(api.frappe, "get_doc", return_value=profile),
+            patch.object(api.frappe.db, "get_value", return_value="Menu A"),
+            patch.object(api, "resolve_restaurant_menu", return_value={"items": [{"item": "Tea"}]}),
+            patch.object(api, "price_items_for_invoice", side_effect=price),
+            patch.object(api, "_resolve_or_create_pos_invoice", return_value=(invoice, invoice.name)),
+            patch.object(api, "_ensure_admin_branch_mapping"),
+            patch.object(api, "get_branch_stock_policy",
+                         return_value=SimpleNamespace(reservation_control_enabled=0)),
+        ):
+            with self.assertRaises(Priced):
+                api.add_customer_items("session-token", [
+                    {"item": "Tea", "qty": 1, "comment": "n" * 200},
+                    {"item": "Tea", "qty": 1, "comment": "short"},
+                ])
+        self.assertEqual([row["comment"] for row in seen], ["n" * 140, "short"])
+
     def test_share_payment_link_rejects_session_without_invoice_before_lookup(self):
         session = SimpleNamespace(invoice=None, ordering_profile="Profile A")
         profile = SimpleNamespace(enable_payment_link=1)
