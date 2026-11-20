@@ -339,7 +339,8 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
             "pay_at_counter_enabled": bool(profile.enable_pay_at_counter),
             "add_to_running_table_enabled": bool(profile.allow_add_to_running_table),
             "feedback_enabled": bool(cint(getattr(profile, "enable_feedback", 0)))
-            and bool(getattr(profile, "feedback_template", None)),
+            and bool(getattr(profile, "feedback_template", None))
+            and frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD),
         },
         # Surfaced so the frontend's idle-reset timer (Phase 3) reads the
         # real per-profile value instead of hardcoding one — same field
