@@ -156,7 +156,7 @@ test("missed tickets print once after reconnect and the job targets host:port wi
   assert.deepEqual(qz.calls.configs[1], { host: "192.0.2.10", port: 9100 });
   assert.deepEqual(qz.calls.prints[1].data[0], {
     type: "raw", format: "html", flavor: "plain", data: "<div>Kitchen ticket</div>",
-    options: { language: "ESCPOS" },
+    options: { language: "ESCPOS", pageWidth: 576 },
   });
   assert.equal(qz.calls.prints[1].data[1].type, "raw");
   assert.match(qz.calls.prints[1].data[1].data, /\u001dV/);
@@ -179,6 +179,34 @@ test("an installed printer name is the QZ config and the job keeps the ESC/POS c
   assert.deepEqual(qz.calls.configs, ["KITCHEN-RAW"]);
   assert.equal(qz.calls.prints[0].config, "KITCHEN-RAW");
   assert.match(qz.calls.prints[0].data[1].data, /\u001dV/);
+});
+
+// QZ 2.3.0 rasterises raw HTML at pageWidth dots; without it the ticket is an 8-dot blank strip.
+test("the HTML raw element carries pageWidth 576 for saved settings without a paper width and 384 for 58 mm", async () => {
+  const { printer, qz } = await makePrinter();
+  assert.equal(printer.settings.pageWidth, 576);
+  await printer.process(ticket("WIDE"));
+  assert.equal(qz.calls.prints[0].data[0].format, "html");
+  assert.equal(qz.calls.prints[0].data[0].options.pageWidth, 576);
+
+  printer.configure({ ...printer.settings, pageWidth: 384 });
+  await printer.process(ticket("NARROW", "Kitchen", "2026-10-01T12:02:00.000Z"));
+  assert.deepEqual(qz.calls.prints[1].data[0].options, { language: "ESCPOS", pageWidth: 384 });
+  assert.equal(qz.calls.prints[1].data[1].options, undefined);
+});
+
+test("configure keeps 576 or 384 dots and rejects any other paper width", async () => {
+  const device = storage();
+  const { printer } = await makePrinter({ storage: device });
+
+  assert.equal(printer.configure(settings()).pageWidth, 576);
+  assert.equal(printer.configure(settings({ pageWidth: 384 })).pageWidth, 384);
+  for (const pageWidth of [0, 80, 58, 500, 577, "576", "58 mm"]) {
+    assert.throws(() => printer.configure(settings({ pageWidth })), { message: "Choose a paper width: 80 mm or 58 mm." });
+  }
+  assert.equal(printer.settings.pageWidth, 384);
+  const reloaded = await makePrinter({ storage: device });
+  assert.equal(reloaded.printer.settings.pageWidth, 384);
 });
 
 test("configure requires exactly one of an installed printer or a network host", async () => {
@@ -330,6 +358,14 @@ test("the settings dialog offers installed printers plus a manual network host o
   const manual = await renderSettings(settings({ printer: "" }), ["KITCHEN-RAW"]);
   assert.match(manual, /Printer host/);
   assert.match(manual, /Printer port/);
+});
+
+test("the settings dialog offers Paper width 80 mm (576 dots) and 58 mm (384 dots)", async () => {
+  const html = await renderSettings(settings({ host: "", printer: "KITCHEN-RAW", pageWidth: 576 }), ["KITCHEN-RAW"]);
+
+  assert.match(html, /Paper width/);
+  assert.match(html, /<option value="576"[^>]*>80 mm<\/option>/);
+  assert.match(html, /<option value="384"[^>]*>58 mm<\/option>/);
 });
 
 test("a saved printer missing from the installed list stays selectable as saved, not found", async () => {
