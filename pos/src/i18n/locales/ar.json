@@ -81,7 +81,8 @@
     "add_comment": "إضافة تعليق",
     "edit_comment": "تعديل التعليق",
     "pax": "عدد الأشخاص",
-    "insufficient_capacity": "السعة غير كافية لإضافة المزيد من هذا الصنف"
+    "insufficient_capacity": "السعة غير كافية لإضافة المزيد من هذا الصنف",
+    "guest_label": "اسم النزيل (اختياري)"
   },
   "order": {
     "select_to_view": "حدد طلبًا لعرض التفاصيل",
@@ -115,7 +116,15 @@
     "change_due": "الباقي: {{amount}}",
     "success": "تم الدفع بنجاح: تم استلام {{amount}}",
     "print_invoice": "طباعة الفاتورة",
-    "payment_not_processed": "لم تتم معالجة الدفع."
+    "payment_not_processed": "لم تتم معالجة الدفع.",
+    "room_folio": "الغرفة / الملف",
+    "room_posting": "ترحيل إلى الغرفة",
+    "check_room": "تحقق من الغرفة",
+    "checking_room": "جارٍ التحقق...",
+    "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
+    "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
+    "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
+    "room_check_failed": "تعذر التحقق من هذه الغرفة"
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -480,7 +489,9 @@
     "next_bill": "الفاتورة التالية",
     "split_from": "مقسومة من {{invoice}}",
     "related": "الفواتير المرتبطة",
-    "open_sibling_failed": "تعذر فتح الفاتورة المرتبطة"
+    "open_sibling_failed": "تعذر فتح الفاتورة المرتبطة",
+    "guest_label": "اسم النزيل للفاتورة الجديدة (اختياري)",
+    "guest_label_placeholder": "مثال: ديفيد"
   },
   "bill_merge": {
     "merge_bill": "دمج الفاتورة",

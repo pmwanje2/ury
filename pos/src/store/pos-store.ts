@@ -100,6 +100,31 @@ export interface Category {
   icon?: string;
 }
 
+function categoriesFromItems(items: MenuItem[]): Category[] {
+  const seen = new Map<string, string>();
+  for (const item of items) {
+    if (item.course && !seen.has(item.course)) seen.set(item.course, item.course_label || item.course);
+  }
+  return Array.from(seen, ([name, label]) => ({ name, label }));
+}
+
+function keepSelection(selected: string, categories: Category[]): string {
+  return !selected || categories.some((c) => c.name === selected) ? selected : '';
+}
+
+// A server course list wins; a list derived from items follows each menu load.
+function withMenuItems(
+  state: { categories: Category[]; categoriesDerived: boolean; selectedCategory: string },
+  menuItems: MenuItem[],
+) {
+  const categories = state.categories.length && !state.categoriesDerived
+    ? state.categories : categoriesFromItems(menuItems);
+  return {
+    menuItems, categories, categoriesDerived: categories !== state.categories,
+    selectedCategory: keepSelection(state.selectedCategory, categories),
+  };
+}
+
 export interface Order {
   id: string;
   cartId: string;
@@ -128,6 +153,7 @@ interface Aggregator {
 interface POSState {
   menuItems: MenuItem[];
   categories: Category[];
+  categoriesDerived: boolean;
   activeOrders: OrderItem[];
   selectedCategory: string;
   selectedTable: string | null;
@@ -157,6 +183,8 @@ interface POSState {
   tableOrder: TableOrder | null;
   isInitializing: boolean;
   orderComment: string;
+  /** Short name for the order or check (Susan, Seat 2); not a Customer. */
+  guestLabel: string;
   noOfPax: number;
   lastModifiedTime: string | null;
   /**
@@ -207,6 +235,7 @@ interface POSStore extends POSState {
   resetOrderState: () => void;
   setSelectedAggregator: (aggregator: Aggregator | null) => void;
   setOrderComment: (comment: string) => void;
+  setGuestLabel: (label: string) => void;
   setNoOfPax: (pax: number) => void;
   /**
    * Updates only the comment/note on an existing cart line, leaving quantity
@@ -236,6 +265,7 @@ const calculateItemPrice = (item: OrderItem): number => {
 export const usePOSStore = create<POSStore>((set, get) => ({
   menuItems: [],
   categories: [],
+  categoriesDerived: false,
   activeOrders: [],
   selectedCategory: '',
   selectedTable: null,
@@ -266,6 +296,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   orderId: null,
   showVoluntaryClosing: false,
   orderComment: '',
+  guestLabel: '',
   noOfPax: 1,
   lastModifiedTime: null,
 
@@ -387,7 +418,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         tax_rate: 0,
       }));
 
-      set({ menuItems });
+      set((state) => withMenuItems(state, menuItems));
     } catch (error) {
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
@@ -410,7 +441,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         category: item.course
       }));
 
-      set({ menuItems, menuLoading: false });
+      set((state) => ({ ...withMenuItems(state, menuItems), menuLoading: false }));
     } catch (error) {
       set({ error: 'Failed to load aggregator menu', menuLoading: false });
       console.error('Error loading aggregator menu:', error);
@@ -419,16 +450,23 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   fetchCategories: async () => {
     try {
+      // Serve the shared cache, then always revalidate: a list cached before the
+      // menu had courses would otherwise hide them for the whole session.
       const cached = sessionStorage.getItem('menuCategories');
-      if (cached) {
-        const categories = JSON.parse(cached);
-        set({ categories });
-        return;
+      if (cached) set({ categories: JSON.parse(cached), categoriesDerived: false });
+      let courses: Category[];
+      try {
+        courses = await getMenuCourses();
+      } catch (error) {
+        if (cached) return;
+        throw error;
       }
-
-      const courses = await getMenuCourses();
       sessionStorage.setItem('menuCategories', JSON.stringify(courses));
-      set({ categories: courses });
+      const categories = courses.length ? courses : categoriesFromItems(get().menuItems);
+      set((state) => ({
+        categories, categoriesDerived: !courses.length,
+        selectedCategory: keepSelection(state.selectedCategory, categories),
+      }));
     } catch (error) {
       set({ error: 'Failed to load menu categories' });
       throw error;
@@ -581,6 +619,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   setSelectedItem: (item) => set({ selectedItem: item }),
   setSelectedAggregator: (aggregator) => set({ selectedAggregator: aggregator }),
   setOrderComment: (comment: string) => set({ orderComment: comment }),
+  setGuestLabel: (label: string) => set({ guestLabel: label }),
   setNoOfPax: (pax: number) => set({ noOfPax: pax }),
   setShowVoluntaryClosing: (show: boolean) => set({ showVoluntaryClosing: show }),
 
@@ -740,6 +779,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           noOfPax: order.no_of_pax || 1,
           lastModifiedTime: order.modified || null,
           orderComment: order.custom_comments || '',
+          guestLabel: order.custom_guest_label || '',
         });
       } else {
         const state = get();
@@ -765,6 +805,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           noOfPax: order?.no_of_pax || 1,
           lastModifiedTime: order?.modified || null,
           orderComment: order?.custom_comments || '',
+          guestLabel: order?.custom_guest_label || '',
         });
       }
     } catch (error) {
@@ -779,6 +820,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         noOfPax: 1,
         lastModifiedTime: null,
         orderComment: '',
+        guestLabel: '',
       });
     } finally {
       set({ orderLoading: false });
@@ -797,6 +839,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       noOfPax: 1,
       lastModifiedTime: null,
       orderComment: '',
+      guestLabel: '',
     });
   },
 
@@ -825,6 +868,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       error: null,
       selectedOrderType: DEFAULT_ORDER_TYPE,
       orderComment: '',
+      guestLabel: '',
       noOfPax: 1,
       lastModifiedTime: null,
     });

@@ -39,8 +39,12 @@ from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
     _resolve_or_create_pos_invoice,
     _ensure_invoice_reservation_ref,
+    get_menu_name,
+    get_restaurant_and_menu_name,
+    invoice_pricing_date,
     price_items_for_invoice,
 )
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 from ury.ury.api.ury_kot_generate import kot_execute
 from ury.ury.api.ury_order_reservation_service import reconcile_order_reservations
 from ury.ury.api.ury_stock_policy import get_branch_stock_policy
@@ -48,6 +52,9 @@ from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 SESSION_TOKEN_BYTES_HASH_LEN = 64  # frappe.generate_hash(length=..)
 MAX_ITEMS_PER_REQUEST = 50
 MAX_COMMENT_LEN = 140  # Data fields: POS Invoice Item.comment and URY KOT Items.comments.
+# last_activity is rewritten at most once a minute (or per half idle timeout, if shorter).
+SESSION_ACTIVITY_GRANULARITY = timedelta(seconds=60)
+SESSION_SLIDE_SAVEPOINT = "ury_guest_session_slide"
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +270,13 @@ def _open_session(profile, source, table, device=None):
     return raw_session_token, session
 
 
+def _log_skipped_slide(error, session_name):
+    # App log only: a busy floor would flood Error Log.
+    frappe.logger("ury").warning(
+        "guest session slide skipped: %s on URY Ordering Session %s", type(error).__name__, session_name
+    )
+
+
 def _resolve_session(session_token):
     if not session_token:
         frappe.throw(_("Missing ordering session"), frappe.PermissionError)
@@ -289,14 +303,33 @@ def _resolve_session(session_token):
             session.save(ignore_permissions=True)
             frappe.throw(_("Ordering session expired. Please rescan the QR code."), frappe.PermissionError)
 
-        session.last_activity = now_datetime()
-        session.expires_at = add_to_date(
-            now_datetime(),
-            minutes=frappe.db.get_value(
-                "URY Self Ordering Profile", session.ordering_profile, "session_idle_timeout_minutes"
-            ) or 30,
-        )
-        session.save(ignore_permissions=True)
+        # Sliding idle expiry without a full save: save() re-reads the row FOR
+        # UPDATE, and concurrent guest reads then fail with QueryDeadlockError
+        # (ER_CHECKREAD under MariaDB innodb_snapshot_isolation).
+        now = now_datetime()
+        idle_minutes = frappe.db.get_value(
+            "URY Self Ordering Profile", session.ordering_profile, "session_idle_timeout_minutes"
+        ) or 30
+        skip_window = min(SESSION_ACTIVITY_GRANULARITY, timedelta(minutes=idle_minutes) / 2)
+        if session.last_activity and now - session.last_activity < skip_window:
+            return session
+        values = {"last_activity": now, "expires_at": add_to_date(now, minutes=idle_minutes)}
+        frappe.db.savepoint(SESSION_SLIDE_SAVEPOINT)
+        try:
+            frappe.db.set_value("URY Ordering Session", session.name, values, update_modified=False)
+        except frappe.QueryDeadlockError as error:
+            # MariaDB has already aborted the whole transaction (1020/1213), so the
+            # savepoint is gone. Every caller resolves the session before any write.
+            frappe.db.rollback()
+            _log_skipped_slide(error, session.name)
+            return session
+        except frappe.QueryTimeoutError as error:
+            # 1205 rolls back only the statement; the savepoint survives.
+            frappe.db.rollback(save_point=SESSION_SLIDE_SAVEPOINT)
+            _log_skipped_slide(error, session.name)
+            return session
+        frappe.db.release_savepoint(SESSION_SLIDE_SAVEPOINT)
+        session.update(values)
 
     return session
 
@@ -437,14 +470,6 @@ def get_customer_product(session, item_code):
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     with _elevated():
-        # Resolve the same price list add_customer_items()/price_items_for_invoice()
-        # would end up using for this session, so variant/add-on rates aren't
-        # null: resolve_restaurant_menu() picks the active menu the same way
-        # get_customer_menu() does, then "Price List" is looked up the same
-        # way ury_order.py resolves invoice.selling_price_list (a Price List
-        # doc linked to that menu via restaurant_menu). No client input
-        # involved — same server-side resolution path, just done ahead of an
-        # invoice existing yet.
         order_type = "Dine In" if session.table else "Take Away"
         branch = frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "branch")
         menu = resolve_restaurant_menu(branch=branch, room=None, order_type=order_type, cashier=False)
@@ -464,17 +489,14 @@ def get_customer_product(session, item_code):
         if not item:
             frappe.throw(_("Item not found"), frappe.DoesNotExistError)
 
-        price_list = frappe.db.get_value(
-            "Price List", {"restaurant_menu": menu["name"], "enabled": 1}, "name"
-        )
-
         # Both `POS Item Variants` and `Item Add On` are child-table doctypes
         # whose only field is a Link to another Item (the variant/add-on is
         # itself a priced Item) — see ury/ury/doctype/{pos_item_variants,
         # item_add_on}/*.json. Resolve each linked item's own price rather
         # than trusting any client-supplied amount.
-        variants = _linked_item_options("POS Item Variants", item_code, invoice_price_list=price_list)
-        addons = _linked_item_options("Item Add On", item_code, invoice_price_list=price_list)
+        price_list, customer = _guest_pricing(session, profile)
+        variants = _linked_item_options("POS Item Variants", item_code, price_list, customer)
+        addons = _linked_item_options("Item Add On", item_code, price_list, customer)
 
     return {
         "item_code": item.item_code,
@@ -486,7 +508,25 @@ def get_customer_product(session, item_code):
     }
 
 
-def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
+def _guest_pricing(session, profile):
+    """The price list and customer add_customer_items bills this guest with, read without creating anything.
+
+    After the first order they are the guest invoice's own. Before it, the menu price list that
+    _resolve_or_create_pos_invoice sets on a new guest invoice (the table's room-wise menu with a table, the
+    order-type menu of the profile branch without one), and the profile's default customer that
+    add_customer_items sets on it.
+    """
+    if session.invoice:
+        invoice = frappe.get_doc("POS Invoice", session.invoice)
+        return invoice.selling_price_list, invoice.customer or profile.default_customer
+    if session.table:
+        menu = get_restaurant_and_menu_name(session.table)[1]
+    else:
+        menu = get_menu_name("Take Away", branch=profile.branch)
+    return frappe.db.get_value("Price List", {"restaurant_menu": menu, "enabled": 1}), profile.default_customer
+
+
+def _linked_item_options(child_doctype, parent_item_code, invoice_price_list, customer=None):
     if not frappe.db.exists("DocType", child_doctype):
         return []
 
@@ -496,6 +536,9 @@ def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
         fields=["item"],
     )
 
+    # The rate billing would charge today (price_items_for_invoice): one price determination for every channel.
+    release_field, released = item_price_release_states() if invoice_price_list else (None, None)
+    today = frappe.utils.getdate()
     options = []
     for row in rows:
         linked = frappe.db.get_value("Item", row.item, ["item_code", "item_name", "image"], as_dict=True)
@@ -503,9 +546,10 @@ def _linked_item_options(child_doctype, parent_item_code, invoice_price_list):
             continue
         price = None
         if invoice_price_list:
-            price = frappe.db.get_value(
-                "Item Price", {"item_code": linked.item_code, "price_list": invoice_price_list}, "price_list_rate"
+            item_price = price_valid_on(
+                linked.item_code, invoice_price_list, today, release_field, released, customer=customer,
             )
+            price = item_price.price_list_rate if item_price else None
         options.append({
             "item_code": linked.item_code,
             "item_name": linked.item_name,
@@ -633,7 +677,9 @@ def add_customer_items(session, items):
         if qty <= 0:
             frappe.throw(_("Invalid quantity for item {0}").format(item_code), frappe.ValidationError)
 
-        clean_items.append({"item": item_code, "item_name": item_code, "qty": qty, "comment": comment})
+        # The check line, KOT and guest view name the dish as staff lines do; never the client's text.
+        item_name = frappe.db.get_value("Item", item_code, "item_name")
+        clean_items.append({"item": item_code, "item_name": item_name, "qty": qty, "comment": comment})
 
     order_type = "Dine In" if session.table else "Take Away"
 
@@ -735,6 +781,7 @@ def add_customer_items(session, items):
         menu = frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
         priced_items = price_items_for_invoice(
             clean_items, invoice.selling_price_list, profile.pos_profile, invoice.branch, menu,
+            posting_date=invoice_pricing_date(invoice), customer=invoice.customer,
         )
         for item_dict in priced_items:
             invoice.append("items", item_dict)

@@ -56,6 +56,8 @@ class TestGuestHardening(unittest.TestCase):
             selling_price_list="Standard Selling", invoice_created=1,
             invoice_printed=0, grand_total=20, creation=datetime(2026, 10, 20, 12),
             items=[], company="Company A",  # version-16 reads invoice.company for the stock policy
+            # A back-dated posting date pins the pricing date without reading System Settings.
+            set_posting_time=1, posting_date=datetime(2026, 10, 20).date(),
         )
         invoice.append = lambda _field, row: invoice.items.append(SimpleNamespace(**row))
         invoice.save = MagicMock()
@@ -195,4 +197,10 @@ class TestGuestHardening(unittest.TestCase):
     def test_valid_guest_session_on_enabled_profile_still_slides(self):
         result, session = self._resolve_with(enabled=1, expires_at=datetime(2026, 10, 20, 12, 10))
         self.assertIs(result, session)
-        session.save.assert_called_once_with(ignore_permissions=True)
+        # Two columns only: a full save re-reads the row FOR UPDATE and clashes with concurrent writers.
+        session.save.assert_not_called()
+        frappe.db.set_value.assert_called_once_with(
+            "URY Ordering Session", "S1",
+            {"last_activity": datetime(2026, 10, 20, 12), "expires_at": datetime(2026, 10, 20, 12, 30)},
+            update_modified=False,
+        )

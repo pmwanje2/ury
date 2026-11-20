@@ -23,6 +23,7 @@ from ury.ury.api.ury_order_reservation_service import (
 from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 from frappe import cache
 
@@ -568,11 +569,27 @@ def _copy_invoice_item_fields(item_row, qty):
     )
 
 
+GUEST_LABEL_MAX = 40
+
+
+def _guest_label(value):
+    """A short name for an order or check (Susan, Seat 2): trimmed, at most
+    GUEST_LABEL_MAX characters, None when blank. It is not a Customer."""
+    label = (value or "").strip()
+    if len(label) > GUEST_LABEL_MAX:
+        frappe.throw(
+            _("[URY-GUEST-LABEL-TOO-LONG] A guest label can be at most {0} characters.").format(GUEST_LABEL_MAX),
+            frappe.ValidationError,
+        )
+    return label or None
+
+
 @frappe.whitelist()
-def split_bill(source_invoice, items_to_move, customer=None):
+def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
     if isinstance(items_to_move, str):
         items_to_move = json.loads(items_to_move)
+    guest_label = _guest_label(guest_label)
 
     source = frappe.get_doc("POS Invoice", source_invoice)
 
@@ -660,6 +677,8 @@ def split_bill(source_invoice, items_to_move, customer=None):
     new_invoice.custom_split_group = split_group
     new_invoice.invoice_printed = 0
     new_invoice.invoice_created = 0
+    # the new check is named for who it is for, else keeps the source label
+    new_invoice.custom_guest_label = guest_label or source.get("custom_guest_label")
 
     if customer:
         new_invoice.customer = customer
@@ -977,7 +996,7 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
         if not invoice_name:
             invoice.naming_series = _resolve_pos_invoice_naming_series(restaurant)
 
-        menu=get_menu_name(order_type)
+        menu = get_menu_name(order_type, branch=branch)
 
         if (order_type == "Aggregators" and frappe.db.get_value("Branch", branch, "custom_no_taxes") == 0) or order_type != "Aggregators":
             invoice.taxes_and_charges = frappe.db.get_value("URY Restaurant", restaurant, "default_tax_template")
@@ -1027,12 +1046,26 @@ def _department_warehouse_for_item(item_code, branch, company):
     return _warehouse_for_context(context)
 
 
-def price_items_for_invoice(items, price_list, pos_profile, branch, menu):
+def invoice_pricing_date(invoice):
+    """The pricing date of an invoice: its posting date.
+
+    ERPNext resets posting_date to today on validate unless set_posting_time
+    is on, so an open till invoice prices on today.
+    """
+    if cint(getattr(invoice, "set_posting_time", 0)) and getattr(invoice, "posting_date", None):
+        return frappe.utils.getdate(invoice.posting_date)
+    return frappe.utils.getdate()
+
+
+def price_items_for_invoice(items, price_list, pos_profile, branch, menu, posting_date=None, customer=None):
     """Resolve course and price for each item and build the invoice item dicts.
 
     Returns a list of dicts in the same shape previously passed directly to
     `invoice.append("items", ...)` inside `sync_order`. Does not append to
-    the invoice itself.
+    the invoice itself. The price is the Item Price valid on posting_date
+    (default today) and released by the site's Item Price workflow, if any,
+    chosen for the invoice customer and the item's selling UOM as ERPNext
+    does (ury.ury.api.item_price.price_valid_on).
 
     sa-architecture-closure (Gap B): also resolves each item's
     `department_warehouse` (the same warehouse availability/reservation/
@@ -1058,19 +1091,22 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu):
     """
     company = frappe.db.get_value("Branch", branch, "company")
     priced_items = []
+    posting_date = frappe.utils.getdate(posting_date) if posting_date else frappe.utils.getdate()
+    release_field, released = item_price_release_states()
 
     for d in items:
 
         course = frappe.db.get_value("URY Menu Item", {"item": d.get("item"), "parent": menu}, "course")
 
-        item_prices = frappe.db.get_list(
-            "Item Price",
-            filters={"item_code": d.get("item"), "price_list": price_list},
-            fields=["price_list_rate"],
+        item_price = price_valid_on(
+            d.get("item"), price_list, posting_date, release_field, released, customer=customer,
         )
 
-        if not item_prices:
-            frappe.throw(_("No item price found for Item: {0} in Price List: {1}. Please check the price list settings.").format(d.get("item"), price_list))
+        if not item_price:
+            frappe.throw(
+                _("[URY-PRICE-NOT-VALID] No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(d.get("item"), price_list, posting_date),
+                frappe.ValidationError,
+            )
 
         else:
             department_warehouse = _department_warehouse_for_item(d.get("item"), branch, company)
@@ -1083,9 +1119,9 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu):
                     **({"custom_course": course} if course else {}),
                     **({"warehouse": department_warehouse} if department_warehouse else {}),
                     comment=d.get("comment"),
-                    rate = item_prices[0].price_list_rate,
-                    price_list_rate = item_prices[0].price_list_rate,
-                    base_price_list_rate = item_prices[0].price_list_rate,
+                    rate = item_price.price_list_rate,
+                    price_list_rate = item_price.price_list_rate,
+                    base_price_list_rate = item_price.price_list_rate,
                     cost_center = frappe.db.get_value(
                         "POS Profile", pos_profile, "cost_center"
                         ),
@@ -1884,9 +1920,13 @@ def sync_order(
     order_type=None,
     aggregator_id=None,
     room=None,
-    merged_tables=None
+    merged_tables=None,
+    guest_label=None,
 ):
-    
+    # None keeps the order's label; any string, blank included, replaces it
+    clear_guest_label = guest_label is not None and not str(guest_label).strip()
+    guest_label = _guest_label(guest_label)
+
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
     
@@ -2070,6 +2110,10 @@ def sync_order(
     invoice.mobile_number = customerdoc.mobile_number
     if comments is not None:
         invoice.custom_comments = comments
+    if clear_guest_label:
+        invoice.custom_guest_label = ""
+    elif guest_label:
+        invoice.custom_guest_label = guest_label
     effective_order_type = order_type or invoice.order_type
     invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
     invoice.pos_profile = pos_profile
@@ -2198,7 +2242,10 @@ def sync_order(
 
     menu = _resolve_menu_for_sync(invoice.branch, table=table or invoice.restaurant_table, room=opening_room or room, order_type=effective_order_type) or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
 
-    priced_items = price_items_for_invoice(items, price_list, pos_profile, invoice.branch, menu)
+    priced_items = price_items_for_invoice(
+        items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
+        customer=invoice.customer,
+    )
 
     _sync_order_company = invoice.company or getattr(posprofile, "company", None) or frappe.db.get_value("Branch", invoice.branch, "company")
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
@@ -2299,8 +2346,8 @@ def get_restaurant_and_menu_name(table):
     return branch, menu, restaurant
 
 @frappe.whitelist()
-def get_menu_name(order_type):
-    branch = getBranch()
+def get_menu_name(order_type, branch=None):
+    branch = branch or getBranch()
     restaurant = frappe.get_value(
         "URY Restaurant",
         {"branch": branch},
@@ -2688,7 +2735,7 @@ def _validate_additional_discount(additional_discount, pos_profile):
 
 # Method for URY POS
 @frappe.whitelist()
-def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1):
+def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
@@ -2701,6 +2748,11 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.customer = customer
     invoice.pos_profile = pos_profile
+
+    # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
+    # POS Invoice.room_number; set before payments so its hooks can read it.
+    if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
+        invoice.room_number = room_number
     
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     invoice.company = pos_prof.company
