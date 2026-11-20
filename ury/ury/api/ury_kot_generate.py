@@ -2,7 +2,7 @@ import json
 from collections import defaultdict
 
 import frappe
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from ury.ury.api.ury_kot_routing import resolve_production_units
 from ury.ury.api.ury_production_context import resolve_production_context
@@ -88,6 +88,7 @@ def create_kot_doc(
     kot_naming_series,
     production,
     validation_dedup_key=None,
+    offline_printed=0,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number
@@ -123,6 +124,10 @@ def create_kot_doc(
         # etc.) must not collide with it, so callers only pass this for that
         # first-KOT case.
         kot_doc.validation_dedup_key = validation_dedup_key
+    # Printed at the station while the link was down: the kitchen already has it.
+    if cint(offline_printed) == 1:
+        kot_doc.ury_offline_printed = 1
+        kot_doc.order_status = "Served"
     if restaurant_table:
         room = frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
         restaurant = frappe.db.get_value("URY Table", restaurant_table, "restaurant")
@@ -207,6 +212,7 @@ def process_items_for_kot(
     pos_profile_id,
     kot_naming_series,
     kot_type,
+    offline_printed=0,
 ):
     kot_items = create_order_items(items)
     pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
@@ -300,6 +306,7 @@ def process_items_for_kot(
             kot_naming_series,
             production_unit,
             validation_dedup_key=validation_dedup_key,
+            offline_printed=offline_printed,
         )
         created_kot_names.append(kot_name)
 
@@ -499,6 +506,7 @@ def kot_execute(
     current_items=[],
     previous_items=[],
     comments=None,
+    offline_printed=0,
 ):
     from frappe import _
 
@@ -573,6 +581,7 @@ def kot_execute(
                 pos_profile_id,
                 kot_naming_series,
                 "New Order",
+                offline_printed=offline_printed,
             )
         )
     if total_cancel_items:
@@ -590,7 +599,7 @@ def kot_execute(
             )
         )
 
-    if created_kot_names:
+    if created_kot_names and cint(offline_printed) != 1:
         print_combined_waiter_order_slip(invoice_id, created_kot_names, restaurant_table)
 
 
