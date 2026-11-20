@@ -89,7 +89,15 @@
     "change_due": "Monnaie à rendre : {{amount}}",
     "success": "Paiement réussi : {{amount}} reçu",
     "print_invoice": "Imprimer la facture",
-    "payment_not_processed": "Le paiement n'a pas été traité."
+    "payment_not_processed": "Le paiement n'a pas été traité.",
+    "room_folio": "Chambre / Folio",
+    "room_posting": "Imputation chambre",
+    "check_room": "Vérifier la chambre",
+    "checking_room": "Vérification...",
+    "room_match": "Chambre {{room}} · {{guest}} · départ {{departure}}",
+    "room_no_post": "La note de ce client est fermée aux imputations",
+    "room_check_required": "Vérifiez la chambre avant une imputation",
+    "room_check_failed": "Impossible de vérifier cette chambre"
   },
   "pos": {
     "not_opened_title": "PDV non ouvert",

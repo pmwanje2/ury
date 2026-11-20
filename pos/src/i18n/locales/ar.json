@@ -115,7 +115,15 @@
     "change_due": "الباقي: {{amount}}",
     "success": "تم الدفع بنجاح: تم استلام {{amount}}",
     "print_invoice": "طباعة الفاتورة",
-    "payment_not_processed": "لم تتم معالجة الدفع."
+    "payment_not_processed": "لم تتم معالجة الدفع.",
+    "room_folio": "الغرفة / الملف",
+    "room_posting": "ترحيل إلى الغرفة",
+    "check_room": "تحقق من الغرفة",
+    "checking_room": "جارٍ التحقق...",
+    "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
+    "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
+    "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
+    "room_check_failed": "تعذر التحقق من هذه الغرفة"
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",

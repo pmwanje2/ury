@@ -2688,7 +2688,7 @@ def _validate_additional_discount(additional_discount, pos_profile):
 
 # Method for URY POS
 @frappe.whitelist()
-def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1):
+def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
@@ -2701,6 +2701,11 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.customer = customer
     invoice.pos_profile = pos_profile
+
+    # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
+    # POS Invoice.room_number; set before payments so its hooks can read it.
+    if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
+        invoice.room_number = room_number
     
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     invoice.company = pos_prof.company

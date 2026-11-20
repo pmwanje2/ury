@@ -856,6 +856,8 @@ def getPosProfile():
         "custom_invoice_warning_time":invoice_warning_time,
         "enable_payment_without_printing":enable_payment_without_printing,
         "custom_disable_print_status_tracking":disable_print_status_tracking,
+        # optional room lookup before a Room Charge; blank keeps free-text room
+        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),
     }
 

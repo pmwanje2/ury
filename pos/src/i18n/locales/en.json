@@ -108,7 +108,15 @@
     "change_due": "Change due: {{amount}}",
     "success": "Payment successful: {{amount}} received",
     "print_invoice": "Print Invoice",
-    "payment_not_processed": "Payment was not processed."
+    "payment_not_processed": "Payment was not processed.",
+    "room_folio": "Room / Folio",
+    "room_posting": "Room posting",
+    "check_room": "Check room",
+    "checking_room": "Checking room...",
+    "room_match": "Room {{room}} · {{guest}} · departs {{departure}}",
+    "room_no_post": "This guest's bill is closed to room charges",
+    "room_check_required": "Check the room before taking Room Charge",
+    "room_check_failed": "Could not check this room"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
