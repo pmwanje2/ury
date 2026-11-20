@@ -1049,15 +1049,15 @@ def share_payment_link(session, recipient):
 #
 # Native Quality Feedback.document_type is only User or Customer, so the bill
 # is stored in the tenant field custom_pos_invoice. This module does not
-# create that field and refuses with URY_FEEDBACK_BILL_LINK_MISSING without it.
+# create that field and refuses with URY-FEEDBACK-BILL-LINK-MISSING without it.
 # A receipt link is minted with the profile QR secret while the bill is
 # rendered; URY marks the bill printed only after rendering, so submit_feedback
 # rechecks the live printed-or-paid state. Grants are purpose-scoped so a later
 # bill grant can reuse the same secret without accepting a feedback QR.
 #
-# Refusal ids (append-only): URY_FEEDBACK_LINK_INVALID (PermissionError);
-# URY_FEEDBACK_DISABLED, URY_FEEDBACK_TEMPLATE, URY_FEEDBACK_BILL_LINK_MISSING,
-# URY_FEEDBACK_NOT_ELIGIBLE, URY_FEEDBACK_RATINGS, URY_FEEDBACK_RETRY
+# Refusal ids (append-only): URY-FEEDBACK-LINK-INVALID (PermissionError);
+# URY-FEEDBACK-DISABLED, URY-FEEDBACK-TEMPLATE, URY-FEEDBACK-BILL-LINK-MISSING,
+# URY-FEEDBACK-NOT-ELIGIBLE, URY-FEEDBACK-RATINGS, URY-FEEDBACK-RETRY
 # (ValidationError).
 # ---------------------------------------------------------------------------
 
@@ -1067,7 +1067,7 @@ _FEEDBACK_RATINGS = {"1", "2", "3", "4", "5"}
 
 
 def _feedback_link_invalid():
-    frappe.throw(_("URY_FEEDBACK_LINK_INVALID: Invalid feedback link"), frappe.PermissionError)
+    frappe.throw(_("[URY-FEEDBACK-LINK-INVALID] Invalid feedback link"), frappe.PermissionError)
 
 
 def _utc_epoch(moment):
@@ -1173,12 +1173,12 @@ def _invoice_accepts_feedback(invoice):
 
 def _feedback_rating(value):
     if isinstance(value, bool) or isinstance(value, float):
-        frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+        frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
     if isinstance(value, int) and value in (1, 2, 3, 4, 5):
         return str(value)
     if isinstance(value, str) and value in _FEEDBACK_RATINGS:
         return value
-    frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+    frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
 
 
 def _feedback_parameters(ratings, expected):
@@ -1186,21 +1186,21 @@ def _feedback_parameters(ratings, expected):
         try:
             ratings = json.loads(ratings)
         except Exception:
-            frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+            frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
     if not isinstance(ratings, list):
-        frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+        frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
 
     supplied = {}
     allowed = set(expected)
     for row in ratings:
         if not isinstance(row, dict) or set(row) != {"parameter", "rating"}:
-            frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+            frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
         parameter = row.get("parameter")
         if not isinstance(parameter, str) or parameter not in allowed or parameter in supplied:
-            frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+            frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
         supplied[parameter] = _feedback_rating(row.get("rating"))
     if set(supplied) != allowed:
-        frappe.throw(_("URY_FEEDBACK_RATINGS"), frappe.ValidationError)
+        frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
     return [{"parameter": parameter, "rating": supplied[parameter]} for parameter in expected]
 
 
@@ -1228,7 +1228,7 @@ def _feedback_bill(session, receipt_token):
         profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
         invoice_name = resolved.invoice
         if not invoice_name:
-            frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+            frappe.throw(_("[URY-FEEDBACK-NOT-ELIGIBLE]"), frappe.ValidationError)
         _limit_feedback_credential("session", resolved.name)
     elif receipt_token:
         profile_name, invoice_name = read_signed_invoice_grant(receipt_token, "feedback")
@@ -1238,11 +1238,11 @@ def _feedback_bill(session, receipt_token):
         _feedback_link_invalid()
 
     if not cint(getattr(profile, "enabled", 0)) or not cint(getattr(profile, "enable_feedback", 0)):
-        frappe.throw(_("URY_FEEDBACK_DISABLED"), frappe.ValidationError)
+        frappe.throw(_("[URY-FEEDBACK-DISABLED]"), frappe.ValidationError)
     if not getattr(profile, "feedback_template", None):
-        frappe.throw(_("URY_FEEDBACK_TEMPLATE"), frappe.ValidationError)
+        frappe.throw(_("[URY-FEEDBACK-TEMPLATE]"), frappe.ValidationError)
     if not frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD):
-        frappe.throw(_("URY_FEEDBACK_BILL_LINK_MISSING"), frappe.ValidationError)
+        frappe.throw(_("[URY-FEEDBACK-BILL-LINK-MISSING]"), frappe.ValidationError)
     return profile, invoice_name
 
 
@@ -1291,7 +1291,7 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         try:
             invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
             if not _feedback_bill_check(profile, invoice_doc):
-                frappe.throw(_("URY_FEEDBACK_NOT_ELIGIBLE"), frappe.ValidationError)
+                frappe.throw(_("[URY-FEEDBACK-NOT-ELIGIBLE]"), frappe.ValidationError)
 
             # Current locking reads serialize the exact bill. MariaDB can
             # refuse a stale transaction snapshot rather than expose the winner.
@@ -1301,7 +1301,7 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
             # Let the native request boundary roll back; never reset its
             # isolation, commit unrelated writes, or guess that feedback exists.
-            frappe.throw(_("URY_FEEDBACK_RETRY: Another request is finishing. Please try again."), frappe.ValidationError)
+            frappe.throw(_("[URY-FEEDBACK-RETRY] Another request is finishing. Please try again."), frappe.ValidationError)
         if existing:
             return {"status": "Already Received"}
 

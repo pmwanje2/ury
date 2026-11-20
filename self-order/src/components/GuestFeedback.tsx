@@ -23,13 +23,13 @@ const COPY = {
 
 // Stable server refusal ids become guest copy; the raw id is never shown.
 const REFUSALS: Record<string, string> = {
-  URY_FEEDBACK_RETRY: COPY.retryLater,
-  URY_FEEDBACK_NOT_ELIGIBLE: COPY.notEligible,
-  URY_FEEDBACK_LINK_INVALID: COPY.invalidLink,
-  URY_FEEDBACK_DISABLED: COPY.unavailable,
-  URY_FEEDBACK_TEMPLATE: COPY.unavailable,
-  URY_FEEDBACK_BILL_LINK_MISSING: COPY.unavailable,
-  URY_FEEDBACK_RATINGS: COPY.unavailable,
+  'URY-FEEDBACK-RETRY': COPY.retryLater,
+  'URY-FEEDBACK-NOT-ELIGIBLE': COPY.notEligible,
+  'URY-FEEDBACK-LINK-INVALID': COPY.invalidLink,
+  'URY-FEEDBACK-DISABLED': COPY.unavailable,
+  'URY-FEEDBACK-TEMPLATE': COPY.unavailable,
+  'URY-FEEDBACK-BILL-LINK-MISSING': COPY.unavailable,
+  'URY-FEEDBACK-RATINGS': COPY.unavailable,
 }
 
 /** The receipt token travels only in the URL fragment, which is never sent to the server. */
@@ -42,9 +42,9 @@ function readCredential(): FeedbackCredential | null {
 
 function errorText(error: unknown): ShownError {
   const parsed = parseFrappeError(error, COPY.loadError)
-  const code = parsed.match(/URY_FEEDBACK_[A-Z_]+/)?.[0]
+  const code = parsed.match(/\[(URY-FEEDBACK-[A-Z-]+)\]/)?.[1]
   if (!code) return { text: COPY.loadError, retryable: false }
-  return { text: REFUSALS[code] ?? COPY.unavailable, retryable: code === 'URY_FEEDBACK_RETRY' }
+  return { text: REFUSALS[code] ?? COPY.unavailable, retryable: code === 'URY-FEEDBACK-RETRY' }
 }
 
 function ratingLabel(label: string, rating: number) {
