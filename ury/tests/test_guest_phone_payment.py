@@ -3,7 +3,7 @@
 import hashlib
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import frappe
 from erpnext.accounts.utils import create_payment_gateway_account
@@ -75,6 +75,25 @@ class TestGuestPhonePayment(unittest.TestCase):
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 0)
         self.assertEqual(frappe.session.user, "Guest")
 
+    def test_unconfigured_refusal_shows_guest_copy_and_logs_staff_detail(self):
+        frappe.db.delete("Payment Gateway Account", {"name": self.gateway.name})
+        with patch.object(frappe, "log_error") as log_error:
+            with self.assertRaises(frappe.ValidationError) as raised:
+                create_payment_request(self.token)
+        message = str(raised.exception)
+        self.assertIn("URY-PAYMENT-NOT-CONFIGURED", message)
+        self.assertIn("Please pay at the counter", message)
+        self.assertNotIn("Payment Gateway Account", message)
+        self.assertNotIn("POS Profile", message)
+        log_error.assert_called_once()
+        logged = log_error.call_args.kwargs
+        self.assertEqual((logged["reference_doctype"], logged["reference_name"]),
+            ("POS Profile", self.pos.profile.name))
+        self.assertIn("URY-PAYMENT-NOT-CONFIGURED", logged["title"])
+        self.assertIn("Payment Gateway Account", logged["message"])
+        # The refusal rolls the request back; only a deferred log survives it.
+        self.assertTrue(logged["defer_insert"])
+
     def test_profile_without_gateway_phone_row_refuses_with_stable_id(self):
         frappe.db.delete("POS Payment Method", {"parent": self.pos.profile.name,
             "mode_of_payment": "P2 Phone"})
@@ -135,6 +154,62 @@ class TestGuestPhonePayment(unittest.TestCase):
         first = self.request()
         status = frappe.call(get_payment_status, session=self.token)
         self.assertEqual(status.get("payment_url"), first["payment_url"])
+
+    def test_payment_status_is_a_read_that_never_calls_the_gateway(self):
+        first = self.request()
+        gateway_url = self.controller.get_payment_url = MagicMock(
+            side_effect=RuntimeError("provider unavailable"))
+        for _ in range(3):
+            status = frappe.call(get_payment_status, session=self.token)
+            self.assertEqual((status["payment_request"], status["payment_url"]),
+                (first["payment_request"], first["payment_url"]))
+        gateway_url.assert_not_called()
+
+    def guest_request_context(self):
+        frappe.local.request = SimpleNamespace(method="POST")
+        frappe.local.request_ip = "203.0.113.5"
+        self.addCleanup(setattr, frappe.local, "request", None)
+        self.addCleanup(setattr, frappe.local, "request_ip", None)
+
+    def second_session(self):
+        frappe.set_user("Administrator")
+        token = frappe.generate_hash(length=64)
+        frappe.get_doc({"doctype": "URY Ordering Session", "ordering_profile": self.profile.name,
+            "source": "QR Pickup", "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+            "status": "Active", "opened_at": now_datetime(),
+            "expires_at": add_to_date(now_datetime(), minutes=30),
+            "invoice": self.invoice_name}).insert()
+        frappe.set_user("Guest")
+        return token
+
+    def test_create_payment_request_is_rate_limited_per_session(self):
+        self.guest_request_context()
+        first = self.request()
+        for _ in range(9):
+            self.assertEqual(self.request()["payment_request"], first["payment_request"])
+        with self.assertRaises(frappe.RateLimitExceededError):
+            create_payment_request(self.token)
+        # Guests at one restaurant share an address; the budget is per session.
+        self.assertEqual(frappe.call(create_payment_request, session=self.second_session())
+            ["payment_request"], first["payment_request"])
+
+    def test_payment_status_is_rate_limited_per_session(self):
+        self.request()
+        self.guest_request_context()
+        for _ in range(60):
+            frappe.call(get_payment_status, session=self.token)
+        with self.assertRaises(frappe.RateLimitExceededError):
+            get_payment_status(self.token)
+        self.assertIn("payment_request", frappe.call(get_payment_status, session=self.second_session()))
+
+    def test_retap_after_partial_payment_reports_real_status_and_balance(self):
+        first = self.request()
+        frappe.db.set_value("Payment Request", first["payment_request"],
+            {"status": "Partially Paid", "outstanding_amount": 40})
+        again = self.request()
+        self.assertEqual((again["payment_request"], again["status"], again["payment_url"]),
+            (first["payment_request"], "Partially Paid", None))
+        self.assertEqual((again["paid_amount"], again["remaining_amount"]), (60, 40))
 
     def mark_paid(self, name):
         frappe.set_user("Administrator")
@@ -225,6 +300,8 @@ class TestGuestPhonePayment(unittest.TestCase):
             ["docstatus", "status"]), (1, "Requested"))
         self.assertEqual(frappe.db.get_value("Integration Request", ir, "status"), "Queued")
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+        # The check balance, not the kept request's amount.
+        self.assertEqual((again["paid_amount"], again["remaining_amount"]), (0, 200))
 
     def test_growth_keeps_request_whose_checkout_failed(self):
         # ea_payments may mark an IR Failed on a transport error while the

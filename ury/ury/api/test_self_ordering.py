@@ -974,7 +974,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         invoice.docstatus = 0
         invoice.name = "POS-INV-100"
 
-        def get_doc_side_effect(doctype, name=None):
+        def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
             if doctype == "POS Invoice":
@@ -1015,8 +1015,24 @@ class TestCreatePaymentRequest(unittest.TestCase):
         profile.enable_payment_link = 0
         mock_get_doc.return_value = profile
 
-        with self.assertRaises(frappe.ValidationError):
+        with self.assertRaisesRegex(frappe.ValidationError, r"^\[URY-PAYMENT-DISABLED\] "):
             create_payment_request("session-token")
+
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._resolve_session")
+    def test_create_payment_request_rejects_session_without_order(self, mock_resolve_session, mock_get_doc):
+        session = MagicMock()
+        session.invoice = None
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock()
+        profile.enable_customer_payment = 1
+        profile.enable_payment_link = 0
+        mock_get_doc.return_value = profile
+
+        with self.assertRaisesRegex(frappe.ValidationError, r"^\[URY-PAYMENT-NO-ORDER\] ") as ctx:
+            create_payment_request("session-token")
+        self.assertNotIsInstance(ctx.exception, frappe.PermissionError)
 
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
@@ -1036,14 +1052,14 @@ class TestCreatePaymentRequest(unittest.TestCase):
         invoice = MagicMock()
         invoice.docstatus = 1  # already submitted/settled
 
-        def get_doc_side_effect(doctype, name=None):
+        def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
             return invoice
 
         mock_get_doc.side_effect = get_doc_side_effect
 
-        with self.assertRaises(frappe.ValidationError):
+        with self.assertRaisesRegex(frappe.ValidationError, r"^\[URY-PAYMENT-SETTLED\] "):
             create_payment_request("session-token")
         mock_make_pr.assert_not_called()
 
@@ -1133,6 +1149,42 @@ class TestCreatePaymentRequest(unittest.TestCase):
         self.assertIn("already created", str(ctx.exception))
         self.assertNotIn("isn't set up", str(ctx.exception))
         mock_clear_messages.assert_not_called()
+
+    @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._resolve_session")
+    @patch(f"{MOD}.frappe.set_user")
+    def test_create_payment_request_locks_invoice_and_maps_lock_conflicts_to_retry(
+        self, mock_set_user, mock_resolve_session, mock_get_doc, mock_make_pr,
+    ):
+        """A double tap is serialised on the invoice row; a lock conflict is
+        the existing retryable guest refusal, not a raw database error."""
+        session = MagicMock()
+        session.invoice = "POS-INV-100"
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock()
+        profile.enable_customer_payment = 1
+        profile.enable_payment_link = 0
+
+        invoice = MagicMock()
+        invoice.docstatus = 0
+        invoice.name = "POS-INV-100"
+        invoice_reads = []
+
+        def get_doc_side_effect(doctype, name=None, **kwargs):
+            if doctype == "URY Self Ordering Profile":
+                return profile
+            invoice_reads.append(kwargs)
+            return invoice
+
+        mock_get_doc.side_effect = get_doc_side_effect
+        mock_make_pr.side_effect = frappe.QueryDeadlockError("Deadlock found")
+
+        with self.assertRaisesRegex(frappe.ValidationError, "URY_GUEST_RETRY") as ctx:
+            create_payment_request("session-token")
+        self.assertNotIsInstance(ctx.exception, frappe.QueryDeadlockError)
+        self.assertEqual(invoice_reads, [{"for_update": True}])
 
 
 class TestSharePaymentLink(unittest.TestCase):
