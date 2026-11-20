@@ -52,7 +52,9 @@ class TestIdempotentWrites(IntegrationTestCase):
         self.assertEqual(submissions, [order.name])
         self.assertIsNotNone(first, "Settlement must return the persisted invoice")
         self.assertEqual(first["name"], second["name"])
-        self.assertEqual(second["docstatus"], 1)
+        # v16 make_invoice answers {"name", "status"}; the retry gives the same answer.
+        self.assertEqual(second, {"name": order.name, "status": "Submitted"})
+        self.assertEqual(frappe.db.get_value("POS Invoice", order.name, "docstatus"), 1)
         self.assertEqual(frappe.db.count("POS Invoice", {"pos_profile": self.pos.profile.name}), 1)
 
     def test_database_unique_index_rejects_another_new_order_with_same_id(self):
