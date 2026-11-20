@@ -111,12 +111,12 @@ test("the board shows a full-width call-waiter banner with table, type and minut
   assert.match(banner(markup), /2 min/);
 });
 
-test("realtime: the board joins the permission-checked room and refreshes on its own branch only", async t => {
+test("realtime: events arrive in the user's own room, and the board refreshes on its own branch only", async t => {
   const env = board();
   await env.start();
   t.after(() => env.stop());
-  assert.ok(env.emitted.some(([event, doctype]) => event === "doctype_subscribe" && doctype === "URY Service Request"),
-    "The board does not subscribe to service-request events");
+  assert.ok(!env.emitted.some(([event, doctype]) => event === "doctype_subscribe" && doctype === "URY Service Request"),
+    "The shared doctype room admits every branch's readers; the server publishes per staff user instead");
   assert.doesNotMatch(await env.html(), /data-testid="service-request-alert"/);
 
   const reads = () => env.requests.filter(r => r.method === `${SR}.list_open_service_requests`).length;
@@ -142,7 +142,7 @@ test("the banner clears once the floor acknowledges the request", async t => {
   assert.doesNotMatch(await env.html(), /data-testid="service-request-alert"/);
 });
 
-test("the poll stays as the fallback, and a reconnect re-joins the room", async t => {
+test("the poll stays as the fallback, and a reconnect refreshes without joining a shared room", async t => {
   const env = board();
   await env.start();
   t.after(() => env.stop());
@@ -150,11 +150,12 @@ test("the poll stays as the fallback, and a reconnect re-joins the room", async 
   env.state.open = [callWaiter({ table: "T-3" })];
   await env.tick(15000);
   assert.match(banner(await env.html()), /T-3/);
-  const joins = () => env.emitted.filter(([event]) => event === "doctype_subscribe").length;
-  const before = joins();
+  const reads = () => env.requests.filter(r => r.method === `${SR}.list_open_service_requests`).length;
+  const before = reads();
   env.reconnect();
   await settle();
-  assert.ok(joins() > before, "After a reconnect the board must re-join the service-request room");
+  assert.ok(reads() > before, "After a reconnect the board must re-read open guest requests");
+  assert.ok(!env.emitted.some(([event]) => event === "doctype_subscribe"), "No shared room on reconnect either");
 });
 
 test("the chime repeats while a request is open, never when the profile turns sound off", async t => {
