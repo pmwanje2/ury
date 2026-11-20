@@ -926,7 +926,8 @@ def _refuse_unconfigured_payment(pos_profile_name):
         defer_insert=True,
     )
     frappe.throw(
-        _("[URY-PAYMENT-NOT-CONFIGURED] Online payment isn't available here yet. Please pay at the counter."),
+        "[URY-PAYMENT-NOT-CONFIGURED] "
+        + _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
         frappe.ValidationError,
     )
 
@@ -965,9 +966,9 @@ def create_payment_request(session):
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not (profile.enable_customer_payment or profile.enable_payment_link):
-        frappe.throw(_("[URY-PAYMENT-DISABLED] Online payment is not enabled"), frappe.ValidationError)
+        frappe.throw("[URY-PAYMENT-DISABLED] " + _("Online payment is not enabled"), frappe.ValidationError)
     if not session.invoice:
-        frappe.throw(_("[URY-PAYMENT-NO-ORDER] No active order for this session"), frappe.ValidationError)
+        frappe.throw("[URY-PAYMENT-NO-ORDER] " + _("No active order for this session"), frappe.ValidationError)
 
     with _elevated():
         from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
@@ -975,7 +976,7 @@ def create_payment_request(session):
         # Serialises a double tap on the check before any request is read or made.
         invoice = frappe.get_doc("POS Invoice", session.invoice, for_update=True)
         if invoice.docstatus == 1:
-            frappe.throw(_("[URY-PAYMENT-SETTLED] This order is already settled"), frappe.ValidationError)
+            frappe.throw("[URY-PAYMENT-SETTLED] " + _("This order is already settled"), frappe.ValidationError)
 
         # ERPNext v16 get_amount() for a POS Invoice reads only the Phone
         # payment row whose account matches the gateway's payment account.
