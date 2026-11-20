@@ -21,7 +21,7 @@ beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   await initI18n('en');
   usePOSStore.setState({
-    paymentModes: ['Room Charge', 'Cash'],
+    paymentModes: ['Room Charge'],
     fetchPaymentModes: async () => {},
     posProfile: {
       name: 'Till A', customer: 'Walk-in Customer', allow_partial_payment: 1,
