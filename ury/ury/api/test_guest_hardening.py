@@ -12,6 +12,10 @@ from ury.ury.api import self_ordering as api
 
 class TestGuestHardening(unittest.TestCase):
     def setUp(self):
+        # Swap request-local state for the test and put the real objects back afterwards,
+        # so later test modules in the same `bench run-tests` process keep a real database.
+        for name in ("flags", "session", "message_log", "error_log", "db"):
+            self.addCleanup(setattr, frappe.local, name, getattr(frappe.local, name, None))
         frappe.local.flags = frappe._dict(mute_messages=True, in_test=True)
         frappe.local.session = frappe._dict(user="Guest", data=frappe._dict())
         frappe.local.message_log = []
