@@ -161,7 +161,8 @@ class TestPrepareAndInsertItem(unittest.TestCase):
         _prepare_and_insert_item(item_data)
 
         self.assertEqual(item_data.get("gst_hsn_code"), "999512")
-        mock_doc.insert.assert_called_once_with(ignore_permissions=True)
+        # Maximus fork (T0, #75): menu Items are created with native permission checks.
+        mock_doc.insert.assert_called_once_with()
 
 
 if __name__ == "__main__":
