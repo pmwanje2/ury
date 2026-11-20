@@ -120,7 +120,8 @@ describe.each([
     expect(container.querySelector('h1')?.textContent).toBe(copy.checkout)
     expectNoEnglish('checkout')
 
-    const place = [...container.querySelectorAll('button')].at(-1)
+    const buttons = [...container.querySelectorAll('button')]
+    const place = buttons[buttons.length - 1]
     await click(place, 'place order')
     expect(container.querySelector('h1')?.textContent).toBe(copy.confirmed)
     expectNoEnglish('order status')
