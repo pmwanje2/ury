@@ -12,6 +12,8 @@ export interface OrderingCapabilities {
   payment_link_enabled: boolean
   pay_at_counter_enabled: boolean
   add_to_running_table_enabled: boolean
+  /** Profile feedback is on and a Quality Feedback Template is chosen. */
+  feedback_enabled?: boolean
 }
 
 export type OrderingLayout = 'Mobile' | 'Tablet' | 'Landscape Kiosk' | 'Portrait Kiosk'
@@ -196,6 +198,41 @@ export async function getCustomerProduct(session: string, itemCode: string): Pro
   const response = await call.post<FrappeResponse<ProductDetail>>(`${M}.get_customer_product`, {
     session,
     item_code: itemCode,
+  })
+  return response.message
+}
+
+export interface FeedbackParameter {
+  parameter: string
+  label: string
+}
+
+export interface FeedbackForm {
+  status: 'open' | 'received' | 'not_eligible'
+  parameters: FeedbackParameter[]
+}
+
+export interface FeedbackRating {
+  parameter: string
+  rating: number
+}
+
+/** Exactly one credential: the ordering session, or a signed receipt token. */
+export async function getFeedbackForm(session?: string, receiptToken?: string): Promise<FeedbackForm> {
+  const credential = session ? { session } : { receipt_token: receiptToken }
+  const response = await call.post<FrappeResponse<FeedbackForm>>(`${M}.get_feedback_form`, credential)
+  return response.message
+}
+
+export async function submitFeedback(
+  ratings: FeedbackRating[],
+  session?: string,
+  receiptToken?: string,
+): Promise<{ status: string }> {
+  const credential = session ? { session } : { receipt_token: receiptToken }
+  const response = await call.post<FrappeResponse<{ status: string }>>(`${M}.submit_feedback`, {
+    ...credential,
+    ratings: JSON.stringify(ratings),
   })
   return response.message
 }
