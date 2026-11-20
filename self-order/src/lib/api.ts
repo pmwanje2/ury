@@ -36,6 +36,10 @@ export interface MenuItem {
   item_image: string | null
   course: string | null
   course_label: string | null
+  /** URY Menu Course.custom_serving_priority; null when not configured. */
+  course_priority?: number | null
+  /** URY Menu Item row order on the menu. */
+  menu_order?: number | null
 }
 
 export interface MenuResponse {

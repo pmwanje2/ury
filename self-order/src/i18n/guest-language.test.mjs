@@ -350,6 +350,8 @@ const HARDCODED_GUEST_COPY = [
 
 const GUEST_UI = [
   'layouts/MobileQRLayout.tsx',
+  'layouts/shared/CategoryTabs.tsx',
+  'layouts/shared/CategoryMenu.tsx',
   'layouts/TabletLayout.tsx',
   'layouts/LandscapeKioskLayout.tsx',
   'layouts/PortraitKioskLayout.tsx',
@@ -662,16 +664,25 @@ test('guest wording, waiter copy, and footer follow the catalog', async (t) => {
   })
 
   await t.test('a category label is not saved already translated', () => {
-    const portrait = readSource('layouts/PortraitKioskLayout.tsx')
-    const memoStart = portrait.indexOf('const categories = useMemo')
-    const memoEnd = portrait.indexOf('}, [menu, t])', memoStart)
+    // Category grouping is shared by every guest layout. The grouping is
+    // memoised, so it keeps the uncategorised label empty and each render
+    // supplies the translated "Other".
+    const grouping = readSource('lib/menu-categories.ts')
+    assert.equal(/\bt\(|i18n/.test(grouping), false, 'menu grouping translates inside a memoised value')
+    const menu = readSource('layouts/shared/CategoryMenu.tsx')
+    const memoStart = menu.indexOf('useMemo(')
+    const memoEnd = menu.indexOf('[menu])', memoStart)
     assert.equal(memoStart >= 0 && memoEnd > memoStart, true)
-    assert.equal(
-      portrait.slice(memoStart, memoEnd).includes("t('menu.other')"),
-      false,
-      'category label is frozen with t() inside useMemo',
-    )
-    assert.equal(portrait.includes("t('menu.other')"), true)
+    assert.equal(/\bt\(/.test(menu.slice(memoStart, memoEnd)), false, 'category label is frozen inside useMemo')
+    assert.equal(menu.includes('group.label ?? otherLabel'), true)
+    for (const rel of [
+      'layouts/MobileQRLayout.tsx',
+      'layouts/TabletLayout.tsx',
+      'layouts/LandscapeKioskLayout.tsx',
+      'layouts/PortraitKioskLayout.tsx',
+    ]) {
+      assert.equal(readSource(rel).includes("otherLabel={t('menu.other')}"), true, rel)
+    }
   })
 
   await t.test('a missing ordering code and a device error still offer the language switcher', () => {
