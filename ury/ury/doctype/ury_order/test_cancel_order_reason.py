@@ -163,6 +163,7 @@ class TestCancelOrderReason(unittest.TestCase):
         for reason in reasons:
             with self.subTest(reason=reason):
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.invoice.reset_mock()
                 self.framework.db.reset_mock()
@@ -198,6 +199,7 @@ class TestCancelOrderReason(unittest.TestCase):
                 self.invoice.docstatus = docstatus
                 self.invoice.reset_mock()
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 ury_order.cancel_order(self.invoice.name, " \tVoid\n ")
                 self.invoice.db_set.assert_called_with("cancel_reason", "Void")
                 self.release.assert_called_once_with("T1")
@@ -228,6 +230,7 @@ class TestCancelOrderReason(unittest.TestCase):
         for case in cases:
             with self.subTest(**case):
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.invoice.reset_mock()
                 self.framework.db.reset_mock()
@@ -259,6 +262,7 @@ class TestCancelOrderReason(unittest.TestCase):
                 self.invoice.restaurant_table = "T1"
                 self.invoice.reset_mock()
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.set_cancel_reason_field(
                     length=case.get("length", 0),
@@ -275,6 +279,7 @@ class TestCancelOrderReason(unittest.TestCase):
         for reason in ("Not a listed reason", "kitchen error", None, "Other:abc"):
             with self.subTest(reason=reason):
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.invoice.reset_mock()
                 self.framework.db.reset_mock()
@@ -296,6 +301,7 @@ class TestCancelOrderReason(unittest.TestCase):
                 self.invoice.restaurant_table = "T1"
                 self.invoice.reset_mock()
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.framework.db.reset_mock()
                 self.set_void_reasons("  Kitchen error  \nBad\n")
@@ -310,6 +316,7 @@ class TestCancelOrderReason(unittest.TestCase):
         for reason in ("Other", "Other:", "Other: ", "Other: abc", "Other:\tabc", "Other:late order", "Other:ab"):
             with self.subTest(reason=reason):
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.invoice.reset_mock()
                 self.framework.db.reset_mock()
@@ -323,6 +330,7 @@ class TestCancelOrderReason(unittest.TestCase):
     def test_other_with_a_note_is_accepted_and_stored_exactly(self):
         self.invoice.reset_mock()
         self.release.reset_mock()
+        self.reservations.reset_mock()
         self.set_void_reasons("Kitchen error")
         ury_order.cancel_order(self.invoice.name, "  Other: late order  ")
         self.invoice.db_set.assert_called_with("cancel_reason", "Other: late order")
@@ -332,6 +340,7 @@ class TestCancelOrderReason(unittest.TestCase):
         for raw in ("", " \n\t", None):
             with self.subTest(raw=raw):
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 self.kot.reset_mock()
                 self.invoice.reset_mock()
                 self.framework.db.reset_mock()
@@ -343,6 +352,7 @@ class TestCancelOrderReason(unittest.TestCase):
                     self.assert_no_mutation()
                 self.invoice.reset_mock()
                 self.release.reset_mock()
+                self.reservations.reset_mock()
                 ury_order.cancel_order(self.invoice.name, " Void ")
                 self.invoice.db_set.assert_called_with("cancel_reason", "Void")
 
@@ -370,6 +380,7 @@ class TestCancelOrderReason(unittest.TestCase):
         self.framework.db.get_value.assert_not_called()
         self.invoice.reset_mock()
         self.release.reset_mock()
+        self.reservations.reset_mock()
         ury_order.cancel_order(self.invoice.name, "Void")
         self.invoice.db_set.assert_called_with("cancel_reason", "Void")
         self.release.assert_called_once_with("T1")

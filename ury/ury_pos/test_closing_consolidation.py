@@ -704,7 +704,10 @@ class TestClosingConsolidation(unittest.TestCase):
 
     def _validate_calls(self):
         calls = []
-        record = lambda name: (lambda *args, **kwargs: calls.append(name))
+
+        def record(name):
+            return lambda *args, **kwargs: calls.append(name)
+
         with patch.object(closing, "populate_pos_transactions", side_effect=record("owner_population")), \
              patch.object(closing, "_set_expected_amounts", side_effect=record("expected"), create=True), \
              patch.object(closing, "populate_draft_stock_correction", side_effect=record("stock_correction")), \
