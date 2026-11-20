@@ -66,14 +66,14 @@ const order = {
 let root: Root
 let container: HTMLDivElement
 // Bill-bearing guest reads travel as POST bodies; guest actions use `writes`.
-let writes: ReturnType<typeof vi.fn>
+let writes: ReturnType<typeof vi.fn<(path: string, args?: Record<string, unknown>) => Promise<unknown>>>
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   sessionStorage.clear()
   localStorage.clear()
   window.history.replaceState(null, '', '/order')
-  writes = vi.fn().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
+  writes = vi.fn<(path: string, args?: Record<string, unknown>) => Promise<unknown>>().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
   vi.spyOn(call, 'get').mockImplementation(async (path: string) => {
     throw Error(`Unexpected GET ${path}`)
   })

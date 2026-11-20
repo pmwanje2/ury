@@ -34,7 +34,7 @@ let root: Root
 let container: HTMLDivElement
 let bootstraps: number
 let reads: Read
-let writes: ReturnType<typeof vi.fn>
+let writes: ReturnType<typeof vi.fn<(path: string, args?: Record<string, unknown>) => Promise<unknown>>>
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -54,7 +54,7 @@ beforeEach(async () => {
     if (path.endsWith('get_customer_order')) return { message: args?.session === 'session-a' ? order : emptyOrder }
     return writes(path, args)
   }
-  writes = vi.fn().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
+  writes = vi.fn<(path: string, args?: Record<string, unknown>) => Promise<unknown>>().mockResolvedValue({ message: { status: 'Requested', request: 'REQ-1' } })
   vi.spyOn(call, 'post').mockImplementation(async (path: string, args?: Record<string, unknown>) => reads(path, args))
   container = document.createElement('div')
   document.body.appendChild(container)
