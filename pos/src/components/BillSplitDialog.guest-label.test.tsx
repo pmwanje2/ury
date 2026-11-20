@@ -24,10 +24,10 @@ const items = [
   { name: "line-2", item_name: "Tea", qty: 1, rate: 20, amount: 20 },
 ];
 
-let onConfirm: ReturnType<typeof vi.fn>;
+let onConfirm: ReturnType<typeof vi.fn<(payload: unknown) => Promise<void>>>;
 
 beforeEach(() => {
-  onConfirm = vi.fn(async () => {});
+  onConfirm = vi.fn(async (_payload: unknown) => {});
   render(
     <BillSplitDialog open onOpenChange={vi.fn()} invoiceName="BILL-1" items={items}
       sourceCustomer={{ id: "Walk-in", name: "Walk-in", phone: "" }} onConfirm={onConfirm} />,
