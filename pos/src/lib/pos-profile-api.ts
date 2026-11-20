@@ -27,6 +27,8 @@ export interface PosProfileLimited {
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
+  floor_idle_signout_seconds?: number;
+  floor_signout_after_send?: number;
 }
 
 export interface PosProfileLimitedResponse {
@@ -79,6 +81,8 @@ export interface PosProfileFull {
   default_customer?: DefaultCustomerEntry | null;
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
+  /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
+  custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -103,6 +107,8 @@ export interface PosProfileCombined extends PosProfileFull {
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
+  floor_idle_signout_seconds?: number;
+  floor_signout_after_send?: number;
 }
 
 export interface Currency {
@@ -170,6 +176,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
+    floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
+    floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
   };
 
   return combinedProfile;

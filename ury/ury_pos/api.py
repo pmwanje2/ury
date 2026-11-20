@@ -856,6 +856,8 @@ def getPosProfile():
         "custom_invoice_warning_time":invoice_warning_time,
         "enable_payment_without_printing":enable_payment_without_printing,
         "custom_disable_print_status_tracking":disable_print_status_tracking,
+        "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
+        "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
         **get_default_customer_config(pos_profiles),
     }
 
@@ -899,6 +901,9 @@ def getPosProfileFull(pos_profile):
         "role_restricted_for_table_order": [row.as_dict() for row in profile.role_restricted_for_table_order],
         "transfer_role_permissions": [row.as_dict() for row in profile.transfer_role_permissions],
         "role_masked_for_amounts": [row.as_dict() for row in (profile.get("role_masked_for_amounts") or [])],
+        "custom_floor_stay_signed_in_roles": [
+            {"role": row.role} for row in (profile.get("custom_floor_stay_signed_in_roles") or [])
+        ],
         "view_all_status": profile.get("view_all_status"),
         "custom_daily_pos_close": profile.get("custom_daily_pos_close"),
         "print_format": profile.print_format,

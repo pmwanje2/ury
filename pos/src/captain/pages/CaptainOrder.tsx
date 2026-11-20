@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { t } from '../../i18n';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ClipboardList, Loader2, UtensilsCrossed } from 'lucide-react';
-import { Button, Spinner, cn, showToast } from '@ury/ui';
+import { Button, ConfirmDialog, Spinner, cn, showToast } from '@ury/ui';
 import { formatCurrency } from '@ury/core';
 import { usePOSStore } from '../../store/pos-store';
 import { useRootStore, RootState } from '../../store/root-store';
@@ -21,6 +21,7 @@ import { printOrder } from '../../lib/print';
 import { resolvePrintFormat } from '../../lib/invoice-api';
 import { getVacantTablesForBranch, Table } from '../../lib/table-api';
 import { DINE_IN, TAKE_AWAY, orderTypeLabel } from '../../data/order-types';
+import { floorSignOut, isFloorPadActive, isStaySignedIn } from '../../lib/floor-session';
 import { useTableOrderContext, OrderDeltaLine } from '../hooks/useTableOrderContext';
 import CaptainMenu from '../components/CaptainMenu';
 import CaptainOrderLine from '../components/CaptainOrderLine';
@@ -108,6 +109,7 @@ export default function CaptainOrder() {
   const [editingItemUniqueId, setEditingItemUniqueId] = useState<string | null>(null);
   const [noteEditingLine, setNoteEditingLine] = useState<OrderDeltaLine | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLeaveDialogOpen, setIsLeaveDialogOpen] = useState(false);
 
   // Secondary actions (PLAN.md §5/§6/§10): overflow menu state + the two
   // picker dialogs, reused as-is from the Cashier `Table.tsx` flow.
@@ -266,6 +268,10 @@ export default function CaptainOrder() {
 
       clearTableOrder();
       showToast.success(isUpdatingOrder ? 'Order updated.' : 'Order sent to kitchen.');
+      if (posProfile.floor_signout_after_send === 1 && isFloorPadActive() && !isStaySignedIn(user, posProfile)) {
+        await floorSignOut();
+        return;
+      }
       navigate('/order');
     } catch (error) {
       console.error('Failed to sync order:', error);
@@ -296,6 +302,15 @@ export default function CaptainOrder() {
   // (kept in sync with `context.order.name` by `useTableOrderContext`) is
   // the source of truth, matching what `handleSend`'s `last_invoice` uses.
   const invoiceId = orderId ?? context?.order?.name ?? null;
+
+  const hasUnsentLines = newOrChangedLines.length > 0 || reductionPendingLines.length > 0;
+  const handleBack = () => {
+    if (hasUnsentLines) {
+      setIsLeaveDialogOpen(true);
+      return;
+    }
+    navigate('/order');
+  };
   const orderType = context?.order?.order_type ?? DINE_IN;
 
   // Reduces a line that is already saved/printed on the server (an
@@ -618,7 +633,7 @@ export default function CaptainOrder() {
       {/* Header */}
       <div className="sticky top-0 z-20 bg-white border-b border-border px-3 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Button onClick={() => navigate('/order')} variant="ghost" size="icon" aria-label={t('captain.back_to_tables')}>
+          <Button onClick={handleBack} variant="ghost" size="icon" aria-label={t('captain.back_to_tables')}>
             <ChevronLeft className="w-5 h-5" />
           </Button>
           <div>
@@ -813,6 +828,20 @@ export default function CaptainOrder() {
         onOpenChange={setIsTransferCaptainOpen}
         currentCaptain={currentCaptain}
         onConfirm={handleCaptainTransferConfirm}
+      />
+
+      <ConfirmDialog
+        open={isLeaveDialogOpen}
+        onOpenChange={setIsLeaveDialogOpen}
+        title={t('unsent_items.title')}
+        description={t('unsent_items.description')}
+        cancelLabel={t('common.cancel')}
+        confirmLabel={t('unsent_items.leave')}
+        confirmVariant="danger"
+        onConfirm={() => {
+          setIsLeaveDialogOpen(false);
+          navigate('/order');
+        }}
       />
     </div>
   );

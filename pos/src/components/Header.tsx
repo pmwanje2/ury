@@ -15,9 +15,11 @@ import { isCashierOnly } from '../lib/roles';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { logout, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
+import { call, logout, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { PrinterStatusButton } from './PrinterWatch';
+import PairTabletDialog from './PairTabletDialog';
+import StaffPinsDialog from './StaffPinsDialog';
 
 const Header = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -29,6 +31,27 @@ const Header = () => {
   const printStatusDisabled = isPrintStatusDisabled(posProfile);
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
+  const [showStaffPins, setShowStaffPins] = useState(false);
+  const [showPairTablet, setShowPairTablet] = useState(false);
+  const [canManagePins, setCanManagePins] = useState(false);
+  const posProfileName = posProfile?.name;
+
+  // Floor tablet setup follows native POS Profile write permission; fail closed.
+  useEffect(() => {
+    let cancelled = false;
+    setCanManagePins(false);
+    if (!posProfileName) return () => { cancelled = true; };
+    call.get('frappe.client.has_permission', {
+      doctype: 'POS Profile', docname: posProfileName, perm_type: 'write',
+    }).then((response) => {
+      if (!cancelled) {
+        setCanManagePins((response as { message?: { has_permission?: unknown } })?.message?.has_permission === true);
+      }
+    }).catch(() => {
+      if (!cancelled) setCanManagePins(false);
+    });
+    return () => { cancelled = true; };
+  }, [posProfileName]);
 
   // Determine placeholder and handlers based on route
   let searchPlaceholder = t('header.search_placeholder_default');
@@ -117,6 +140,7 @@ const Header = () => {
   };
 
   return (
+    <>
     <header className="sticky top-0 z-40 bg-white border-b border-border">
       <div className="flex items-center justify-between h-12 px-4 md:px-6">
         {/* Logo */}
@@ -240,6 +264,26 @@ const Header = () => {
                     <RefreshCw className="w-4 h-4 me-3" />
                     {t('header.clear_cache')}
                   </Button>
+                  {canManagePins && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                        onClick={() => { setShowUserMenu(false); setShowPairTablet(true); }}
+                      >
+                        <Monitor className="w-4 h-4 me-3" />
+                        {t('header.pair_tablet')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                        onClick={() => { setShowUserMenu(false); setShowStaffPins(true); }}
+                      >
+                        <User className="w-4 h-4 me-3" />
+                        {t('header.staff_pins')}
+                      </Button>
+                    </>
+                  )}
                   <Button
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
@@ -255,6 +299,13 @@ const Header = () => {
         </div>
       </div>
     </header>
+    {canManagePins && posProfileName && (
+      <>
+        <StaffPinsDialog open={showStaffPins} onOpenChange={setShowStaffPins} />
+        <PairTabletDialog open={showPairTablet} onOpenChange={setShowPairTablet} posProfile={posProfileName} />
+      </>
+    )}
+    </>
   );
 };
 

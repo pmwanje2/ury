@@ -36,6 +36,13 @@ Given below is the list of features of URY app.
 > **Use the URY branch `v1` to access these separate apps.**
 > **Support for this version will end in December 2025.**
 
+### Shared floor tablets
+
+Pair a shared tablet only for waiter/floor PIN sign-in (POS Profile **PIN sign-in on floor
+tablets**, header menu **Pair this tablet** and **Staff PINs**). **Cashier tills must not be
+paired**: pairing is a browser-wide floor-session setting, so a paired till shows the floor PIN
+pad instead of the cashier sign-in.
+
 ### URY MOSAIC
 
 **URY MOSAIC** is an interactive Kitchen Display System (KDS) designed to simplify order management in both single and multi-kitchen restaurants. Additionally, it offers optional Kitchen Order Ticket (KOT) printing support for added convenience.

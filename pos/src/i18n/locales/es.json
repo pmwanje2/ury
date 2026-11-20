@@ -34,7 +34,10 @@
     "close_shift": "Cerrar turno",
     "switch_to_dashboard": "Ir al panel de turno",
     "switch_to_desk": "Ir al escritorio",
-    "search_placeholder_reservations": "Buscar reservas por cliente, mesa..."
+    "search_placeholder_reservations": "Buscar reservas por cliente, mesa...",
+    "switch_waiter": "Cambiar de mesero",
+    "pair_tablet": "Vincular esta tableta",
+    "staff_pins": "PIN del personal"
   },
   "menu": {
     "special_items": "Artículos especiales"
@@ -233,7 +236,8 @@
       "session_elsewhere": "Ya tienes una sesión abierta en otro lugar.",
       "generic": "No se pudo abrir la sesión de POS. {{message}}",
       "load_failed": "No se pudo verificar el estado de la sesión de POS. Inténtalo de nuevo."
-    }
+    },
+    "floor_pin_not_permitted": "No tienes permiso para gestionar los PIN del personal ni vincular esta tableta."
   },
   "success": {
     "order_cancelled": "Pedido cancelado correctamente",
@@ -622,5 +626,51 @@
     "acknowledge": "Confirmar",
     "resolve": "Resolver",
     "acknowledged": "Confirmado"
+  },
+  "floor_pin": {
+    "title": "Acceso del personal",
+    "pin_prompt": "Introduce tu PIN de 4 dígitos",
+    "clear": "Borrar",
+    "delete": "Eliminar dígito",
+    "username_fallback": "Iniciar sesión con usuario",
+    "username_label": "Usuario",
+    "password_label": "Contraseña",
+    "sign_in": "Iniciar sesión",
+    "back_to_pin": "Volver al PIN",
+    "refused": "Ese PIN no funcionó. Pide un PIN nuevo a un encargado.",
+    "locked": "El acceso con PIN está pausado en esta tableta. Avisa a un encargado.",
+    "till_closed": "Inicia sesión con usuario mientras la caja esté cerrada.",
+    "device_not_paired": "Inicia sesión con usuario para vincular esta tableta.",
+    "login_failed": "No se pudo iniciar sesión. Revisa tus credenciales."
+  },
+  "pair_tablet": {
+    "description": "Pon un nombre a esta tableta de sala para que el personal entre con PIN. No vincules una caja.",
+    "label": "Nombre de la tableta",
+    "placeholder": "Tableta de sala 1",
+    "label_required": "Introduce un nombre para la tableta.",
+    "label_too_long": "El nombre de la tableta debe tener 80 caracteres como máximo.",
+    "label_invalid": "Usa un nombre de tableta de hasta 80 caracteres y sin el carácter |.",
+    "profile_not_pairable": "Este nombre de perfil POS no se puede usar para una tableta de sala.",
+    "submit": "Vincular tableta",
+    "failed": "No se pudo vincular esta tableta. Comprueba que el acceso con PIN esté activado."
+  },
+  "staff_pins": {
+    "title": "PIN del personal",
+    "description": "Asigna un PIN de sala a un miembro del personal autorizado.",
+    "shown_once": "Este PIN solo se muestra una vez. Entrégalo al empleado en privado.",
+    "pin_value": "PIN del personal asignado",
+    "done": "Listo",
+    "close": "Cerrar",
+    "needs_pin": "Necesita PIN",
+    "new_pin": "PIN nuevo",
+    "give_pin": "Dar PIN",
+    "no_staff": "No hay personal autorizado.",
+    "load_failed": "No se pudo cargar el personal.",
+    "issue_failed": "No se pudo asignar un PIN. Comprueba que esta persona pueda usar un PIN de sala."
+  },
+  "unsent_items": {
+    "title": "Artículos sin enviar",
+    "description": "Tienes artículos sin enviar. ¿Salir sin enviarlos?",
+    "leave": "Salir"
   }
 }

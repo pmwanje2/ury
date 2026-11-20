@@ -13,6 +13,7 @@ import {
   type ActiveTableOrder,
 } from '../lib/captain-table-api';
 import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
+import { floorSignOut } from '../../lib/floor-session';
 import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
@@ -273,9 +274,14 @@ export default function CaptainTables() {
       <div className="sticky top-0 z-10 border-b border-border bg-white p-3">
         <div className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-bold text-gray-900">{t('captain.tables')}</h1>
-          <Button variant="ghost" size="sm" onClick={refresh}>
-            {t('common.refresh')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={refresh}>
+              {t('common.refresh')}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void floorSignOut()}>
+              {t('header.switch_waiter')}
+            </Button>
+          </div>
         </div>
 
         {branchRooms.length > 0 && (
