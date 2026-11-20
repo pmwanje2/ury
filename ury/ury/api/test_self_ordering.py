@@ -12,6 +12,7 @@ import base64
 import hmac
 import hashlib
 import unittest
+from types import MappingProxyType
 from unittest.mock import patch, MagicMock
 
 import frappe
@@ -886,7 +887,7 @@ class TestGuestItemName(unittest.TestCase):
     the check line names the menu item). Live Tank Hill THI00057 saved
     item_name=CF0001 for Americano and the guest view showed "CF0001 x 1"."""
 
-    ITEM_NAMES = {"Fish": "Grilled tilapia", "Tea": "African tea"}
+    ITEM_NAMES = MappingProxyType({"Fish": "Grilled tilapia", "Tea": "African tea"})
 
     def setUp(self):
         patcher = patch(f"{MOD}.get_branch_stock_policy", return_value=StockPolicy(True, False, False))
