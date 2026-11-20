@@ -125,7 +125,6 @@ describe('guest feedback route', () => {
       ['[URY-FEEDBACK-DISABLED]', 'Feedback is not available right now.'],
       ['[URY-FEEDBACK-TEMPLATE]', 'Feedback is not available right now.'],
       ['[URY-FEEDBACK-BILL-LINK-MISSING]', 'Feedback is not available right now.'],
-      ['[URY-FEEDBACK-RATINGS]', 'Feedback is not available right now.'],
       ['[URY-FEEDBACK-NOT-ELIGIBLE]', 'Feedback is not available for this bill.'],
       ['[URY-FEEDBACK-LINK-INVALID]', 'This feedback link is not valid.'],
     ]
@@ -137,6 +136,26 @@ describe('guest feedback route', () => {
       expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
       view.unmount()
     }
+  })
+
+  it('asks for the ratings again on the stable ratings refusal and reloads the form on retry', async () => {
+    feedbackError = new Error('[URY-FEEDBACK-RATINGS]')
+    render(<App />)
+    expect(await screen.findByText('Please rate every question again.')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('URY-FEEDBACK-')
+    const loads = postCalls.filter(entry => entry.path.endsWith('get_feedback_form')).length
+    feedbackError = null
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('First label')).toBeInTheDocument()
+    expect(postCalls.filter(entry => entry.path.endsWith('get_feedback_form')).length).toBe(loads + 1)
+  })
+
+  it('tells the guest to wait on the stable rate-limit refusal and offers no retry', async () => {
+    feedbackError = new Error('[URY-FEEDBACK-RATE-LIMITED] Too many attempts.')
+    render(<App />)
+    expect(await screen.findByText('Too many attempts. Please wait a few minutes and try again.')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('URY-FEEDBACK-')
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
   it('reads the receipt token from the fragment only, falls back to the session, and never renders either', async () => {

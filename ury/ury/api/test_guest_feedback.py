@@ -589,6 +589,36 @@ class TestGuestFeedback(unittest.TestCase):
                 outcomes.append("disabled")
         return outcomes
 
+    def test_rate_limit_refusals_carry_one_stable_id(self):
+        # The native limiter throws free text; guests need an id the form can map.
+        self.profile.enable_feedback = 0
+        self.enterContext(patch.object(frappe, "cache", _MemoryCache()))
+        frappe.local.request = SimpleNamespace(method="POST")
+        self.addCleanup(setattr, frappe.local, "request", None)
+        self.resolve.side_effect = lambda token: SimpleNamespace(**{**vars(self.session), "name": f"session-{token}"})
+        endpoints = {
+            "submit_feedback": lambda **kwargs: self.submit(ratings=RATINGS, **kwargs),
+            "get_feedback_form": lambda **kwargs: self.api.get_feedback_form(**kwargs),
+        }
+        for endpoint, call in endpoints.items():
+            for budget in ("address", "credential"):
+                with self.subTest(endpoint=endpoint, budget=budget):
+                    frappe.cache.store.clear()
+                    for index in range(6):
+                        frappe.local.request_ip = "203.0.113.5" if budget == "address" else f"203.0.113.{index}"
+                        session = f"attempt-{index}" if budget == "address" else "opaque-session"
+                        frappe.local.form_dict = frappe._dict(cmd=f"{MOD}.{endpoint}", session=session)
+                        try:
+                            call(session=session)
+                        except frappe.RateLimitExceededError as error:
+                            self.assertEqual(index, 5)
+                            self.assertIn("[URY-FEEDBACK-RATE-LIMITED]", str(error))
+                            break
+                        except frappe.ValidationError:
+                            continue
+                    else:
+                        self.fail(f"{endpoint} {budget} budget never limited")
+
     def test_ip_budget_cannot_be_reset_by_changing_session(self):
         outcomes = self._feedback_budget_outcomes(
             [f"attempt-{index}" for index in range(6)], ["203.0.113.5"] * 6, "session",
