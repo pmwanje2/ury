@@ -107,13 +107,13 @@ describe("TabletLayout", () => {
     expect(screen.getByText("Biryani")).toBeInTheDocument()
   })
 
-  it("displays the table number in header", () => {
+  it("names the location in the header, never a hard-coded Table (#97)", () => {
     useOrderingSessionMock.mockReturnValue(
       createMockOrderingSession()
     )
 
     render(<TabletLayout />)
-    expect(screen.getByText(/Table 5/)).toBeInTheDocument()
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^5$/)
   })
 
   it("displays New Order button", () => {
@@ -139,6 +139,21 @@ describe("TabletLayout", () => {
 
     render(<TabletLayout />)
     expect(screen.getByText("Checkout")).toBeInTheDocument()
+  })
+
+  it("shows the guest phone payment outcome in the side cart panel", () => {
+    useOrderingSessionMock.mockReturnValue(
+      createMockOrderingSession({
+        order: { invoice: "INV-1", items: [], grand_total: 250, billed: false },
+        paymentRequest: {
+          payment_request: "PR-1", amount: 250, currency: "UGX", payment_url: null,
+          status: "Paid", paid_amount: 250, remaining_amount: 0,
+        },
+      })
+    )
+
+    render(<TabletLayout />)
+    expect(screen.getByRole("status")).toHaveTextContent("Paid (250 UGX) — thank you.")
   })
 
   it("resets session with confirmation dialog", async () => {

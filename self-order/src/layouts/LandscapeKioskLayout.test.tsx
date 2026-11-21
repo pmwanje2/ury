@@ -219,11 +219,11 @@ describe("LandscapeKioskLayout", () => {
     })
   })
 
-  it("displays table number in header", async () => {
+  it("names the location in the header, never a hard-coded Table (#97)", async () => {
     render(<LandscapeKioskLayout />)
 
     await waitFor(() => {
-      expect(screen.getByText("Table 5")).toBeInTheDocument()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^5$/)
     })
   })
 

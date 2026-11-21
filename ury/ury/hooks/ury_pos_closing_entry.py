@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import get_datetime
+from frappe.utils import flt, get_datetime
 from frappe import _
 from datetime import datetime
 
@@ -9,11 +9,207 @@ from ury.ury_pos.api import (
 	_role_rank,
 )
 
+def _is_pos_invoice_mode():
+    return frappe.db.get_single_value("POS Settings", "invoice_type") == "POS Invoice"
+
+
+def before_validate(doc, method):
+    if _is_pos_invoice_mode():
+        # Native validation assumes the closing user owns every invoice. URY
+        # waiters own them, so the server rebuilds the list after validation.
+        doc.set("pos_invoices", [])
+
+
+def before_submit(doc, method):
+    if not _is_pos_invoice_mode():
+        return
+
+    from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import get_taxes
+    from ury.ury_pos.api import _till_invoice_rows
+
+    start, end, inside, before, after = _closing_invoice_rows(doc)
+
+    if after:
+        frappe.throw("[URY-CLOSE-LATE-INVOICE] Unconsolidated invoices exist after the closing end.")
+    if before:
+        frappe.throw("[URY-CLOSE-ORPHAN-INVOICE] Unconsolidated invoices exist before the opening start.")
+
+    readable = _till_invoice_rows(doc.pos_profile, start, end, frappe.get_list)
+    if {row.name for row in inside} != {row.name for row in readable}:
+        frappe.throw("[URY-CLOSE-UNREADABLE-INVOICE] Not all till invoices are readable by this user.")
+
+    _set_till_invoices(doc, inside)
+    doc.set("taxes", [
+        {"account_head": tax.account_head, "amount": tax.tax_amount}
+        for tax in get_taxes(inside)
+    ])
+    doc.grand_total = sum(row.grand_total or 0 for row in inside)
+    doc.net_total = sum(row.net_total or 0 for row in inside)
+    doc.total_quantity = sum(row.total_qty or 0 for row in inside)
+    doc.total_taxes_and_charges = sum(row.total_taxes_and_charges or 0 for row in inside)
+
+
+def _set_till_invoices(doc, invoices):
+    doc.set("pos_invoices", [])
+    for row in invoices:
+        doc.append("pos_invoices", {
+            "pos_invoice": row.name,
+            "posting_date": row.posting_date,
+            "customer": row.customer,
+            "grand_total": row.grand_total,
+            "is_return": row.is_return,
+            "return_against": row.return_against,
+        })
+
+
+def _closing_invoice_rows(doc):
+    """Every submitted, unconsolidated invoice of the till, whoever created it,
+    split around the linked opening's start and the closing end."""
+    start = get_datetime(frappe.db.get_value(
+        "POS Opening Entry", doc.pos_opening_entry, "period_start_date"
+    ))
+    end = get_datetime(doc.period_end_date)
+    rows = frappe.get_all(
+        "POS Invoice",
+        filters={
+            "docstatus": 1,
+            "pos_profile": doc.pos_profile,
+            "consolidated_invoice": ["is", "not set"],
+        },
+        fields=[
+            "name", "posting_date", "posting_time", "customer", "grand_total",
+            "net_total", "total_qty", "total_taxes_and_charges", "is_return", "return_against",
+            "rounded_total", "change_amount", "account_for_change_amount",
+        ],
+        order_by="posting_date asc, posting_time asc",
+        limit_page_length=0,
+    )
+    before, inside, after = [], [], []
+    for row in rows:
+        timestamp = datetime.combine(
+            get_datetime(row.posting_date).date(),
+            frappe.utils.get_time(row.posting_time),
+        )
+        if timestamp < start:
+            before.append(row)
+        elif timestamp > end:
+            after.append(row)
+        else:
+            row.doctype = "POS Invoice"
+            inside.append(row)
+    return start, end, inside, before, after
+
+
+def _set_expected_amounts(doc):
+    """Server expected cash per mode: opening float plus the till's payments,
+    less native change; existing rows are updated in place and keep their order."""
+    from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import (
+        get_change_payment_row,
+        get_payment_rows_by_invoice,
+    )
+
+    _, _, invoices, _, _ = _closing_invoice_rows(doc)
+    # The list read by later validate entries (closing reconciliation); the
+    # submit-time guards in before_submit rebuild it.
+    _set_till_invoices(doc, invoices)
+    opening = frappe.get_doc("POS Opening Entry", doc.pos_opening_entry)
+    profile = frappe.get_doc("POS Profile", doc.pos_profile)
+    precision = frappe.get_precision("POS Closing Entry Detail", "expected_amount")
+
+    opening_by_mode = {}
+    for detail in opening.balance_details or []:
+        mode = detail.mode_of_payment
+        opening_by_mode[mode] = _currency_flt(
+            opening_by_mode.get(mode, 0) + flt(detail.opening_amount), precision
+        )
+
+    till_modes_by_account = {}
+    for payment_mode in profile.get("payments") or []:
+        account = frappe.db.get_value(
+            "Mode of Payment Account",
+            {"parent": payment_mode.mode_of_payment, "company": doc.company},
+            "default_account",
+        )
+        till_modes_by_account.setdefault(account, []).append(payment_mode.mode_of_payment)
+
+    rows_by_invoice = get_payment_rows_by_invoice(invoices) if invoices else {}
+    amounts_by_mode = {}
+    fallback_changes = {}
+    for invoice in invoices:
+        rows = rows_by_invoice.get(("POS Invoice", invoice.name), [])
+        change_amount = flt(invoice.get("change_amount"))
+        if change_amount > 0 and not invoice.get("is_return"):
+            if row := get_change_payment_row(rows, invoice.account_for_change_amount):
+                row.amount = flt(row.amount) - change_amount
+            else:
+                modes = till_modes_by_account.get(invoice.account_for_change_amount, [])
+                if len(modes) != 1:
+                    frappe.throw(
+                        "[URY-CLOSE-CHANGE-NO-TILL-MODE] Map exactly one till payment mode "
+                        f"to the change account {invoice.account_for_change_amount} before closing."
+                    )
+                fallback_changes[modes[0]] = fallback_changes.get(modes[0], 0) + change_amount
+        for row in rows:
+            amounts_by_mode[row.mode_of_payment] = _currency_flt(
+                amounts_by_mode.get(row.mode_of_payment, 0) + flt(row.amount),
+                precision,
+            )
+
+    expected_by_mode = dict(opening_by_mode)
+    for mode, amount in amounts_by_mode.items():
+        expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) + amount, precision)
+    for mode, change_amount in fallback_changes.items():
+        expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) - change_amount, precision)
+
+    client_rows = {row.mode_of_payment: row for row in doc.payment_reconciliation or []}
+    # Existing rows keep their place (and their names); only missing modes are
+    # appended, in opening, then expected order. idx is renumbered 1..n.
+    modes = [
+        row.mode_of_payment for row in doc.payment_reconciliation or []
+        if client_rows.get(row.mode_of_payment) is row
+    ]
+    modes.extend(mode for mode in opening_by_mode if mode not in modes)
+    modes.extend(mode for mode in expected_by_mode if mode not in modes)
+    ordered_rows = []
+    for mode in modes:
+        client_row = client_rows.get(mode)
+        closing_amount = _currency_flt(client_row.closing_amount, precision) if client_row else 0
+        expected_amount = _currency_flt(expected_by_mode.get(mode, 0), precision)
+        values = {
+            "mode_of_payment": mode,
+            "opening_amount": _currency_flt(opening_by_mode.get(mode, 0), precision),
+            "expected_amount": expected_amount,
+            "custom_closing_amount": (
+                _currency_flt(client_row.custom_closing_amount, precision) if client_row else 0
+            ),
+            "closing_amount": closing_amount,
+            "difference": _currency_flt(closing_amount - expected_amount, precision),
+        }
+        if client_row:
+            for field, value in values.items():
+                setattr(client_row, field, value)
+            row = client_row
+        else:
+            row = doc.append("payment_reconciliation", values)
+        ordered_rows.append(row)
+    doc.payment_reconciliation[:] = ordered_rows
+    for position, row in enumerate(ordered_rows, start=1):
+        row.idx = position
+
+
+def _currency_flt(value, precision):
+    # frappe.utils.flt applies the site's System Settings rounding method.
+    return flt(value, precision)
+
+
 def before_save(doc, method):
     sub_pos_close_check(doc, method)
 
 def validate(doc, method):
-    populate_pos_transactions(doc, method)
+    if _is_pos_invoice_mode():
+        _set_expected_amounts(doc)
+    else:
+        populate_pos_transactions(doc, method)
     populate_draft_stock_correction(doc)
     calculate_closing_amount(doc, method)
     validate_cashier(doc, method)

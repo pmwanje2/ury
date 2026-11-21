@@ -516,20 +516,23 @@ def get_needs_attention(branch=None):
 	return items
 
 
-def _business_day_bounds(branch):
+def _business_day_bounds(branch, *, default_hours=0, now=None):
+	"""The branch business day containing `now`. The branch's URY Report
+	Settings hour wins (0 is midnight); otherwise `default_hours` applies."""
 	rs_hours = frappe.db.get_value("URY Report Settings", {"branch": branch}, "hours") if branch else None
-	now = get_datetime()
-	if rs_hours:
-		cutoff_today = get_datetime(f"{today()} {str(rs_hours).zfill(2)}:00:00")
-		if now < cutoff_today:
-			start = add_to_date(cutoff_today, days=-1)
-			end = cutoff_today
-		else:
-			start = cutoff_today
-			end = add_to_date(cutoff_today, days=1)
+	hours = default_hours if rs_hours is None else rs_hours
+	if now is None:
+		now = get_datetime()
+		day = today()
 	else:
-		start = get_datetime(f"{today()} 00:00:00")
-		end = add_to_date(start, days=1)
+		day = now.date().isoformat()
+	cutoff_today = get_datetime(f"{day} {str(hours).zfill(2)}:00:00")
+	if now < cutoff_today:
+		start = add_to_date(cutoff_today, days=-1)
+		end = cutoff_today
+	else:
+		start = cutoff_today
+		end = add_to_date(cutoff_today, days=1)
 	return start, end
 
 

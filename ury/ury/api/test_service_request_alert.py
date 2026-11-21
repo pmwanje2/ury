@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import frappe
 
 DOCTYPE_MOD = "ury.ury.doctype.ury_service_request.ury_service_request"
+GUEST_MOD = "ury.ury.api.self_ordering"
 STAFF_MOD = "ury.ury.api.service_requests"
 
 
@@ -366,6 +367,131 @@ class TestLifecycleAndAudit(unittest.TestCase):
 				self.assertEqual(fields[name]["fieldtype"], fieldtype)
 				self.assertEqual(fields[name].get("read_only"), 1)
 		self.assertEqual(fields["acknowledged_by"].get("options"), "User")
+
+
+class _MemoryCache:
+	"""The four frappe.cache calls frappe.rate_limiter makes, kept in memory."""
+
+	def __init__(self):
+		self.store = {}
+
+	def make_key(self, key, user=None, shared=False):
+		return f"unit|{key}".encode()
+
+	def get(self, key):
+		return self.store.get(key)
+
+	def setex(self, key, seconds, value):
+		self.store[key] = value
+
+	def incrby(self, key, amount):
+		self.store[key] = int(self.store.get(key) or 0) + amount
+		return self.store[key]
+
+
+class TestGuestRequestLimits(unittest.TestCase):
+	"""A guest session can only create, for its own table, once per kind, at a bounded rate."""
+
+	def setUp(self):
+		from ury.ury.api import self_ordering
+
+		self.api = self_ordering
+		self.session = MagicMock(table="T-2", invoice="POS-1", ordering_profile="Profile A")
+		self.session.name = "SESSION-1"
+		self.profile = MagicMock(enable_request_bill=1)
+		self.enterContext(patch(f"{GUEST_MOD}._resolve_session", return_value=self.session))
+		self.get_doc = self.enterContext(patch(f"{GUEST_MOD}.frappe.get_doc"))
+		self.exists = self.enterContext(patch(f"{GUEST_MOD}.frappe.db.exists", return_value=None))
+		self.enterContext(patch(f"{GUEST_MOD}.frappe.set_user"))
+		self.enterContext(patch(f"{GUEST_MOD}.now_datetime", return_value=datetime.datetime(2026, 11, 20, 14, 56)))
+		self.req = MagicMock()
+		self.req.name = "REQ-NEW"
+		self.get_doc.side_effect = lambda doctype, name=None: self.req if isinstance(doctype, dict) else self.profile
+
+	def guest(self, name):
+		method = getattr(self.api, name, None)
+		self.assertTrue(callable(method), f"Guests have no {name} endpoint")
+		return method
+
+	def test_one_open_assistance_per_table_whatever_the_check(self):
+		self.exists.return_value = "REQ-OPEN"
+		self.assertEqual(self.guest("request_assistance")("opaque"), {"status": "Already Requested", "request": "REQ-OPEN"})
+		self.exists.assert_called_once_with(
+			"URY Service Request",
+			{"table": "T-2", "request_type": "Assistance", "status": "Open"},
+		)
+		self.req.insert.assert_not_called()
+
+	def test_a_later_call_after_an_acknowledged_one_alerts_again(self):
+		# Only an Open call suppresses a new one: once staff acknowledged the first
+		# call, the guest calling again is a new request that must ring again.
+		stored = {"REQ-ACK": {"table": "T-2", "request_type": "Assistance", "status": "Acknowledged"}}
+		self.exists.side_effect = lambda doctype, filters: next(
+			(name for name, row in stored.items() if all(_match(row.get(k), v) for k, v in filters.items())), None)
+		self.assertEqual(self.guest("request_assistance")("opaque"), {"status": "Requested", "request": "REQ-NEW"})
+		self.req.insert.assert_called_once_with(ignore_permissions=True)
+
+	def test_bill_requests_also_dedupe_against_open_only(self):
+		self.exists.return_value = "REQ-OPEN"
+		self.assertEqual(self.api.request_bill("opaque")["status"], "Already Requested")
+		self.exists.assert_called_once_with(
+			"URY Service Request",
+			{"table": "T-2", "invoice": "POS-1", "request_type": "Bill", "status": "Open"},
+		)
+
+	def test_request_is_created_for_the_sessions_own_table_only(self):
+		self.guest("request_assistance")("opaque")
+		payload = self.get_doc.call_args.args[0]
+		self.assertEqual(payload["table"], "T-2")
+		self.assertEqual(payload["session"], "SESSION-1")
+		self.req.insert.assert_called_once_with(ignore_permissions=True)
+
+	def test_guest_requests_are_post_only(self):
+		# Both guest writes travel as POST; a GET (link prefetch, crawler) cannot create a request.
+		for name in ("request_assistance", "request_bill"):
+			with self.subTest(name=name):
+				fn = self.guest(name)
+				self.assertIn(fn, frappe.guest_methods)
+				self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(fn), ["POST"])
+
+	def test_refusals_carry_stable_ids_and_stay_validation_errors(self):
+		# Closed, append-only refusal ids; a refusal is a validation error, never an authorization denial.
+		cases = [
+			("request_assistance", "capability", "[URY-GUEST-ASSISTANCE-DISABLED]"),
+			("request_bill", "capability", "[URY-GUEST-BILL-DISABLED]"),
+			("request_assistance", "order", "[URY-GUEST-NO-ACTIVE-ORDER]"),
+			("request_bill", "order", "[URY-GUEST-NO-ACTIVE-ORDER]"),
+		]
+		for name, cause, refusal_id in cases:
+			with self.subTest(name=name, cause=cause):
+				self.profile.enable_request_bill = 0 if cause == "capability" else 1
+				self.session.invoice = None if cause == "order" else "POS-1"
+				with self.assertRaises(frappe.ValidationError) as caught:
+					self.guest(name)("opaque")
+				self.assertIn(refusal_id, str(caught.exception))
+				self.assertNotIsInstance(caught.exception, frappe.PermissionError)
+				self.req.insert.assert_not_called()
+
+	def test_guest_endpoints_accept_only_the_session_token(self):
+		import inspect
+
+		for name in ("request_assistance", "request_bill"):
+			with self.subTest(name=name):
+				self.assertEqual(list(inspect.signature(self.guest(name)).parameters), ["session"])
+
+	def test_guest_requests_are_rate_limited(self):
+		self.enterContext(patch.object(frappe, "cache", _MemoryCache()))
+		frappe.local.request = SimpleNamespace(method="POST")
+		self.addCleanup(setattr, frappe.local, "request", None)
+		frappe.local.request_ip = "203.0.113.9"
+		for name in ("request_assistance", "request_bill"):
+			with self.subTest(name=name):
+				frappe.local.form_dict = frappe._dict(cmd=f"{GUEST_MOD}.{name}", session="opaque")
+				fn = self.guest(name)
+				for _ in range(5):
+					fn("opaque")
+				with self.assertRaises(frappe.RateLimitExceededError):
+					fn("opaque")
 
 
 class TestServiceRequestHistoryIsKept(unittest.TestCase):
