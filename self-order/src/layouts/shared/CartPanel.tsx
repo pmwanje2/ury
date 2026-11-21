@@ -1,7 +1,8 @@
 import { formatCurrency } from '@ury/core'
 import { t } from '../../i18n'
 import type { CartEntry } from '../../hooks/useOrderingSession'
-import type { CustomerOrder, MenuItem, OrderingContext } from '../../lib/api'
+import type { CustomerOrder, MenuItem, OrderingContext, PaymentRequestResult } from '../../lib/api'
+import { paymentNoticeFor } from '../../lib/payment-outcome'
 
 interface CartPanelProps {
   context: OrderingContext | null
@@ -12,6 +13,7 @@ interface CartPanelProps {
   submitting: boolean
   billRequested: boolean
   payingOnline: boolean
+  paymentRequest?: PaymentRequestResult | null
   /** Called with the line's note so + adds to the same noted line. */
   onIncrement: (item: MenuItem, options?: { comment?: string }) => void
   /** Called with the line's cart key (the item code for a plain line). */
@@ -36,6 +38,7 @@ function CartPanel({
   submitting,
   billRequested,
   payingOnline,
+  paymentRequest,
   onIncrement,
   onDecrement,
   onSubmit,
@@ -43,6 +46,7 @@ function CartPanel({
   onPayOnline,
   className,
 }: CartPanelProps) {
+  const paymentNotice = paymentNoticeFor(paymentRequest)
   return (
     <aside className={className}>
       <div className="flex-1 overflow-y-auto">
@@ -124,6 +128,11 @@ function CartPanel({
           >
             {payingOnline ? t('payment.starting') : t('payment.pay_online')}
           </button>
+        )}
+        {paymentNotice && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            {paymentNotice}
+          </p>
         )}
         {context?.capabilities.request_bill_enabled && order && !order.billed && (
           <button

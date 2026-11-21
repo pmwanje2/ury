@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { CartEntry } from '../../hooks/useOrderingSession'
 import type { OrderingCapabilities, PaymentRequestResult } from '../../lib/api'
 import { t } from '../../i18n'
+import { paymentNoticeFor } from '../../lib/payment-outcome'
 
 // Local, UI-only concept — `pay_at_counter_enabled` has no backend action of
 // its own (see useOrderingSession's payOnline/handleRequestBill: neither
@@ -65,6 +66,7 @@ function CheckoutScreen({
   const showPayAtCounter = capabilities.pay_at_counter_enabled
   const showRequestBill = capabilities.request_bill_enabled
   const hasAnyPaymentOption = showPayOnline || showPayAtCounter || showRequestBill
+  const paymentNotice = paymentNoticeFor(paymentRequest)
 
   // "Pay at Counter" is purely informational — selecting it doesn't call
   // anything, it just reflects the customer's choice not to pay online.
@@ -135,9 +137,9 @@ function CheckoutScreen({
               </button>
             )}
           </div>
-          {paymentRequest && !paymentRequest.payment_url && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t('payment.request_created', { amount: paymentRequest.amount, currency: paymentRequest.currency })}
+          {paymentNotice && (
+            <p role="status" className="mt-2 text-xs text-muted-foreground">
+              {paymentNotice}
             </p>
           )}
         </section>

@@ -16,6 +16,7 @@ import {
   type OrderStatus,
   type PaymentRequestResult,
 } from '../lib/api'
+import { paymentOutcome } from '../lib/payment-outcome'
 import { getAvailabilityMessage, getItemAvailability } from '../lib/availability'
 import { t } from '../i18n'
 import { useGuestLanguage } from '../components/LanguageSwitcher'
@@ -428,8 +429,9 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     try {
       const result = await createPaymentRequest(context.session)
       setPaymentRequest(result)
-      if (result.payment_url) {
-        window.location.href = result.payment_url
+      const { redirect } = paymentOutcome(result)
+      if (redirect) {
+        window.location.href = redirect
       }
     } catch (err) {
       // Includes the graceful "online payment isn't set up yet" case from

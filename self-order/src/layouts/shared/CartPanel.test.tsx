@@ -425,4 +425,29 @@ describe("CartPanel", () => {
 
     expect(screen.queryByText("Pay Online")).not.toBeInTheDocument()
   })
+  it("shows the guest phone payment outcome next to Pay Online", () => {
+    render(
+      <CartPanel
+        context={{ ...baseContext, capabilities: { ...baseContext.capabilities, customer_payment_enabled: true } }}
+        order={sampleOrder}
+        cartItems={[]}
+        cartCount={0}
+        cartTotal={0}
+        submitting={false}
+        billRequested={false}
+        payingOnline={false}
+        paymentRequest={{
+          payment_request: "PR-1", amount: 350, currency: "UGX", payment_url: null,
+          status: "Paid", paid_amount: 350, remaining_amount: 0,
+        }}
+        onIncrement={vi.fn()}
+        onDecrement={vi.fn()}
+        onSubmit={vi.fn()}
+        onRequestBill={vi.fn()}
+        onPayOnline={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole("status")).toHaveTextContent("Paid (350 UGX) — thank you.")
+  })
 })
