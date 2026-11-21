@@ -55,13 +55,13 @@ patch-identical ones marked superseded below.
 | T2 | Posting and closing correctness | 95 | 5 | 0 | 100 |
 | T3 | KOT, hold/fire, station print | 82 | 1 | 0 | 83 |
 | T4 | Floor PIN | 46 | 0 | 0 | 46 |
-| T5 | Offline capture | 85 | 0 | 0 | 85 |
+| T5 | Offline capture | 79 | 4 | 2 | 85 |
 | T6 | Guest, feedback, pricing | 79 | 0 | 35 | 114 |
 | T7 | Branding | 61 | 0 | 0 | 61 |
 | T8 | Room lookup and Kamra | 4 | 0 | 0 | 4 |
 | T9 | POS UX remainder | 119 | 0 | 4 | 123 |
 | T10 | Docs and evidence (not carried) | 0 | 2 | 54 | 56 |
-| | **Total** | 592 | 8 | 95 | 695 |
+| | **Total** | 586 | 12 | 97 | 695 |
 
 Theme N (neutralise upstream: Insights auto-grant gate, Report override removal, migrate-time
 sidebar hide, Stock Reconciliation draft guard, `role_permissions.py`) has no fork commits; it
@@ -87,6 +87,13 @@ the open PR.
 | T1 | #93 | `5b5b34da` | `664d8ff4` | open, draft. `pos-tests.yml` (#51, `00b79383`) waits on B5 |
 | N | #95 | `8b6aa8a0`, `80f70004`, `1f98feff` | `042c8e29` | open, draft (new work, no fork rows) |
 | T0 | #96 | `ba3154e3`, `1747bae1`, `6692547b`, `7f0f931e`, `a7578aaf` | `b0d12217` | open, draft |
+| T5 part 3 | local branch `maximus/t5p3-offline-pos-wiring` | `e6a0290a`, `b59ba37e` | `6c24d276`, `3bb914d0` | implemented; landing PR pending |
+
+T5 accounts for 85 distinct fork commits: 12 ported in #107, 43 in #110,
+24 ported in part 3, four superseded by the v16 default-customer resolver,
+and two dropped test harnesses. Part 3 also finishes UI and projection work
+on 16 previously counted rows. `8174af18` counts once in part 3; its fixture and
+filter landed in #107. No T5 implementation rows remain deferred.
 
 T0 notes on rows marked "port" in the rows below:
 - `04099204`, `fc2a3970`: carried as tests only where they apply; the duplicate guest-grant
@@ -389,82 +396,82 @@ T0 notes on rows marked "port" in the rows below:
 | `2c06ba47` | 2026-10-14 | #37 | T2 | port | fix(pos): GREEN allow a zero count when nothing is expected |  |
 | `3f833a9a` | 2026-10-14 | #37 | T2 | port | test(pos): RED blind zero count must not reveal expected cash |  |
 | `ab02784b` | 2026-10-14 | #37 | T2 | port | fix(pos): GREEN submit a blind zero count without reading expected cash |  |
-| `e9afc4d2` | 2026-10-14 | #31 | T5 | port | test: RED idempotent offline order and settlement writes (O1) |  |
-| `123b03bb` | 2026-10-14 | #31 | T5 | port | fix: make offline order and settlement retries idempotent (O1) |  |
+| `e9afc4d2` | 2026-10-14 | #31 | T5 | port | test: RED idempotent offline order and settlement writes (O1) | PR #107 |
+| `123b03bb` | 2026-10-14 | #31 | T5 | port | fix: make offline order and settlement retries idempotent (O1) | PR #107 |
 | `1df2b9cd` | 2026-10-14 | #31 | T10 | dropped | docs: add O1 disposable bench evidence | docs/evidence or docs/pr-assets only |
-| `30862bc2` | 2026-10-14 | #31 | T5 | port | test: RED reject mismatched client-order targets (O1 review) |  |
-| `f454372a` | 2026-10-14 | #31 | T5 | port | fix: GREEN bind client-order lookup to requested target (O1 review) |  |
+| `30862bc2` | 2026-10-14 | #31 | T5 | port | test: RED reject mismatched client-order targets (O1 review) | PR #107 |
+| `f454372a` | 2026-10-14 | #31 | T5 | port | fix: GREEN bind client-order lookup to requested target (O1 review) | PR #107 |
 | `d9456f94` | 2026-10-14 | #31 | T10 | dropped | docs: refresh O1 bench screenshot after review fix | docs/evidence or docs/pr-assets only |
-| `37a35774` | 2026-10-14 | #33 | T5 | port | test: RED offline append capture and printed KOT replay |  |
-| `4c9687b9` | 2026-10-14 | #33 | T5 | port | fix: replay offline rounds additively within the cashier shift |  |
+| `37a35774` | 2026-10-14 | #33 | T5 | port | test: RED offline append capture and printed KOT replay | PR #107 |
+| `4c9687b9` | 2026-10-14 | #33 | T5 | port | fix: replay offline rounds additively within the cashier shift | PR #107 |
 | `37f1b0c9` | 2026-10-14 | #33 | T10 | dropped | docs: add O2 running bench evidence | docs/evidence or docs/pr-assets only |
-| `847c9746` | 2026-10-14 | #33 | T5 | port | test: RED preserve occupied gate for append retries |  |
-| `9d29e6c9` | 2026-10-14 | #33 | T5 | port | fix: retain occupied gate for append requests without snapshot |  |
-| `0934894f` | 2026-10-14 | #33 | T5 | port | test: RED preserve saved defaults during offline total comparison |  |
-| `60ddd45e` | 2026-10-14 | #33 | T5 | port | fix: preserve invoice defaults while checking offline totals |  |
+| `847c9746` | 2026-10-14 | #33 | T5 | port | test: RED preserve occupied gate for append retries | PR #107 |
+| `9d29e6c9` | 2026-10-14 | #33 | T5 | port | fix: retain occupied gate for append requests without snapshot | PR #107 |
+| `0934894f` | 2026-10-14 | #33 | T5 | port | test: RED preserve saved defaults during offline total comparison | PR #107 |
+| `60ddd45e` | 2026-10-14 | #33 | T5 | port | fix: preserve invoice defaults while checking offline totals | PR #107 |
 | `04547a40` | 2026-10-14 | #33 | T10 | dropped | docs: refresh O2 bench screenshots and RED GREEN evidence | docs/evidence or docs/pr-assets only |
-| `f5e402b7` | 2026-10-14 | #39 | T5 | port | test(O4): RED durable cashier outbox, replay and offline close guards |  |
-| `ae74f6e8` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN durable offline outbox and replay guards |  |
-| `6f2001d1` | 2026-10-14 | #39 | T5 | port | test(O4): RED cashier capture, print, banner, logout and fixture wiring |  |
-| `b856500f` | 2026-10-14 | #39 | T5 | port | test(O4): qualify async cashier harness and native fixture hook keys |  |
-| `8174af18` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN wire capture, station printing, banner and native opt-in fixture |  |
-| `5786d423` | 2026-10-14 | #39 | T5 | port | test(O4): RED queue controls, guarded logout, reprint and refused offline mutations |  |
-| `49c87b1b` | 2026-10-14 | #39 | T5 | port | test(O4): qualify browser lock doubles and async DOM flushes |  |
-| `0b903763` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN cashier queue controls, positive rounds and guarded purge |  |
-| `7fab2bab` | 2026-10-14 | #39 | T5 | port | test(O4): RED bounded replay, role revocation and offline action safety |  |
-| `d36caa1f` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN bound replay and refuse offline voids, discounts and live settlement |  |
-| `c654d404` | 2026-10-14 | #39 | T5 | port | test(O4): qualify legacy module loader and asynchronous empty-outbox guards |  |
-| `5d0b3aba` | 2026-10-14 | #39 | T5 | port | test(O4): RED use native profile walk-in customer for offline capture |  |
-| `77ac68f8` | 2026-10-14 | #39 | T5 | port | test(O4): await durable native walk-in capture acknowledgement |  |
-| `7e9e0e76` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN reuse native profile customer for offline walk-in orders |  |
-| `ae738005` | 2026-10-14 | #39 | T5 | port | test(O4): preserve till-read API coverage through the real module loader |  |
-| `f4f0f6bb` | 2026-10-14 | #39 | T5 | port | revert(O4): remove unqualified walk-in GREEN before restarting RED |  |
-| `c2f951ca` | 2026-10-14 | #39 | T5 | port | test(O4): RED await cache purge and native walk-in capture |  |
-| `ae288fd4` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN await O3 purge and capture native walk-in orders |  |
-| `a3bfb04e` | 2026-10-15 | #39 | T5 | port | test(O4): RED retain transient authentication failures |  |
-| `432e778e` | 2026-10-15 | #39 | T5 | port | feat(O4): GREEN retain transport authentication failures for retry |  |
+| `f5e402b7` | 2026-10-14 | #39 | T5 | port | test(O4): RED durable cashier outbox, replay and offline close guards | PR #110; offline-outbox.test.ts ported; offline-cashier.test.tsx in T5 part 3 |
+| `ae74f6e8` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN durable offline outbox and replay guards | PR #110 |
+| `6f2001d1` | 2026-10-14 | #39 | T5 | port | test(O4): RED cashier capture, print, banner, logout and fixture wiring | PR #107; fixture test in #107, offline-capture.test.ts in #110; offline-banner/-cashier tests in T5 part 3 |
+| `b856500f` | 2026-10-14 | #39 | T5 | port | test(O4): qualify async cashier harness and native fixture hook keys | PR #107; fixture test in #107, offline-capture.test.ts in #110; cashier harness in T5 part 3 |
+| `8174af18` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN wire capture, station printing, banner and native opt-in fixture | T5 part 3: POS UI wiring (OrderPanel/Header/OfflineBanner); fixture+filter part ported in #107 |
+| `5786d423` | 2026-10-14 | #39 | T5 | port | test(O4): RED queue controls, guarded logout, reprint and refused offline mutations | PR #110; outbox/capture tests ported; offline-banner/-cashier/-refusals tests in T5 part 3 |
+| `49c87b1b` | 2026-10-14 | #39 | T5 | port | test(O4): qualify browser lock doubles and async DOM flushes | PR #110; offline-locks.ts and capture flushes ported; banner/cashier parts in T5 part 3 |
+| `0b903763` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN cashier queue controls, positive rounds and guarded purge | PR #110; engine part; component wiring in T5 part 3 |
+| `7fab2bab` | 2026-10-14 | #39 | T5 | port | test(O4): RED bounded replay, role revocation and offline action safety | PR #110; offline-outbox bounded replay/role revocation ported; banner/cashier/cancel-order tests in T5 part 3 |
+| `d36caa1f` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN bound replay and refuse offline voids, discounts and live settlement | PR #110; engine part; component wiring in T5 part 3 |
+| `c654d404` | 2026-10-14 | #39 | T5 | dropped | test(O4): qualify legacy module loader and asynchronous empty-outbox guards | node:test logout harness; v16 core logout covered by pos/tests/offline-logout.test.ts |
+| `5d0b3aba` | 2026-10-14 | #39 | T5 | superseded | test(O4): RED use native profile walk-in customer for offline capture | v16 resolve_default_customer (ury/ury_pos/default_customer.py, @ury/core/default-customer) |
+| `77ac68f8` | 2026-10-14 | #39 | T5 | superseded | test(O4): await durable native walk-in capture acknowledgement | v16 resolve_default_customer |
+| `7e9e0e76` | 2026-10-14 | #39 | T5 | superseded | feat(O4): GREEN reuse native profile customer for offline walk-in orders | v16 resolve_default_customer |
+| `ae738005` | 2026-10-14 | #39 | T5 | dropped | test(O4): preserve till-read API coverage through the real module loader | fork till-close node:test loader; not part of v16 closing (T2 owns closing) |
+| `f4f0f6bb` | 2026-10-14 | #39 | T5 | superseded | revert(O4): remove unqualified walk-in GREEN before restarting RED | v16 resolve_default_customer (revert of a superseded GREEN) |
+| `c2f951ca` | 2026-10-14 | #39 | T5 | port | test(O4): RED await cache purge and native walk-in capture | PR #110; offline-capture purge test ported (re-pointed to purgeOfflineSession); walk-in part superseded by v16 resolve_default_customer |
+| `ae288fd4` | 2026-10-14 | #39 | T5 | port | feat(O4): GREEN await O3 purge and capture native walk-in orders | PR #110; engine part; component wiring in T5 part 3 |
+| `a3bfb04e` | 2026-10-15 | #39 | T5 | port | test(O4): RED retain transient authentication failures | PR #110 |
+| `432e778e` | 2026-10-15 | #39 | T5 | port | feat(O4): GREEN retain transport authentication failures for retry | PR #110 |
 | `5acb4bbb` | 2026-10-15 | #39 | T10 | dropped | docs(O4): capture native v16 offline replay screenshots and TDD evidence | docs/evidence or docs/pr-assets only |
 | `86aeb989` | 2026-10-15 | #39 | T10 | dropped | chore(O4): normalize captured evidence output | docs/evidence or docs/pr-assets only |
-| `44b1ca95` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline read cache excludes POST and non-allowlisted API routes |  |
-| `ec3d88e9` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN PWA shell and network-first read cache |  |
-| `aab27234` | 2026-10-14 | #38 | T5 | port | test(O3): RED boot registers offline capture from the loaded till flag |  |
-| `e6778762` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN register offline capture from the loaded POS profile |  |
-| `cee1e21b` | 2026-10-14 | #38 | T5 | port | test(O3): RED precache URLs and a stalled worker must not wedge the till |  |
-| `107cd7c3` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN root precache URLs and do not wait on serviceWorker.ready |  |
-| `2e4629e0` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline reload keeps the cached shell session |  |
-| `eb98df49` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN keep the cached shell when the logged-user read is offline |  |
-| `ab5acddb` | 2026-10-14 | #38 | T5 | port | test(O3): RED DevTools offline keeps the cached shell session |  |
-| `af202f83` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN keep the cookie session when the logged-user read has a network error |  |
-| `47d03127` | 2026-10-14 | #38 | T5 | port | test(O3): RED a network failure on the opening check still shows the shell |  |
-| `e40f16d7` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN show the cached shell when the opening check has a network error |  |
+| `44b1ca95` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline read cache excludes POST and non-allowlisted API routes | PR #110 |
+| `ec3d88e9` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN PWA shell and network-first read cache | PR #110 |
+| `aab27234` | 2026-10-14 | #38 | T5 | port | test(O3): RED boot registers offline capture from the loaded till flag | PR #110; flag on/off boot tests ported (re-pointed to getPosProfileFull) |
+| `e6778762` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN register offline capture from the loaded POS profile | PR #110 |
+| `cee1e21b` | 2026-10-14 | #38 | T5 | port | test(O3): RED precache URLs and a stalled worker must not wedge the till | PR #110 |
+| `107cd7c3` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN root precache URLs and do not wait on serviceWorker.ready | PR #110 |
+| `2e4629e0` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline reload keeps the cached shell session | T5 part 3: offline shell auth fallback |
+| `eb98df49` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN keep the cached shell when the logged-user read is offline | T5 part 3: offline shell auth fallback |
+| `ab5acddb` | 2026-10-14 | #38 | T5 | port | test(O3): RED DevTools offline keeps the cached shell session | T5 part 3: offline shell auth fallback |
+| `af202f83` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN keep the cookie session when the logged-user read has a network error | T5 part 3: offline shell auth fallback |
+| `47d03127` | 2026-10-14 | #38 | T5 | port | test(O3): RED a network failure on the opening check still shows the shell | T5 part 3: offline opening fallback |
+| `e40f16d7` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN show the cached shell when the opening check has a network error | T5 part 3: offline opening fallback |
 | `b034e969` | 2026-10-14 | #38 | T10 | dropped | docs(O3): offline POS shell and service-worker cache evidence | docs/evidence or docs/pr-assets only |
-| `6e6a55b3` | 2026-10-14 | #38 | T5 | port | test(O3): RED POS-only worker scope and URY-only purge |  |
-| `79a6d694` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN POS-only worker scope and URY-only purge |  |
-| `220654fe` | 2026-10-14 | #38 | T5 | port | test(O3): RED read allowlist is same-origin with exact parameters at the Workbox router |  |
-| `6907f93d` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN own worker with exact same-origin read routes |  |
-| `ddd0135a` | 2026-10-14 | #38 | T5 | port | test(O3): RED real frappe-js-sdk network failures are told apart from 401/403 |  |
-| `31f5b0fd` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN tag real SDK transport failures; keep 401/403 as HTTP errors |  |
-| `ee9cf865` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline auth fallback only on a real transport failure on an opted-in till |  |
-| `ed6617a5` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN offline auth fallback only on a transport failure on an opted-in till |  |
-| `4b7ad97c` | 2026-10-14 | #38 | T5 | port | test(O3): RED NetworkFirst never serves cached user data over a pending 401/403 |  |
-| `f39825a9` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN NetworkFirst without timeout; 401/403 purge session caches |  |
-| `36521ff6` | 2026-10-14 | #38 | T5 | port | test(O3): RED sign-out is an awaited, race-safe boundary for cached user data |  |
-| `440fbd9d` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN race-safe, awaited sign-out for the offline caches |  |
-| `c5e24f3e` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline opening fallback needs the till flag and a confirmed opening |  |
-| `fd3c448a` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN offline opening fallback gated by the till flag and a confirmed opening |  |
+| `6e6a55b3` | 2026-10-14 | #38 | T5 | port | test(O3): RED POS-only worker scope and URY-only purge | PR #110 |
+| `79a6d694` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN POS-only worker scope and URY-only purge | PR #110 |
+| `220654fe` | 2026-10-14 | #38 | T5 | port | test(O3): RED read allowlist is same-origin with exact parameters at the Workbox router | PR #110 |
+| `6907f93d` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN own worker with exact same-origin read routes | PR #110 |
+| `ddd0135a` | 2026-10-14 | #38 | T5 | port | test(O3): RED real frappe-js-sdk network failures are told apart from 401/403 | T5 part 3: SDK transport tagging |
+| `31f5b0fd` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN tag real SDK transport failures; keep 401/403 as HTTP errors | T5 part 3: SDK transport tagging |
+| `ee9cf865` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline auth fallback only on a real transport failure on an opted-in till | T5 part 3: offline auth fallback |
+| `ed6617a5` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN offline auth fallback only on a transport failure on an opted-in till | T5 part 3: offline auth fallback |
+| `4b7ad97c` | 2026-10-14 | #38 | T5 | port | test(O3): RED NetworkFirst never serves cached user data over a pending 401/403 | PR #110 |
+| `f39825a9` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN NetworkFirst without timeout; 401/403 purge session caches | PR #110 |
+| `36521ff6` | 2026-10-14 | #38 | T5 | port | test(O3): RED sign-out is an awaited, race-safe boundary for cached user data | PR #110; core purge/logout only; Header/Mosaic/frontend logout UI in T5 part 3 |
+| `440fbd9d` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN race-safe, awaited sign-out for the offline caches | PR #110; core purge/logout only; Header/Mosaic/frontend logout UI in T5 part 3 |
+| `c5e24f3e` | 2026-10-14 | #38 | T5 | port | test(O3): RED offline opening fallback needs the till flag and a confirmed opening | T5 part 3: offline opening fallback |
+| `fd3c448a` | 2026-10-14 | #38 | T5 | port | feat(O3): GREEN offline opening fallback gated by the till flag and a confirmed opening | T5 part 3: offline opening fallback |
 | `6c88a3cc` | 2026-10-15 | #38 | T10 | dropped | docs(O3): refresh offline evidence at fd3c448a | docs/evidence or docs/pr-assets only |
 | `0c9f482b` | 2026-10-15 | #39 | T10 | dropped | docs(O4): record final O3 merge verification | docs/evidence or docs/pr-assets only |
-| `a1731575` | 2026-10-15 | #40 | T5 | port | test(pos): RED bind the signed-in user before menu and profile reads |  |
-| `85d8e50e` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN bind the signed-in user before menu and profile reads |  |
-| `2d4055c4` | 2026-10-15 | #40 | T5 | port | test(pos): RED describe the service worker scope as /pos |  |
-| `a67a3c39` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN describe the service worker scope as /pos |  |
-| `b1e3ad05` | 2026-10-15 | #40 | T5 | port | test(pos): RED reject encoded /pos traversals from the shell cache |  |
-| `ce6f5f67` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN match only normalized POS cache paths |  |
-| `ac218689` | 2026-10-15 | #40 | T5 | port | test(pos): RED keep the outage id until the offline queue is empty |  |
-| `318d4172` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN keep the outage id until the offline queue is empty |  |
+| `a1731575` | 2026-10-15 | #40 | T5 | port | test(pos): RED bind the signed-in user before menu and profile reads | T5 part 3: bind user before boot reads |
+| `85d8e50e` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN bind the signed-in user before menu and profile reads | T5 part 3: bind user before boot reads |
+| `2d4055c4` | 2026-10-15 | #40 | T5 | port | test(pos): RED describe the service worker scope as /pos | PR #110 |
+| `a67a3c39` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN describe the service worker scope as /pos | PR #110 |
+| `b1e3ad05` | 2026-10-15 | #40 | T5 | port | test(pos): RED reject encoded /pos traversals from the shell cache | PR #110 |
+| `ce6f5f67` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN match only normalized POS cache paths | PR #110 |
+| `ac218689` | 2026-10-15 | #40 | T5 | port | test(pos): RED keep the outage id until the offline queue is empty | PR #110 |
+| `318d4172` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN keep the outage id until the offline queue is empty | PR #110 |
 | `5e7515fd` | 2026-10-15 | #40 | T10 | dropped | docs(O3b): record bind-before-read and same-outage evidence | docs/evidence or docs/pr-assets only |
-| `dfd2166e` | 2026-10-15 | #40 | T5 | port | test(pos): RED serve cached reads only to their owner, the signed-in user |  |
-| `f3defd84` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN serve cached reads only to their owner, the signed-in user |  |
+| `dfd2166e` | 2026-10-15 | #40 | T5 | port | test(pos): RED serve cached reads only to their owner, the signed-in user | PR #110 |
+| `f3defd84` | 2026-10-15 | #40 | T5 | port | fix(pos): GREEN serve cached reads only to their owner, the signed-in user | PR #110 |
 | `ffab6774` | 2026-10-15 | #40 | T10 | dropped | docs(O3b): recapture owner-tagged cache evidence | docs/evidence or docs/pr-assets only |
 | `280789db` | 2026-10-15 | #40 | T10 | dropped | docs(O3b): recapture labelled Alice/Bob evidence on f3defd84 | docs/evidence or docs/pr-assets only |
 | `e47d4f73` | 2026-10-15 | #41 | T6 | port | test: define guest phone payment request contract |  |
@@ -502,11 +509,11 @@ T0 notes on rows marked "port" in the rows below:
 | `25c29a9d` | 2026-10-15 | #44 | T2 | port | fix(pos): keep unpaid settlement native-valid with a zero mode row (GREEN) |  |
 | `7511f64b` | 2026-10-15 | #44 | T2 | port | docs(E5): record native unpaid-row RED and GREEN evidence |  |
 | `46345746` | 2026-10-15 | #44 | T2 | port | test(E5): remove test lint debt and correct pristine-base evidence |  |
-| `42ffaf84` | 2026-10-15 | #45 | T5 | port | test(pos): RED gateway HTTP statuses do not fall back or queue |  |
-| `bc796c58` | 2026-10-15 | #45 | T5 | port | fix(pos): GREEN treat gateway statuses as offline for an opted-in till |  |
+| `42ffaf84` | 2026-10-15 | #45 | T5 | port | test(pos): RED gateway HTTP statuses do not fall back or queue | PR #110; offline-gateway and network-first gateway tests ported; getPosInvoice column assertion in T5 part 3 |
+| `bc796c58` | 2026-10-15 | #45 | T5 | port | fix(pos): GREEN treat gateway statuses as offline for an opted-in till | PR #110; engine part; component wiring in T5 part 3 |
 | `3930ad21` | 2026-10-15 | #45 | T10 | dropped | docs(pos): show the opted-in till still open behind HTTP 502 | docs/evidence or docs/pr-assets only |
-| `ae5626ba` | 2026-10-15 | #45 | T5 | port | test(pos): RED a gateway error must not queue a named-account short settlement |  |
-| `4230f81f` | 2026-10-15 | #45 | T5 | port | fix(pos): GREEN queue only a fully paid cash settlement on a gateway error |  |
+| `ae5626ba` | 2026-10-15 | #45 | T5 | port | test(pos): RED a gateway error must not queue a named-account short settlement | PR #110 |
+| `4230f81f` | 2026-10-15 | #45 | T5 | port | fix(pos): GREEN queue only a fully paid cash settlement on a gateway error | PR #110; engine part; component wiring in T5 part 3 |
 | `1b0b7678` | 2026-10-15 | #46 | T4 | port | test: RED contracts for paired floor PIN sign-in and manager screens |  |
 | `ce7d3394` | 2026-10-15 | #46 | T4 | port | feat: GREEN paired floor PIN sign-in and tablet manager screens |  |
 | `40855026` | 2026-10-15 | #46 | T4 | port | test: RED native collision retry and durable failed PIN audit |  |
@@ -515,22 +522,22 @@ T0 notes on rows marked "port" in the rows below:
 | `6dcae843` | 2026-10-15 | #46 | T4 | port | fix: GREEN ensure reissued PIN invalidates the previous value |  |
 | `6631a1bb` | 2026-10-15 | #46 | T4 | port | test: RED PIN sessions keep password change hidden after reload |  |
 | `97c9c8fd` | 2026-10-15 | #46 | T4 | port | fix: GREEN retain non-secret PIN session type across page reload |  |
-| `7e32fa7a` | 2026-10-15 | #47 | T5 | port | test(pos): RED gateway session continuity, one open check, and Add New Order |  |
-| `36a386af` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN keep the till through a gateway outage and one open check per table |  |
-| `9da2dfd6` | 2026-10-15 | #47 | T5 | port | fix(pos): keep Add New Order inside the outlet when the banner wraps |  |
+| `7e32fa7a` | 2026-10-15 | #47 | T5 | port | test(pos): RED gateway session continuity, one open check, and Add New Order | PR #110; offline-one-open-order ported; POSOpeningProvider/add-new-order/shell-auth parts in T5 part 3 |
+| `36a386af` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN keep the till through a gateway outage and one open check per table | PR #110; engine part; component wiring in T5 part 3 |
+| `9da2dfd6` | 2026-10-15 | #47 | T5 | port | fix(pos): keep Add New Order inside the outlet when the banner wraps | T5 part 3: Add New Order layout |
 | `c32410e8` | 2026-10-15 | #47 | T10 | dropped | docs(O7): Playwright evidence for gateway session, one open check, and Add New Order | docs/evidence or docs/pr-assets only |
-| `3477222d` | 2026-10-15 | #47 | T5 | port | test(pos): RED selecting a table during a gateway outage keeps the till |  |
-| `d33af7b0` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN a gateway outage on table selection keeps the till |  |
-| `fc086b0b` | 2026-10-15 | #47 | T5 | port | test(pos): RED a table read issued before logout must not reach the open-check cache |  |
-| `08d753aa` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN bind open-check cache writes to the session that issued the read |  |
-| `f35300c3` | 2026-10-15 | #47 | T5 | port | test(pos): RED an occupied-table gateway fallback keeps the round id it sent |  |
-| `810fa301` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN keep the sent round id when a gateway error hits an occupied table |  |
-| `c850377f` | 2026-10-15 | #47 | T5 | port | test(pos): RED a partly replayed table check keeps its client id across outages |  |
-| `92b4d694` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN a table's unsettled check keeps its client id across outages |  |
-| `4ab669f7` | 2026-10-15 | #47 | T5 | port | test(pos): RED a stale table read must not change the active till |  |
-| `97fe1ae0` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN drop a stale table read before it reaches the active till |  |
-| `9226e4b8` | 2026-10-15 | #48 | T5 | port | test(pos): RED offline /pos root entry shows Access Denied |  |
-| `5af9e16d` | 2026-10-15 | #48 | T5 | port | fix(pos): GREEN open the till from /pos when the link is down |  |
+| `3477222d` | 2026-10-15 | #47 | T5 | port | test(pos): RED selecting a table during a gateway outage keeps the till | T5 part 3: table read outage in pos-store |
+| `d33af7b0` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN a gateway outage on table selection keeps the till | T5 part 3: table read outage in pos-store |
+| `fc086b0b` | 2026-10-15 | #47 | T5 | port | test(pos): RED a table read issued before logout must not reach the open-check cache | T5 part 3: table read session guard |
+| `08d753aa` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN bind open-check cache writes to the session that issued the read | T5 part 3: table read session guard |
+| `f35300c3` | 2026-10-15 | #47 | T5 | port | test(pos): RED an occupied-table gateway fallback keeps the round id it sent | PR #110 |
+| `810fa301` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN keep the sent round id when a gateway error hits an occupied table | PR #110 |
+| `c850377f` | 2026-10-15 | #47 | T5 | port | test(pos): RED a partly replayed table check keeps its client id across outages | PR #110 |
+| `92b4d694` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN a table's unsettled check keeps its client id across outages | PR #110 |
+| `4ab669f7` | 2026-10-15 | #47 | T5 | port | test(pos): RED a stale table read must not change the active till | T5 part 3: stale table read guard |
+| `97fe1ae0` | 2026-10-15 | #47 | T5 | port | fix(pos): GREEN drop a stale table read before it reaches the active till | T5 part 3: stale table read guard |
+| `9226e4b8` | 2026-10-15 | #48 | T5 | port | test(pos): RED offline /pos root entry shows Access Denied | T5 part 3: /pos root entry offline |
+| `5af9e16d` | 2026-10-15 | #48 | T5 | port | fix(pos): GREEN open the till from /pos when the link is down | T5 part 3: /pos root entry offline |
 | `5bc54852` | 2026-10-15 | #48 | T10 | dropped | docs(O7): Playwright evidence for offline /pos root entry | docs/evidence or docs/pr-assets only |
 | `26a630e6` | 2026-10-15 | #49 | T9 | port | fix(pos): GREEN combine online walk-ins with offline customer safeguards |  |
 | `b6c3330f` | 2026-10-16 | #49 | T9 | port | test(pos): type offline walk-in fixture without explicit any |  |
