@@ -286,6 +286,24 @@ class TestURYPosAPI(FrappeTestCase):
         self.assertIn("outside your active branch", str(context.exception))
 
 
+class TestSplitPreviewScope(unittest.TestCase):
+    def test_reassigned_sibling_requires_its_own_order_access(self):
+        from ury.ury.doctype.ury_order import ury_order
+        doc = MagicMock(name='sibling')
+        doc.get.side_effect = {'custom_split_group':'group', 'pos_profile':'profile'}.get
+        doc.waiter = 'other@example.com'
+        doc.branch = 'Branch A'
+        profile = frappe._dict(transfer_role_permissions=[], role_allowed_for_billing=[])
+        with patch('ury.ury_pos.api.getBranch', return_value=doc.branch), \
+             patch.object(ury_order, 'getBranch', return_value=doc.branch), \
+             patch.object(frappe, 'get_roles', return_value=['URY Captain']), \
+             patch.object(frappe, 'session', frappe._dict(user='captain@example.com')), \
+             patch.object(frappe, 'has_permission', return_value=True), \
+             patch.object(frappe, 'get_doc', side_effect=lambda dt, name: doc if dt == 'POS Invoice' else profile):
+            with self.assertRaises(frappe.PermissionError):
+                getPosInvoiceItems('SYN-SIBLING')
+
+
 class TestCreateCustomerLinkId(unittest.TestCase):
     """Regression: success payload must expose Customer link `name`, which
     can differ from display `customer_name` under series naming."""

@@ -153,7 +153,7 @@ beforeEach(async () => {
   boundary.get.mockReset().mockImplementation(async (method: string) => {
     if (method === 'ury.ury.api.ury_server_time.get_server_time') return { message: '2026-10-20 12:05:00' };
     if (method.endsWith('.get_table_order_context')) return { message: { permissions: {view:true}, order:{name:'INV'} } };
-    if (method === 'frappe.client.get') return { message: { restaurant_table: 'T-05' } };
+    if (method === 'frappe.client.get') return { message: { restaurant_table: 'T-05', invoice: 'INV' } };
     throw new Error(`Unexpected method ${method}`);
   });
   boundary.toastInfo.mockReset();
@@ -303,6 +303,31 @@ describe('captain kitchen notifications', () => {
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order');
     expect(call.post).not.toHaveBeenCalled();
     expect(panel().textContent).toContain('Check unavailable');
+  });
+
+  it.each([true, false])('opens only the exact sibling and marks read only on authorized success (%s)', async allowed => {
+    await renderTables();
+    const open = await vi.waitFor(() => {
+      const button = Array.from(panel().querySelectorAll('button')).find(b => b.textContent === 'Open check');
+      expect(button).toBeDefined(); return button!;
+    });
+    boundary.get.mockImplementation(async method => {
+      if (method === 'frappe.client.get') return {message:{restaurant_table:'T-05', invoice:'INV-SEAT-2'}};
+      if (method.endsWith('.get_table_order_context')) return {message:{permissions:{view:true},order:{name:'INV'}}};
+      if (method.endsWith('.getPosInvoiceItems') && allowed) return {message:[[{name:'row',item_name:'Toast',qty:1}], []]};
+      throw Error('Check unavailable');
+    });
+    vi.mocked(call.post).mockClear();
+    await act(async () => open.click());
+    expect(boundary.get).toHaveBeenCalledWith('ury.ury_pos.api.getPosInvoiceItems', {invoice:'INV-SEAT-2'});
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order');
+    if (allowed) {
+      expect(document.body.textContent).toContain('Toast');
+      expect(call.post).toHaveBeenCalled();
+    } else {
+      expect(panel().textContent).toContain('Check unavailable');
+      expect(call.post).not.toHaveBeenCalled();
+    }
   });
 
   it('opens a kitchen notification on the KOT restaurant table', async () => {

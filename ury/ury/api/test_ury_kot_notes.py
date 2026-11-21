@@ -215,6 +215,26 @@ class TestKOTNoteDiff(OrderingCases, TestCase):
         )
         self.assertEqual(self.tickets[0].original_kot, "KOT-HOT")
 
+    def test_repeat_note_uses_latest_active_release_in_this_station(self):
+        # A -> B -> A at two stations. The first A was already cancelled.
+        key = 'ref:Fish:seat'
+        line = Row(item='Fish', comments='A', reservation_line_key=key, quantity=1)
+        history = [('A-old', 'Kitchen', 'New Order', ''), ('A-void', 'Kitchen', 'Partially cancelled', 'A-old'),
+                   ('A-current', 'Kitchen', 'Order Modified', ''), ('A-other', 'Bar', 'Order Modified', '')]
+        for name, station, kind, original in history:
+            self.historical_tickets[name] = Row(name=name, production=station, type=kind, docstatus=1,
+                original_kot=original, kot_items=[line if not original else Row(**vars(line), cancelled_qty=1)])
+        def list_tickets(dt, filters, **kwargs):
+            kinds = filters['type'][1] if isinstance(filters.get('type'), (list, tuple)) else None
+            tickets = [t for t in self.historical_tickets.values() if
+                       (not filters.get('production') or filters['production'] == t.production) and
+                       (not kinds or t.type in kinds)]
+            return list(reversed(tickets)) if 'desc' in kwargs.get('order_by', '') else tickets
+        self.framework.db.get_list.side_effect = list_tickets
+        self.kot.create_cancel_kot_doc(self.invoice.name, None, [{**self.line('A'), 'reservation_line_key': key}],
+            'Partially cancelled', 'Guest', None, 'POS A', 'CNCL-', [self.line('A')], 'Kitchen')
+        self.assertEqual(self.tickets[-1].original_kot, 'A-current')
+
     def test_changing_a_note_cancels_the_old_variant_and_sends_the_new_one(self):
         self.framework.db.get_list.return_value = []
         self.kot.kot_execute(self.invoice.name, "Walk-in", None,

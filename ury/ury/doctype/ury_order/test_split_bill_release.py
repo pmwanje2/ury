@@ -220,6 +220,19 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
         new_invoice.name = None
         self.framework.new_doc.return_value = new_invoice
 
+    def test_reassigned_split_target_cannot_print_or_mark_printed(self):
+        target = self._invoice(waiter='other@example.com')
+        target.custom_split_group = 'group'
+        self._wire_print(sibling_open=True)
+        settings = SimpleNamespace(print_doc=MagicMock(return_value={'status': 'Success'}))
+        docs = {'Network Printer Settings': settings, 'POS Invoice': target, 'POS Profile': self._profile()}
+        self.framework.get_doc.side_effect = lambda dt, name: docs[dt]
+        for endpoint in ('qz', 'network', 'socket'):
+            with self.subTest(endpoint=endpoint), self.assertRaises(PermissionError):
+                self._print_one(endpoint)
+        self.framework.db.set_value.assert_not_called()
+        self.framework.publish_realtime.assert_not_called()
+
     def test_split_bill_refuses_other_waiters_order(self):
         invoice = self._invoice(waiter="captain_b@example.com")
         self._wire_invoice(invoice)
