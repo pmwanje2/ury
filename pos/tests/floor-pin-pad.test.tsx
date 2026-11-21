@@ -12,7 +12,7 @@ const boundary = vi.hoisted(() => ({
   logout: vi.fn(),
   disconnectQzPrinter: vi.fn(),
   state: {
-    user: null as null | { name: string; roles: string[] },
+    user: null as null | { name: string; roles: string[]; provisional?: boolean },
     isLoading: false,
     error: null as string | null,
     posProfile: null as Record<string, unknown> | null,
@@ -238,6 +238,25 @@ describe('paired floor tablet sign-in', () => {
 });
 
 describe('floor session isolation', () => {
+  it('loads the provisional cashier profile on an unpaired till', async () => {
+    setFloorPad({ paired: false, till_open: true });
+    boundary.state.user = { name: 'cashier@example.test', roles: ['URY Cashier'], provisional: true };
+    boundary.state.posProfile = { name: 'Till' };
+    await render();
+    expect(boundary.state.fetchPosProfile).toHaveBeenCalledExactlyOnceWith();
+    expect(container.textContent).toContain('Captain shell');
+  });
+
+  it.each([false, true])('keeps a provisional cookie on the paired sign-in screen (tab marker: %s)', async (marker) => {
+    if (marker) sessionStorage.setItem('userAuth', 'true');
+    boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'], provisional: true };
+    boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
+    await render();
+    expect(container.textContent).not.toContain('Captain shell');
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Offline');
+    expect(boundary.logout).not.toHaveBeenCalled();
+  });
+
   it('cold-boots a non-stay user without the tab marker back to the PIN pad', async () => {
     boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'] };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [{ role: 'URY Manager' }] };
