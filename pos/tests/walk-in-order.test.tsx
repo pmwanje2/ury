@@ -38,7 +38,7 @@ let root: Root;
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   await initI18n('en');
-  Object.assign(state, { selectedOrderType: 'Take Away', selectedTable: null, selectedCustomer: null,
+  Object.assign(state, { tableOrder: null, selectedOrderType: 'Take Away', selectedTable: null, selectedCustomer: null,
     selectedAggregator: null, isUpdatingOrder: false, disabled: false, user: { name: 'waiter@example.com' } });
   state.posProfile.customer = undefined;
   vi.clearAllMocks();
@@ -79,9 +79,10 @@ it.each([false, true])('preserves explicit customer and invoice metadata (update
     last_modified_time: updating ? state.lastModifiedTime : undefined, room: 'Dining',
     comments: 'No pepper', cashier: 'Cashier', owner: 'Owner', mode_of_payment: 'Cash' }));
 });
-it('leaves an anonymous invoice update identity to the native endpoint', async () => {
+it('preserves the loaded invoice customer when the picker is blank on update', async () => {
+  Object.assign(state, {tableOrder: {message: invoice}});
   state.isUpdatingOrder = true; await submit();
-  expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ customer: '', invoice: 'INV-1', last_invoice: 'INV-1', last_modified_time: state.lastModifiedTime }));
+  expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ customer: invoice.customer, invoice: 'INV-1', last_invoice: 'INV-1', last_modified_time: state.lastModifiedTime }));
 });
 it.each(['Delivery', 'Phone In'])('requires a selected customer for %s', async type => {
   state.selectedOrderType = type; await submit();

@@ -105,12 +105,16 @@ describe("Header (/ury)", () => {
 });
 
 it("clears the POS worker caches as well as web storage before reloading", async () => {
+  localStorage.setItem('deskPreference', 'keep');
+  sessionStorage.setItem('deskSession', 'keep');
   const remove = vi.fn().mockResolvedValue(true);
   vi.stubGlobal('caches', {keys: async () => ['ury-pos-shell', 'other'], delete: remove});
   try {
     render(<BrowserRouter><Header /></BrowserRouter>);
     await userEvent.click(screen.getByRole('button', {name: 'Admin User'}));
     await userEvent.click(screen.getByText('Clear Cache'));
+    expect(localStorage.getItem('deskPreference')).toBe('keep');
+    expect(sessionStorage.getItem('deskSession')).toBe('keep');
     expect(remove.mock.calls).toEqual([['ury-pos-shell']]);
   } finally { vi.unstubAllGlobals(); }
 });

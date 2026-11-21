@@ -217,3 +217,11 @@ describe('pre-session logout', () => {
     await logout();
   });
 });
+
+it('clears named shared-till caches without erasing other apps on explicit cache clear', async () => {
+  await (await import('../src/offline/cashier')).clearCashierStorage();
+  expect(localStorage.getItem('posOrderTabsData')).toBeNull();
+  expect(localStorage.getItem('deskPreference')).toBe('keep');
+  expect(sessionStorage.getItem('deskSession')).toBe('keep');
+  expect(request).not.toHaveBeenCalled();
+});
