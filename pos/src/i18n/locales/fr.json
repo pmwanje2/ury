@@ -34,7 +34,10 @@
     "close_shift": "Clôturer la session",
     "switch_to_dashboard": "Aller au tableau de bord",
     "switch_to_desk": "Accéder au bureau",
-    "search_placeholder_reservations": "Rechercher des réservations par client, table..."
+    "search_placeholder_reservations": "Rechercher des réservations par client, table...",
+    "switch_waiter": "Changer de serveur",
+    "pair_tablet": "Appairer cette tablette",
+    "staff_pins": "PIN du personnel"
   },
   "menu": {
     "special_items": "Plats spéciaux"
@@ -191,7 +194,8 @@
       "session_elsewhere": "Vous avez déjà une session ouverte ailleurs.",
       "generic": "Impossible d'ouvrir la session PDV. {{message}}",
       "load_failed": "Impossible de vérifier l'état de la session PDV. Veuillez réessayer."
-    }
+    },
+    "floor_pin_not_permitted": "Vous n’êtes pas autorisé à gérer les PIN du personnel ou à appairer cette tablette."
   },
   "success": {
     "order_cancelled": "Commande annulée avec succès",
@@ -626,6 +630,56 @@
     "acknowledge": "Accuser réception",
     "resolve": "Résoudre",
     "acknowledged": "Pris en charge"
+  },
+  "floor_pin": {
+    "title": "Connexion du personnel",
+    "pin_prompt": "Saisissez votre PIN à 4 chiffres",
+    "clear": "Effacer",
+    "delete": "Supprimer un chiffre",
+    "username_fallback": "Se connecter avec un identifiant",
+    "username_label": "Identifiant",
+    "password_label": "Mot de passe",
+    "sign_in": "Se connecter",
+    "back_to_pin": "Retour au PIN",
+    "refused": "Ce PIN ne fonctionne pas. Demandez un nouveau PIN à un responsable.",
+    "locked": "La connexion par PIN est suspendue sur cette tablette. Demandez à un responsable.",
+    "till_closed": "Connectez-vous avec un identifiant tant que la caisse est fermée.",
+    "device_not_paired": "Connectez-vous avec un identifiant pour appairer cette tablette.",
+    "login_failed": "Échec de la connexion. Vérifiez vos identifiants.",
+    "try_again": "Impossible de vérifier le PIN. Réessayez."
+  },
+  "pair_tablet": {
+    "description": "Donnez un nom à cette tablette de salle pour permettre la connexion par PIN. N’appairez pas une caisse.",
+    "label": "Nom de la tablette",
+    "placeholder": "Tablette de salle 1",
+    "label_required": "Saisissez un nom de tablette.",
+    "label_too_long": "Le nom de la tablette doit comporter au maximum 80 caractères.",
+    "label_invalid": "Utilisez un nom de tablette de 80 caractères au maximum, sans le caractère |.",
+    "profile_not_pairable": "Ce nom de profil POS ne peut pas être utilisé pour une tablette de salle.",
+    "submit": "Appairer la tablette",
+    "failed": "Impossible d’appairer cette tablette. Vérifiez que la connexion par PIN est activée.",
+    "login_disabled": "La connexion par PIN de salle est désactivée pour ce profil POS. Activez-la d’abord dans le profil POS."
+  },
+  "staff_pins": {
+    "title": "PIN du personnel",
+    "description": "Attribuez un PIN de salle à un membre du personnel éligible.",
+    "shown_once": "Ce PIN n’est affiché qu’une seule fois. Remettez-le au membre du personnel en privé.",
+    "pin_value": "PIN du personnel attribué",
+    "done": "Terminé",
+    "close": "Fermer",
+    "needs_pin": "PIN requis",
+    "new_pin": "Nouveau PIN",
+    "give_pin": "Donner le PIN",
+    "no_staff": "Aucun membre du personnel éligible trouvé.",
+    "load_failed": "Impossible de charger le personnel.",
+    "issue_failed": "Impossible d’attribuer un PIN. Vérifiez que cette personne peut utiliser un PIN de salle.",
+    "login_disabled": "Aucun profil POS n’a la connexion par PIN de salle activée. Activez-la d’abord dans le profil POS.",
+    "target_ineligible": "Ce membre du personnel ne peut pas recevoir de PIN de salle. Vérifiez son rôle, sa branche et l’état de son compte."
+  },
+  "unsent_items": {
+    "title": "Articles non envoyés",
+    "description": "Vous avez des articles non envoyés. Partir sans les envoyer ?",
+    "leave": "Partir"
   },
   "offline": {
     "kot": "Ticket de cuisine",

@@ -113,4 +113,18 @@ describe('useIdleReset', () => {
     })
     expect(onIdle).toHaveBeenCalledTimes(1)
   })
+
+  // Theme T4 (fork #29 U2): a kiosk that slept past its deadline resets on wake,
+  // not one full timeout after it wakes.
+  it.each(['visibilitychange', 'focus'])('resets immediately on %s after sleeping past the deadline', (event) => {
+    vi.setSystemTime(new Date('2026-10-14T12:00:00Z'))
+    const onIdle = vi.fn()
+    renderHook(() => useIdleReset(onIdle, 60000))
+
+    vi.setSystemTime(new Date('2026-10-14T12:02:00Z'))
+    act(() => {
+      ;(event === 'visibilitychange' ? document : window).dispatchEvent(new Event(event))
+    })
+    expect(onIdle).toHaveBeenCalledTimes(1)
+  })
 })

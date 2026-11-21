@@ -6,6 +6,8 @@ import frappe.sessions
 from frappe import _
 from frappe.utils.telemetry import capture
 
+from ury.ury_pos.floor_pin import get_floor_pad
+
 no_cache = 1
 
 SCRIPT_TAG_PATTERN = re.compile(r"\<script[^<]*\</script\>")
@@ -41,6 +43,7 @@ def get_context(context):
 	context.update(
 		{"build_version": frappe.utils.get_build_version(), "boot": boot_json, "csrf_token": csrf_token}
 	)
+	context["floor_pad"] = get_floor_pad()
 	return context
 
 

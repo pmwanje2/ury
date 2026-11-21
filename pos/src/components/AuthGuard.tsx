@@ -4,6 +4,15 @@ import { Button } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { RefreshCw } from 'lucide-react';
 import { t } from '../i18n'
+import FloorPinPad from './FloorPinPad';
+import {
+  floorSignOut,
+  hasFloorLogoutFailureMarker,
+  hasFloorSessionMarker,
+  isFloorPadActive,
+  isStaySignedIn,
+  useFloorIdle,
+} from '../lib/floor-session';
 
 interface Props {
   children: React.ReactNode;
@@ -25,6 +34,17 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // State to track if we're rechecking permissions
   const [isRechecking, setIsRechecking] = useState(false);
+  const [isColdBootSigningOut, setIsColdBootSigningOut] = useState(false);
+  const floorPadActive = isFloorPadActive();
+  const logoutFailed = hasFloorLogoutFailureMarker();
+
+  useFloorIdle(user, posProfile);
+
+  // A surviving cookie on a paired tablet must not admit the previous waiter.
+  const coldBoot = Boolean(
+    floorPadActive && user && posProfile
+      && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
+  );
 
   useEffect(() => {
     // Start auth check
@@ -37,6 +57,12 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       fetchPosProfile();
     }
   }, [user, fetchPosProfile]);
+
+  useEffect(() => {
+    if (!coldBoot || isColdBootSigningOut) return;
+    setIsColdBootSigningOut(true);
+    void floorSignOut();
+  }, [coldBoot, isColdBootSigningOut]);
 
   // Show loading state while either auth or config is loading
   if (authLoading || (user && configLoading) || isRechecking) {
@@ -57,6 +83,10 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
         </div>
       </div>
     );
+  }
+
+  if (floorPadActive && (!user || coldBoot || isColdBootSigningOut || logoutFailed)) {
+    return <FloorPinPad />;
   }
 
   if (!user) {

@@ -39,7 +39,10 @@
     "switch_to_dashboard": "Switch to Dashboard",
     "switch_to_desk": "Switch To Desk",
     "search_placeholder_reservations": "Search reservations by customer, table...",
-    "user_fallback": "User"
+    "user_fallback": "User",
+    "switch_waiter": "Switch waiter",
+    "pair_tablet": "Pair this tablet",
+    "staff_pins": "Staff PINs"
   },
   "menu": {
     "special_items": "Special Items",
@@ -264,7 +267,8 @@
       "session_elsewhere": "You already have an open session elsewhere.",
       "generic": "Could not open the POS session. {{message}}",
       "load_failed": "Could not check the POS session status. Please try again."
-    }
+    },
+    "floor_pin_not_permitted": "You do not have permission to manage floor PINs or pair this tablet."
   },
   "success": {
     "order_cancelled": "Order cancelled successfully",
@@ -818,6 +822,56 @@
     "acknowledge": "Acknowledge",
     "resolve": "Resolve",
     "acknowledged": "Acknowledged"
+  },
+  "floor_pin": {
+    "title": "Staff sign-in",
+    "pin_prompt": "Enter your 4-digit PIN",
+    "clear": "Clear",
+    "delete": "Delete digit",
+    "username_fallback": "Sign in with username",
+    "username_label": "Username",
+    "password_label": "Password",
+    "sign_in": "Sign in",
+    "back_to_pin": "Back to PIN",
+    "refused": "That PIN didn't work. Ask a manager for a new PIN.",
+    "locked": "PIN sign-in is paused on this tablet. Ask a manager.",
+    "till_closed": "Sign in with username while the till is closed.",
+    "device_not_paired": "Sign in with username to pair this tablet.",
+    "login_failed": "Username sign-in failed. Check your credentials.",
+    "try_again": "Could not check the PIN. Try again."
+  },
+  "pair_tablet": {
+    "description": "Give this floor tablet a label so staff can sign in with a PIN. Do not pair a cashier till.",
+    "label": "Tablet label",
+    "placeholder": "Floor tablet 1",
+    "label_required": "Enter a tablet label.",
+    "label_too_long": "Tablet labels must be 80 characters or fewer.",
+    "label_invalid": "Use a tablet label of up to 80 characters without the | character.",
+    "profile_not_pairable": "This POS Profile name cannot be used for a floor tablet.",
+    "submit": "Pair tablet",
+    "failed": "This tablet could not be paired. Check that floor PIN sign-in is enabled.",
+    "login_disabled": "Floor PIN sign-in is off for this POS Profile. Turn it on in the POS Profile first."
+  },
+  "staff_pins": {
+    "title": "Staff PINs",
+    "description": "Issue a floor PIN to an eligible staff member.",
+    "shown_once": "This PIN is shown only once. Give it to the staff member privately.",
+    "pin_value": "Issued staff PIN",
+    "done": "Done",
+    "close": "Close",
+    "needs_pin": "Needs PIN",
+    "new_pin": "New PIN",
+    "give_pin": "Give PIN",
+    "no_staff": "No eligible staff found.",
+    "load_failed": "Staff could not be loaded.",
+    "issue_failed": "A PIN could not be issued. Check that this person is eligible for floor PIN sign-in.",
+    "login_disabled": "No POS Profile has floor PIN sign-in turned on. Turn it on in the POS Profile first.",
+    "target_ineligible": "This staff member cannot get a floor PIN. Check their role, branch and account status."
+  },
+  "unsent_items": {
+    "title": "Unsent items",
+    "description": "You have unsent items. Leave without sending them?",
+    "leave": "Leave"
   },
   "offline": {
     "kot": "Kitchen Order Ticket",
