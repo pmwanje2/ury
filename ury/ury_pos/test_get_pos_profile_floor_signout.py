@@ -90,6 +90,12 @@ class TestFloorSignoutProfile(unittest.TestCase):
         result = api.getPosProfileFull("Floor POS")
         self.assertEqual(result.get("custom_floor_stay_signed_in_roles"), [{"role": "URY Manager"}])
 
+    def test_full_profile_exposes_hold_fire_switch_to_staff(self):
+        for enabled in (0, 1):
+            with self.subTest(enabled=enabled):
+                self.profile.ury_enable_hold_fire = enabled
+                self.assertEqual(api.getPosProfileFull("Floor POS").get("ury_enable_hold_fire"), enabled)
+
     def test_full_profile_stay_roles_default_to_empty(self):
         result = api.getPosProfileFull("Floor POS")
         self.assertIn("custom_floor_stay_signed_in_roles", result)

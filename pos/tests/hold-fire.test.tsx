@@ -93,3 +93,10 @@ test('held/sent controls are default-off and hidden offline; fire preserves unsa
     expect(host.querySelector('input')).toBeNull();
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+
+test('losing connectivity after holding a dish refuses the staff sync before RPC', async () => {
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+  await expect(api.syncOrder({ items: [{ item: 'Fish', ury_held: 1 }] } as api.SyncOrderRequest)).rejects.toThrow();
+  expect(call.post).not.toHaveBeenCalled();
+});
