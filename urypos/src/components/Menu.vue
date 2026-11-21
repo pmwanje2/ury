@@ -4,28 +4,23 @@
   <div class="container mx-auto" v-if="this.menu.paginatedItems.length > 0">
     <div class="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-5">
       <div
-        class="rounded border px-2 py-2 text-left shadow"
+        class="flex min-w-0 flex-col rounded border bg-white p-3 text-left shadow"
         v-for="item in this.menu.paginatedItems"
         :key="item.item"
       >
         <div class="w-full" v-if="this.auth.viewItemImage">
           <div v-if="item.item_image"
-            class="aspect-square w-full overflow-hidden"
+            class="aspect-[4/3] w-full overflow-hidden"
           >
             <img
               :src="this.menu.getFullImagePath(item.item_image)"
-              alt="Item Image"
+              :alt="item.item_name"
               class="h-full w-full rounded object-cover"
             />
           </div>
-          <div v-else class="relative aspect-square w-full">
-            <img
-              :src="`https://dummyimage.com/640x640/f9fafa/fff&text=+`"
-              alt="Item Image"
-              class="h-full w-full rounded object-cover"
-            />
-            <div class="absolute inset-0 flex items-center justify-center">
-              <span class="text-3xl text-gray-400">{{
+          <div v-else class="relative aspect-[4/3] w-full rounded bg-gray-50">
+            <div class="absolute inset-0 flex items-center justify-center" aria-hidden="true">
+              <span class="text-3xl font-medium text-gray-600">{{
                 this.menu.itemNameExtract(item.item_name)
               }}</span>
             </div>
@@ -33,41 +28,44 @@
         </div>
 
         <h2
-          class="mt-2"
+          class="mt-3 break-words text-base font-medium leading-snug"
           :class="{
-            'text-md overflow-hidden whitespace-nowrap text-gray-600':
+            'text-gray-900':
               this.auth.viewItemImage,
-            'mb-2 text-center text-lg font-normal leading-normal':
+            'mb-2 text-center text-lg':
               !this.auth.viewItemImage,
           }"
         >
           {{ item.item_name }}
         </h2>
         <h2
-          class="mt-1"
+          class="mt-auto whitespace-nowrap pt-2 text-base font-semibold tabular-nums"
           :class="{
-            'text-sm font-bold': this.auth.viewItemImage,
-            'mb-2 mt-0 text-center text-lg font-normal leading-normal':
+            'text-gray-900': this.auth.viewItemImage,
+            'text-center text-lg leading-normal':
               !this.auth.viewItemImage,
           }"
         >
           {{ this.invoiceData.currency }} {{ item.rate }}
         </h2>
-        <div v-if="!item.qty" class="text-center">
+        <div v-if="!item.qty" class="pt-3 text-center">
           <button
             @click="
               item.showInput = true;
               this.menu.addToCart(item);
             "
-            class="mt-2 rounded border px-10 pb-2 pt-2.5 text-xs font-medium leading-normal"
+            type="button"
+            :aria-label="`Add ${item.item_name}`"
+            class="min-h-[44px] w-full rounded border px-3 py-2 text-base font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
           >
             ADD +
           </button>
         </div>
-        <div v-if="item.qty" class="mt-2 flex rounded-md text-center">
+        <div v-if="item.qty" class="flex min-w-0 rounded-md pt-3 text-center">
           <button
             type="button"
-            class="inline-flex items-center justify-center gap-2 border bg-white px-4 py-3 align-middle text-sm font-medium shadow-sm transition-all focus:outline-none dark:border-gray-700"
+            class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center border bg-white px-3 py-2 text-lg font-medium shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 dark:border-gray-700"
+            :aria-label="`Decrease ${item.item_name} quantity`"
             :class="{
               'text-gray-700':
                 this.recentOrders.editPrintedInvoice === 0 ||
@@ -89,7 +87,8 @@
             type="number"
             id="qty_input"
             name="qty_input"
-            class="block w-full border border-gray-200 text-center text-sm shadow-sm"
+            class="block min-h-[44px] w-full min-w-0 border border-gray-200 text-center text-base shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
+            :aria-label="`Quantity and details for ${item.item_name}`"
             :value="item.qty"
             @input="item.qty = $event.target.value"
             readonly
@@ -97,7 +96,8 @@
           />
           <button
             type="button"
-            class="-ml-px inline-flex items-center justify-center gap-2 border bg-white px-4 py-3 align-middle text-sm font-medium text-gray-700 shadow-sm transition-all focus:outline-none dark:border-gray-700"
+            class="-ml-px inline-flex min-h-[44px] min-w-[44px] items-center justify-center border bg-white px-3 py-2 text-lg font-medium text-gray-700 shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 dark:border-gray-700"
+            :aria-label="`Increase ${item.item_name} quantity`"
             @click="this.menu.incrementItemQuantity(item)"
           >
             +

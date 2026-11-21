@@ -24,7 +24,8 @@ const fixtures = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@ury/core', () => ({
+vi.mock('@ury/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@ury/core')>(),
   call: { get: fixtures.callGet, post: fixtures.callPost },
   logout: vi.fn(),
   withReturnContext: (path: string) => path,

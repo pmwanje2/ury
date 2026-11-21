@@ -115,7 +115,7 @@
       <div class="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-5">
         <div
           w-full
-          class="w-full max-w-sm rounded border border-gray-200 bg-white shadow dark:border-gray-700 dark:bg-gray-800"
+          class="flex w-full min-w-0 flex-col rounded border border-gray-200 bg-white shadow dark:border-gray-700 dark:bg-gray-800"
           v-for="table in auth.cashier
             ? this.table.tables
             : this.table.filteredTables"
@@ -142,7 +142,8 @@
             </div>
             <div class="relative">
               <button
-                class="inline-block rounded p-1.5 text-sm text-gray-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
+                class="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1.5 text-sm text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
+                :aria-label="`Table options for ${table.name}`"
                 type="button"
                 @click="this.table.toggleDropdown(table.name)"
               >
@@ -191,26 +192,27 @@
               </div>
             </div>
           </div>
-          <div class="flex flex-col pb-4">
-            <div
-              class="mt-1 text-center"
-              @click="
-                table.occupied === 1 && !this.auth.restrictTableOrder
-                  ? this.table.routeToMenu(table)
-                  : ''
-              "
-            >
+          <div class="flex flex-1 flex-col pb-3">
+            <div class="mt-1 px-3 text-left">
               <h5
-                class="mt-2 text-xl font-medium text-gray-900 dark:text-white flex justify-center items-center gap-2"
+                class="mt-2 text-2xl font-semibold text-gray-900 dark:text-white"
                 :class="{ 'mt-3': table.occupied === 0 }"
               >
-                {{ table.name }}
-                <svg v-if="table.merged_with" class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" title="Merged Table">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
-                </svg>
+                <button
+                  type="button"
+                  class="flex min-h-[44px] w-full items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
+                  :aria-label="table.occupied === 1 ? `Open menu for ${table.name}` : table.name"
+                  :disabled="table.occupied !== 1 || this.auth.restrictTableOrder"
+                  @click="table.occupied === 1 && !this.auth.restrictTableOrder && this.table.routeToMenu(table)"
+                >
+                  <span class="min-w-0 break-words">{{ table.name }}</span>
+                  <svg v-if="table.merged_with" class="h-5 w-5 shrink-0 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" title="Merged Table">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+                  </svg>
+                </button>
               </h5>
               <p v-if="table.occupied === 1 && table.owner_name" class="truncate text-sm font-medium">{{ table.owner_name }}</p>
-              <span class="text-sm text-gray-500 dark:text-gray-400">
+              <span class="text-base font-medium tabular-nums text-gray-500 dark:text-gray-400">
                 {{
                   table.occupied === 1
                     ? this.table.getTimeDifference(table, now)
@@ -218,10 +220,10 @@
                 }}</span
               >
             </div>
-            <div class="mt-8 flex justify-center gap-2" v-if="table.occupied != 1">
+            <div class="mt-auto flex justify-center gap-2 px-3 pt-3" v-if="table.occupied != 1">
               <button
                 type="button"
-                class="inline-flex items-center rounded px-2 py-2.5 text-center text-sm font-medium text-white hover:bg-[#2557D6]/90 focus:outline-none focus:ring-4 focus:ring-[#2557D6]/50 dark:focus:ring-[#2557D6]/50"
+                class="inline-flex min-h-[44px] w-full items-center justify-center rounded px-2 py-2.5 text-center text-base font-medium text-white hover:bg-[#2557D6]/90 focus-visible:ring-2 focus-visible:ring-blue-700 focus:outline-none focus:ring-4 focus:ring-[#2557D6]/50 dark:focus:ring-[#2557D6]/50"
                 :class="[
                   {
                     'bg-blue-700': !this.auth.restrictTableOrder,
@@ -251,10 +253,10 @@
                 </svg>
               </button>
             </div>
-            <div class="mt-2 flex justify-center" v-if="table.occupied === 1">
+            <div class="mt-auto flex items-center justify-center gap-2 px-3 pt-3" v-if="table.occupied === 1">
               <button
                 type="button"
-                class="mb-2 me-2 inline-flex items-center rounded bg-blue-700 px-5 py-2.5 text-center text-sm font-medium text-white hover:bg-[#2557D6]/90 focus:outline-none focus:ring-4 focus:ring-[#2557D6]/50 dark:focus:ring-[#2557D6]/50"
+                class="inline-flex min-h-[44px] flex-1 items-center justify-center rounded bg-blue-700 px-3 py-2.5 text-center text-base font-medium text-white hover:bg-[#2557D6]/90 focus-visible:ring-2 focus-visible:ring-blue-700 focus:outline-none focus:ring-4 focus:ring-[#2557D6]/50 dark:focus:ring-[#2557D6]/50"
                 @click="this.invoiceData.billing(table)"
               >
                 <svg
@@ -272,8 +274,11 @@
                 Bill
               </button>
 
-              <div
-                class="relative inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border hover:bg-blue-700 hover:text-white focus:outline-none focus:ring-4 focus:ring-blue-300 dark:border-blue-500 dark:text-blue-500 dark:hover:bg-blue-500 dark:hover:text-white dark:focus:ring-blue-800"
+              <button
+                type="button"
+                :aria-label="`View order for ${table.name}`"
+                :disabled="this.auth.restrictTableOrder"
+                class="relative inline-flex min-h-[44px] min-w-[44px] items-center justify-center overflow-hidden rounded-full border hover:bg-blue-700 hover:text-white focus-visible:ring-2 focus-visible:ring-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 dark:border-blue-500 dark:text-blue-500 dark:hover:bg-blue-500 dark:hover:text-white dark:focus:ring-blue-800"
                 :class="[
                   {
                     'border-blue-700 text-blue-700':
@@ -288,7 +293,7 @@
               >
                 <svg
                   aria-hidden="true"
-                  class="h-10 w-6"
+                  class="h-6 w-6"
                   fill="currentColor"
                   viewBox="0 0 20 20"
                   xmlns="http://www.w3.org/2000/svg"
@@ -300,7 +305,7 @@
                     clip-rule="evenodd"
                   ></path>
                 </svg>
-              </div>
+              </button>
             </div>
           </div>
         </div>

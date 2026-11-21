@@ -1,20 +1,18 @@
 import json
-import re
 
 import frappe
 import frappe.sessions
 from frappe import _
 from frappe.utils.telemetry import capture
 
+from ury.brand import get_brand, get_brand_context, get_theme_context, json_for_script
 from ury.ury_pos.floor_pin import get_floor_pad
 
 no_cache = 1
 
-SCRIPT_TAG_PATTERN = re.compile(r"\<script[^<]*\</script\>")
-CLOSING_SCRIPT_TAG_PATTERN = re.compile(r"</script\>")
-
-
 def get_context(context):
+	context.update(get_brand_context(surface="staff"))
+	context.update(get_theme_context())
 	csrf_token = frappe.sessions.get_csrf_token()
 	# Manually commit the CSRF token here
 	frappe.db.commit()  # nosemgrep
@@ -34,11 +32,8 @@ def get_context(context):
 		enabled = True
 	boot["server_script_enabled"] = enabled
 
-	boot_json = frappe.as_json(boot, indent=None, separators=(",", ":"))
-	boot_json = SCRIPT_TAG_PATTERN.sub("", boot_json)
-
-	boot_json = CLOSING_SCRIPT_TAG_PATTERN.sub("", boot_json)
-	boot_json = json.dumps(boot_json)
+	boot["ury_brand"] = context["brand"]
+	boot_json = json.dumps(json_for_script(boot))
 
 	context.update(
 		{"build_version": frappe.utils.get_build_version(), "boot": boot_json, "csrf_token": csrf_token}
@@ -63,10 +58,7 @@ def get_boot():
 		raise frappe.SessionBootFailed from e
 
 	boot["push_relay_server_url"] = frappe.conf.get("push_relay_server_url")
-	boot_json = frappe.as_json(boot, indent=None, separators=(",", ":"))
-	boot_json = SCRIPT_TAG_PATTERN.sub("", boot_json)
-
-	boot_json = CLOSING_SCRIPT_TAG_PATTERN.sub("", boot_json)
-	boot_json = json.dumps(boot_json)
+	boot["ury_brand"] = get_brand(surface="staff")
+	boot_json = json.dumps(json_for_script(boot))
 
 	return boot_json

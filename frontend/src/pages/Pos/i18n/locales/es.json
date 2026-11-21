@@ -20,7 +20,7 @@
     "checking_pos_status": "Verificando estado del POS...",
     "cancelling": "Cancelando...",
     "confirm_cancel": "Confirmar cancelación",
-    "loading_ury_pos": "Cargando URY POS...",
+    "loading_ury_pos": "Cargando {{name}}...",
     "please_wait_setup": "Espera mientras configuramos todo"
   },
   "header": {

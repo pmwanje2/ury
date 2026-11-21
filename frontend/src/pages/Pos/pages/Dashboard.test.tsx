@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import Dashboard from './Dashboard';
@@ -11,6 +12,10 @@ vi.mock('@ury/core', () => ({
     get: (...args: any[]) => callGetMock(...args),
   },
   formatCurrency: (value: number) => `₹${value}`,
+}));
+
+vi.mock('../store/root-store', () => ({
+  useRootStore: (select: (state: { user: { name: string } }) => unknown) => select({ user: { name: 'cashier@example.test' } }),
 }));
 
 vi.mock('../store/pos-store', () => ({
@@ -110,6 +115,53 @@ describe('POS Dashboard branch status', () => {
     expect(screen.getByText('Review production postings (2)')).toBeInTheDocument();
     expect(vi.mocked(getBranchOperationalState)).toHaveBeenCalledWith('Kozhikode');
   });
+
+  it('discloses the full native notification behind a compact headline', async () => {
+    const subject = 'Long notification '.repeat(9).trim();
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => ({
+      message: url.includes('Notification+Log') ? [{ name: 'N1', subject, creation: '2026-01-01' }] : [],
+    }) })));
+    render(<Dashboard />);
+    const full = await screen.findByText(subject);
+    const details = full.closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(details!.querySelector('summary')).toHaveTextContent(subject.slice(0, 96).trimEnd() + '…');
+  });
+
+  it.each(['Short notice', 'Long notification '.repeat(9).trim()])(
+    'discloses the full subject and distinct safe notification body for %s', async (subject) => {
+      const row: Record<string, string> = { name: 'N1', for_user: 'cashier@example.test', subject: `<b>${subject}</b>`,
+        email_content: '<strong>Collect &amp; verify</strong><script>bad()</script>', creation: '2026-01-01' };
+      const getList = vi.fn(async (url: string) => {
+        const params = new URL(url, location.origin).searchParams;
+        const fields: string[] = JSON.parse(params.get('fields') || '[]');
+        const message = params.get('doctype') === 'Notification Log'
+          ? [Object.fromEntries(fields.map(key => [key, row[key]]))] : [];
+        return { ok: true, json: async () => ({ message }) };
+      });
+      vi.stubGlobal('fetch', getList);
+      try {
+        render(<Dashboard />);
+        const body = await screen.findByText('Collect & verify');
+        const details = body.closest('details')!;
+        const summary = details.querySelector('summary')!;
+        expect(summary.textContent).toBe(subject.length > 96 ? subject.slice(0, 96).trimEnd() + '…' : subject);
+        expect(details.querySelector('p')?.textContent).toBe(subject);
+        expect(details.querySelector('b, strong, script')).toBeNull();
+        expect(details.textContent).not.toContain('bad()');
+        expect(details).not.toHaveAttribute('open');
+        summary.focus();
+        expect(summary).toHaveFocus();
+        await userEvent.click(summary);
+        expect(details).toHaveAttribute('open');
+        const requests = getList.mock.calls.map(([url]) => new URL(url, location.origin).searchParams)
+          .filter(params => params.get('doctype') === 'Notification Log');
+        expect(requests).toHaveLength(1);
+        expect(JSON.parse(requests[0].get('filters') || '{}')).toEqual({ for_user: 'cashier@example.test' });
+      } finally { vi.unstubAllGlobals(); }
+    },
+  );
 
   it('shows a clear unavailable state when branch status cannot load', async () => {
     vi.mocked(getBranchOperationalState).mockRejectedValueOnce(new Error('offline'));

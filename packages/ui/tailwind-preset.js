@@ -13,6 +13,14 @@ export default {
         hair2: "hsl(var(--hair2))",
         "text-tertiary": "hsl(var(--text-tertiary))",
         "text-quaternary": "hsl(var(--text-quaternary))",
+        header: {
+          DEFAULT: "hsl(var(--header))",
+          foreground: "hsl(var(--header-foreground))",
+          border: "hsl(var(--header-border))",
+          user: "hsl(var(--header-user))",
+          title: "hsl(var(--header-title))",
+          muted: "hsl(var(--header-muted))",
+        },
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
@@ -104,6 +112,19 @@ export default {
           900: "hsl(var(--success-900))",
           950: "hsl(var(--success-950))",
         },
+        blue: {
+          50: "hsl(var(--blue-50) / <alpha-value>)",
+          100: "hsl(var(--blue-100) / <alpha-value>)",
+          200: "hsl(var(--blue-200) / <alpha-value>)",
+          300: "hsl(var(--blue-300) / <alpha-value>)",
+          400: "hsl(var(--blue-400) / <alpha-value>)",
+          500: "hsl(var(--blue-500) / <alpha-value>)",
+          600: "hsl(var(--blue-600) / <alpha-value>)",
+          700: "hsl(var(--blue-700) / <alpha-value>)",
+          800: "hsl(var(--blue-800) / <alpha-value>)",
+          900: "hsl(var(--blue-900) / <alpha-value>)",
+          950: "hsl(var(--blue-950) / <alpha-value>)",
+        },
         gray: {
           50: "hsl(var(--gray-50))",
           100: "hsl(var(--gray-100))",
@@ -130,13 +151,13 @@ export default {
         "chat-accent": "hsl(var(--chat-accent))",
       },
       fontFamily: {
-        inter: ['Inter', 'URY SAR Sign', 'sans-serif'],
+        inter: ['var(--font-inter, Inter)', 'URY SAR Sign', 'sans-serif'],
         // Geist / Geist Mono (https://github.com/vercel/geist-font),
         // self-hosted via @fontsource — matches ury-app.html's type system.
         // Redefines the default `font-sans`/`font-mono` utilities so every
         // existing `font-mono` call site (numeric table cells, amounts)
         // picks up Geist Mono without call-site changes.
-        sans: ['Geist', 'URY SAR Sign', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['var(--font-sans, Geist)', 'URY SAR Sign', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['Geist Mono', 'URY SAR Sign', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       borderRadius: {

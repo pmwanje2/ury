@@ -509,7 +509,7 @@ export default function Orders() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
       {/* Left Sidebar - Order Types */}
       <OrderStatusSidebar
         selectedStatus={selectedStatus}
@@ -517,8 +517,8 @@ export default function Orders() {
       />
 
       {/* Middle Section - Order Cards */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden pe-96">
-        <div className="flex-1 overflow-y-auto bg-gray-50 p-4 pb-40">
+      <div className="min-h-0 min-w-0 flex flex-1 flex-col">
+        <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
           {orderLoading ? (
             <div className="flex items-center justify-center h-full">
               <Spinner  message={t('common.loading')} />
@@ -528,7 +528,7 @@ export default function Orders() {
               <p className="text-gray-500">{t('orders.no_orders_found')}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-screen-xl mx-auto">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
               {orders.map((order) => {
                 const splitBill = isSplitBill(order);
                 const mergedBill = isMergedBill(order);
@@ -604,7 +604,7 @@ export default function Orders() {
 
                       {/* Total - pushed to bottom like MenuCard */}
                       <div className="mt-auto pt-2">
-                        <span className="text-sm font-semibold text-gray-900 tabular-nums">
+                        <span className="text-lg font-semibold text-gray-900 tabular-nums">
                           {formatCurrency(cardTotal)}
                         </span>
                       </div>
@@ -649,7 +649,7 @@ export default function Orders() {
       </div>
 
       {/* Right Section - Order Details */}
-      <div className="w-96 bg-white border-s border-border flex flex-col h-[calc(100vh-4rem)] fixed end-0 z-10">
+      <div className="flex min-h-96 min-w-0 flex-col rounded-lg border border-border bg-white lg:min-h-0 lg:w-[38%]">
         {!selectedOrder ? (
           <div className="text-center h-full flex flex-col items-center justify-center text-gray-500 p-6">
             <p className="text-lg font-medium mb-2">{t('order.select_to_view')}</p>
@@ -669,7 +669,7 @@ export default function Orders() {
             {/* Fixed Header */}
             <div className="sticky top-0 start-0 end-0 z-20 border-b border-border bg-white px-6 py-4">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="min-w-0 flex-1 truncate text-xl font-semibold text-gray-900">
+                <h2 className="min-w-0 flex-1 break-words text-lg font-semibold text-gray-900">
                   {selectedOrder.name}
                 </h2>
                 <div className="flex shrink-0 items-center gap-2">
@@ -788,7 +788,7 @@ export default function Orders() {
               </DialogContent>
             </Dialog>
             {/* Scrollable Content Area */}
-            <div className="flex-1 overflow-y-auto p-6 pb-40">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
                 onOpenInvoice={openRelatedInvoice}
@@ -847,10 +847,10 @@ export default function Orders() {
                     const isReducingThisItem = reducingItemKey === item.name;
 
                     return (
-                      <div key={index} className="flex justify-between items-start py-2 border-b border-gray-100">
+                      <div key={index} className="flex justify-between items-start gap-3 py-2 border-b border-gray-100">
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-gray-900">{item.item_name}</p>
+                            <p className="break-words text-sm font-medium text-gray-900">{item.item_name}</p>
                             {discountPercentage !== null && (
                               <Badge className="shrink-0 bg-red-50 text-red-700 border-red-200 hover:bg-red-50 text-xs">
                                 -{discountPercentage}%
@@ -876,7 +876,7 @@ export default function Orders() {
                             <p className="text-xs text-gray-500">{t('orders.qty_label', { qty: item.qty })}</p>
                           </div>
                         </div>
-                        <div className="text-end">
+                        <div className="shrink-0 text-end tabular-nums">
                           <p className="text-sm font-semibold text-gray-900">
                             {formatCurrency(item.amount)}
                           </p>
@@ -939,7 +939,7 @@ export default function Orders() {
                   </Button>
                 )}
                 {/* Total */}
-                <span className="ms-auto text-xl font-bold text-gray-900 whitespace-nowrap">
+                <span className="ms-auto text-2xl font-bold text-gray-900 whitespace-nowrap tabular-nums">
                   {isMergedBill(selectedOrder) ? (
                     <span className="flex flex-col items-end leading-tight">
                       <span className="text-xs font-medium text-gray-500">{t('bill_merge.combined_total')}</span>

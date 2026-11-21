@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useBranchContext } from '../../context/BranchContext';
 import {
+  resolveBrand,
   logout, purgeOfflineSession,
   call,
   getLoggedUser,
@@ -70,6 +71,7 @@ function stripHtml(html: string): string {
 
 
 export const Header: React.FC = () => {
+  const brand = resolveBrand({ name: __('URY Logo'), logo: uryLogo });
   const { activeBranchId, setActiveBranchId, branches, activeBranch } = useBranchContext();
   const { activeCompanyId, setActiveCompanyId, companies, activeCompany } = useCompanyContext();
   const deskPermission = useDeskPermission('User');
@@ -221,7 +223,7 @@ export const Header: React.FC = () => {
             }}
             className="flex items-center gap-3 group shrink-0"
           >
-            <img src={uryLogo} alt={__('URY Logo')} className="h-8 w-auto" />
+            <img src={brand.logo} alt={brand.name} className="h-8 w-auto" />
           </a>
           <div className="hidden sm:block h-4 w-px bg-border shrink-0" />
           <Breadcrumbs />

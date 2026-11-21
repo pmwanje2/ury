@@ -73,7 +73,7 @@ describe('KPIGrid', () => {
   it('renders navigation links to POS and Mosaic', () => {
     render(<KPIGrid summary={mockSummary} loading={false} />);
     expect(screen.getByText('POS')).toBeInTheDocument();
-    expect(screen.getByText('Mosaic')).toBeInTheDocument();
+    expect(screen.getByText('Kitchen Display').closest('a')).toHaveAttribute('href', '/mosaic');
   });
 
   it('handles null summary gracefully', () => {

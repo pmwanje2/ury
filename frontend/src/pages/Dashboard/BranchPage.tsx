@@ -27,6 +27,7 @@ interface BranchData {
 }
 
 interface RestaurantData {
+  image?: string;
   name: string;
   company?: string;
   invoice_series_prefix?: string;
@@ -291,6 +292,7 @@ export const BranchPage: React.FC = () => {
           // the edit form is bound to.
           setBranchForm((prev) => ({ ...prev, address: restaurant.address || '' }));
           setRestaurantForm({
+            image: restaurant.image || '',
             invoice_series_prefix: restaurant.invoice_series_prefix || branch.custom_invoice_series_prefix || '',
             aggregator_series_prefix: restaurant.aggregator_series_prefix || branch.custom_aggregator_series_prefix || '',
             tax_id: restaurant.tax_id || branch.tax_id || companyTaxId || '',
@@ -464,6 +466,7 @@ export const BranchPage: React.FC = () => {
       custom_grace_period: branchData?.custom_grace_period != null ? Number(branchData.custom_grace_period) : 0,
       custom_avg_table_time_last_day: branchData?.custom_avg_table_time_last_day != null ? Number(branchData.custom_avg_table_time_last_day) : 0,
       custom_avg_table_time_last_week: branchData?.custom_avg_table_time_last_week != null ? Number(branchData.custom_avg_table_time_last_week) : 0,
+      image: restaurantData?.image || '',
       invoice_series_prefix: (restaurantData?.invoice_series_prefix || '').trim(),
       aggregator_series_prefix: (restaurantData?.aggregator_series_prefix || '').trim(),
       tax_id: (restaurantData?.tax_id || '').trim(),
@@ -494,6 +497,7 @@ export const BranchPage: React.FC = () => {
       custom_grace_period: branchForm.custom_grace_period != null && branchForm.custom_grace_period !== '' ? Number(branchForm.custom_grace_period) : 0,
       custom_avg_table_time_last_day: branchData?.custom_avg_table_time_last_day != null ? Number(branchData.custom_avg_table_time_last_day) : 0,
       custom_avg_table_time_last_week: branchData?.custom_avg_table_time_last_week != null ? Number(branchData.custom_avg_table_time_last_week) : 0,
+      image: (restaurantForm.image || '').trim(),
       invoice_series_prefix: (restaurantForm.invoice_series_prefix || '').trim(),
       aggregator_series_prefix: (restaurantForm.aggregator_series_prefix || '').trim(),
       tax_id: (restaurantForm.tax_id || '').trim(),
@@ -579,6 +583,7 @@ export const BranchPage: React.FC = () => {
           name: currentRestaurantName,
           branch: branchForm.branch_name.trim(),
           address: resolvedAddress,
+          image: current.image,
           invoice_series_prefix: restaurantForm.invoice_series_prefix,
           aggregator_series_prefix: restaurantForm.aggregator_series_prefix,
           tax_id: restaurantForm.tax_id,
@@ -701,6 +706,14 @@ export const BranchPage: React.FC = () => {
                 {__('Fiscal & Operational Identification')}
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {restaurantData && (
+                  <div className="space-y-2">
+                    <label htmlFor="guest-logo" className="text-sm font-medium text-foreground">{__('Guest Logo')}</label>
+                    <Input id="guest-logo" value={restaurantForm.image || ''} disabled={!isEditMode}
+                      onChange={(e) => setRestaurantForm(p => ({ ...p, image: e.target.value }))}
+                      placeholder={__('Public image path, e.g. /files/logo.png')} />
+                  </div>
+                )}
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">{__('Invoice Series Prefix')} <span className="text-red-500">*</span></label>
                   <Input
@@ -868,7 +881,7 @@ export const BranchPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">{__('No URY Restaurant linked to this branch.')}</p>
+                <p className="text-sm text-muted-foreground">{__('No restaurant linked to this branch.')}</p>
               )}
             </div>
 
@@ -924,7 +937,7 @@ export const BranchPage: React.FC = () => {
                   return (
                     <div className="space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        {__("No URY Restaurant linked to this branch, so room/menu assignment isn't available yet.")}
+                        {__("No restaurant linked to this branch, so room/menu assignment isn't available yet.")}
                       </p>
                       {branchRooms.length > 0 ? (
                         <ul className="text-sm text-foreground list-disc list-inside">
@@ -1018,7 +1031,7 @@ export const BranchPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">{__('No URY Restaurant linked to this branch.')}</p>
+                <p className="text-sm text-muted-foreground">{__('No restaurant linked to this branch.')}</p>
               )}
             </div>
 

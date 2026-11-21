@@ -1,3 +1,4 @@
+import { roleLabel, roleOption } from '../../lib/roleLabels';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Button, Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, Input } from '@ury/ui';
@@ -70,7 +71,7 @@ export const QuickActions: React.FC = () => {
   const handleSubmitUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userForm.name || !userForm.email) return;
-    showNotification(`Successfully added user "${userForm.name}" as ${userForm.role}.`);
+    showNotification(`Successfully added user "${userForm.name}" as ${roleLabel(userForm.role)}.`);
     setUserForm({ name: '', email: '', role: 'URY Cashier' });
     handleClose();
     refreshDashboard();
@@ -448,10 +449,10 @@ export const QuickActions: React.FC = () => {
                 value={userForm.role}
                 onChange={(_, value) => setUserForm({ ...userForm, role: value })}
                 options={[
-                  { value: 'URY Cashier', label: __('URY Cashier') },
-                  { value: 'URY Captain', label: __('URY Captain / Waiter') },
-                  { value: 'URY Manager', label: __('URY Restaurant Manager') },
-                  { value: 'URY Kitchen User', label: __('Kitchen Display User') },
+                  roleOption('URY Cashier'),
+                  roleOption('URY Captain'),
+                  roleOption('URY Manager'),
+                  roleOption('URY Kitchen User'),
                 ]}
               />
             </div>
