@@ -122,7 +122,9 @@ export class OfflineOutbox {
   private get sessionBlockKey() { return `ury_offline_session_blocked:${this.options.user.name}`; }
   get sessionBlocked() { return sessionStorage.getItem(this.sessionBlockKey) !== null; }
   assertSessionAllowed() {
-    if (this.sessionBlocked) throw new Error('Verify the cashier session online before taking orders or payments.');
+    if (this.sessionBlocked) throw Object.assign(new Error('Verify the cashier session online before taking orders or payments.'), {
+      code: 'URY_OFFLINE_SESSION_UNVERIFIED' as const,
+    });
   }
   private replayFailure(error: unknown) {
     this.reachable = !(error instanceof LinkDown);
