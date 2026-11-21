@@ -652,7 +652,8 @@
     "locked": "El acceso con PIN está pausado en esta tableta. Avisa a un encargado.",
     "till_closed": "Inicia sesión con usuario mientras la caja esté cerrada.",
     "device_not_paired": "Inicia sesión con usuario para vincular esta tableta.",
-    "login_failed": "No se pudo iniciar sesión. Revisa tus credenciales."
+    "login_failed": "No se pudo iniciar sesión. Revisa tus credenciales.",
+    "try_again": "No se pudo comprobar el PIN. Inténtalo de nuevo."
   },
   "pair_tablet": {
     "description": "Pon un nombre a esta tableta de sala para que el personal entre con PIN. No vincules una caja.",

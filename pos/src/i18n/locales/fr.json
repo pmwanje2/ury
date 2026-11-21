@@ -645,7 +645,8 @@
     "locked": "La connexion par PIN est suspendue sur cette tablette. Demandez à un responsable.",
     "till_closed": "Connectez-vous avec un identifiant tant que la caisse est fermée.",
     "device_not_paired": "Connectez-vous avec un identifiant pour appairer cette tablette.",
-    "login_failed": "Échec de la connexion. Vérifiez vos identifiants."
+    "login_failed": "Échec de la connexion. Vérifiez vos identifiants.",
+    "try_again": "Impossible de vérifier le PIN. Réessayez."
   },
   "pair_tablet": {
     "description": "Donnez un nom à cette tablette de salle pour permettre la connexion par PIN. N’appairez pas une caisse.",

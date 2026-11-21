@@ -837,7 +837,8 @@
     "locked": "PIN sign-in is paused on this tablet. Ask a manager.",
     "till_closed": "Sign in with username while the till is closed.",
     "device_not_paired": "Sign in with username to pair this tablet.",
-    "login_failed": "Username sign-in failed. Check your credentials."
+    "login_failed": "Username sign-in failed. Check your credentials.",
+    "try_again": "Could not check the PIN. Try again."
   },
   "pair_tablet": {
     "description": "Give this floor tablet a label so staff can sign in with a PIN. Do not pair a cashier till.",

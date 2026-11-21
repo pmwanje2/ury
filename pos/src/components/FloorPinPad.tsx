@@ -14,10 +14,11 @@ const REFUSAL_COPY: Array<[string, string]> = [
   ['URY_FLOOR_PIN_REFUSED', 'floor_pin.refused'],
 ];
 
+// Without a known id the server never judged the PIN (rate limit, 5xx, network).
 function pinError(error: unknown): string {
-  const message = parseFrappeError(error, t('floor_pin.refused'));
+  const message = parseFrappeError(error, '');
   const match = REFUSAL_COPY.find(([code]) => message.includes(code));
-  return match ? t(match[1]) : t('floor_pin.refused');
+  return match ? t(match[1]) : t('floor_pin.try_again');
 }
 
 function signedIn() {
