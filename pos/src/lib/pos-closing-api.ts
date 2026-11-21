@@ -43,6 +43,7 @@ export interface POSClosingPayment {
  * This matches the .as_dict() shape of a POS Invoice doctype with all relevant closing fields
  */
 export interface POSClosingInvoice {
+  outstanding_amount?: number;
   name: string;
   grand_total: number;
   net_total: number;

@@ -204,6 +204,7 @@ function extractServerErrorMessage(error: unknown, fallback: string): string {
 }
 
 interface AggregatedTotals {
+  onAccount: number;
   grandTotal: number;
   netTotal: number;
   totalQty: number;
@@ -228,10 +229,11 @@ function aggregateInvoices(
   totals: AggregatedTotals;
   expectedByMode: Record<string, number>;
 } {
-  const totals: AggregatedTotals = { grandTotal: 0, netTotal: 0, totalQty: 0 };
+  const totals: AggregatedTotals = { grandTotal: 0, netTotal: 0, totalQty: 0, onAccount: 0 };
   const expectedByMode: Record<string, number> = {};
 
   invoices.forEach((invoice) => {
+    totals.onAccount += Number(invoice.outstanding_amount) || 0;
     totals.grandTotal += Number(invoice.grand_total) || 0;
     totals.netTotal += Number(invoice.net_total) || 0;
     totals.totalQty += Number(invoice.total_qty) || 0;
@@ -336,7 +338,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [isSubCashier, setIsSubCashier] = useState(false);
   const [periodEndDate, setPeriodEndDate] = useState<Date>(new Date());
   const [invoiceCount, setInvoiceCount] = useState(0);
-  const [totals, setTotals] = useState<AggregatedTotals>({ grandTotal: 0, netTotal: 0, totalQty: 0 });
+  const [totals, setTotals] = useState<AggregatedTotals>({ grandTotal: 0, netTotal: 0, totalQty: 0, onAccount: 0 });
   const [rows, setRows] = useState<ClosingPaymentSummary[]>([]);
   // Sales-only tenders hidden by blind count; reconciled at zero count on submit.
   const [hiddenRows, setHiddenRows] = useState<ClosingPaymentSummary[]>([]);
@@ -714,6 +716,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             <>
               {!blindCashCount && (
               <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div className="rounded-lg border border-border p-3">
+                  <p className="text-xs text-gray-500">{t('pos_closing.on_account')}</p>
+                  <p>{maskAmounts ? MASKED : formatCurrency(totals.onAccount)}</p>
+                </div>
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.grand_total')}</p>
                   <p className="text-lg font-semibold text-gray-900">

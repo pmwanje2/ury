@@ -119,6 +119,13 @@
     "settle_bill": "Settle bill"
   },
   "payment": {
+    "account_amount": "On account: {{amount}}",
+    "charge_account": "Charge to account",
+    "account_balance": "Balance",
+    "account_limit": "Credit limit",
+    "account_available": "Available credit",
+    "no_accounts": "No approved accounts found.",
+    "account_search_failed": "Could not search credit accounts.",
     "title": "Payment",
     "apply_discount": "Apply Discount",
     "discount_placeholder": "Enter %",
@@ -175,6 +182,7 @@
     "failed_to_load": "Failed to load POS"
   },
   "pos_closing": {
+    "on_account": "On account",
     "title": "Close POS",
     "description": "Review sales for your session and enter the actual closing amounts.",
     "loading": "Loading closing details...",

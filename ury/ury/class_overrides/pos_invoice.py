@@ -1,3 +1,5 @@
+from html import escape
+
 import frappe
 from erpnext.accounts.doctype.pos_invoice.pos_invoice import (
 	POSInvoice,
@@ -71,8 +73,17 @@ class CustomPOSInvoice(POSInvoice):
 		# Frappe printview also accepts a serialized document. Authorize the saved check.
 		if self.name and frappe.db.exists("POS Invoice", self.name):
 			permission = "read" if getattr(self, "_ury_copy_render", None) is _COPY_RENDER_MARKER else "write"
-			check_split_target_access(frappe.get_doc("POS Invoice", self.name), permission)
+			saved = frappe.get_doc("POS Invoice", self.name)
+			check_split_target_access(saved, permission)
+			if saved.get("custom_merged_pos_invoice") and saved.get("custom_merged_pos_invoice") == self.get("custom_merged_pos_invoice"):
+				partner = frappe.get_doc("POS Invoice", saved.custom_merged_pos_invoice, check_permission="read")
+				check_split_target_access(partner, "read")
+				self.ury_print_partner = partner
 		super().before_print(settings)
+		if flt(getattr(self, "outstanding_amount", 0)) > 0:
+			# The native POS receipt renders terms. Add the balance to this print-only copy.
+			line = _("Charged to account {0}: {1} {2}").format(self.customer, self.outstanding_amount, self.currency)
+			self.terms = (self.terms or "") + "<p>" + escape(line) + "</p>"
 
 	def validate_stock_availablility(self):
 		if self.is_return or frappe.get_cached_doc("Stock Settings").allow_negative_stock:

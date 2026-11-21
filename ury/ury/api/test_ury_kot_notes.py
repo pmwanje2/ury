@@ -113,7 +113,7 @@ class OrderingCases:
         raise exception(message)
 
     @staticmethod
-    def get_value(doctype, filters, field):
+    def get_value(doctype, filters, field, *, for_update=False):
         if doctype == "Workflow":
             return None  # the fixture site has no Item Price release workflow
         return {"ury_offline_capture": 1, "item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
@@ -339,6 +339,22 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
         self.assertEqual([(row.quantity, row.cancelled_qty, row.comments) for row in ticket.kot_items],
                          [(2, 2, "no onions"), (1, 1, "extra chilli")])
         self.assertEqual([ticket.docstatus for ticket in self.historical_tickets.values()], [2, 2])
+
+    def test_food_and_drink_rounds_retain_header_and_route_only_new_quantities(self):
+        self.kot.resolve_production_units.side_effect = lambda item_code, **kw: ['Bar' if item_code == 'Tea' else 'Kitchen']
+        self.invoice.restaurant_table = 'T1'
+        self.framework.get_value.return_value = ('Restaurant', 'Branch A', 'Dining')
+        self.framework.db.get_value.side_effect = lambda dt, key, field: (
+            ('Branch A', 'Dining') if isinstance(field, list) else 'Dining' if field == 'restaurant_room' else self.get_value(dt, key, field))
+        self.enterContext(patch.object(self.order, '_merged_partners_for_primary', return_value=[]))
+        for qty in (1, 2):
+            items = [dict(item=code, item_name=code, qty=qty, comment=note) for code, note in [('Fish','no onions'),('Tea','no sugar')]]
+            self.order.sync_order(items=items, cashier=None, owner=None, mode_of_payment='Cash', customer='Walk-in', no_of_pax=2,
+                                  last_invoice=None, waiter='waiter@example.com', pos_profile='POS A', order_type='Dine In', table='T1',
+                                  guest_label='Party A' if qty == 1 else None, comments='Serve together' if qty == 1 else None)
+        self.assertEqual([(t.production, t.comments, t.custom_guest_label, r.quantity, r.comments)
+                          for t in self.tickets for r in t.kot_items],
+                         [('Kitchen','Serve together','Party A',1,'no onions'), ('Bar','Serve together','Party A',1,'no sugar')] * 2)
 
     def test_staff_sync_preserves_existing_note_in_the_kot_baseline(self):
         self.seed("no onions")
@@ -606,10 +622,10 @@ class TestGuestItemName(OrderingCases, TestCase):
 
     ITEM_NAMES = {"Fish": "Grilled tilapia", "Tea": "African tea"}
 
-    def get_value(self, doctype, filters, field):
+    def get_value(self, doctype, filters, field, *, for_update=False):
         if doctype == "Item" and field == "item_name":
             return self.ITEM_NAMES.get(filters)
-        return super().get_value(doctype, filters, field)
+        return super().get_value(doctype, filters, field, for_update=for_update)
 
     def test_guest_line_saves_the_item_name_not_the_code(self):
         self.add(code="Fish")

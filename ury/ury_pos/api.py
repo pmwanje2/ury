@@ -2576,7 +2576,7 @@ def search_settled_bills(branch: str | None = None, pos_profile: str | None = No
     for row in names:
         doc = _closed_invoice(row.name, branch)
         data = {key: doc.get(key) for key in ('name', 'posting_date', 'posting_time', 'branch', 'restaurant_table',
-                'pos_profile', 'cashier', 'waiter', 'currency', 'grand_total', 'net_total', 'rounded_total',
+                'pos_profile', 'customer', 'cashier', 'waiter', 'currency', 'grand_total', 'net_total', 'rounded_total',
                 'total_taxes_and_charges', 'outstanding_amount', 'status', 'consolidated_invoice')}
         for child, fields in [('items', ('item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
                               ('payments', ('mode_of_payment', 'amount'))]:
@@ -2648,3 +2648,28 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
         return _copy_result(current)
     frappe.db.set_value(_COPY_LOG, job_id, update)
     return _copy_result({**record, **update})
+
+
+@frappe.whitelist(methods=['GET'])
+def credit_accounts(pos_profile: str, query: str):
+    from ury.ury_pos.credit import balance, default_accounts, require_credit_access
+
+    profile = frappe.get_doc('POS Profile', pos_profile)
+    require_credit_access(profile)
+    text = query.strip()[:100]
+    if not text or not profile.customer:
+        return []
+    pattern = '%' + text + '%'
+    accounts = frappe.get_list('Customer',
+        filters={'disabled': 0, 'name': ['not in', list(filter(None, default_accounts(profile)))],
+                 'credit_limits.company': profile.company, 'credit_limits.credit_limit': ['>', 0]},
+        or_filters={'name': ['like', pattern], 'customer_name': ['like', pattern]},
+        fields=['name','customer_name','credit_limits.credit_limit as limit_amount'],
+        order_by='customer_name asc, name asc', page_length=20)
+    currency = frappe.get_cached_value('Company', profile.company, 'default_currency')
+    result = []
+    for row in accounts:
+        outstanding = balance(row.name, profile.company)
+        result.append(dict(name=row.name, customer_name=row.customer_name, balance=outstanding,
+                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding, currency=currency))
+    return result

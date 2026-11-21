@@ -692,6 +692,9 @@ class TestMakeInvoice(FrappeTestCase):
         )
         fields.update(overrides)
         invoice = _FakeInvoice(**fields)
+        invoice.precision = lambda field: 2
+        invoice.conversion_rate = 1
+        invoice.set_outstanding_amount = MagicMock()
         invoice.submit = MagicMock()
         invoice.save = MagicMock()
         # The merged-bill branch sets `.flags.ignore_payment_sync` on both
@@ -719,6 +722,7 @@ class TestMakeInvoice(FrappeTestCase):
                 return_value=frappe._dict(
                     company="Test Company",
                     currency="USD",
+                    customer="Walk In",
                     allow_discount_change=1,
                     custom_enable_discount=1,
                 ),
@@ -747,9 +751,10 @@ class TestMakeInvoice(FrappeTestCase):
         mock_free.assert_not_called()
 
     def test_submit_order_invoice(self):
-        invoice = self._invoice()
+        invoice = self._invoice(payments=[_FakeRow(mode_of_payment="Cash", amount=250)])
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=invoice))
+            stack.enter_context(patch(f"{MODULE}.frappe.get_cached_doc", return_value=frappe._dict(customer="Walk In")))
             mock_free = stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
             res = submit_order_invoice(invoice.name)
         self.assertEqual(res, {"name": invoice.name, "status": "Submitted"})
@@ -827,7 +832,7 @@ class TestMakeInvoice(FrappeTestCase):
         invoice.submit.assert_not_called()
 
     def test_an_authorized_discount_is_written_onto_the_invoice(self):
-        invoice = self._invoice()
+        invoice = self._invoice(rounded_total=200)
         profile = MagicMock()
         profile.custom_enable_discount = 1
         profile.get.return_value = 1
@@ -884,13 +889,12 @@ class TestMakeInvoice(FrappeTestCase):
             stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=primary))
             mock_free = stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
             self._run(
-                secondary, [{"mode_of_payment": "Cash", "amount": 250}], stack, table=None
+                secondary, [{"mode_of_payment": "Cash", "amount": 500}], stack, table=None
             )
         mock_free.assert_called_once_with("T1", "T2")
-        # The tendered amount covers this bill only; the primary keeps its own
-        # dues rather than being credited twice for the same cash.
+        # The paid walk-in releases the primary table and allocates the cash once.
         self.assertEqual([row.amount for row in secondary.payments], [250])
-        self.assertEqual(primary.payments, [])
+        self.assertEqual([row.amount for row in primary.payments], [250])
 
     def test_a_merged_pair_splits_one_tender_across_both_bills(self):
         """A single tendered amount larger than the secondary's own total
