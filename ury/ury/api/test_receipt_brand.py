@@ -26,7 +26,7 @@ class TestReceiptBrand(unittest.TestCase):
         token = base64.urlsafe_b64encode('Profile|Table|é'.encode()).decode()
         settings = SimpleNamespace(app_name='Example site', app_logo=None, favicon=None)
         with (patch.object(frappe, 'form_dict', {'t': token}), patch.object(frappe, 'conf', {}),
-              patch.object(frappe, 'get_cached_doc', return_value=settings), patch.object(frappe, 'db'),
+              patch.object(frappe, 'get_cached_doc', return_value=settings), patch.object(frappe, 'db', MagicMock()),
               patch.object(frappe.sessions, 'get_csrf_token', return_value='test'),
               patch.object(frappe.website.utils, 'get_boot_data', return_value={}),
               patch.object(frappe.utils, 'get_build_version', return_value='test'),
