@@ -123,7 +123,8 @@ export interface SyncOrderRequest {
  * when the backend rejects the write (e.g. stale last_modified_time, table already
  * occupied, or an already-billed invoice).
  */
-export type SyncOrderResponse = POSInvoice | { status: 'Failure' };
+export type SavedInvoice = POSInvoice & import('./invoice-api').POSInvoice;
+export type SyncOrderResponse = SavedInvoice | { status: 'Failure' };
 
 export const syncOrder = async (data: SyncOrderRequest) => {
   await assertOfflineActionAllowed(data.items?.some(item => item.ury_held) ? 'hold/fire' : 'online-order rounds');
@@ -172,6 +173,13 @@ export async function tableTransfer(
     newTable,
     invoice,
   });
+}
+
+export async function getCaptainTransferCandidates(invoice: string) {
+  const result = await call.get<{ message: { name: string; full_name?: string }[] }>(
+    'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates', { invoice },
+  );
+  return result.message;
 }
 
 export async function captainTransfer(

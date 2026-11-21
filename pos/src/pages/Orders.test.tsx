@@ -33,6 +33,7 @@ vi.mock("@ury/ui", () => ({
 
 // Create a mock store object with correct pagination structure
 const mockRootStoreState = {
+  ordersOwner: "cashier@example.com",
   orders: [],
   ordersOffline: false,
   orderLoading: false,
@@ -76,6 +77,7 @@ vi.mock("react-router-dom", () => ({
 
 // Mock core functions
 vi.mock("@ury/core", () => ({
+  getSessionUser: () => "cashier@example.com",
   formatCurrency: (amount: number) => `Rs. ${amount}`,
   normalizeFrappeTime: (time: any) => time || "2026-11-03 12:00:00",
   call: {
@@ -237,7 +239,7 @@ describe("Orders Page", () => {
 
     render(<Orders />);
 
-    const paymentBtn = screen.getByRole("button", { name: "order.payment" });
+    const paymentBtn = screen.getByRole("button", { name: "order.settle_bill" });
     fireEvent.click(paymentBtn);
 
     expect(showToast.error).toHaveBeenCalledWith("errors.please_print_first");
@@ -255,7 +257,7 @@ describe("Orders Page", () => {
 
     render(<Orders />);
 
-    const paymentBtn = screen.getByRole("button", { name: "order.payment" });
+    const paymentBtn = screen.getByRole("button", { name: "order.settle_bill" });
     fireEvent.click(paymentBtn);
 
     expect(showToast.error).not.toHaveBeenCalled();
@@ -315,6 +317,7 @@ describe("Orders guest label", () => {
     render(<Orders />);
     fireEvent.click(screen.getByRole("button", { name: "orders.edit_order" }));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/register"));
+    expect(mockPosStore.setOrderForUpdate).toHaveBeenCalledWith(order.name, order.customer, order.modified);
     expect(setGuestLabel).toHaveBeenCalledWith("Susan");
     vi.unstubAllGlobals();
   });

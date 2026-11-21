@@ -1,12 +1,13 @@
-import { getSessionUser, sessionStorageKey } from '@ury/core';
+import { getSessionUser, ownedSessionKey } from '@ury/core';
 import { cachedOfflineProfile } from '../../pwa/register-offline';
 import { StateCreator } from 'zustand';
-import { OrderType } from '../../data/order-types';
+import { OrderType, OrderStatusType } from '../../data/order-types';
 import { isLinkDown, call } from '@ury/core';
-import { getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoiceTax } from '../../lib/invoice-api';
+import { getTillBranch, getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoiceTax } from '../../lib/invoice-api';
 import { searchPosInvoice } from '../../lib/invoice-api';
 
 export interface POSInvoice {
+  branch?: string;
   ury_client_order_id?: string | null;
   name: string;
   invoice_printed: number;
@@ -34,9 +35,13 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   additional_discount_percentage?: number;
   discount_amount?: number;
+  age_minutes?: number;
+  items_preview?: Array<{ item_name: string; qty: number }>;
 }
 
 export interface OrdersState {
+  ordersOwner: string | null;
+  ordersBranch: string | null;
   ordersOffline: boolean;
   orders: POSInvoice[];
   orderLoading: boolean;
@@ -46,7 +51,7 @@ export interface OrdersState {
     hasNextPage: boolean;
     itemsPerPage: number;
   };
-  selectedStatus: 'Draft' | 'Unbilled' | 'Recently Paid' | 'Paid' | 'Consolidated' | 'Return';
+  selectedStatus: OrderStatusType;
   selectedOrder: POSInvoice | null;
   selectedOrderItems: POSInvoiceItem[];
   selectedOrderTaxes: POSInvoiceTax[];
@@ -60,8 +65,8 @@ export interface OrdersActions {
   updateOrderStatus: (orderId: string, status: POSInvoice['status']) => Promise<void>;
   goToNextPage: () => Promise<void>;
   goToPreviousPage: () => Promise<void>;
-  setSelectedStatus: (status: POSInvoice['status']) => Promise<void>;
-  selectOrder: (order: POSInvoice) => Promise<void>;
+  setSelectedStatus: (status: OrderStatusType) => Promise<void>;
+  selectOrder: (order: POSInvoice) => Promise<boolean>;
   clearSelectedOrder: () => void;
   setOrderSearchQuery: (query: string) => void;
 }
@@ -75,165 +80,213 @@ export const createOrdersSlice: StateCreator<
   [],
   [],
   OrdersSlice
-> = (set, get) => ({
-  // Initial state
-  ordersOffline: false,
-  orders: [],
-  orderLoading: false,
-  error: null,
-  pagination: {
-    currentPage: 1,
-    hasNextPage: false,
-    itemsPerPage: ITEMS_PER_PAGE,
-  },
-  selectedStatus: 'Draft',
-  selectedOrder: null,
-  selectedOrderItems: [],
-  selectedOrderTaxes: [],
-  selectedOrderLoading: false,
-  selectedOrderError: null,
-  orderSearchQuery: '',
+> = (set, get) => {
+  let listVersion = 0;
+  let detailVersion = 0;
+  const emptyDetails = { selectedOrder: null, selectedOrderItems: [], selectedOrderTaxes: [], selectedOrderError: null, selectedOrderLoading: false };
+  const clearQueue = (owner: string | null, branch: string | null) => {
+    ++detailVersion;
+    set({ ...emptyDetails, orders: [], ordersOwner: owner, ordersBranch: branch,
+      pagination: { currentPage: 1, hasNextPage: false, itemsPerPage: ITEMS_PER_PAGE } });
+  };
+  return {
+    ordersOwner: null,
+    ordersBranch: null,
+    // Initial state
+    ordersOffline: false,
+    orders: [],
+    orderLoading: false,
+    error: null,
+    pagination: {
+      currentPage: 1,
+      hasNextPage: false,
+      itemsPerPage: ITEMS_PER_PAGE,
+    },
+    selectedStatus: 'Outstanding',
+    selectedOrder: null,
+    selectedOrderItems: [],
+    selectedOrderTaxes: [],
+    selectedOrderLoading: false,
+    selectedOrderError: null,
+    orderSearchQuery: '',
 
-  // Actions
-  fetchOrders: async (page = 1) => {
-    try {
-      set({ orderLoading: true, error: null, ordersOffline: false });
-      const { orderSearchQuery, selectedStatus } = get();
-      
-      // Get POS profile to access paid_limit
-      const posProfile = sessionStorage.getItem(sessionStorageKey('posProfile'));
-      const profile = posProfile ? JSON.parse(posProfile) : null;
-      const paidLimit = profile?.paid_limit;
-      
-      if (orderSearchQuery && orderSearchQuery.trim()) {
-        // Use search API
-        const res = await searchPosInvoice(orderSearchQuery, selectedStatus);
+    // Actions
+    fetchOrders: async (page = 1) => {
+      const version = ++listVersion;
+      const owner = getSessionUser();
+      const current = () => {
+        if (version !== listVersion) return false;
+        if (owner === getSessionUser()) return true;
+        clearQueue(getSessionUser(), null);
+        set({ orderLoading: false });
+        return false;
+      };
+      if (get().ordersOwner !== owner) clearQueue(owner, null);
+      let branch: string | undefined;
+      try {
+        set({ orderLoading: true, error: null, ordersOffline: false });
+        const { orderSearchQuery, selectedStatus } = get();
+
+        // Get POS profile to access paid_limit
+        const key = ownedSessionKey('posProfile');
+        const posProfile = key && sessionStorage.getItem(key);
+        const profile = posProfile ? JSON.parse(posProfile) : null;
+        const paidLimit = profile?.paid_limit;
+
+        if (!owner || owner === 'Guest') throw new Error('Till session unavailable');
+        if (selectedStatus === 'Outstanding') {
+          branch = await getTillBranch();
+          if (!current()) return;
+          if (get().ordersBranch !== branch) {
+            // Register can select its acknowledged invoice before the first queue page loads.
+            if (get().selectedOrder?.branch === branch && !get().ordersBranch) set({ ordersBranch: branch });
+            else clearQueue(owner, branch);
+          }
+        }
+        if (orderSearchQuery && orderSearchQuery.trim()) {
+          // Use search API
+          const res = await searchPosInvoice(orderSearchQuery, selectedStatus, branch);
+          if (!current()) return;
+          set({
+            orders: res.data || [],
+            pagination: {
+              currentPage: 1,
+              hasNextPage: false,
+              itemsPerPage: ITEMS_PER_PAGE,
+            },
+            orderLoading: false
+          });
+          return;
+        }
+        // Default fetch
+        const limitStart = (page - 1) * ITEMS_PER_PAGE;
+        const status = selectedStatus;
+        const { invoices, hasMore } = await getPOSInvoices({
+          status,
+          limit: ITEMS_PER_PAGE,
+          limit_start: limitStart,
+          branch, paid_limit: paidLimit
+        });
+        if (!current()) return;
         set({
-          orders: res.data || [],
+          orders: invoices,
           pagination: {
-            currentPage: 1,
-            hasNextPage: false,
+            currentPage: page,
+            hasNextPage: hasMore,
             itemsPerPage: ITEMS_PER_PAGE,
           },
           orderLoading: false
         });
-        return;
+      } catch (error) {
+        if (!current()) return;
+        if (get().selectedStatus === 'Outstanding' && !branch) clearQueue(owner, null);
+        if (isLinkDown(error) && cachedOfflineProfile(getSessionUser())) {
+          set({ ordersOffline: true, orderLoading: false, orders: [], selectedOrder: null, error: null });
+          return;
+        }
+        set({
+          error: error instanceof Error ? error.message : 'Failed to fetch orders',
+          orderLoading: false
+        });
       }
-      // Default fetch
-      const limitStart = (page - 1) * ITEMS_PER_PAGE;
-      const status = selectedStatus;
-      const { invoices, hasMore } = await getPOSInvoices({
-        status,
-        limit: ITEMS_PER_PAGE,
-        limit_start: limitStart,
-        paid_limit: paidLimit
-      });
-      set({ 
-        orders: invoices,
-        pagination: {
-          currentPage: page,
-          hasNextPage: hasMore,
-          itemsPerPage: ITEMS_PER_PAGE,
-        },
-        orderLoading: false 
-      });
-    } catch (error) {
-      if (isLinkDown(error) && cachedOfflineProfile(getSessionUser())) {
-        set({ ordersOffline: true, orderLoading: false, orders: [], selectedOrder: null, error: null });
-        return;
+    },
+
+    goToNextPage: async () => {
+      const { pagination, orderLoading } = get();
+      if (!orderLoading && pagination.hasNextPage) {
+        await get().fetchOrders(pagination.currentPage + 1);
       }
-      set({ 
-        error: error instanceof Error ? error.message : 'Failed to fetch orders',
-        orderLoading: false 
-      });
-    }
-  },
+    },
 
-  goToNextPage: async () => {
-    const { pagination, orderLoading } = get();
-    if (!orderLoading && pagination.hasNextPage) {
-      await get().fetchOrders(pagination.currentPage + 1);
-    }
-  },
+    goToPreviousPage: async () => {
+      const { pagination, orderLoading } = get();
+      if (!orderLoading && pagination.currentPage > 1) {
+        await get().fetchOrders(pagination.currentPage - 1);
+      }
+    },
 
-  goToPreviousPage: async () => {
-    const { pagination, orderLoading } = get();
-    if (!orderLoading && pagination.currentPage > 1) {
-      await get().fetchOrders(pagination.currentPage - 1);
-    }
-  },
+    setSelectedStatus: async (status) => {
+      set({ selectedStatus: status });
+      // Clear selected order when status changes
+      get().clearSelectedOrder();
+      await get().fetchOrders(1); // Reset to first page when status changes
+    },
 
-  setSelectedStatus: async (status) => {
-    set({ selectedStatus: status });
-    // Clear selected order when status changes
-    get().clearSelectedOrder();
-    await get().fetchOrders(1); // Reset to first page when status changes
-  },
+    selectOrder: async (order) => {
+      const owner = getSessionUser();
+      if (get().ordersOwner !== owner) clearQueue(owner, order.branch ?? null);
+      const version = ++detailVersion;
+      if (!owner || owner === 'Guest') { set(emptyDetails); return false; }
+      const current = () => {
+        if (version !== detailVersion || get().selectedOrder?.name !== order.name) return false;
+        if (owner === getSessionUser()) return true;
+        clearQueue(getSessionUser(), null);
+        return false;
+      };
+      try {
+        set({
+          ...emptyDetails, selectedOrder: order,
+          selectedOrderLoading: true,
+          selectedOrderError: null
+        });
 
-  selectOrder: async (order) => {
-    try {
-      set({ 
-        selectedOrder: order,
-        selectedOrderLoading: true, 
-        selectedOrderError: null 
-      });
+        const [{ items, taxes }, splitGroup] = await Promise.all([
+          getPOSInvoiceItems(order.name),
+          getSplitGroup(order.name).catch(() => ({ invoices: [], current: order.name, group: null })),
+        ]);
 
-      const [{ items, taxes }, splitGroup] = await Promise.all([
-        getPOSInvoiceItems(order.name),
-        getSplitGroup(order.name).catch(() => ({ invoices: [], current: order.name, group: null })),
-      ]);
+        if (!current()) return false;
+        const splitMatch = splitGroup.invoices.find((inv) => inv.name === order.name);
+        const enrichedOrder = splitMatch
+          ? { ...order, ...mapSplitGroupInvoiceToPOSInvoice(splitMatch) }
+          : order;
 
-      const splitMatch = splitGroup.invoices.find((inv) => inv.name === order.name);
-      const enrichedOrder = splitMatch
-        ? { ...order, ...mapSplitGroupInvoiceToPOSInvoice(splitMatch) }
-        : order;
-      
-      set((state) => ({ 
-        selectedOrder: enrichedOrder,
-        selectedOrderItems: items,
-        selectedOrderTaxes: taxes,
-        selectedOrderLoading: false,
-        orders: splitMatch
-          ? state.orders.map((o) => (o.name === enrichedOrder.name ? enrichedOrder : o))
-          : state.orders,
-      }));
-    } catch (error) {
-      set({ 
-        selectedOrderError: error instanceof Error ? error.message : 'Failed to fetch order details',
-        selectedOrderLoading: false 
-      });
-    }
-  },
+        set((state) => ({
+          selectedOrder: enrichedOrder,
+          selectedOrderItems: items,
+          selectedOrderTaxes: taxes,
+          selectedOrderLoading: false,
+          orders: splitMatch
+            ? state.orders.map((o) => (o.name === enrichedOrder.name ? enrichedOrder : o))
+            : state.orders,
+        }));
+        return true;
+      } catch (error) {
+        if (!current()) return false;
+        set({
+          selectedOrderError: error instanceof Error ? error.message : 'Failed to fetch order details',
+          selectedOrderLoading: false
+        });
+        return false;
+      }
+    },
 
-  clearSelectedOrder: () => {
-    set({ 
-      selectedOrder: null,
-      selectedOrderItems: [],
-      selectedOrderTaxes: [],
-      selectedOrderError: null 
-    });
-  },
+    clearSelectedOrder: () => {
+      ++detailVersion;
+      set(emptyDetails);
+    },
 
-  updateOrderStatus: async (orderId: string, status: POSInvoice['status']) => {
-    try {
-      set({ orderLoading: true, error: null });
+    updateOrderStatus: async (orderId: string, status: POSInvoice['status']) => {
+      try {
+        set({ orderLoading: true, error: null });
 
-      await call.post('ury.ury_pos.api.updatePosInvoiceStatus', {
-        invoice: orderId,
-        status,
-      });
+        await call.post('ury.ury_pos.api.updatePosInvoiceStatus', {
+          invoice: orderId,
+          status,
+        });
 
-      // Refresh the orders list after status update
-      await get().fetchOrders(get().pagination.currentPage);
-      
-      set({ orderLoading: false });
-    } catch (error) {
-      set({ 
-        error: error instanceof Error ? error.message : 'Failed to update order status',
-        orderLoading: false 
-      });
-    }
-  },
+        // Refresh the orders list after status update
+        await get().fetchOrders(get().pagination.currentPage);
 
-  setOrderSearchQuery: (query) => set({ orderSearchQuery: query }),
-}); 
+        set({ orderLoading: false });
+      } catch (error) {
+        set({
+          error: error instanceof Error ? error.message : 'Failed to update order status',
+          orderLoading: false
+        });
+      }
+    },
+
+    setOrderSearchQuery: (query) => set({ orderSearchQuery: query }),
+  };
+};

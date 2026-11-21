@@ -105,14 +105,29 @@ describe("Header (/ury)", () => {
 });
 
 it("clears the POS worker caches as well as web storage before reloading", async () => {
+  localStorage.setItem('deskPreference', 'keep');
+  sessionStorage.setItem('deskSession', 'keep');
   const remove = vi.fn().mockResolvedValue(true);
   vi.stubGlobal('caches', {keys: async () => ['ury-pos-shell', 'other'], delete: remove});
   try {
     render(<BrowserRouter><Header /></BrowserRouter>);
     await userEvent.click(screen.getByRole('button', {name: 'Admin User'}));
     await userEvent.click(screen.getByText('Clear Cache'));
+    expect(localStorage.getItem('deskPreference')).toBe('keep');
+    expect(sessionStorage.getItem('deskSession')).toBe('keep');
     expect(remove.mock.calls).toEqual([['ury-pos-shell']]);
   } finally { vi.unstubAllGlobals(); }
+});
+
+it('keeps the management session visible and allows retry after a refused logout', async () => {
+  cleanup();
+  const { logout } = await import('@ury/core');
+  vi.mocked(logout).mockResolvedValueOnce(false);
+  render(<BrowserRouter><Header /></BrowserRouter>);
+  await userEvent.click(screen.getByRole('button', {name: 'Admin User'}));
+  await userEvent.click(screen.getByRole('button', {name: 'Logout'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Failed to logout');
+  expect(screen.getByRole('button', {name: 'Logout'})).toBeEnabled();
 });
 
 it("renders the site logo with its configured accessible name", () => {

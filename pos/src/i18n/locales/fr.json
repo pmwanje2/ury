@@ -37,7 +37,8 @@
     "cancelling": "Annulation en cours...",
     "confirm_cancel": "Confirmer l'annulation",
     "loading_ury_pos": "Chargement de {{name}}...",
-    "please_wait_setup": "Veuillez patienter pendant que nous préparons tout"
+    "please_wait_setup": "Veuillez patienter pendant que nous préparons tout",
+    "reserved": "Réservé"
   },
   "header": {
     "search_placeholder_default": "Rechercher commandes, articles ou clients...",
@@ -91,7 +92,16 @@
     "void_reason_other": "Autre",
     "print": "Imprimer",
     "payment": "Paiement",
-    "order_actions": "Actions sur la commande"
+    "order_actions": "Actions sur la commande",
+    "age_minutes": "{{count}} min",
+    "change_type_confirm": "Effacer et changer",
+    "change_type_message": "Passer à {{type}} efface cette commande. Articles dans le panier : {{count}}.",
+    "change_type_title": "Changer le type de commande ?",
+    "not_printed": "Non imprimée",
+    "print_bill": "Imprimer l’addition",
+    "print_receipt": "Imprimer le reçu",
+    "printed": "Imprimée",
+    "settle_bill": "Régler l’addition"
   },
   "payment": {
     "title": "Paiement",
@@ -444,7 +454,8 @@
     "orders": "Commandes",
     "settings": "Paramètres",
     "sessions": "Sessions",
-    "reservations": "Réservations"
+    "reservations": "Réservations",
+    "analytics": "Analyses"
   },
   "product_dialog": {
     "special_instructions": "Instructions spéciales",
@@ -471,7 +482,8 @@
     "recently_paid": "Payé récemment",
     "paid": "Payé",
     "consolidated": "Consolidé",
-    "return": "Retour"
+    "return": "Retour",
+    "outstanding": "À régler"
   },
   "settings": {
     "title": "Paramètres",
@@ -733,5 +745,22 @@
     "captured": "Saisie",
     "no_fdn": "Saisie hors ligne ; aucun numéro fiscal.",
     "refused": "{{action}} est refusé hors ligne. Reconnectez-vous au serveur."
+  },
+  "bill_requests": {
+    "choose_check": "Choisir une addition ouverte",
+    "empty": "Aucune demande d’addition en attente",
+    "loading": "Chargement des demandes d’addition",
+    "lookup_loading": "Recherche de l’addition ouverte…",
+    "lookup_unavailable": "Recherche d’addition indisponible",
+    "no_link": "La demande n’est liée à aucune table ni addition",
+    "no_open_checks": "Aucune addition ouverte pour {{table}}",
+    "not_found": "L’addition {{invoice}} est introuvable",
+    "not_open": "L’addition {{invoice}} n’est pas ouverte",
+    "open_record": "Ouvrir la demande",
+    "refresh": "Actualiser",
+    "refresh_failed": "Bill requests refresh failed",
+    "title": "Demandes d’addition",
+    "unavailable": "Demandes d’addition indisponibles",
+    "waiting": "Demandes d’addition : {{count}} en attente"
   }
 }

@@ -24,7 +24,7 @@ import { Spinner } from '@ury/ui';
 import { Button } from '@ury/ui';
 import { Badge } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
-import { captainTransfer, getTableOrder, tableTransfer } from '../lib/order-api';
+import { getCaptainTransferCandidates, captainTransfer, getTableOrder, tableTransfer } from '../lib/order-api';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat } from '../lib/invoice-api';
 import { canCaptainTransfer, isUserRestrictedFromTableOrders } from '@ury/core';
@@ -44,7 +44,7 @@ const TableView = () => {
   const navigate = useNavigate();
   const { posProfile, setSelectedTable, setSelectedOrderType } = usePOSStore();
   const user = useRootStore((state) => state.user);
-  const showCaptainTransfer = canCaptainTransfer(user, posProfile);
+  const hasTransferRole = canCaptainTransfer(user, posProfile);
 
   const branch = posProfile?.branch ?? null;
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -58,6 +58,19 @@ const TableView = () => {
   const [error, setError] = useState<string | null>(null);
   const [printingTable, setPrintingTable] = useState<string | null>(null);
   const [menuOpenForTable, setMenuOpenForTable] = useState<string | null>(null);
+  const [eligibleMenu, setEligibleMenu] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    setEligibleMenu(null);
+    if (menuOpenForTable && hasTransferRole) {
+      getTableOrder(menuOpenForTable).then(async ({ message }) => {
+        if (!current || !message?.name) return;
+        const candidates = await getCaptainTransferCandidates(message.name);
+        if (current && candidates.length) setEligibleMenu(menuOpenForTable);
+      }).catch(() => { if (current) setEligibleMenu(null); });
+    }
+    return () => { current = false; };
+  }, [menuOpenForTable, hasTransferRole, branch]);
   const [mergeSourceTable, setMergeSourceTable] = useState<Table | null>(null);
   const [unmergeSourceTable, setUnmergeSourceTable] = useState<Table | null>(null);
   const [transferSourceTable, setTransferSourceTable] = useState<Table | null>(null);
@@ -97,14 +110,15 @@ const TableView = () => {
 
   // Periodic polling for active reservations so buffer windows and status transitions reflect in real time
   useEffect(() => {
-    if (!branch) return;
+    setActiveReservationsList([]);
+    if (!branch || !isReservationEnabled) return;
     let isMounted = true;
 
     const fetchReservations = async () => {
       if (!isMounted) return;
       try {
         const res = await getActiveReservations(branch);
-        if (isMounted && res) {
+        if (isMounted && Array.isArray(res)) {
           setActiveReservationsList(res);
         }
       } catch (_e) {
@@ -119,7 +133,7 @@ const TableView = () => {
       isMounted = false;
       clearInterval(intervalId);
     };
-  }, [branch]);
+  }, [branch, isReservationEnabled]);
 
   // Informational toast when a table enters its reservation buffer window
   const notifiedLockReservationsRef = useRef<Set<string>>(new Set());
@@ -283,6 +297,12 @@ const TableView = () => {
       return;
     }
 
+    if (!isReservationEnabled) {
+      setSelectedOrderType(DINE_IN);
+      setSelectedTable(tableName, selectedRoom);
+      navigate('/register');
+      return;
+    }
     // Check if table has an ongoing active order first
     try {
       const orderResponse = await getTableOrder(tableName);
@@ -572,12 +592,12 @@ const TableView = () => {
       mergeGroupLabel={mergeGroupLabel}
       className={className}
       menuOpen={menuOpenForTable === table.name}
-      onMenuOpenChange={(open) => setMenuOpenForTable(open ? table.name : null)}
+      onMenuOpenChange={(open) => { setEligibleMenu(null); setMenuOpenForTable(open ? table.name : null); }}
       onMerge={() => setMergeSourceTable(table)}
       onUnmerge={() => setUnmergeSourceTable(table)}
       onTransferTable={canTransferTable ? () => void handleOpenTransferTable(table) : undefined}
       onTransferCaptain={() => void handleOpenCaptainTransfer(table)}
-      showCaptainTransfer={showCaptainTransfer}
+      showCaptainTransfer={hasTransferRole && menuOpenForTable === table.name && eligibleMenu === table.name}
       onReserve={isReservationEnabled ? () => setReservationTable(table) : undefined}
       onNavigate={() => handleNavigateToPOS(table.name)}
       onPreview={(event) => handlePreviewTable(table, event)}
@@ -772,6 +792,7 @@ const TableView = () => {
           if (!open) setCaptainTransferContext(null);
         }}
         currentCaptain={captainTransferContext?.currentCaptain ?? ''}
+        invoiceName={captainTransferContext?.invoiceName ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
 

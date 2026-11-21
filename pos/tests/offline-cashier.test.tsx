@@ -8,7 +8,7 @@ import { testLocks } from './offline-locks';
 import { showToast } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 import { useRootStore } from '../src/store/root-store';
-import { usePOSStore } from '../src/store/pos-store';
+import { usePOSStore, type OrderItem } from '../src/store/pos-store';
 import OrderPanel from '../src/components/OrderPanel';
 import { OfflineOutbox } from '../src/offline/outbox';
 import Header from '../src/components/Header';
@@ -259,4 +259,37 @@ test('full cash payment after split navigation uses the selected check identity'
     if (id) expect(payload.client_order_id).toBe(id);
     else { expect(payload.client_order_id).toMatch(/^[0-9a-f-]{36}$/); expect(payload.client_order_id).not.toBe(client); }
   }
+});
+
+test.each(['Take Away', 'Dine In'])('new offline %s orders use the profile native walk-in customer after cart reset without searching the server', async (orderType) => {
+  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, default_customer: { customer: 'Native Walk In' } },
+    isInitializing: false, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: orderType, selectedCustomer: null, selectedTable: orderType === 'Dine In' ? 'Table 1' : null, selectedRoom: null,
+    paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T4', name: 'Tea', price: 100, quantity: 1 } as any] });
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
+  await act(async () => root.render(<OrderPanel />));
+  const q = new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! });
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect(await q.list()).toHaveLength(1)); });
+  const rows = await q.list();
+  expect(rows[0].order.customer).toBe('Native Walk In');
+  expect(usePOSStore.getState().activeOrders).toEqual([]);
+});
+
+test.each(['Take Away', 'Dine In'])('anonymous offline %s without a profile customer is refused and retains its cart', async (orderType) => {
+  usePOSStore.setState({ isInitializing: false, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: orderType, selectedCustomer: null, selectedTable: orderType === 'Dine In' ? 'Table 1' : null, selectedRoom: null,
+    paymentModes: ['Cash'], activeOrders: [{ id: 'Tea', uniqueId: 'T5', name: 'Tea', price: 100, quantity: 1 } as unknown as OrderItem] });
+  const post = vi.spyOn(call, 'post');
+  const warning = vi.spyOn(showToast, 'error');
+  await act(async () => root.render(<OrderPanel />));
+  await act(async () => button(/^Add New Order$/).click());
+  expect(warning).toHaveBeenCalledWith(expect.stringMatching(/select a customer/i));
+  expect(post).not.toHaveBeenCalled();
+  const q = new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! });
+  expect(await q.list()).toEqual([]);
+  expect(usePOSStore.getState().activeOrders).toEqual([
+    expect.objectContaining({ id: 'Tea', quantity: 1 }),
+  ]);
+  expect(container.textContent).toContain('Tea');
+  expect(button(/^Add New Order$/).disabled).toBe(false);
 });

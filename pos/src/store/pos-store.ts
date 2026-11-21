@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
+import { ownedSessionKey, getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
 import { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
@@ -179,6 +179,7 @@ interface POSState {
   selectedAggregator: Aggregator | null;
   currency: string;
   currencySymbol: string | null;
+  editCustomer: { invoice: string; customer: string } | null;
   isUpdatingOrder: boolean;
   orderId: string | null;
   posProfile: PosProfileCombined | null;
@@ -235,7 +236,7 @@ interface POSStore extends POSState {
   isMenuInteractionDisabled: () => boolean;
   isOrderInteractionDisabled: () => boolean;
   initializeApp: () => Promise<void>;
-  setOrderForUpdate: (orderId: string | null) => void;
+  setOrderForUpdate: (orderId: string | null, customer?: string, modified?: string) => void;
   resetOrderState: () => void;
   setSelectedAggregator: (aggregator: Aggregator | null) => void;
   setOrderComment: (comment: string) => void;
@@ -297,6 +298,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   currencySymbol: storage.getItem('currencySymbol') || null,
   tableOrder: null,
   isInitializing: true,
+  editCustomer: null,
   isUpdatingOrder: false,
   orderId: null,
   showVoluntaryClosing: false,
@@ -341,8 +343,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     try {
       let currencySymbolHandled = false;
       const owner = getSessionUser();
-      const key = owner ? `posProfile:${owner}` : 'posProfile';
-      const cached = sessionStorage.getItem(key);
+      const key = ownedSessionKey('posProfile');
+      const cached = key && sessionStorage.getItem(key);
       if (cached) {
         const profile = JSON.parse(cached);
         if (profile && profile.country && 'custom_invoice_warning_time' in profile && !profileLacksDefaultCustomerConfig(profile) && profile.enable_payment_without_printing !== undefined) {
@@ -375,7 +377,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       }
 
       if (owner !== getSessionUser()) return;
-      sessionStorage.setItem(key, JSON.stringify(combinedProfile));
+      if (key) sessionStorage.setItem(key, JSON.stringify(combinedProfile));
       set({
         posProfile: combinedProfile,
         profileLoading: false,
@@ -495,7 +497,9 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   fetchPaymentModes: async () => {
     try {
+      const owner = getSessionUser();
       const modes = await getPaymentModes();
+      if (owner !== getSessionUser()) return;
       set({ paymentModes: modes });
     } catch (error) {
       console.error('Failed to fetch payment modes:', error);
@@ -635,7 +639,9 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       activeOrders: [],
       selectedOrderType: type,
       isUpdatingOrder: false,
+      editCustomer: null,
       orderId: null,
+      ...(type !== 'Dine In' ? { selectedTable: null, selectedRoom: null } : {}),
       ...(followDefault ? { selectedCustomer: resolveDefaultCustomer(type, posProfile) } : {}),
     });
     
@@ -692,27 +698,33 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   fetchCustomerGroups: async () => {
-    const cached = sessionStorage.getItem('customerGroups');
+    const owner = getSessionUser();
+    const key = ownedSessionKey('customerGroups');
+    const cached = key && sessionStorage.getItem(key);
     if (cached) {
       set({ customerGroups: JSON.parse(cached) });
       return;
     }
     const groups = await getCustomerGroups();
     const names = groups.map((g: any) => g.name);
+    if (owner !== getSessionUser()) return;
     set({ customerGroups: names });
-    sessionStorage.setItem('customerGroups', JSON.stringify(names));
+    if (key) sessionStorage.setItem(key, JSON.stringify(names));
   },
 
   fetchTerritories: async () => {
-    const cached = sessionStorage.getItem('territories');
+    const owner = getSessionUser();
+    const key = ownedSessionKey('territories');
+    const cached = key && sessionStorage.getItem(key);
     if (cached) {
       set({ territories: JSON.parse(cached) });
       return;
     }
     const terrs = await getCustomerTerritories();
     const names = terrs.map((t: any) => t.name);
+    if (owner !== getSessionUser()) return;
     set({ territories: names });
-    sessionStorage.setItem('territories', JSON.stringify(names));
+    if (key) sessionStorage.setItem(key, JSON.stringify(names));
   },
 
   getCartTotals: (): CartTotals => {
@@ -858,6 +870,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         selectedCustomer: null,
         customerSource: 'auto',
         isUpdatingOrder: false,
+        editCustomer: null,
         orderId: null,
         noOfPax: 1,
         lastModifiedTime: null,
@@ -877,6 +890,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       selectedCustomer: resolveDefaultCustomer(selectedOrderType, posProfile),
       customerSource: 'auto',
       isUpdatingOrder: false,
+      editCustomer: null,
       orderId: null,
       noOfPax: 1,
       lastModifiedTime: null,
@@ -885,8 +899,10 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     });
   },
 
-  setOrderForUpdate: (orderId: string | null) => {
+  setOrderForUpdate: (orderId, customer, modified) => {
     set({ 
+      editCustomer: orderId && customer ? { invoice: orderId, customer } : null,
+      lastModifiedTime: modified ?? null,
       isUpdatingOrder: orderId !== null,
       orderId,
     });
@@ -902,6 +918,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       selectedRoom: null,
       selectedAggregator: null,
       isUpdatingOrder: false,
+      editCustomer: null,
       orderId: null,
       activeOrders: [],
       selectedItem: null,

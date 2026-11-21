@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useBranchContext } from '../../context/BranchContext';
 import {
   resolveBrand,
-  logout, purgeOfflineSession,
+  logout, clearAppStorage, purgeOfflineSession,
   call,
   getLoggedUser,
   getUserRoles,
@@ -178,26 +178,28 @@ export const Header: React.FC = () => {
 
   const handleClearCache = async () => {
     await purgeOfflineSession();
-    // Clear all local storage
-    localStorage.clear();
-    // Clear all session storage
-    sessionStorage.clear();
+    clearAppStorage();
     // Reload the page
     window.location.reload();
   };
 
+  const pendingLogout = useRef(false);
+  const [logoutState, setLogoutState] = useState<'idle' | 'pending' | 'failed'>('idle');
   const handleLogout = async () => {
+    if (pendingLogout.current) return;
+    pendingLogout.current = true;
+    setLogoutState('pending');
     try {
-      await logout();
-    } catch {
-      // Ignore logout errors
-    } finally {
+      if (await logout() === false) throw new Error('Logout refused');
       const path = window.location.pathname || '';
       const matched = ['/pos', '/ury', '/mosaic', '/urypos', '/order'].find(
         (prefix) => path === prefix || path.startsWith(prefix + '/')
       );
       const redirectTarget = matched || (path.startsWith('/') ? path : '/ury');
       window.location.href = `/login?redirect-to=${encodeURIComponent(redirectTarget)}`;
+    } catch {
+      pendingLogout.current = false;
+      setLogoutState('failed');
     }
   };
 
@@ -440,7 +442,9 @@ export const Header: React.FC = () => {
                     </button>
                   )}
 
+                  {logoutState === 'failed' && <p role="alert">{__('Failed to logout. Please try again.')}</p>}
                   <button
+                    disabled={logoutState === 'pending'}
                     onClick={handleLogout}
                     className="w-full flex items-center gap-3 px-4 py-2 text-sm text-destructive hover:bg-destructive-tint transition-colors"
                   >

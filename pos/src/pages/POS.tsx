@@ -10,7 +10,7 @@ import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
 
-export default function POS() {
+export default function POS({ onCashierCheck }: React.ComponentProps<typeof OrderPanel>) {
   const {
     quickFilter,
     setQuickFilter,
@@ -134,7 +134,7 @@ export default function POS() {
 
         <MenuList onItemClick={handleItemClick} />
       </div>
-      <OrderPanel />
+      <OrderPanel onCashierCheck={onCashierCheck} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
     </div>
   );

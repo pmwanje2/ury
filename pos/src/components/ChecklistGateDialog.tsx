@@ -1,3 +1,4 @@
+import TillLogout from './TillLogout';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Input, Spinner, cn, messageToPlainText } from '@ury/ui';
 import { t } from '../i18n';
@@ -406,6 +407,7 @@ const ChecklistGateDialog = ({ posProfile, checklistType, onComplete }: Checklis
             </Button>
           </>
         )}
+        <TillLogout />
       </div>
     </div>
   );

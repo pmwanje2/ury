@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ClipboardList, Loader2, UtensilsCrossed } from 'lucide-react';
 import { Button, ConfirmDialog, Spinner, cn, showToast } from '@ury/ui';
-import { formatCurrency } from '@ury/core';
+import { formatCurrency, parseFrappeError as refusalMessage } from '@ury/core';
 import { usePOSStore } from '../../store/pos-store';
 import { useRootStore, RootState } from '../../store/root-store';
 import {
@@ -233,15 +233,6 @@ export default function CaptainOrder() {
         showToast.error(t('captain.add_item_first'));
         return;
       }
-      // sync_order requires `customer` as a hard backend parameter (found via
-      // live E2E test — a 500 "missing 1 required positional argument:
-      // 'customer'" — not just a Cashier-UI convention). Match OrderPanel's
-      // exact validate-before-submit gate rather than only omitting the field.
-      if (!selectedCustomer?.name) {
-        showToast.error(t('captain.select_customer_first'));
-        return;
-      }
-
       setIsSubmitting(true);
 
       const orderData: SyncOrderRequest = {
@@ -262,7 +253,7 @@ export default function CaptainOrder() {
         order_type: tableOrderType,
         table,
         room: selectedRoom || undefined,
-        customer: selectedCustomer.id,
+        customer: selectedCustomer?.id || (isUpdatingOrder && context?.order?.name === orderId ? context.order.customer : '') || '',
         cashier: posProfile.cashier,
         owner: posProfile.owner,
         mode_of_payment: paymentModes[0],
@@ -278,11 +269,7 @@ export default function CaptainOrder() {
       const result = await syncOrder(orderData);
 
       if (result?.message && typeof result.message === 'object' && 'status' in result.message && result.message.status === 'Failure') {
-        showToast.error(
-          isUpdatingOrder
-            ? 'This order was modified by someone else. Please reopen the table and try again.'
-            : 'Failed to send the order. Please try again.'
-        );
+        showToast.error(refusalMessage(result, t('errors.order_sync_failed')));
         return;
       }
 
@@ -712,7 +699,7 @@ export default function CaptainOrder() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-dvh overflow-hidden bg-gray-50 flex flex-col">
       {/* Header */}
       <div className="sticky top-0 z-20 bg-header text-header-foreground border-b border-header-border px-3 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -799,7 +786,7 @@ export default function CaptainOrder() {
       )}
 
       {/* Mobile layout: toggle-driven single-pane view */}
-      <div className="flex-1 flex flex-col overflow-hidden lg:hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden lg:hidden">
         {canModify && mode === 'menu' ? (
           <CaptainMenu canAddItems={canModify} />
         ) : (
@@ -808,7 +795,7 @@ export default function CaptainOrder() {
       </div>
 
       {/* Tablet layout: side-by-side Menu | Order with primary action */}
-      <div className="hidden lg:flex lg:flex-col lg:flex-1 lg:overflow-hidden">
+      <div className="hidden lg:flex lg:flex-col lg:flex-1 lg:min-h-0 lg:overflow-hidden">
         <div className="flex flex-row gap-4 flex-1 overflow-hidden p-3">
           {canModify && (
             <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-white">
@@ -927,6 +914,7 @@ export default function CaptainOrder() {
         open={isTransferCaptainOpen}
         onOpenChange={setIsTransferCaptainOpen}
         currentCaptain={currentCaptain}
+        invoiceName={invoiceId ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
 

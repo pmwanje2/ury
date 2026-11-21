@@ -266,3 +266,20 @@ test.each([
   await expect(submitOrderOfflineAware({ profile, user, order, total: 100, onlineSubmit })).resolves.toMatchObject({ offline: true });
   expect(onlineSubmit).not.toHaveBeenCalled();
 });
+
+test('a lost live walk-in acknowledgement queues the configured customer for replay', async () => {
+  const { submitOrderOfflineAware } = await captureModule();
+  const result = await submitOrderOfflineAware({
+    profile: { ...profile, default_customer: { customer: 'Test Guest' } }, user,
+    order: { ...order, customer: '' }, total: 100, onlineSubmit: async () => { throw { httpStatus: 502 }; },
+  });
+  expect(result.entry.order.customer).toBe('Test Guest');
+});
+
+test('a lost live acknowledgement without a configured walk-in refuses anonymous offline capture', async () => {
+  const { submitOrderOfflineAware } = await captureModule();
+  await expect(submitOrderOfflineAware({ profile, user, order: { ...order, customer: '' }, total: 100,
+    onlineSubmit: async () => { throw { httpStatus: 502 }; },
+  })).rejects.toThrow(/customer/i);
+  expect(await queuedIds()).toEqual([]);
+});

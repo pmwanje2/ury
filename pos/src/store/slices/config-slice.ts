@@ -1,3 +1,4 @@
+import { getSessionUser, ownedSessionKey } from '@ury/core';
 import { StateCreator } from 'zustand';
 import { bindOfflineUser } from '../../pwa/register-offline';
 import { AuthSlice } from './auth-slice';
@@ -98,10 +99,11 @@ export const createConfigSlice: StateCreator<
       set({ isLoading: true, error: null });
 
       // Check session storage first if not forcing refresh
-      const user = get().user;
-      await bindOfflineUser(user?.name);
-      const key = user ? `posProfile:${user.name}` : 'posProfile';
-      const cached = sessionStorage.getItem(key);
+      const owner = getSessionUser();
+      await bindOfflineUser(owner);
+      if (owner !== getSessionUser()) return;
+      const key = ownedSessionKey('posProfile');
+      const cached = key && sessionStorage.getItem(key);
       if (cached && !forceRefresh) {
         const profile = JSON.parse(cached);
         if (profile && profile.country && profile.enable_payment_without_printing !== undefined) {
@@ -120,7 +122,8 @@ export const createConfigSlice: StateCreator<
       const profile = await getCombinedPosProfile();
 
       // Cache the profile
-      sessionStorage.setItem(key, JSON.stringify(profile));
+      if (owner !== getSessionUser()) return;
+      if (key) sessionStorage.setItem(key, JSON.stringify(profile));
       set({ posProfile: profile });
 
       // Allowed to enter the app: see deriveAllowedRoles.

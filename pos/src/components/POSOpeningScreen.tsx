@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Store, RefreshCw, AlertTriangle, Lock, LogOut } from 'lucide-react';
 import { Button, Badge, Select, SelectItem, Spinner, showToast } from '@ury/ui';
-import { clearCashierStorage } from '../offline/cashier';
+import { useTillLogout } from './TillLogout';
 import { formatCurrency } from '@ury/core';
 import { useRootStore } from '../store/root-store';
 import {
@@ -55,24 +55,8 @@ const POSOpeningScreen = ({ onSuccess, onError, onContinue }: POSOpeningScreenPr
   const [error, setError] = useState<string | null>(null);
   const [balances, setBalances] = useState<POSOpeningPayment[]>([]);
   const [zeroBalanceConfirmed, setZeroBalanceConfirmed] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const logoutPending = useRef(false);
-
+  const { loggingOut, handleLogout } = useTillLogout();
   const occupied = context?.occupied_entry ?? null;
-
-  const handleLogout = async () => {
-    if (logoutPending.current) return;
-    logoutPending.current = true;
-    setLoggingOut(true);
-    try {
-      await clearCashierStorage(true);
-      window.location.href = '/login?redirect-to=%2Fpos';
-    } catch (error) {
-      showToast.error(error instanceof Error && /outbox/i.test(error.message) ? error.message : t('errors.failed_logout'));
-      logoutPending.current = false;
-      setLoggingOut(false);
-    }
-  };
 
   const sessionStart = useMemo(() => {
     if (occupied?.period_start_date) {

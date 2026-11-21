@@ -1,9 +1,10 @@
+import { resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
 import { v4 as uuid } from 'uuid';
 import { t } from '../i18n';
 import { isGatewayUnreachableStatus } from './gateway';
 import { forgetOpenTableCheck, readOpenTableCheck, rememberOpenTableCheck, type OpenTableCheck } from './open-table-checks';
 
-export interface OfflineProfile {
+export interface OfflineProfile extends DefaultCustomerConfig {
   name: string;
   ury_offline_capture?: unknown;
   role_allowed_for_billing?: Array<{ role: string }>;
@@ -241,6 +242,11 @@ export class OfflineOutbox {
       const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;
       if (clientId && (!previous || previous.outage_id !== outage || previous.state !== 'pending' || previous.next_round)) throw new Error('Extra rounds require an order from this same outage.');
       if (previous && (['customer', 'table', 'room', 'order_type', 'no_of_pax'] as const).some((key) => previous.order[key] !== order[key])) throw new Error('Extra rounds cannot change the order context, customer or table offline.');
+      if (reserved && !previous && !order.customer && (order.order_type === 'Dine In' || order.order_type === 'Take Away')) {
+        const customer = resolveDefaultCustomer(order.order_type, this.options.profile)?.id;
+        if (!customer) throw new Error(t('errors.select_customer'));
+        order = { ...order, customer };
+      }
       if (previous?.settlement) throw new Error('This order already has a settlement.');
       await this.rememberPersistence();
       const round = this.round(order.items, total, !previous ? reserved?.roundId : undefined);

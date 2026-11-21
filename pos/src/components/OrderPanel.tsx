@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
-import { formatCurrency, parseFrappeError } from '@ury/core';
+import { formatCurrency, parseFrappeError, resolveDefaultCustomer } from '@ury/core';
 import { CustomerSelect } from './CustomerSelect';
 import ProductDialog from './ProductDialog';
 import OrderTypeSelect from './OrderTypeSelect';
@@ -14,7 +14,7 @@ import { HoldFireControls } from './HoldFireControls';
 import { useOutbox } from '../offline/use-outbox';
 import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
-import { syncOrder } from '../lib/order-api';
+import { syncOrder, type SavedInvoice } from '../lib/order-api';
 import { useRootStore } from '../store/root-store';
 import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
@@ -29,7 +29,7 @@ const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'w
   SERVED: { label: 'order.kot_served', variant: 'success' },
 };
 
-const OrderPanel = () => {
+const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoice) => void }) => {
   const { 
     activeOrders, 
     removeFromOrder, 
@@ -43,6 +43,7 @@ const OrderPanel = () => {
     selectedOrderType,
     selectedTable,
     selectedRoom,
+    tableOrder, editCustomer,
     selectedCustomer,
     selectedAggregator,
     resetOrderState,
@@ -128,13 +129,20 @@ const OrderPanel = () => {
         throw new Error(t('errors.user_not_logged_in'));
       }
 
+      const routine = selectedOrderType === DINE_IN || selectedOrderType === 'Take Away';
+      const invoiceCustomer = isUpdatingOrder && orderId ? (
+        editCustomer?.invoice === orderId ? editCustomer.customer :
+          tableOrder?.message?.name === orderId ? tableOrder.message.customer : null
+      ) : null;
+      const customer = selectedCustomer?.id || invoiceCustomer || (!isUpdatingOrder && outbox.offline && routine
+        ? resolveDefaultCustomer(selectedOrderType, posProfile)?.id : '');
       // Validate customer/aggregator details
       if (!target && selectedOrderType === 'Aggregators') {
         if (!selectedAggregator?.customer) {
           showToast.error(t('errors.select_aggregator'));
           return;
         }
-      } else if (!target && !selectedCustomer?.name) {
+      } else if (!target && !customer && (!routine || outbox.offline)) {
         showToast.error(t('errors.select_customer'));
         return;
       }
@@ -167,7 +175,7 @@ const OrderPanel = () => {
         order_type: selectedOrderType,
         table: selectedTable || undefined,
         room: selectedRoom || undefined,
-        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : selectedCustomer?.id,
+        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : customer,
         aggregator_id: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : undefined,
         cashier: posProfile.cashier,
         owner: posProfile.owner,
@@ -195,7 +203,7 @@ const OrderPanel = () => {
       // write is rejected (stale last_modified_time, table already occupied,
       // or the invoice was already billed by another user).
       if (result?.message && typeof result.message === 'object' && 'status' in result.message && result.message.status === 'Failure') {
-        showToast.error(isUpdatingOrder ? t('errors.order_modified') : t('errors.order_sync_failed'));
+        showToast.error(parseFrappeError(result, t('errors.order_sync_failed')));
         return;
       }
 
@@ -203,6 +211,9 @@ const OrderPanel = () => {
       resetOrderState();
       setOfflineTarget('');
       showToast.success(submission.offline ? t('offline.saved') : isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
+      if (result?.message && 'name' in result.message && user.roles?.includes('URY Cashier')) {
+        onCashierCheck?.(result.message);
+      }
     } catch (error) {
       console.error('Failed to sync order:', error);
       showToast.error(parseFrappeError(error, t('errors.failed_process_order')));

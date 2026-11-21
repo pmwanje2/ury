@@ -1,4 +1,4 @@
-import { sessionStorageKey } from '@ury/core';
+import { ownedSessionKey } from '@ury/core';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { isLinkDown } from '@ury/core';
 import { DOCTYPES } from '../data/doctypes';
@@ -37,6 +37,8 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  age_minutes?: number;
+  items_preview?: Array<{ item_name: string; qty: number }>;
 }
 
 export interface SplitGroupInvoice extends POSInvoice {
@@ -76,23 +78,69 @@ interface GetPOSInvoicesResponse {
 }
 
 interface GetPOSInvoicesParams {
-  status: POSInvoice['status'];
+  status: OrderStatusType;
   limit?: number;
   limit_start?: number;
   paid_limit?: number;
+  branch?: string;
 }
 
 interface GetPOSInvoiceItemsResponse {
   message: [POSInvoiceItem[], POSInvoiceTax[]];
 }
 
+export const outstandingFields = [
+  'docstatus', 'name', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
+  'custom_merged_tables', 'cashier', 'waiter', 'net_total', 'posting_time', 'total_taxes_and_charges',
+  'customer', 'customer_name', 'status', 'mobile_number', 'posting_date', 'rounded_total', 'order_type',
+  'custom_split_group', 'custom_split_from', 'custom_guest_label', 'custom_merged_pos_invoice',
+  'custom_merged_total', 'additional_discount_percentage', 'discount_amount', 'ury_client_order_id',
+];
+
+export async function getTillBranch() {
+  const { message: branch } = await call.get<{ message: string }>('ury.ury_pos.api.getBranch');
+  if (!branch) throw new Error('Till branch unavailable');
+  return branch;
+}
+
+async function outstandingChecks(limit: number, offset: number, query?: string, resolvedBranch?: string) {
+  const branch = resolvedBranch || await getTillBranch();
+  const { message: rows } = await call.get<{ message: (POSInvoice & { creation: string })[] }>('frappe.client.get_list', {
+    doctype: 'POS Invoice', filters: { branch, docstatus: 0, status: 'Draft' }, fields: outstandingFields,
+    ...(query ? { or_filters: ['name', 'customer', 'mobile_number'].map(field => [field, 'like', `%${query}%`]) } : {}),
+    order_by: 'creation asc, name asc', limit_start: offset, limit_page_length: limit + 1,
+  });
+  const invoices = rows.slice(0, limit);
+  if (invoices.length) {
+    const [items, clock] = await Promise.allSettled([
+      call.get<{ message: { parent: string; item_name: string; qty: number }[] }>('frappe.client.get_list', {
+        doctype: 'POS Invoice Item', parent: 'POS Invoice', fields: ['parent', 'item_name', 'qty'],
+        filters: { parenttype: 'POS Invoice', parent: ['in', invoices.map(row => row.name)] },
+        order_by: 'parent asc, idx asc', limit_page_length: 0,
+      }),
+      call.get<{ message: string }>('ury.ury.api.ury_server_time.get_server_time'),
+    ]);
+    // Both values are site-local wall times. Parse in the same fixed offset so
+    // the till's timezone and daylight saving transitions do not change the age.
+    const siteMillis = (value: string) => Date.parse(value.replace(' ', 'T') + 'Z');
+    for (const inv of invoices) {
+      const age = clock.status === 'fulfilled' && typeof clock.value.message === 'string' && inv.creation
+        ? siteMillis(clock.value.message) - siteMillis(inv.creation) : NaN;
+      if (Number.isFinite(age)) inv.age_minutes = Math.max(0, Math.floor(age / 60000));
+      if (items.status === 'fulfilled' && Array.isArray(items.value.message)) inv.items_preview = items.value.message.filter(row => row.parent === inv.name).map(({ item_name, qty }) => ({ item_name, qty }));
+    }
+  }
+  return { invoices, hasMore: rows.length > limit };
+}
+
 export async function getPOSInvoices({
   status,
   limit,
   limit_start,
-  paid_limit
+  paid_limit, branch
 }: GetPOSInvoicesParams) {
   try {
+    if (status === 'Outstanding') return await outstandingChecks(limit ?? 20, limit_start ?? 0, undefined, branch);
     // Use paid_limit as the limit for Recently Paid status
     const actualLimit = status === 'Recently Paid' && paid_limit ? paid_limit : limit;
 
@@ -150,8 +198,12 @@ export async function updateInvoiceStatus(
   }
 }
 
-export async function searchPosInvoice(query: string, status: string) {
+export async function searchPosInvoice(query: string, status: string, branch?: string) {
   try {
+    if (status === 'Outstanding') {
+      const { invoices, hasMore } = await outstandingChecks(10, 0, query, branch);
+      return { data: invoices, next: hasMore };
+    }
     const response = await call.get('ury.ury_pos.api.searchPosInvoice', {
       query,
       status,
@@ -348,7 +400,8 @@ const MERGE_CANDIDATE_FIELDS = [
 ] as const;
 
 function getBranchFromSession(): string {
-  const raw = sessionStorage.getItem(sessionStorageKey('posProfile'));
+  const key = ownedSessionKey('posProfile');
+  const raw = key && sessionStorage.getItem(key);
   if (!raw) {
     throw new Error('POS profile not loaded');
   }

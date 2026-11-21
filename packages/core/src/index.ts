@@ -22,7 +22,7 @@ export {
   storage,
   purgeOfflineSession,
   tellOfflineWorker,
-  getSessionUser, sessionStorageKey, getUserSessionStorageKey,
+  clearAppStorage, ownedSessionKey, getSessionUser, sessionStorageKey, getUserSessionStorageKey,
   isUryPosRegistration,
   URY_POS_SCOPE,
   URY_POS_CACHE_PREFIX,

@@ -1,3 +1,34 @@
+const APP_LOCAL_STORAGE_KEYS = [
+  'userAuth', 'selectedRoom', 'posOrderTabsData', 'pos_profile',
+  'currency', 'currencySymbol', 'kot_time', 'ury_active_branch_id',
+];
+const APP_SESSION_STORAGE_KEYS = [
+  'posProfile', 'menuCategories', 'customerGroups', 'territories', 'payment_modes',
+  'ury.setup.configureState',
+];
+const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session'];
+
+export function clearAppStorage(): void {
+  APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+  APP_SESSION_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
+  // Walk backwards because removeItem changes the storage indices.
+  for (let index = localStorage.length - 1; index >= 0; index--) {
+    const key = localStorage.key(index);
+    if (key && (key.startsWith('posOrderTabsData:') || /^.+_.+_strike$/.test(key))) {
+      localStorage.removeItem(key);
+    }
+  }
+  for (let index = sessionStorage.length - 1; index >= 0; index--) {
+    const key = sessionStorage.key(index);
+    if (key && (
+      USER_SESSION_STORAGE_KEYS.some((prefix) => key.startsWith(`${prefix}:`)) ||
+      key.startsWith('ury_rooms_') || key.startsWith('ury_room_counts_')
+    )) {
+      sessionStorage.removeItem(key);
+    }
+  }
+}
+
 export const storage = {
   savePosProfileFull: (profile: unknown) => {
     localStorage.setItem('pos_profile', JSON.stringify(profile));
@@ -44,8 +75,8 @@ export const getSessionUser = (): string | null => {
   }
 };
 
-export function sessionStorageKey(key: string): string {
-  return getUserSessionStorageKey(key, getSessionUser()) ?? key;
+export function sessionStorageKey(key: string): string | null {
+  return getUserSessionStorageKey(key, getSessionUser());
 }
 
 export function isUryPosRegistration(registration: { scope: string }): boolean {
@@ -113,4 +144,9 @@ export async function purgeOfflineSession(): Promise<void> {
     await Promise.all(names.map((name) => caches.delete(name)));
   });
   await Promise.all(registrations.map((registration) => settle(() => registration.unregister())));
+}
+
+export function ownedSessionKey(key: string): string | null {
+  sessionStorage.removeItem(key);
+  return sessionStorageKey(key);
 }

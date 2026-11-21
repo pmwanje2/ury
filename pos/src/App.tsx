@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import AppLayout from './components/AppLayout';
 import Orders from './pages/Orders';
 import POS from './pages/POS';
@@ -16,6 +16,7 @@ import CaptainRouteGuard from './captain/components/CaptainRouteGuard';
 import CaptainTables from './captain/pages/CaptainTables';
 import CaptainOrder from './captain/pages/CaptainOrder';
 import { ToastProvider } from '@ury/ui';
+import { homePath } from './lib/home-route';
 import { useRootStore } from './store/root-store';
 import { usePOSStore } from './store/pos-store';
 import { useEffect, useRef, useState } from 'react';
@@ -57,7 +58,17 @@ function useAiSettings() {
   return aiEnabled;
 }
 
+
+function RegisterRoute() {
+  const navigate = useNavigate();
+  return <POS onCashierCheck={(invoice) => {
+    void useRootStore.getState().selectOrder(invoice);
+    navigate('/orders');
+  }} />;
+}
+
 function App() {
+  const user = useRootStore((state) => state.user);
   const {
     initializeApp
   } = usePOSStore();
@@ -99,9 +110,9 @@ function App() {
                   <ChatWidgetRefProvider chatRef={chatRef}>
                     <Routes>
                       <Route element={<AppLayout />}>
-                        <Route index element={<Navigate to={provisional ? "/register" : "/dashboard"} replace />} />
+                        <Route index element={<Navigate to={provisional ? "/register" : homePath(user)} replace />} />
                         <Route path="/dashboard" element={<Dashboard />} />
-                        <Route path="/register" element={<POS />} />
+                        <Route path="/register" element={<RegisterRoute />} />
                         <Route path="/tables" element={<Table />} />
                         <Route path="/table" element={<Table />} />
                         <Route path="/orders" element={<Orders />} />

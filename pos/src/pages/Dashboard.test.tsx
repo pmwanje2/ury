@@ -59,8 +59,7 @@ describe("Dashboard", () => {
     render(<Dashboard />);
 
     await waitFor(() => {
-      // The dashboard renders "Shift Overview" as the title
-      expect(screen.getByText("Shift Overview")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: "Shift Overview" })).toBeInTheDocument();
     });
   });
 

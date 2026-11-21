@@ -14,8 +14,10 @@ import { getMergeGroupMembers, sortTablesByMergeGroups, formatReservationTime, i
 import { t } from '../../i18n';
 import {
   getActiveTableOrders,
+  getUpcomingBookings,
   getUserFullNames,
   type ActiveTableOrder,
+  type UpcomingBooking,
 } from '../lib/captain-table-api';
 import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
 import { floorSignOut } from '../../lib/floor-session';
@@ -49,6 +51,7 @@ export default function CaptainTables() {
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [tables, setTables] = useState<Table[]>([]);
   const [activeOrders, setActiveOrders] = useState<Map<string, ActiveTableOrder>>(new Map());
+  const [bookings, setBookings] = useState<Map<string, UpcomingBooking>>(new Map());
   const [ownerNames, setOwnerNames] = useState<Map<string, string>>(new Map());
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
@@ -126,6 +129,16 @@ export default function CaptainTables() {
     }
   }, []);
 
+  const loadBookings = useCallback(async (branchName: string) => {
+    try {
+      setBookings(await getUpcomingBookings(branchName));
+    } catch (err) {
+      // Advisory only: a booking read must never prevent seating.
+      setBookings(new Map());
+      console.error('Failed to load table bookings', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedRoom) {
       loadTables(selectedRoom);
@@ -135,13 +148,17 @@ export default function CaptainTables() {
   useEffect(() => {
     if (branch) {
       loadActiveOrders(branch);
+      loadBookings(branch);
     }
-  }, [branch, loadActiveOrders]);
+  }, [branch, loadActiveOrders, loadBookings]);
 
   const refresh = useCallback(() => {
     if (selectedRoom) loadTables(selectedRoom);
-    if (branch) loadActiveOrders(branch);
-  }, [selectedRoom, branch, loadTables, loadActiveOrders]);
+    if (branch) {
+      loadActiveOrders(branch);
+      loadBookings(branch);
+    }
+  }, [selectedRoom, branch, loadTables, loadActiveOrders, loadBookings]);
 
   const tableGroups = useMemo(() => sortTablesByMergeGroups(tables), [tables]);
 
@@ -157,6 +174,15 @@ export default function CaptainTables() {
   const handleTableTap = async (table: Table, order: ActiveTableOrder | undefined) => {
     const ownership = resolveOwnership(table, order);
 
+    if (context?.reservation_enabled !== true) {
+      if (ownership === 'free' || ownership === 'mine' || canAccessOtherCaptainsTables) {
+        navigate(`/order/table/${table.name}`);
+      } else {
+        const name = order && (ownerNames.get(order.waiter) ?? order.waiter);
+        showToast.error(name ? t('tables.assigned_to', { owner: name }) : t('tables.table_occupied'));
+      }
+      return;
+    }
     if (ownership === 'free') {
       try {
         const orderRes = await getTableOrder(table.name);
@@ -373,6 +399,7 @@ export default function CaptainTables() {
                   key={table.name}
                   table={table}
                   order={order}
+                  booking={bookings.get(table.name)}
                   ownership={ownership}
                   ownerName={ownership === 'mine' ? undefined : ownerName}
                   mergePartners={mergePartners}

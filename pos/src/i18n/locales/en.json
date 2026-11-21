@@ -37,7 +37,8 @@
     "retry": "Retry",
     "today": "Today",
     "refresh": "Refresh",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "reserved": "Reserved"
   },
   "header": {
     "search_placeholder_default": "Search orders, menu items, or customers...",
@@ -106,7 +107,16 @@
     "kot_sent": "Sent",
     "kot_preparing": "Preparing",
     "kot_ready": "Ready",
-    "kot_served": "Served"
+    "kot_served": "Served",
+    "age_minutes": "{{count}} min",
+    "change_type_confirm": "Clear and switch",
+    "change_type_message": "Switching to {{type}} clears this order. Items in the cart: {{count}}.",
+    "change_type_title": "Change order type?",
+    "not_printed": "Not printed",
+    "print_bill": "Print bill",
+    "print_receipt": "Print receipt",
+    "printed": "Printed",
+    "settle_bill": "Settle bill"
   },
   "payment": {
     "title": "Payment",
@@ -528,7 +538,8 @@
     "orders": "Orders",
     "settings": "Settings",
     "sessions": "Sessions",
-    "reservations": "Reservations"
+    "reservations": "Reservations",
+    "analytics": "Analytics"
   },
   "product_dialog": {
     "special_instructions": "Special Instructions",
@@ -555,7 +566,8 @@
     "recently_paid": "Recently Paid",
     "paid": "Paid",
     "consolidated": "Consolidated",
-    "return": "Return"
+    "return": "Return",
+    "outstanding": "Outstanding"
   },
   "settings": {
     "title": "Settings",
@@ -921,5 +933,22 @@
     "captured": "Captured",
     "no_fdn": "Offline capture; no fiscal device number.",
     "refused": "{{action}} is refused offline. Reconnect to the server first."
+  },
+  "bill_requests": {
+    "choose_check": "Choose an open check",
+    "empty": "No bill requests waiting",
+    "loading": "Loading bill requests",
+    "lookup_loading": "Finding open bill…",
+    "lookup_unavailable": "Bill lookup unavailable",
+    "no_link": "Request has no linked table or bill",
+    "no_open_checks": "No open checks for {{table}}",
+    "not_found": "Bill {{invoice}} was not found",
+    "not_open": "Bill {{invoice}} is not open",
+    "open_record": "Open request",
+    "refresh": "Refresh",
+    "refresh_failed": "Bill requests refresh failed",
+    "title": "Bill requests",
+    "unavailable": "Bill requests unavailable",
+    "waiting": "Bill requests: {{count}} waiting"
   }
 }
