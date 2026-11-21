@@ -103,7 +103,9 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     []
   );
 
-  const checkPOSStatus = useCallback(async () => {
+  // resumeEntry: continue on another operator's joinable open till. It takes
+  // the same company/profile, checklist and daily-close path as an own entry.
+  const checkPOSStatus = useCallback(async (resumeEntry?: POSOpeningEntryRef) => {
     if (!posProfile) return;
 
     setIsLoading(true);
@@ -112,7 +114,9 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     setNeedsOpeningChecklist(false);
 
     try {
-      const response = await checkPOSOpening(user?.name);
+      const response = resumeEntry
+        ? { message: [resumeEntry] }
+        : await checkPOSOpening(user?.name);
       const entries = normalizeOpenEntries(response.message);
 
       // No open entry for this user -> show the native opening screen.
@@ -307,7 +311,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         message={blockingMessage}
         existingEntry={existingEntry}
         canAccessDesk={canAccessDesk}
-        onRetry={checkPOSStatus}
+        onRetry={() => checkPOSStatus()}
         onContinue={() => setBlockingState(null)}
         onCloseNow={
           blockingState === 'dailyClosePending'
@@ -326,7 +330,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         checklistType="Opening"
         onComplete={() => {
           setNeedsOpeningChecklist(false);
-          checkPOSStatus();
+          checkPOSStatus(existingEntry || undefined);
         }}
       />
     );
@@ -337,6 +341,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
       <POSOpeningScreen
         onSuccess={handleOpeningSuccess}
         onError={handleScreenError}
+        onContinue={(entry) => checkPOSStatus(entry)}
       />
     );
   }

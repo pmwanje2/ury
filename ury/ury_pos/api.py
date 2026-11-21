@@ -939,6 +939,10 @@ def getPosProfileFull(pos_profile):
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
+        # native partial-payment switch; the till lets only a named account settle short
+        "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
+        # one configured void reason per line; None on sites without the field
+        "custom_void_reasons": profile.get("custom_void_reasons"),
         **get_default_customer_config(profile),
     }
 

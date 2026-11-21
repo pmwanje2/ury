@@ -27,6 +27,9 @@ export interface PosProfileLimited {
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
+  custom_blind_cash_count?: number;
+  /** Mode of Payment -> default account for the profile's company. */
+  payment_mode_accounts?: Record<string, string | null>;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
@@ -63,6 +66,7 @@ export interface PosProfileFull {
   idx: number;
   company: string;
   customer: string | null;
+  allow_partial_payment?: number;
   country: string;
   disabled: number;
   warehouse: string;
@@ -83,6 +87,9 @@ export interface PosProfileFull {
   default_customer?: DefaultCustomerEntry | null;
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
+  custom_blind_cash_count?: number;
+  /** One configured void reason per line. Absent on sites without the field. */
+  custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
 }
@@ -109,6 +116,7 @@ export interface PosProfileCombined extends PosProfileFull {
   enable_payment_without_printing?: number;
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
+  payment_mode_accounts?: Record<string, string | null>;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
@@ -179,6 +187,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
+    custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
+    payment_mode_accounts: limitedProfile.payment_mode_accounts,
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',

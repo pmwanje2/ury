@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Store, RefreshCw, AlertTriangle, Lock } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Store, RefreshCw, AlertTriangle, Lock, LogOut } from 'lucide-react';
 import { Button, Badge, Select, SelectItem, Spinner, showToast } from '@ury/ui';
-import { formatCurrency } from '@ury/core';
+import { formatCurrency, logout } from '@ury/core';
 import { useRootStore } from '../store/root-store';
 import {
   createPOSOpening,
   getPOSOpeningContext,
   parseFrappeError,
   POSOpeningContext,
+  POSOpeningEntryRef,
   POSOpeningPayment,
 } from '../lib/pos-opening-api';
-import { t } from '../i18n';
+import { getActiveLanguage, t } from '../i18n';
 import POSOpeningPaymentTable from './POSOpeningPaymentTable';
 
 type OpeningBlockingState =
@@ -23,6 +24,8 @@ type OpeningBlockingState =
 interface POSOpeningScreenProps {
   onSuccess?: () => void;
   onError?: (state: OpeningBlockingState, message?: string) => void;
+  /** Continue on another operator's joinable open till (no new opening is created). */
+  onContinue?: (entry: POSOpeningEntryRef) => void;
 }
 
 const BLOCKING_ERROR_NONE = 'none';
@@ -32,11 +35,17 @@ type BlockingErrorKey =
   | 'no_profiles'
   | 'no_payment_modes'
   | 'no_permission'
+  | 'occupied_till'
   | 'daily_close_pending'
   | 'main_cashier_not_open'
   | 'main_cashier_not_configured';
 
-const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
+/** Frappe datetimes are site-local; parse as local ISO, render in the active language. */
+function formatOpeningTime(value: string): string {
+  return new Date(value.replace(' ', 'T')).toLocaleString(getActiveLanguage());
+}
+
+const POSOpeningScreen = ({ onSuccess, onError, onContinue }: POSOpeningScreenProps) => {
   const { user } = useRootStore();
 
   const [context, setContext] = useState<POSOpeningContext | null>(null);
@@ -45,11 +54,32 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
   const [error, setError] = useState<string | null>(null);
   const [balances, setBalances] = useState<POSOpeningPayment[]>([]);
   const [zeroBalanceConfirmed, setZeroBalanceConfirmed] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const logoutPending = useRef(false);
+
+  const occupied = context?.occupied_entry ?? null;
+
+  const handleLogout = async () => {
+    if (logoutPending.current) return;
+    logoutPending.current = true;
+    setLoggingOut(true);
+    try {
+      await logout();
+      window.location.href = '/login?redirect-to=%2Fpos';
+    } catch {
+      showToast.error(t('errors.failed_logout'));
+      logoutPending.current = false;
+      setLoggingOut(false);
+    }
+  };
 
   const sessionStart = useMemo(() => {
+    if (occupied?.period_start_date) {
+      return new Date(occupied.period_start_date.replace(' ', 'T')).toLocaleString();
+    }
     const timestamp = context?.session_start || new Date().toISOString();
     return new Date(timestamp).toLocaleString();
-  }, [context?.session_start]);
+  }, [occupied?.period_start_date, context?.session_start]);
 
   const loadContext = async (posProfile?: string) => {
     setIsLoading(true);
@@ -99,6 +129,10 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
   const blockingError: BlockingErrorKey = useMemo(() => {
     if (!context || isLoading) return BLOCKING_ERROR_NONE;
 
+    if (context.occupied_entry) {
+      return 'occupied_till';
+    }
+
     if (!context.permissions.create || !context.permissions.submit) {
       return 'no_permission';
     }
@@ -132,6 +166,24 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
     !isSubmitting &&
     blockingError === BLOCKING_ERROR_NONE &&
     context?.selected_profile != null;
+
+  const canContinue =
+    !isLoading &&
+    !loggingOut &&
+    occupied?.joinable === true &&
+    !!occupied.name &&
+    !!context?.selected_profile &&
+    !!onContinue;
+
+  const handleContinue = () => {
+    if (!canContinue || !occupied?.name || !context?.selected_profile) return;
+    onContinue?.({
+      name: occupied.name,
+      company: context.company,
+      pos_profile: context.selected_profile,
+      period_start_date: occupied.period_start_date,
+    });
+  };
 
   const mapCreateError = (message: string): string => {
     const lower = message.toLowerCase();
@@ -205,6 +257,21 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
             <p className="text-red-700 text-sm">{t('pos_opening.no_profiles')}</p>
           </div>
         );
+      case 'occupied_till':
+        return (
+          <div className="flex items-start gap-3 p-4 bg-orange-50 border border-orange-200 rounded-lg">
+            <AlertTriangle className="w-5 h-5 text-orange-600 mt-0.5 shrink-0" />
+            <p className="text-orange-700 text-sm">
+              {t(occupied?.joinable ? 'pos_opening.joinable_till' : 'pos_opening.occupied_till', {
+                profile: context?.selected_profile || '',
+                holder: occupied?.user_full_name && !occupied.user_full_name.includes('@')
+                  ? occupied.user_full_name
+                  : t('pos_opening.another_cashier'),
+                since: occupied?.period_start_date ? formatOpeningTime(occupied.period_start_date) : '',
+              })}
+            </p>
+          </div>
+        );
       case 'no_payment_modes':
         return (
           <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -259,11 +326,13 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-gray-900">
-                {t('pos_opening.title')}
+                {t(occupied ? 'pos_opening.occupied_title' : 'pos_opening.title')}
               </h1>
-              <p className="text-sm text-gray-500">
-                {t('pos_opening.subtitle')}
-              </p>
+              {!occupied && (
+                <p className="text-sm text-gray-500">
+                  {t('pos_opening.subtitle')}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -332,7 +401,7 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
           </section>
 
           {/* Opening Balance */}
-          {context && context.payment_modes.length > 0 && (
+          {context && !occupied && context.payment_modes.length > 0 && (
             <section className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
@@ -374,6 +443,13 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
         {/* Actions */}
         <div className="px-8 py-6 border-t border-gray-100 bg-gray-50 rounded-b-xl">
           <div className="flex flex-col sm:flex-row gap-3">
+            {occupied ? (
+              canContinue && (
+                <Button onClick={handleContinue} className="w-full sm:w-auto sm:flex-1">
+                  {t('pos_opening.continue')}
+                </Button>
+              )
+            ) : (
             <Button
               onClick={handleSubmit}
               disabled={!canSubmit}
@@ -390,6 +466,7 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
                 t('pos_opening.open_session')
               )}
             </Button>
+            )}
 
             <Button
               onClick={() => loadContext(context?.selected_profile || undefined)}
@@ -414,6 +491,16 @@ const POSOpeningScreen = ({ onSuccess, onError }: POSOpeningScreenProps) => {
               className="w-full sm:w-auto"
             >
               {t('pos_opening.back_to_dashboard')}
+            </Button>
+
+            <Button
+              onClick={handleLogout}
+              disabled={loggingOut || isSubmitting}
+              variant="outline"
+              className="w-full sm:w-auto"
+            >
+              <LogOut className="w-4 h-4 me-2" />
+              {t('header.logout')}
             </Button>
           </div>
         </div>

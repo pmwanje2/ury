@@ -18,6 +18,7 @@ export const posClosing = defineStore("posClose", {
     showPosOpen: false,
     selectedPosOpenEntry: null,
     cashier: null,
+    posProfile: null,
     postingTime: new Date(),
     openingBalance: [],
     closingAmount: 0,
@@ -73,7 +74,9 @@ export const posClosing = defineStore("posClose", {
         .get("frappe.client.get", getPosOpenEntry)
         .then((result) => {
           this.startDate = result.message.period_start_date;
-          this.cashier = result.message.owner;
+          // The till holder and its profile, not whoever created the entry.
+          this.cashier = result.message.user;
+          this.posProfile = result.message.pos_profile;
           this.openingBalance = result.message.balance_details;
 
           this.getInvoice();
@@ -96,12 +99,13 @@ export const posClosing = defineStore("posClose", {
       const PosOpenEntry = {
         start: this.startDate,
         end: this.formattedDateTime,
-        pos_profile: this.invoiceData.posProfile,
+        pos_profile: this.posProfile,
         user: this.cashier,
       };
+      // Whole-till read: v16 get_invoices only returns the holder's own bills.
       this.call
         .get(
-          "erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry.get_invoices",
+          "ury.ury_pos.api.get_till_invoices",
           PosOpenEntry
         )
         .then((result) => {
@@ -186,17 +190,15 @@ export const posClosing = defineStore("posClose", {
         let found = false;
         this.payments.forEach((secondItem) => {
           if (secondItem.mode_of_payment === item.mode_of_payment) {
-            item.expected_amount = secondItem.expected_amount;
-            item.difference = -secondItem.expected_amount;
-
+            item.expected_amount = (Number(item.opening_amount) || 0) + secondItem.expected_amount;
             found = true;
           }
         });
 
         if (!found) {
-          item.expected_amount = 0;
-          item.difference = 0;
+          item.expected_amount = Number(item.opening_amount) || 0;
         }
+        item.difference = (Number(item.closing_amount) || 0) - item.expected_amount;
       });
 
       this.db
@@ -206,9 +208,8 @@ export const posClosing = defineStore("posClose", {
           posting_date: this.postingDate,
           posting_time: formattedTime,
           company: this.invoiceData.company,
-          pos_profile: this.invoiceData.posProfile,
+          pos_profile: this.posProfile,
           payment_reconciliation: payment_reconciliation,
-          pos_transactions: this.posInvoice,
           pos_opening_entry: this.selectedPosOpenEntry,
           user: this.cashier,
           grand_total: this.grandTotal,

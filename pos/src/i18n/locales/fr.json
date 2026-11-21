@@ -71,6 +71,8 @@
     "taxes_charges": "Taxes et frais",
     "cancel_order": "Annuler la commande",
     "enter_cancel_reason": "Saisir le motif d'annulation",
+    "select_void_reason": "Sélectionner un motif d'annulation",
+    "void_reason_other": "Autre",
     "print": "Imprimer",
     "payment": "Paiement",
     "order_actions": "Actions sur la commande"
@@ -178,7 +180,8 @@
     "invalid_discount": "Veuillez entrer une valeur de remise valide",
     "discount_exceeds_max": "La remise en pourcentage ne peut pas dépasser 100 %",
     "please_print_first": "Veuillez imprimer la facture avant d'effectuer le paiement",
-    "enter_cancel_reason": "Veuillez entrer un motif d'annulation.",
+    "enter_cancel_reason": "Saisissez un motif d'annulation (au moins 4 caractères).",
+    "choose_void_reason": "Choisissez un motif configuré, ou Autre avec une note.",
     "dine_in_restricted": "La consommation sur place n'est pas disponible pour votre rôle",
     "order_modified": "Cette commande a été modifiée. Veuillez recharger la page pour récupérer les dernières modifications.",
     "order_sync_failed": "Impossible de synchroniser cette commande. Veuillez recharger la page et réessayer.",
@@ -494,6 +497,11 @@
     "main_cashier_not_open": "Le caissier principal n'a pas encore ouvert la caisse. Veuillez patienter ou contacter votre caissier principal.",
     "main_cashier_not_configured": "Aucun caissier principal n'est configuré pour ce terminal. Contactez votre responsable.",
     "session_already_open": "Une session est déjà ouverte pour ce terminal.",
+    "occupied_till": "{{profile}} est ouvert par {{holder}} depuis {{since}} ; {{holder}} doit clôturer la session, ou un responsable la clôture dans Desk.",
+    "occupied_title": "Caisse déjà ouverte",
+    "joinable_till": "Caisse ouverte par {{holder}} depuis {{since}}",
+    "continue": "Continuer",
+    "another_cashier": "un autre caissier",
     "user_already_assigned": "Vous avez déjà une session ouverte ailleurs.",
     "payment_mode_misconfigured": "Un mode de paiement n'est pas entièrement configuré. Contactez votre responsable.",
     "contact_manager": "Contactez votre responsable",
@@ -630,6 +638,9 @@
     "acknowledge": "Accuser réception",
     "resolve": "Résoudre",
     "acknowledged": "Pris en charge"
+  },
+  "captain": {
+    "till_not_open": "La caisse n’est pas ouverte. Demandez au caissier de l’ouvrir."
   },
   "floor_pin": {
     "title": "Connexion du personnel",

@@ -27,6 +27,7 @@ describe("CaptainRouteGuard", () => {
   it("renders children when context is available", () => {
     mockUseCaptainContext.mockReturnValue({ 
       capabilities: { canTakeTableOrders: true },
+      openingState: { pos_open: true },
       branch: "B1",
       isLoading: false,
       error: null

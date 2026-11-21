@@ -8,6 +8,7 @@ import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat, type POSInvoice } from '../lib/invoice-api';
+import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 
 
 interface PaymentDialogProps {
@@ -121,7 +122,27 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const roomFields = roomChargeAmount > 0 ? { room_number: roomNumber } : {};
   const shortfall = finalTotal - paymentsTotal;
   const isShort = shortfall > 0.005;
-  const paymentDisabled = isProcessing || payments.length === 0 || isShort || !roomVerified;
+  // A named (non-default) customer on a profile with allow_partial_payment
+  // may settle short; the balance stays owed on the invoice. Profile, order-type
+  // and profile-level default customers are not named accounts; a profile that
+  // predates the default-customer keys fails closed. The submitted payment list
+  // keeps one native mode row, at zero when nothing was tendered.
+  const accountPaymentMode = paymentModes
+    .map((mode: string | { id: string }) => (typeof mode === 'string' ? mode : mode.id))
+    .find(Boolean);
+  const canPayOnAccount = isShort && !!accountPaymentMode
+    && storePosProfile?.name === posProfile
+    && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
+    && !!customer.trim() && customer !== storePosProfile.customer
+    && !profileLacksDefaultCustomerConfig(storePosProfile)
+    && !isConfiguredDefaultCustomer(customer, storePosProfile);
+  // Both rules hold: a Room Charge waits for a verified room, and only a named
+  // account may settle short.
+  const paymentDisabled = isProcessing || !roomVerified
+    || ((payments.length === 0 || isShort) && !canPayOnAccount);
+  const settlementPayments = payments.length === 0 && canPayOnAccount
+    ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
+    : payments;
 
   const handleCheckRoom = async () => {
     const room = roomNumber.trim();
@@ -204,7 +225,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           customer,
           invoice,
           owner,
-          payments,
+          payments: settlementPayments,
           pos_profile: posProfile,
           table,
           submit_invoice: 0,
@@ -240,7 +261,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           customer,
           invoice,
           owner,
-          payments,
+          payments: settlementPayments,
           pos_profile: posProfile,
           table,
           submit_invoice: 1,

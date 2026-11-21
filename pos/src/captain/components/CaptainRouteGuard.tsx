@@ -1,5 +1,5 @@
 import React from 'react';
-import { Spinner } from '@ury/ui';
+import { Button, Spinner } from '@ury/ui';
 import { useCaptainContext } from '../hooks/useCaptainContext';
 import ServiceRequestPanel from './ServiceRequestPanel';
 import ServiceRequestAlert from '../../components/ServiceRequestAlert';
@@ -20,17 +20,15 @@ interface Props {
  * every mutation must still be re-validated server-side per PLAN.md §9.
  *
  * NOTE: this guard runs *inside* `AuthGuard`/`POSOpeningProvider`
- * (`pos/src/App.tsx`). `AuthGuard`'s own `hasAccess` check is derived from
- * POS Profile `role_allowed_for_billing` membership only (see
- * `pos/src/store/slices/config-slice.ts`) — a Captain (non-billing role)
- * will fail that check and never reach this guard at all today. That is a
- * known, confirmed, out-of-scope blocker for this phase — see the Phase 6
- * report for detail. This guard still assumes the AuthGuard/session-auth
- * layer above it is intact and only handles the Captain-specific capability
- * check.
+ * (`pos/src/App.tsx`). `AuthGuard` admits URY POS roles, including Captain
+ * (`pos/src/store/slices/config-slice.ts`), and `POSOpeningProvider` does not
+ * gate `/order*`. After `canTakeTableOrders`, this guard requires the branch
+ * till to be open (`openingState.pos_open` from `get_captain_context`); a
+ * missing opening state blocks. This is a UX hint: the server still
+ * validates the order.
  */
 const CaptainRouteGuard: React.FC<Props> = ({ children }) => {
-  const { capabilities, branch, isLoading, error } = useCaptainContext();
+  const { capabilities, branch, openingState, isLoading, error, refetch } = useCaptainContext();
 
   if (isLoading) {
     return (
@@ -61,6 +59,22 @@ const CaptainRouteGuard: React.FC<Props> = ({ children }) => {
           <p className="text-gray-600">
             {t('captain.no_permission_take_orders')}
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (openingState?.pos_open !== true) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="text-amber-600 text-xl mb-4">🔒</div>
+          <p className="text-gray-600">{t('captain.till_not_open')}</p>
+          <div className="mt-4 flex items-center justify-center">
+            <Button type="button" onClick={() => { void refetch(); }}>
+              {t('pos_opening.retry')}
+            </Button>
+          </div>
         </div>
       </div>
     );

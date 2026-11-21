@@ -15,6 +15,7 @@ import { t } from '../i18n';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 import ClosingPaymentTable from './ClosingPaymentTable';
+import { isBlindCashCount } from '../lib/pos-closing-visibility';
 import ChecklistGateDialog from './ChecklistGateDialog';
 import { getChecklist } from '../lib/checklist-api';
 import {
@@ -53,6 +54,7 @@ interface OpeningEntryDoc {
 }
 
 const MASKED = '—';
+const NO_PAYMENT_MODES: string[] = [];
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
@@ -208,15 +210,20 @@ interface AggregatedTotals {
 
 /**
  * Aggregates raw POS Invoice dicts into closing totals and per-mode expected
- * amounts. When `paymentsByMode` is provided (ERPNext v16 main-cashier path),
- * those payments are already pre-aggregated server-side by mode_of_payment
- * with change_amount already deducted, so they are summed verbatim. When it
- * is absent (sub-cashier path / legacy invoice-list shape), expected amounts
- * are accumulated per-invoice, subtracting the invoice's change_amount when
- * the payment account matches account_for_change_amount (mirroring
- * sub_pos_closing.js refresh_payments / set_form_data).
+ * amounts. When `paymentsByMode` is provided (pre-aggregated shape), those
+ * payments already have change_amount deducted and are summed verbatim.
+ * Otherwise expected amounts are accumulated per invoice, subtracting the
+ * invoice's change_amount when the payment account matches
+ * account_for_change_amount (mirroring sub_pos_closing.js). A card-only
+ * invoice that paid change has no row on the change account, so its change
+ * comes out of the profile mode the server maps to that account.
  */
-function aggregateInvoices(invoices: POSClosingInvoice[], paymentsByMode?: POSClosingPayment[]): {
+function aggregateInvoices(
+  invoices: POSClosingInvoice[],
+  paymentsByMode?: POSClosingPayment[],
+  paymentModes: string[] = [],
+  paymentModeAccounts: Record<string, string | null> = {},
+): {
   totals: AggregatedTotals;
   expectedByMode: Record<string, number>;
 } {
@@ -229,7 +236,20 @@ function aggregateInvoices(invoices: POSClosingInvoice[], paymentsByMode?: POSCl
     totals.totalQty += Number(invoice.total_qty) || 0;
 
     if (!paymentsByMode) {
-      (invoice.payments || []).forEach((payment) => {
+      const payments = invoice.payments || [];
+      const hasChangePayment = payments.some(
+        (payment) => payment.account === invoice.account_for_change_amount,
+      );
+      if (Number(invoice.change_amount) > 0 && !hasChangePayment) {
+        const changeMode = paymentModes.find(
+          (mode) => paymentModeAccounts[mode] === invoice.account_for_change_amount,
+        );
+        if (changeMode) {
+          expectedByMode[changeMode] =
+            (expectedByMode[changeMode] || 0) - Number(invoice.change_amount);
+        }
+      }
+      payments.forEach((payment) => {
         let amount = Number(payment.amount) || 0;
         if (payment.account === invoice.account_for_change_amount) {
           amount -= Number(invoice.change_amount) || 0;
@@ -250,13 +270,28 @@ function aggregateInvoices(invoices: POSClosingInvoice[], paymentsByMode?: POSCl
   return { totals, expectedByMode };
 }
 
+/**
+ * Blind count seeds rows only from the opening and the profile's cached
+ * payment modes, so which rows appear never reveals sales activity.
+ * Sales-only modes are returned separately for reconciliation.
+ */
 function buildRows(
   openingBalances: OpeningBalanceDetail[],
-  expectedByMode: Record<string, number>
-): ClosingPaymentSummary[] {
+  expectedByMode: Record<string, number>,
+  blindCashCount = false,
+  profilePaymentModes: string[] = []
+): { visible: ClosingPaymentSummary[]; hidden: ClosingPaymentSummary[] } {
   const rows = new Map<string, ClosingPaymentSummary>();
+  const hidden = new Map<string, ClosingPaymentSummary>();
+  const rowBalances = blindCashCount
+    ? [
+        ...openingBalances,
+        ...profilePaymentModes.map((mode) => ({ mode_of_payment: mode, opening_amount: 0 })),
+      ]
+    : openingBalances;
 
-  openingBalances.forEach((detail) => {
+  rowBalances.forEach((detail) => {
+    if (rows.has(detail.mode_of_payment)) return;
     const opening = Number(detail.opening_amount) || 0;
     rows.set(detail.mode_of_payment, {
       mode_of_payment: detail.mode_of_payment,
@@ -274,7 +309,7 @@ function buildRows(
     if (existing) {
       existing.expected_amount += sales;
     } else {
-      rows.set(mode, {
+      (blindCashCount ? hidden : rows).set(mode, {
         mode_of_payment: mode,
         opening_amount: 0,
         expected_amount: sales,
@@ -284,12 +319,13 @@ function buildRows(
     }
   });
 
-  return Array.from(rows.values());
+  return { visible: Array.from(rows.values()), hidden: Array.from(hidden.values()) };
 }
 
 const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosingDialogProps) => {
-  const { posProfile } = usePOSStore();
+  const { posProfile, paymentModes = NO_PAYMENT_MODES } = usePOSStore();
   const { user } = useRootStore();
+  const blindCashCount = isBlindCashCount(posProfile);
   // Roles configured on the POS Profile do not see totals/expected amounts (display only).
   const maskAmounts = shouldMaskAmounts(user, posProfile);
 
@@ -301,6 +337,8 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [invoiceCount, setInvoiceCount] = useState(0);
   const [totals, setTotals] = useState<AggregatedTotals>({ grandTotal: 0, netTotal: 0, totalQty: 0 });
   const [rows, setRows] = useState<ClosingPaymentSummary[]>([]);
+  // Sales-only tenders hidden by blind count; reconciled at zero count on submit.
+  const [hiddenRows, setHiddenRows] = useState<ClosingPaymentSummary[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   // Set once the close submission (Sub POS Closing / POS Closing Entry) has
@@ -390,9 +428,21 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       const invoices = Array.isArray(invoiceResult) ? invoiceResult : (invoiceResult?.invoices || []);
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
-      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(invoices, payments);
+      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(
+        invoices,
+        payments,
+        paymentModes,
+        posProfile.payment_mode_accounts,
+      );
       setTotals(aggregatedTotals);
-      setRows(buildRows(openingDoc?.balance_details ?? [], expectedByMode));
+      const { visible, hidden } = buildRows(
+        openingDoc?.balance_details ?? [],
+        expectedByMode,
+        blindCashCount,
+        paymentModes,
+      );
+      setRows(visible);
+      setHiddenRows(hidden);
       setTouchedModes(new Set());
     } catch (error) {
       console.error('Failed to load POS closing details:', error);
@@ -400,7 +450,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     } finally {
       setIsLoading(false);
     }
-  }, [posProfile, user]);
+  }, [posProfile, user, blindCashCount, paymentModes]);
 
   useEffect(() => {
     if (!open) return;
@@ -446,14 +496,15 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       (row) =>
         touchedModes.has(row.mode_of_payment) &&
         row.closing_amount === 0 &&
-        (row.opening_amount !== 0 || row.expected_amount !== 0)
+        // Blind count never consults sales-derived expected amounts.
+        (row.opening_amount !== 0 || (!blindCashCount && row.expected_amount !== 0))
     );
 
     const warningMessage =
       zeroRowsWithActivity.length > 0 ? t('pos_closing.validation_zero_row_warning') : null;
 
     return { isValid: true, blockingMessage: null as string | null, warningMessage };
-  }, [rows, touchedModes]);
+  }, [rows, touchedModes, blindCashCount]);
 
   const handleRequestSubmit = () => {
     if (!validation.isValid) return;
@@ -488,7 +539,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     setIsSubmitting(true);
     setSubmitError(null);
 
-    const paymentReconciliation = rows.map((row) => ({
+    const paymentReconciliation = [...rows, ...hiddenRows].map((row) => ({
       mode_of_payment: row.mode_of_payment,
       opening_amount: row.opening_amount,
       expected_amount: row.expected_amount,
@@ -660,6 +711,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             <p className="py-8 text-center text-sm text-red-600">{loadError}</p>
           ) : (
             <>
+              {!blindCashCount && (
               <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.grand_total')}</p>
@@ -682,6 +734,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   <p className="text-lg font-semibold text-gray-900">{invoiceCount}</p>
                 </div>
               </div>
+              )}
 
               {hasRows ? (
                 <ClosingPaymentTable
@@ -689,6 +742,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   touchedModes={touchedModes}
                   onChange={handleRowChange}
                   hideExpected={maskAmounts}
+                  blindCashCount={blindCashCount}
                 />
               ) : (
                 <p className="py-8 text-center text-sm text-gray-500">
