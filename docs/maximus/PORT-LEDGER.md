@@ -112,28 +112,59 @@ The shared #27 rows `1e732d8e` and `1bd5e78d` are maintained by T9a (#126): its 
 branch’s `CaptainTables` / `CaptainTableCard` plus `table-bookings.test.tsx` compose the full feature.
 Standalone T9b accepts a missing endpoint. No configuration or customer data is seeded.
 
+This keyed supplement updates the corresponding fork rows without editing T9a’s ledger hunks.
+
+| Fork commits | Disposition on v16 |
+|---|---|
+| `492ac51d`, `7dec3e97`, `7d18b8b1` | React captain already sends to the kitchen, locks the pending action and returns to Tables; `captain-walk-in-order` covers anonymous sends. Legacy Cart/Pax and send-state changes remain outside T9b. |
+| `7d6bc789`, `a92006cb` | React retains the matching invoice customer and displays Frappe’s billed-order refusal. Legacy `order-send.js` and server-side blank-update fallback remain outside T9b. |
+| `89429dae`, `3a3a676a` | v16 `sync_order` resolves a new invoice from the order-type/profile default. React supplies the loaded existing invoice customer; direct blank-update RPC parity remains open. |
+| `499a5d1d`, `d942f807` | React cashier opens the acknowledged invoice in Orders; captain returns to Tables (floor sign-out keeps precedence). Legacy Vue routing remains outside T9b. |
+| `e1722257`, `078404d2`, `4ea7132b` | Shared CSRF-safe sign-out, scoped cleanup and pending-action guards. v16 React has no persisted order-tab collection; old tab keys are purged. The mixed legacy Vue caller is excluded. |
+| `bd78795d`, `a379feb4`, `05737a5e`, `ebe37108` | Management and POS retain state on failure and clear only app-owned storage after success. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. Legacy Vue caller excluded. |
+| `c94bd75e`, `7b1d816f` | Orders exposes print, split and settle with native permission/print-before-pay guards; selected invoice and split-line identities retained. |
+| `ca0dfdda`, `f8d76b8e` | Profile, payment modes, customer groups, territories and paid-limit/merge reads use cookie-owned keys; stale responses cannot populate another user’s cache. |
+| `75e634ab`, `091bfa0e` | Resolve branch on the server and read URY Production Unit with native document permissions; `production-api.test.ts`. |
+| `7b3c4430`, `2157f927` | Read the current Frappe cookie locally for cache ownership. Guest/missing cookies cannot read legacy profiles; `profile-cache.test.ts`. |
+| `bd7cc393`, `77368707`, `df3e6f35`, `44c186c4` | Cashier Home opens the branch’s unpaid drafts oldest first, with site-clock ages, item previews and existing settlement controls. Permission-filtered native lists replace the frozen custom query. |
+| `8f35fad2`, `98b312db` | Bill pickup distinguishes a missing/deleted invoice from an unavailable lookup; `BillRequestStrip.test.tsx`. |
+| `7e7cd07e`, `82075f4f` | Cashier role takes Home precedence across roles; explicit analytics, captain and provisional offline register routes retained. |
+| `57cdac91`, `4ed639cc`, `a7b1ad05` | Bill requests and table checks use the till branch; refresh keeps rows on transient failures. Exact and split bill selection tested. |
+| `2d5d6ed5`, `bab890ba`, `f049f262` | Orders mounts #125’s shared Notifications component; native record and exact KOT check navigation use current user/branch. |
+| `6a24e1ca`, `a1fa7644`, `2be36009`, `13435364`, `868e7217` | Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
+| `caf7f11f`, `c7885262` | Open outside T9b: v16 `cancel_order` submits then cancels drafts; the frozen fix uses discard. Legacy `recentOrder.js` still lowercases nullable fields. Both source paths are excluded. |
+| `0197abec`, `0aaa0d9b`, `087cc044`, `d2a64e6e` | Opening, closing and checklist gates reuse till logout; rejection preserves checklist inputs and permits retry. |
+| `f9e31842`, `7fec963b`, `40c43f55`, `f3277dcf` | New routine React sends pass an explicit empty customer to v16; edits preserve invoice identity and named/aggregator orders retain validation. Mixed Vue navigation is excluded. |
+| `caa7ad62`, `36e594c9` | All React till logout surfaces retain `/login?redirect-to=%2Fpos`; failed logout stays on the current screen. |
+| `1e732d8e`, `1bd5e78d` | React badges use #126’s optional read-only endpoint, site-local time and first name. Empty/absent reads leave the table selectable; hard reservation locks remain independent. |
+| `26a630e6`, `b6c3330f` | Known-offline and lost-ack walk-ins use the configured customer or refuse capture; pending local rounds and named customers retain identity. No seeded default. |
+| `dbc36d59`, `3936081b`, `82c78d69`, `320267e7` | Captain sends a blank customer for native resolution on new live orders, preserves matching invoice customer on edit, and keeps v16 floor authorization; no captain offline queue. |
+| `8d84fa3f`, `05bcc006`, `3e7beb8c` | Captain menu/order panes scroll independently inside one dynamic viewport, with visible total/send controls; desktop and phone exercised. |
+| `c7e345ad`, `69c14fe6` | New populated carts confirm an order-type change. Cancel/reselect keeps lines; confirmation clears lines and releases dine-in table/room. Saved order edit restrictions retained. |
+| `b244590e`, `b7210ffd` | Removed the unsourced Shift Brief card; the real shift dashboard remains. |
+
 ## Rows (oldest first)
 
 | Fork commit | Date | Source | Theme | Status | Subject | Note |
 |---|---|---|---|---|---|---|
 | `0bc10600` | 2026-10-01 | direct | T0 | port | test(csrf): cover session token for urypos and mosaic | PR #96 |
 | `ce3a4e14` | 2026-10-01 | direct | T0 | port | fix(csrf): render session token for urypos and mosaic | PR #96 |
-| `492ac51d` | 2026-10-01 | direct | T9 | port | test(pos): reproduce waiter send-to-kitchen failures | T9b: React captain already sends to the kitchen, locks the pending action and returns to Tables; `captain-walk-in-order` covers anonymous sends. Legacy Cart/Pax and send-state changes remain outside T9b. |
-| `7dec3e97` | 2026-10-01 | direct | T9 | port | test(pos): accept equivalent blank Pax HTML attributes | T9b: React captain already sends to the kitchen, locks the pending action and returns to Tables; `captain-walk-in-order` covers anonymous sends. Legacy Cart/Pax and send-state changes remain outside T9b. |
-| `7d18b8b1` | 2026-10-01 | direct | T9 | port | fix(pos): streamline waiter sends to kitchen | T9b: React captain already sends to the kitchen, locks the pending action and returns to Tables; `captain-walk-in-order` covers anonymous sends. Legacy Cart/Pax and send-state changes remain outside T9b. |
-| `7d6bc789` | 2026-10-01 | direct | T9 | port | test(pos): reproduce customer fallback and billed-order feedback gaps | T9b: React retains the matching invoice customer and displays Frappe’s billed-order refusal. Legacy `order-send.js` and server-side blank-update fallback remain outside T9b. |
-| `a92006cb` | 2026-10-01 | direct | T9 | port | fix(pos): preserve invoice customer and explain billed-order sends | T9b: React retains the matching invoice customer and displays Frappe’s billed-order refusal. Legacy `order-send.js` and server-side blank-update fallback remain outside T9b. |
-| `89429dae` | 2026-10-01 | direct | T9 | port | test(pos): prefer profile default over new invoice customer | T9b: v16 `sync_order` resolves a new invoice from the order-type/profile default. React supplies the loaded existing invoice customer; direct blank-update RPC parity remains open. |
-| `3a3a676a` | 2026-10-01 | direct | T9 | port | fix(pos): reuse customer only from existing invoices | T9b: v16 `sync_order` resolves a new invoice from the order-type/profile default. React supplies the loaded existing invoice customer; direct blank-update RPC parity remains open. |
-| `499a5d1d` | 2026-10-01 | direct | T9 | port | test(pos): reproduce role-based post-send routing | T9b: React cashier opens the acknowledged invoice in Orders; captain returns to Tables (floor sign-out keeps precedence). Legacy Vue routing remains outside T9b. |
-| `d942f807` | 2026-10-01 | direct | T9 | port | fix(pos): restore cashier post-send check routing | T9b: React cashier opens the acknowledged invoice in Orders; captain returns to Tables (floor sign-out keeps precedence). Legacy Vue routing remains outside T9b. |
-| `e1722257` | 2026-10-01 | direct | T9 | port | test(pos): reproduce unsafe logout and shared order tabs | T9b: Shared CSRF-safe sign-out, scoped cleanup and pending-action guards. v16 React has no persisted order-tab collection; old tab keys are purged. The mixed legacy Vue caller is excluded. |
-| `078404d2` | 2026-10-01 | direct | T9 | port | fix(pos): make logout CSRF-safe and isolate saved order tabs | T9b: Shared CSRF-safe sign-out, scoped cleanup and pending-action guards. v16 React has no persisted order-tab collection; old tab keys are purged. The mixed legacy Vue caller is excluded. |
-| `4ea7132b` | 2026-10-01 | direct | T9 | port | refactor(test): keep logout regressions outside POS app compilation | T9b: Shared CSRF-safe sign-out, scoped cleanup and pending-action guards. v16 React has no persisted order-tab collection; old tab keys are purged. The mixed legacy Vue caller is excluded. |
-| `bd78795d` | 2026-10-01 | direct | T9 | port | test(frontend): reproduce unsafe logout and destructive cache clearing | T9b: Management and POS retain state on failure and clear only app-owned storage after success. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. Legacy Vue caller excluded. |
-| `a379feb4` | 2026-10-01 | direct | T9 | port | fix(frontend): reuse CSRF-safe logout and scoped storage cleanup | T9b: Management and POS retain state on failure and clear only app-owned storage after success. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. Legacy Vue caller excluded. |
-| `05737a5e` | 2026-10-01 | direct | T9 | port | test(logout): reproduce leaked setup state and navigation re-entry | T9b: Management and POS retain state on failure and clear only app-owned storage after success. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. Legacy Vue caller excluded. |
-| `ebe37108` | 2026-10-01 | direct | T9 | port | fix(logout): clear shared-till state and retain navigation guards | T9b: Management and POS retain state on failure and clear only app-owned storage after success. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. Legacy Vue caller excluded. |
+| `492ac51d` | 2026-10-01 | direct | T9 | port | test(pos): reproduce waiter send-to-kitchen failures |  |
+| `7dec3e97` | 2026-10-01 | direct | T9 | port | test(pos): accept equivalent blank Pax HTML attributes |  |
+| `7d18b8b1` | 2026-10-01 | direct | T9 | port | fix(pos): streamline waiter sends to kitchen |  |
+| `7d6bc789` | 2026-10-01 | direct | T9 | port | test(pos): reproduce customer fallback and billed-order feedback gaps |  |
+| `a92006cb` | 2026-10-01 | direct | T9 | port | fix(pos): preserve invoice customer and explain billed-order sends |  |
+| `89429dae` | 2026-10-01 | direct | T9 | port | test(pos): prefer profile default over new invoice customer |  |
+| `3a3a676a` | 2026-10-01 | direct | T9 | port | fix(pos): reuse customer only from existing invoices |  |
+| `499a5d1d` | 2026-10-01 | direct | T9 | port | test(pos): reproduce role-based post-send routing |  |
+| `d942f807` | 2026-10-01 | direct | T9 | port | fix(pos): restore cashier post-send check routing |  |
+| `e1722257` | 2026-10-01 | direct | T9 | port | test(pos): reproduce unsafe logout and shared order tabs |  |
+| `078404d2` | 2026-10-01 | direct | T9 | port | fix(pos): make logout CSRF-safe and isolate saved order tabs |  |
+| `4ea7132b` | 2026-10-01 | direct | T9 | port | refactor(test): keep logout regressions outside POS app compilation |  |
+| `bd78795d` | 2026-10-01 | direct | T9 | port | test(frontend): reproduce unsafe logout and destructive cache clearing |  |
+| `a379feb4` | 2026-10-01 | direct | T9 | port | fix(frontend): reuse CSRF-safe logout and scoped storage cleanup |  |
+| `05737a5e` | 2026-10-01 | direct | T9 | port | test(logout): reproduce leaked setup state and navigation re-entry |  |
+| `ebe37108` | 2026-10-01 | direct | T9 | port | fix(logout): clear shared-till state and retain navigation guards |  |
 | `9223e62f` | 2026-10-01 | direct | T3 | port | test(kitchen): define serve undo recall and late contracts |  |
 | `3cfe480c` | 2026-10-01 | direct | T3 | port | fix(kitchen): add serve undo recall and late feedback |  |
 | `4c741657` | 2026-10-01 | direct | T3 | port | test(mosaic): catch nonreactive in-flight serve state |  |
@@ -192,16 +223,16 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `bf0db04b` | 2026-10-02 | direct | T9 | port | fix(dashboard): use site business day and valid service durations |  |
 | `62a93557` | 2026-10-02 | direct | T9 | port | test(dashboard): reproduce running-low site-day and cutoff defects |  |
 | `805a9699` | 2026-10-02 | direct | T9 | port | fix(dashboard): share site business day for running-low metrics |  |
-| `c94bd75e` | 2026-10-02 | direct | T9 | port | test(pos): define visible Orders cashier actions (RED) | T9b: Orders exposes print, split and settle with native permission/print-before-pay guards; selected invoice and split-line identities retained. |
-| `7b1d816f` | 2026-10-02 | direct | T9 | port | feat(pos): expose native Orders settle split and print actions (GREEN) | T9b: Orders exposes print, split and settle with native permission/print-before-pay guards; selected invoice and split-line identities retained. |
+| `c94bd75e` | 2026-10-02 | direct | T9 | port | test(pos): define visible Orders cashier actions (RED) |  |
+| `7b1d816f` | 2026-10-02 | direct | T9 | port | feat(pos): expose native Orders settle split and print actions (GREEN) |  |
 | `264f6146` | 2026-10-02 | direct | T2 | port | test(pos): require opening-inclusive closing reconciliation (RED) |  |
 | `4a5c4d68` | 2026-10-02 | direct | T2 | port | fix(pos): closing expected amount includes the opening float |  |
-| `ca0dfdda` | 2026-10-02 | direct | T9 | port | test(pos): reproduce cross-user profile and payment caches (RED) | T9b: Profile, payment modes, customer groups, territories and paid-limit/merge reads use cookie-owned keys; stale responses cannot populate another user’s cache. |
-| `f8d76b8e` | 2026-10-02 | direct | T9 | port | fix(pos): scope profile and permission-sensitive caches per session user (GREEN) | T9b: Profile, payment modes, customer groups, territories and paid-limit/merge reads use cookie-owned keys; stale responses cannot populate another user’s cache. |
-| `75e634ab` | 2026-10-02 | direct | T9 | port | test(pos): reproduce missing production-unit endpoint (RED) | T9b: Resolve branch on the server and read URY Production Unit with native document permissions; `production-api.test.ts`. |
-| `091bfa0e` | 2026-10-02 | direct | T9 | port | fix(pos): load branch production units through existing native APIs (GREEN) | T9b: Resolve branch on the server and read URY Production Unit with native document permissions; `production-api.test.ts`. |
-| `7b3c4430` | 2026-10-02 | direct | T9 | port | test(pos): require request-free cookie-owned caches and pure keys (RED) | T9b: Read the current Frappe cookie locally for cache ownership. Guest/missing cookies cannot read legacy profiles; `profile-cache.test.ts`. |
-| `2157f927` | 2026-10-02 | direct | T9 | port | fix(pos): read cache ownership from the live Frappe cookie (GREEN) | T9b: Read the current Frappe cookie locally for cache ownership. Guest/missing cookies cannot read legacy profiles; `profile-cache.test.ts`. |
+| `ca0dfdda` | 2026-10-02 | direct | T9 | port | test(pos): reproduce cross-user profile and payment caches (RED) |  |
+| `f8d76b8e` | 2026-10-02 | direct | T9 | port | fix(pos): scope profile and permission-sensitive caches per session user (GREEN) |  |
+| `75e634ab` | 2026-10-02 | direct | T9 | port | test(pos): reproduce missing production-unit endpoint (RED) |  |
+| `091bfa0e` | 2026-10-02 | direct | T9 | port | fix(pos): load branch production units through existing native APIs (GREEN) |  |
+| `7b3c4430` | 2026-10-02 | direct | T9 | port | test(pos): require request-free cookie-owned caches and pure keys (RED) |  |
+| `2157f927` | 2026-10-02 | direct | T9 | port | fix(pos): read cache ownership from the live Frappe cookie (GREEN) |  |
 | `b023438c` | 2026-10-02 | direct | T2 | port | test(closing): cover whole-till consolidation and submit guards (RED) |  |
 | `15c551df` | 2026-10-02 | direct | T2 | port | fix(closing): consolidate the whole till on submit (GREEN) |  |
 | `c1540303` | 2026-10-02 | direct | T2 | port | test(closing): require native closing tax amount field (RED) |  |
@@ -219,31 +250,31 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `f89aed6a` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce split seating age and idle floor updates (RED) |  |
 | `ff38ad1e` | 2026-10-02 | direct | T9 | port | fix(urypos): preserve oldest seating age and tick idle floors (GREEN) |  |
 | `98fdcfcf` | 2026-10-02 | direct | T9 | port | test(urypos): clarify reversed invoice fixture order (REFACTOR) |  |
-| `bd7cc393` | 2026-10-02 | direct | T9 | port | test(pos): cashier settlement home contracts (RED) | T9b: Cashier Home opens the branch’s unpaid drafts oldest first, with site-clock ages, item previews and existing settlement controls. Permission-filtered native lists replace the frozen custom query. |
-| `77368707` | 2026-10-02 | direct | T9 | port | test(pos): supply real session reader in orders harness | T9b: Cashier Home opens the branch’s unpaid drafts oldest first, with site-clock ages, item previews and existing settlement controls. Permission-filtered native lists replace the frozen custom query. |
-| `df3e6f35` | 2026-10-02 | direct | T9 | port | feat(pos): settlement-first cashier home (GREEN) | T9b: Cashier Home opens the branch’s unpaid drafts oldest first, with site-clock ages, item previews and existing settlement controls. Permission-filtered native lists replace the frozen custom query. |
-| `44c186c4` | 2026-10-02 | direct | T9 | port | test(pos): provide roles in legacy header fixture | T9b: Cashier Home opens the branch’s unpaid drafts oldest first, with site-clock ages, item previews and existing settlement controls. Permission-filtered native lists replace the frozen custom query. |
-| `8f35fad2` | 2026-10-02 | direct | T9 | port | test(pos): distinguish missing bill from unavailable lookup (RED) | T9b: Bill pickup distinguishes a missing/deleted invoice from an unavailable lookup; `BillRequestStrip.test.tsx`. |
-| `98b312db` | 2026-10-02 | direct | T9 | port | fix(pos): show deleted bill as not open (GREEN) | T9b: Bill pickup distinguishes a missing/deleted invoice from an unavailable lookup; `BillRequestStrip.test.tsx`. |
-| `7e7cd07e` | 2026-10-02 | direct | T9 | port | test(pos): cashier role wins for every multi-role identity (RED) | T9b: Cashier role takes Home precedence across roles; explicit analytics, captain and provisional offline register routes retained. |
-| `82075f4f` | 2026-10-02 | direct | T9 | port | fix(pos): follow cashier-role Home precedence (GREEN) | T9b: Cashier role takes Home precedence across roles; explicit analytics, captain and provisional offline register routes retained. |
-| `57cdac91` | 2026-10-02 | direct | T9 | port | test(pos): expose bill request branch leak and refresh regressions | T9b: Bill requests and table checks use the till branch; refresh keeps rows on transient failures. Exact and split bill selection tested. |
-| `4ed639cc` | 2026-10-02 | direct | T9 | port | fix(pos): scope bill requests to till branch and retain refreshed rows | T9b: Bill requests and table checks use the till branch; refresh keeps rows on transient failures. Exact and split bill selection tested. |
-| `a7b1ad05` | 2026-10-02 | direct | T9 | port | test(pos): bind Orders harness to the till branch read | T9b: Bill requests and table checks use the till branch; refresh keeps rows on transient failures. Exact and split bill selection tested. |
+| `bd7cc393` | 2026-10-02 | direct | T9 | port | test(pos): cashier settlement home contracts (RED) |  |
+| `77368707` | 2026-10-02 | direct | T9 | port | test(pos): supply real session reader in orders harness |  |
+| `df3e6f35` | 2026-10-02 | direct | T9 | port | feat(pos): settlement-first cashier home (GREEN) |  |
+| `44c186c4` | 2026-10-02 | direct | T9 | port | test(pos): provide roles in legacy header fixture |  |
+| `8f35fad2` | 2026-10-02 | direct | T9 | port | test(pos): distinguish missing bill from unavailable lookup (RED) |  |
+| `98b312db` | 2026-10-02 | direct | T9 | port | fix(pos): show deleted bill as not open (GREEN) |  |
+| `7e7cd07e` | 2026-10-02 | direct | T9 | port | test(pos): cashier role wins for every multi-role identity (RED) |  |
+| `82075f4f` | 2026-10-02 | direct | T9 | port | fix(pos): follow cashier-role Home precedence (GREEN) |  |
+| `57cdac91` | 2026-10-02 | direct | T9 | port | test(pos): expose bill request branch leak and refresh regressions |  |
+| `4ed639cc` | 2026-10-02 | direct | T9 | port | fix(pos): scope bill requests to till branch and retain refreshed rows |  |
+| `a7b1ad05` | 2026-10-02 | direct | T9 | port | test(pos): bind Orders harness to the till branch read |  |
 | `c0fb83a4` | 2026-10-02 | direct | T2 | port | test(pos): expose daily-close business-day regressions (RED) |  |
 | `ee393dd3` | 2026-10-02 | direct | T2 | port | fix(pos): daily close check uses the business day (GREEN) |  |
 | `7d758811` | 2026-10-02 | direct | T0 | port | test: reproduce dashboard guards and wizard status gaps (RED) | PR #96 |
 | `d9457602` | 2026-10-02 | direct | T0 | port | fix: native dashboard guards and v16 wizard status (GREEN) | PR #96 |
-| `2d5d6ed5` | 2026-10-03 | direct | T9 | port | test(pos): cashier Home native notifications contracts (RED) | T9b: Orders mounts #125’s shared Notifications component; native record and exact KOT check navigation use current user/branch. |
-| `bab890ba` | 2026-10-03 | direct | T9 | port | test(pos): retain offline socket boundary across mock restoration | T9b: Orders mounts #125’s shared Notifications component; native record and exact KOT check navigation use current user/branch. |
-| `f049f262` | 2026-10-03 | direct | T9 | port | feat(pos): share native notifications on cashier Home (GREEN) | T9b: Orders mounts #125’s shared Notifications component; native record and exact KOT check navigation use current user/branch. |
-| `6a24e1ca` | 2026-10-03 | direct | T9 | port | test(pos): native record read-state navigation and refresh races (RED) | T9b: Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
-| `a1fa7644` | 2026-10-03 | direct | T9 | port | fix(pos): preserve native record read state across navigation and refresh (GREEN) | T9b: Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
-| `2be36009` | 2026-10-03 | direct | T9 | port | test(pos): isolate native notification writes at the HTTP boundary | T9b: Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
-| `13435364` | 2026-10-03 | direct | T9 | port | test(pos): reproduce notification age timezone defect (RED) | T9b: Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
-| `868e7217` | 2026-10-03 | direct | T9 | port | fix(pos): use existing site clock for notification ages (GREEN) | T9b: Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
-| `caf7f11f` | 2026-10-04 | direct | T9 | port | test: reproduce draft cancellation and Walk-in order log failures (RED) | T9b: Open outside T9b: v16 `cancel_order` submits then cancels drafts; the frozen fix uses discard. Legacy `recentOrder.js` still lowercases nullable fields. Both source paths are excluded. |
-| `c7885262` | 2026-10-04 | direct | T9 | port | fix: discard open checks natively and guard empty order search fields (GREEN) | T9b: Open outside T9b: v16 `cancel_order` submits then cancels drafts; the frozen fix uses discard. Legacy `recentOrder.js` still lowercases nullable fields. Both source paths are excluded. |
+| `2d5d6ed5` | 2026-10-03 | direct | T9 | port | test(pos): cashier Home native notifications contracts (RED) |  |
+| `bab890ba` | 2026-10-03 | direct | T9 | port | test(pos): retain offline socket boundary across mock restoration |  |
+| `f049f262` | 2026-10-03 | direct | T9 | port | feat(pos): share native notifications on cashier Home (GREEN) |  |
+| `6a24e1ca` | 2026-10-03 | direct | T9 | port | test(pos): native record read-state navigation and refresh races (RED) |  |
+| `a1fa7644` | 2026-10-03 | direct | T9 | port | fix(pos): preserve native record read state across navigation and refresh (GREEN) |  |
+| `2be36009` | 2026-10-03 | direct | T9 | port | test(pos): isolate native notification writes at the HTTP boundary |  |
+| `13435364` | 2026-10-03 | direct | T9 | port | test(pos): reproduce notification age timezone defect (RED) |  |
+| `868e7217` | 2026-10-03 | direct | T9 | port | fix(pos): use existing site clock for notification ages (GREEN) |  |
+| `caf7f11f` | 2026-10-04 | direct | T9 | port | test: reproduce draft cancellation and Walk-in order log failures (RED) |  |
+| `c7885262` | 2026-10-04 | direct | T9 | port | fix: discard open checks natively and guard empty order search fields (GREEN) |  |
 | `9dcd3126` | 2026-10-04 | #2 | T2 | port | test: reject invalid void reasons before table release (RED) |  |
 | `4c514e5b` | 2026-10-04 | #2 | T2 | port | fix: validate void reason before releasing tables (GREEN) |  |
 | `4eaa0a48` | 2026-10-04 | #3 | T2 | superseded | test: reject hardcoded rupee in zero-balance warning (RED) | version-16 zero_balance_warning uses {{amount}} (7bceb499) |
@@ -271,10 +302,10 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `bc697654` | 2026-10-11 | #6 | T2 | port | fix: attribute merged settlement and keep native daily-close explanation (#1652) |  |
 | `cb80fde7` | 2026-10-11 | #6 | T2 | port | test: reproduce occupied till Session Start badge mismatch (RED) |  |
 | `d5db68ac` | 2026-10-11 | #6 | T2 | port | fix: show occupied till opening time in Session Start badge (GREEN) |  |
-| `0197abec` | 2026-10-11 | #7 | T9 | port | test: reproduce missing logout on POS pre-session gates (RED #1653) | T9b: Opening, closing and checklist gates reuse till logout; rejection preserves checklist inputs and permits retry. |
-| `0aaa0d9b` | 2026-10-11 | #7 | T9 | port | fix: expose shared logout on POS checklist and pre-session gates (GREEN #1653) | T9b: Opening, closing and checklist gates reuse till logout; rejection preserves checklist inputs and permits retry. |
-| `087cc044` | 2026-10-11 | #7 | T9 | port | test: reproduce checklist input reset on failed logout (RED #1653) | T9b: Opening, closing and checklist gates reuse till logout; rejection preserves checklist inputs and permits retry. |
-| `d2a64e6e` | 2026-10-11 | #7 | T9 | port | fix: preserve checklist progress across failed logout (GREEN #1653) | T9b: Opening, closing and checklist gates reuse till logout; rejection preserves checklist inputs and permits retry. |
+| `0197abec` | 2026-10-11 | #7 | T9 | port | test: reproduce missing logout on POS pre-session gates (RED #1653) |  |
+| `0aaa0d9b` | 2026-10-11 | #7 | T9 | port | fix: expose shared logout on POS checklist and pre-session gates (GREEN #1653) |  |
+| `087cc044` | 2026-10-11 | #7 | T9 | port | test: reproduce checklist input reset on failed logout (RED #1653) |  |
+| `d2a64e6e` | 2026-10-11 | #7 | T9 | port | fix: preserve checklist progress across failed logout (GREEN #1653) |  |
 | `fc911dd0` | 2026-10-12 | #13 | T7 | port | test(pos): capture cashier flow and compact alert RED |  |
 | `64a92b4e` | 2026-10-12 | #13 | T7 | port | feat(pos): improve cashier bill hierarchy and compact native alerts |  |
 | `d8a8ea25` | 2026-10-12 | #13 | T10 | dropped | docs(pos): attach synthetic cashier viewport evidence | docs/evidence or docs/pr-assets only |
@@ -307,10 +338,10 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `73d3a83c` | 2026-10-12 | #12 | T10 | dropped | docs: remove remaining source-tree PR screenshot | docs/evidence or docs/pr-assets only |
 | `55c0c360` | 2026-10-12 | #12 | T3 | port | test(mosaic): expose hidden items and misleading kitchen identity (RED) |  |
 | `5e0b1a4e` | 2026-10-12 | #12 | T3 | port | fix(mosaic): show every item before serving and preserve kitchen identity (GREEN) |  |
-| `f9e31842` | 2026-10-13 | #49 | T9 | port | test: reproduce walk-in customer and waiter navigation blockers | T9b: New routine React sends pass an explicit empty customer to v16; edits preserve invoice identity and named/aggregator orders retain validation. Mixed Vue navigation is excluded. |
-| `7fec963b` | 2026-10-13 | #49 | T9 | port | test: require explicit blank RPC customer for native fallback | T9b: New routine React sends pass an explicit empty customer to v16; edits preserve invoice identity and named/aggregator orders retain validation. Mixed Vue navigation is excluded. |
-| `40c43f55` | 2026-10-13 | #49 | T9 | port | test: use the native invoice success response shape | T9b: New routine React sends pass an explicit empty customer to v16; edits preserve invoice identity and named/aggregator orders retain validation. Mixed Vue navigation is excluded. |
-| `f3277dcf` | 2026-10-13 | #49 | T9 | port | fix: allow native walk-in customer resolution for routine orders | T9b: New routine React sends pass an explicit empty customer to v16; edits preserve invoice identity and named/aggregator orders retain validation. Mixed Vue navigation is excluded. |
+| `f9e31842` | 2026-10-13 | #49 | T9 | port | test: reproduce walk-in customer and waiter navigation blockers |  |
+| `7fec963b` | 2026-10-13 | #49 | T9 | port | test: require explicit blank RPC customer for native fallback |  |
+| `40c43f55` | 2026-10-13 | #49 | T9 | port | test: use the native invoice success response shape |  |
+| `f3277dcf` | 2026-10-13 | #49 | T9 | port | fix: allow native walk-in customer resolution for routine orders |  |
 | `58fc9171` | 2026-10-13 | #17 | T7 | port | test(guest): RED assistance, ERP refusal text and configurable identity |  |
 | `756c4923` | 2026-10-13 | #17 | T7 | port | feat(guest): GREEN native waiter requests, ERP refusals and profile brand |  |
 | `5320837e` | 2026-10-13 | #17 | T7 | port | test(guest): RED review edge cases for identity, cooldown and requests |  |
@@ -369,8 +400,8 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `ccd9b11f` | 2026-10-13 | #24 | T7 | port | fix(theme): retain AA margin through pixel rounding (GREEN) |  |
 | `78405a30` | 2026-10-13 | #26 | T9 | port | test: reproduce checklist UTC midnight mismatch (RED SAL-ACC-01) |  |
 | `77aba68c` | 2026-10-13 | #26 | T9 | port | fix: use native site-local checklist dates (GREEN SAL-ACC-01) |  |
-| `caa7ad62` | 2026-10-13 | #26 | T9 | port | test: reproduce loss of till return path on logout (RED SAL-ACC-01) | T9b: All React till logout surfaces retain `/login?redirect-to=%2Fpos`; failed logout stays on the current screen. |
-| `36e594c9` | 2026-10-13 | #26 | T9 | port | fix: retain native till return path after logout (GREEN SAL-ACC-01) | T9b: All React till logout surfaces retain `/login?redirect-to=%2Fpos`; failed logout stays on the current screen. |
+| `caa7ad62` | 2026-10-13 | #26 | T9 | port | test: reproduce loss of till return path on logout (RED SAL-ACC-01) |  |
+| `36e594c9` | 2026-10-13 | #26 | T9 | port | fix: retain native till return path after logout (GREEN SAL-ACC-01) |  |
 | `1e732d8e` | 2026-10-14 | #27 | T9 | port | test: RED for waiter table booking badges (X55) |  |
 | `1bd5e78d` | 2026-10-14 | #27 | T9 | port | feat: show advisory table booking badges to waiters (X55) |  |
 | `54756d84` | 2026-10-14 | #28 | T9 | port | test(urypos): require the table owner on the floor plan (RED) |  |
@@ -548,8 +579,8 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `9226e4b8` | 2026-10-15 | #48 | T5 | port | test(pos): RED offline /pos root entry shows Access Denied | T5 part 3: /pos root entry offline |
 | `5af9e16d` | 2026-10-15 | #48 | T5 | port | fix(pos): GREEN open the till from /pos when the link is down | T5 part 3: /pos root entry offline |
 | `5bc54852` | 2026-10-15 | #48 | T10 | dropped | docs(O7): Playwright evidence for offline /pos root entry | docs/evidence or docs/pr-assets only |
-| `26a630e6` | 2026-10-15 | #49 | T9 | port | fix(pos): GREEN combine online walk-ins with offline customer safeguards | T9b: Known-offline and lost-ack walk-ins use the configured customer or refuse capture; pending local rounds and named customers retain identity. No seeded default. |
-| `b6c3330f` | 2026-10-16 | #49 | T9 | port | test(pos): type offline walk-in fixture without explicit any | T9b: Known-offline and lost-ack walk-ins use the configured customer or refuse capture; pending local rounds and named customers retain identity. No seeded default. |
+| `26a630e6` | 2026-10-15 | #49 | T9 | port | fix(pos): GREEN combine online walk-ins with offline customer safeguards |  |
+| `b6c3330f` | 2026-10-16 | #49 | T9 | port | test(pos): type offline walk-in fixture without explicit any |  |
 | `f18bd7a6` | 2026-10-16 | #50 | T3 | port | test(U1): reproduce dropped KOT notes and repeat dish variants |  |
 | `6ea03420` | 2026-10-16 | #50 | T3 | port | fix(U1): preserve KOT item notes and diff repeat dishes by note |  |
 | `b499a966` | 2026-10-16 | #50 | T3 | port | test(U1): complete legacy no-note invoice fixtures |  |
@@ -756,10 +787,10 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `ac63706d` | 2026-10-22 | #72 | T2 | port | test(pos): getPosProfile tolerates a profile without payment rows (Opus r2 N1) |  |
 | `42684e95` | 2026-10-22 | #72 | T2 | port | fix(pos): payment-mode account map tolerates a profile without payment rows; use native change amount (Opus r2 N1, R1) |  |
 | `bed02bad` | 2026-10-22 | #72 | T2 | port | chore(pos): drop unused closing totals after the native change rule (lint only, Opus r3 L1) |  |
-| `dbc36d59` | 2026-10-22 | #73 | T9 | port | test(pos): cover captain walk-in customer resolution | T9b: Captain sends a blank customer for native resolution on new live orders, preserves matching invoice customer on edit, and keeps v16 floor authorization; no captain offline queue. |
-| `3936081b` | 2026-10-22 | #73 | T9 | port | fix(pos): allow captain walk-in customer resolution | T9b: Captain sends a blank customer for native resolution on new live orders, preserves matching invoice customer on edit, and keeps v16 floor authorization; no captain offline queue. |
-| `82c78d69` | 2026-10-22 | #73 | T9 | port | test(pos): captain leaves walk-in resolution to the server (review r1 F1) | T9b: Captain sends a blank customer for native resolution on new live orders, preserves matching invoice customer on edit, and keeps v16 floor authorization; no captain offline queue. |
-| `320267e7` | 2026-10-22 | #73 | T9 | port | fix(pos): captain sends an empty customer for walk-in resolution (review r1 F1/F2) | T9b: Captain sends a blank customer for native resolution on new live orders, preserves matching invoice customer on edit, and keeps v16 floor authorization; no captain offline queue. |
+| `dbc36d59` | 2026-10-22 | #73 | T9 | port | test(pos): cover captain walk-in customer resolution |  |
+| `3936081b` | 2026-10-22 | #73 | T9 | port | fix(pos): allow captain walk-in customer resolution |  |
+| `82c78d69` | 2026-10-22 | #73 | T9 | port | test(pos): captain leaves walk-in resolution to the server (review r1 F1) |  |
+| `320267e7` | 2026-10-22 | #73 | T9 | port | fix(pos): captain sends an empty customer for walk-in resolution (review r1 F1/F2) |  |
 | `57d52834` | 2026-10-23 | #74 | T2 | port | test(pos): preserve closing rows during validation (RED) |  |
 | `2a3de9e5` | 2026-10-23 | #74 | T2 | port | fix(pos): update closing rows in place (GREEN) |  |
 | `3ce66ba9` | 2026-10-23 | #74 | T2 | port | test(pos): closing rows keep their order and idx is 1..n (RED, Opus r1 F1/F2) |  |
@@ -767,18 +798,18 @@ Standalone T9b accepts a missing endpoint. No configuration or customer data is 
 | `18862880` | 2026-10-28 | #75 | T0 | port | enforce native permissions in minimal setup API (#75) | PR #96 |
 | `939af8fa` | 2026-11-10 | #77 | T7 | port | test(mosaic): RED kitchen header logo is height-bounded like the POS header |  |
 | `c78422d9` | 2026-11-10 | #77 | T7 | port | fix(mosaic): GREEN size the kitchen header logo like the POS header |  |
-| `8d84fa3f` | 2026-11-10 | #78 | T9 | port | test(pos): RED captain order screen fits the viewport | T9b: Captain menu/order panes scroll independently inside one dynamic viewport, with visible total/send controls; desktop and phone exercised. |
-| `05bcc006` | 2026-11-10 | #78 | T9 | port | test(pos): RED select viewport panes by their layout comments | T9b: Captain menu/order panes scroll independently inside one dynamic viewport, with visible total/send controls; desktop and phone exercised. |
-| `3e7beb8c` | 2026-11-10 | #78 | T9 | port | fix(pos): GREEN captain order screen fits the viewport | T9b: Captain menu/order panes scroll independently inside one dynamic viewport, with visible total/send controls; desktop and phone exercised. |
+| `8d84fa3f` | 2026-11-10 | #78 | T9 | port | test(pos): RED captain order screen fits the viewport |  |
+| `05bcc006` | 2026-11-10 | #78 | T9 | port | test(pos): RED select viewport panes by their layout comments |  |
+| `3e7beb8c` | 2026-11-10 | #78 | T9 | port | fix(pos): GREEN captain order screen fits the viewport |  |
 | `c9e819c4` | 2026-11-12 | #79 | T3 | port | test(hospitality): RED floor-first alerts and board-matched kitchen counts |  |
 | `a9944b62` | 2026-10-21 | #79 | T3 | superseded | fix(kds): align overview counts with the unit view time window | same change landed upstream as 84658374 (in version-16) |
 | `59c01718` | 2026-11-12 | #79 | T3 | port | fix(pos): GREEN prioritize captain floor and scope kitchen notifications |  |
 | `33878a5c` | 2026-11-12 | #79 | T3 | port | test(kds): RED preserve fork order-type filters in overview counts |  |
 | `de0faa42` | 2026-11-12 | #79 | T3 | port | fix(kds): GREEN reuse station order-type filtering in counts |  |
-| `c7e345ad` | 2026-11-12 | #80 | T9 | port | test(pos): RED order-type change confirms, then clears cart and releases table | T9b: New populated carts confirm an order-type change. Cancel/reselect keeps lines; confirmation clears lines and releases dine-in table/room. Saved order edit restrictions retained. |
-| `69c14fe6` | 2026-11-12 | #80 | T9 | port | fix(pos): confirm before an order-type change clears the cart; release the table | T9b: New populated carts confirm an order-type change. Cancel/reselect keeps lines; confirmation clears lines and releases dine-in table/room. Saved order edit restrictions retained. |
-| `b244590e` | 2026-11-12 | #81 | T9 | port | test(pos): RED dashboard shows no Shift Brief placeholder without a source | T9b: Removed the unsourced Shift Brief card; the real shift dashboard remains. |
-| `b7210ffd` | 2026-11-12 | #81 | T9 | port | fix(pos): hide the Shift Brief placeholder card until a summary source exists | T9b: Removed the unsourced Shift Brief card; the real shift dashboard remains. |
+| `c7e345ad` | 2026-11-12 | #80 | T9 | port | test(pos): RED order-type change confirms, then clears cart and releases table |  |
+| `69c14fe6` | 2026-11-12 | #80 | T9 | port | fix(pos): confirm before an order-type change clears the cart; release the table |  |
+| `b244590e` | 2026-11-12 | #81 | T9 | port | test(pos): RED dashboard shows no Shift Brief placeholder without a source |  |
+| `b7210ffd` | 2026-11-12 | #81 | T9 | port | fix(pos): hide the Shift Brief placeholder card until a summary source exists |  |
 | `01bd8d07` | 2026-11-14 | direct | T9 | port | test: reservation merge keeps our till, floor and permissions (RED) |  |
 | `b7ba8a3c` | 2026-11-14 | direct | T9 | port | fix: carry upstream reservations without changing a branch that has not enabled them (GREEN) |  |
 | `2fbb6e04` | 2026-11-14 | direct | T2 | port | test: one Custom Field fixture row per field (RED) |  |
