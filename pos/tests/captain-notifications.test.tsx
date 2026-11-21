@@ -297,7 +297,7 @@ describe('captain kitchen notifications', () => {
       expect(el).toBeDefined(); return el!;
     });
     boundary.get.mockImplementation(async method => method === 'frappe.client.get'
-      ? {message:{restaurant_table:'T-05'}} : {message:{order:null, permissions:{view:false}}});
+      ? {message:{restaurant_table:'T-05', invoice:'INV'}} : {message:{order:{name:'INV'}, permissions:{view:false}}});
     vi.mocked(call.post).mockClear();
     await act(async () => open.click());
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order');
@@ -305,7 +305,7 @@ describe('captain kitchen notifications', () => {
     expect(panel().textContent).toContain('Check unavailable');
   });
 
-  it.each([true, false])('opens only the exact sibling and marks read only on authorized success (%s)', async allowed => {
+  it.each([[true, true], [false, true], [true, false]])('opens the exact sibling using its access (%s) with primary access (%s)', async (allowed, primaryView) => {
     await renderTables();
     const open = await vi.waitFor(() => {
       const button = Array.from(panel().querySelectorAll('button')).find(b => b.textContent === 'Open check');
@@ -313,7 +313,7 @@ describe('captain kitchen notifications', () => {
     });
     boundary.get.mockImplementation(async method => {
       if (method === 'frappe.client.get') return {message:{restaurant_table:'T-05', invoice:'INV-SEAT-2'}};
-      if (method.endsWith('.get_table_order_context')) return {message:{permissions:{view:true},order:{name:'INV'}}};
+      if (method.endsWith('.get_table_order_context')) return {message:{permissions:{view:primaryView},order:{name:'INV'}}};
       if (method.endsWith('.getPosInvoiceItems') && allowed) return {message:[[{name:'row',item_name:'Toast',qty:1}], []]};
       throw Error('Check unavailable');
     });
