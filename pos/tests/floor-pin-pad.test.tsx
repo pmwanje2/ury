@@ -248,7 +248,7 @@ describe('floor session isolation', () => {
   });
 
   it.each([false, true])('keeps a provisional cookie on the paired sign-in screen (tab marker: %s)', async (marker) => {
-    if (marker) sessionStorage.setItem('userAuth', 'true');
+    if (marker) localStorage.setItem('userAuth', 'true');
     boundary.state.user = { name: 'waiter@example.test', roles: ['URY Captain'], provisional: true };
     boundary.state.posProfile = { custom_floor_stay_signed_in_roles: [] };
     await render();
