@@ -11,6 +11,7 @@ from ury.ury_pos import api
 class Credit(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(order,'_',lambda msg: msg))
+        self.enterContext(patch.object(frappe, "get_system_settings", return_value="Commercial Rounding"))
         self.f = self.enterContext(patch.object(order, 'frappe'))
         self.enterContext(patch('ury.ury_pos.credit.frappe',self.f))
         self.enterContext(patch.object(api,'getBranch',return_value='West'))
@@ -47,6 +48,7 @@ class Credit(unittest.TestCase):
     def bill(self, name, total):
         bill = MagicMock(); bill.name=name; bill.branch='West'; bill.customer='AC-1'; bill.company='Hotel'; bill.currency='UGX'; bill.conversion_rate=1
         bill.pos_profile='Till'; bill.restaurant_table=None; bill.custom_merged_pos_invoice=None; bill.docstatus=0
+        bill.precision.return_value = 2
         bill.items=[]; bill.payments=[]; bill.rounded_total=bill.grand_total=total
         bill.set.side_effect=lambda key,value:setattr(bill,key,value)
         bill.get.side_effect=lambda key,default=None:vars(bill).get(key,default)
@@ -142,4 +144,10 @@ class Credit(unittest.TestCase):
         self.target.submit.side_effect = ValueError('Partner refused')
         with self.assertRaisesRegex(ValueError, 'Partner refused'):
             order.submit_order_invoice('B1')
+        self.invoice.submit.assert_not_called()
+
+    def test_native_save_repricing_is_rechecked_before_submit(self):
+        self.invoice.save.side_effect = lambda: setattr(self.invoice, 'rounded_total', 200)
+        with self.assertRaisesRegex(ValueError, 'URY-CREDIT-004'):
+            self.settle()
         self.invoice.submit.assert_not_called()
