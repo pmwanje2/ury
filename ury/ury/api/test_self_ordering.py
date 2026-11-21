@@ -12,6 +12,7 @@ import base64
 import hmac
 import hashlib
 import unittest
+from types import MappingProxyType
 from unittest.mock import patch, MagicMock
 
 import frappe
@@ -109,6 +110,114 @@ class TestQRTokenRoundtrip(unittest.TestCase):
             _verify_qr_token("not-a-valid-token")
 
 
+class TestRequestAssistance(unittest.TestCase):
+    """Call waiter: a verified guest session raises one native Assistance request for its own table."""
+
+    def setUp(self):
+        from ury.ury.api import self_ordering
+        self.api = self_ordering
+        self.session = MagicMock(table="Table 7", invoice="POS-1", ordering_profile="Profile A")
+        self.session.name = "SESSION-1"
+        self.profile = MagicMock(enable_request_bill=1)
+        self.resolve = self.enterContext(patch(f"{MOD}._resolve_session", return_value=self.session))
+        self.get_doc = self.enterContext(patch(f"{MOD}.frappe.get_doc"))
+        self.exists = self.enterContext(patch(f"{MOD}.frappe.db.exists", return_value=None))
+        self.user = self.enterContext(patch(f"{MOD}.frappe.set_user"))
+        # now_datetime reads System Settings through the patched frappe.get_doc on v16.
+        self.enterContext(patch(f"{MOD}.now_datetime"))
+        self.req = MagicMock()
+        self.req.name = "REQ-ASSIST"
+        self.get_doc.side_effect = lambda doctype, name=None: self.req if isinstance(doctype, dict) else self.profile
+
+    def request(self):
+        method = getattr(self.api, "request_assistance", None)
+        self.assertTrue(callable(method), "Guests cannot request native Assistance yet")
+        return method("opaque-session")
+
+    def test_creates_native_assistance_for_verified_table_and_invoice(self):
+        result = self.request()
+        self.assertEqual(result, {"status": "Requested", "request": "REQ-ASSIST"})
+        self.resolve.assert_called_once_with("opaque-session")
+        payload = self.get_doc.call_args.args[0]
+        self.assertEqual({key: payload[key] for key in ("doctype", "request_type", "table", "invoice", "session", "status")},
+                         {"doctype": "URY Service Request", "request_type": "Assistance", "table": "Table 7",
+                          "invoice": "POS-1", "session": "SESSION-1", "status": "Open"})
+        self.req.insert.assert_called_once_with(ignore_permissions=True)
+
+    def test_disabled_service_requests_are_refused(self):
+        self.profile.enable_request_bill = 0
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.req.insert.assert_not_called()
+
+    def test_table_and_active_order_are_required(self):
+        for field in ("table", "invoice"):
+            with self.subTest(field=field):
+                old = getattr(self.session, field)
+                setattr(self.session, field, None)
+                with self.assertRaises(frappe.ValidationError):
+                    self.request()
+                setattr(self.session, field, old)
+        self.req.insert.assert_not_called()
+
+    def test_expired_or_forged_session_is_refused_before_insertion(self):
+        self.resolve.side_effect = frappe.PermissionError("Expired")
+        with self.assertRaises(frappe.PermissionError):
+            self.request()
+        self.get_doc.assert_not_called()
+
+    def test_insertion_failure_restores_guest_identity(self):
+        self.req.insert.side_effect = frappe.ValidationError("Cannot insert")
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.assertEqual(self.user.call_args.args, (frappe.session.user,))
+
+    def test_only_post_is_accepted(self):
+        method = getattr(self.api, "request_assistance", None)
+        self.assertTrue(callable(method), "Guests cannot request native Assistance yet")
+        self.assertIn(method, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(method), ["POST"])
+
+
+class TestOrderingContextArea(unittest.TestCase):
+    """Simphony MOP: a QR code is a location with a subtype; the guest header shows the table's area."""
+
+    def _profile(self):
+        profile = MagicMock()
+        profile.restaurant = "Outlet"
+        profile.branch = "Branch A"
+        profile.session_idle_timeout_minutes = 30
+        for flag in ("enable_product_detail_page", "show_item_images", "show_item_descriptions", "enable_item_notes",
+                     "enable_request_bill", "enable_customer_payment", "enable_payment_link",
+                     "enable_pay_at_counter", "allow_add_to_running_table", "enable_feedback"):
+            setattr(profile, flag, 0)
+        return profile
+
+    @patch(f"{MOD}.frappe.db.get_value")
+    def test_table_context_carries_its_area(self, mock_get_value):
+        from ury.ury.api.self_ordering import _ordering_context_response
+
+        mock_get_value.side_effect = lambda doctype, name, field: {
+            ("URY Table", "Room 103", "restaurant_room"): "In-Room Dining",
+            ("Branch", "Branch A", "company"): "Company A",
+        }.get((doctype, name, field))
+        context = _ordering_context_response("raw", "QR Table", self._profile(), "Room 103", "Mobile")
+        self.assertEqual(context.get("area", "<missing>"), "In-Room Dining")
+        self.assertEqual(context["table"], "Room 103")
+        self.assertEqual(set(context), {"session", "source", "restaurant", "company", "table", "area", "layout",
+                                        "capabilities", "session_idle_timeout_minutes"})
+
+    @patch(f"{MOD}.frappe.db.get_value")
+    def test_pickup_context_has_no_area_and_reads_no_table(self, mock_get_value):
+        from ury.ury.api.self_ordering import _ordering_context_response
+
+        mock_get_value.return_value = "Company A"
+        context = _ordering_context_response("raw", "QR Pickup", self._profile(), None, "Mobile")
+        self.assertIn("area", context)
+        self.assertIsNone(context["area"])
+        self.assertNotIn("URY Table", [call.args[0] for call in mock_get_value.call_args_list])
+
+
 class TestAddCustomerItemsAppendOnly(unittest.TestCase):
     """The core Phase 3 safety guarantee: add_customer_items() only ever
     appends new rows and re-derives price server-side — it must never trust
@@ -203,7 +312,10 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
 
-        mock_db_get_value.return_value = "Menu A"
+        # The guest line is named from the Item (as staff lines are), never from its code.
+        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
+            "Club sandwich" if (doctype, field) == ("Item", "item_name") else "Menu A"
+        )
 
         result = add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -215,7 +327,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # only, no client-supplied rate ever reaches invoice construction.
         mock_price_items.assert_called_once()
         called_items = mock_price_items.call_args[0][0]
-        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Sandwich", "qty": 1.0, "comment": ""}])
+        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": ""}])
         # KOT still invoked (existing kitchen pipeline untouched) — and
         # crucially, current_items passed to it is the FULL aggregated
         # per-item state (old Biryani row + new Sandwich row), not just the
@@ -693,7 +805,9 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         priced_biryani = {"item_code": "Biryani", "item_name": "Biryani", "qty": 1, "comment": "",
                            "rate": 100, "price_list_rate": 100, "base_price_list_rate": 100, "cost_center": "CC"}
         mock_price_items.return_value = [priced_biryani]
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
+            "Chicken biryani" if (doctype, field) == ("Item", "item_name") else "Menu A"
+        )
         mock_reconcile.return_value = None  # available -- no rejection
 
         add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
@@ -705,7 +819,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_reconcile.assert_called_once()
         _, kwargs = mock_reconcile.call_args
         self.assertEqual(kwargs["order_ref"], "POS-INV-100")
-        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Biryani", "qty": 1.0, "comment": ""}])
+        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Chicken biryani", "qty": 1.0, "comment": ""}])
         self.assertEqual(kwargs["previous_items"], [])
         self.assertEqual(kwargs["branch"], "Branch A")
         self.assertEqual(kwargs["company"], "Test Company")
@@ -876,6 +990,93 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
             self.assertNotIn("already has an order in progress", str(ctx.exception))
 
 
+class TestGuestItemName(unittest.TestCase):
+    """A guest line carries the Item's name, like a staff line (Oracle Simphony:
+    the check line names the menu item). Live Tank Hill THI00057 saved
+    item_name=CF0001 for Americano and the guest view showed "CF0001 x 1"."""
+
+    ITEM_NAMES = MappingProxyType({"Fish": "Grilled tilapia", "Tea": "African tea"})
+
+    def setUp(self):
+        patcher = patch(f"{MOD}.get_branch_stock_policy", return_value=StockPolicy(True, False, False))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _add(self, items, existing_rows=()):
+        """Run add_customer_items with a pricing stub that copies item_name as
+        price_items_for_invoice does; return (result, invoice, kot_execute mock)."""
+        session = MagicMock(table="Table 7", invoice="POS-INV-100", source="QR Table", device=None)
+        session.name = "SESSION-1"
+        session.ordering_profile = "Profile A"
+        profile = MagicMock(enabled=1, allow_add_to_running_table=1, branch="Branch A",
+                            pos_profile="POS Profile A", default_customer="Walk-in Customer")
+
+        invoice = MagicMock()
+        invoice.customer = "Walk-in Customer"
+        invoice.items = list(existing_rows)
+        invoice.invoice_created = 1
+        invoice.invoice_printed = 0
+        invoice.restaurant_table = "Table 7"
+        invoice.branch = "Branch A"
+        invoice.company = "Test Company"
+        invoice.selling_price_list = "Standard Selling"
+        invoice.grand_total = 100
+        invoice.name = "POS-INV-100"
+        invoice.append.side_effect = lambda fieldname, row: invoice.items.append(MagicMock(
+            item_code=row["item_code"], item_name=row["item_name"], qty=row["qty"], rate=100, amount=100,
+        )) if fieldname == "items" else None
+
+        def get_value(doctype, name, field=None, *args, **kwargs):
+            if (doctype, field) == ("Item", "item_name"):
+                return self.ITEM_NAMES.get(name)
+            return "Menu A"
+
+        def price(lines, *args, **kwargs):
+            return [{"item_code": d["item"], "item_name": d.get("item_name"), "qty": d["qty"],
+                     "comment": d.get("comment"), "rate": 100} for d in lines]
+
+        with patch(f"{MOD}._resolve_session", return_value=session), \
+             patch(f"{MOD}.frappe.get_doc", side_effect=lambda doctype, name=None: profile), \
+             patch(f"{MOD}.resolve_restaurant_menu", return_value={"items": [{"item": "Fish"}, {"item": "Tea"}]}), \
+             patch(f"{MOD}._resolve_or_create_pos_invoice", return_value=(invoice, "POS-INV-100")), \
+             patch(f"{MOD}.price_items_for_invoice", side_effect=price), \
+             patch(f"{MOD}.frappe.db.get_value", side_effect=get_value), \
+             patch(f"{MOD}.frappe.db.exists", return_value=True), \
+             patch(f"{MOD}.frappe.db.set_value"), \
+             patch(f"{MOD}.frappe.set_user"), \
+             patch(f"{MOD}.reconcile_order_reservations"), \
+             patch(f"{MOD}.kot_execute") as mock_kot:
+            result = add_customer_items("session-token", items)
+        return result, invoice, mock_kot
+
+    def test_guest_line_saves_the_item_name_not_the_code(self):
+        _, invoice, _ = self._add([{"item": "Fish", "qty": 1}])
+        self.assertEqual([row.item_name for row in invoice.items], ["Grilled tilapia"])
+
+    def test_guest_order_view_shows_the_item_name(self):
+        result, _, _ = self._add([{"item": "Fish", "qty": 1}])
+        self.assertEqual([row["item_name"] for row in result["items"]], ["Grilled tilapia"])
+
+    def test_kitchen_ticket_input_carries_the_item_name(self):
+        _, _, mock_kot = self._add([{"item": "Fish", "qty": 1}])
+        current_items = mock_kot.call_args[0][3]
+        self.assertEqual([(row["item_code"], row["item_name"]) for row in current_items],
+                         [("Fish", "Grilled tilapia")])
+
+    def test_guest_dish_added_to_a_staff_order_keeps_both_names(self):
+        staff_row = MagicMock(item_code="Tea", item_name="African tea", qty=1, rate=100, amount=100)
+        result, _, mock_kot = self._add([{"item": "Fish", "qty": 1}], existing_rows=[staff_row])
+        self.assertEqual([row["item_name"] for row in result["items"]], ["African tea", "Grilled tilapia"])
+        current_items, past_items = mock_kot.call_args[0][3], mock_kot.call_args[0][4]
+        self.assertEqual([(row["item_code"], row["item_name"]) for row in current_items],
+                         [("Tea", "African tea"), ("Fish", "Grilled tilapia")])
+        self.assertEqual([(row["item_code"], row["item_name"]) for row in past_items], [("Tea", "African tea")])
+
+    def test_client_supplied_item_name_is_ignored(self):
+        _, invoice, _ = self._add([{"item": "Fish", "item_name": "Free beer", "qty": 1}])
+        self.assertEqual([row.item_name for row in invoice.items], ["Grilled tilapia"])
+
+
 class TestRequestBill(unittest.TestCase):
     @patch(f"{MOD}.now_datetime")
     @patch(f"{MOD}.frappe.get_doc")
@@ -931,7 +1132,44 @@ class TestRequestBill(unittest.TestCase):
         self.assertEqual(result["request"], "SR-EXISTING")
 
 
+def _catalogued_sources():
+    import csv
+    import os
+
+    path = os.path.join(os.path.dirname(frappe.get_app_path("ury")), "ury", "translations", "ar.csv")
+    with open(path, encoding="utf-8") as catalog:
+        return {row[0] for row in csv.reader(catalog) if row}
+
+
 class TestCreatePaymentRequest(unittest.TestCase):
+    def assert_refusal_keeps_translation(self, refusal_id, call):
+        """The stable id stays outside the translated text, so the existing
+        guest catalogue still translates the human part of the refusal."""
+        translated = []
+        with patch(f"{MOD}._", side_effect=lambda text, *a, **k: translated.append(text) or text):
+            with self.assertRaisesRegex(frappe.ValidationError, rf"^\[{refusal_id}\] "):
+                call()
+        self.assertTrue(translated)
+        self.assertEqual(set(translated) - _catalogued_sources(), set(), "text missing from ar.csv")
+
+    def setUp(self):
+        pos_profile = MagicMock()
+        pos_profile.payments = [frappe._dict(mode_of_payment="P2 Phone")]
+        self.enterContext(patch(f"{MOD}.frappe.get_cached_doc", return_value=pos_profile))
+
+        def configured_gateway(doctype, *args, **kwargs):
+            if doctype == "Payment Gateway Account":
+                return frappe._dict(name="P2 Gateway", payment_account="P2 Bank", payment_channel="Phone")
+            if doctype == "Mode of Payment":
+                return "Phone"
+            if doctype == "Mode of Payment Account":
+                return "P2 Bank"
+            return None
+
+        self.enterContext(patch(f"{MOD}.frappe.db.get_value", side_effect=configured_gateway))
+        # No earlier Paid requests for these mocked invoices.
+        self.enterContext(patch(f"{MOD}.frappe.get_all", return_value=[]))
+
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
@@ -956,7 +1194,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         invoice.docstatus = 0
         invoice.name = "POS-INV-100"
 
-        def get_doc_side_effect(doctype, name=None):
+        def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
             if doctype == "POS Invoice":
@@ -979,7 +1217,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         # any client-supplied argument (there isn't one to trust).
         mock_make_pr.assert_called_once_with(
             dt="POS Invoice", dn="POS-INV-100", submit_doc=1, mute_email=1,
-            order_type="Shopping Cart", return_doc=1,
+            payment_gateway_account="P2 Gateway", mode_of_payment="P2 Phone", return_doc=1,
         )
         self.assertEqual(result["payment_request"], "PR-001")
         self.assertEqual(result["amount"], 1293.72)
@@ -997,8 +1235,26 @@ class TestCreatePaymentRequest(unittest.TestCase):
         profile.enable_payment_link = 0
         mock_get_doc.return_value = profile
 
-        with self.assertRaises(frappe.ValidationError):
+        self.assert_refusal_keeps_translation(
+            "URY-PAYMENT-DISABLED", lambda: create_payment_request("session-token"))
+
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._resolve_session")
+    def test_create_payment_request_rejects_session_without_order(self, mock_resolve_session, mock_get_doc):
+        session = MagicMock()
+        session.invoice = None
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock()
+        profile.enable_customer_payment = 1
+        profile.enable_payment_link = 0
+        mock_get_doc.return_value = profile
+
+        self.assert_refusal_keeps_translation(
+            "URY-PAYMENT-NO-ORDER", lambda: create_payment_request("session-token"))
+        with self.assertRaises(frappe.ValidationError) as ctx:
             create_payment_request("session-token")
+        self.assertNotIsInstance(ctx.exception, frappe.PermissionError)
 
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
     @patch(f"{MOD}.frappe.get_doc")
@@ -1018,15 +1274,15 @@ class TestCreatePaymentRequest(unittest.TestCase):
         invoice = MagicMock()
         invoice.docstatus = 1  # already submitted/settled
 
-        def get_doc_side_effect(doctype, name=None):
+        def get_doc_side_effect(doctype, name=None, **kwargs):
             if doctype == "URY Self Ordering Profile":
                 return profile
             return invoice
 
         mock_get_doc.side_effect = get_doc_side_effect
 
-        with self.assertRaises(frappe.ValidationError):
-            create_payment_request("session-token")
+        self.assert_refusal_keeps_translation(
+            "URY-PAYMENT-SETTLED", lambda: create_payment_request("session-token"))
         mock_make_pr.assert_not_called()
 
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
@@ -1084,24 +1340,12 @@ class TestCreatePaymentRequest(unittest.TestCase):
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
     @patch(f"{MOD}.frappe.set_user")
-    def test_create_payment_request_reports_unconfigured_gateway_clearly(
+    def test_create_payment_request_does_not_relabel_request_errors(
         self, mock_set_user, mock_resolve_session, mock_get_doc, mock_log_error, mock_clear_messages, mock_make_pr,
     ):
-        """Live-testing finding (two parts): for dt="POS Invoice", ERPNext's
-        get_amount() only recognizes payments rows with type="Phone"
-        matching a configured gateway account -- with none configured (true
-        on a fresh bench with no real Payment Gateway Account set up),
-        make_payment_request() itself throws "Payment Entry is already
-        created", which reads as if the order were already paid. This must
-        surface as a clear "not configured yet" exception message (part 1
-        -- already covered before this fix). But live browser testing found
-        a SECOND leak: ERPNext's own frappe.throw() inside make_payment_request
-        queues that raw message via msgprint into frappe.local.message_log
-        BEFORE we ever catch the exception -- so even though the exception
-        object we raise is clean, the queued message survives and would
-        still reach the client's _server_messages array alongside it. Part
-        2: frappe.clear_messages() must be called to drop that queued
-        message before re-throwing."""
+        """Missing configuration is refused before ERPNext is called. Any
+        later Payment Request error is real and must not be relabelled as
+        "online payment isn't set up"."""
         session = MagicMock()
         session.invoice = "POS-INV-100"
         mock_resolve_session.return_value = session
@@ -1120,13 +1364,50 @@ class TestCreatePaymentRequest(unittest.TestCase):
             return invoice
 
         mock_get_doc.side_effect = get_doc_side_effect
-        mock_make_pr.side_effect = frappe.ValidationError("Payment Entry is already created")
+        mock_make_pr.side_effect = frappe.ValidationError("Payment Request is already created")
 
         with self.assertRaises(frappe.ValidationError) as ctx:
             create_payment_request("session-token")
-        self.assertIn("isn't set up", str(ctx.exception))
-        self.assertNotIn("already created", str(ctx.exception))
-        mock_clear_messages.assert_called_once()
+        self.assertIn("already created", str(ctx.exception))
+        self.assertNotIn("isn't set up", str(ctx.exception))
+        mock_clear_messages.assert_not_called()
+
+    @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._resolve_session")
+    @patch(f"{MOD}.frappe.set_user")
+    def test_create_payment_request_locks_invoice_and_maps_lock_conflicts_to_retry(
+        self, mock_set_user, mock_resolve_session, mock_get_doc, mock_make_pr,
+    ):
+        """A double tap is serialised on the invoice row; a lock conflict is
+        the existing retryable guest refusal, not a raw database error."""
+        session = MagicMock()
+        session.invoice = "POS-INV-100"
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock()
+        profile.enable_customer_payment = 1
+        profile.enable_payment_link = 0
+
+        invoice = MagicMock()
+        invoice.docstatus = 0
+        invoice.name = "POS-INV-100"
+        invoice_reads = []
+
+        def get_doc_side_effect(doctype, name=None, **kwargs):
+            if doctype == "URY Self Ordering Profile":
+                return profile
+            if doctype == "POS Invoice":
+                invoice_reads.append(kwargs)
+            return invoice
+
+        mock_get_doc.side_effect = get_doc_side_effect
+        mock_make_pr.side_effect = frappe.QueryDeadlockError("Deadlock found")
+
+        with self.assertRaisesRegex(frappe.ValidationError, "URY_GUEST_RETRY") as ctx:
+            create_payment_request("session-token")
+        self.assertNotIsInstance(ctx.exception, frappe.QueryDeadlockError)
+        self.assertEqual(invoice_reads, [{"for_update": True}])
 
 
 class TestSharePaymentLink(unittest.TestCase):

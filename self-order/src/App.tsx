@@ -4,6 +4,9 @@ import TabletLayout from './layouts/TabletLayout'
 import LandscapeKioskLayout from './layouts/LandscapeKioskLayout'
 import PortraitKioskLayout from './layouts/PortraitKioskLayout'
 import type { OrderingLayout } from './lib/api'
+import { t } from './i18n'
+import LanguageSwitcher, { useGuestLanguage } from './components/LanguageSwitcher'
+import GuestFeedback from './components/GuestFeedback'
 
 const LAYOUTS: Record<OrderingLayout, typeof MobileQRLayout> = {
   Mobile: MobileQRLayout,
@@ -21,21 +24,24 @@ const LAYOUTS: Record<OrderingLayout, typeof MobileQRLayout> = {
  * the QR/mobile case) falls through to MobileQRLayout, which does its own
  * token/session bootstrap via useOrderingSession().
  */
-function App() {
+function OrderingApp() {
+  useGuestLanguage()
   const { isDevice, deviceContext, deviceLoading, deviceError } = useDeviceBootstrap()
 
   if (isDevice) {
     if (deviceLoading) {
       return (
-        <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-          Starting up…
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+          <LanguageSwitcher />
+          {t('status.starting')}
         </div>
       )
     }
     if (deviceError || !deviceContext) {
       return (
-        <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-          {deviceError ?? 'This device could not be started. Please contact staff.'}
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+          <LanguageSwitcher />
+          <p className="text-destructive">{deviceError ?? t('errors.device_start')}</p>
         </div>
       )
     }
@@ -44,6 +50,14 @@ function App() {
   }
 
   return <MobileQRLayout />
+}
+
+// /order and /ury/order both serve this app (hooks.py website_route_rules).
+const FEEDBACK_PATH = /\/order\/feedback\/?$/
+
+function App() {
+  if (FEEDBACK_PATH.test(window.location.pathname)) return <GuestFeedback />
+  return <OrderingApp />
 }
 
 export default App

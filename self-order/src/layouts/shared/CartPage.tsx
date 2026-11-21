@@ -1,13 +1,17 @@
 import type { CartEntry } from '../../hooks/useOrderingSession'
 import type { MenuItem } from '../../lib/api'
+import { t } from '../../i18n'
+import { useGuestLanguage } from '../../components/LanguageSwitcher'
 
 interface CartPageProps {
   cartItems: CartEntry[]
   cartCount: number
   cartTotal: number
   itemNotesEnabled?: boolean
-  onIncrement: (item: MenuItem) => void
-  onDecrement: (itemCode: string) => void
+  /** Called with the line's note so + adds to the same noted line. */
+  onIncrement: (item: MenuItem, options?: { comment?: string }) => void
+  /** Called with the line's cart key (the item code for a plain line). */
+  onDecrement: (lineKey: string) => void
   onBack: () => void
   onCheckout: () => void
   className?: string
@@ -33,54 +37,55 @@ function CartPage({
   onCheckout,
   className,
 }: CartPageProps) {
+  useGuestLanguage()
   return (
     <div className={className ?? 'flex h-full flex-col'}>
       <header className="flex items-center gap-2 border-b p-4">
         <button
           onClick={onBack}
           className="rounded-md border px-3 py-2 text-sm font-medium"
-          aria-label="Back to menu"
+          aria-label={t('nav.back_to_menu')}
         >
-          ← Back to menu
+          ← {t('nav.back_to_menu')}
         </button>
-        <h1 className="flex-1 text-center text-lg font-semibold">Your Cart</h1>
+        <h1 className="flex-1 text-center text-lg font-semibold">{t('cart.your_cart')}</h1>
         <span className="w-[92px]" aria-hidden="true" />
       </header>
 
       <div className="flex-1 overflow-y-auto p-4">
         {cartItems.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <p className="text-muted-foreground">Your cart is empty.</p>
+            <p className="text-muted-foreground">{t('cart.page_empty')}</p>
             <button onClick={onBack} className="rounded-md border px-4 py-2 text-sm font-medium">
-              Browse the menu
+              {t('nav.browse_menu')}
             </button>
           </div>
         ) : (
           <ul className="space-y-3 text-sm">
             {cartItems.map((entry) => (
-              <li key={entry.item.item} className="rounded-lg border p-3">
+              <li key={entry.key ?? entry.item.item} className="rounded-lg border p-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex-1 font-medium">{entry.item.item_name}</span>
                   <span className="flex items-center gap-2">
                     <button
-                      onClick={() => onDecrement(entry.item.item)}
+                      onClick={() => onDecrement(entry.key ?? entry.item.item)}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
-                      aria-label={`Remove one ${entry.item.item_name}`}
+                      aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                     >
                       −
                     </button>
                     <span className="w-4 text-center">{entry.qty}</span>
                     <button
-                      onClick={() => onIncrement(entry.item)}
+                      onClick={() => onIncrement(entry.item, { comment: entry.comment })}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
-                      aria-label={`Add one more ${entry.item.item_name}`}
+                      aria-label={t('cart.add_one', { name: entry.item.item_name })}
                     >
                       +
                     </button>
                   </span>
                 </div>
                 {itemNotesEnabled && entry.comment && (
-                  <p className="mt-1 text-xs text-muted-foreground">Note: {entry.comment}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{t('cart.note', { note: entry.comment })}</p>
                 )}
               </li>
             ))}
@@ -90,9 +95,7 @@ function CartPage({
 
       <div className="border-t p-4">
         <div className="mb-3 flex items-center justify-between text-sm font-semibold">
-          <span>
-            {cartCount} item{cartCount !== 1 ? 's' : ''}
-          </span>
+          <span>{t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount })}</span>
           <span>{cartTotal}</span>
         </div>
         <button
@@ -100,7 +103,7 @@ function CartPage({
           disabled={cartCount === 0}
           className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
         >
-          Proceed to checkout
+          {t('cart.proceed')}
         </button>
       </div>
     </div>

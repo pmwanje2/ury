@@ -4,6 +4,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { MenuItem, OrderingContext } from '../lib/api'
+import { menuCategories } from '../lib/menu-categories'
+import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import SearchBar from './shared/SearchBar'
 import MenuGrid from './shared/MenuGrid'
 import ProductDetail from './shared/ProductDetail'
@@ -12,6 +16,7 @@ import CheckoutScreen from './shared/CheckoutScreen'
 import OrderStatusScreen from './shared/OrderStatusScreen'
 
 const IDLE_RESET_GRACE_MS = 15000
+const OTHER = '__other__'
 
 const ALL_CATEGORY = '__all__'
 
@@ -27,7 +32,7 @@ interface LayoutProps {
  * product grid in the main area, and a bottom cart bar.
  *
  * Cart design choice: the cart bar starts collapsed (just count/total) and
- * expands to the full item list + Place Order button when tapped, rather
+ * expands to the full item list + place-order button when tapped, rather
  * than being always-expanded. On a tall portrait screen an always-expanded
  * cart would either eat a large fixed chunk of the browsing area or force
  * the product grid to reflow awkwardly as items are added; a collapsed bar
@@ -36,6 +41,7 @@ interface LayoutProps {
  * the bottom of the screen.
  */
 function PortraitKioskLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -47,6 +53,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     error,
     billRequested,
     payingOnline,
+    paymentRequest,
     addToCart,
     decrementCart,
     submitCart,
@@ -67,12 +74,12 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>(ALL_CATEGORY)
   const [cartExpanded, setCartExpanded] = useState(false)
   const [showIdleWarning, setShowIdleWarning] = useState(false)
-  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const idleWarnMs = (context?.session_idle_timeout_minutes ?? 30) * 60000
   const [searchQuery, setSearchQuery] = useState('')
 
   function handleReset() {
-    if (window.confirm('Start a new order? Current cart will be cleared.')) {
+    if (window.confirm(t('confirm.new_order'))) {
       resetSession()
     }
   }
@@ -97,24 +104,16 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     setShowIdleWarning(false)
   }
 
-  const categories = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const item of menu) {
-      const key = item.course ?? ALL_CATEGORY
-      if (key === ALL_CATEGORY) continue
-      if (!seen.has(key)) {
-        seen.set(key, item.course_label ?? item.course ?? 'Other')
-      }
-    }
-    return Array.from(seen.entries()).map(([course, label]) => ({ course, label }))
-  }, [menu])
+  // Categories in the menu's configured order (#98); "Other" is translated per render.
+  const groups = useMemo(() => menuCategories(menu), [menu])
+  const categories = groups.map((group) => ({ course: group.course ?? OTHER, label: group.label ?? t('menu.other') }))
 
   const visibleMenu = useMemo(() => {
-    let filtered = menu
+    let filtered = groups.flatMap((group) => group.items)
 
     // Apply category filter
     if (selectedCategory !== ALL_CATEGORY) {
-      filtered = filtered.filter((item) => (item.course ?? ALL_CATEGORY) === selectedCategory)
+      filtered = groups.find((group) => (group.course ?? OTHER) === selectedCategory)?.items ?? []
     }
 
     // Apply search filter
@@ -128,20 +127,22 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     }
 
     return filtered
-  }, [menu, selectedCategory, searchQuery])
+  }, [groups, selectedCategory, searchQuery])
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        Loading menu…
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+        <LanguageSwitcher />
+        {t('status.loading_menu')}
       </div>
     )
   }
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -169,13 +170,13 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex min-h-screen flex-col">
         <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-6 py-4 backdrop-blur">
           <h1 className="text-2xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
 
@@ -185,6 +186,8 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
           menuItem={detailItem}
           onAddToCart={addToCart}
           onBack={goToMenu}
+          menu={menu}
+          itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
         />
       </div>
     )
@@ -195,13 +198,13 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex min-h-screen flex-col">
         <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-6 py-4 backdrop-blur">
           <h1 className="text-2xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
 
@@ -225,13 +228,13 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex min-h-screen flex-col">
         <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-6 py-4 backdrop-blur">
           <h1 className="text-2xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
 
@@ -248,7 +251,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             submitting={submitting}
             payingOnline={payingOnline}
             billRequested={billRequested}
-            paymentRequest={null}
+            paymentRequest={paymentRequest}
             onSubmitCart={() => {
               submitCart().then((success) => {
                 if (success) goToStatus()
@@ -270,13 +273,13 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
       <div className="flex min-h-screen flex-col bg-background">
         <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-6 py-4 backdrop-blur">
           <h1 className="text-2xl font-semibold">
-            {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+            {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
           </h1>
           <button
             onClick={handleReset}
             className="rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground"
           >
-            New Order
+            {t('actions.new_order')}
           </button>
         </header>
 
@@ -297,13 +300,14 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
     <div className="flex min-h-screen flex-col pb-24">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background/95 px-6 py-4 backdrop-blur">
         <h1 className="text-2xl font-semibold">
-          {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+          {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
         </h1>
+        <LanguageSwitcher />
         <button
           onClick={handleReset}
           className="rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground"
         >
-          New Order
+          {t('actions.new_order')}
         </button>
       </header>
 
@@ -313,7 +317,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
 
       {order && order.items.length > 0 && (
         <section className="mx-6 mt-4 rounded-lg border p-4">
-          <h2 className="mb-2 text-sm font-medium text-muted-foreground">Your order so far</h2>
+          <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('order.so_far')}</h2>
           <ul className="space-y-1 text-base">
             {order.items.map((row, idx) => (
               <li key={`${row.item_code}-${idx}`} className="flex justify-between">
@@ -323,7 +327,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             ))}
           </ul>
           <div className="mt-2 flex justify-between border-t pt-2 text-base font-semibold">
-            <span>Total</span>
+            <span>{t('order.total')}</span>
             <span>{order.grand_total}</span>
           </div>
         </section>
@@ -333,10 +337,10 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
         {/* Search bar and category rail */}
         <div className="flex gap-4">
           <div className="w-40 shrink-0">
-            <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search..." />
+            <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={t('search.placeholder_short')} />
           </div>
           <nav
-            aria-label="Menu categories"
+            aria-label={t('menu.categories')}
             className="flex flex-1 gap-2 self-start overflow-x-auto rounded-lg border p-2"
           >
             <button
@@ -347,7 +351,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
                   : 'text-foreground hover:bg-muted'
               }`}
             >
-              All Items
+              {t('menu.all_items')}
             </button>
             {categories.map((category) => (
               <button
@@ -387,21 +391,21 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
             <div className="max-h-[50vh] overflow-y-auto border-b p-4">
               <ul className="space-y-2 text-base">
                 {cartItems.map((entry) => (
-                  <li key={entry.item.item} className="flex items-center justify-between">
+                  <li key={entry.key ?? entry.item.item} className="flex items-center justify-between">
                     <span>{entry.item.item_name}</span>
                     <span className="flex items-center gap-3">
                       <button
-                        onClick={() => decrementCart(entry.item.item)}
+                        onClick={() => decrementCart(entry.key ?? entry.item.item)}
                         className="h-8 w-8 rounded-full border text-base leading-none"
-                        aria-label={`Remove one ${entry.item.item_name}`}
+                        aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                       >
                         −
                       </button>
                       {entry.qty}
                       <button
-                        onClick={() => addToCart(entry.item)}
+                        onClick={() => addToCart(entry.item, { comment: entry.comment })}
                         className="h-8 w-8 rounded-full border text-base leading-none"
-                        aria-label={`Add one more ${entry.item.item_name}`}
+                        aria-label={t('cart.add_one', { name: entry.item.item_name })}
                       >
                         +
                       </button>
@@ -419,7 +423,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
               aria-expanded={cartExpanded}
             >
               <span className="text-base font-semibold">
-                {cartCount} item{cartCount > 1 ? 's' : ''}
+                {t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount })}
               </span>
               <span className="text-base font-semibold tabular-nums">{formatCurrency(cartTotal)}</span>
             </button>
@@ -428,23 +432,23 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
               disabled={cartCount === 0}
               className="rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground disabled:opacity-50"
             >
-              Checkout
+              {t('checkout.title')}
             </button>
           </div>
         </div>
       )}
 
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
-        <DialogContent onClose={handleStillHere}>
+        <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
-            <DialogTitle>Still there?</DialogTitle>
+            <DialogTitle>{t('cart.still_there')}</DialogTitle>
           </DialogHeader>
           <DialogFooter>
             <button
               onClick={handleStillHere}
               className="w-full rounded-md bg-primary py-3 text-base font-medium text-primary-foreground"
             >
-              I'm still here
+              {t('cart.still_here')}
             </button>
           </DialogFooter>
         </DialogContent>
