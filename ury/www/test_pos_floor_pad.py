@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import frappe
 from jinja2 import Environment
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,9 @@ class TestPosFloorPad(unittest.TestCase):
             patch.object(controller.frappe, "db", MagicMock()),
             patch.object(controller.frappe, "session", SimpleNamespace(user="Guest")),
             patch.object(controller.frappe.website.utils, "get_boot_data", return_value={}),
+            # Site-free: frappe.conf is a werkzeug local proxy that is unbound without frappe.init.
+            patch.object(controller.frappe, "conf", frappe._dict()),
+            patch.object(controller.frappe.utils, "get_build_version", return_value="build"),
         ):
             result = controller.get_context(context)
 
