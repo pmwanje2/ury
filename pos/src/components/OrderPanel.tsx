@@ -14,7 +14,7 @@ import { HoldFireControls } from './HoldFireControls';
 import { useOutbox } from '../offline/use-outbox';
 import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
-import { syncOrder } from '../lib/order-api';
+import { syncOrder, type SavedInvoice } from '../lib/order-api';
 import { useRootStore } from '../store/root-store';
 import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
@@ -29,7 +29,7 @@ const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'w
   SERVED: { label: 'order.kot_served', variant: 'success' },
 };
 
-const OrderPanel = () => {
+const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoice) => void }) => {
   const { 
     activeOrders, 
     removeFromOrder, 
@@ -208,6 +208,9 @@ const OrderPanel = () => {
       resetOrderState();
       setOfflineTarget('');
       showToast.success(submission.offline ? t('offline.saved') : isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
+      if (result?.message && 'name' in result.message && user.roles?.includes('URY Cashier')) {
+        onCashierCheck?.(result.message);
+      }
     } catch (error) {
       console.error('Failed to sync order:', error);
       showToast.error(parseFrappeError(error, t('errors.failed_process_order')));

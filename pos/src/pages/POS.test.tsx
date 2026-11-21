@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -77,7 +78,7 @@ describe("POS", () => {
   });
 
   it("renders main POS layout", () => {
-    render(<POS />);
+    render(<MemoryRouter><POS /></MemoryRouter>);
 
     expect(screen.getByText("Sidebar")).toBeInTheDocument();
     expect(screen.getByText("OrderPanel")).toBeInTheDocument();
@@ -85,14 +86,14 @@ describe("POS", () => {
   });
 
   it("renders quick filter buttons", () => {
-    render(<POS />);
+    render(<MemoryRouter><POS /></MemoryRouter>);
 
     expect(screen.getByText("common.all")).toBeInTheDocument();
     expect(screen.getByText("menu.special_items")).toBeInTheDocument();
   });
 
   it("renders all components", () => {
-    render(<POS />);
+    render(<MemoryRouter><POS /></MemoryRouter>);
 
     expect(screen.getByText("Sidebar")).toBeInTheDocument();
     expect(screen.getByText("OrderPanel")).toBeInTheDocument();
@@ -111,7 +112,7 @@ describe("POS", () => {
       isInitializing: true,
     } as any);
     
-    render(<POS />);
+    render(<MemoryRouter><POS /></MemoryRouter>);
     
     expect(screen.getByText("InitialLoader")).toBeInTheDocument();
   });
@@ -128,7 +129,7 @@ describe("POS", () => {
       isInitializing: false,
     } as any);
 
-    render(<POS />);
+    render(<MemoryRouter><POS /></MemoryRouter>);
     
     expect(screen.getByText('common.retry')).toBeInTheDocument();
   });
@@ -145,13 +146,13 @@ describe("POS", () => {
       isInitializing: false,
     } as any);
 
-    render(<POS />);
+    render(<MemoryRouter><POS /></MemoryRouter>);
     
     expect(screen.getByText("common.loading_menu_items")).toBeInTheDocument();
   });
 
   it("has proper flex layout", () => {
-    const { container } = render(<POS />);
+    const { container } = render(<MemoryRouter><POS /></MemoryRouter>);
     const mainDiv = container.querySelector("div[class*=\"flex\"]");
     expect(mainDiv).toBeTruthy();
   });

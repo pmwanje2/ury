@@ -123,7 +123,8 @@ export interface SyncOrderRequest {
  * when the backend rejects the write (e.g. stale last_modified_time, table already
  * occupied, or an already-billed invoice).
  */
-export type SyncOrderResponse = POSInvoice | { status: 'Failure' };
+export type SavedInvoice = POSInvoice & import('./invoice-api').POSInvoice;
+export type SyncOrderResponse = SavedInvoice | { status: 'Failure' };
 
 export const syncOrder = async (data: SyncOrderRequest) => {
   await assertOfflineActionAllowed(data.items?.some(item => item.ury_held) ? 'hold/fire' : 'online-order rounds');

@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useRootStore } from '../store/root-store';
 import { t } from '../i18n';
 import { Star, TrendingUp } from 'lucide-react';
 import Sidebar from '../components/Sidebar';
@@ -11,6 +13,7 @@ import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
 
 export default function POS() {
+  const navigate = useNavigate();
   const {
     quickFilter,
     setQuickFilter,
@@ -134,7 +137,10 @@ export default function POS() {
 
         <MenuList onItemClick={handleItemClick} />
       </div>
-      <OrderPanel />
+      <OrderPanel onCashierCheck={(invoice) => {
+        void useRootStore.getState().selectOrder(invoice);
+        navigate('/orders');
+      }} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
     </div>
   );
