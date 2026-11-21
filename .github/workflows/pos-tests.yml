@@ -46,3 +46,4 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_menu.test_menu_price_upkeep
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_shown_price_is_billed
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_kds_display_window
+          PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_backfill_invoice_employee_attribution

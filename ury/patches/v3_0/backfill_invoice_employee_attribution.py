@@ -18,7 +18,7 @@ The patch is idempotent and only fills blanks, never overwrites a manual correct
 Idempotent: WHERE IFNULL(..., '') = '' guards ensure this is a no-op on re-run.
 """
 import frappe
-from frappe.utils.fixtures import sync_fixtures
+from frappe.core.doctype.data_import.data_import import import_doc
 
 _PICK = """
     SELECT e.user_id, e.name AS employee
@@ -40,18 +40,19 @@ _PICK = """
 
 
 def execute():
-    # custom_waiter_employee/custom_closing_employee are fixture-declared
-    # custom fields (ury/fixtures/custom_field.json). bench migrate runs
-    # post_model_sync patches (this one included) BEFORE syncing fixtures,
-    # so on a genuinely fresh install these columns don't exist yet when
-    # this patch first runs. Sync fixtures here so the columns are always
-    # present before the raw SQL below touches them -- sync_fixtures is
-    # itself idempotent, so this is a no-op on later re-runs.
-    for dt in ("POS Invoice", "Sales Invoice"):
-        for dest in ("custom_waiter_employee", "custom_closing_employee"):
-            if not frappe.db.has_column(dt, dest):
-                sync_fixtures(app="ury")
-                break
+    # Migrate imports profiles after patches. Importing them here can lock them
+    # until a worker runs, so load only the fields needed by the SQL below.
+    if any(
+        not frappe.db.has_column(dt, dest)
+        for dt in ("POS Invoice", "Sales Invoice")
+        for dest in ("custom_waiter_employee", "custom_closing_employee")
+    ):
+        previous = frappe.flags.in_fixtures
+        try:
+            frappe.flags.in_fixtures = True
+            import_doc(frappe.get_app_path("ury", "fixtures", "custom_field.json"), sort=True)
+        finally:
+            frappe.flags.in_fixtures = previous
 
     for dt in ("POS Invoice", "Sales Invoice"):
         for src, dest in (("waiter", "custom_waiter_employee"),
