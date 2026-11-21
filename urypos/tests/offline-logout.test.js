@@ -35,6 +35,8 @@ it('posts once with CSRF; keeps the session on refusal and permits retry', async
   fetch.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   localStorage.setItem('userAuth', 'true');
   localStorage.setItem('unrelated', 'keep');
+  localStorage.setItem('otherapp_panel_strike', 'keep');
+  localStorage.setItem('selectedRoom', 'Terrace');
   sessionStorage.setItem('ury.setup.configureState', 'private');
   const pending = store.logOut();
   store.logOut();
@@ -47,6 +49,8 @@ it('posts once with CSRF; keeps the session on refusal and permits retry', async
   await pending;
   expect(localStorage.getItem('userAuth')).toBe('true');
   expect(sessionStorage.getItem('ury.setup.configureState')).toBe('private');
+  expect(localStorage.getItem('otherapp_panel_strike')).toBe('keep');
+  expect(localStorage.getItem('selectedRoom')).toBe('Terrace');
   expect(router.push).not.toHaveBeenCalled();
   expect(store.alert.createAlert).toHaveBeenCalled();
   await store.logOut();
@@ -54,4 +58,6 @@ it('posts once with CSRF; keeps the session on refusal and permits retry', async
   expect(localStorage.getItem('userAuth')).toBeNull();
   expect(sessionStorage.getItem('ury.setup.configureState')).toBeNull();
   expect(localStorage.getItem('unrelated')).toBe('keep');
+  expect(localStorage.getItem('selectedRoom')).toBeNull();
+  expect(localStorage.getItem('otherapp_panel_strike')).toBe('keep');
 });
