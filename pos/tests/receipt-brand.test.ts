@@ -12,24 +12,25 @@ vi.mock('@ury/core', async (importOriginal) => ({
 }));
 
 it.each([['POS', posHtml], ['dashboard', dashboardHtml], ['Serve', serveHtml]] as const)(
-  '%s QZ does not override the invoice letter head or site print settings', async (_, html) => {
+  '%s QZ explicitly requests the invoice without a letterhead', async (_, html) => {
     vi.mocked(call.get).mockResolvedValue({ message: { html: '<p>Receipt</p>' } });
     await html('INV-1', 'Thermal receipt');
     const [, params] = vi.mocked(call.get).mock.lastCall!;
     expect(params).toMatchObject({ name: 'INV-1', print_format: 'Thermal receipt' });
-    expect(params).not.toHaveProperty('no_letterhead');
-    expect(params).not.toHaveProperty('letterhead');
+    expect(params).toMatchObject({ no_letterhead: 1, letterhead: 'No Letterhead', settings: {} });
   },
 );
 
 it.each([['POS', posPrint], ['dashboard', dashboardPrint]] as const)(
-  '%s printview respects the native receipt identity', async (_, print) => {
+  '%s browser printview explicitly suppresses letterhead', async (_, print) => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     try {
       await print({ orderId: 'INV-1', posProfile: { print_type: 'socket' } as never, printFormat: 'Thermal receipt' });
       const params = new URL(String(open.mock.lastCall![0]), location.origin).searchParams;
       expect(params.get('format')).toBe('Thermal receipt');
-      expect(params.has('no_letterhead') || params.has('letterhead')).toBe(false);
+      expect(params.get('no_letterhead')).toBe('1');
+      expect(params.get('letterhead')).toBe('No Letterhead');
+      expect(params.get('settings')).toBe('{}');
     } finally { open.mockRestore(); }
   },
 );

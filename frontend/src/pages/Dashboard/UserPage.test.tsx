@@ -78,7 +78,7 @@ describe("UserPage", () => {
     render(<UserPage />);
     await waitFor(() => {
       expect(screen.getByText("user@ury.test")).toBeInTheDocument();
-      expect(screen.getByText("POS Admin")).toBeInTheDocument();
+      expect(screen.getByText("Restaurant POS Admin")).toBeInTheDocument();
     });
   });
 
@@ -96,19 +96,19 @@ describe("UserPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Roles / Access Level")).toBeInTheDocument();
-      expect(screen.getByText("POS Cashier")).toBeInTheDocument();
+      expect(screen.getByText("Restaurant POS Cashier")).toBeInTheDocument();
     });
 
     // Click the MultiSelect dropdown trigger
-    const selectTrigger = screen.getByText("POS Cashier").closest("div");
+    const selectTrigger = screen.getByText("Restaurant POS Cashier").closest("div");
     if (selectTrigger) {
       fireEvent.click(selectTrigger);
     }
 
     await waitFor(() => {
-      expect(screen.getByText("POS Admin")).toBeInTheDocument();
-      expect(screen.getByText("POS Manager")).toBeInTheDocument();
-      expect(screen.getByText("POS Captain")).toBeInTheDocument();
+      expect(screen.getByText("Restaurant POS Admin")).toBeInTheDocument();
+      expect(screen.getByText("Restaurant POS Manager")).toBeInTheDocument();
+      expect(screen.getByText("Restaurant POS Captain")).toBeInTheDocument();
       expect(screen.getByText("POS Waiter")).toBeInTheDocument();
     });
   });

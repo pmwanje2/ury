@@ -76,7 +76,7 @@ describe('RoleGuard', () => {
 
   it('denies access when the user has roles but none is URY Manager', async () => {
     getLoggedUserMock.mockResolvedValueOnce('user@example.com');
-    getUserRolesMock.mockResolvedValueOnce({ roles: ['Sales User'] });
+    getUserRolesMock.mockResolvedValueOnce({ roles: ['Sales User', 'POS Manager', 'Restaurant POS Manager'] });
 
     render(
       <RoleGuard>
@@ -86,7 +86,7 @@ describe('RoleGuard', () => {
 
     await waitFor(() => expect(screen.getByText('Access Denied')).toBeInTheDocument());
     expect(
-      screen.getByText('You need the POS Manager role to access this section.')
+      screen.getByText('You need the Restaurant POS Manager role to access this section.')
     ).toBeInTheDocument();
   });
 

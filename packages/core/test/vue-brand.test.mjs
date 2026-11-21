@@ -49,18 +49,38 @@ for (const [file, defaultAlt, defaultLogo] of fixtures) {
   }
 }
 
-
-test('classic POS browser receipts honour the native letter head', async () => {
-  let target;
-  const { useInvoiceDataStore: store } = loadModule(resolve('urypos/src/stores/invoiceData.js'), {
-    window: { open: url => { target = new URL(url, 'https://example.test'); } },
+function classicStore(window = {}) {
+  const { useInvoiceDataStore } = loadModule(resolve('urypos/src/stores/invoiceData.js'), {
+    window,
   }, { pinia: { defineStore: (_name, options) => options }, '../router': {},
-    './utils/PrintWithQz': {}, ...Object.fromEntries(['Table', 'Menu', 'Customer', 'Notification',
+    './utils/PrintWithQz': { printWithQz: async () => 'printed' }, ...Object.fromEntries(['Table', 'Menu', 'Customer', 'Notification',
       'recentOrder', 'Alert', 'NotificationModal', 'Auth', 'frappeSdk'].map(name => [`./${name}.js`, {}])),
     './NotificationModal': {},
   });
-  await store.actions.printFunction.call({ recentOrders: {}, invoiceNumber: 'INV-1', print_type: 'socket',
+  return useInvoiceDataStore.actions;
+}
+
+test('classic POS browser printview explicitly suppresses letterhead', async () => {
+  let target;
+  const store = classicStore({ open: url => { target = new URL(url, 'https://example.test'); } });
+  await store.printFunction.call({ recentOrders: {}, invoiceNumber: 'INV-1', print_type: 'socket',
     print_format: 'Receipt', call: { post: async () => {} }, notification: { createNotification() {} } });
   assert.equal(target.searchParams.get('format'), 'Receipt');
-  assert.equal(target.searchParams.has('letterhead') || target.searchParams.has('no_letterhead'), false);
+  assert.equal(target.searchParams.get('no_letterhead'), '1');
+  assert.equal(target.searchParams.get('letterhead'), 'No Letterhead');
+  assert.equal(target.searchParams.get('settings'), '{}');
+});
+
+test('classic POS QZ leaves letterhead selection to native printview', async () => {
+  let request;
+  const store = classicStore();
+  await store.printFunction.call({ recentOrders: {}, invoiceNumber: 'INV-1', print_type: 'qz',
+    print_format: 'Receipt', updatePrintTable: async () => true,
+    call: { get: async (method, args) => {
+      request = { method, ...args };
+      return { message: { html: '<p>Receipt</p>' } };
+    } },
+  });
+  assert.deepEqual(request, { method: 'frappe.www.printview.get_html_and_style', doc: 'POS Invoice',
+    name: 'INV-1', print_format: 'Receipt', _lang: 'en' });
 });

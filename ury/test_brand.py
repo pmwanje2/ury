@@ -349,17 +349,20 @@ class TestSiteBrand(unittest.TestCase):
                 self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/public-release")
                 self.framework.conf.clear()
 
-    def test_receipt_honours_the_native_letter_head_and_no_letterhead_switch(self):
+    def test_merged_receipt_displays_invoice_identity_without_injecting_a_letterhead_or_footer(self):
         from unittest.mock import MagicMock
 
         form = ROOT / "ury/ury/print_format/merged_pos_invoice_format/merged_pos_invoice_format.json"
         template = Environment().from_string(json.loads(form.read_text())["html"])
-        doc = MagicMock(custom_merged_pos_invoice=None, custom_merged_total=0, grand_total=10, items=[])
+        doc = MagicMock(restaurant="Signed outlet", branch="West branch", custom_merged_pos_invoice=None,
+                        custom_merged_total=0, grand_total=10, items=[])
         configured = '<img src="/files/site-receipt.png" alt="Example site">'
         for suppress in (False, True):
             html = template.render(doc=doc, frappe=MagicMock(), letter_head=configured, footer="Configured receipt footer", no_letterhead=suppress)
-            self.assertEqual(configured in html, not suppress)
-            self.assertEqual("Configured receipt footer" in html, not suppress)
+            self.assertIn("Signed outlet", html)
+            self.assertIn("West branch", html)
+            self.assertNotIn(configured, html)
+            self.assertNotIn("Configured receipt footer", html)
 
     def test_authenticated_pos_and_dev_boot_include_site_brand(self):
         self.set_brand()
