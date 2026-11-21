@@ -88,6 +88,7 @@ the open PR.
 | N | #95 | `8b6aa8a0`, `80f70004`, `1f98feff` | `042c8e29` | open, draft (new work, no fork rows) |
 | T0 | #96 | `ba3154e3`, `1747bae1`, `6692547b`, `7f0f931e`, `a7578aaf` | `b0d12217` | open, draft |
 | T5 part 3 | local branch `maximus/t5p3-offline-pos-wiring` | `e6a0290a`, `b59ba37e` | `6c24d276`, `3bb914d0` | implemented; landing PR pending |
+| T9a | `maximus/t9a-urypos-and-backend` | `a51f9071` | `4adcca54` | implemented on the draft branch; T9b owns the React POS remainder |
 
 T5 accounts for 85 distinct fork commits: 12 ported in #107, 43 in #110,
 24 ported in part 3, four superseded by the v16 default-customer resolver,
@@ -161,11 +162,11 @@ T0 notes on rows marked "port" in the rows below:
 | `43811585` | 2026-10-01 | direct | T2 | port | test(pos): expose browser-clock closing period regression (RED) |  |
 | `89e1f123` | 2026-09-08 | direct | T2 | superseded | Port POS Closing Entry clock-integrity check using server time | patch-identical to upstream 4138eb35 |
 | `67e35429` | 2026-09-15 | #387 | T2 | superseded | fix(pos): anchor closing period end to server clock, not browser clock (#387) | patch-identical to upstream 227e4ded (#387) |
-| `dbaa33ff` | 2026-10-01 | direct | T9 | port | test(pos): expose hard-coded customer defaults (RED) |  |
-| `8a7cbd89` | 2026-10-01 | direct | T9 | port | fix(pos): use native Selling Settings customer defaults (GREEN) |  |
-| `ebe03553` | 2026-10-01 | direct | T9 | port | test(pos): reject missing customer group and resolve native territory root (RED) |  |
-| `184a3d62` | 2026-10-01 | direct | T9 | port | test(pos): preserve validation messages in customer defaults double (RED) |  |
-| `db3bed33` | 2026-10-01 | direct | T9 | port | fix(pos): require customer group default and resolve native territory root (GREEN) |  |
+| `dbaa33ff` | 2026-10-01 | direct | T9 | port | test(pos): expose hard-coded customer defaults (RED) | T9a: Customer draft reads the native Selling Settings customer group and territory; covered in `test_customer_defaults.py`. |
+| `8a7cbd89` | 2026-10-01 | direct | T9 | port | fix(pos): use native Selling Settings customer defaults (GREEN) | T9a: Customer draft reads the native Selling Settings customer group and territory; covered in `test_customer_defaults.py`. |
+| `ebe03553` | 2026-10-01 | direct | T9 | port | test(pos): reject missing customer group and resolve native territory root (RED) | T9a: Missing customer group refuses with a configuration message. A missing territory resolves the actual nested-set root; explicit territory wins. `test_customer_defaults.py`. |
+| `184a3d62` | 2026-10-01 | direct | T9 | port | test(pos): preserve validation messages in customer defaults double (RED) | T9a: Missing customer group refuses with a configuration message. A missing territory resolves the actual nested-set root; explicit territory wins. `test_customer_defaults.py`. |
+| `db3bed33` | 2026-10-01 | direct | T9 | port | fix(pos): require customer group default and resolve native territory root (GREEN) | T9a: Missing customer group refuses with a configuration message. A missing territory resolves the actual nested-set root; explicit territory wins. `test_customer_defaults.py`. |
 | `799dc28e` | 2026-10-01 | direct | T2 | port | test(pos): RED whole-till closing authorization and invoice contract |  |
 | `7f603121` | 2026-10-01 | direct | T2 | port | fix(pos): count every bill on the holder's open till |  |
 | `81c2f646` | 2026-10-01 | direct | T2 | port | test(pos): RED opening holder drives till read and closing |  |
@@ -179,10 +180,10 @@ T0 notes on rows marked "port" in the rows below:
 | `00d2503a` | 2026-09-26 | direct | T7 | port | docs(core): document the frappe.boot currency fallback in formatCurrency |  |
 | `c52e0844` | 2026-10-01 | direct | T2 | port | test(pos): expose blind closing clock integration failures (RED) |  |
 | `0a9a068f` | 2026-10-01 | direct | T2 | port | test(pos): reconcile blind closing and server clock harnesses |  |
-| `b0c3c6f6` | 2026-10-02 | direct | T9 | port | test(dashboard): reproduce site-day, ticket-time and table-age defects |  |
-| `bf0db04b` | 2026-10-02 | direct | T9 | port | fix(dashboard): use site business day and valid service durations |  |
-| `62a93557` | 2026-10-02 | direct | T9 | port | test(dashboard): reproduce running-low site-day and cutoff defects |  |
-| `805a9699` | 2026-10-02 | direct | T9 | port | fix(dashboard): share site business day for running-low metrics |  |
+| `b0c3c6f6` | 2026-10-02 | direct | T9 | port | test(dashboard): reproduce site-day, ticket-time and table-age defects | T9a: `test_dashboard_site_day.py` and `test_service_line_site_day.py`: site business-day bounds and open bill creation. v16 already computes plausible overnight ticket durations in SQL; preserve it, include only Served tickets and retain zero. Existing frontend consumers accept this contract. |
+| `bf0db04b` | 2026-10-02 | direct | T9 | port | fix(dashboard): use site business day and valid service durations | T9a: `test_dashboard_site_day.py` and `test_service_line_site_day.py`: site business-day bounds and open bill creation. v16 already computes plausible overnight ticket durations in SQL; preserve it, include only Served tickets and retain zero. Existing frontend consumers accept this contract. |
+| `62a93557` | 2026-10-02 | direct | T9 | port | test(dashboard): reproduce running-low site-day and cutoff defects | T9a: Running-low sales share the site business day and branch cutoff; `test_service_line_site_day.py` exercises the emitted query at midnight and cutoff. |
+| `805a9699` | 2026-10-02 | direct | T9 | port | fix(dashboard): share site business day for running-low metrics | T9a: Running-low sales share the site business day and branch cutoff; `test_service_line_site_day.py` exercises the emitted query at midnight and cutoff. |
 | `c94bd75e` | 2026-10-02 | direct | T9 | port | test(pos): define visible Orders cashier actions (RED) |  |
 | `7b1d816f` | 2026-10-02 | direct | T9 | port | feat(pos): expose native Orders settle split and print actions (GREEN) |  |
 | `264f6146` | 2026-10-02 | direct | T2 | port | test(pos): require opening-inclusive closing reconciliation (RED) |  |
@@ -197,19 +198,19 @@ T0 notes on rows marked "port" in the rows below:
 | `15c551df` | 2026-10-02 | direct | T2 | port | fix(closing): consolidate the whole till on submit (GREEN) |  |
 | `c1540303` | 2026-10-02 | direct | T2 | port | test(closing): require native closing tax amount field (RED) |  |
 | `d972cb0f` | 2026-10-02 | direct | T2 | port | fix(closing): map native tax totals to closing rows (GREEN) |  |
-| `7cfd7fc9` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce floor table age clock and midnight defects (RED) |  |
-| `784781cb` | 2026-10-02 | direct | T9 | port | fix(urypos): use server time for occupied table age (GREEN) |  |
-| `cd51f906` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce room loading blocked by floor requests (RED) |  |
-| `ab8bfc62` | 2026-10-02 | direct | T9 | port | fix(urypos): keep room menu loading independent of floor requests (GREEN) |  |
-| `c9057116` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce future-time jitter as a day-old table (RED) |  |
-| `b06854d9` | 2026-10-02 | direct | T9 | port | fix(urypos): clamp clock jitter without losing midnight rollover (GREEN) |  |
-| `1f97c59f` | 2026-10-02 | direct | T9 | port | test(urypos): require uniform padded site-clock durations (RED) |  |
-| `4d749dd7` | 2026-10-02 | direct | T9 | port | fix(urypos): apply site offset and minute padding uniformly (GREEN) |  |
-| `6cc06b60` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce long-lived and merged open-bill ages (RED) |  |
-| `b81352c4` | 2026-10-02 | direct | T9 | port | fix(urypos): age occupied tables from the open bill creation (GREEN) |  |
-| `f89aed6a` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce split seating age and idle floor updates (RED) |  |
-| `ff38ad1e` | 2026-10-02 | direct | T9 | port | fix(urypos): preserve oldest seating age and tick idle floors (GREEN) |  |
-| `98fdcfcf` | 2026-10-02 | direct | T9 | port | test(urypos): clarify reversed invoice fixture order (REFACTOR) |  |
+| `7cfd7fc9` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce floor table age clock and midnight defects (RED) | T9a: `Table.js` and `Table.test.js`: occupied age uses the server clock across local midnight. |
+| `784781cb` | 2026-10-02 | direct | T9 | port | fix(urypos): use server time for occupied table age (GREEN) | T9a: `Table.js` and `Table.test.js`: occupied age uses the server clock across local midnight. |
+| `cd51f906` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce room loading blocked by floor requests (RED) | T9a: `Table.test.js`: pending or denied floor reads leave the selected room menu and cashier usable. |
+| `ab8bfc62` | 2026-10-02 | direct | T9 | port | fix(urypos): keep room menu loading independent of floor requests (GREEN) | T9a: `Table.test.js`: pending or denied floor reads leave the selected room menu and cashier usable. |
+| `c9057116` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce future-time jitter as a day-old table (RED) | T9a: Clamp future clock jitter at zero; preserve actual midnight rollover (`Table.test.js`). |
+| `b06854d9` | 2026-10-02 | direct | T9 | port | fix(urypos): clamp clock jitter without losing midnight rollover (GREEN) | T9a: Clamp future clock jitter at zero; preserve actual midnight rollover (`Table.test.js`). |
+| `1f97c59f` | 2026-10-02 | direct | T9 | port | test(urypos): require uniform padded site-clock durations (RED) | T9a: Apply the site offset consistently and pad elapsed minutes (`Table.test.js`). |
+| `4d749dd7` | 2026-10-02 | direct | T9 | port | fix(urypos): apply site offset and minute padding uniformly (GREEN) | T9a: Apply the site offset consistently and pad elapsed minutes (`Table.test.js`). |
+| `6cc06b60` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce long-lived and merged open-bill ages (RED) | T9a: Use full creation timestamps for open bills and exact merged-table matches; retain the legacy time-only fallback (`Table.js`). |
+| `b81352c4` | 2026-10-02 | direct | T9 | port | fix(urypos): age occupied tables from the open bill creation (GREEN) | T9a: Use full creation timestamps for open bills and exact merged-table matches; retain the legacy time-only fallback (`Table.js`). |
+| `f89aed6a` | 2026-10-02 | direct | T9 | port | test(urypos): reproduce split seating age and idle floor updates (RED) | T9a: `Table.test.js`: reversed split drafts retain the oldest seating age; mounted floor/pickup views tick without a refetch. |
+| `ff38ad1e` | 2026-10-02 | direct | T9 | port | fix(urypos): preserve oldest seating age and tick idle floors (GREEN) | T9a: `Table.test.js`: reversed split drafts retain the oldest seating age; mounted floor/pickup views tick without a refetch. |
+| `98fdcfcf` | 2026-10-02 | direct | T9 | port | test(urypos): clarify reversed invoice fixture order (REFACTOR) | T9a: `Table.test.js`: reversed split drafts retain the oldest seating age; mounted floor/pickup views tick without a refetch. |
 | `bd7cc393` | 2026-10-02 | direct | T9 | port | test(pos): cashier settlement home contracts (RED) |  |
 | `77368707` | 2026-10-02 | direct | T9 | port | test(pos): supply real session reader in orders harness |  |
 | `df3e6f35` | 2026-10-02 | direct | T9 | port | feat(pos): settlement-first cashier home (GREEN) |  |
@@ -318,18 +319,18 @@ T0 notes on rows marked "port" in the rows below:
 | `ed2de277` | 2026-10-13 | #16 | T6 | port | fix(self-order): retranslate the device recovery error (GREEN) |  |
 | `dfe89af4` | 2026-10-13 | #19 | T2 | port | test: refuse an over-long void reason before any side effect (RED) |  |
 | `3371d297` | 2026-10-13 | #19 | T2 | port | fix: refuse an over-long void reason before any side effect (GREEN) |  |
-| `b14b559d` | 2026-10-13 | #18 | T9 | port | test(urypos): RED keep unsent items when View order reopens the same table |  |
-| `cd0ad88a` | 2026-10-13 | #18 | T9 | dropped | fix(urypos): keep unsent items when View order reopens the same table (GREEN) | reverted in 8b6762c0 |
-| `b5add614` | 2026-10-13 | #18 | T9 | port | test(urypos): RED reject a foreign cart and refresh same-table assignment |  |
-| `c2ae5e7f` | 2026-10-13 | #18 | T9 | dropped | fix(urypos): keep a cart only when it belongs to that table | reverted in a19965a2 |
-| `a19965a2` | 2026-10-13 | #18 | T9 | dropped | Revert "fix(urypos): keep a cart only when it belongs to that table" | revert of c2ae5e7f |
-| `8b6762c0` | 2026-10-13 | #18 | T9 | dropped | Revert "fix(urypos): keep unsent items when View order reopens the same table (GREEN)" | revert of cd0ad88a |
-| `fe859755` | 2026-10-13 | #18 | T9 | port | test(urypos): RED ask before leaving unsent items |  |
-| `30fe2b88` | 2026-10-13 | #18 | T9 | port | fix(urypos): ask before leaving a table with unsent items |  |
-| `f76ec18c` | 2026-10-13 | #18 | T9 | port | test(urypos): RED compare recent-order snapshot and line comments |  |
-| `25e6ac3f` | 2026-10-13 | #18 | T9 | port | fix(urypos): compare the saved snapshot and line comments |  |
-| `37b581f0` | 2026-10-13 | #18 | T9 | port | test(urypos): RED ignore a stale recent-order snapshot from another table |  |
-| `99d6dd8a` | 2026-10-13 | #18 | T9 | port | fix(urypos): use a recent-order snapshot only for its own table |  |
+| `b14b559d` | 2026-10-13 | #18 | T9 | port | test(urypos): RED keep unsent items when View order reopens the same table | T9a: The later confirmed-leave contract supersedes the original retention expectation. `view-order-unsent-cart.test.js` covers same/foreign carts and refresh after consent. |
+| `cd0ad88a` | 2026-10-13 | #18 | T9 | dropped | fix(urypos): keep unsent items when View order reopens the same table (GREEN) | reverted in 8b6762c0; T9a: Dropped: reverted pair stays out; the final confirmed-leave behavior is carried separately. |
+| `b5add614` | 2026-10-13 | #18 | T9 | port | test(urypos): RED reject a foreign cart and refresh same-table assignment | T9a: The later confirmed-leave contract supersedes the original retention expectation. `view-order-unsent-cart.test.js` covers same/foreign carts and refresh after consent. |
+| `c2ae5e7f` | 2026-10-13 | #18 | T9 | dropped | fix(urypos): keep a cart only when it belongs to that table | reverted in a19965a2; T9a: Dropped: reverted pair stays out; the final confirmed-leave behavior is carried separately. |
+| `a19965a2` | 2026-10-13 | #18 | T9 | dropped | Revert "fix(urypos): keep a cart only when it belongs to that table" | revert of c2ae5e7f; T9a: Dropped: reverted pair stays out; the final confirmed-leave behavior is carried separately. |
+| `8b6762c0` | 2026-10-13 | #18 | T9 | dropped | Revert "fix(urypos): keep unsent items when View order reopens the same table (GREEN)" | revert of cd0ad88a; T9a: Dropped: reverted pair stays out; the final confirmed-leave behavior is carried separately. |
+| `fe859755` | 2026-10-13 | #18 | T9 | port | test(urypos): RED ask before leaving unsent items | T9a: `Table.js`: ask before leaving an unsent cart; cancel preserves it and confirm reloads the selected order (`view-order-unsent-cart.test.js`). |
+| `30fe2b88` | 2026-10-13 | #18 | T9 | port | fix(urypos): ask before leaving a table with unsent items | T9a: `Table.js`: ask before leaving an unsent cart; cancel preserves it and confirm reloads the selected order (`view-order-unsent-cart.test.js`). |
+| `f76ec18c` | 2026-10-13 | #18 | T9 | port | test(urypos): RED compare recent-order snapshot and line comments | T9a: Compare saved recent-order quantities and line comments when detecting unsent changes (`view-order-unsent-cart.test.js`). |
+| `25e6ac3f` | 2026-10-13 | #18 | T9 | port | fix(urypos): compare the saved snapshot and line comments | T9a: Compare saved recent-order quantities and line comments when detecting unsent changes (`view-order-unsent-cart.test.js`). |
+| `37b581f0` | 2026-10-13 | #18 | T9 | port | test(urypos): RED ignore a stale recent-order snapshot from another table | T9a: Only compare a recent-order snapshot belonging to the same table (`view-order-unsent-cart.test.js`). |
+| `99d6dd8a` | 2026-10-13 | #18 | T9 | port | fix(urypos): use a recent-order snapshot only for its own table | T9a: Only compare a recent-order snapshot belonging to the same table (`view-order-unsent-cart.test.js`). |
 | `dee00f6d` | 2026-10-13 | #21 | T6 | port | test: reproduce guest reload and translated refusal regressions (RED) |  |
 | `6946be3e` | 2026-10-13 | #21 | T6 | port | fix: resume guest QR sessions and show ERP refusal once (GREEN) |  |
 | `3315ae8c` | 2026-10-13 | #22 | T6 | port | test: reproduce missing staff assistance request cue (RED) |  |
@@ -358,16 +359,16 @@ T0 notes on rows marked "port" in the rows below:
 | `9b20db5b` | 2026-10-13 | #24 | T7 | port | fix(theme): keep gray text readable and preserve rem sizing (GREEN) |  |
 | `99a3229a` | 2026-10-13 | #24 | T7 | port | test(theme): require AA after gray pixel quantization (RED) |  |
 | `ccd9b11f` | 2026-10-13 | #24 | T7 | port | fix(theme): retain AA margin through pixel rounding (GREEN) |  |
-| `78405a30` | 2026-10-13 | #26 | T9 | port | test: reproduce checklist UTC midnight mismatch (RED SAL-ACC-01) |  |
-| `77aba68c` | 2026-10-13 | #26 | T9 | port | fix: use native site-local checklist dates (GREEN SAL-ACC-01) |  |
+| `78405a30` | 2026-10-13 | #26 | T9 | port | test: reproduce checklist UTC midnight mismatch (RED SAL-ACC-01) | T9a: Checklist lookup and submission use `frappe.utils.getdate()`; tested at site midnight in `test_shared_till.py`. The separate #26 React logout rows stay in T9b. |
+| `77aba68c` | 2026-10-13 | #26 | T9 | port | fix: use native site-local checklist dates (GREEN SAL-ACC-01) | T9a: Checklist lookup and submission use `frappe.utils.getdate()`; tested at site midnight in `test_shared_till.py`. The separate #26 React logout rows stay in T9b. |
 | `caa7ad62` | 2026-10-13 | #26 | T9 | port | test: reproduce loss of till return path on logout (RED SAL-ACC-01) |  |
 | `36e594c9` | 2026-10-13 | #26 | T9 | port | fix: retain native till return path after logout (GREEN SAL-ACC-01) |  |
-| `1e732d8e` | 2026-10-14 | #27 | T9 | port | test: RED for waiter table booking badges (X55) |  |
-| `1bd5e78d` | 2026-10-14 | #27 | T9 | port | feat: show advisory table booking badges to waiters (X55) |  |
-| `54756d84` | 2026-10-14 | #28 | T9 | port | test(urypos): require the table owner on the floor plan (RED) |  |
-| `0d516c4d` | 2026-10-14 | #28 | T9 | port | feat(urypos): show the table owner on the floor plan (GREEN) |  |
-| `bdea6e8d` | 2026-10-14 | #28 | T9 | port | test(urypos): require one branch-scoped invoice read per floor refresh (RED) |  |
-| `e23681e4` | 2026-10-14 | #28 | T9 | port | fix(urypos): read floor owners from the one branch-scoped invoice query (GREEN) |  |
+| `1e732d8e` | 2026-10-14 | #27 | T9 | port | test: RED for waiter table booking badges (X55) | T9a: Partial -> remainder in T9b: `ury_table_bookings.py` + tests return permitted advisory Appointment data. Badge rendering, translations and its React tests are `pos/` in the source; no Vue badge component in this pair. |
+| `1bd5e78d` | 2026-10-14 | #27 | T9 | port | feat: show advisory table booking badges to waiters (X55) | T9a: Partial -> remainder in T9b: `ury_table_bookings.py` + tests return permitted advisory Appointment data. Badge rendering, translations and its React tests are `pos/` in the source; no Vue badge component in this pair. |
+| `54756d84` | 2026-10-14 | #28 | T9 | port | test(urypos): require the table owner on the floor plan (RED) | T9a: Show the assigned waiter on the occupied floor card, merged partner and refusal; fall back to the readable identifier (`Table.test.js`). |
+| `0d516c4d` | 2026-10-14 | #28 | T9 | port | feat(urypos): show the table owner on the floor plan (GREEN) | T9a: Show the assigned waiter on the occupied floor card, merged partner and refusal; fall back to the readable identifier (`Table.test.js`). |
+| `bdea6e8d` | 2026-10-14 | #28 | T9 | port | test(urypos): require one branch-scoped invoice read per floor refresh (RED) | T9a: One branch-scoped open POS Invoice query supplies owner and age for all occupied cards; tested with lookalike table names and multiple tables. |
+| `e23681e4` | 2026-10-14 | #28 | T9 | port | fix(urypos): read floor owners from the one branch-scoped invoice query (GREEN) | T9a: One branch-scoped open POS Invoice query supplies owner and age for all occupied cards; tested with lookalike table names and multiple tables. |
 | `1f735ba9` | 2026-10-14 | #29 | T4 | port | test(U1): RED opt-in floor sign-out profile settings |  |
 | `508eda6d` | 2026-10-14 | #29 | T4 | port | feat(U1): GREEN expose opt-in floor sign-out settings |  |
 | `a053a2e5` | 2026-10-14 | #29 | T4 | port | test(U2): RED shared idle watcher and kiosk wake reset |  |
@@ -387,11 +388,11 @@ T0 notes on rows marked "port" in the rows below:
 | `62e50c61` | 2026-10-14 | #36 | T4 | port | test: RED SSO stay-signed-in session admission |  |
 | `8fcad741` | 2026-10-14 | #36 | T4 | port | fix: GREEN admit stay-signed-in ERP sessions to URY POS |  |
 | `eff8d965` | 2026-10-14 | #36 | T4 | port | refactor: remove unused test capture after GREEN |  |
-| `eb6bb3f6` | 2026-10-14 | #34 | T9 | port | test(floor): RED alert when another waiter's order read is refused |  |
-| `9845eb1c` | 2026-10-14 | #34 | T9 | port | fix(floor): GREEN show the assigned waiter when the order read is refused |  |
-| `dd99ac67` | 2026-10-14 | #34 | T9 | port | test(floor): RED keep a rejected floor return handled |  |
-| `c73a28c9` | 2026-10-14 | #34 | T9 | port | fix(floor): GREEN handle a rejected return to the floor |  |
-| `1718c1b8` | 2026-10-14 | #35 | T9 | port | S6: resolve branch from native default permission without guessing (#35) |  |
+| `eb6bb3f6` | 2026-10-14 | #34 | T9 | port | test(floor): RED alert when another waiter's order read is refused | T9a: A refused order read names the assigned waiter when known and returns to the floor; other read errors retain their own handling (`Table.test.js`). |
+| `9845eb1c` | 2026-10-14 | #34 | T9 | port | fix(floor): GREEN show the assigned waiter when the order read is refused | T9a: A refused order read names the assigned waiter when known and returns to the floor; other read errors retain their own handling (`Table.test.js`). |
+| `dd99ac67` | 2026-10-14 | #34 | T9 | port | test(floor): RED keep a rejected floor return handled | T9a: Handle a rejected return navigation after a refused read; `Table.test.js` checks the alert and handled promise. |
+| `c73a28c9` | 2026-10-14 | #34 | T9 | port | fix(floor): GREEN handle a rejected return to the floor | T9a: Handle a rejected return navigation after a refused read; `Table.test.js` checks the alert and handled promise. |
+| `1718c1b8` | 2026-10-14 | #35 | T9 | port | S6: resolve branch from native default permission without guessing (#35) | T9a: `getBranch` and both room APIs use the single assigned branch or the unique assigned native default Branch User Permission. Ambiguous or foreign defaults refuse (`test_branch_resolution.py`). |
 | `ccbc60a6` | 2026-10-14 | #37 | T2 | port | test(pos): RED allow a zero count when nothing is expected |  |
 | `2c06ba47` | 2026-10-14 | #37 | T2 | port | fix(pos): GREEN allow a zero count when nothing is expected |  |
 | `3f833a9a` | 2026-10-14 | #37 | T2 | port | test(pos): RED blind zero count must not reveal expected cash |  |
@@ -497,10 +498,10 @@ T0 notes on rows marked "port" in the rows below:
 | `a2a6d4dc` | 2026-10-15 | #42 | T6 | port | fix(P2b): never cancel a queued checkout or a cashier request (GREEN) |  |
 | `7feb8c02` | 2026-10-15 | #42 | T6 | port | test(P2b): never cancel a guest request with a failed checkout (RED) |  |
 | `5ba10e16` | 2026-10-15 | #42 | T6 | port | fix(P2b): never cancel a guest request once checkout started (GREEN) |  |
-| `e0d5d18e` | 2026-10-15 | #43 | T9 | port | test: cover eligible captain transfer candidates |  |
-| `b5e86a30` | 2026-10-15 | #43 | T9 | port | fix: share invoice-scoped captain transfer eligibility |  |
-| `8f4ac36b` | 2026-10-15 | #43 | T9 | port | test: refuse self-transfers and gate captain menus (RED) |  |
-| `40f8d9f8` | 2026-10-15 | #43 | T9 | port | fix: align captain transfer writes and menu eligibility (GREEN) |  |
+| `e0d5d18e` | 2026-10-15 | #43 | T9 | port | test: cover eligible captain transfer candidates | T9a: Partial -> remainder in T9b: invoice-scoped candidate API and Vue picker use shared write eligibility. React transfer dialog, API callers and dialog tests remain in `pos/`. |
+| `b5e86a30` | 2026-10-15 | #43 | T9 | port | fix: share invoice-scoped captain transfer eligibility | T9a: Partial -> remainder in T9b: invoice-scoped candidate API and Vue picker use shared write eligibility. React transfer dialog, API callers and dialog tests remain in `pos/`. |
+| `8f4ac36b` | 2026-10-15 | #43 | T9 | port | test: refuse self-transfers and gate captain menus (RED) | T9a: Partial -> remainder in T9b: refuse self-transfers and stale/ineligible targets; gate the Vue action on candidates. React Table menu and tests remain in `pos/`. |
+| `40f8d9f8` | 2026-10-15 | #43 | T9 | port | fix: align captain transfer writes and menu eligibility (GREEN) | T9a: Partial -> remainder in T9b: refuse self-transfers and stale/ineligible targets; gate the Vue action on candidates. React Table menu and tests remain in `pos/`. |
 | `06f1100f` | 2026-10-15 | #44 | T2 | port | test(pos): expose named-account short-payment refusal (RED) |  |
 | `2dac7691` | 2026-10-15 | #44 | T2 | port | test(pos): follow the same button through processing |  |
 | `a6efd481` | 2026-10-15 | #44 | T2 | port | fix(pos): allow short settlement only for opted-in named accounts (GREEN) |  |
@@ -770,12 +771,12 @@ T0 notes on rows marked "port" in the rows below:
 | `69c14fe6` | 2026-11-12 | #80 | T9 | port | fix(pos): confirm before an order-type change clears the cart; release the table |  |
 | `b244590e` | 2026-11-12 | #81 | T9 | port | test(pos): RED dashboard shows no Shift Brief placeholder without a source |  |
 | `b7210ffd` | 2026-11-12 | #81 | T9 | port | fix(pos): hide the Shift Brief placeholder card until a summary source exists |  |
-| `01bd8d07` | 2026-11-14 | direct | T9 | port | test: reservation merge keeps our till, floor and permissions (RED) |  |
-| `b7ba8a3c` | 2026-11-14 | direct | T9 | port | fix: carry upstream reservations without changing a branch that has not enabled them (GREEN) |  |
+| `01bd8d07` | 2026-11-14 | direct | T9 | port | test: reservation merge keeps our till, floor and permissions (RED) | T9a: Partial -> remainder in T9b: disabled branches leave occupancy, closing and scheduling alone; enabled writes use native permissions. React reservation visibility/context remains in `pos/`; unrelated branding and select assets excluded. |
+| `b7ba8a3c` | 2026-11-14 | direct | T9 | port | fix: carry upstream reservations without changing a branch that has not enabled them (GREEN) | T9a: Partial -> remainder in T9b: disabled branches leave occupancy, closing and scheduling alone; enabled writes use native permissions. React reservation visibility/context remains in `pos/`; unrelated branding and select assets excluded. |
 | `2fbb6e04` | 2026-11-14 | direct | T2 | port | test: one Custom Field fixture row per field (RED) |  |
 | `71a1152f` | 2026-11-14 | direct | T2 | superseded | fix: drop the repeated Custom Field fixture rows from ury-erp/ury#358 (GREEN) | version-16 custom_field.json has 215 rows, no repeated names |
-| `96637608` | 2026-11-14 | direct | T9 | port | test: reservation writes refuse a branch that has not enabled them (RED) |  |
-| `a31a11b8` | 2026-11-14 | direct | T9 | port | fix: reservation writes refuse a branch that has not enabled them (GREEN) |  |
+| `96637608` | 2026-11-14 | direct | T9 | port | test: reservation writes refuse a branch that has not enabled them (RED) | T9a: `test_reservation_merge_safety.py` and native `test_ury_table_reservation.py`: refuse disabled-branch creates, edits, moves and status writes at the API and document boundary. |
+| `a31a11b8` | 2026-11-14 | direct | T9 | port | fix: reservation writes refuse a branch that has not enabled them (GREEN) | T9a: `test_reservation_merge_safety.py` and native `test_ury_table_reservation.py`: refuse disabled-branch creates, edits, moves and status writes at the API and document boundary. |
 | `9df80663` | 2026-11-14 | direct | T1 | port | test: require frozen permissive legacy frontend closures | PR #93 |
 | `f6c00c41` | 2026-11-14 | direct | T1 | port | test: require qualified legacy RSA signing dependency | PR #93 |
 | `ac6dfa07` | 2026-11-14 | direct | T1 | port | test: reject unused legacy package manager and wrapper dependencies | PR #93 |
