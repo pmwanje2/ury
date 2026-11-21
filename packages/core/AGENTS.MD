@@ -6,7 +6,7 @@
 
 - **Workspace package** (yarn classic workspaces, declared at repo root). Consumed as `"@ury/core": "*"`.
 - **Source-linked**: `package.json` `exports` points directly at `./src/index.ts`. There is no build step — the consuming app's Vite/TypeScript (`moduleResolution: "bundler"`) compiles the package source. Edits are picked up instantly by `vite dev`.
-- **Peer dependencies**: `frappe-js-sdk`, `axios`, `qz-tray`, `jsrsasign` — the consuming app must declare them (see §4).
+- **Peer dependencies**: `frappe-js-sdk`, `axios`, `jsrsasign` — the consuming app must declare them (see §4).
 - Typecheck standalone with `yarn workspace @ury/core typecheck`.
 
 The React component counterpart is `@ury/ui` (`packages/ui/`): components, theme tokens, Tailwind preset. `@ury/ui` does **not** depend on `@ury/core`.
@@ -63,7 +63,7 @@ All take the shared `User` and `PosProfileCombined` types from `types.ts` (struc
 - `formatInvoiceTime(timestamp)` — locale time for ISO datetimes, handles bare `HH:MM:SS` strings, returns `'No bill activity yet'` for null.
 
 ### QZ-Tray printing (`print/qz.ts`)
-Transport + signing mechanics only; domain print orchestration (e.g. pos's `printOrder`) stays in the app.
+QZ loads lazily from Frappe’s runtime asset. Transport + signing mechanics only; domain print orchestration (e.g. pos's `printOrder`) stays in the app.
 
 - `initPrinting({ signKey })` — **must be called once at app startup before any print**. The RSA signing key is injected; it lives in the consuming app (e.g. `pos/privateKey.ts`) and must NEVER be moved into `packages/`. `printWithQz` throws a clear error if used uninitialized.
 - `printWithQz(host, html)` — signs (SHA512withRSA via jsrsasign), connects if needed, prints HTML to the default printer.
@@ -80,7 +80,7 @@ initPrinting({ signKey: privateKey });
 
 - **Import only from the barrel** `'@ury/core'`, never deep paths into `src/`.
 - **Keep it framework-agnostic**: no React, no JSX, no app state, no domain API wrappers (order/table/invoice APIs belong in the app, e.g. `pos/src/lib/`).
-- **Peer deps**: anything imported at module level here must be a `peerDependency` (with a matching `devDependency` for standalone typecheck), and every consuming app must declare it — the barrel pulls all modules, so even a non-printing app currently needs `qz-tray`/`jsrsasign`/`axios` at build time. If that becomes painful, split subpath exports (e.g. `@ury/core/print`) rather than dropping the peers.
+- **Peer deps**: anything imported at module level here must be a `peerDependency` (with a matching `devDependency` for standalone typecheck), and every consuming app must declare it — the barrel pulls all modules, so even a non-printing app currently needs `jsrsasign`/`axios` at build time. If that becomes painful, split subpath exports (e.g. `@ury/core/print`) rather than dropping the peers.
 - **No secrets**: keys, certs, and credentials stay in consuming apps and are injected (the `initPrinting` pattern).
 - **Don't rename exports** without updating all consumers (`pos/`, `frontend/`) in the same change; run `yarn workspace @ury/core typecheck` plus each app's `tsc -b` and `yarn build`.
 - `import.meta.env` usage is confined to `frappe/client.ts` — keep it that way (it ties the file to Vite consumers; the factory's explicit `baseUrl` parameter is the escape hatch).

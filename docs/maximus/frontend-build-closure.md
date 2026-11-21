@@ -36,7 +36,7 @@ bench layout.
   `Badge`, so it keeps that dependency.
 
 `tests/qz-signing-compatibility.test.cjs` runs the unchanged QZ RSA-SHA512 callback
-(`urypos/src/stores/utils/PrintWithQz.js`, Git blob `e2fda90a`) against the locked
+(`urypos/src/stores/utils/PrintWithQz.js`, Git blob `ba560454`) against the locked
 `jsrsasign` with a generated synthetic key. It never loads the app's private-key module.
 
 ## Licences and known advisories
