@@ -57,6 +57,14 @@ describe('Orders', () => {
     }, { timeout: 3000 });
   });
 
+  it('keeps the bill details in the worklist flow without reserving overlay space', () => {
+    const { container } = render(<MemoryRouter><Orders /></MemoryRouter>);
+    const worklist = container.firstElementChild!;
+    expect(worklist.lastElementChild).not.toHaveClass('fixed');
+    expect(worklist.querySelector('.pe-96')).toBeNull();
+    expect(worklist).toHaveClass('flex-col', 'lg:flex-row');
+  });
+
   it('renders page structure', async () => {
     const { container } = render(
       <MemoryRouter>

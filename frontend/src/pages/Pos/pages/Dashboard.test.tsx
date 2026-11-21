@@ -111,6 +111,19 @@ describe('POS Dashboard branch status', () => {
     expect(vi.mocked(getBranchOperationalState)).toHaveBeenCalledWith('Kozhikode');
   });
 
+  it('discloses the full native notification behind a compact headline', async () => {
+    const subject = 'Long notification '.repeat(9).trim();
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => ({
+      message: url.includes('Notification+Log') ? [{ name: 'N1', subject, creation: '2026-01-01' }] : [],
+    }) })));
+    render(<Dashboard />);
+    const full = await screen.findByText(subject);
+    const details = full.closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+    expect(details!.querySelector('summary')).toHaveTextContent(subject.slice(0, 96).trimEnd() + '…');
+  });
+
   it('shows a clear unavailable state when branch status cannot load', async () => {
     vi.mocked(getBranchOperationalState).mockRejectedValueOnce(new Error('offline'));
 
