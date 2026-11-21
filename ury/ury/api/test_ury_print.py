@@ -17,6 +17,13 @@ from ury.ury.api.ury_print import (
 )
 
 
+def _ordinary_invoice():
+	invoice = MagicMock()
+	invoice.get.return_value = None
+	invoice.pos_profile = None
+	return invoice
+
+
 class TestNetworkPrinting(FrappeTestCase):
 	@patch("ury.ury.api.ury_print.validate_print_permission")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -29,7 +36,7 @@ class TestNetworkPrinting(FrappeTestCase):
 			"status": "Success",
 			"cups_job_id": 123,
 		}
-		mock_get_doc.side_effect = [MagicMock(), mock_printer_doc]
+		mock_get_doc.side_effect = [_ordinary_invoice(), mock_printer_doc]
 
 		with patch(
 			"ury.ury.api.ury_fulfilment_posting_service.trigger_manufacture_on_bill_print"
@@ -58,7 +65,7 @@ class TestNetworkPrinting(FrappeTestCase):
 			"status": "Failure",
 			"message": "printer offline",
 		}
-		mock_get_doc.side_effect = [MagicMock(), mock_printer_doc]
+		mock_get_doc.side_effect = [_ordinary_invoice(), mock_printer_doc]
 
 		with patch(
 			"ury.ury.api.ury_fulfilment_posting_service.trigger_manufacture_on_bill_print"
@@ -77,7 +84,7 @@ class TestNetworkPrinting(FrappeTestCase):
 		"""Non-dict engine results are returned unchanged (no PrintResult wrap)."""
 		mock_printer_doc = MagicMock()
 		mock_printer_doc.print_doc.return_value = "Success"
-		mock_get_doc.side_effect = [MagicMock(), mock_printer_doc]
+		mock_get_doc.side_effect = [_ordinary_invoice(), mock_printer_doc]
 
 		result = network_printing("POS Invoice", "INV-001", "Printer-1")
 
@@ -94,7 +101,7 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 		self, mock_get_doc, mock_db_get_value, mock_get_all, mock_network_printing
 	):
 		"""Test that select_network_printer uses room printers if table has room."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_invoice.restaurant_table = "T-01"
 		mock_get_doc.return_value = mock_invoice
 
@@ -124,7 +131,7 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 		self, mock_get_doc, mock_db_get_value, mock_get_all, mock_network_printing
 	):
 		"""Test that select_network_printer returns None when no printers found."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_invoice.restaurant_table = "T-01"
 		mock_get_doc.return_value = mock_invoice
 
@@ -144,7 +151,7 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 		self, mock_get_doc, mock_db_get_value, mock_get_all, mock_network_printing
 	):
 		"""Test that select_network_printer uses POS profile printers if no table."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_invoice.restaurant_table = None
 		mock_get_doc.return_value = mock_invoice
 
@@ -167,7 +174,7 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 		self, mock_get_doc, mock_has_permission
 	):
 		"""Test that select_network_printer throws on permission denied."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_get_doc.return_value = mock_invoice
 		mock_has_permission.return_value = False
 
@@ -183,7 +190,7 @@ class TestQzPrintUpdate(FrappeTestCase):
 		self, mock_get_doc, mock_db_get_value, mock_db_set_value
 	):
 		"""Test qz_print_update when invoice has no table."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_get_doc.return_value = mock_invoice
 
 		# table lookup, prior invoice_printed read by the helper, post-update validation
@@ -201,12 +208,12 @@ class TestQzPrintUpdate(FrappeTestCase):
 		self, mock_get_doc, mock_db_get_value, mock_db_set_value
 	):
 		"""Test qz_print_update with table when invoice_printed is 0."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_get_doc.return_value = mock_invoice
 
 		mock_db_get_value.side_effect = ["T-01", 0, 1, 0]
 
-		with patch("ury.ury.api.ury_print.release_merge_cluster_tables") as mock_release:
+		with patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices") as mock_release:
 			result = qz_print_update("INV-001")
 
 		self.assertEqual(result, {"status": "Success"})
@@ -219,7 +226,7 @@ class TestQzPrintUpdate(FrappeTestCase):
 		self, mock_get_doc, mock_db_get_value, mock_db_set_value
 	):
 		"""Test qz_print_update when invoice_printed is already 1."""
-		mock_invoice = MagicMock()
+		mock_invoice = _ordinary_invoice()
 		mock_get_doc.return_value = mock_invoice
 
 		mock_db_get_value.side_effect = ["T-01", 1]
@@ -231,7 +238,7 @@ class TestQzPrintUpdate(FrappeTestCase):
 
 
 class TestPrintPosPage(FrappeTestCase):
-	@patch("ury.ury.api.ury_print.release_merge_cluster_tables")
+	@patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices")
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.publish_realtime")
@@ -245,7 +252,7 @@ class TestPrintPosPage(FrappeTestCase):
 		mock_release,
 	):
 		"""Test print_pos_page successfully publishes and updates invoice."""
-		mock_doc = MagicMock()
+		mock_doc = _ordinary_invoice()
 		mock_get_doc.return_value = mock_doc
 
 		mock_db_get_value.side_effect = [("T-01", "Branch-1", "INV-001"), 0]
@@ -276,12 +283,12 @@ class TestPrintPosPage(FrappeTestCase):
 		mock_db_set_value,
 	):
 		"""Test print_pos_page when invoice has no table."""
-		mock_doc = MagicMock()
+		mock_doc = _ordinary_invoice()
 		mock_get_doc.return_value = mock_doc
 
 		mock_db_get_value.side_effect = [(None, "Branch-1", "INV-001"), 0]
 
-		with patch("ury.ury.api.ury_print.release_merge_cluster_tables") as mock_release:
+		with patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices") as mock_release:
 			print_pos_page("POS Invoice", "INV-001", "Standard")
 
 		mock_publish.assert_called_once()
@@ -300,13 +307,13 @@ class TestPrintPosPage(FrappeTestCase):
 		mock_db_set_value,
 	):
 		"""Test print_pos_page when invoice already printed."""
-		mock_doc = MagicMock()
+		mock_doc = _ordinary_invoice()
 		mock_get_doc.return_value = mock_doc
 
 		# First call: table exists, invoice_printed already 1
 		mock_db_get_value.side_effect = [("T-01", "Branch-1", "INV-001"), 1]
 
-		with patch("ury.ury.api.ury_print.release_merge_cluster_tables") as mock_release:
+		with patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices") as mock_release:
 			print_pos_page("POS Invoice", "INV-001", "Standard")
 
 		mock_publish.assert_called_once()
@@ -318,7 +325,7 @@ class TestPrintPosPage(FrappeTestCase):
 		self, mock_get_doc, mock_has_permission
 	):
 		"""Test print_pos_page throws on permission denied."""
-		mock_doc = MagicMock()
+		mock_doc = _ordinary_invoice()
 		mock_get_doc.return_value = mock_doc
 		mock_has_permission.return_value = False
 

@@ -42,7 +42,8 @@ vi.mock("../../lib/pos-opening-api", () => ({ parseFrappeError: (_e: unknown, fa
 vi.mock("../../lib/print", () => ({ printOrder: vi.fn() }));
 vi.mock("../../lib/invoice-api", () => ({ resolvePrintFormat: vi.fn(() => "default") }));
 vi.mock("../../lib/table-api", () => ({ getVacantTablesForBranch: vi.fn() }));
-vi.mock("@ury/ui", () => ({
+vi.mock("@ury/ui", async (original) => ({
+  ...await original<typeof import("@ury/ui")>(),
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
   Spinner: ({ message }: any) => <div>{message}</div>,
   ConfirmDialog: () => null,

@@ -1,5 +1,4 @@
 import {
-  Bell,
   Users,
   LogOut,
   Activity,
@@ -16,22 +15,9 @@ import { formatCurrency } from '@ury/core';
 import { getOpenPosOpeningEntries, type OpenPosOpeningEntry } from '../lib/pos-closing-api';
 import InsightFeed from '../components/dashboard/InsightFeed';
 import AskBar from '../components/chat/AskBar';
-import { t, tData, tUser, tNotification, ltrFraction } from '../i18n';
+import { t, tData, tUser, ltrFraction } from '../i18n';
 
-// Helper function to format relative time
-function getRelativeTime(creationDate: string): string {
-  const now = new Date();
-  const date = new Date(creationDate);
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return t('dashboard.relative_just_now');
-  if (diffMins < 60) return t('dashboard.relative_min_ago', { n: diffMins });
-  if (diffHours < 24) return t('dashboard.relative_hr_ago', { n: diffHours });
-  return t('dashboard.relative_days_ago', { n: diffDays });
-}
+import Notifications from '../components/Notifications';
 
 // Helper to format ETA minutes into readable time
 function formatETA(minutes: number | null): string {
@@ -144,7 +130,6 @@ export default function Dashboard() {
   const [floorLoad, setFloorLoad] = useState<any[]>([]);
   const [runningLow, setRunningLow] = useState<any[]>([]);
   const [needsAttention, setNeedsAttention] = useState<AttentionItemProps[]>([]);
-  const [notifications, setNotifications] = useState<any[]>([]);
   const [openEntries, setOpenEntries] = useState<OpenPosOpeningEntry[]>([]);
   const [statsLoading, setStatsLoading] = useState(false);
   const [serviceLineLoading, setServiceLineLoading] = useState(false);
@@ -152,7 +137,6 @@ export default function Dashboard() {
   const [floorLoadLoading, setFloorLoadLoading] = useState(false);
   const [runningLowLoading, setRunningLowLoading] = useState(false);
   const [needsAttentionLoading, setNeedsAttentionLoading] = useState(false);
-  const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [openEntriesLoading, setOpenEntriesLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [serviceLineError, setServiceLineError] = useState<string | null>(null);
@@ -160,7 +144,6 @@ export default function Dashboard() {
   const [floorLoadError, setFloorLoadError] = useState<string | null>(null);
   const [runningLowError, setRunningLowError] = useState<string | null>(null);
   const [needsAttentionError, setNeedsAttentionError] = useState<string | null>(null);
-  const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [openEntriesError, setOpenEntriesError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -294,33 +277,6 @@ export default function Dashboard() {
         setNeedsAttentionLoading(false);
       }
 
-      // Fetch recent notifications
-      setNotificationsLoading(true);
-      setNotificationsError(null);
-      try {
-        const params = new URLSearchParams({
-          doctype: 'Notification Log',
-          fields: JSON.stringify(['name', 'subject', 'creation']),
-          order_by: 'creation desc',
-          limit_page_length: '10'
-        });
-        const notificationsRes = await fetch(
-          `/api/method/frappe.client.get_list?${params.toString()}`
-        );
-        if (!notificationsRes.ok) throw new Error('Failed to fetch notifications');
-        const notificationsData = await notificationsRes.json();
-        const processedNotifications = (notificationsData.message || []).map((notif: any) => ({
-          id: notif.name,
-          message: notif.subject,
-          timestamp: getRelativeTime(notif.creation)
-        }));
-        setNotifications(processedNotifications);
-      } catch (err) {
-        setNotificationsError(t('dashboard.notifications_error'));
-        console.error('Error fetching notifications:', err);
-      } finally {
-        setNotificationsLoading(false);
-      }
     };
 
     fetchDashboardData();
@@ -691,26 +647,7 @@ export default function Dashboard() {
               </p>
             </Panel>
 
-            <Panel icon={Bell} title={t('dashboard.notifications_title')}>
-              {notificationsError ? (
-                <PanelState kind="error">{t('dashboard.notifications_error')}</PanelState>
-              ) : notificationsLoading ? (
-                <PanelState kind="loading">{t('dashboard.notifications_loading')}</PanelState>
-              ) : notifications.length === 0 ? (
-                <PanelState kind="empty">{t('dashboard.notifications_empty')}</PanelState>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {notifications.map((notification) => (
-                    <div key={notification.id} className="flex items-start justify-between gap-2 py-2 first:pt-0 last:pb-0">
-                      <p className="text-xs leading-relaxed text-gray-700">{tNotification(notification.message)}</p>
-                      <span className="shrink-0 whitespace-nowrap text-xs text-gray-400">
-                        {notification.timestamp}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
+            <Notifications title={t('dashboard.notifications_title')} />
           </div>
         </div>
       </div>

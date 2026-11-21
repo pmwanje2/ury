@@ -123,7 +123,7 @@ class Loaded(unittest.TestCase):
             setattr(utils, name, MagicMock())
         order = _stub(
             "ury.ury.doctype.ury_order.ury_order",
-            _resolve_or_create_pos_invoice=MagicMock(), _ensure_invoice_reservation_ref=MagicMock(),
+            _kitchen_snapshot=MagicMock(), _resolve_or_create_pos_invoice=MagicMock(), _ensure_invoice_reservation_ref=MagicMock(),
             invoice_pricing_date=MagicMock(), price_items_for_invoice=MagicMock(),
             # The menu resolvers _resolve_or_create_pos_invoice uses: by table (room-wise) and by order type.
             get_restaurant_and_menu_name=MagicMock(return_value=("Branch A", "Menu Room", "Restaurant A")),
@@ -136,7 +136,7 @@ class Loaded(unittest.TestCase):
             "frappe.rate_limiter": _stub("frappe.rate_limiter",
                                          rate_limit=lambda *args, **kwargs: (lambda function: function)),
             "ury.ury.doctype.ury_order.ury_order": order,
-            "ury.ury.api.ury_kot_generate": _stub("ury.ury.api.ury_kot_generate", kot_execute=MagicMock()),
+            "ury.ury.api.ury_kot_generate": _stub("ury.ury.api.ury_kot_generate", _execute_kot=MagicMock()),
             "ury.ury.api.ury_order_reservation_service": _stub(
                 "ury.ury.api.ury_order_reservation_service", reconcile_order_reservations=MagicMock()),
             "ury.ury.api.ury_stock_policy": _stub("ury.ury.api.ury_stock_policy",

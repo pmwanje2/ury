@@ -89,6 +89,7 @@ export interface OrderItem extends MenuItem {
    * and must never be sent to that API as the row selector.
    */
   invoiceItemName?: string;
+  ury_held?: number;
 }
 
 export interface PaymentMode {
@@ -250,6 +251,7 @@ interface POSStore extends POSState {
    * `OrderPanel`/`ProductDialog` behavior, which never calls this.
    */
   updateItemComment: (uniqueId: string, comment: string) => void;
+  setItemHeld: (uniqueId: string, held: boolean) => void;
   setShowVoluntaryClosing: (show: boolean) => void;
 }
 
@@ -511,7 +513,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       }
 
       const uniqueId = generateUniqueId(item);
-      const existingItemIndex = get().activeOrders.findIndex(orderItem => orderItem.uniqueId === uniqueId);
+      const existingItemIndex = get().activeOrders.findIndex(orderItem => !item.invoiceItemName && !orderItem.invoiceItemName
+        && generateUniqueId(orderItem) === uniqueId && !!orderItem.ury_held === !!item.ury_held);
 
       if (existingItemIndex !== -1) {
         const existingItem = get().activeOrders[existingItemIndex];
@@ -531,12 +534,13 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         
         set({ activeOrders: newOrders });
       } else {
+        const rowId = item.invoiceItemName || (get().activeOrders.some(row => row.uniqueId === uniqueId || row.reservationLineKey === uniqueId) ? uuidv4() : uniqueId);
         const newOrders = [
           ...get().activeOrders,
           // A brand-new cart line owns its identity from creation: the
           // server persists this key on the invoice row and we echo it back
           // on every later sync (see OrderItem.reservationLineKey).
-          { ...item, uniqueId, reservationLineKey: item.reservationLineKey || uniqueId },
+          { ...item, uniqueId: rowId, reservationLineKey: item.reservationLineKey || rowId },
         ];
         set({ activeOrders: newOrders });
       }
@@ -582,6 +586,12 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       item.uniqueId === uniqueId ? { ...item, comment } : item
     );
     set({ activeOrders: newOrders });
+  },
+
+  setItemHeld: (uniqueId, held) => {
+    if (navigator.onLine === false || !get().posProfile?.ury_enable_hold_fire) throw new Error('URY_HOLD_OFFLINE');
+    set({ activeOrders: get().activeOrders.map(item => item.uniqueId === uniqueId && !item.invoiceItemName
+      ? { ...item, ury_held: held ? 1 : 0 } : item) });
   },
 
   clearOrder: async () => {
@@ -766,14 +776,15 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             item: item.item_code,
             item_name: item.item_name,
             item_image: null,
-            course: '',
+            course: item.custom_course || '',
+            invoiceItemName: item.name,
+            ury_held: item.ury_held || 0,
             description: item.description || '',
             special_dish: 0 as 0 | 1,
             tax_rate: 0,
             comment: item.comment || '',
-            invoiceItemName: item.name,
           };
-          const uniqueId = generateUniqueId(orderItem as OrderItem);
+          const uniqueId = item.name || generateUniqueId(orderItem as OrderItem);
           return {
             ...orderItem,
             uniqueId,

@@ -239,6 +239,24 @@ class TestIdempotentWrites(IntegrationTestCase):
                 else:
                     self.fail("A malformed id must be refused")
 
+    def test_split_group_cashier_settles_the_original_with_its_own_client_id(self):
+        from ury.ury.doctype.ury_order.ury_order import split_bill
+        from ury.ury_pos.api import get_split_group
+
+        dish = {"item": self.pos.item.name, "item_name": self.pos.item.item_name, "qty": 2}
+        original = self.send(items=[dish])
+        child = split_bill(original.name, [{"name": original["items"][0].name, "qty": 1}])["new_invoice"]
+        checks = {row.name: row for row in get_split_group(child)["invoices"]}
+        with self.assertRaisesRegex(frappe.ValidationError, "URY_CLIENT_ORDER_ID_REBIND"):
+            settle_order(self.pos, original.name, client_order_id=str(uuid4()))
+        self.assertEqual(checks[original.name].get("ury_client_order_id"), self.client_order_id)
+        self.assertFalse(checks[child].get("ury_client_order_id"))
+        result = settle_order(self.pos, original.name, client_order_id=checks[original.name].ury_client_order_id)
+        self.assertEqual(result, {"name": original.name, "status": "Submitted"})
+        paid = frappe.get_doc("POS Invoice", original.name)
+        self.assertEqual((paid.docstatus, paid.grand_total, paid.outstanding_amount), (1, 100, 0))
+        self.assertEqual(frappe.db.get_value("POS Invoice", child, "docstatus"), 0)
+
 
 class TestOfflineRefusalVocabulary(IntegrationTestCase):
     def test_offline_refusal_ids_are_a_closed_append_only_set(self):

@@ -58,6 +58,7 @@ export async function getActiveTableOrders(
       ['branch', '=', branch],
       ['docstatus', '=', 0],
     ],
+    orderBy: { field: 'creation', order: 'asc' },
     limit: '*' as unknown as number,
     asDict: true,
   } as unknown as Parameters<typeof db.getDocList>[1])) as ActiveInvoiceRow[];
@@ -72,11 +73,10 @@ export async function getActiveTableOrders(
       invoicePrinted: row.invoice_printed === 1,
     };
 
-    if (row.restaurant_table) {
-      map.set(row.restaurant_table, info);
-    }
-    for (const partnerTable of parseMergedWith(row.custom_merged_tables)) {
-      map.set(partnerTable, info);
+    for (const table of [row.restaurant_table, ...parseMergedWith(row.custom_merged_tables)]) {
+      if (!table) continue;
+      const current = map.get(table);
+      if (!current || (current.invoicePrinted && !info.invoicePrinted)) map.set(table, info);
     }
   }
 

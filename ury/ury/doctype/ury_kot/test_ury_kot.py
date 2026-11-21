@@ -53,6 +53,7 @@ class TestURYKOT(TestCase):
             "ury.ury.doctype.ury_order.ury_order": SimpleNamespace(
                 release_merge_cluster_tables=MagicMock(),
                 _free_tables_if_no_open_invoices=MagicMock(),
+                check_split_target_access=MagicMock(),
             ),
         }):
             path = Path(__file__).parents[2] / "api" / "ury_print.py"
