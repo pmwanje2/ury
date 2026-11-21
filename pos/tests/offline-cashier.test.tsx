@@ -57,6 +57,26 @@ test('the real cashier submit persists offline before clearing its cart without 
   expect(await new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! }).list()).toHaveLength(1);
 });
 
+test.each([false, true])('a held round stays in the cart without an offline ticket (browser online: %s)', async (online) => {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: online });
+  const profile = { ...usePOSStore.getState().posProfile!, ury_enable_hold_fire: 1 };
+  const held = { id: 'Tea', uniqueId: 'T1', name: 'Tea', price: 100, quantity: 1, ury_held: 1 };
+  usePOSStore.setState({ posProfile: profile, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: 'Take Away', selectedCustomer: { id: 'CUST-A', name: 'Walk In', phone: '' },
+    selectedTable: null, selectedRoom: null, paymentModes: ['Cash'], activeOrders: [held as any] });
+  const post = vi.spyOn(call, 'post').mockRejectedValue({ httpStatus: 503 });
+  const popup = vi.spyOn(window, 'open').mockReturnValue(null);
+  const refused = vi.spyOn(showToast, 'error');
+  const saved = vi.spyOn(showToast, 'success');
+  await act(async () => root.render(<OrderPanel />));
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(() => expect(refused.mock.calls.length + saved.mock.calls.length).toBeGreaterThan(0)); });
+  expect(post).toHaveBeenCalledTimes(online ? 1 : 0);
+  expect(refused).toHaveBeenCalledWith(expect.stringMatching(/hold.*(online|offline)/i));
+  expect(usePOSStore.getState().activeOrders).toEqual([held]);
+  expect(await new OfflineOutbox({ profile, user: useRootStore.getState().user! }).list()).toEqual([]);
+  expect(popup).not.toHaveBeenCalled();
+});
+
 test('pending outbox disables till close even when the browser is online', async () => {
   await queued(); Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network Error'); }));
