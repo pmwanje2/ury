@@ -39,6 +39,7 @@ class URYPrintJob(Document):
 
     def db_insert(self, *args, **kwargs):
         """Persist new job to file store."""
+        _guard_copy(self.name, self.as_dict(), get_job(self.name) or {})
         data = self.as_dict()
         if getattr(self, "modified", None):
             data["modified"] = str(self.modified)
@@ -51,6 +52,7 @@ class URYPrintJob(Document):
         existing = get_job(self.name) or {}
         old_status = existing.get("status")
         data = self.as_dict()
+        _guard_copy(self.name, data, existing)
         existing.update(data)
         if getattr(self, "modified", None):
             existing["modified"] = str(self.modified)
@@ -94,6 +96,7 @@ class URYPrintJob(Document):
 
     def delete(self, *args, **kwargs):
         """Delete the JSON file instead of removing a DB row."""
+        _guard_copy(self.name, {}, get_job(self.name) or {})
         delete_job(self.name)
 
     @staticmethod
@@ -309,3 +312,8 @@ def _matches_filters(doc, filters):
             return False
 
     return True
+
+
+def _guard_copy(name, data, existing):
+    if str(name).startswith('COPY-') or 'BILL_COPY' in (existing.get('job_type'), data.get('job_type')):
+        frappe.throw('URY-COPY-001: Copy jobs are managed by the print worker.', frappe.PermissionError)

@@ -60,13 +60,18 @@ except ImportError:
 			return get_stock_availability(item_code, warehouse)
 
 
+# A serialized printview document cannot supply this process-local identity.
+_COPY_RENDER_MARKER = object()
+
+
 class CustomPOSInvoice(POSInvoice):
 	def before_print(self, settings=None):
 		from ury.ury.doctype.ury_order.ury_order import check_split_target_access
 
 		# Frappe printview also accepts a serialized document. Authorize the saved check.
 		if self.name and frappe.db.exists("POS Invoice", self.name):
-			check_split_target_access(frappe.get_doc("POS Invoice", self.name), "write")
+			permission = "read" if getattr(self, "_ury_copy_render", None) is _COPY_RENDER_MARKER else "write"
+			check_split_target_access(frappe.get_doc("POS Invoice", self.name), permission)
 		super().before_print(settings)
 
 	def validate_stock_availablility(self):

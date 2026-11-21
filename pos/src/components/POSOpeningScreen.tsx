@@ -313,6 +313,8 @@ const POSOpeningScreen = ({ onSuccess, onError, onContinue }: POSOpeningScreenPr
               <h1 className="text-2xl font-bold text-gray-900">
                 {t(occupied ? 'pos_opening.occupied_title' : 'pos_opening.title')}
               </h1>
+              {user?.roles?.some(r => r === "URY Cashier" || r === "URY Manager") &&
+                <a href="/pos/orders/settled" className="text-blue-700 underline">{t('orders.settled_closed')}</a>}
               {!occupied && (
                 <p className="text-sm text-gray-500">
                   {t('pos_opening.subtitle')}

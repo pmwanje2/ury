@@ -10,7 +10,8 @@ import { formatCurrency, normalizeFrappeTime } from '@ury/core';
 import { Spinner } from '@ury/ui';
 import { Textarea } from '@ury/ui';
 import { usePOSStore } from '../store/pos-store';
-import { useNavigate } from 'react-router-dom';
+import SettledBills from './SettledBills';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import PaymentDialog from '../components/PaymentDialog';
 import BillSplitDialog from '../components/BillSplitDialog';
 import BillMergeDialog from '../components/BillMergeDialog';
@@ -98,6 +99,8 @@ function LinkTag({ icon: Icon, children }: { icon: React.ComponentType<{ classNa
 
 export default function Orders() {
   const owner = useSessionOwner();
+  const { pathname } = useLocation();
+  if (pathname.replace(/\/$/, '') === '/orders/settled') return <SettledBills key={owner} />;
   return <OwnerOrders key={owner} owner={owner} />;
 }
 
@@ -533,10 +536,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
       {/* Left Sidebar - Order Types */}
+      <div className="flex flex-col bg-white">
+      <Link className="p-3 text-blue-700 underline" to="/orders/settled">{t('orders.settled_closed')}</Link>
       <OrderStatusSidebar
         selectedStatus={selectedStatus}
         setSelectedStatus={setSelectedStatus}
       />
+      </div>
 
       {/* Middle Section - Order Cards */}
       <div className="flex min-w-0 flex-none flex-col lg:min-h-0 lg:flex-1">
