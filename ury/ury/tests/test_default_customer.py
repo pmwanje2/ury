@@ -160,10 +160,14 @@ class TestRemovedApi(unittest.TestCase):
 
 class TestSyncOrderFallbackWiring(unittest.TestCase):
 	def test_sync_order_uses_resolver_only_for_new_orders_without_customer(self):
-		import inspect
-
 		from ury.ury.doctype.ury_order import ury_order
 
-		src = inspect.getsource(ury_order.sync_order)
-		self.assertIn("if not customer and not invoice.name:", src)
-		self.assertIn("resolve_default_customer(", src)
+		profile = FakeProfile(customer="CUST-REG")
+		for name, saved, explicit, expected in (
+			(None, "Unsaved default", "", "CUST-REG"),
+			("INV", "Saved customer", "", "Saved customer"),
+			("INV", "Saved customer", "Explicit", "Explicit"),
+		):
+			with self.subTest(name=name, explicit=explicit), patch.object(frappe, "get_all", return_value=_customers(REGULAR)):
+				invoice = SimpleNamespace(name=name, customer=saved, order_type="Take Away")
+				self.assertEqual(ury_order._order_customer(invoice, profile, None, explicit), expected)

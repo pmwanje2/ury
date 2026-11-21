@@ -244,9 +244,21 @@ class TestURYOrder(FrappeTestCase):
 
         cancel_order("POS-INV-DRAFT", "draft cancellation")
 
-        mock_invoice.submit.assert_called_once()
-        mock_invoice.cancel.assert_called_once()
+        mock_invoice.discard.assert_called_once_with()
+        mock_invoice.submit.assert_not_called()
+        mock_invoice.cancel.assert_not_called()
         mock_invoice.db_set.assert_called_once_with("cancel_reason", "draft cancellation")
+
+    @patch("ury.ury.doctype.ury_order.ury_order.release_order_reservations")
+    @patch("ury.ury.doctype.ury_order.ury_order.cancel_kot")
+    def test_native_discard_keeps_draft_check_and_reason_without_posting(self, _kot, _reservations):
+        draft = frappe.new_doc("POS Invoice")
+        draft.name = "TEST-DISCARD-" + frappe.generate_hash(length=12)
+        draft.db_insert()  # An incomplete check cannot be submitted for settlement.
+        cancel_order(draft.name, "Duplicate check")
+        draft.reload()
+        self.assertEqual((draft.docstatus, draft.status, draft.cancel_reason), (2, "Cancelled", "Duplicate check"))
+        self.assertFalse(frappe.db.exists("GL Entry", {"voucher_no": draft.name}))
 
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.cache")
     @patch("ury.ury.doctype.ury_order.ury_order.get_order_invoice")
