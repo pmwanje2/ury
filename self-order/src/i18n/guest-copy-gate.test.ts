@@ -26,6 +26,9 @@ const NOT_COPY = new Set([
   'QR Pickup',
   'Already Requested',
   'Already Received',
+  // Payment Request statuses compared in lib/payment-outcome.ts.
+  'Paid',
+  'Partially Paid',
   'Content-Type',
 ])
 
