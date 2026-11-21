@@ -29,7 +29,8 @@ export function CustomerPicker({ value, onChange, disabled }: CustomerPickerProp
     posProfile?.country ||
     (() => {
       try {
-        const raw = sessionStorage.getItem(sessionStorageKey('posProfile'));
+        const key = sessionStorageKey('posProfile');
+        const raw = key && sessionStorage.getItem(key);
         return raw ? JSON.parse(raw)?.country : undefined;
       } catch {
         return undefined;

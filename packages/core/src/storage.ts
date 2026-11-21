@@ -75,8 +75,8 @@ export const getSessionUser = (): string | null => {
   }
 };
 
-export function sessionStorageKey(key: string): string {
-  return getUserSessionStorageKey(key, getSessionUser()) ?? key;
+export function sessionStorageKey(key: string): string | null {
+  return getUserSessionStorageKey(key, getSessionUser());
 }
 
 export function isUryPosRegistration(registration: { scope: string }): boolean {
@@ -148,5 +148,5 @@ export async function purgeOfflineSession(): Promise<void> {
 
 export function ownedSessionKey(key: string): string | null {
   sessionStorage.removeItem(key);
-  return getUserSessionStorageKey(key, getSessionUser());
+  return sessionStorageKey(key);
 }
