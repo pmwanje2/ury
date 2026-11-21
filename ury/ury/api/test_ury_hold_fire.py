@@ -114,6 +114,13 @@ class HoldFireTests(OrderingCases, TestCase):
         self.assertEqual(self.ticket_lines(), [('Fish', 1, 'now')])
         self.assertEqual(self.tickets[0].kot_items[0].reservation_line_key, 'ref:Fish:cart-s')
 
+    def test_desk_removing_last_held_row_keeps_unkeyed_sent_dish_unchanged(self):
+        sent = self.row('sent', held=0)
+        before = [vars(sent).copy(), dict(name='removed', item_code='Tea', item_name='Tea',
+                                          qty=1, ury_held=1, comment='later')]
+        self.kot.kot_execute(self.invoice.name, self.invoice.customer, None, [vars(sent)], before)
+        self.assertEqual(self.tickets, [])
+
     def test_fire_line_is_idempotent_preserves_price_notes_and_sends_only_that_line(self):
         self.row()
         self.row("held-2", note="chilli", qty=2)
@@ -288,7 +295,7 @@ class HoldFireTests(OrderingCases, TestCase):
     def test_authorized_keyed_note_change_cancels_original_and_sends_replacement(self):
         old = self.row("sent", held=0, note="plain")
         old.reservation_line_key = "cart-line"
-        self.historical_tickets = {"KOT-OLD": Row(kot_items=[Row(item="Fish", comments="plain", reservation_line_key="ref:Fish:cart-line")], name="KOT-OLD")}
+        self.historical_tickets = {"KOT-OLD": Row(kot_items=[Row(item="Fish", quantity=1, comments="plain", reservation_line_key="ref:Fish:cart-line")], name="KOT-OLD")}
         original = self.framework.db.get_list.side_effect
         self.framework.db.get_list.side_effect = lambda dt, **kw: [Row(name="KOT-OLD")] if dt == "URY KOT" else original(dt, **kw)
         self.sync([{**self.request("sent", held=0, note="chilli"), "uniqueId": "cart-line"}])
