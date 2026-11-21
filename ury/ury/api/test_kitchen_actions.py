@@ -134,6 +134,56 @@ class TestKitchenActions(unittest.TestCase):
         self.recall()
         self.doc.db_set.assert_called_once_with("order_status", "Ready For Prepare")
 
+    def test_kitchen_admin_predicate_matches_the_board_all_branch_scope(self):
+        predicate = getattr(kitchen, "is_kitchen_admin", None)
+        self.assertTrue(callable(predicate), "Board and recall have no shared kitchen-admin predicate")
+        cases = (
+            ("Administrator", [], True),
+            ("admin@example.com", ["URY Admin"], True),
+            ("sysmgr@example.com", ["System Manager"], False),
+            ("cook@example.com", ["URY Captain"], False),
+        )
+        for user, roles, expected in cases:
+            with self.subTest(user=user, roles=roles):
+                frappe.session.user = user
+                frappe.get_roles.return_value = roles
+                self.assertIs(predicate(), expected)
+
+    def test_recall_gives_a_branchless_ury_admin_the_board_all_branch_scope(self):
+        frappe.session.user = "admin@example.com"
+        frappe.get_roles.return_value = ["URY Admin"]
+        kitchen.getBranch.side_effect = frappe.ValidationError("No branch")
+        self.doc.branch = "Branch B"
+        self.recall()
+        self.doc.db_set.assert_called_once_with("order_status", "Ready For Prepare")
+
+    def test_recall_lets_a_ury_admin_with_a_branch_recall_any_branch_the_board_shows(self):
+        frappe.session.user = "admin@example.com"
+        frappe.get_roles.return_value = ["URY Admin"]
+        self.doc.branch = "Branch B"
+        self.recall()
+        self.doc.db_set.assert_called_once_with("order_status", "Ready For Prepare")
+
+    def test_recall_scopes_a_branchless_system_manager_like_the_board(self):
+        frappe.session.user = "sysmgr@example.com"
+        frappe.get_roles.return_value = ["System Manager"]
+        kitchen.getBranch.side_effect = frappe.ValidationError("No branch")
+        with self.assertRaisesRegex(frappe.ValidationError, "No branch"):
+            self.recall()
+        self.assert_no_write()
+
+    def test_board_and_recall_read_the_same_admin_predicate(self):
+        self.assertTrue(callable(getattr(kitchen, "is_kitchen_admin", None)), "No shared kitchen-admin predicate")
+        self.patch(kitchen, "is_kitchen_admin", return_value=True)
+        kitchen.getBranch.side_effect = frappe.ValidationError("No branch")
+        self.patch(frappe, "get_list", return_value=[])
+        self.patch(frappe.utils, "now", return_value="2026-10-01 00:05:00")
+        self.assertIsNone(kitchen.kot_list()["Branch"])
+        self.assertIsNone(kitchen.served_kot_list()["Branch"])
+        self.doc.branch = "Branch B"
+        self.recall()
+        self.doc.db_set.assert_called_once_with("order_status", "Ready For Prepare")
+
     def test_recall_rejects_missing_or_invalid_serving_time(self):
         for value in (None, "", "bad", "nan", "inf", "-1"):
             with self.subTest(value=value):

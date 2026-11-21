@@ -319,6 +319,28 @@ test("recent served query is native and constrained to the branch and production
   assert.deepEqual(state.recentServed.map(k => k.name), ["RECENT"]);
 });
 
+test("an all-branch admin board omits the branch filter from the recent-served query", async () => {
+  const query = helpers.recentServedQuery(null, "Kitchen", new Date("2026-10-01T00:05:00"));
+  assert.equal("branch" in query.filters, false, "A null board branch must not become a branch = null filter");
+  assert.equal(query.filters.production, "Kitchen");
+  const { state, call } = kitchen();
+  state.branch = null;
+  const gets = [];
+  call.get = async (method, args) => { gets.push({ method, args }); return { message: [] }; };
+  await state.fetchRecentServed();
+  assert.equal("branch" in gets[0].args.filters, false);
+});
+
+test("an all-branch admin board offers the recent-served recall list", async () => {
+  const k = kitchen();
+  k.snapshot([socketTicket("KNOWN")], undefined, { Branch: null });
+  const state = k.mount();
+  onTestFinished(() => k.unmount(state));
+  await settle();
+  assert.equal(state.branch, null);
+  assert.match(await k.html(state), /Recently served · Recall/, "Admins see every branch on the board but cannot open recall");
+});
+
 test("recall restores the active list only after the server accepts it", async () => {
   const { state, ticket, requests } = kitchen();
   state.recentServed = [ticket];
