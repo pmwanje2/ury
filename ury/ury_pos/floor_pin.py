@@ -1,13 +1,16 @@
 """Paired floor tablets use short PINs only while their till is open.
 
 Refusal ids (closed, append-only):
-- URY_FLOOR_PIN_NOT_PERMITTED (PermissionError): caller may not manage PINs or pair tablets,
-  or the target user is not eligible for floor PIN sign-in.
+- URY_FLOOR_PIN_NOT_PERMITTED (PermissionError): caller lacks POS Profile write permission.
 - URY_FLOOR_TABLET_LABEL_INVALID (ValidationError): tablet label is blank, too long or has
   a reserved character.
 - URY_FLOOR_PROFILE_NOT_PAIRABLE (ValidationError): the POS Profile name cannot be carried
   in the signed device cookie.
 - URY_FLOOR_PIN_ISSUE_EXHAUSTED (ValidationError): no free PIN was found after retries.
+- URY_FLOOR_PIN_LOGIN_DISABLED (ValidationError): the POS Profile has floor PIN login off or is
+  disabled, or no POS Profile has floor PIN login on.
+- URY_FLOOR_PIN_TARGET_INELIGIBLE (ValidationError): the user cannot hold a floor PIN (disabled,
+  off-branch, no floor role, stay role, System Manager or Administrator).
 - URY_FLOOR_DEVICE_NOT_PAIRED, URY_FLOOR_TILL_CLOSED, URY_FLOOR_PIN_LOCKED,
   URY_FLOOR_PIN_REFUSED (AuthenticationError): PIN sign-in refusals, as native login.
 """
@@ -47,6 +50,10 @@ def _refuse(code, message, exc):
 
 def _not_permitted(message):
 	_refuse("URY_FLOOR_PIN_NOT_PERMITTED", message, frappe.PermissionError)
+
+
+def _login_disabled(message):
+	_refuse("URY_FLOOR_PIN_LOGIN_DISABLED", message, frappe.ValidationError)
 
 
 def _sign_in_refused(code, message):
@@ -103,8 +110,10 @@ def get_floor_pad():
 @frappe.whitelist(methods=["POST"])
 def pair_device(pos_profile, label):
 	profile = frappe.get_doc("POS Profile", pos_profile)
-	if not _enabled(profile) or not frappe.has_permission("POS Profile", "write", profile):
+	if not frappe.has_permission("POS Profile", "write", profile):
 		_not_permitted("This tablet cannot be paired.")
+	if not _enabled(profile):
+		_login_disabled("Floor PIN sign-in is off for this POS Profile.")
 	label = (label or "").strip()
 	if not label or len(label) > MAX_LABEL_LENGTH or any(c in label for c in RESERVED_CHARACTERS):
 		_refuse("URY_FLOOR_TABLET_LABEL_INVALID", "Enter a tablet label of up to 80 characters.", frappe.ValidationError)
@@ -120,12 +129,22 @@ def pair_device(pos_profile, label):
 
 
 def _managed_profile(user=None):
-	for row in frappe.get_all("POS Profile", filters={"custom_floor_pin_login": 1, "disabled": 0}, fields=["name"]):
-		profile = frappe.get_doc("POS Profile", row.name)
-		if (_enabled(profile) and frappe.has_permission("POS Profile", "write", profile)
-			and (user is None or _eligible(user, profile))):
+	# Authorization first, so profile state is never disclosed to a caller without write.
+	if not frappe.has_permission("POS Profile", "write"):
+		_not_permitted("A manager must issue a PIN to eligible floor staff.")
+	rows = frappe.get_all("POS Profile", filters={"custom_floor_pin_login": 1, "disabled": 0}, fields=["name"])
+	profiles = [p for p in (frappe.get_doc("POS Profile", row.name) for row in rows) if _enabled(p)]
+	if not profiles:
+		_login_disabled("No POS Profile has floor PIN sign-in turned on.")
+	profiles = [p for p in profiles if frappe.has_permission("POS Profile", "write", p)]
+	if not profiles:
+		_not_permitted("A manager must issue a PIN to eligible floor staff.")
+	if user is None:
+		return profiles[0]
+	for profile in profiles:
+		if _eligible(user, profile):
 			return profile
-	_not_permitted("A manager must issue a PIN to eligible floor staff.")
+	_refuse("URY_FLOOR_PIN_TARGET_INELIGIBLE", "This user cannot get a floor PIN.", frappe.ValidationError)
 
 
 @frappe.whitelist(methods=["POST"])

@@ -656,7 +656,8 @@
     "label_invalid": "Utilisez un nom de tablette de 80 caractères au maximum, sans le caractère |.",
     "profile_not_pairable": "Ce nom de profil POS ne peut pas être utilisé pour une tablette de salle.",
     "submit": "Appairer la tablette",
-    "failed": "Impossible d’appairer cette tablette. Vérifiez que la connexion par PIN est activée."
+    "failed": "Impossible d’appairer cette tablette. Vérifiez que la connexion par PIN est activée.",
+    "login_disabled": "La connexion par PIN de salle est désactivée pour ce profil POS. Activez-la d’abord dans le profil POS."
   },
   "staff_pins": {
     "title": "PIN du personnel",
@@ -670,7 +671,9 @@
     "give_pin": "Donner le PIN",
     "no_staff": "Aucun membre du personnel éligible trouvé.",
     "load_failed": "Impossible de charger le personnel.",
-    "issue_failed": "Impossible d’attribuer un PIN. Vérifiez que cette personne peut utiliser un PIN de salle."
+    "issue_failed": "Impossible d’attribuer un PIN. Vérifiez que cette personne peut utiliser un PIN de salle.",
+    "login_disabled": "Aucun profil POS n’a la connexion par PIN de salle activée. Activez-la d’abord dans le profil POS.",
+    "target_ineligible": "Ce membre du personnel ne peut pas recevoir de PIN de salle. Vérifiez son rôle, sa branche et l’état de son compte."
   },
   "unsent_items": {
     "title": "Articles non envoyés",

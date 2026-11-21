@@ -48,7 +48,7 @@ const StaffPinsDialog = ({ open, onOpenChange }: StaffPinsDialogProps) => {
         setStaff(Array.isArray(message) ? (message as StaffMember[]) : []);
       })
       .catch((reason) => {
-        if (!cancelled) setError(floorPinError(parseFrappeError(reason, t('staff_pins.load_failed'))));
+        if (!cancelled) setError(floorPinError(parseFrappeError(reason, t('staff_pins.load_failed')), 'staff_pins'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -69,7 +69,7 @@ const StaffPinsDialog = ({ open, onOpenChange }: StaffPinsDialogProps) => {
       setIssued({ name: member.full_name, pin });
       setStaff((current) => current.map((row) => (row.user === member.user ? { ...row, has_pin: true } : row)));
     } catch (reason) {
-      setError(floorPinError(parseFrappeError(reason, t('staff_pins.issue_failed'))));
+      setError(floorPinError(parseFrappeError(reason, t('staff_pins.issue_failed')), 'staff_pins'));
     } finally {
       setBusyUser(null);
     }

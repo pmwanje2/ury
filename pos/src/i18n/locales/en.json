@@ -848,7 +848,8 @@
     "label_invalid": "Use a tablet label of up to 80 characters without the | character.",
     "profile_not_pairable": "This POS Profile name cannot be used for a floor tablet.",
     "submit": "Pair tablet",
-    "failed": "This tablet could not be paired. Check that floor PIN sign-in is enabled."
+    "failed": "This tablet could not be paired. Check that floor PIN sign-in is enabled.",
+    "login_disabled": "Floor PIN sign-in is off for this POS Profile. Turn it on in the POS Profile first."
   },
   "staff_pins": {
     "title": "Staff PINs",
@@ -862,7 +863,9 @@
     "give_pin": "Give PIN",
     "no_staff": "No eligible staff found.",
     "load_failed": "Staff could not be loaded.",
-    "issue_failed": "A PIN could not be issued. Check that this person is eligible for floor PIN sign-in."
+    "issue_failed": "A PIN could not be issued. Check that this person is eligible for floor PIN sign-in.",
+    "login_disabled": "No POS Profile has floor PIN sign-in turned on. Turn it on in the POS Profile first.",
+    "target_ineligible": "This staff member cannot get a floor PIN. Check their role, branch and account status."
   },
   "unsent_items": {
     "title": "Unsent items",

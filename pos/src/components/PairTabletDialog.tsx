@@ -56,7 +56,7 @@ const PairTabletDialog = ({ open, onOpenChange, posProfile }: PairTabletDialogPr
       onOpenChange(false);
       window.location.reload();
     } catch (reason) {
-      setError(floorPinError(parseFrappeError(reason, t('pair_tablet.failed'))));
+      setError(floorPinError(parseFrappeError(reason, t('pair_tablet.failed')), 'pair_tablet'));
     } finally {
       setBusy(false);
     }

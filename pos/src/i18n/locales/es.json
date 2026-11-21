@@ -663,7 +663,8 @@
     "label_invalid": "Usa un nombre de tableta de hasta 80 caracteres y sin el carácter |.",
     "profile_not_pairable": "Este nombre de perfil POS no se puede usar para una tableta de sala.",
     "submit": "Vincular tableta",
-    "failed": "No se pudo vincular esta tableta. Comprueba que el acceso con PIN esté activado."
+    "failed": "No se pudo vincular esta tableta. Comprueba que el acceso con PIN esté activado.",
+    "login_disabled": "El acceso con PIN de sala está desactivado en este perfil POS. Actívalo primero en el perfil POS."
   },
   "staff_pins": {
     "title": "PIN del personal",
@@ -677,7 +678,9 @@
     "give_pin": "Dar PIN",
     "no_staff": "No hay personal autorizado.",
     "load_failed": "No se pudo cargar el personal.",
-    "issue_failed": "No se pudo asignar un PIN. Comprueba que esta persona pueda usar un PIN de sala."
+    "issue_failed": "No se pudo asignar un PIN. Comprueba que esta persona pueda usar un PIN de sala.",
+    "login_disabled": "Ningún perfil POS tiene activado el acceso con PIN de sala. Actívalo primero en el perfil POS.",
+    "target_ineligible": "Este empleado no puede recibir un PIN de sala. Revisa su rol, sucursal y estado de cuenta."
   },
   "unsent_items": {
     "title": "Artículos sin enviar",
