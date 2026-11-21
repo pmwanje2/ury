@@ -582,9 +582,21 @@ class TestGuestLabelOnSyncOrder(unittest.TestCase):
         return frappe.call(
             ury_order.sync_order,
             items="[]", cashier="x", owner="x", mode_of_payment="Cash", customer="",
-            no_of_pax=1, last_invoice=None, waiter="x", pos_profile="Till A",
+            no_of_pax=1, last_invoice=kwargs.pop("last_invoice", None), waiter="x", pos_profile="Till A",
             order_type="Take Away", **kwargs,
         )
+
+    def test_blank_update_uses_saved_customer_then_order_type_default(self):
+        self.invoice.name = "INV-1"
+        self.invoice.pos_profile = self.profile.name
+        self.invoice.waiter = "waiter@example.com"
+        self.invoice.modified = frappe.utils.get_datetime("2026-10-01 12:00:00")
+        for saved, expected in (("Original", "Original"), (None, "Walk-in Customer")):
+            with self.subTest(saved=saved):
+                self.invoice.customer = saved
+                self.send(last_invoice="INV-1", last_modified_time=self.invoice.modified)
+                self.assertEqual(self.invoice.customer, expected)
+                self.assertEqual(self.invoice.customer_name, expected)
 
     def test_order_label_is_stored_on_the_invoice(self):
         self.send(guest_label="  Susan ")

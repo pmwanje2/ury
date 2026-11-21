@@ -671,6 +671,7 @@
     "till_not_open": "La caisse n’est pas ouverte. Demandez au caissier de l’ouvrir."
   },
   "floor_pin": {
+    "offline_notice": "Hors connexion. Reconnectez-vous avant de prendre des commandes.",
     "title": "Connexion du personnel",
     "pin_prompt": "Saisissez votre PIN à 4 chiffres",
     "clear": "Effacer",

@@ -1884,6 +1884,14 @@ def get_captain_context():
     }
 
 
+def _order_customer(invoice, profile, order_type, customer):
+    if customer:
+        return customer
+    if invoice.name and invoice.customer:
+        return invoice.customer
+    return resolve_default_customer(profile, order_type or getattr(invoice, "order_type", None))
+
+
 def _validate_customer_change(invoice, customer):
     """Allow replacing the customer on an open order, except for Aggregators.
 
@@ -2489,17 +2497,9 @@ def sync_order(
         invoice.posting_date = captured.date()
         invoice.posting_time = captured.time()
 
-    # New order with no customer from the client (older cached client, offline
-    # replay, legacy POS, kiosk): fall back to the POS Profile's configured
-    # default for this order type. Never overrides a customer the client sent,
-    # and never applies to an existing order.
-    if not customer and not invoice.name:
-        customer = resolve_default_customer(
-            posprofile, order_type or getattr(invoice, "order_type", None)
-        )
-
+    customer = _order_customer(invoice, posprofile, order_type, customer)
     if not customer:
-        frappe.throw("Please enter valid customer details")
+        frappe.throw(_("Select a customer or set a default customer in the POS Profile."))
     else:
         _validate_customer_change(invoice, customer)
         invoice.customer = customer
@@ -3036,11 +3036,14 @@ def cancel_order(invoice_id, reason):
                 frappe.PermissionError,
             )
 
+    if pos_invoice.docstatus == 2:
+        frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
+
     reason = _validated_void_reason(pos_invoice, reason)
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:
-        release_merge_cluster_tables(pos_invoice.restaurant_table)
+        release_merge_cluster_tables(pos_invoice.restaurant_table, commit=False)
 
     # KOT cancellation is part of the order-cancellation transaction. If it
     # fails, stop immediately so the invoice is not cancelled while the KOT
@@ -3083,17 +3086,10 @@ def cancel_order(invoice_id, reason):
             message=f"Failed to send fraud alert for invoice {invoice_id}: {str(e)}"
         )
 
-    # Ensure invoice is not already cancelled
-    if pos_invoice.docstatus == 2:
-        frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
-
-    # Draft invoice: submit first so it can follow standard document lifecycle cancellation
     if pos_invoice.docstatus == 0:
-        pos_invoice.flags.ignore_mandatory = True
-        pos_invoice.submit()
-
-    # Cancel through standard document workflow so on_cancel hooks run and docstatus=2 is set
-    pos_invoice.cancel()
+        pos_invoice.discard()
+    else:
+        pos_invoice.cancel()
     pos_invoice.db_set("cancel_reason", reason)
 
 # Roles permitted to authorize an additional discount when settling an order.

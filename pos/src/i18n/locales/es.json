@@ -639,6 +639,7 @@
     "acknowledged": "Confirmado"
   },
   "floor_pin": {
+    "offline_notice": "Sin conexión. Vuelve a iniciar sesión antes de tomar pedidos.",
     "title": "Acceso del personal",
     "pin_prompt": "Introduce tu PIN de 4 dígitos",
     "clear": "Borrar",

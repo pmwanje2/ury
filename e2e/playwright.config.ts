@@ -31,7 +31,8 @@ export default defineConfig({
   },
   projects: [
     { name: "frontend", testMatch: "frontend.spec.ts" },
-    { name: "pos", testMatch: "pos.spec.ts" },
+    { name: "pos", testMatch: ["pos.spec.ts", "pos-session.spec.ts"] },
+    { name: "urypos", testMatch: "legacy-logout.spec.ts" },
     { name: "self-order", testMatch: "self-order.spec.ts" },
     { name: "mosaic", testMatch: "mosaic.spec.ts" },
   ],

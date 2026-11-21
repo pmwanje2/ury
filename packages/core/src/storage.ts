@@ -8,13 +8,13 @@ const APP_SESSION_STORAGE_KEYS = [
 ];
 const USER_SESSION_STORAGE_KEYS = ['posProfile', 'payment_modes', 'customerGroups', 'territories', 'ury_offline_opening', 'ury_open_table_checks', 'ury_open_table_checks_session'];
 
-export function clearAppStorage(): void {
+export function clearAppStorage({ includeMosaicStrikes = true } = {}): void {
   APP_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   APP_SESSION_STORAGE_KEYS.forEach((key) => sessionStorage.removeItem(key));
   // Walk backwards because removeItem changes the storage indices.
   for (let index = localStorage.length - 1; index >= 0; index--) {
     const key = localStorage.key(index);
-    if (key && (key.startsWith('posOrderTabsData:') || /^.+_.+_strike$/.test(key))) {
+    if (key && (key.startsWith('posOrderTabsData:') || (includeMosaicStrikes && /^.+_.+_strike$/.test(key)))) {
       localStorage.removeItem(key);
     }
   }

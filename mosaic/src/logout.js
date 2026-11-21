@@ -1,11 +1,4 @@
-import { clearAppStorage, purgeOfflineSession } from '../../packages/core/src/storage';
+import { logout as endSession } from '../../packages/core/src/logout.js';
 
-export async function logout() {
-  const response = await fetch('/api/method/logout', {
-    method: 'POST',
-    headers: { 'X-Frappe-CSRF-Token': window.csrf_token || '' },
-  });
-  if (!response.ok) throw new Error('Logout refused');
-  clearAppStorage();
-  await purgeOfflineSession();
-}
+// Mosaic still writes unnamespaced ticket/row strike markers.
+export const logout = () => endSession({ includeMosaicStrikes: true });
