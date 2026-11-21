@@ -3036,11 +3036,14 @@ def cancel_order(invoice_id, reason):
                 frappe.PermissionError,
             )
 
+    if pos_invoice.docstatus == 2:
+        frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
+
     reason = _validated_void_reason(pos_invoice, reason)
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:
-        release_merge_cluster_tables(pos_invoice.restaurant_table)
+        release_merge_cluster_tables(pos_invoice.restaurant_table, commit=False)
 
     # KOT cancellation is part of the order-cancellation transaction. If it
     # fails, stop immediately so the invoice is not cancelled while the KOT
@@ -3082,10 +3085,6 @@ def cancel_order(invoice_id, reason):
             title="Delayed cancellation alert notification failed",
             message=f"Failed to send fraud alert for invoice {invoice_id}: {str(e)}"
         )
-
-    # Ensure invoice is not already cancelled
-    if pos_invoice.docstatus == 2:
-        frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
 
     if pos_invoice.docstatus == 0:
         pos_invoice.discard()
