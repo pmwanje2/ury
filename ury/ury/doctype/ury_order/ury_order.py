@@ -950,7 +950,11 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
         )
 
         if not getattr(invoice, "customer", None) or invoice.customer == "Guest":
-            from ury.ury.api.table_reservation import get_completed_reservation_for_table, reservations_enabled
+            from ury.ury.api.table_reservation import (
+                get_completed_reservation_for_table,
+                reservations_enabled,
+            )
+
             completed_res = get_completed_reservation_for_table(table, branch) if reservations_enabled(branch) else None
             if completed_res and completed_res.get("customer"):
                 invoice.customer = completed_res.get("customer")
