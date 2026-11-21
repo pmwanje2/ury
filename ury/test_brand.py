@@ -74,7 +74,7 @@ class TestSiteBrand(unittest.TestCase):
         framework.local = SimpleNamespace(dev_server=0, request=SimpleNamespace(path="/ury"))
         framework.conf = {}
         framework.form_dict = {}
-        framework.db = SimpleNamespace(commit=lambda: None)
+        framework.db = SimpleNamespace(commit=lambda: None, get_value=lambda doctype, name, field: None)
         framework._ = lambda value: value
 
         def whitelist(**kwargs):
@@ -423,6 +423,25 @@ class TestSiteBrand(unittest.TestCase):
                                  "dark": "#23664a", "font": "Noto Sans", "font_size": "14px", "rounded": True})
         self.assertFalse(getattr(self.theme_module().get_theme, "is_whitelisted", False))
 
+    def test_native_color_links_are_resolved_and_validated_per_field(self):
+        colors = {"Pale": "#ffffcc", "Ink": "#111122", "Paper": "#ffffff", "Night": "#112233"}
+
+        def lookup(doctype, name, field):
+            self.assertEqual((doctype, field), ("Color", "color"))
+            return colors.get(name)
+
+        self.framework.db.get_value = lookup
+        self.set_theme(primary_color="Pale", text_color="Ink", background_color="Paper", dark_color="Night")
+        theme = self.theme_module().get_theme()
+        self.assertEqual([theme.get(k) for k in ("primary", "text", "background", "dark")], list(colors.values()))
+        colors["Ink"] = "var(--bad)"
+        self.set_theme(primary_color="#abcdef", text_color="Ink", background_color="Absent", dark_color="Night")
+        theme = self.theme_module().get_theme()
+        self.assertEqual(theme["primary"], "#abcdef")
+        self.assertEqual(theme["dark"], colors["Night"])
+        self.assertNotIn("text", theme)
+        self.assertNotIn("background", theme)
+
     def test_invalid_hex_values_are_dropped_per_field(self):
         module = self.theme_module()
         for value in ("#fff", "#gggggg", "red", "#123456;evil", "#123456\n", None, 123456):
@@ -492,7 +511,7 @@ class TestSiteBrand(unittest.TestCase):
                 self.assertTrue(all(shade < base for shade, base in zip(channels[700], channels[600])))
 
     def test_white_text_passes_aa_on_600_and_all_brand_shades(self):
-        for color in ("#23664a", "#174a8b", "#767676"):
+        for color in ("#23664a", "#174a8b", "#767676", "#ffffcc", "#ffffff", "#00ff00"):
             self.set_theme(primary_color=color)
             tokens = self.theme_tokens()
             for step in (600, 700, 800, 900, 950):
