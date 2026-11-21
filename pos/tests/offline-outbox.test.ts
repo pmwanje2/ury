@@ -302,3 +302,14 @@ test('replay is exclusive, exposes Replaying, and prohibits capture while it is 
   expect(sends).toHaveLength(1);
   request.mockImplementation(normal);
 });
+
+test.each([401, 403, 500])('HTTP %i on replay of an order retains it and blocks further local settlement', async (status) => {
+  const q = await outbox();
+  const pending = await q.capture(data, 100);
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json(null, status));
+  await q.replay();
+  await expect(q.settle(pending.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 })).rejects.toThrow(/session|sign.in|verif/i);
+  expect(await q.list()).toEqual([pending]);
+  await q.replay();
+  expect(await q.list()).toEqual([]);
+});

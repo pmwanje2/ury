@@ -71,3 +71,15 @@ test('denied persistent storage is visible to the cashier with a retained pendin
   await waitForUI(() => expect(container.textContent).toContain('1 pending'));
   expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/persistent storage|keep this browser/i);
 });
+
+test('a denied poll retains the queue and disables settlement even if the connection then drops', async () => {
+  const { cashierOutbox } = await import('../src/offline/cashier');
+  const q = cashierOutbox(profile, user);
+  await q.capture({ pos_profile: profile.name, items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 100 }], no_of_pax: 1, invoice: null, last_invoice: null, order_type: 'Take Away' }, 100);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 403 })));
+  await q.replay();
+  await act(async () => root.render(layout));
+  await waitForUI(() => expect(container.textContent).toContain('1 pending'));
+  expect(container.textContent).not.toContain('Offline capture');
+  expect((container.querySelector('[data-testid="settle-cash"]') as HTMLButtonElement).disabled).toBe(true);
+});
