@@ -24,6 +24,18 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
     'npm --prefix .. ci --ignore-scripts --no-audit --no-fund',
     'node --test ../tests/pos-workflow.test.cjs',
     'npm test --offline -- ./tests/ --maxWorkers=1',
-    'PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_offline_capture_fixture ury.ury_pos.test_floor_pin',
+    ...[
+      'ury.tests.unit.test_offline_capture_fixture',
+      'ury.ury.api.test_ury_kot_notes',
+      'ury.ury.api.test_ury_hold_fire',
+      'ury.ury.api.test_ury_table_bookings',
+      'ury.ury.doctype.ury_order.test_split_bill_release',
+      'ury.ury.doctype.ury_order.test_cancel_order_reason',
+      'ury.ury_pos.test_floor_pin',
+      'ury.ury.doctype.ury_order.test_price_determination',
+      'ury.ury.doctype.ury_menu.test_menu_price_upkeep',
+      'ury.ury.api.test_shown_price_is_billed',
+      'ury.ury.api.test_kds_display_window',
+    ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',
   ]);
 });
