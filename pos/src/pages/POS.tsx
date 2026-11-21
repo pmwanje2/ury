@@ -110,9 +110,11 @@ export default function POS() {
   }
 
   return (
-    <div className="absolute inset-0 flex min-h-0 overflow-hidden">
-      <Sidebar disabled={isMenuInteractionDisabled()} />
-      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden pe-96">
+    <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden lg:flex-row">
+      <div className="hidden lg:contents">
+        <Sidebar disabled={isMenuInteractionDisabled()} />
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="p-4 bg-white border-b border-border">
           <div className="max-w-screen-xl mx-auto space-y-3">
             <div className="flex items-center gap-2 overflow-x-auto overflow-y-hidden">

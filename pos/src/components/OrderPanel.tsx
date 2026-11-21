@@ -252,7 +252,7 @@ const OrderPanel = () => {
   const isInteractionDisabled = isOrderInteractionDisabled() || isSubmitting;
 
   return (
-    <div data-testid="order-panel" className="absolute inset-y-0 end-0 z-10 flex h-full min-h-0 w-full max-w-sm flex-col overflow-hidden border-s border-border bg-white">
+    <div data-testid="order-panel" className="min-h-0 w-full flex-1 overflow-y-auto border-t border-border bg-white lg:flex lg:h-full lg:w-96 lg:flex-none lg:flex-col lg:overflow-hidden lg:border-s lg:border-t-0">
       <div className="min-h-0 overflow-y-auto border-b border-border p-4">
         {outbox.queue && outbox.offline && <label className="block text-sm mb-2">{t('offline.round_target')}
           <select data-testid="offline-round-target" className="block w-full border p-1" value={offlineTarget} disabled={isInteractionDisabled || outbox.replaying} onChange={(event) => setOfflineTarget(event.target.value)}>
@@ -404,7 +404,7 @@ const OrderPanel = () => {
             )}
           </div>
           
-          <div className="p-4 border-t border-border flex-shrink-0 bg-white">
+          <div className="sticky bottom-0 p-4 border-t border-border flex-shrink-0 bg-white lg:static">
             <input
               type="text"
               name="guest_label"
