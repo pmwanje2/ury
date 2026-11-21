@@ -36,7 +36,7 @@ export async function printOrder({ orderId, posProfile, printFormat }: PrintOrde
   } else {
     // Redirect to printview page
     const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
-    const url = `/printview?doctype=POS Invoice&name=${orderId}${formatParam}&no_letterhead=1&settings={}&letterhead=No Letterhead&trigger_print=1&_lang=en`;
+    const url = `/printview?doctype=POS Invoice&name=${orderId}${formatParam}&trigger_print=1&_lang=en`;
     window.open(url, '_blank', 'noopener,noreferrer');
     await updatePrintStatus(orderId);
     return 'socket';

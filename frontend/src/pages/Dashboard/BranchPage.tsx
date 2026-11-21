@@ -868,7 +868,7 @@ export const BranchPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">{__('No URY Restaurant linked to this branch.')}</p>
+                <p className="text-sm text-muted-foreground">{__('No restaurant linked to this branch.')}</p>
               )}
             </div>
 
@@ -924,7 +924,7 @@ export const BranchPage: React.FC = () => {
                   return (
                     <div className="space-y-3">
                       <p className="text-sm text-muted-foreground">
-                        {__("No URY Restaurant linked to this branch, so room/menu assignment isn't available yet.")}
+                        {__("No restaurant linked to this branch, so room/menu assignment isn't available yet.")}
                       </p>
                       {branchRooms.length > 0 ? (
                         <ul className="text-sm text-foreground list-disc list-inside">
@@ -1018,7 +1018,7 @@ export const BranchPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">{__('No URY Restaurant linked to this branch.')}</p>
+                <p className="text-sm text-muted-foreground">{__('No restaurant linked to this branch.')}</p>
               )}
             </div>
 

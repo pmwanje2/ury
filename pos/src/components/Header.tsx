@@ -15,13 +15,14 @@ import { isCashierOnly } from '../lib/roles';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { call, logout, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
+import { call, resolveBrand, logout, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { PrinterStatusButton } from './PrinterWatch';
 import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
 
 const Header = () => {
+  const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const user = useRootStore((state: RootState) => state.user);
@@ -141,7 +142,7 @@ const Header = () => {
 
   return (
     <>
-    <header className="sticky top-0 z-40 bg-white border-b border-border">
+    <header className="sticky top-0 z-40 bg-header text-header-foreground border-b border-header-border">
       <div className="flex items-center justify-between h-12 px-4 md:px-6">
         {/* Logo */}
         <div className="flex items-center">
@@ -163,8 +164,8 @@ const Header = () => {
             className="flex items-center gap-3"
           >
             <img
-              src="/assets/ury/pos/ury_pos.png"
-              alt="URY POS"
+              src={brand.logo}
+              alt={brand.name}
               className="h-8 w-auto"
             />
           </a>
@@ -198,7 +199,7 @@ const Header = () => {
             <Button
               onClick={handleUserMenuToggle}
               variant="ghost"
-              className="flex items-center gap-2 h-7 text-gray-600 hover:text-gray-900"
+              className="flex items-center gap-2 h-7 text-header-user hover:text-header-title"
             >
               <div className="w-6 h-6 bg-primary-500 rounded-full flex items-center justify-center">
                 <User className="w-3.5 h-3.5 text-white" />

@@ -1,3 +1,4 @@
+import { roleOption } from '../../../lib/roleLabels';
 import React from 'react';
 import { useConfigure, generateRandomPassword } from '../../../context/ConfigureContext';
 import { Input, Button } from '@ury/ui';
@@ -73,9 +74,9 @@ function UserRow({ user, usersLength, updateUser, deleteUser }: any) {
             id={`user-role-${user.id}`}
             value={user.role}
             options={[
-              { value: 'URY Cashier', label: __('URY Cashier') },
-              { value: 'URY Captain', label: __('URY Captain') },
-              { value: 'URY Manager', label: __('URY Manager') },
+              roleOption('URY Cashier'),
+              roleOption('URY Captain'),
+              roleOption('URY Manager'),
             ]}
             onChange={(_, val) => updateUser(user.id, { role: val })}
           />

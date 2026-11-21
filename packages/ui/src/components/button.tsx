@@ -42,7 +42,7 @@ const buttonVariants = cva(
         // purpose") should use `variant="accent"` instead of relying on the
         // old default.
         accent:
-          "bg-primary text-white shadow-sm hover:bg-primary/90 active:bg-primary-600 active:shadow-none",
+          "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 active:bg-primary-600 active:shadow-none",
         destructive:
           "bg-destructive text-white shadow-sm hover:bg-destructive/90 active:bg-destructive active:brightness-95 active:shadow-none",
         outline:

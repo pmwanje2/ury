@@ -1,3 +1,4 @@
+import { resolveBrand } from '@ury/core';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
@@ -132,6 +133,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
   // `source` (not the absence of a table) is the authoritative signal for
   // pickup mode — set server-side by _verify_qr_token/_resolve_device, never
   // guessed from context.table being falsy.
+  const brand = resolveBrand({ name: '', logo: '' });
   const isPickup = context?.source === 'QR Pickup'
 
   // Menu screen: header + category tabs + search bar + product grid
@@ -139,6 +141,10 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     return (
       <div className="min-h-screen pb-28">
         <header ref={headerRef} className="sticky top-0 z-20 border-b bg-background/95 px-4 py-3 backdrop-blur">
+          {(brand.name || brand.logo) && <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+            {brand.logo && <img src={brand.logo} alt="" className="h-8 w-auto max-w-32 object-contain" />}
+            {brand.name && <span className="break-words">{brand.name}</span>}
+          </div>}
           <div className="flex items-center justify-between gap-2">
             <h1 className="text-lg font-semibold">
               {isPickup ? t('header.pickup') : context?.table ? locationLabel(context.table, context.area) : t('header.order')}

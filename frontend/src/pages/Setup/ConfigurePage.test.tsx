@@ -27,7 +27,8 @@ vi.mock('../../services/setup', () => ({
   },
 }));
 
-vi.mock('@ury/core', () => ({
+vi.mock('@ury/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@ury/core')>(),
   call: vi.fn().mockResolvedValue({ message: {} }),
 }));
 

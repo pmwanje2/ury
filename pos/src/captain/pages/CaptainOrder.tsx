@@ -649,14 +649,14 @@ export default function CaptainOrder() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
-      <div className="sticky top-0 z-20 bg-white border-b border-border px-3 py-3 flex items-center justify-between">
+      <div className="sticky top-0 z-20 bg-header text-header-foreground border-b border-header-border px-3 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Button onClick={handleBack} variant="ghost" size="icon" aria-label={t('captain.back_to_tables')}>
             <ChevronLeft className="w-5 h-5" />
           </Button>
           <div>
-            <h1 className="font-semibold text-gray-900 leading-tight">{t('pos_ui.table')} {table}</h1>
-            <p className="text-xs text-gray-500">{isUpdatingOrder ? t('pos_ui.updating_order') : t('pos_ui.new_order')}</p>
+            <h1 className="font-semibold text-header-title leading-tight">{t('pos_ui.table')} {table}</h1>
+            <p className="text-xs text-header-muted">{isUpdatingOrder ? t('pos_ui.updating_order') : t('pos_ui.new_order')}</p>
           </div>
         </div>
 

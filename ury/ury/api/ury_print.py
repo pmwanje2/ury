@@ -56,7 +56,7 @@ def network_printing(
     printer_setting,
     print_format=None,
     doc=None,
-    no_letterhead=0,
+    no_letterhead=None,
 ):
     validate_print_permission(frappe.get_doc(doctype, name))
 

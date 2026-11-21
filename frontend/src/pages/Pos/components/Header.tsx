@@ -12,10 +12,11 @@ import { Button, Input, buttonVariants } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { logout, DESK_RETURN_STORAGE_KEY } from '@ury/core';
+import { resolveBrand, logout, DESK_RETURN_STORAGE_KEY } from '@ury/core';
 import { showToast } from '@ury/ui';
 
 const Header = () => {
+  const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const user = useRootStore((state: RootState) => state.user);
@@ -125,8 +126,8 @@ const Header = () => {
             className="flex items-center gap-3"
           >
             <img
-              src="/assets/ury/pos/ury_pos.png"
-              alt="URY POS"
+              src={brand.logo}
+              alt={brand.name}
               className="h-5 w-auto"
             />
           </a>

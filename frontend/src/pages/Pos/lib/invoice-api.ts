@@ -221,8 +221,6 @@ export async function getInvoicePrintHtml(invoiceId: string, printFormat: string
         name: invoiceId,
         print_format: printFormat,
         _lang: 'en',
-        no_letterhead: 1,
-        letterhead: "No Letterhead",
         settings: {}
       }
     );

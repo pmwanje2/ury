@@ -1,10 +1,11 @@
 import json
-import re
 
 import frappe
 import frappe.sessions
 from frappe import _
 from frappe.utils.telemetry import capture
+
+from ury.brand import get_brand_context, get_brand, json_for_script
 
 no_cache = 1
 login_required = True
@@ -19,10 +20,6 @@ login_required = True
 # then rebuild the frontend. The standalone POS at /pos is NOT affected.
 POS_ROUTE_BLOCKED = True
 
-SCRIPT_TAG_PATTERN = re.compile(r"\<script[^<]*\</script\>")
-CLOSING_SCRIPT_TAG_PATTERN = re.compile(r"</script\>")
-
-
 def _is_blocked_pos_route():
 	path = (getattr(frappe.local.request, "path", "") or "").rstrip("/")
 	return POS_ROUTE_BLOCKED and (path == "/ury/pos" or path.startswith("/ury/pos/"))
@@ -36,6 +33,7 @@ def get_context(context):
 		frappe.local.flags.redirect_location = "/login"
 		raise frappe.Redirect
 
+	context.update(get_brand_context(surface="staff"))
 	csrf_token = frappe.sessions.get_csrf_token()
 	# Manually commit the CSRF token here
 	frappe.db.commit()  # nosemgrep
@@ -52,11 +50,8 @@ def get_context(context):
 		enabled = True
 	boot["server_script_enabled"] = enabled
 
-	boot_json = frappe.as_json(boot, indent=None, separators=(",", ":"))
-	boot_json = SCRIPT_TAG_PATTERN.sub("", boot_json)
-
-	boot_json = CLOSING_SCRIPT_TAG_PATTERN.sub("", boot_json)
-	boot_json = json.dumps(boot_json)
+	boot["ury_brand"] = context["brand"]
+	boot_json = json.dumps(json_for_script(boot))
 
 	from frappe.utils import cint
 
@@ -87,10 +82,7 @@ def get_boot():
 		raise frappe.SessionBootFailed from e
 
 	boot["push_relay_server_url"] = frappe.conf.get("push_relay_server_url")
-	boot_json = frappe.as_json(boot, indent=None, separators=(",", ":"))
-	boot_json = SCRIPT_TAG_PATTERN.sub("", boot_json)
-
-	boot_json = CLOSING_SCRIPT_TAG_PATTERN.sub("", boot_json)
-	boot_json = json.dumps(boot_json)
+	boot["ury_brand"] = get_brand(surface="staff")
+	boot_json = json.dumps(json_for_script(boot))
 
 	return boot_json
