@@ -122,7 +122,8 @@
       </form>
     </div>
 
-    <div v-if="branch" class="mb-4">
+    <!-- '' until kot_list answers; an all-branch admin board answers with Branch null. -->
+    <div v-if="branch !== ''" class="mb-4">
       <button @click="fetchRecentServed" :disabled="loadingServed" class="rounded px-3 py-2 disabled:opacity-50" style="background: var(--ac); color: #fff">
         {{ loadingServed ? __("Loading…") : __("Recently served · Recall") }}
       </button>

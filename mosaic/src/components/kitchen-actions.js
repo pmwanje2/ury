@@ -23,7 +23,8 @@ export function recentServedQuery(branch, production, now) {
     doctype: "URY KOT",
     fields: ["name", "invoice", "restaurant_table", "table_takeaway", "order_no", "order_status", "creation", "production_time"],
     filters: {
-      branch,
+      // An all-branch admin board has no branch; a branch = null filter would match nothing.
+      ...(branch ? { branch } : {}),
       production,
       order_status: "Served",
       docstatus: 1,

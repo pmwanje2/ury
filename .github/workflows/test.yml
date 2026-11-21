@@ -150,6 +150,9 @@ jobs:
               ury.ury.api.test_ury_inventory_projection
               ury.ury.api.test_ury_issue_authorization
               ury.ury.api.test_ury_job_card_controls
+              ury.ury.api.test_kds_display_window
+              ury.ury.api.test_kitchen_actions
+              ury.ury.api.test_kot_dashboard_counts
               ury.ury.api.test_ury_kot_cancellation_service
               ury.ury.api.test_ury_kot_chef_filter
               ury.ury.api.test_ury_kot_display

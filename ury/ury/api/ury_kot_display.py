@@ -47,6 +47,12 @@ def record_kot_served(name, creation_time, kot_doc=None):
 KOT_RECALL_WINDOW_MINUTES = 15
 
 
+def is_kitchen_admin(user=None):
+    """All-branch kitchen scope: the board, its counts and recall share this one rule."""
+    user = user or frappe.session.user
+    return user == "Administrator" or "URY Admin" in frappe.get_roles(user)
+
+
 @frappe.whitelist(methods=["POST"])
 def recall_kot(name):
     """Return a KOT served in the last 15 minutes to the kitchen board.
@@ -63,13 +69,7 @@ def recall_kot(name):
             frappe.PermissionError,
         )
 
-    try:
-        session_branch = getBranch()
-    except Exception:
-        if frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles():
-            session_branch = None
-        else:
-            raise
+    session_branch = None if is_kitchen_admin() else getBranch()
 
     if session_branch and kot_doc.branch != session_branch:
         frappe.throw(
@@ -312,10 +312,7 @@ def production_unit_counts(units=None):
     """Active/served/total KOT counts per production unit, windowed like the unit view."""
     if isinstance(units, str):
         units = json.loads(units)
-    branch = None
-    user = frappe.session.user
-    if not (user == "Administrator" or "URY Admin" in frappe.get_roles(user)):
-        branch = getBranch()
+    branch = None if is_kitchen_admin() else getBranch()
     cancelled = _get_cancel_confirmed_original_kots(branch)
     production_filters = {}
 
@@ -366,14 +363,7 @@ def _matches_production_order_type(kot, production_filters):
 @frappe.whitelist()
 def kot_list():
     today = frappe.utils.now()
-    user = frappe.session.user
-    roles = frappe.get_roles(user)
-    is_admin = user == "Administrator" or "URY Admin" in roles
-
-    if is_admin:
-        branch = None
-    else:
-        branch = getBranch()
+    branch = None if is_kitchen_admin() else getBranch()
 
     pos_profile_filters = {}
     if branch:
@@ -442,14 +432,7 @@ def kot_list():
 @frappe.whitelist()
 def served_kot_list():
     today = frappe.utils.now()
-    user = frappe.session.user
-    roles = frappe.get_roles(user)
-    is_admin = user == "Administrator" or "URY Admin" in roles
-
-    if is_admin:
-        branch = None
-    else:
-        branch = getBranch()
+    branch = None if is_kitchen_admin() else getBranch()
 
     pos_profile_filters = {}
     if branch:
