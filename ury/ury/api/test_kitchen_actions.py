@@ -63,6 +63,17 @@ class TestKitchenActions(unittest.TestCase):
         })
         self.set_value.assert_not_called()
 
+    def test_offline_printed_serve_uses_the_same_one_document_write(self):
+        # ury_kot_generate records a station-printed KOT as served without loading it first.
+        kitchen.record_kot_served("KOT-001", self.doc.creation)
+        frappe.get_doc.assert_called_once_with("URY KOT", "KOT-001")
+        self.doc.db_set.assert_called_once_with({
+            "start_time_serv": "00:05:00",
+            "production_time": 25.0,
+            "order_status": "Served",
+        })
+        self.set_value.assert_not_called()
+
     def test_serve_still_requires_document_write_permission(self):
         self.permission.return_value = False
         with self.assertRaises(frappe.PermissionError):
