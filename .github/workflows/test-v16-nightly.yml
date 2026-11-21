@@ -119,8 +119,9 @@ jobs:
       # over test.yml's own lopsided 23/24/36/35 split.
       #
       # Shard 0 also runs the three guest-session modules that gate
-      # self_ordering._resolve_session (32/29/28/28): they are not in
-      # test.yml, which only runs on PRs into v3-stg.
+      # self_ordering._resolve_session: they are not in test.yml, which only
+      # runs on PRs into v3-stg. Shard 1 also runs the three site-less kitchen
+      # display modules from #115, which test.yml lists too (32/32/28/28).
       #
       # test_ury_order_v3_73_stock_authority_flag remains excluded (it is
       # absent from test.yml too): it imports and passes locally against a
@@ -169,6 +170,9 @@ jobs:
               ury.ury.api.test_ury_inventory_projection
               ury.ury.api.test_ury_issue_authorization
               ury.ury.api.test_ury_job_card_controls
+              ury.ury.api.test_kds_display_window
+              ury.ury.api.test_kitchen_actions
+              ury.ury.api.test_kot_dashboard_counts
               ury.ury.api.test_ury_kot_cancellation_service
               ury.ury.api.test_ury_kot_chef_filter
               ury.ury.api.test_ury_kot_display
