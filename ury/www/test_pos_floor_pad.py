@@ -38,6 +38,9 @@ class TestPosFloorPad(unittest.TestCase):
         context = {}
         with (
             patch.object(controller, "get_floor_pad", return_value={"paired": True, "till_open": True}),
+            patch.object(controller.frappe, "get_cached_doc", return_value=SimpleNamespace(app_name=None, app_logo=None, favicon=None)),
+            patch.object(controller.frappe, "get_hooks", return_value={}),
+            patch("frappe.website.doctype.website_theme.website_theme.get_active_theme", return_value=None),
             patch.object(controller.frappe.sessions, "get_csrf_token", return_value="session-token"),
             patch.object(controller.frappe, "db", MagicMock()),
             patch.object(controller.frappe, "session", SimpleNamespace(user="Guest")),

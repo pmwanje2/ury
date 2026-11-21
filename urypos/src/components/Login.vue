@@ -8,8 +8,8 @@
       <div class="rounded-lg bg-white px-6 py-8 shadow-md">
         <div class="mb-8 flex justify-center">
           <img
-            :src="imagePath"
-            alt="URY POS logo"
+            :src="brand.logo"
+            :alt="brand.name"
             class="h-8 w-auto sm:h-8 lg:h-8"
           />
         </div>
@@ -101,6 +101,7 @@
 </template>
 
 <script>
+import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import { useAuthStore } from "@/stores/Auth.js";
 import uriPosImage from "@/assets/logos/URY_POS.jpg";
 
@@ -111,7 +112,7 @@ export default {
   },
   data() {
     return {
-      imagePath: uriPosImage,
+      brand: resolveBrand({ name: "URY POS logo", logo: uriPosImage }),
     };
   },
 };

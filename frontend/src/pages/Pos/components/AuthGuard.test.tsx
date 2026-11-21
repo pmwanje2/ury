@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import AuthGuard from "./AuthGuard";
+import { useRootStore } from "../store/root-store";
 
 vi.mock("../store/root-store", () => {
   return {
@@ -31,6 +32,15 @@ vi.mock("../i18n", () => ({
 }));
 
 describe("AuthGuard", () => {
+  it("explains denial and offers a recheck without exposing internal role IDs", () => {
+    const state = useRootStore();
+    vi.mocked(useRootStore).mockReturnValueOnce({ ...state, allowedRoles: ["URY Waiter"], hasAccess: false });
+    render(<AuthGuard>Protected</AuthGuard>);
+    expect(screen.getByRole("button", { name: "Recheck Permissions" })).toBeInTheDocument();
+    expect(screen.queryByText(/URY Waiter/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Protected")).not.toBeInTheDocument();
+  });
+
   it("renders children when user has access", () => {
     render(
       <AuthGuard>

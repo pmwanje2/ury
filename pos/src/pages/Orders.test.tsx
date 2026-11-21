@@ -202,7 +202,7 @@ describe("Orders Page", () => {
     mockRootStoreState.selectedOrder = null;
     render(<Orders />);
 
-    expect(screen.getByText(/order.select_to_view/i)).toBeInTheDocument();
+    expect(screen.getByText(/order.select_to_view/i).closest(".fixed")).toBeNull();
   });
 
   it("shows only the outage notice instead of the detail pane that covers phone navigation", () => {

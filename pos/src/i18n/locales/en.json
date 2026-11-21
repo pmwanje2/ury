@@ -32,7 +32,7 @@
     "checking_pos_status": "Checking POS status...",
     "cancelling": "Cancelling...",
     "confirm_cancel": "Confirm Cancel",
-    "loading_ury_pos": "Loading URY POS...",
+    "loading_ury_pos": "Loading {{name}}...",
     "please_wait_setup": "Please wait while we set things up",
     "retry": "Retry",
     "today": "Today",
@@ -742,7 +742,7 @@
   "screen_size": {
     "title": "Desktop Only",
     "designed_for": "This POS system is designed for desktop computers and tablets with larger screens.",
-    "use_v1": "You can use URY POS Version 1 for mobile devices.",
+    "use_v1": "You can use the classic POS for mobile devices.",
     "switch_v1": "Switch to Version 1",
     "current_width": "Current screen width: {{px}}px",
     "required": "Required: 1024px or larger",

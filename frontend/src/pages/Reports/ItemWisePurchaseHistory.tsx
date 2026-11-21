@@ -92,7 +92,7 @@ export function ItemWisePurchaseHistory() {
         columns={columns}
         rows={data?.items ?? []}
         isLoading={isLoading}
-        emptyMessage={__('No purchase records in this range — Purchase Invoices are created via standard ERPNext Desk, not a URY-specific workflow, so this may legitimately be sparse.')}
+        emptyMessage={__('No purchase records in this range — Purchase Invoices are created from purchase transactions, so this report may be empty.')}
       />
     </div>
   );

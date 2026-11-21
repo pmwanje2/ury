@@ -60,6 +60,24 @@ pad instead of the cashier sign-in.
 > **Use the URY branch `v1` to access these separate apps.**
 > **Support for this version will end in December 2025.**
 
+## Site branding
+
+Use Website Settings (`app_name`, `app_logo`, `favicon`) for the dashboard,
+POS, Serve, Mosaic, classic POS and self-order pages. Unset fields retain the
+screen’s own fallback. Upload public images to Frappe Files. A staff-only
+`ury_brand` app hook can override `name`, `logo` and `favicon` individually;
+it does not change guest pages. A verified QR link can select the Self Ordering
+Profile’s optional Guest Display Name and its linked restaurant’s image.
+
+The POS uses supported colours, font, size and corner settings from the active
+Website Theme. No theme scripts or custom stylesheets are embedded. The merged
+POS invoice shows the invoice’s restaurant and branch. React QZ and register
+browser printing (including classic POS in the browser) suppress the letterhead.
+Classic QZ leaves letterhead selection to Frappe; network printing forwards
+`no_letterhead`, defaulting to `0`. POS and guest footers retain URY attribution. Set the
+site-config key `ury_source_url` to the public source for the deployed release;
+when unset it links to the upstream repository.
+
 ## Features
 
 ### POS & Billing

@@ -129,3 +129,12 @@ it('keeps the management session visible and allows retry after a refused logout
   expect(await screen.findByRole('alert')).toHaveTextContent('Failed to logout');
   expect(screen.getByRole('button', {name: 'Logout'})).toBeEnabled();
 });
+
+it("renders the site logo with its configured accessible name", () => {
+  vi.stubGlobal("frappe", { boot: { ury_brand: { name: "Example site", logo: "/files/site.png" } } });
+  try {
+    render(<BrowserRouter><Header /></BrowserRouter>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/files/site.png");
+    expect(screen.getByRole("img")).toHaveAccessibleName("Example site");
+  } finally { vi.unstubAllGlobals(); }
+});
