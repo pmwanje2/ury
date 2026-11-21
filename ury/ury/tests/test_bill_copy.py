@@ -61,6 +61,7 @@ class BillCopy(unittest.TestCase):
             return type('Pending', (), {'insert': lambda _, **kw: records.append(record) or record})()
         with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
              patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=['Bar printer']), \
              patch('ury.ury.printing.service.submit_and_monitor_print_job') as submit, \
              patch('ury.ury.printing.file_store.save_job', return_value=True):
             f.get_doc.side_effect = get_doc; f.get_roles.return_value = ['URY Cashier']; f.session.user='test-cashier'
@@ -96,3 +97,15 @@ class BillCopy(unittest.TestCase):
             self.assertEqual(result['status'], 'Success'); self.assertEqual(result['print_job_id'], 'COPY-example')
             self.assertEqual(register.call_args.args[0]['job_type'],'BILL_COPY')
             self.assertEqual(modules['cups'].Connection().printFile.call_args.args[2], 'COPY-example')
+
+    def test_only_internal_copy_render_uses_read_on_saved_split(self):
+        from ury.ury.class_overrides import pos_invoice
+        module = 'ury.ury.doctype.ury_order.ury_order'
+        doc = MagicMock(spec=pos_invoice.CustomPOSInvoice)
+        doc.name = 'INV-split'
+        with patch.object(pos_invoice, 'frappe') as f, patch.object(pos_invoice.POSInvoice,'before_print'), \
+             patch(module + '.check_split_target_access') as check:
+            for marker, permission in [(True,'write'), (getattr(pos_invoice, '_COPY_RENDER_MARKER', object()),'read')]:
+                doc._ury_copy_render = marker
+                pos_invoice.CustomPOSInvoice.before_print(doc)
+                check.assert_called_with(f.get_doc.return_value, permission)
