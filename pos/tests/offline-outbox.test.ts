@@ -314,3 +314,34 @@ test.each([401, 403, 500])('HTTP %i on replay of an order retains it and blocks 
   await q.replay();
   expect(await q.list()).toEqual([]);
 });
+
+test('a native order PermissionError parks only its row and replays the following order', async () => {
+  const q = await outbox();
+  const denied = await q.capture(data, 100);
+  const next = await q.capture({ ...data, customer: 'B' }, 100);
+  const exception = 'frappe.exceptions.PermissionError: Not permitted to modify this order';
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(Response.json({ exc_type: 'PermissionError', exception }, { status: 403 }));
+  await q.replay();
+  expect(await q.list()).toEqual([{ ...denied, state: 'review', reason: exception }]);
+  expect(sends.map((s) => s.data.client_order_id)).toEqual([next.client_order_id]);
+  await expect(q.capture(data, 100)).resolves.toMatchObject({ state: 'pending' });
+});
+
+test.each(['capture', 'settle', 'gateway settlement', 'reprint'])('%s honors the preceding locked session denial', async (action) => {
+  const q = await outbox();
+  const poller = await outbox();
+  print.mockResolvedValueOnce(false);
+  const pending = await q.capture(data, 100);
+  print.mockClear();
+  const tender = { kind: 'cash', mode_of_payment: 'Cash', amount: 100 };
+  request.mockResolvedValueOnce(json(null, 403));
+  const poll = poller.replay();
+  const operation = action === 'capture' ? q.capture(data, 100)
+    : action === 'settle' ? q.settle(pending.client_order_id, tender)
+    : action === 'gateway settlement' ? q.queueGatewaySettlement({ clientOrderId: pending.client_order_id,
+      roundId: pending.rounds[0].round_id, invoice: 'INV-1', settlement: tender })
+    : q.reprint(pending.client_order_id, 'kot');
+  await Promise.all([poll, expect(operation).rejects.toMatchObject({ code: 'URY_OFFLINE_SESSION_UNVERIFIED' })]);
+  expect(await q.list()).toEqual([pending]);
+  expect(print).not.toHaveBeenCalled();
+});
