@@ -2000,8 +2000,8 @@ class TestSplitBillReservations(FrappeTestCase):
     while leaving `URY Stock Reservation` pointed at deleted rows on the
     source invoice and giving the new invoice zero coverage."""
 
-    def setUp(self):
-        # T3: see TestURYOrder.setUp -- same gating default applies here.
+    def _build_source(self):
+        # The fake source models a branch with reservation control enabled.
         patcher = patch(
             "ury.ury.doctype.ury_order.ury_order.get_branch_stock_policy",
             return_value=StockPolicy(True, False, False),
@@ -2009,7 +2009,6 @@ class TestSplitBillReservations(FrappeTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _build_source(self):
         item_a = _FakeRow(
             name="ITEM-ROW-A",
             item_code="ITEM-A",
@@ -2070,6 +2069,33 @@ class TestSplitBillReservations(FrappeTestCase):
             items=[item_a, item_b],
             rounded_total=250,
         )
+
+    def test_split_bill_reassigns_kot_only_when_fully_moved(self):
+        from ury.tests.offline_pos_utils import make_offline_pos, send_order
+        from ury.ury.doctype.ury_order.ury_order import fire_items
+
+        self.addCleanup(frappe.set_user, frappe.session.user)
+        self.addCleanup(frappe.db.rollback)
+        pos = make_offline_pos()  # Fresh branch with reservation control off.
+        frappe.db.set_value("POS Profile", pos.profile.name, "ury_enable_hold_fire", 1)
+        items = [
+            dict(item=pos.item.name, item_name=pos.item.item_name, qty=1, rate=100,
+                 reservation_line_key=key, comment=key, ury_held=int(key == "whole"))
+            for key in ("move", "stay", "whole")
+        ]
+        source = frappe.get_doc("POS Invoice", send_order(pos, items=items).name)
+        lines = {row.reservation_line_key: row.name for row in source.items}
+
+        def tickets(invoice):
+            return set(frappe.get_all("URY KOT", filters={"invoice": invoice, "docstatus": 1}, pluck="name"))
+
+        mixed, = tickets(source.name)
+        self.assertCountEqual([row.comments for row in frappe.get_doc("URY KOT", mixed).kot_items], ["move", "stay"])
+        fire_items(source.name, line=lines["whole"])
+        whole, = tickets(source.name) - {mixed}
+        result = split_bill(source.name, [{"name": lines[key], "qty": 1} for key in ("move", "whole")])
+        self.assertEqual(tickets(result["new_invoice"]), {whole})
+        self.assertEqual(tickets(source.name), {mixed})
 
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.get_all")
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.db.set_value")
