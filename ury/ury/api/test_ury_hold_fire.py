@@ -340,6 +340,25 @@ class HoldFireTests(OrderingCases, TestCase):
         with self.assertRaises(PermissionError):
             self.fire(line="held-1")
 
+    def test_guest_followup_keeps_reservation_for_saved_held_dish(self):
+        self.row().reservation_line_key = "held-cart-line"
+        self.framework.session.user = "Guest"
+        with patch.object(self.guest, "get_branch_stock_policy", return_value=Row(reservation_control_enabled=True)), \
+             patch.object(self.guest, "reconcile_order_reservations") as reconcile:
+            self.add(code="Tea")
+        args = reconcile.call_args.kwargs
+        self.assertEqual(args["previous_items"][0]["reservation_line_key"], "held-cart-line")
+        self.assertIn(args["previous_items"][0], args["accepted_items"])
+        self.assertEqual(args["accepted_items"][-1]["item"], "Tea")
+
+    def test_fire_checks_branch_on_locked_invoice(self):
+        self.row()
+        self.invoice.reload.side_effect = lambda: setattr(self.invoice, "branch", "Branch B")
+        with self.assertRaises(PermissionError):
+            self.fire(line="held-1")
+        self.invoice.save.assert_not_called()
+        self.assertFalse(self.tickets)
+
     def test_guest_addition_does_not_release_existing_held_items(self):
         self.row()
         self.framework.session.user = "Guest"
