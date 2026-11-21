@@ -949,11 +949,9 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             "Price List", dict(restaurant_menu=menu_name, enabled=1)
         )
 
-        from ury.ury.api.table_reservation import reservations_enabled
-
-        if (not getattr(invoice, "customer", None) or invoice.customer == "Guest") and reservations_enabled(branch):
-            from ury.ury.api.table_reservation import get_completed_reservation_for_table
-            completed_res = get_completed_reservation_for_table(table, branch)
+        if not getattr(invoice, "customer", None) or invoice.customer == "Guest":
+            from ury.ury.api.table_reservation import get_completed_reservation_for_table, reservations_enabled
+            completed_res = get_completed_reservation_for_table(table, branch) if reservations_enabled(branch) else None
             if completed_res and completed_res.get("customer"):
                 invoice.customer = completed_res.get("customer")
                 if completed_res.get("customer_name"):
