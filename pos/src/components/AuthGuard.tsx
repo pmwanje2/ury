@@ -37,13 +37,14 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   const floorPadActive = isFloorPadActive();
   const logoutFailed = hasFloorLogoutFailureMarker();
 
-  useFloorIdle(user, posProfile);
-
   // A surviving cookie on a paired tablet must not admit the previous waiter.
   const coldBoot = Boolean(
     floorPadActive && user && !user.provisional && posProfile
       && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
   );
+
+  const showFloorPad = floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed);
+  useFloorIdle(showFloorPad ? null : user, posProfile);
 
   useEffect(() => {
     // Start auth check
@@ -84,7 +85,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
-  if (floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed)) {
+  if (showFloorPad) {
     return <FloorPinPad offline={user?.provisional} />;
   }
 
