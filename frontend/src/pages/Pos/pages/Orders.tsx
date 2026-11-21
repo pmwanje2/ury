@@ -501,7 +501,7 @@ export default function Orders() {
           ? order.rounded_total + Math.round(order.custom_merged_total ?? 0)
           : order.rounded_total;
         return (
-          <span className="font-mono tabular-nums text-foreground font-semibold">
+          <span className="font-mono text-lg tabular-nums text-foreground font-semibold">
             {formatCurrency(rowTotal)}
           </span>
         );
@@ -534,7 +534,7 @@ export default function Orders() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
       {/* Left Sidebar - Order Types */}
       <OrderStatusSidebar
         selectedStatus={selectedStatus}
@@ -542,8 +542,8 @@ export default function Orders() {
       />
 
       {/* Middle Section - Order Table */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden pe-96">
-        <div className="flex-1 overflow-y-auto bg-muted p-4 pb-40">
+      <div className="min-h-0 min-w-0 flex flex-1 flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto bg-muted p-4">
           {orderLoading ? (
             <div className="flex items-center justify-center h-full">
               <Spinner  message={t('common.loading')} />
@@ -606,7 +606,7 @@ export default function Orders() {
       </div>
 
       {/* Right Section - Order Details */}
-      <div className="w-96 bg-card border-s border-border flex flex-col h-[calc(100vh-4rem)] fixed end-0 z-10">
+      <div className="flex min-h-96 min-w-0 flex-col rounded-lg border border-border bg-card lg:min-h-0 lg:w-[38%]">
         {!selectedOrder ? (
           <div className="flex items-center px-4 py-[18px] text-xs text-text-tertiary">
             {t('order.select_to_view')} — {t('orders.click_to_view')}
@@ -624,7 +624,7 @@ export default function Orders() {
             {/* Fixed Header */}
             <div className="sticky top-0 start-0 end-0 z-20 border-b border-border bg-card px-6 py-4">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="min-w-0 flex-1 truncate text-xl font-semibold text-foreground">
+                <h2 className="min-w-0 flex-1 break-words text-lg font-semibold text-foreground">
                   {selectedOrder.name}
                 </h2>
                 <div className="flex shrink-0 items-center gap-2">
@@ -726,7 +726,7 @@ export default function Orders() {
               </DialogContent>
             </Dialog>
             {/* Scrollable Content Area */}
-            <div className="flex-1 overflow-y-auto p-6 pb-40">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
                 onOpenInvoice={openRelatedInvoice}
@@ -779,7 +779,7 @@ export default function Orders() {
                       <div key={index} className="flex py-1.5 border-b border-hair last:border-0">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <p className="text-sm font-medium text-foreground truncate">{item.item_name}</p>
+                            <p className="break-words text-sm font-medium text-foreground">{item.item_name}</p>
                             {discountPercentage !== null && (
                               <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-destructive-tint text-destructive border border-destructive-tint-border">
                                 -{discountPercentage}%
@@ -788,7 +788,7 @@ export default function Orders() {
                           </div>
                           <p className="text-xs text-text-tertiary font-mono tabular-nums">Qty: {item.qty}</p>
                         </div>
-                        <p className="ml-auto font-mono text-xs font-semibold text-foreground tabular-nums self-center">
+                        <p className="ms-auto shrink-0 ps-3 font-mono text-sm font-semibold text-foreground tabular-nums self-center">
                           {formatCurrency(item.amount)}
                         </p>
                       </div>
@@ -849,7 +849,7 @@ export default function Orders() {
                   </Button>
                 )}
                 {/* Total */}
-                <span className="ms-auto text-xl font-bold text-foreground whitespace-nowrap">
+                <span className="ms-auto text-2xl font-bold text-foreground whitespace-nowrap tabular-nums">
                   {isMergedBill(selectedOrder) ? (
                     <span className="flex flex-col items-end leading-tight">
                       <span className="text-xs font-medium text-text-tertiary">{t('bill_merge.combined_total')}</span>

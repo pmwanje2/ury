@@ -9,6 +9,11 @@ describe("ScreenSizeDialog", () => {
     expect(screen.getAllByText("Desktop Only")[0]).toBeInTheDocument();
   });
 
+  it("offers the classic POS on small displays without a vendor name", () => {
+    render(<ScreenSizeDialog />);
+    expect(screen.getByText(/classic POS/i)).toBeInTheDocument();
+  });
+
   it("displays messaging about desktop requirement", () => {
     render(<ScreenSizeDialog />);
     expect(screen.getAllByText(/This POS system is designed for desktop computers/)[0]).toBeInTheDocument();

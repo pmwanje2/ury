@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { call } from '@ury/core';
 import BranchPage from './BranchPage';
 
 const mockBranches = Object.freeze([
@@ -30,6 +31,7 @@ const mockRestaurants = Object.freeze([
     invoice_series_prefix: 'INV-KZK-',
     aggregator_series_prefix: 'AGG-KZK-',
     active_menu: 'Main Menu',
+    image: '/files/old.png',
   },
 ]);
 
@@ -134,5 +136,16 @@ describe('BranchPage', () => {
       expect(screen.getByText('AGG-KZK-')).toBeInTheDocument();
       expect(screen.getByText('TAX-998877')).toBeInTheDocument();
     }, { timeout: 5000 });
+  });
+  it('saves an image-only change on the linked restaurant', async () => {
+    render(<BranchPage />);
+    fireEvent.click(await screen.findByTitle('Edit Branch'));
+    const image = await screen.findByRole('textbox', { name: 'Guest Logo' });
+    expect(image).toHaveValue('/files/old.png');
+    fireEvent.change(image, { target: { value: '/files/outlet.png' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith('frappe.client.save', {
+      doc: expect.objectContaining({ name: 'Kozhikode Restaurant', image: '/files/outlet.png' }),
+    }));
   });
 });

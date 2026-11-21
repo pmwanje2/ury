@@ -3,10 +3,10 @@ import { render, screen } from "@testing-library/react";
 import InitialLoader from "./InitialLoader";
 
 vi.mock("../i18n", () => ({
-  t: (key: string) => {
+  t: (key: string, params?: { name: string }) => {
     const translations: Record<string, string> = {
       "common.loading": "Loading",
-      "common.loading_ury_pos": "Loading URY POS",
+      "common.loading_ury_pos": `Loading ${params?.name || "URY POS"}`,
       "common.please_wait_setup": "Please wait while we set up your POS",
     };
     return translations[key] || key;
@@ -42,4 +42,13 @@ describe("InitialLoader", () => {
     const { container } = render(<InitialLoader />);
     expect(container.firstChild).toBeTruthy();
   });
+});
+
+
+it('uses the configured site name during startup', () => {
+  vi.stubGlobal('frappe', { boot: { ury_brand: { name: 'Sample site' } } });
+  try {
+    render(<InitialLoader />);
+    expect(screen.getByText('Loading Sample site')).toBeInTheDocument();
+  } finally { vi.unstubAllGlobals(); }
 });

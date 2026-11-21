@@ -1,3 +1,4 @@
+import { resolveBrand } from '@ury/core';
 import { ReactNode } from 'react';
 import { Button, Card, Page } from '@ury/ui';
 import { Check } from 'lucide-react';
@@ -33,13 +34,14 @@ export function WizardLayout({
   isNextLoading,
   secondaryAction,
 }: WizardLayoutProps) {
+  const brand = resolveBrand({ name: __('URY Logo'), logo: uryLogo });
   return (
     <div className="min-h-screen w-full flex flex-col bg-background text-foreground font-inter text-sm">
       {/* Header bar — mirrors components/layout/Header.tsx */}
       <header className="w-full border-b border-border bg-background">
         <div className={`${SHELL} h-12 flex items-center justify-between gap-4`}>
           <div className="flex items-center gap-4 min-w-0">
-            <img src={uryLogo} alt={__('URY Logo')} className="h-8 w-auto shrink-0" />
+            <img src={brand.logo} alt={brand.name} className="h-8 w-auto shrink-0" />
             <div className="hidden sm:block h-4 w-px bg-border shrink-0" />
             <span className="text-sm font-semibold text-foreground truncate">{__("Let's get your restaurant ready")}</span>
           </div>

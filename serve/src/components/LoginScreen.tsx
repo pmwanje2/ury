@@ -1,3 +1,4 @@
+import { resolveBrand } from '@ury/core';
 import React, { useState, FormEvent } from 'react';
 import { AlertTriangle, Loader2, Eye, EyeOff } from 'lucide-react';
 import { Button, Input } from '@ury/ui';
@@ -5,6 +6,7 @@ import { useRootStore } from '../store/root-store';
 import { t } from '../i18n';
 
 const LoginScreen: React.FC = () => {
+  const brand = resolveBrand({ name: t('login.title'), logo: '' });
   const { loginWithCredentials } = useRootStore();
 
   const [username, setUsername] = useState('');
@@ -42,8 +44,9 @@ const LoginScreen: React.FC = () => {
         <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 sm:p-8 space-y-6">
           {/* Header */}
           <div className="text-center space-y-2">
+            {brand.logo && <img src={brand.logo} alt="" className="mx-auto h-8 w-auto" />}
             <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-              {t('login.title')}
+              {brand.name}
             </h1>
           </div>
 

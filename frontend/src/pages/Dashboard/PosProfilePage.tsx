@@ -516,7 +516,7 @@ export const PosProfilePage: React.FC = () => {
             <div>
               <h2 className="text-lg font-bold text-foreground">{__('POS Profile:')} {selectedProfile.name}</h2>
               <p className="text-xs text-muted-foreground">
-                {__('Company:')} {selectedProfile.company || __('URY Restaurant')} &bull; {__('Branch:')} {selectedProfile.branch || __('Main Branch')}
+                {__('Company:')} {selectedProfile.company || '—'} &bull; {__('Branch:')} {selectedProfile.branch || '—'}
               </p>
             </div>
           </div>
@@ -718,7 +718,7 @@ export const PosProfilePage: React.FC = () => {
                         </Badge>
                       </div>
                       <p className="text-muted-foreground">
-                        {__('Bill printer and KOT kitchen printer configuration are loaded automatically from POS Profile events and URY Printer Mappings.')}
+                        {__('Bill printer and KOT kitchen printer configuration are loaded automatically from POS Profile events and printer mappings.')}
                       </p>
                     </div>
                   </div>

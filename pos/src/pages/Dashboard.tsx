@@ -10,6 +10,7 @@ import {
 import { Badge, Card, CardContent, KpiStrip, AttentionFeed, cn } from '@ury/ui';
 import type { AttentionItemProps } from '@ury/ui';
 import { useState, useEffect } from 'react';
+import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency } from '@ury/core';
 import { getOpenPosOpeningEntries, type OpenPosOpeningEntry } from '../lib/pos-closing-api';
@@ -122,6 +123,11 @@ function PanelState({ kind, children }: { kind: 'loading' | 'error' | 'empty'; c
 }
 
 export default function Dashboard() {
+  const recipient = useRootStore((state) => state.user?.name);
+  return <DashboardContent key={recipient} recipient={recipient} />;
+}
+
+function DashboardContent({ recipient }: { recipient?: string }) {
   const { posProfile } = usePOSStore();
   const [stats, setStats] = useState<any[]>([]);
   const [serviceLine, setServiceLine] = useState<any[]>([]);
@@ -280,7 +286,7 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
-  }, [posProfile?.branch]);
+  }, [posProfile?.branch, recipient]);
 
   // Fetch open sessions
   useEffect(() => {

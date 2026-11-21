@@ -176,6 +176,16 @@ describe("MobileQRLayout", () => {
     useOrderingSessionMock.mockReturnValue(defaultSessionMock)
   })
 
+  it.each(["Example site", ""])('shows a verified guest logo independently of the name: %j', name => {
+    vi.stubGlobal('frappe', { boot: { ury_brand: { name, logo: '/files/guest.png' } } })
+    try {
+      render(<MobileQRLayout />)
+      const header = screen.getByRole('banner')
+      expect(header.querySelector('img')).toHaveAttribute('src', '/files/guest.png')
+      if (name) expect(header).toHaveTextContent(name)
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it("shows loading state", () => {
     useOrderingSessionMock.mockReturnValue({
       ...defaultSessionMock,

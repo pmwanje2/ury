@@ -29,7 +29,6 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     isLoading: configLoading,
     error: configError,
     hasAccess,
-    allowedRoles,
   } = useRootStore();
 
   // State to track if we're rechecking permissions
@@ -113,7 +112,6 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
           <div className="text-amber-600 text-xl mb-4">🔒</div>
           <h2 className="text-xl font-semibold text-gray-800 mb-2">{t('auth.permission_required')}</h2>
           <p className="text-gray-600">{t('auth.no_permission')}</p>
-          <p className="text-sm text-gray-500 mt-2">{t('auth.required_roles', { roles: allowedRoles.join(', ') })}</p>
           <Button 
             variant="outline"
             className="mt-4"

@@ -199,7 +199,7 @@ export const TablePage: React.FC = () => {
           }
         }
         if (!restaurantName) {
-          showToast.error(__('No URY Restaurant configured for this branch — set one up first'));
+          showToast.error(__('No restaurant configured for this branch — set one up first'));
           return;
         }
 

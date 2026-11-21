@@ -1,3 +1,4 @@
+import { roleLabel, roleOption } from '../../lib/roleLabels';
 import React, { useState, useEffect } from 'react';
 import { useBranchContext } from '../../context/BranchContext';
 import { Users, Plus, ShieldCheck, Edit2 } from 'lucide-react';
@@ -98,7 +99,7 @@ export const UserPage: React.FC = () => {
   const getDisplayRoles = (user: UserRecord): string[] => {
     if (user.roles && Array.isArray(user.roles) && user.roles.length > 0) {
       const uryRole = user.roles.find(r => r.role.startsWith('URY '));
-      return [uryRole ? uryRole.role : user.roles[0].role];
+      return [roleLabel(uryRole ? uryRole.role : user.roles[0].role)];
     }
     return ['User'];
   };
@@ -360,7 +361,7 @@ export const UserPage: React.FC = () => {
             <MultiSelect
               id="user-roles"
               values={newUser.roles}
-              options={allRoles.map(r => ({ value: r.name, label: r.name }))}
+              options={allRoles.map(r => roleOption(r.name))}
               placeholder={__('Select roles...')}
               onChange={(selectedRoles) => setNewUser({ ...newUser, roles: selectedRoles })}
             />

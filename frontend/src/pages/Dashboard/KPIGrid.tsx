@@ -42,7 +42,7 @@ export const KPIGrid: React.FC<KPIGridProps> = ({ summary, loading }) => {
     <section className="w-full space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:w-fit">
         <LinkCard label={__('POS')} subtitle={__('Billing & order taking')} href="/pos" />
-        <LinkCard label={__('Mosaic')} subtitle={__('Kitchen Display System')} href="/mosaic" />
+        <LinkCard label={__('Kitchen Display')} subtitle={__('Kitchen Display System')} href="/mosaic" />
       </div>
 
       {loading ? (

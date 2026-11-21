@@ -1,7 +1,7 @@
 <template>
   <header class="sticky top-0 z-40 bg-[var(--panel)] min-h-12 py-2 px-4 md:px-6 flex flex-wrap gap-2 justify-between items-center border-b border-[var(--hair)]">
     <router-link to="/" class="flex items-center cursor-pointer">
-      <img :src="imagePath" :alt="__('Logo')" class="h-8 w-auto me-2">
+      <img :src="brand.logo" :alt="brand.name" class="h-8 w-auto me-2">
     </router-link>
     <div class="flex items-center gap-3">
       <template v-if="$route.name === 'Home'">
@@ -73,6 +73,7 @@
 
 <script>
 import { purgeOfflineSession } from '../../../packages/core/src/storage';
+import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import urimosaicImage from "@/assets/logos/mosaic.jpg";
 import { t } from "../i18n";
 import ScopeSelector from "./ScopeSelector.vue";
@@ -92,7 +93,7 @@ export default {
   },
   data() {
     return {
-      imagePath: urimosaicImage,
+      brand: resolveBrand({ name: t("Logo"), logo: urimosaicImage }),
       showUserMenu: false,
       userName: t("User"),
       userId: "user@example.com"

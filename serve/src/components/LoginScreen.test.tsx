@@ -102,3 +102,13 @@ describe('LoginScreen', () => {
     expect(passwordInput).toHaveAttribute('type', 'password');
   });
 });
+
+
+it('names the configured site on the staff sign-in screen', () => {
+  vi.stubGlobal('frappe', { boot: { ury_brand: { name: 'Sample site', logo: '/files/sample.png' } } });
+  try {
+    render(<LoginScreen />);
+    expect(screen.getByRole('heading')).toHaveTextContent('Sample site');
+    expect(document.querySelector('img')).toHaveAttribute('src', '/files/sample.png');
+  } finally { vi.unstubAllGlobals(); }
+});

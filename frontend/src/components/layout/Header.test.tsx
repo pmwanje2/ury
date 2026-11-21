@@ -114,3 +114,12 @@ it("clears the POS worker caches as well as web storage before reloading", async
     expect(remove.mock.calls).toEqual([['ury-pos-shell']]);
   } finally { vi.unstubAllGlobals(); }
 });
+
+it("renders the site logo with its configured accessible name", () => {
+  vi.stubGlobal("frappe", { boot: { ury_brand: { name: "Example site", logo: "/files/site.png" } } });
+  try {
+    render(<BrowserRouter><Header /></BrowserRouter>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/files/site.png");
+    expect(screen.getByRole("img")).toHaveAccessibleName("Example site");
+  } finally { vi.unstubAllGlobals(); }
+});

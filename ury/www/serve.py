@@ -1,14 +1,11 @@
 import json
-import re
 
 import frappe
 import frappe.sessions
 
+from ury.brand import get_brand_context, json_for_script
+
 no_cache = 1
-
-SCRIPT_TAG_PATTERN = re.compile(r"\<script[^<]*\</script\>")
-CLOSING_SCRIPT_TAG_PATTERN = re.compile(r"</script\>")
-
 
 def get_context(context):
 	"""Boot context for the staff Serve PWA (/ury/serve/*).
@@ -16,6 +13,7 @@ def get_context(context):
 	Same pattern as POS www/pos.py: Guest gets website boot; staff get session
 	boot. The HTML document embeds CSRF and must never be cached by the SW.
 	"""
+	context.update(get_brand_context(surface="staff"))
 	csrf_token = frappe.sessions.get_csrf_token()
 	frappe.db.commit()  # nosemgrep
 
@@ -33,10 +31,8 @@ def get_context(context):
 		enabled = True
 	boot["server_script_enabled"] = enabled
 
-	boot_json = frappe.as_json(boot, indent=None, separators=(",", ":"))
-	boot_json = SCRIPT_TAG_PATTERN.sub("", boot_json)
-	boot_json = CLOSING_SCRIPT_TAG_PATTERN.sub("", boot_json)
-	boot_json = json.dumps(boot_json)
+	boot["ury_brand"] = context["brand"]
+	boot_json = json.dumps(json_for_script(boot))
 
 	context.update(
 		{"build_version": frappe.utils.get_build_version(), "boot": boot_json, "csrf_token": csrf_token}
