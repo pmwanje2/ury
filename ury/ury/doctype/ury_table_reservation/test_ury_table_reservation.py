@@ -383,3 +383,17 @@ class TestURYTableReservation(FrappeTestCase):
         with self.assertRaises(frappe.ValidationError):
             update_reservation_status(res_id, "Completed")
 
+
+
+class TestNativeReservationBranchGuard(FrappeTestCase):
+    def test_disabled_branch_refuses_native_save_before_conflict_checks(self):
+        from unittest.mock import MagicMock, patch
+
+        from ury.ury.doctype.ury_table_reservation.ury_table_reservation import URYTableReservation
+
+        doc = MagicMock(branch='Branch A')
+        with patch('frappe.db.get_value', return_value=0), self.assertRaisesRegex(
+            frappe.ValidationError, 'switched off'
+        ):
+            URYTableReservation.validate(doc)
+        doc.validate_conflicts.assert_not_called()

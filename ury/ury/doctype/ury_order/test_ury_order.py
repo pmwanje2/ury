@@ -1265,7 +1265,11 @@ class TestGetCaptainContext(FrappeTestCase):
         )
         mock_get_doc.return_value = pos_profile
 
-        result = get_captain_context()
+        pos_profile.get.return_value = None
+        for enabled in (1, 0, None):
+            with patch("frappe.db.get_value", return_value=enabled):
+                result = get_captain_context()
+            self.assertIs(result.get("reservation_enabled"), bool(enabled))
 
         self.assertEqual(result["user"], "captain@example.com")
         self.assertEqual(result["branch"], "Test Branch")
