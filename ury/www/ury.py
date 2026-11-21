@@ -5,7 +5,7 @@ import frappe.sessions
 from frappe import _
 from frappe.utils.telemetry import capture
 
-from ury.brand import get_brand_context, get_brand, json_for_script
+from ury.brand import get_brand, get_brand_context, json_for_script
 
 no_cache = 1
 login_required = True

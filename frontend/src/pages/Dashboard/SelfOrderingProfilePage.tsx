@@ -20,6 +20,7 @@ import { __ } from '../../i18n';
 interface SelfOrderingProfile {
   name: string;
   profile_name: string;
+  guest_display_name?: string;
   restaurant: string;
   branch: string;
   pos_profile: string;
@@ -42,6 +43,7 @@ interface SelfOrderingProfile {
 
 interface FormData {
   profile_name: string;
+  guest_display_name: string;
   restaurant: string;
   branch: string;
   pos_profile: string;
@@ -85,6 +87,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
 
   const [formData, setFormData] = useState<FormData>({
     profile_name: '',
+    guest_display_name: '',
     restaurant: '',
     branch: '',
     pos_profile: '',
@@ -118,7 +121,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
       );
       setProfiles(records);
     } catch {
-      showToast(__('Failed to load profiles'), 'error');
+      showToast.error(__('Failed to load profiles'));
       setProfiles([]);
     } finally {
       setLoading(false);
@@ -171,6 +174,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
   const resetForm = () => {
     setFormData({
       profile_name: '',
+      guest_display_name: '',
       restaurant: '',
       branch: '',
       pos_profile: '',
@@ -198,6 +202,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
       setEditingProfile(profile);
       setFormData({
         profile_name: profile.profile_name,
+        guest_display_name: profile.guest_display_name || '',
         restaurant: profile.restaurant,
         branch: profile.branch,
         pos_profile: profile.pos_profile,
@@ -227,7 +232,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
     e.preventDefault();
 
     if (!formData.profile_name || !formData.restaurant || !formData.pos_profile) {
-      showToast(__('Please fill in all required fields'), 'error');
+      showToast.error(__('Please fill in all required fields'));
       return;
     }
 
@@ -236,6 +241,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
       const docData = {
         doctype: 'URY Self Ordering Profile',
         profile_name: formData.profile_name,
+        guest_display_name: formData.guest_display_name.trim(),
         restaurant: formData.restaurant,
         branch: formData.branch,
         pos_profile: formData.pos_profile,
@@ -262,17 +268,17 @@ export const SelfOrderingProfilePage: React.FC = () => {
           name: editingProfile.name,
           fieldname: docData,
         });
-        showToast(__('Profile updated successfully'), 'success');
+        showToast.success(__('Profile updated successfully'));
       } else {
-        await call('frappe.client.insert', docData);
-        showToast(__('Profile created successfully'), 'success');
+        await call('frappe.client.insert', { doc: docData });
+        showToast.success(__('Profile created successfully'));
       }
 
       await fetchProfiles();
       setShowForm(false);
       resetForm();
     } catch (err: any) {
-      showToast(err?.message || __('Failed to save profile'), 'error');
+      showToast.error(err?.message || __('Failed to save profile'));
     } finally {
       setSaving(false);
     }
@@ -288,10 +294,10 @@ export const SelfOrderingProfilePage: React.FC = () => {
         doctype: 'URY Self Ordering Profile',
         name: profile.name,
       });
-      showToast(__('Profile deleted successfully'), 'success');
+      showToast.success(__('Profile deleted successfully'));
       await fetchProfiles();
     } catch (err: any) {
-      showToast(err?.message || __('Failed to delete profile'), 'error');
+      showToast.error(err?.message || __('Failed to delete profile'));
     }
   };
 
@@ -373,6 +379,15 @@ export const SelfOrderingProfilePage: React.FC = () => {
                           placeholder={__('e.g., Main Branch QR')}
                           required
                         />
+                      </div>
+
+                      <div>
+                        <label htmlFor="guest-display-name" className="block text-sm font-medium text-muted-foreground mb-1.5">
+                          {__('Guest Display Name')}
+                        </label>
+                        <Input id="guest-display-name" value={formData.guest_display_name}
+                          placeholder={__('Leave blank to use the site name')}
+                          onChange={(e) => setFormData({ ...formData, guest_display_name: e.target.value })} />
                       </div>
 
                       <div>

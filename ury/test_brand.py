@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 from jinja2 import Environment, FileSystemLoader
 
-
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = {"pos": "pos", "urypos": "urypos", "mosaic": "mosaic", "order": "self-order", "serve": "serve"}
 DEFAULT_TITLES = {"pos": "URY POS", "urypos": "URY POS", "mosaic": "Mosaic", "order": "Order", "serve": "URY Serve"}
@@ -485,7 +484,7 @@ class TestSiteBrand(unittest.TestCase):
             with self.subTest(step=step):
                 h, s, l = map(float, tokens[f"--primary-{step}"].replace("%", "").split())
                 rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
-                for actual, expected in zip(rgb, expected_rgb):
+                for actual, expected in zip(rgb, expected_rgb, strict=True):
                     self.assertAlmostEqual(actual * 255, expected, delta=0.001)
 
     def test_primary_600_and_blue_600_keep_the_exact_owner_brand(self):
@@ -508,7 +507,7 @@ class TestSiteBrand(unittest.TestCase):
                     h, s, l = map(float, tokens[f"--primary-{step}"].replace("%", "").split())
                     channels[step] = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
                 self.assertTrue(all(240 / 255 < channel < 1 for channel in channels[50]))
-                self.assertTrue(all(shade < base for shade, base in zip(channels[700], channels[600])))
+                self.assertTrue(all(shade < base for shade, base in zip(channels[700], channels[600], strict=True)))
 
     def test_white_text_passes_aa_on_600_and_all_brand_shades(self):
         for color in ("#23664a", "#174a8b", "#767676", "#ffffcc", "#ffffff", "#00ff00"):
@@ -519,7 +518,7 @@ class TestSiteBrand(unittest.TestCase):
                     h, s, l = map(float, tokens[f"--primary-{step}"].replace("%", "").split())
                     rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
                     linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
-                    luminance = sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+                    luminance = sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
                     self.assertGreaterEqual(1.05 / (luminance + 0.05), 4.5)
                     self.assertEqual(tokens[f"--blue-{step}"], tokens[f"--primary-{step}"])
 
@@ -551,7 +550,7 @@ class TestSiteBrand(unittest.TestCase):
     def test_derived_text_grays_pass_aa_on_canvas_and_white_cards(self):
         def luminance(rgb):
             linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
-            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
 
         for background, text in (("#f2ede4", "#1f2a24"), ("#eef1f5", "#1f2933"),
                                  ("#ffffff", None), ("#767676", None)):
@@ -612,7 +611,7 @@ class TestSiteBrand(unittest.TestCase):
             h, s, l = map(float, hsl.replace("%", "").split())
             rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
             linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
-            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+            return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
 
         self.set_theme(primary_color="#777777", dark_color="#777777")
         tokens = self.theme_tokens()

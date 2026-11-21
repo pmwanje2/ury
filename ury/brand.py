@@ -19,6 +19,10 @@ def get_theme():
     tokens = {}
     for key in ("primary", "text", "background", "dark"):
         value = getattr(theme, f"{key}_color", None)
+        if not isinstance(value, str) or not value:
+            continue
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            value = frappe.db.get_value("Color", value, "color")
         if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value):
             tokens[key] = value
     for key, field, pattern in (
@@ -52,7 +56,7 @@ def theme_style(theme):
         h, s, l = color
         rgb = colorsys.hls_to_rgb(h / 360, l / 100, s / 100)
         linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in rgb]
-        return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+        return sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
 
     def contrast(a, b):
         lo, hi = sorted((luminance(a), luminance(b)))
@@ -97,10 +101,15 @@ def theme_style(theme):
                 if contrast(color, muted) >= 4.5:
                     values["--header-muted"] = "var(--gray-500)"
     if "primary" in theme:
-        rgb = [int(theme["primary"][i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        h, s, light = hsl(theme["primary"])
+        # Fixed-white utility buttons use 600 at rest and darker shades on hover.
+        # Preserve the owner's exact --primary for semantic foreground pairs.
+        if contrast((h, s, light), (0, 0, 100)) < 4.5:
+            while contrast((h, s, light), (0, 0, 100)) < 4.55:
+                light = max(0, light - 0.5)
+        rgb = colorsys.hls_to_rgb(h / 360, light / 100, s / 100)
         values["--ring"] = values["--primary"]
         values["--button-foreground"] = "var(--primary-foreground)"
-        # Anchor 600 on the owner's brand; RGB tints/shades preserve its contrast.
         for step, target, weight in (
             (50, 1, 0.95), (100, 1, 0.90), (200, 1, 0.75), (300, 1, 0.60),
             (400, 1, 0.40), (500, 1, 0.20), (600, 0, 0),
