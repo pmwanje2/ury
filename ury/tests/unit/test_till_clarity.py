@@ -459,7 +459,9 @@ class TestGuestLabelInCashierLists(unittest.TestCase):
         self.framework.get_doc.return_value = invoice
         self.framework.has_permission.return_value = True
         self.framework.get_all.return_value = []
-        api.get_split_group("POS-1")
+        self.framework.session.user = "Administrator"
+        with patch.object(ury_order, "frappe", self.framework):
+            api.get_split_group("POS-1")
         fields = self.framework.get_all.call_args_list[0].kwargs["fields"]
         self.assertIn("custom_guest_label", fields)
 

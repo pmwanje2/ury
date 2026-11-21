@@ -355,6 +355,9 @@ def get_split_group(invoice):
     if pos_invoice.branch and user_branch and pos_invoice.branch != user_branch:
         frappe.throw(frappe._("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
+    from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+
+    check_split_target_access(pos_invoice, "read")
     group = pos_invoice.custom_split_group
     if not group:
         split_from = frappe.db.get_value("POS Invoice", invoice, "custom_split_from")
@@ -399,6 +402,9 @@ def get_split_group(invoice):
     )
 
     member_names = [inv["name"] for inv in invoices]
+    # Legacy children can lack a group even after their original is cancelled.
+    if pos_invoice.custom_split_from and pos_invoice.custom_split_from not in member_names:
+        member_names.append(pos_invoice.custom_split_from)
     if member_names:
         children = frappe.get_all(
             "POS Invoice",
@@ -418,16 +424,23 @@ def get_split_group(invoice):
     for inv in invoices:
         if inv.get("branch") and user_branch and inv.get("branch") != user_branch:
             continue
-        if not frappe.has_permission("POS Invoice", "read", doc=inv.get("name")):
-            continue
+        if inv.name != invoice:
+            try:
+                check_split_target_access(frappe.get_doc("POS Invoice", inv.name), "read")
+            except frappe.PermissionError:
+                frappe.clear_last_message()
+                continue
         valid_invoices.append(inv)
     invoices = valid_invoices
 
+    visible_names = {row.name for row in invoices}
     total = len(invoices)
     for index, inv in enumerate(invoices, start=1):
         inv["split_index"] = index
         inv["split_total"] = total
         inv["is_original"] = not inv.get("custom_split_from")
+        if inv.get("custom_split_from") not in visible_names:
+            inv["custom_split_from"] = None
         inv["split_siblings"] = [row["name"] for row in invoices if row["name"] != inv["name"]]
 
     return {"invoices": invoices, "current": invoice, "group": group}

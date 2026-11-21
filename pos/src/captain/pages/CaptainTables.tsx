@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { call } from '@ury/core';
 import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
-import { getPOSInvoiceItems, type POSInvoiceItem } from '../../lib/invoice-api';
+import { getPOSInvoiceItems, getSplitGroup, type POSInvoiceItem } from '../../lib/invoice-api';
 import Notifications from '../../components/Notifications';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Square } from 'lucide-react';
@@ -263,11 +263,16 @@ export default function CaptainTables() {
       const invoice = response.message?.invoice;
       if (!isCurrentSession() || !tableName || !invoice) return false;
       const target = await getTableOrderContext(tableName);
-      if (!isCurrentSession() || !target?.order) return false;
-      if (target.order.name === invoice) {
+      if (!isCurrentSession() || !target) return false;
+      if (target.order?.name === invoice) {
         if (!target.permissions?.view) return false;
         navigate(`/order/table/${encodeURIComponent(tableName)}`);
       } else {
+        if (!target.order) {
+          const group = await getSplitGroup(invoice);
+          if (!isCurrentSession() || !group.invoices.some(check => check.name === invoice &&
+            !check.is_original && check.restaurant_table === tableName && check.docstatus === 0)) return false;
+        }
         const { items } = await getPOSInvoiceItems(invoice);
         if (!isCurrentSession()) return false;
         setReadyCheck({ name: invoice, items });
