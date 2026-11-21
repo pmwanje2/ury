@@ -50,11 +50,11 @@ def _site_less_frappe():
     pos_api = ModuleType("ury.ury_pos.api")
     pos_api.resolve_restaurant_menu = MagicMock()
     order = ModuleType("ury.ury.doctype.ury_order.ury_order")
-    for name in ("_resolve_or_create_pos_invoice", "_ensure_invoice_reservation_ref", "get_menu_name",
+    for name in ("_kitchen_snapshot", "_resolve_or_create_pos_invoice", "_ensure_invoice_reservation_ref", "get_menu_name",
                  "get_restaurant_and_menu_name", "invoice_pricing_date", "price_items_for_invoice"):
         setattr(order, name, MagicMock())
     kot = ModuleType("ury.ury.api.ury_kot_generate")
-    kot.kot_execute = MagicMock()
+    kot._execute_kot = MagicMock()
     item_price = ModuleType("ury.ury.api.item_price")
     item_price.item_price_release_states = MagicMock()
     item_price.price_valid_on = MagicMock()

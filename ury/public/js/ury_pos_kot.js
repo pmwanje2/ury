@@ -16,7 +16,9 @@ frappe.ui.form.on("POS Invoice", {
         qty: new_item.qty,
         item_name: new_item.item_name,
         name: new_item.name,
-        comments: "",
+        comments: new_item.comment || "",
+        reservation_line_key: new_item.reservation_line_key,
+        ury_held: new_item.ury_held,
       };
       new_items.push(json_newitem);
     });

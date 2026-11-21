@@ -284,7 +284,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
-        existing_row = MagicMock(item_code="Biryani", item_name="Biryani", qty=2)
+        existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2, comment="")
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
@@ -303,7 +303,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # would.
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(frappe._dict(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"], comment=row_dict.get("comment")))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
@@ -327,7 +327,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # only, no client-supplied rate ever reaches invoice construction.
         mock_price_items.assert_called_once()
         called_items = mock_price_items.call_args[0][0]
-        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": ""}])
+        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": "", "reservation_line_key": unittest.mock.ANY}])
         # KOT still invoked (existing kitchen pipeline untouched) — and
         # crucially, current_items passed to it is the FULL aggregated
         # per-item state (old Biryani row + new Sandwich row), not just the
@@ -387,7 +387,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_get_doc.side_effect = get_doc_side_effect
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
-        existing_row = MagicMock(item_code="Biryani", item_name="Biryani", qty=2)
+        existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2)
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
@@ -401,7 +401,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(frappe._dict(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
@@ -462,7 +462,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_get_doc.side_effect = get_doc_side_effect
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
-        existing_row = MagicMock(item_code="Biryani", item_name="Biryani", qty=2)
+        existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2)
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
@@ -476,7 +476,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(frappe._dict(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
@@ -614,8 +614,8 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # Two SEPARATE Biryani rows already on the invoice (from two earlier
         # add_customer_items() calls) -- this is the realistic pre-existing
         # state that exposed the bug.
-        existing_row_1 = MagicMock(item_code="Biryani", item_name="Biryani", qty=1)
-        existing_row_2 = MagicMock(item_code="Biryani", item_name="Biryani", qty=1)
+        existing_row_1 = frappe._dict(item_code="Biryani", item_name="Biryani", qty=1, comment="")
+        existing_row_2 = frappe._dict(item_code="Biryani", item_name="Biryani", qty=1, comment="")
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row_1, existing_row_2]
@@ -629,7 +629,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(frappe._dict(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"], comment=row_dict.get("comment")))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
@@ -701,7 +701,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_get_doc.side_effect = get_doc_side_effect
         mock_resolve_menu.return_value = {"items": [{"item": "Sandwich"}]}
 
-        existing_row = MagicMock(item_code="Biryani", item_name="Biryani", qty=2)
+        existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2)
         invoice = MagicMock()
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
@@ -715,7 +715,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         def append_side_effect(fieldname, row_dict):
             if fieldname == "items":
-                invoice.items.append(MagicMock(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
+                invoice.items.append(frappe._dict(item_code=row_dict["item_code"], item_name=row_dict["item_name"], qty=row_dict["qty"]))
         invoice.append.side_effect = append_side_effect
 
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
@@ -798,7 +798,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         invoice.grand_total = 100
         invoice.name = "POS-INV-100"
         invoice.append.side_effect = lambda fieldname, row_dict: invoice.items.append(
-            MagicMock(item_code=row_dict.get("item_code"), item_name=row_dict.get("item_name"), qty=row_dict.get("qty"))
+            frappe._dict(item_code=row_dict.get("item_code"), item_name=row_dict.get("item_name"), qty=row_dict.get("qty"))
         ) if fieldname == "items" else None
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
 
@@ -819,7 +819,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_reconcile.assert_called_once()
         _, kwargs = mock_reconcile.call_args
         self.assertEqual(kwargs["order_ref"], "POS-INV-100")
-        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Chicken biryani", "qty": 1.0, "comment": ""}])
+        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Chicken biryani", "qty": 1.0, "comment": "", "reservation_line_key": unittest.mock.ANY}])
         self.assertEqual(kwargs["previous_items"], [])
         self.assertEqual(kwargs["branch"], "Branch A")
         self.assertEqual(kwargs["company"], "Test Company")
@@ -1022,7 +1022,7 @@ class TestGuestItemName(unittest.TestCase):
         invoice.selling_price_list = "Standard Selling"
         invoice.grand_total = 100
         invoice.name = "POS-INV-100"
-        invoice.append.side_effect = lambda fieldname, row: invoice.items.append(MagicMock(
+        invoice.append.side_effect = lambda fieldname, row: invoice.items.append(frappe._dict(
             item_code=row["item_code"], item_name=row["item_name"], qty=row["qty"], rate=100, amount=100,
         )) if fieldname == "items" else None
 
@@ -1064,7 +1064,7 @@ class TestGuestItemName(unittest.TestCase):
                          [("Fish", "Grilled tilapia")])
 
     def test_guest_dish_added_to_a_staff_order_keeps_both_names(self):
-        staff_row = MagicMock(item_code="Tea", item_name="African tea", qty=1, rate=100, amount=100)
+        staff_row = frappe._dict(item_code="Tea", item_name="African tea", qty=1, rate=100, amount=100)
         result, _, mock_kot = self._add([{"item": "Fish", "qty": 1}], existing_rows=[staff_row])
         self.assertEqual([row["item_name"] for row in result["items"]], ["African tea", "Grilled tilapia"])
         current_items, past_items = mock_kot.call_args[0][3], mock_kot.call_args[0][4]

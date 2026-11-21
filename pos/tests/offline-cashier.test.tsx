@@ -57,6 +57,26 @@ test('the real cashier submit persists offline before clearing its cart without 
   expect(await new OfflineOutbox({ profile: usePOSStore.getState().posProfile!, user: useRootStore.getState().user! }).list()).toHaveLength(1);
 });
 
+test.each([false, true])('a held round stays in the cart without an offline ticket (browser online: %s)', async (online) => {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: online });
+  const profile = { ...usePOSStore.getState().posProfile!, ury_enable_hold_fire: 1 };
+  const held = { id: 'Tea', uniqueId: 'T1', name: 'Tea', price: 100, quantity: 1, ury_held: 1 };
+  usePOSStore.setState({ posProfile: profile, isUpdatingOrder: false, orderId: null, orderLoading: false,
+    selectedOrderType: 'Take Away', selectedCustomer: { id: 'CUST-A', name: 'Walk In', phone: '' },
+    selectedTable: null, selectedRoom: null, paymentModes: ['Cash'], activeOrders: [held as any] });
+  const post = vi.spyOn(call, 'post').mockRejectedValue({ httpStatus: 503 });
+  const popup = vi.spyOn(window, 'open').mockReturnValue(null);
+  const refused = vi.spyOn(showToast, 'error');
+  const saved = vi.spyOn(showToast, 'success');
+  await act(async () => root.render(<OrderPanel />));
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(() => expect(refused.mock.calls.length + saved.mock.calls.length).toBeGreaterThan(0)); });
+  expect(post).toHaveBeenCalledTimes(online ? 1 : 0);
+  expect(refused).toHaveBeenCalledWith(expect.stringMatching(/hold.*(online|offline)/i));
+  expect(usePOSStore.getState().activeOrders).toEqual([held]);
+  expect(await new OfflineOutbox({ profile, user: useRootStore.getState().user! }).list()).toEqual([]);
+  expect(popup).not.toHaveBeenCalled();
+});
+
 test('pending outbox disables till close even when the browser is online', async () => {
   await queued(); Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Network Error'); }));
@@ -184,4 +204,59 @@ test('a server logout failure keeps the opening screen and confirmed opening for
   const { clearCashierStorage } = await import('../src/offline/cashier');
   await expect(clearCashierStorage(true)).rejects.toThrow();
   expect(sessionStorage.getItem(key)).toBe('confirmed');
+});
+
+test.each([false, true])('fresh carts replay the same dish as distinct lines after a lost ack (first send online: %s)', async (online) => {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: online });
+  const user = useRootStore.getState().user!;
+  const profile = usePOSStore.getState().posProfile!;
+  const live = vi.spyOn(call, 'post').mockRejectedValue({ httpStatus: 503 });
+  vi.spyOn(window, 'open').mockImplementation(() => ({ document: { write() {}, close() {} }, focus() {}, print() {} }) as any);
+  const addTea = async () => {
+    usePOSStore.setState({ isUpdatingOrder: false, orderId: null, orderLoading: false, activeOrders: [],
+      selectedOrderType: 'Take Away', selectedCustomer: { id: 'CUST-A', name: 'Walk In', phone: '' },
+      selectedTable: null, selectedRoom: null, paymentModes: ['Cash'] });
+    await usePOSStore.getState().addToOrder({ id: 'Tea', name: 'Tea', price: 100, quantity: 1 } as any);
+  };
+  await act(async () => { await addTea(); root.render(<OrderPanel />); });
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(() => expect(usePOSStore.getState().activeOrders).toEqual([])); });
+  const requests: Array<{ round_id: string; items: { reservation_line_key?: string }[] }> = [];
+  const queue = new OfflineOutbox({ profile, user, request: async (url, init) => {
+    if (String(url).endsWith('get_logged_user')) return Response.json({ message: user.name });
+    requests.push(JSON.parse(String(init?.body)));
+    if (requests.length === 2) return new Response(null, { status: 503 });
+    return Response.json({ message: { name: 'INV-1' } });
+  } });
+  const [first] = await queue.list();
+  await act(async () => { await addTea(); });
+  const select = container.querySelector<HTMLSelectElement>('[data-testid="offline-round-target"]')!;
+  await act(async () => { select.value = first.client_order_id; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await act(async () => { button(/^Add New Order$/).click(); await vi.waitFor(async () => expect((await queue.list())[0].rounds).toHaveLength(2)); });
+  await act(async () => { await queue.replay(); await queue.replay(); });
+  expect(requests).toHaveLength(3);
+  expect(requests[2]).toEqual(requests[1]);
+  expect(requests[0].round_id).not.toBe(requests[1].round_id);
+  const keys = requests.slice(0, 2).map(r => r.items[0].reservation_line_key);
+  expect(keys.every(Boolean)).toBe(true);
+  expect(keys[1]).not.toBe(keys[0]);
+  if (online) expect(live).toHaveBeenCalledWith(expect.stringContaining('sync_order'), expect.objectContaining({
+    round_id: requests[0].round_id, items: requests[0].items,
+  }));
+  expect(await queue.list()).toEqual([]);
+});
+
+test('full cash payment after split navigation uses the selected check identity', async () => {
+  const { mapSplitGroupInvoiceToPOSInvoice } = await import('../src/lib/invoice-api');
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+  usePOSStore.setState({ paymentModes: ['Cash'], fetchPaymentModes: vi.fn() });
+  const client = '11111111-1111-4111-8111-111111111111';
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { status: 'Submitted' } });
+  for (const [invoice, id] of [['INV-B', null], ['INV-A', client]] as const) {
+    const order = mapSplitGroupInvoiceToPOSInvoice({ name: invoice, invoice_printed: 1, ury_client_order_id: id } as any);
+    await act(async () => root.render(<PaymentDialog key={invoice} order={order} onClose={vi.fn()} grandTotal={100} roundedTotal={100} invoice={invoice} customer="Walk In" posProfile="Till A" table={null} cashier="Cashier" owner="Cashier" fetchOrders={vi.fn()} clearSelectedOrder={vi.fn()} />));
+    await act(async () => { button(/^Pay /).click(); await vi.waitFor(() => expect(post).toHaveBeenCalledWith(expect.stringContaining('make_invoice'), expect.objectContaining({ invoice }))); });
+    const payload = post.mock.lastCall![1] as { client_order_id: string };
+    if (id) expect(payload.client_order_id).toBe(id);
+    else { expect(payload.client_order_id).toMatch(/^[0-9a-f-]{36}$/); expect(payload.client_order_id).not.toBe(client); }
+  }
 });

@@ -6,7 +6,7 @@ import os
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
+from ury.ury.doctype.ury_order.ury_order import _free_tables_if_no_open_invoices, check_split_target_access
 
 no_cache = 1
 
@@ -58,7 +58,11 @@ def network_printing(
     doc=None,
     no_letterhead=0,
 ):
-    validate_print_permission(frappe.get_doc(doctype, name))
+    target = frappe.get_doc(doctype, name)
+    validate_print_permission(target)
+    if doctype == "POS Invoice":
+        check_split_target_access(target, "write")
+        doc = target
 
     restaurant_table = None
     if doctype == "POS Invoice":
@@ -102,6 +106,7 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
+    check_split_target_access(invoice_doc, "write")
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
     if not print_format and pos_profile:
         print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
@@ -165,6 +170,7 @@ def qz_print_update(invoice):
         if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
             frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
+        check_split_target_access(invoice_doc, "write")
         table = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
         
         if table == None or table == "":
@@ -182,12 +188,11 @@ def qz_print_update(invoice):
                 # Update invoice_printed
                 _mark_invoice_printed(invoice, was_printed=0, update_modified=False)
 
-                release_merge_cluster_tables(table)
+                _free_tables_if_no_open_invoices(table)
                 # Validate both updates
                 new_invoice_printed = frappe.db.get_value("POS Invoice", invoice, "invoice_printed")
-                new_table_status = frappe.db.get_value("URY Table", table, "occupied")
                 
-                if new_invoice_printed != 1 or new_table_status != 0:
+                if new_invoice_printed != 1:
                     return {"status": "Failure"}
         
         from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
@@ -195,6 +200,8 @@ def qz_print_update(invoice):
 
         return {"status": "Success"}
         
+    except frappe.PermissionError:
+        raise
     except Exception as e:
         frappe.log_error(message=e, title="Print Fail")
         frappe.throw(_("Error while printing order",e))                   
@@ -207,6 +214,8 @@ def print_pos_page(doctype, name, print_format):
     if not frappe.has_permission(doctype, "write", doc=doc_to_check):
         frappe.throw(_("Not permitted to print this document"), frappe.PermissionError)
 
+    if doctype == "POS Invoice":
+        check_split_target_access(doc_to_check, "write")
     data = {"name": name, "doctype": doctype, "print_format": print_format}
 
     restaurant_table, branch, name = frappe.db.get_value(
@@ -221,7 +230,7 @@ def print_pos_page(doctype, name, print_format):
         _mark_invoice_printed(name, was_printed=0)
 
         if restaurant_table:
-            release_merge_cluster_tables(restaurant_table)
+            _free_tables_if_no_open_invoices(restaurant_table)
 
     from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
     trigger_manufacture_on_bill_print(name)

@@ -185,7 +185,7 @@ class TestGetProductionsForBranch(FrappeTestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].name, "PROD-001")
         mock_get_all.assert_called_once_with(
-            "URY Production Unit", filters={"branch": "Branch1"}, fields=["name", "item_groups"]
+            "URY Production Unit", filters={"branch": "Branch1"}, fields=["name"]
         )
 
     @patch(f"{MODULE}.frappe.get_all")
@@ -436,9 +436,40 @@ class TestProcessInvoice(FrappeTestCase):
     def tearDown(self):
         frappe.set_user("Administrator")
 
+    def test_scheduler_never_offers_a_held_line_to_a_station(self):
+        invoice = _InvoiceStub(_invoice_dict(items=[_kot_item_dict(ury_held=1)]))
+        profile = _pos_profile_dict(ury_enable_hold_fire=1)
+        docs = {'POS Invoice': invoice, 'POS Profile': profile,
+                'URY Production Unit': _production_unit_dict(), 'Item': frappe._dict(item_group='Food')}
+        with patch.object(frappe, 'get_doc', side_effect=lambda dt, *args, **kw: docs[dt]), \
+             patch.object(frappe.db, 'get_value', return_value=None), \
+             patch(f'{MODULE}.get_productions_for_branch', return_value=[_production_unit_dict()]), \
+             patch(f'{MODULE}.create_kot') as dispatch:
+            process_invoice(frappe._dict(name=invoice.name))
+            dispatch.assert_not_called()
+
+    def test_fallback_checks_current_ticket_after_locking_the_invoice(self):
+        invoice = _InvoiceStub(_invoice_dict(items=[_kot_item_dict()]))
+        docs = {'POS Invoice': invoice, 'POS Profile': _pos_profile_dict()}
+        locks = []
+        def document(dt, name, **kwargs):
+            if dt == 'POS Invoice' and kwargs.get('for_update'):
+                locks.append(name)
+            return docs[dt]
+        def current_ticket(dt, filters, field, **kwargs):
+            self.assertEqual(locks, [invoice.name])
+            self.assertTrue(kwargs.get('for_update'))
+            return 'KOT-FROM-FIRE'
+        with patch.object(frappe, 'get_doc', side_effect=document), \
+             patch.object(frappe.db, 'get_value', side_effect=current_ticket) as lookup, \
+             patch(f'{MODULE}.get_productions_for_branch', return_value=[]) as stations:
+            process_invoice(invoice)
+        lookup.assert_called_once()
+        stations.assert_not_called()
+
     @patch(f"{MODULE}.create_kot")
     @patch(f"{MODULE}.get_productions_for_branch")
-    @patch(f"{MODULE}.frappe.get_list")
+    @patch(f"{MODULE}.frappe.db.get_value")
     @patch(f"{MODULE}.frappe.get_doc")
     def test_process_invoice_creates_kot_when_none_exists(
         self, mock_get_doc, mock_get_list, mock_get_productions, mock_create_kot
@@ -459,7 +490,7 @@ class TestProcessInvoice(FrappeTestCase):
         production_unit = _production_unit_dict()
         item = frappe._dict({"item_group": "Food"})
 
-        def get_doc_side_effect(doctype, name):
+        def get_doc_side_effect(doctype, name, **kwargs):
             if doctype == "POS Invoice":
                 return pos_invoice
             elif doctype == "POS Profile":
@@ -480,7 +511,7 @@ class TestProcessInvoice(FrappeTestCase):
 
     @patch(f"{MODULE}.create_kot")
     @patch(f"{MODULE}.get_productions_for_branch")
-    @patch(f"{MODULE}.frappe.get_list")
+    @patch(f"{MODULE}.frappe.db.get_value")
     @patch(f"{MODULE}.frappe.get_doc")
     def test_process_invoice_skips_when_kot_exists(
         self, mock_get_doc, mock_get_list, mock_get_productions, mock_create_kot
@@ -489,7 +520,7 @@ class TestProcessInvoice(FrappeTestCase):
         pos_invoice = _invoice_dict(name="POS-INV-001")
         pos_profile = _pos_profile_dict()
 
-        mock_get_doc.side_effect = lambda doctype, name: (
+        mock_get_doc.side_effect = lambda doctype, name, **kwargs: (
             pos_invoice if doctype == "POS Invoice" else pos_profile
         )
         mock_get_list.return_value = [frappe._dict(name="KOT-001")]

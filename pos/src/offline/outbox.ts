@@ -1,4 +1,5 @@
 import { v4 as uuid } from 'uuid';
+import { t } from '../i18n';
 import { isGatewayUnreachableStatus } from './gateway';
 import { forgetOpenTableCheck, readOpenTableCheck, rememberOpenTableCheck, type OpenTableCheck } from './open-table-checks';
 
@@ -10,10 +11,16 @@ export interface OfflineProfile {
 export interface OfflineUser { name: string; roles: string[] }
 export interface OfflineRound {
   round_id: string;
-  items: Array<{ item: string; item_name: string; qty: number; rate: number; comment?: string }>;
+  items: Array<{ item: string; item_name: string; qty: number; rate: number; comment?: string; ury_held?: number; reservation_line_key?: string }>;
   captured_at: string;
   expected_total: number;
   offline_printed: number;
+}
+// Fresh carts can repeat the same dish key. The live attempt and its replay
+// share one round ID and line order, even when the acknowledgement is lost.
+export function roundItems<T extends { reservation_line_key?: string }>(items: T[], roundId: string) {
+  return items.map((item, index) => item.reservation_line_key
+    ? { ...item, reservation_line_key: `${roundId}:${index}` } : item);
 }
 export interface OfflineOrder {
   pos_profile: string; customer?: string; cashier?: string; owner?: string; waiter?: string;
@@ -177,8 +184,8 @@ export class OfflineOutbox {
     if (await this.tryPrint(entry, 'kot')) { round.offline_printed = 1; await save(entry); }
     return entry;
   }
-  private round(items: OfflineRound['items'], expected: number, roundId?: string): OfflineRound {
-    return { items: structuredClone(items), round_id: roundId || uuid(), captured_at: new Date().toISOString(), expected_total: expected, offline_printed: 0 };
+  private round(items: OfflineRound['items'], expected: number, roundId = uuid()): OfflineRound {
+    return { items: roundItems(structuredClone(items), roundId), round_id: roundId, captured_at: new Date().toISOString(), expected_total: expected, offline_printed: 0 };
   }
   // One open check per table, same as the server. A caller-supplied client id
   // keeps the total it was given (already cumulative). Auto-bind adds the new
@@ -210,6 +217,7 @@ export class OfflineOutbox {
   async capture(order: OfflineOrder, total: number, clientId?: string,
     reserved?: { clientOrderId: string; roundId: string }): Promise<OfflineEntry> {
     this.allowed();
+    if (order.items.some(item => item.ury_held)) throw Object.assign(new Error(t('hold_fire.offline')), { code: 'URY_HOLD_OFFLINE' });
     if (order.invoice || order.last_invoice) throw new Error('Rounds on online orders are refused offline.');
     if (order.pos_profile !== this.options.profile.name) throw new Error('Offline order belongs to another profile.');
     if (!order.items.length || order.items.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) throw new Error('Offline rounds require positive quantities; reductions are refused.');

@@ -2,7 +2,8 @@ import frappe
 import json
 
 from frappe import _
-from frappe.utils import get_datetime, datetime
+from frappe.utils import cint, get_datetime, datetime
+from ury.ury.api.ury_order_reservation_service import _line_key
 from ury.ury_pos.api import getBranch
 
 
@@ -38,45 +39,36 @@ def get_unprocessed_invoices(start_time, end_time):
 
 # Function to process an invoice
 def process_invoice(invoice):
-    posInvoice = frappe.get_doc("POS Invoice", invoice)
-    waiter = posInvoice.waiter
+    posInvoice = frappe.get_doc("POS Invoice", invoice.name, for_update=True)
+    if posInvoice.docstatus != 0:
+        return
+    owner = posInvoice.waiter
     pos_profile = frappe.get_doc("POS Profile", posInvoice.pos_profile)
-
-    # Determine the owner based on the restaurant table
-    owner = waiter if not invoice.restaurant_table else waiter
-
-    kot_naming_series = pos_profile.kot_naming_series
-    kot_list = frappe.get_list(
-        "URY KOT",
-        filters={"creation": (">", posInvoice.creation), "invoice": posInvoice.name},
-    )
-
-    # If no KOT exists for the invoice, process it
-    if not kot_list:
-        production_items = []
-        productionDoc = None
-
+    kot_naming_series = pos_profile.get("custom_kot_naming_series") or pos_profile.get("kot_naming_series")
+    # A scheduler tick may have opened its transaction before Fire committed.
+    if not frappe.db.get_value("URY KOT", {"invoice": posInvoice.name}, "name", for_update=True):
         # Fetch production units for the branch
         productions = get_productions_for_branch(posInvoice.branch)
 
         for p in productions:
+            production_items = []
             productionDoc = frappe.get_doc("URY Production Unit", p.name)
             productionItemGroups = [
                 item_group.item_group for item_group in productionDoc.item_groups
             ]
-            p_flag = 0
 
             # Check if items in the invoice belong to production groups
             for i in posInvoice.items:
+                if cint(i.get("ury_held")) or not i.qty:
+                    continue
                 item = frappe.get_doc("Item", i.item_code)
                 if item.item_group in productionItemGroups:
-                    p_flag = 1
                     production_items.append(i)
 
-            if p_flag == 1:
+            if production_items:
                 try:
                     create_kot(
-                        invoice,
+                        posInvoice.name,
                         pos_profile,
                         kot_naming_series,
                         production_items,
@@ -96,7 +88,7 @@ def process_invoice(invoice):
 # Function to fetch production units for a branch
 def get_productions_for_branch(branch):
     return frappe.get_all(
-        "URY Production Unit", filters={"branch": branch}, fields=["name", "item_groups"]
+        "URY Production Unit", filters={"branch": branch}, fields=["name"]
     )
 
 
@@ -125,7 +117,9 @@ def create_kot(
     for pr in production_items:
         kotdoc.append(
             "kot_items",
-            {"item": pr.item_code, "item_name": pr.item_name, "quantity": pr.qty},
+            {"item": pr.item_code, "item_name": pr.item_name, "quantity": pr.qty,
+             "comments": pr.get("comment"),
+             "reservation_line_key": _line_key(pr.item_code, pr, 1) if pr.get("reservation_line_key") else None},
         )
 
     # Guards against the check-then-insert race in process_invoice(): the same

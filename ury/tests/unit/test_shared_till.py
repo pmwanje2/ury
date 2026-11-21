@@ -67,11 +67,11 @@ def runtime(monkeypatch):
     queries = ModuleType("erpnext.controllers.queries")
     queries.item_query = MagicMock()
     kot = ModuleType("ury.ury.api.ury_kot_generate")
-    kot.kot_execute = MagicMock()
+    kot._execute_kot = MagicMock()
     kot.process_items_for_cancel_kot = MagicMock()
     # version-16 ury_order imports these at load time; none is under test here.
     reservations = ModuleType("ury.ury.api.ury_order_reservation_service")
-    for attribute in ("_line_ref", "reconcile_order_reservations", "release_order_reservations",
+    for attribute in ("_line_key", "_line_ref", "reconcile_order_reservations", "release_order_reservations",
                       "resolve_production_context", "_warehouse_for_context"):
         setattr(reservations, attribute, MagicMock())
     stock_policy = ModuleType("ury.ury.api.ury_stock_policy")

@@ -10,7 +10,9 @@ import CommentDialog from './CommentDialog';
 import { Button, Badge } from '@ury/ui';
 import { getOrderKotStatus, type KotItemState } from '../lib/kot-status-api';
 import { Spinner } from '@ury/ui';
+import { HoldFireControls } from './HoldFireControls';
 import { useOutbox } from '../offline/use-outbox';
+import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
 import { syncOrder } from '../lib/order-api';
 import { useRootStore } from '../store/root-store';
@@ -147,6 +149,8 @@ const OrderPanel = () => {
       
       const orderData = {
         items: activeOrders.map(item => ({
+          ...(item.invoiceItemName ? { name: item.invoiceItemName } : {}),
+          ...(posProfile.ury_enable_hold_fire || item.ury_held ? { ury_held: item.ury_held || 0 } : {}),
           item: item.id,
           item_name: item.name,
           rate: item.selectedVariant?.price || item.price,
@@ -182,7 +186,7 @@ const OrderPanel = () => {
         total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
         clientOrderId: target?.client_order_id,
         onlineSubmit: (ids) => syncOrder({ ...orderData,
-          ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId }),
+          ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId, items: roundItems(orderData.items, ids.roundId) }),
         }),
       });
       const result = submission.offline ? null : submission.response;
@@ -295,6 +299,7 @@ const OrderPanel = () => {
       ) : (
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-6">
+            <HoldFireControls />
             {activeOrders.map((item) => (
               <div
                 key={item.uniqueId}

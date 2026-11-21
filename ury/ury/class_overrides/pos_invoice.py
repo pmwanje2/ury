@@ -61,6 +61,14 @@ except ImportError:
 
 
 class CustomPOSInvoice(POSInvoice):
+	def before_print(self, settings=None):
+		from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+
+		# Frappe printview also accepts a serialized document. Authorize the saved check.
+		if self.name and frappe.db.exists("POS Invoice", self.name):
+			check_split_target_access(frappe.get_doc("POS Invoice", self.name), "write")
+		super().before_print(settings)
+
 	def validate_stock_availablility(self):
 		if self.is_return or frappe.get_cached_doc("Stock Settings").allow_negative_stock:
 			return

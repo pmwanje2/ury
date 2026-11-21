@@ -286,6 +286,111 @@ class TestURYPosAPI(FrappeTestCase):
         self.assertIn("outside your active branch", str(context.exception))
 
 
+class TestSplitPreviewScope(unittest.TestCase):
+    def test_reassigned_sibling_requires_its_own_order_access(self):
+        from ury.ury.doctype.ury_order import ury_order
+        doc = MagicMock(name='sibling')
+        doc.get.side_effect = {'custom_split_group':'group', 'pos_profile':'profile'}.get
+        doc.waiter = 'other@example.com'
+        doc.branch = 'Branch A'
+        profile = frappe._dict(transfer_role_permissions=[], role_allowed_for_billing=[])
+        with patch('ury.ury_pos.api.getBranch', return_value=doc.branch), \
+             patch.object(ury_order, 'getBranch', return_value=doc.branch), \
+             patch.object(frappe, 'get_roles', return_value=['URY Captain']), \
+             patch.object(frappe, 'session', frappe._dict(user='captain@example.com')), \
+             patch.object(frappe, 'has_permission', return_value=True), \
+             patch.object(frappe, 'get_doc', side_effect=lambda dt, name: doc if dt == 'POS Invoice' else profile):
+            with self.assertRaises(frappe.PermissionError):
+                getPosInvoiceItems('SYN-SIBLING')
+
+
+    def test_split_render_checks_persisted_target_before_rendering(self):
+        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
+        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
+        from ury.ury.doctype.ury_order import ury_order
+        target = MagicMock()
+        target.name = 'SYN-SIBLING'
+        target.branch = 'Branch A'
+        target.waiter = 'other@example.com'
+        target.get.side_effect = {'custom_split_group': 'group', 'pos_profile': 'profile'}.get
+        profile = frappe._dict(transfer_role_permissions=[], role_allowed_for_billing=[])
+        with patch.object(frappe.db, 'exists', return_value=True), patch.object(POSInvoice, 'before_print'), \
+             patch.object(ury_order, 'getBranch', return_value='Branch A'), \
+             patch.object(frappe, 'get_roles', return_value=['URY Captain']), \
+             patch.object(frappe, 'session', frappe._dict(user='captain@example.com')), \
+             patch.object(frappe, 'has_permission', return_value=True), \
+             patch.object(frappe, 'get_doc', side_effect=lambda dt, name: target if dt == 'POS Invoice' else profile):
+            with self.assertRaises(frappe.PermissionError):
+                CustomPOSInvoice.before_print(target, {})
+
+
+class TestSplitGroupScope(unittest.TestCase):
+    def setUp(self):
+        from ury.ury.doctype.ury_order import ury_order
+        self.original = self.member('original', 'other', None)
+        self.child = self.member('child', 'waiter', 'original')
+        self.docs = {row.name: row for row in (self.original, self.child)}
+        profile = frappe._dict(transfer_role_permissions=[], role_allowed_for_billing=[frappe._dict(role='Cashier')])
+        self.session = frappe._dict(user='waiter')
+        self.enterContext(patch.object(frappe, 'session', self.session))
+        self.enterContext(patch.object(frappe, 'get_roles', side_effect=lambda: [self.session.user.title()]))
+        self.enterContext(patch.object(frappe, 'has_permission', return_value=True))
+        self.enterContext(patch('ury.ury_pos.api.getBranch', return_value='Branch A'))
+        self.enterContext(patch.object(ury_order, 'getBranch', return_value='Branch A'))
+        self.enterContext(patch.object(frappe, 'get_doc', side_effect=lambda dt, name:
+            self.docs[name] if dt == 'POS Invoice' else profile))
+        self.query = self.enterContext(patch.object(frappe, 'get_all', side_effect=lambda dt, filters, **kw:
+            [frappe._dict(r) for r in self.docs.values() if r.docstatus < 2 and
+             (r.custom_split_group == filters['custom_split_group'] if 'custom_split_group' in filters
+              else r.custom_split_from in filters['custom_split_from'][1])]))
+        self.enterContext(patch.object(frappe.db, 'get_value', side_effect=lambda dt, name, field: self.docs[name][field]))
+
+    @staticmethod
+    def member(name, waiter, parent):
+        return frappe._dict(name=name, waiter=waiter, branch='Branch A', pos_profile='Profile',
+                            custom_split_group='group', custom_split_from=parent, docstatus=0,
+                            creation=1 if parent is None else 2, custom_guest_label=f'label-{name}',
+                            mobile_number=f'contact-{name}')
+
+    def test_denies_requested_foreign_check_before_enumerating(self):
+        with self.assertRaises(frappe.PermissionError):
+            get_split_group('original')
+        self.query.assert_not_called()
+
+    def test_owned_child_omits_hidden_parent_and_renumbers_visible_members(self):
+        for member in self.docs.values():
+            member.custom_split_group = self.original.name
+        response = get_split_group('child')
+        self.assertEqual([row.name for row in response['invoices']], ['child'])
+        child, = response['invoices']
+        self.assertEqual((child.name, child.split_index, child.split_total, child.split_siblings), ('child', 1, 1, []))
+        self.assertIsNone(child.custom_split_from)
+        self.assertFalse(child.is_original)
+        for hidden in ('"original"', 'label-original', 'contact-original'):
+            self.assertNotIn(hidden, json.dumps(response))
+
+    def test_owned_legacy_child_remains_visible_when_primary_is_cancelled(self):
+        self.original.docstatus = 2
+        self.child.custom_split_group = None
+        members = get_split_group('child')['invoices']
+        self.assertEqual([row.name for row in members], ['child'])
+        child, = members
+        self.assertEqual(child.name, 'child')
+        self.assertIsNone(child.custom_split_from)
+        self.assertFalse(child.is_original)
+
+    def test_permitted_waiter_and_cashier_see_both_checks(self):
+        for user in ('cashier', 'waiter'):
+            with self.subTest(user=user):
+                self.session.user = user
+                if user == 'waiter':
+                    self.original.waiter = user
+                original, child = get_split_group('child')['invoices']
+                self.assertTrue(original.is_original)
+                self.assertEqual((child.split_index, child.split_total, child.split_siblings,
+                                  child.custom_split_from), (2, 2, ['original'], 'original'))
+
+
 class TestCreateCustomerLinkId(unittest.TestCase):
     """Regression: success payload must expose Customer link `name`, which
     can differ from display `customer_name` under series naming."""
