@@ -76,7 +76,8 @@ beforeAll(async () => {
       json(response, 200, { message: { items: [], log_name: 'LOG-1', log_status: 'Complete' } });
       return;
     }
-    if (url.includes('getPosInvoice')) {
+    if (url.includes('getBranch')) { json(response, 200, { message: 'Branch A' }); return; }
+    if (url.includes('getPosInvoice') || (url.includes('frappe.client.get_list') && new URL(url, 'http://localhost').searchParams.get('doctype') === 'POS Invoice')) {
       json(response, deniedStatus, {
         exc_type: deniedStatus === 401 ? 'AuthenticationError' : 'PermissionError',
         message: 'Not permitted',
@@ -238,3 +239,14 @@ test('v16 merge candidates read the active user’s branch rather than an unscop
   await getMergeBillCandidates({primaryInvoice: 'INV-A', linkedSecondaries: []});
   expect(read).toHaveBeenCalledWith('POS Invoice', expect.objectContaining({filters: expect.arrayContaining([['branch', '=', 'Branch A']])}));
 });
+
+for (const response of [502, 401, 403]) {
+  test(`default Outstanding home distinguishes HTTP ${response} from an empty till`, async () => {
+    useRootStore.setState({ selectedStatus: 'Outstanding' });
+    mode = response === 502 ? 'gateway' : 'denied';
+    gatewayStatus = deniedStatus = response;
+    const expected = response === 502 ? 'Orders are unavailable while the link is down.' : 'Access Denied';
+    await openRoot('/pos/orders', (text) => text.includes(expected));
+    expect(hits.some(hit => hit.includes(response === 502 ? 'getBranch' : 'doctype=POS+Invoice'))).toBe(true);
+  });
+}

@@ -331,3 +331,12 @@ test('failed logout leaves storage intact', async () => {
 
   expect(sessionStorage.getItem(`posProfile:${cashier}`)).toBe('cached');
 });
+
+test('profile-only readers cannot obtain an unowned legacy key when the cookie is missing or Guest', async () => {
+  const { sessionStorageKey } = await import('../../packages/core/src/storage');
+  for (const identity of [null, 'Guest']) {
+    session.user = identity;
+    sessionStorage.setItem('posProfile', JSON.stringify({ branch: 'Prior branch' }));
+    expect(sessionStorageKey('posProfile')).toBeNull();
+  }
+});
