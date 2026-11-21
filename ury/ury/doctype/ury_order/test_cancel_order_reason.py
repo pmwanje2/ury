@@ -202,7 +202,7 @@ class TestCancelOrderReason(unittest.TestCase):
                 self.reservations.reset_mock()
                 ury_order.cancel_order(self.invoice.name, " \tVoid\n ")
                 self.invoice.db_set.assert_called_with("cancel_reason", "Void")
-                self.release.assert_called_once_with("T1")
+                self.release.assert_called_once_with("T1", commit=False)
 
     def test_cancel_permission_denial_precedes_reason_validation(self):
         self.framework.has_permission.return_value = False
@@ -270,7 +270,7 @@ class TestCancelOrderReason(unittest.TestCase):
                 )
                 ury_order.cancel_order(self.invoice.name, case["reason"])
                 self.invoice.db_set.assert_called_with("cancel_reason", case["stored"])
-                self.release.assert_called_once_with("T1")
+                self.release.assert_called_once_with("T1", commit=False)
                 self.framework.get_meta.assert_called_with("POS Invoice")
 
 
@@ -310,7 +310,7 @@ class TestCancelOrderReason(unittest.TestCase):
                     "POS Profile", "Till A", "custom_void_reasons"
                 )
                 self.invoice.db_set.assert_called_with("cancel_reason", stored)
-                self.release.assert_called_once_with("T1")
+                self.release.assert_called_once_with("T1", commit=False)
 
     def test_other_without_a_note_is_refused_before_release(self):
         for reason in ("Other", "Other:", "Other: ", "Other: abc", "Other:\tabc", "Other:late order", "Other:ab"):
@@ -334,7 +334,7 @@ class TestCancelOrderReason(unittest.TestCase):
         self.set_void_reasons("Kitchen error")
         ury_order.cancel_order(self.invoice.name, "  Other: late order  ")
         self.invoice.db_set.assert_called_with("cancel_reason", "Other: late order")
-        self.release.assert_called_once_with("T1")
+        self.release.assert_called_once_with("T1", commit=False)
 
     def test_empty_list_keeps_the_four_character_rule(self):
         for raw in ("", " \n\t", None):
@@ -383,7 +383,7 @@ class TestCancelOrderReason(unittest.TestCase):
         self.reservations.reset_mock()
         ury_order.cancel_order(self.invoice.name, "Void")
         self.invoice.db_set.assert_called_with("cancel_reason", "Void")
-        self.release.assert_called_once_with("T1")
+        self.release.assert_called_once_with("T1", commit=False)
 
     def test_void_reason_read_error_is_not_treated_as_free_text(self):
         self.invoice.pos_profile = "Till A"
