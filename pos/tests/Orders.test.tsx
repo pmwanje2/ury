@@ -285,6 +285,12 @@ describe('Outstanding settlement working area', () => {
     expect(container.textContent).toContain('Bill requests: 0 waiting');
   });
 
+  it('reserves room for the cashier queue and notifications above the detail pane on phones', async () => {
+    await renderOrders();
+    const queue = container.querySelector('[aria-label="Notifications"]')!.parentElement!.parentElement!;
+    expect(getComputedStyle(queue).flexShrink).toBe('0');
+  });
+
   it.each(['normal', 'empty', 'error'])('shows operational notifications alongside the %s queue', async (queue) => {
     state.empty = queue === 'empty';
     state.error = queue === 'error' ? 'Invoice list unavailable' : null;
