@@ -109,3 +109,12 @@ class BillCopy(unittest.TestCase):
                 doc._ury_copy_render = marker
                 pos_invoice.CustomPOSInvoice.before_print(doc)
                 check.assert_called_with(f.get_doc.return_value, permission)
+
+    def test_copy_identity_with_missing_metadata_never_falls_back_to_bill(self):
+        with patch.object(finalizer, '_set_finalized_idempotency_key', return_value=True), \
+             patch.object(finalizer, 'get_print_job', return_value={'invoice': 'INV-1', 'restaurant_table': 'T1'}), \
+             patch.object(finalizer, 'update_print_job'), patch.object(finalizer,'frappe') as f, \
+             patch.object(finalizer,'_free_tables_if_no_open_invoices') as free:
+            finalizer.finalize_print_job('COPY-' + '1'*64 + '-1', 'COMPLETED')
+            free.assert_not_called()
+            self.assertFalse(any(c.args[0] == 'POS Invoice' for c in f.db.set_value.call_args_list))
