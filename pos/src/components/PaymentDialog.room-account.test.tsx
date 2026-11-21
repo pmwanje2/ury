@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { call } from '@ury/core';
 import PaymentDialog from './PaymentDialog';
 import { initI18n } from '../i18n';
+import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 
 vi.mock('../lib/print', () => ({ printOrder: vi.fn() }));
@@ -14,11 +15,13 @@ vi.mock('../lib/print', () => ({ printOrder: vi.fn() }));
 const METHOD = 'pms_bridge.room_charge_lookup';
 let container: HTMLDivElement;
 let root: Root;
+const initialRoot = useRootStore.getState();
 const initialStore = usePOSStore.getState();
 type Profile = NonNullable<typeof initialStore.posProfile>;
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  useRootStore.setState({user:{name:'cashier',roles:['URY Cashier']}});
   await initI18n('en');
   usePOSStore.setState({
     paymentModes: ['Room Charge'],
@@ -39,6 +42,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   usePOSStore.setState(initialStore, true);
+  useRootStore.setState(initialRoot, true);
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllGlobals();

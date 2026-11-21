@@ -120,7 +120,7 @@ class Credit(unittest.TestCase):
         if "FROM `tabCustomer`" in query:
             self.assertIn("FOR UPDATE", query.upper())
             self.events.append("customer lock")
-            return [("AC-1",)]
+            return [("AC-1", self.disabled)]
         if "SUM(" in query.upper():
             return self.db.execute(
                 query.replace("%s", "?").replace("FOR UPDATE", ""), args

@@ -13,6 +13,8 @@ import { resolvePrintFormat, type POSInvoice } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 
 
+type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
+
 interface PaymentDialogProps {
   order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id'> & { invoice_printed?: string | number }) | null;
   onClose: () => void;
@@ -37,7 +39,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   grandTotal,
   roundedTotal,
   invoice,
-  customer,
+  customer: originalCustomer,
   posProfile,
   table,
   tableLabel,
@@ -69,6 +71,26 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
+  const canSelectCredit = storePosProfile?.name === posProfile && storePosProfile.allow_partial_payment === 1
+    && !!user?.roles?.some(role => role === 'URY Cashier' || role === 'URY Manager');
+  const [query, setQuery] = useState('');
+  const [account, setAccount] = useState<CreditAccount | null>(null);
+  const [accounts, setAccounts] = useState<CreditAccount[]>([]);
+  const [creditStatus, setCreditStatus] = useState('');
+  const customer = canSelectCredit && account ? account.name : originalCustomer;
+  useEffect(() => {
+    let active = true;
+    setAccounts([]);
+    setCreditStatus('');
+    if (!canSelectCredit || !query.trim()) return;
+    const timer = window.setTimeout(async () => {
+      try {
+        const { message } = await call.get<{message: CreditAccount[]}>('ury.ury_pos.api.credit_accounts', {pos_profile: posProfile, query: query.trim()});
+        if (active) { setAccounts(message); setCreditStatus(message.length ? '' : t('payment.no_accounts')); }
+      } catch (err) { if (active) setCreditStatus(parseFrappeError(err, t('payment.account_search_failed'))); }
+    }, 200);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [query, canSelectCredit, posProfile]);
   const [roomNumber, setRoomNumber] = useState('');
   // Optional room lookup from this till's POS Profile. Blank: free-text room
   // box. Set: Pay waits for a verified match of the room as typed now.
@@ -139,7 +161,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const accountPaymentMode = paymentModes
     .map((mode: string | { id: string }) => (typeof mode === 'string' ? mode : mode.id))
     .find(Boolean);
-  const canPayOnAccount = isShort && !!accountPaymentMode
+  const canPayOnAccount = canSelectCredit && isShort && !!accountPaymentMode
     && storePosProfile?.name === posProfile
     && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
     && !!customer.trim() && customer !== storePosProfile.customer
@@ -372,6 +394,20 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 );
               })}
             </div>
+            {canSelectCredit && <section>
+              <label htmlFor="credit-account-search">{t('payment.charge_account')}</label>
+              <Input type="search" id="credit-account-search" value={query} disabled={isProcessing}
+                onChange={e => { setAccount(null); setAccounts([]); setQuery(e.target.value); }} />
+              {creditStatus && <p role="status">{creditStatus}</p>}
+              {accounts.map(row => <Button type="button" variant="outline" key={row.name} disabled={isProcessing}
+                className="w-full h-auto whitespace-normal justify-start text-start" onClick={() => {
+                  setAccount(row); setQuery(''); setAccounts([]);
+                  if (paymentsTotal === finalTotal) setPaymentInputs({});
+                }}>
+                {row.customer_name} · {row.name} · {t('payment.account_balance')}: {formatCurrency(row.balance,row.currency)} · {t('payment.account_limit')}: {formatCurrency(row.limit,row.currency)} · {t('payment.account_available')}: {formatCurrency(row.available,row.currency)}
+              </Button>)}
+              {account && <p>{account.customer_name} · {account.name} <Button type="button" variant="ghost" disabled={isProcessing} onClick={() => setAccount(null)}>{t('common.cancel')}</Button></p>}
+            </section>}
             {roomChargeAmount > 0 && (
               <div className="space-y-2">
                 <label htmlFor="room-charge-reference" className="text-sm font-medium">
@@ -423,7 +459,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             </div>
             {isShort && (
               <p role="status" className="text-amber-700 text-sm font-medium">
-                {t('payment.short_by', { amount: formatCurrency(shortfall) })}
+                {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatCurrency(shortfall) })}
               </p>
             )}
             {paymentsTotal > finalTotal && (

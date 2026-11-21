@@ -5,7 +5,7 @@ import { Button } from '@ury/ui';
 import { tData } from '../i18n';
 
 type Bill = {
-  name: string; status: string; posting_date: string; posting_time: string; currency: string;
+  name: string; customer: string; status: string; posting_date: string; posting_time: string; currency: string;
   restaurant_table: string; pos_profile: string; consolidated_invoice: string | null;
   grand_total: number; rounded_total: number; outstanding_amount: number; total_taxes_and_charges: number;
   items: { item_name: string; qty: number; amount: number }[];
@@ -79,8 +79,8 @@ export default function SettledBills() {
         <tbody>{bill.items.map((r,i) => <tr key={i}><td>{r.item_name}</td><td>{r.qty}</td><td>{bill.currency} {r.amount}</td></tr>)}</tbody></table>
       <h3>{tData('Taxes')}</h3>{bill.taxes.map((r,i) => <p key={i}><span>{r.description}</span>: {bill.currency} {r.tax_amount}</p>)}
       <p>{tData('Grand total')}: {bill.currency} {bill.grand_total}</p><p>{tData('Rounded total')}: {bill.currency} {bill.rounded_total}</p>
-      <h3>{tData('Original tenders')}</h3>{bill.payments.map((r,i) => <p key={i}><span>{r.mode_of_payment}</span>: {bill.currency} {r.amount}</p>)}
-      <p>{tData('Outstanding')}: {bill.currency} {bill.outstanding_amount}</p>
+      <h3>{tData('Original tenders')}</h3>{bill.payments.filter(p => p.amount !== 0).map((r,i) => <p key={i}><span>{r.mode_of_payment}</span>: {bill.currency} {r.amount}</p>)}
+      <p>{tData('Amount on account / Balance due')}: {bill.currency} {bill.outstanding_amount}{bill.outstanding_amount > 0 && ` · ${bill.customer}`}</p>
       <Button disabled={busy} onClick={print}>{tData(['FAILED','CANCELED','ERROR'].includes(outcome) ? 'Retry copy' : keys.has(bill.name) ? 'Check / retry copy' : 'Print copy')}</Button>
     </article>}
   </main>;

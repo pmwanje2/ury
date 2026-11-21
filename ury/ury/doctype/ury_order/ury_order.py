@@ -2665,7 +2665,7 @@ def sync_order(
 
     try:
         kot_execute(
-            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), comments,
+            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), invoice.custom_comments,
             offline_printed=offline_printed,
         )
     except Exception as e:
@@ -3145,11 +3145,60 @@ def _validate_additional_discount(additional_discount, pos_profile):
     return discount
 
 
+def _set_settlement_customer(invoice, customer):
+    if invoice.customer != customer:
+        invoice.customer = customer
+        # Re-resolve party-specific fields through the native controller.
+        invoice.customer_name = invoice.debit_to = invoice.party_account_currency = None
+        invoice.due_date = invoice.payment_terms_template = None
+        invoice.set_missing_values(for_validate=True)
+
+
+def _lock_settlement_customer(customer, profile):
+    from ury.ury_pos.credit import default_accounts
+
+    # Default accounts can never incur AR. Keep ordinary walk-in tills independent.
+    if customer and customer not in default_accounts(profile):
+        row = frappe.db.sql("SELECT name, disabled FROM `tabCustomer` WHERE name=%s FOR UPDATE", (customer,))
+        return row[0][1] if row else None
+
+
+def _enforce_on_account(invoice, profile, customer_disabled, target=None):
+    from ury.ury_pos.credit import balance, credit_limit, default_accounts, require_credit_access
+
+    bills = (invoice, target) if target else (invoice,)
+    proposed = 0
+    for bill in bills:
+        remaining = flt(bill.rounded_total or bill.grand_total) - sum(flt(row.amount) for row in bill.payments)
+        if flt(remaining, bill.precision("outstanding_amount")) > 0:
+            if flt(bill.conversion_rate) <= 0:
+                frappe.throw(_("Missing invoice conversion rate."))
+            proposed += remaining * flt(bill.conversion_rate)
+    if not proposed:
+        return
+    customer = invoice.customer
+    if not customer or not profile.customer or customer in default_accounts(profile):
+        _offline_refusal('URY-CREDIT-001', _('Select a named customer account.'))
+    require_credit_access(profile)
+    if not frappe.has_permission('Customer', 'read', doc=customer):
+        frappe.throw(_('Not permitted to use this account.'), frappe.PermissionError)
+    if customer_disabled != 0:
+        _offline_refusal('URY-CREDIT-002', _('This customer is inactive.'))
+    limit = credit_limit(customer, invoice.company)
+    if limit <= 0:
+        _offline_refusal('URY-CREDIT-003', _('This customer has no positive credit limit for the company.'))
+    if balance(customer, invoice.company, invoice.name, current=True) + proposed > limit:
+        _offline_refusal('URY-CREDIT-004', _('The charge exceeds the available credit.'))
+    return True
+
+
 # Method for URY POS
 @frappe.whitelist()
 def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     client_order_id = _validate_client_ids(client_order_id, round_id)
+    pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
+    customer_disabled = _lock_settlement_customer(customer, pos_prof)
     existing_invoice = _client_order_invoice(client_order_id, invoice, table)
     if existing_invoice:
         # A settled client order answers every settle retry, with or without its round id.
@@ -3158,18 +3207,29 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
         if existing_invoice.docstatus != 0:
             _offline_refusal("URY_ORDER_NOT_OPEN", _("This order is no longer open."))
         invoice = existing_invoice.name
+    if invoice and frappe.db.get_value('POS Invoice', invoice, 'docstatus', for_update=True) == 1:
+        settled = frappe.get_doc('POS Invoice', invoice)
+        settled.check_permission('read')
+        _enforce_order_access(settled)
+        if settled.branch != getBranch():
+            frappe.throw(_('Not permitted outside your branch.'), frappe.PermissionError)
+        return {'name': settled.name, 'status': 'Submitted'}
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
     _check_held_before_settlement(invoice, preserve_resolved=True)
+    if invoice.docstatus == 1:
+        return {'name': invoice.name, 'status': 'Submitted'}
+    if invoice.pos_profile and invoice.pos_profile != pos_profile:
+        frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
     _refuse_client_order_rebind(invoice, client_order_id)
 
     if table:
         restaurant = get_restaurant_and_menu_name(table)
         invoice.restaurant = restaurant
 
-    invoice.customer = customer
+    _set_settlement_customer(invoice, customer)
     invoice.pos_profile = pos_profile
     # The settling operator, not the client-sent or originally assigned cashier.
     invoice.cashier = frappe.session.user
@@ -3179,7 +3239,6 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
         invoice.room_number = room_number
     
-    pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     invoice.company = pos_prof.company
     invoice.currency = pos_prof.currency
     
@@ -3204,13 +3263,14 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.set("payments", [])
 
+    target = None
     if invoice.custom_merged_pos_invoice:
-        target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
+        target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
         target.cashier = frappe.session.user
         target.calculate_taxes_and_totals()
         
-        doc_req = invoice.rounded_total
-        target_req = target.rounded_total
+        doc_req = invoice.rounded_total or invoice.grand_total
+        target_req = target.rounded_total or target.grand_total
         
         target.set("payments", [])
         
@@ -3230,6 +3290,14 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
                 amt -= give
                 target_req -= give
                 
+        if not target.payments and payments:
+            target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
+        if _enforce_on_account(invoice, pos_prof, customer_disabled, target):
+            if target.company != invoice.company or target.pos_profile != invoice.pos_profile or target.docstatus != 0:
+                frappe.throw(_('Merged credit bills must be open on the same till.'))
+            _set_settlement_customer(target, customer)
+            target.set_paid_amount()
+            target.set_outstanding_amount()
         target.flags.ignore_payment_sync = True
         
         frappe.flags.in_bill_merge_sync = True
@@ -3246,6 +3314,9 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
             )
 
     invoice.set_paid_amount()
+    if not target:
+        _enforce_on_account(invoice, pos_prof, customer_disabled)
+    invoice.set_outstanding_amount()
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:
@@ -3256,7 +3327,7 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}
 
-    _submit_and_release_tables(invoice)
+    _submit_and_release_tables(invoice, pos_prof, customer_disabled, target)
     return {"name": invoice.name, "status": "Submitted"}
 
 
@@ -3271,9 +3342,27 @@ def _check_held_before_settlement(invoice, preserve_resolved=False):
         frappe.throw(_("URY_HELD_NOT_FIRED: Fire or remove held items before settlement."))
 
 
-def _submit_and_release_tables(invoice):
+def _submit_and_release_tables(invoice, profile, customer_disabled, target=None):
+    credit_partner = None
+    if _enforce_on_account(invoice, profile, customer_disabled, target) and target:
+        if (target.customer, target.company, target.pos_profile, target.docstatus) != (
+            invoice.customer, invoice.company, invoice.pos_profile, 0
+        ):
+            frappe.throw(_('Merged credit bills must belong to the same account and till.'))
+        credit_partner = target
     try:
-        invoice.submit()
+        if credit_partner:
+            # Both halves must post in this transaction with the allocated tenders.
+            # The ordinary merge hook performs best-effort partner synchronization.
+            previous = frappe.flags.in_bill_merge_sync
+            frappe.flags.in_bill_merge_sync = True
+            try:
+                credit_partner.submit()
+                invoice.submit()
+            finally:
+                frappe.flags.in_bill_merge_sync = previous
+        else:
+            invoice.submit()
     except Exception as e:
         frappe.throw(f"Error while settling order: {e}")
 
@@ -3304,8 +3393,16 @@ def submit_order_invoice(invoice):
     if doc.docstatus == 1:
         return {"name": doc.name, "status": "Submitted"}
 
+    customer, profile_name = doc.customer, doc.pos_profile
+    profile = frappe.get_cached_doc('POS Profile', profile_name)
+    customer_disabled = _lock_settlement_customer(customer, profile)
     _check_held_before_settlement(doc)
-    _submit_and_release_tables(doc)
+    if doc.docstatus == 1:
+        return {'name': doc.name, 'status': 'Submitted'}
+    if (doc.customer, doc.pos_profile) != (customer, profile_name):
+        frappe.throw(_('The order changed; reopen settlement.'))
+    target = frappe.get_doc('POS Invoice', doc.custom_merged_pos_invoice, for_update=True) if doc.custom_merged_pos_invoice else None
+    _submit_and_release_tables(doc, profile, customer_disabled, target)
     return {"name": doc.name, "status": "Submitted"}
         
         

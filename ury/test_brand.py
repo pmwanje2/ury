@@ -354,7 +354,7 @@ class TestSiteBrand(unittest.TestCase):
         form = ROOT / "ury/ury/print_format/merged_pos_invoice_format/merged_pos_invoice_format.json"
         template = Environment().from_string(json.loads(form.read_text())["html"])
         doc = MagicMock(restaurant="Signed outlet", branch="West branch", custom_merged_pos_invoice=None,
-                        custom_merged_total=0, grand_total=10, items=[])
+                        custom_merged_total=0, grand_total=10, items=[], outstanding_amount=0, ury_print_partner=None)
         configured = '<img src="/files/site-receipt.png" alt="Example site">'
         for suppress in (False, True):
             html = template.render(doc=doc, frappe=MagicMock(), letter_head=configured, footer="Configured receipt footer", no_letterhead=suppress)
