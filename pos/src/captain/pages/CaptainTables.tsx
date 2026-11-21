@@ -263,8 +263,9 @@ export default function CaptainTables() {
       const invoice = response.message?.invoice;
       if (!isCurrentSession() || !tableName || !invoice) return false;
       const target = await getTableOrderContext(tableName);
-      if (!isCurrentSession() || !target?.permissions?.view || !target.order) return false;
+      if (!isCurrentSession() || !target?.order) return false;
       if (target.order.name === invoice) {
+        if (!target.permissions?.view) return false;
         navigate(`/order/table/${encodeURIComponent(tableName)}`);
       } else {
         const { items } = await getPOSInvoiceItems(invoice);
