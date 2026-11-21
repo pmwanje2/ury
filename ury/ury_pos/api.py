@@ -961,6 +961,9 @@ def getPosInvoiceItems(invoice):
     if orderdItems.branch and user_branch and orderdItems.branch != user_branch:
         frappe.throw(frappe._("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
+    from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+
+    check_split_target_access(orderdItems, "read")
     posItems = orderdItems.items
     for items in posItems:
         itemDetails.append(

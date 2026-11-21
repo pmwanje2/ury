@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { call } from '@ury/core';
+import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
+import { getPOSInvoiceItems, type POSInvoiceItem } from '../../lib/invoice-api';
 import Notifications from '../../components/Notifications';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Square } from 'lucide-react';
@@ -50,6 +52,7 @@ export default function CaptainTables() {
   const [ownerNames, setOwnerNames] = useState<Map<string, string>>(new Map());
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
+  const [readyCheck, setReadyCheck] = useState<{ name: string; items: POSInvoiceItem[] } | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
 
   // `get_captain_context()`'s `rooms` field (from `getRoom()` in
@@ -252,15 +255,22 @@ export default function CaptainTables() {
 
   const openKitchenCheck = useCallback(async (kotName: string, isCurrentSession: () => boolean) => {
     try {
-      const response = await call.get<{ message: { restaurant_table?: string | null } }>('frappe.client.get', {
+      const response = await call.get<{ message: { restaurant_table?: string | null; invoice?: string } }>('frappe.client.get', {
         doctype: 'URY KOT',
         name: kotName,
       });
       const tableName = response.message?.restaurant_table;
-      if (!isCurrentSession() || !tableName) return false;
+      const invoice = response.message?.invoice;
+      if (!isCurrentSession() || !tableName || !invoice) return false;
       const target = await getTableOrderContext(tableName);
       if (!isCurrentSession() || !target?.permissions?.view || !target.order) return false;
-      navigate(`/order/table/${encodeURIComponent(tableName)}`);
+      if (target.order.name === invoice) {
+        navigate(`/order/table/${encodeURIComponent(tableName)}`);
+      } else {
+        const { items } = await getPOSInvoiceItems(invoice);
+        if (!isCurrentSession()) return false;
+        setReadyCheck({ name: invoice, items });
+      }
       return true;
     } catch {
       return false;
@@ -368,6 +378,7 @@ export default function CaptainTables() {
           </div>
         )}
       </div>
+      {readyCheck && <SplitInvoiceDetails invoice={readyCheck} loadedItems={readyCheck.items} onClose={() => setReadyCheck(null)} />}
       <aside className="w-full shrink-0 xl:sticky xl:top-32 xl:w-80">
         <Button
           variant="outline"

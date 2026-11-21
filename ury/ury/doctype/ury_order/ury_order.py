@@ -1261,6 +1261,17 @@ def _enforce_order_access(invoice, pos_profile_name=None, require_modify=False, 
     return flags
 
 
+def check_split_target_access(invoice, permission):
+    if not (invoice.get("custom_split_group") or invoice.get("custom_split_from")):
+        return
+    if not frappe.has_permission("POS Invoice", permission, doc=invoice):
+        frappe.throw(_("Not permitted to access this check"), frappe.PermissionError)
+    if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles():
+        if not invoice.branch or getBranch() != invoice.branch:
+            frappe.throw(_("Not permitted outside your active branch"), frappe.PermissionError)
+    _enforce_order_access(invoice, require_modify=False)
+
+
 def _branch_has_open_pos(branch):
     """True when the branch has at least one submitted Open POS Opening Entry."""
     return bool(

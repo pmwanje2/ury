@@ -404,9 +404,12 @@ def create_cancel_kot_doc(
         "URY KOT",
         filters={
             "invoice": invoice_id,
-            "type": ("in", ("New Order", "Order Modified")),
+            "type": ("in", ("New Order", "Order Modified", "Duplicate")),
+            "production": production,
+            "docstatus": 1,
         },
         fields=("name"),
+        order_by="creation desc, name desc",
     )
 
     # Find original KOTs related to the cancel items. When the cancel item

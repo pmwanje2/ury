@@ -314,7 +314,7 @@ class TestSplitPreviewScope(unittest.TestCase):
         target.waiter = 'other@example.com'
         target.get.side_effect = {'custom_split_group': 'group', 'pos_profile': 'profile'}.get
         profile = frappe._dict(transfer_role_permissions=[], role_allowed_for_billing=[])
-        with patch.object(POSInvoice, 'before_print'), \
+        with patch.object(frappe.db, 'exists', return_value=True), patch.object(POSInvoice, 'before_print'), \
              patch.object(ury_order, 'getBranch', return_value='Branch A'), \
              patch.object(frappe, 'get_roles', return_value=['URY Captain']), \
              patch.object(frappe, 'session', frappe._dict(user='captain@example.com')), \
