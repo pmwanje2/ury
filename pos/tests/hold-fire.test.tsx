@@ -100,3 +100,15 @@ test('losing connectivity after holding a dish refuses the staff sync before RPC
   await expect(api.syncOrder({ items: [{ item: 'Fish', ury_held: 1 }] } as api.SyncOrderRequest)).rejects.toThrow();
   expect(call.post).not.toHaveBeenCalled();
 });
+
+test('adding the same dish after reload gives its new round a distinct reservation key', async () => {
+  const savedKey = 'Fish-default-no-addons';
+  vi.mocked(call.get).mockResolvedValue({ message: { name: 'INV-1', items: [
+    { name: 'saved-row', item_code: 'Fish', item_name: 'Fish', qty: 1, rate: 100, reservation_line_key: savedKey, ury_held: 1 },
+  ] } });
+  await usePOSStore.getState().loadTableOrder('T-1');
+  await usePOSStore.getState().addToOrder({ id: 'Fish', name: 'Fish', price: 100, quantity: 1 } as never);
+  const [held, fresh] = usePOSStore.getState().activeOrders;
+  expect(held.reservationLineKey).toBe(savedKey);
+  expect(fresh.reservationLineKey).not.toBe(savedKey);
+});

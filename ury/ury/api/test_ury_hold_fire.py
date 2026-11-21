@@ -268,6 +268,13 @@ class HoldFireTests(OrderingCases, TestCase):
             self.order.submit_order_invoice(self.invoice.name)
         self.invoice.submit.assert_not_called()
 
+    def test_new_round_cannot_reuse_a_saved_reservation_key(self):
+        self.row("sent", held=0).reservation_line_key = "cart-key"
+        with self.assertRaisesRegex(ValueError, "URY_LINE_KEY_REUSED"):
+            self.sync([{**self.request(held=0), "reservation_line_key": "cart-key"}], append=1)
+        self.invoice.save.assert_not_called()
+        self.assertEqual(self.tickets, [])
+
     def test_authorized_keyed_note_change_cancels_original_and_sends_replacement(self):
         old = self.row("sent", held=0, note="plain")
         old.reservation_line_key = "cart-line"

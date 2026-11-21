@@ -107,6 +107,21 @@ def _kot_doc_recorder():
 class TestQtyReductionOnAllowedOrderType(FrappeTestCase):
 	"""Test successful qty reduction on an order type explicitly allowed by POS Profile."""
 
+	def test_reducing_sent_dish_preserves_original_kitchen_note_and_line_key(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {"order_type": "Dine In"}.get
+		invoice.items = [frappe._dict(name="ROW", item_code="TEA", item_name="Tea", qty=2,
+		                             comment="no milk", reservation_line_key="cart-row")]
+		with patch(f"{MODULE}.frappe.db.exists", return_value=True), \
+		     patch(f"{MODULE}.frappe.get_doc", side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f"{MODULE}.frappe.has_permission", return_value=True), \
+		     patch(f"{MODULE}.process_items_for_cancel_kot") as cancel:
+			reduce_order_item_qty(invoice.name, "ROW", 1, reason="guest correction")
+		line = cancel.call_args.args[3][0]
+		self.assertEqual((line["reservation_line_key"], line["comments"], line["qty"]),
+		                 ("ref:TEA:cart-row", "no milk", -1))
+		self.assertEqual(cancel.call_args.args[4], "guest correction")
+
 	def test_reducing_held_dish_updates_bill_without_kitchen_cancellation(self):
 		invoice = MagicMock()
 		invoice.get.side_effect = {"order_type": "Dine In"}.get
