@@ -1,8 +1,7 @@
-from datetime import datetime as _datetime, timedelta as _timedelta
-
 import frappe
 
-from frappe.utils import get_datetime, add_to_date, today
+from frappe.utils import get_datetime
+from ury.ury.api.ury_dashboard import _business_day_bounds
 from ury.ury.report_api.utils import require_dashboard_user
 
 
@@ -18,7 +17,7 @@ def get_service_line(branch=None):
 	tables = frappe.get_all(
 		"URY Table",
 		filters=table_filters,
-		fields=["name", "occupied", "latest_invoice_time", "is_take_away"],
+		fields=["name", "occupied", "is_take_away"],
 		order_by="name",
 	)
 
@@ -33,37 +32,9 @@ def get_service_line(branch=None):
 			continue
 
 		minutes = None
-		if t.latest_invoice_time:
-			# `URY Table.latest_invoice_time` is a **Time** field (confirmed
-			# via ury_table.json), not Datetime -- Frappe's ORM returns Time
-			# columns as `datetime.timedelta` (seconds since midnight), not
-			# a full datetime. The previous code (`now - get_datetime(...)`,
-			# and frappe.utils.time_diff_in_seconds, which does the same
-			# thing internally) assumed a full datetime and broke: when one
-			# operand of a `-` is already a timedelta, `datetime -
-			# timedelta` returns a *datetime*, not a timedelta, so the
-			# `.total_seconds()` call on the result raised AttributeError.
-			# Fix: compare against "now" expressed the same way (seconds
-			# since midnight today), so both sides of the subtraction are
-			# real timedeltas.
-			now_since_midnight = now - _datetime.combine(now.date(), _datetime.min.time())
-			if isinstance(t.latest_invoice_time, _datetime):
-				latest_invoice_time = t.latest_invoice_time - _datetime.combine(
-					t.latest_invoice_time.date(), _datetime.min.time()
-				)
-			else:
-				latest_invoice_time = t.latest_invoice_time
-			delta = now_since_midnight - latest_invoice_time
-			if delta.total_seconds() < 0:
-				# Order was placed before midnight and it's now past
-				# midnight -- add a day so this still reads as "elapsed",
-				# not a negative/nonsensical value.
-				delta += _timedelta(days=1)
-			minutes = int(delta.total_seconds() // 60)
-
 		invoice = frappe.db.sql(
 			"""
-			SELECT name FROM `tabPOS Invoice`
+			SELECT name, creation FROM `tabPOS Invoice`
 			WHERE restaurant_table = %(table)s AND docstatus = 0
 			ORDER BY creation DESC LIMIT 1
 			""",
@@ -73,6 +44,7 @@ def get_service_line(branch=None):
 
 		stage = "seated"
 		if invoice:
+			minutes = max(0, int((now - get_datetime(invoice[0].creation)).total_seconds() // 60))
 			kot = frappe.db.sql(
 				"""
 				SELECT order_status FROM `tabURY KOT`
@@ -119,11 +91,12 @@ def get_running_low(branch=None):
 		pos_profile = frappe.db.get_value("POS Profile", {"branch": branch}, "warehouse")
 		warehouse = pos_profile
 
-	shift_start = get_datetime(f"{today()} 00:00:00")
-	hours_elapsed = max((get_datetime() - shift_start).total_seconds() / 3600, 0.5)
+	now = get_datetime()
+	shift_start, shift_end = _business_day_bounds(branch, now=now)
+	hours_elapsed = max((now - shift_start).total_seconds() / 3600, 0.5)
 
-	sold_conditions = "inv.`docstatus` = 1 AND inv.`posting_date` = CURDATE() AND item.`is_stock_item` = 1"
-	sold_params = {}
+	sold_conditions = "inv.`docstatus` = 1 AND TIMESTAMP(inv.`posting_date`, inv.`posting_time`) >= %(start)s AND TIMESTAMP(inv.`posting_date`, inv.`posting_time`) < %(end)s AND item.`is_stock_item` = 1"
+	sold_params = {"start": shift_start, "end": shift_end}
 	if branch:
 		sold_conditions += " AND inv.`branch` = %(branch)s"
 		sold_params["branch"] = branch

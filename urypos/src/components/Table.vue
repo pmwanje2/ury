@@ -127,20 +127,20 @@
                 class="me-2 rounded px-2.5 py-0.5 text-sm font-medium"
                 :class="{
                   'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300':
-                    this.table.getBadgeType(table) === 'red',
+                    this.table.getBadgeType(table, now) === 'red',
                   'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300':
-                    this.table.getBadgeType(table) === 'default',
+                    this.table.getBadgeType(table, now) === 'default',
 
                   'bg-yellow-100 text-yellow-800':
-                    this.table.getBadgeType(table) === 'yellow',
+                    this.table.getBadgeType(table, now) === 'yellow',
                   'bg-green-100 text-green-800':
-                    this.table.getBadgeType(table) === 'green',
+                    this.table.getBadgeType(table, now) === 'green',
                 }"
               >
-                {{ this.table.getBadgeText(table) }}
+                {{ this.table.getBadgeText(table, now) }}
               </span>
             </div>
-            <div class="relative" v-if="table.occupied !== 1">
+            <div class="relative">
               <button
                 class="inline-block rounded p-1.5 text-sm text-gray-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:focus:ring-gray-700"
                 type="button"
@@ -179,7 +179,7 @@
                       >Table Transfer</a
                     >
                   </li>
-                  <li v-if="table.occupied === 1 && this.auth.hasAccess">
+                  <li v-if="table.occupied === 1 && this.auth.hasAccess && this.table.activeDropdown === table.name && this.table.captain.length > 0">
                     <a
                       href="#"
                       class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:text-white"
@@ -209,10 +209,11 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
                 </svg>
               </h5>
+              <p v-if="table.occupied === 1 && table.owner_name" class="truncate text-sm font-medium">{{ table.owner_name }}</p>
               <span class="text-sm text-gray-500 dark:text-gray-400">
                 {{
                   table.occupied === 1
-                    ? this.table.getTimeDifference(table)
+                    ? this.table.getTimeDifference(table, now)
                     : ""
                 }}</span
               >
@@ -316,7 +317,7 @@
     </div>
   </div>
   <div v-else>
-    <takeAwayTable />
+    <takeAwayTable :now="now" />
   </div>
 
   <div
@@ -513,7 +514,7 @@
               @click="this.table.selectcaptain(captain)"
             >
               <h1 class="text-base font-semibold leading-normal">
-                {{ captain.name }}
+                {{ captain.full_name || captain.name }}
               </h1>
             </div>
           </div>
@@ -548,7 +549,7 @@
 </template>
 
 <script>
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useTableStore } from "@/stores/Table.js";
 import { useAuthStore } from "@/stores/Auth.js";
 import { useMenuStore } from "@/stores/Menu.js";
@@ -567,13 +568,19 @@ export default {
     const auth = useAuthStore();
     const menu = useMenuStore();
     const recentOrders = usetoggleRecentOrder();
+    const now = ref(Date.now());
+    let clockInterval;
     let requestsInterval;
     onMounted(() => {
+      clockInterval = setInterval(() => { now.value = Date.now(); }, 60000);
       requestsInterval = setInterval(() => table.fetchServiceRequests(), 30 * 1000);
     });
-    onUnmounted(() => clearInterval(requestsInterval));
+    onUnmounted(() => {
+      clearInterval(clockInterval);
+      clearInterval(requestsInterval);
+    });
 
-    return { table, invoiceData, auth, menu,recentOrders };
+    return { table, invoiceData, auth, menu, recentOrders, now };
   },
 };
 </script>

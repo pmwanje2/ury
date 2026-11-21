@@ -62,7 +62,7 @@ class TestGetServiceLine(FrappeTestCase):
 
         now = datetime(2026, 8, 19, 14, 30, 0)
         # get_datetime() is called twice in source with different args: once
-        # bare for "now", once with t.latest_invoice_time to normalize it.
+        # bare for "now", once with invoice.creation to normalize it.
         # A plain return_value would collapse both calls to the same value
         # and always yield a zero minute delta, so use side_effect to mimic
         # real get_datetime's passthrough-on-datetime-arg behavior.
@@ -78,7 +78,7 @@ class TestGetServiceLine(FrappeTestCase):
         ]
 
         mock_sql.side_effect = [
-            [frappe._dict({"name": "INV-001"})],
+            [frappe._dict({"name": "INV-001", "creation": datetime(2026, 8, 19, 14, 0)})],
             [frappe._dict({"order_status": "Ready For Prepare"})],
         ]
 
@@ -110,7 +110,7 @@ class TestGetServiceLine(FrappeTestCase):
         ]
 
         mock_sql.side_effect = [
-            [frappe._dict({"name": "INV-002"})],
+            [frappe._dict({"name": "INV-002", "creation": datetime(2026, 8, 19, 14, 0)})],
             [frappe._dict({"order_status": "Served"})],
         ]
 
@@ -193,7 +193,7 @@ class TestGetServiceLine(FrappeTestCase):
         ]
 
         mock_sql.side_effect = [
-            [frappe._dict({"name": "INV-003"})],
+            [frappe._dict({"name": "INV-003", "creation": datetime(2026, 8, 19, 14, 0)})],
             [frappe._dict({"order_status": "Served"})],
         ]
 
@@ -236,16 +236,16 @@ class TestGetRunningLow(FrappeTestCase):
     @patch("ury.ury.api.ury_service_line.frappe.db.get_value")
     @patch("ury.ury.api.ury_service_line.frappe.db.sql")
     @patch("ury.ury.api.ury_service_line.get_datetime")
-    @patch("ury.ury.api.ury_service_line.today")
-    def test_running_low_with_items(self, mock_today, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj, mock_bin_qty):
+    @patch("ury.ury.api.ury_service_line._business_day_bounds")
+    def test_running_low_with_items(self, mock_bounds, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj, mock_bin_qty):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
 
-        mock_today.return_value = "2026-08-19"
         shift_start = datetime(2026, 8, 19, 0, 0, 0)
         current_time = datetime(2026, 8, 19, 4, 0, 0)
-        mock_get_datetime.side_effect = [shift_start, current_time]
+        mock_get_datetime.return_value = current_time
+        mock_bounds.return_value = (shift_start, datetime(2026, 8, 20))
 
         mock_sql.return_value = [
             frappe._dict({
@@ -274,16 +274,16 @@ class TestGetRunningLow(FrappeTestCase):
     @patch("ury.ury.api.ury_service_line.frappe.db.get_value")
     @patch("ury.ury.api.ury_service_line.frappe.db.sql")
     @patch("ury.ury.api.ury_service_line.get_datetime")
-    @patch("ury.ury.api.ury_service_line.today")
-    def test_running_low_negative_stock_flags_data_quality(self, mock_today, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj, mock_bin_qty):
+    @patch("ury.ury.api.ury_service_line._business_day_bounds")
+    def test_running_low_negative_stock_flags_data_quality(self, mock_bounds, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj, mock_bin_qty):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
 
-        mock_today.return_value = "2026-08-19"
         shift_start = datetime(2026, 8, 19, 0, 0, 0)
         current_time = datetime(2026, 8, 19, 2, 0, 0)
-        mock_get_datetime.side_effect = [shift_start, current_time]
+        mock_get_datetime.return_value = current_time
+        mock_bounds.return_value = (shift_start, datetime(2026, 8, 20))
 
         mock_sql.return_value = [
             frappe._dict({
@@ -306,16 +306,16 @@ class TestGetRunningLow(FrappeTestCase):
     @patch("ury.ury.api.ury_service_line.frappe.db.get_value")
     @patch("ury.ury.api.ury_service_line.frappe.db.sql")
     @patch("ury.ury.api.ury_service_line.get_datetime")
-    @patch("ury.ury.api.ury_service_line.today")
-    def test_running_low_no_items_sold(self, mock_today, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj):
+    @patch("ury.ury.api.ury_service_line._business_day_bounds")
+    def test_running_low_no_items_sold(self, mock_bounds, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
 
-        mock_today.return_value = "2026-08-19"
         shift_start = datetime(2026, 8, 19, 0, 0, 0)
         current_time = datetime(2026, 8, 19, 2, 0, 0)
-        mock_get_datetime.side_effect = [shift_start, current_time]
+        mock_get_datetime.return_value = current_time
+        mock_bounds.return_value = (shift_start, datetime(2026, 8, 20))
 
         mock_sql.return_value = []
 
@@ -333,16 +333,16 @@ class TestGetRunningLow(FrappeTestCase):
     @patch("ury.ury.api.ury_service_line.frappe.db.get_value")
     @patch("ury.ury.api.ury_service_line.frappe.db.sql")
     @patch("ury.ury.api.ury_service_line.get_datetime")
-    @patch("ury.ury.api.ury_service_line.today")
-    def test_running_low_no_branch(self, mock_today, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj, mock_bin_qty):
+    @patch("ury.ury.api.ury_service_line._business_day_bounds")
+    def test_running_low_no_branch(self, mock_bounds, mock_get_datetime, mock_sql, mock_get_value, mock_cache_obj, mock_bin_qty):
         mock_cache_instance = MagicMock()
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
 
-        mock_today.return_value = "2026-08-19"
         shift_start = datetime(2026, 8, 19, 0, 0, 0)
         current_time = datetime(2026, 8, 19, 3, 0, 0)
-        mock_get_datetime.side_effect = [shift_start, current_time]
+        mock_get_datetime.return_value = current_time
+        mock_bounds.return_value = (shift_start, datetime(2026, 8, 20))
 
         mock_sql.return_value = [
             frappe._dict({

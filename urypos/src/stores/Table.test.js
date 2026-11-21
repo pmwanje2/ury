@@ -43,7 +43,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const activeBranch = 'Salama Kampala';
+const activeBranch = 'Test Branch';
 
 describe.each([
   ['dine-in', FloorPlan, 0],

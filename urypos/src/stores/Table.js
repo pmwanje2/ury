@@ -8,6 +8,7 @@ import { useNotifications } from "./Notification.js";
 import { useAlert } from "./Alert.js";
 import frappe from "./frappeSdk.js";
 import { usetoggleRecentOrder } from "./recentOrder.js";
+import { useNotificationModal } from "./NotificationModal.js";
 
 
 export const useTableStore = defineStore("table", {
@@ -49,6 +50,7 @@ export const useTableStore = defineStore("table", {
     showCaptain: false,
     cashier: null,
     captain: [],
+    captainRead: 0,
     previousWaiter: null,
     newCaptain: "",
     invoicePrinted: "",
@@ -56,6 +58,8 @@ export const useTableStore = defineStore("table", {
     call: frappe.call(),
     customers: useCustomerStore(),
     db: frappe.db(),
+    serverTimeOffset: 0,
+    ownerNames: {},
     totalMinutes: null,
     invoiceNumber: null,
     modifiedTime: null,
@@ -79,9 +83,9 @@ export const useTableStore = defineStore("table", {
     },
     searchCaptian() {
       return this.captain.filter((ordeTakers) => {
-        return ordeTakers.name
-          .toLowerCase()
-          .includes(this.newCaptain.toLowerCase());
+        const search = this.newCaptain.toLowerCase();
+        return ordeTakers.name.toLowerCase().includes(search)
+          || (ordeTakers.full_name || '').toLowerCase().includes(search);
       });
     },
     toggleTableType(state) {
@@ -148,7 +152,7 @@ export const useTableStore = defineStore("table", {
     },
     async handleRoomChange() {
       localStorage.setItem("selectedRoom", this.selectedRoom);
-      await this.fetchTable();
+      this.fetchTable();
       await this.getMenu();
       if (this.invoiceData.multipleCashier) {
         this.getCashier()
@@ -168,6 +172,13 @@ export const useTableStore = defineStore("table", {
       this.serviceRequests = [];
       this.serviceRequestsLoading = true;
       ++this.serviceRequestsRead;
+      this.call
+        .get("ury.ury.api.ury_server_time.get_server_time")
+        .then((result) => {
+          // Match Mosaic's site-local wall-clock offset.
+          this.serverTimeOffset = new Date(result.message.replace(" ", "T")).getTime() - Date.now();
+        })
+        .catch((error) => console.error(error));
       this.db
         .getDocList("URY Table", {
           fields: [
@@ -186,7 +197,7 @@ export const useTableStore = defineStore("table", {
           filters: [["restaurant_room", "=", this.selectedRoom]],
           limit: 0,
         })
-        .then((tables) => {
+        .then(async (tables) => {
           if (room !== this.selectedRoom) return;
           tableListLoaded = true;
           this.tables = tables.sort((a, b) => {
@@ -197,6 +208,42 @@ export const useTableStore = defineStore("table", {
           });
           this.serviceRequestsRoom = room;
           this.fetchServiceRequests();
+          // Publish the floor first; a pending/denied bill read must not block it.
+          const occupiedTables = this.tables.filter((table) => table.occupied === 1);
+          if (!occupiedTables.length) return;
+          const invoices = await this.db.getDocList("POS Invoice", {
+            fields: ["name", "restaurant_table", "creation", "custom_merged_tables", "waiter"],
+            filters: [
+              ["branch", "=", this.invoiceData.branch],
+              ["docstatus", "=", 0],
+            ],
+            orFilters: [
+              ["restaurant_table", "in", occupiedTables.map((table) => table.name)],
+              ...occupiedTables.map((table) => ["custom_merged_tables", "like", `%${table.name}%`]),
+            ],
+            orderBy: { field: "creation", order: "desc" },
+            limit: 0,
+          });
+          // Seating starts at the oldest still-open check, including split siblings.
+          // Keep these captured rows so a late response cannot affect another room.
+          for (const table of occupiedTables) {
+            let oldestTime = Infinity;
+            table.open_bill_creation = null;
+            for (const bill of invoices) {
+              if (
+                bill.restaurant_table !== table.name &&
+                !(bill.custom_merged_tables || "").split(",").some((name) => name.trim() === table.name)
+              ) continue;
+              const creationTime = new Date((bill.creation || "").replace(" ", "T")).getTime();
+              if (creationTime < oldestTime) {
+                oldestTime = creationTime;
+                table.open_bill_creation = bill.creation;
+              }
+            }
+          }
+          if (room === this.selectedRoom) {
+            await this.attachTableOwners(occupiedTables, room, invoices);
+          }
         })
         .catch((error) => {
           if (!tableListLoaded && room === this.selectedRoom) {
@@ -305,28 +352,43 @@ export const useTableStore = defineStore("table", {
         console.error("Failed to merge tables:", error);
       }
     },
-    fetchCaptain() {
-      this.db
-        .getDocList("User", {
-          fields: ["name"],
-          limit: 0,
-        })
-        .then((docs) => {
-          this.captain = docs;
-        })
-        .catch((error) => console.error(error));
+    async fetchCaptain() {
+      const read = ++this.captainRead;
+      this.captain = [];
+      this.invoiceNumber = null;
+      try {
+        const invoice = await this.invoiceNumberFetching();
+        if (read !== this.captainRead || !invoice?.name) return;
+        const result = await this.call.get(
+          "ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates",
+          { invoice: invoice.name },
+        );
+        if (read === this.captainRead) this.captain = result.message || [];
+      } catch (error) {
+        if (read === this.captainRead) this.captain = [];
+        console.error(error);
+      }
     },
     async toggleDropdown(index) {
       this.tableName = index;
+      this.captain = [];
+      ++this.captainRead;
       if (this.activeDropdown === index) {
         this.activeDropdown = null;
+        return;
       } else {
         this.activeDropdown = index;
       }
-      await this.invoiceNumberFetching();
+      if (this.auth.hasAccess) {
+        await this.fetchCaptain();
+      } else {
+        await this.invoiceNumberFetching();
+      }
     },
     hideDropdown() {
       this.activeDropdown = null;
+      this.captain = [];
+      ++this.captainRead;
     },
     selectTable(tables) {
       this.newTable = tables.name;
@@ -336,36 +398,43 @@ export const useTableStore = defineStore("table", {
       this.newCaptain = captain.name;
       this.showCaptain = false;
     },
-    getTimeDifference(table) {
-      const now = new Date();
-      let tableTime = "00:00:00";
-      if (table && table.occupied === 1 && table.latest_invoice_time) {
-        tableTime = table.latest_invoice_time;
+    getTimeDifference(table, browserNow = Date.now()) {
+      const now = new Date(browserNow + this.serverTimeOffset);
+      const creation = table && table.occupied === 1 && table.open_bill_creation;
+      // Frappe creation and the server clock use the same site-local wall time.
+      let tableDate = new Date(creation ? creation.replace(" ", "T") : NaN);
+      if (!Number.isFinite(tableDate.getTime())) {
+        // Preserve the legacy fallback only when no readable, valid bill exists.
+        const hasInvoiceTime = table && table.occupied === 1 && table.latest_invoice_time;
+        const tableTime = hasInvoiceTime ? table.latest_invoice_time : "00:00:00";
+        const [tableHours, tableMinutes, tableSeconds] = tableTime.split(":");
+        tableDate = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          tableHours,
+          tableMinutes,
+          tableSeconds
+        );
+        if (hasInvoiceTime && tableDate - now > 12 * 60 * 60 * 1000) {
+          tableDate.setDate(tableDate.getDate() - 1);
+        }
       }
-      const [tableHours, tableMinutes, tableSeconds] = tableTime.split(":");
-      const tableDate = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        tableHours,
-        tableMinutes,
-        tableSeconds
-      );
-      const timeDifferenceInMs = now - tableDate;
+      const timeDifferenceInMs = Math.max(0, now - tableDate);
       const secondsDifference = Math.floor(timeDifferenceInMs / 1000);
       const minutesDifference = Math.floor(secondsDifference / 60);
       const hoursDifference = Math.floor(minutesDifference / 60);
-      const formattedTimeDifference = `${hoursDifference}:${minutesDifference % 60
-        }`;
+      const minutes = minutesDifference % 60;
+      const formattedTimeDifference = `${hoursDifference}:${String(minutes).padStart(2, "0")}`;
       return formattedTimeDifference;
     },
-    getBadgeType(table) {
+    getBadgeType(table, browserNow) {
       if (table.occupied != 1 && table.name !== this.selectedTable) {
         return "green";
       } else if (table.name === this.selectedTable) {
         return "default";
       } else if (table.occupied === 1 && table.name !== this.selectedTable) {
-        const timeDifference = this.getTimeDifference(table);
+        const timeDifference = this.getTimeDifference(table, browserNow);
         const [hours, minutes] = timeDifference.split(":");
         const totalMinutes = parseInt(hours) * 60 + parseInt(minutes);
         if (totalMinutes > this.invoiceData.tableAttention) {
@@ -375,13 +444,13 @@ export const useTableStore = defineStore("table", {
         }
       }
     },
-    getBadgeText(table) {
+    getBadgeText(table, browserNow) {
       if (table.occupied != 1 && table.name !== this.selectedTable) {
         return "Free";
       } else if (table.name === this.selectedTable) {
         return "Active";
       } else if (table.occupied === 1 && table.name !== this.selectedTable) {
-        const timeDifference = this.getTimeDifference(table);
+        const timeDifference = this.getTimeDifference(table, browserNow);
         const [hours, minutes] = timeDifference.split(":");
         const totalMinutes = parseInt(hours) * 60 + parseInt(minutes);
         if (totalMinutes > this.invoiceData.tableAttention) {
@@ -391,7 +460,52 @@ export const useTableStore = defineStore("table", {
         }
       }
     },
-    async addToSelectedTables(table) {
+    cartHasUnsentItems() {
+      const lineKeys = (rows, codeOf) => (rows || [])
+        .map((row) => {
+          const code = row && codeOf(row);
+          if (!code) return null;
+          const comment = String(row.comment == null ? "" : row.comment).trim();
+          return code + "\0" + Number(row.qty || 0) + "\0" + comment;
+        })
+        .filter((key) => key !== null)
+        .sort();
+      const cart = this.menu.cart || [];
+      const tableSaved = Array.isArray(this.previousOrderdItem) ? this.previousOrderdItem : [];
+      const recent = this.recentOrders;
+      const recentItems = recent && recent.pastOrderdItem;
+      const recentSaved = Array.isArray(recentItems) ? recentItems : [];
+      const storedTable = recent && recent.restaurantTable;
+      const listedTable = recent && recent.selectedTable;
+      const recentTable = storedTable || listedTable;
+      const recentInvoice = recent && (recent.draftInvoice || recent.invoiceNumber);
+      const tablesAgree = Boolean(storedTable) && (!listedTable || listedTable === storedTable);
+      const openDraftBelongsToItsTable = Boolean(recent && recent.draftInvoice) && tablesAgree;
+      const sameTable = Boolean(recentTable) && recentTable === this.selectedTable;
+      const sameInvoice = Boolean(recentInvoice) && recentInvoice === this.invoiceNo && sameTable;
+      const saved = tableSaved.length ? tableSaved : ((openDraftBelongsToItsTable || sameInvoice) ? recentSaved : []);
+      const cartKeys = lineKeys(cart, (row) => row.item);
+      const savedKeys = lineKeys(saved, (row) => row.item_code || row.item);
+      if (cartKeys.length !== savedKeys.length) return true;
+      return cartKeys.some((key, index) => key !== savedKeys[index]);
+    },
+    confirmLeaveUnsent(onLeave) {
+      if (!this.cartHasUnsentItems()) {
+        onLeave();
+        return;
+      }
+      useNotificationModal().showModal({
+        title: "Unsent items",
+        message: "You have unsent items. Leave without sending them?",
+        showCancelButton: true,
+        onConfirm: () => onLeave(),
+        onCancel: () => {},
+      });
+    },
+    addToSelectedTables(table) {
+      this.confirmLeaveUnsent(() => this.loadSelectedTable(table));
+    },
+    async loadSelectedTable(table) {
       this.selectedTable = table.name;
       this.takeAwayTable = 0;
 
@@ -436,7 +550,7 @@ export const useTableStore = defineStore("table", {
               this.alert
                 .createAlert(
                   "Message",
-                  "Table is assigned to " + this.previousOrder.waiter,
+                  "Table is assigned to " + this.ownerLabel(this.previousOrder.waiter),
                   "OK"
                 )
                 .then(() => {
@@ -498,15 +612,39 @@ export const useTableStore = defineStore("table", {
             });
           }
         })
-        .catch((error) => console.error(error));
+        .catch((error) => {
+          const permissionRefused = error?.httpStatus === 403 || error?.exc_type === "PermissionError";
+          if (permissionRefused && !this.auth.hasAccess && !this.auth.cashier) {
+            const fromFloor = table && typeof table.owner_name === "string" ? table.owner_name.trim() : "";
+            const ownerName = fromFloor || this.ownerLabel(table && table.waiter) || "another waiter";
+            this.alert
+              .createAlert(
+                "Message",
+                "Table is assigned to " + ownerName,
+                "OK"
+              )
+              .then(() => {
+                return router.push("/Table").then(() => {
+                  window.location.reload();
+                });
+              })
+              .catch((error) => console.error(error));
+            return;
+          }
+          console.error(error);
+        });
     },
     routeToCart(table) {
-      this.addToSelectedTables(table);
-      router.push("/Cart");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Cart");
+      });
     },
     routeToMenu(table) {
-      this.addToSelectedTables(table);
-      router.push("/Menu");
+      this.confirmLeaveUnsent(() => {
+        this.loadSelectedTable(table);
+        router.push("/Menu");
+      });
     },
     async invoiceNumberFetching() {
       const tableInvoiceNumber = {
@@ -517,8 +655,10 @@ export const useTableStore = defineStore("table", {
           "ury.ury.doctype.ury_order.ury_order.get_order_invoice",
           tableInvoiceNumber
         );
+        if (this.tableName !== tableInvoiceNumber.table) return;
         this.invoiceNumber = result.message.name;
         this.currentCaptain = result.message.waiter;
+        return result.message;
       } catch (error) {
         console.error(error._server_messages);
       }
@@ -574,6 +714,56 @@ export const useTableStore = defineStore("table", {
             }
           });
       }
+    },
+    async attachTableOwners(occupiedTables, room, invoices) {
+      if (room !== this.selectedRoom) return;
+      try {
+        const visible = new Set(occupiedTables.map((table) => table.name));
+        const waiterByTable = new Map();
+        for (const bill of invoices || []) {
+          if (!bill || !bill.waiter) continue;
+          const names = [];
+          if (bill.restaurant_table) names.push(bill.restaurant_table);
+          for (const partner of String(bill.custom_merged_tables || "").split(",")) {
+            const name = partner.trim();
+            if (name) names.push(name);
+          }
+          for (const name of names) {
+            if (visible.has(name)) waiterByTable.set(name, bill.waiter);
+          }
+        }
+        const waiterIds = [...new Set(waiterByTable.values())];
+        if (waiterIds.length) {
+          try {
+            const users = await this.db.getDocList("User", {
+              fields: ["name", "full_name"],
+              filters: [["name", "in", waiterIds]],
+              limit: waiterIds.length,
+            });
+            if (room !== this.selectedRoom) return;
+            for (const user of users || []) {
+              const fullName = user && typeof user.full_name === "string" ? user.full_name.trim() : "";
+              if (user && user.name && fullName) this.ownerNames[user.name] = fullName;
+            }
+          } catch (error) {
+            console.error(error);
+          }
+        }
+        if (room !== this.selectedRoom) return;
+        for (const table of this.tables) {
+          const waiter = waiterByTable.get(table.name);
+          table.owner_name = waiter ? this.ownerLabel(waiter) : "";
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    },
+    ownerLabel(userId) {
+      if (!userId) return "";
+      const known = this.ownerNames[userId];
+      if (known) return known;
+      const at = String(userId).indexOf("@");
+      return at > 0 ? String(userId).slice(0, at) : String(userId);
     },
   },
 });

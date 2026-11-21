@@ -309,7 +309,7 @@ class TestCreateCustomerLinkId(unittest.TestCase):
         customer_doc.insert.side_effect = _insert
         mock_get_doc.return_value = customer_doc
 
-        result = create_customer("Alice Restaurant Guest", "+919876543210")
+        result = create_customer("Alice Restaurant Guest", "+919876543210", customer_group="Test Group", territory="Test Territory")
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["name"], "CUST-00042")
@@ -365,7 +365,8 @@ class TestUryPosApi(unittest.TestCase):
     def test_authorized_create_customer(self):
         frappe.set_user("Administrator")
         
-        result = create_customer("Test Auth Customer", "+919876543210")
+        group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+        result = create_customer("Test Auth Customer", "+919876543210", customer_group=group)
         
         self.assertEqual(result.get("status"), "success")
         self.assertTrue(frappe.db.exists("Customer", "Test Auth Customer"))
@@ -377,14 +378,19 @@ class TestUryPosApi(unittest.TestCase):
             create_customer("Test Invalid Customer", "12345")
         self.assertIn("Invalid mobile number", str(cm.exception))
 
-    @patch("ury.ury_pos.api.frappe.db.get_value")
-    def test_create_customer_validates_against_pos_profile_country(self, mock_get_value):
+    def test_create_customer_validates_against_pos_profile_country(self):
         frappe.set_user("Administrator")
         # Simulate pos_profile with country "India"
-        mock_get_value.return_value = "India"
+        get_value = frappe.db.get_value
+        group = get_value("Customer Group", {"is_group": 0}, "name")
+        def get_profile_value(doctype, name=None, fieldname="name", *args, **kwargs):
+            if (doctype, name, fieldname) == ("POS Profile", "India POS", "country"):
+                return "India"
+            return get_value(doctype, name, fieldname, *args, **kwargs)
+        self.enterContext(patch.object(frappe.db, "get_value", side_effect=get_profile_value))
 
         # Valid 10-digit India number
-        result = create_customer("Test India Customer", "9876543210", pos_profile="India POS")
+        result = create_customer("Test India Customer", "9876543210", pos_profile="India POS", customer_group=group)
         self.assertEqual(result.get("status"), "success")
         if frappe.db.exists("Customer", "Test India Customer"):
             frappe.delete_doc("Customer", "Test India Customer", ignore_permissions=True, force=1)

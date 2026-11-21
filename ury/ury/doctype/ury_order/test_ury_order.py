@@ -1082,7 +1082,7 @@ class TestGetTableOrderContext(FrappeTestCase):
             return_value=True,
         ), patch(
             "ury.ury.doctype.ury_order.ury_order.frappe.get_all",
-            return_value=invoices,
+            side_effect=lambda doctype, **kwargs: [] if doctype == "URY User" else invoices,
         ), patch(
             "ury.ury.doctype.ury_order.ury_order.frappe.get_roles",
             return_value=list(user_roles or []),

@@ -55,8 +55,8 @@ beforeEach(async () => {
   });
   dependencies.invoice = reactive({
     currency: 'UGX',
-    posProfile: 'Salama POS',
-    warehouse: 'Stores - SAL',
+    posProfile: 'Test POS',
+    warehouse: 'Test Warehouse',
     showUpdateButtton: true,
     invoiceUpdating: false,
     kotPrinting: false,
@@ -100,7 +100,7 @@ beforeEach(async () => {
   dependencies.call = {
     get: async (method) => {
       if (method === 'ury.ury_pos.api.getRestaurantMenu') {
-        return { message: { items: structuredClone(menuRows), name: 'Salama Main Menu' } };
+        return { message: { items: structuredClone(menuRows), name: 'Test Menu' } };
       }
       if (method === 'ury.ury.doctype.ury_order.ury_order.get_order_invoice') {
         return { message: structuredClone(invoice) };
