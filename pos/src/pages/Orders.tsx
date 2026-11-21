@@ -535,7 +535,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       <div className="flex min-w-0 flex-none flex-col lg:min-h-0 lg:flex-1">
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-4 bg-gray-50 p-4 xl:grid-cols-[minmax(0,1fr)_14rem] xl:grid-rows-1">
           <div className="min-w-0 overflow-y-auto">
-          <BillRequestStrip orders={error ? [] : orders} selectOrder={selectOrder} />
+          <BillRequestStrip selectOrder={selectOrder} />
           {error ? (
             <div className="p-4 text-center">
               <p className="font-semibold text-red-600">{t('orders.failed_to_load')}</p>

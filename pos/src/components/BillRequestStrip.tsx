@@ -23,7 +23,6 @@ function isOpen(invoice: POSInvoice & { docstatus?: number }) {
 }
 
 interface Props {
-  orders: POSInvoice[];
   selectOrder: (invoice: POSInvoice) => Promise<boolean>;
 }
 
@@ -33,7 +32,7 @@ export default function BillRequestStrip(props: Props) {
   return <OwnerRequests key={owner} {...props} owner={owner} />;
 }
 
-function OwnerRequests({ owner, orders, selectOrder }: Props & { owner: string }) {
+function OwnerRequests({ owner, selectOrder }: Props & { owner: string }) {
   const [requests, setRequests] = useState<BillRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [unavailable, setUnavailable] = useState(false);
@@ -121,8 +120,6 @@ function OwnerRequests({ owner, orders, selectOrder }: Props & { owner: string }
     setChoices([]);
     try {
       if (request.invoice) {
-        const loaded = orders.find(inv => inv.name === request.invoice && isOpen(inv));
-        if (loaded) { await open(loaded); return; }
         const result = await call.get<{ message: POSInvoice[] }>('frappe.client.get_list', {
           doctype: 'POS Invoice', filters: { name: request.invoice, branch: scope, status: 'Draft', docstatus: 0 },
           fields: invoiceFields, limit_page_length: 1,

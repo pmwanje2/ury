@@ -99,8 +99,10 @@ describe('read-only bill-request strip', () => {
     expect(container.textContent).toContain('No bill requests waiting');
   });
   it('selects an exact invoice in the loaded queue without searching', async () => {
+    search = [queue[0]];
     await render(); await pickup(); expect(select).toHaveBeenCalledWith(queue[0]);
-    expect(call.get).toHaveBeenCalledTimes(3);
+    expect(call.get).toHaveBeenCalledTimes(4);
+    expect(call.get).not.toHaveBeenCalledWith('ury.ury_pos.api.searchPosInvoice', expect.anything());
   });
   it('searches Outstanding for an off-page invoice and selects only the exact readable draft', async () => {
     queue = []; search = [check('POS-10'), check('POS-1')];
@@ -263,6 +265,7 @@ describe('read-only bill-request strip', () => {
     expect(container.textContent).toContain('1 waiting');
     expect(container.textContent).toContain('Bill requests refresh failed');
     expect(container.textContent).not.toContain('Bill requests unavailable');
+    search = [queue[0]];
     await pickup(); expect(select).toHaveBeenCalledWith(queue[0]);
     await click('Refresh');
     expect(container.textContent).not.toContain('refresh failed');
