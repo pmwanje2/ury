@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
-import { formatCurrency, parseFrappeError } from '@ury/core';
+import { formatCurrency, parseFrappeError, resolveDefaultCustomer } from '@ury/core';
 import { CustomerSelect } from './CustomerSelect';
 import ProductDialog from './ProductDialog';
 import OrderTypeSelect from './OrderTypeSelect';
@@ -43,6 +43,7 @@ const OrderPanel = () => {
     selectedOrderType,
     selectedTable,
     selectedRoom,
+    tableOrder,
     selectedCustomer,
     selectedAggregator,
     resetOrderState,
@@ -128,13 +129,17 @@ const OrderPanel = () => {
         throw new Error(t('errors.user_not_logged_in'));
       }
 
+      const routine = selectedOrderType === DINE_IN || selectedOrderType === 'Take Away';
+      const invoiceCustomer = isUpdatingOrder && tableOrder?.message?.name === orderId ? tableOrder.message.customer : null;
+      const customer = selectedCustomer?.id || invoiceCustomer || (!isUpdatingOrder && outbox.offline && routine
+        ? resolveDefaultCustomer(selectedOrderType, posProfile)?.id : '');
       // Validate customer/aggregator details
       if (!target && selectedOrderType === 'Aggregators') {
         if (!selectedAggregator?.customer) {
           showToast.error(t('errors.select_aggregator'));
           return;
         }
-      } else if (!target && !selectedCustomer?.name) {
+      } else if (!target && !customer && (!routine || outbox.offline)) {
         showToast.error(t('errors.select_customer'));
         return;
       }
@@ -167,7 +172,7 @@ const OrderPanel = () => {
         order_type: selectedOrderType,
         table: selectedTable || undefined,
         room: selectedRoom || undefined,
-        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : selectedCustomer?.id,
+        customer: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : customer,
         aggregator_id: selectedOrderType === 'Aggregators' ? selectedAggregator?.customer : undefined,
         cashier: posProfile.cashier,
         owner: posProfile.owner,

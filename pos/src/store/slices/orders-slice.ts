@@ -1,7 +1,7 @@
-import { getSessionUser, sessionStorageKey } from '@ury/core';
+import { getSessionUser, ownedSessionKey } from '@ury/core';
 import { cachedOfflineProfile } from '../../pwa/register-offline';
 import { StateCreator } from 'zustand';
-import { OrderType } from '../../data/order-types';
+import { OrderType, OrderStatusType } from '../../data/order-types';
 import { isLinkDown, call } from '@ury/core';
 import { getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoiceTax } from '../../lib/invoice-api';
 import { searchPosInvoice } from '../../lib/invoice-api';
@@ -34,6 +34,8 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   additional_discount_percentage?: number;
   discount_amount?: number;
+  age_minutes?: number;
+  items_preview?: Array<{ item_name: string; qty: number }>;
 }
 
 export interface OrdersState {
@@ -46,7 +48,7 @@ export interface OrdersState {
     hasNextPage: boolean;
     itemsPerPage: number;
   };
-  selectedStatus: 'Draft' | 'Unbilled' | 'Recently Paid' | 'Paid' | 'Consolidated' | 'Return';
+  selectedStatus: OrderStatusType;
   selectedOrder: POSInvoice | null;
   selectedOrderItems: POSInvoiceItem[];
   selectedOrderTaxes: POSInvoiceTax[];
@@ -60,7 +62,7 @@ export interface OrdersActions {
   updateOrderStatus: (orderId: string, status: POSInvoice['status']) => Promise<void>;
   goToNextPage: () => Promise<void>;
   goToPreviousPage: () => Promise<void>;
-  setSelectedStatus: (status: POSInvoice['status']) => Promise<void>;
+  setSelectedStatus: (status: OrderStatusType) => Promise<void>;
   selectOrder: (order: POSInvoice) => Promise<void>;
   clearSelectedOrder: () => void;
   setOrderSearchQuery: (query: string) => void;
@@ -86,7 +88,7 @@ export const createOrdersSlice: StateCreator<
     hasNextPage: false,
     itemsPerPage: ITEMS_PER_PAGE,
   },
-  selectedStatus: 'Draft',
+  selectedStatus: 'Outstanding',
   selectedOrder: null,
   selectedOrderItems: [],
   selectedOrderTaxes: [],
@@ -101,7 +103,8 @@ export const createOrdersSlice: StateCreator<
       const { orderSearchQuery, selectedStatus } = get();
       
       // Get POS profile to access paid_limit
-      const posProfile = sessionStorage.getItem(sessionStorageKey('posProfile'));
+      const key = ownedSessionKey('posProfile');
+      const posProfile = key && sessionStorage.getItem(key);
       const profile = posProfile ? JSON.parse(posProfile) : null;
       const paidLimit = profile?.paid_limit;
       

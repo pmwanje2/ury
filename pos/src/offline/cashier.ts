@@ -1,4 +1,4 @@
-import { logout, purgeOfflineSession } from '@ury/core';
+import { clearAppStorage, logout, purgeOfflineSession } from '@ury/core';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
 import { OfflineOutbox, canCaptureOffline, openTableRow, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
@@ -36,7 +36,10 @@ export async function clearCashierStorage(signOut = false): Promise<void> {
   await withEmptyOutbox(async () => {
     if (signOut && await logout() === false) throw new Error(t('errors.failed_logout'));
     await purgeEmptyOutbox();
-    await purgeOfflineSession();
+    if (!signOut) {
+      clearAppStorage();
+      await purgeOfflineSession();
+    }
   });
 }
 

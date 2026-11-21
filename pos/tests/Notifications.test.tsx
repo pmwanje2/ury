@@ -60,7 +60,7 @@ afterEach(async () => {
 describe('notification ages use the floor-plan site clock', () => {
   function siteClock(browserNow: string, serverNow: string, clock?: () => Promise<{ message: string }>) {
     vi.stubEnv('TZ', 'Europe/Berlin');
-    vi.useFakeTimers();
+    if (!vi.isFakeTimers()) vi.useFakeTimers();
     vi.setSystemTime(new Date(browserNow));
     vi.mocked(call.get).mockImplementation(async <T,>(method: string): Promise<T> => {
       if (method === 'ury.ury.api.ury_server_time.get_server_time') {

@@ -101,7 +101,16 @@
     "kot_sent": "أُرسل",
     "kot_preparing": "قيد التحضير",
     "kot_ready": "جاهز",
-    "kot_served": "قُدِّم"
+    "kot_served": "قُدِّم",
+    "age_minutes": "{{count}} min",
+    "change_type_confirm": "مسح وتبديل",
+    "change_type_message": "التبديل إلى {{type}} يمسح هذا الطلب. عدد العناصر في السلة: {{count}}.",
+    "change_type_title": "تغيير نوع الطلب؟",
+    "not_printed": "Not printed",
+    "print_bill": "طباعة الفاتورة",
+    "print_receipt": "طباعة الإيصال",
+    "printed": "Printed",
+    "settle_bill": "تسوية الفاتورة"
   },
   "payment": {
     "title": "الدفع",
@@ -523,7 +532,8 @@
     "orders": "الطلبات",
     "settings": "الإعدادات",
     "sessions": "الجلسات",
-    "reservations": "الحجوزات"
+    "reservations": "الحجوزات",
+    "analytics": "Analytics"
   },
   "product_dialog": {
     "special_instructions": "تعليمات خاصة",
@@ -550,7 +560,8 @@
     "recently_paid": "مدفوع مؤخراً",
     "paid": "مدفوع",
     "consolidated": "مجمع",
-    "return": "مرتجع"
+    "return": "مرتجع",
+    "outstanding": "Outstanding"
   },
   "settings": {
     "title": "الإعدادات",
@@ -916,5 +927,21 @@
     "captured": "وقت التسجيل",
     "no_fdn": "تسجيل دون اتصال؛ لا يوجد رقم فاتورة ضريبية.",
     "refused": "{{action}} غير متاح دون اتصال. أعد الاتصال بالخادم أولاً."
+  },
+  "bill_requests": {
+    "choose_check": "Choose an open check",
+    "empty": "No bill requests waiting",
+    "loading": "Loading bill requests",
+    "lookup_loading": "Finding open bill…",
+    "lookup_unavailable": "Bill lookup unavailable",
+    "no_link": "Request has no linked table or bill",
+    "no_open_checks": "No open checks for {{table}}",
+    "not_open": "Bill {{invoice}} is not open",
+    "open_record": "Open request",
+    "refresh": "Refresh",
+    "refresh_failed": "Bill requests refresh failed",
+    "title": "Bill requests",
+    "unavailable": "Bill requests unavailable",
+    "waiting": "Bill requests: {{count}} waiting"
   }
 }

@@ -1,3 +1,4 @@
+import TillLogout from './TillLogout';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dialog,
@@ -769,6 +770,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         )}
 
         <DialogFooter>
+          <TillLogout />
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isSubmitting}>
             {t('common.cancel')}
           </Button>

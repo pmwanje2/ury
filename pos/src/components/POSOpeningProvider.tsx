@@ -1,3 +1,4 @@
+import TillLogout from './TillLogout';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isLinkDown, getUserSessionStorageKey } from '@ury/core';
 import { offlineCaptureEnabled } from '../pwa/runtime-caching';
@@ -293,6 +294,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
           <p className="text-gray-600">{t('common.checking_pos_status')}</p>
+          <TillLogout />
         </div>
       </div>
     );

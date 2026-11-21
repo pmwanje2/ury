@@ -134,7 +134,8 @@ beforeEach(async () => {
   localStorage.setItem('currencySymbol', '$');
   useRootStore.setState({
     user: null, isLoading: false, error: null, posProfile: null, hasAccess: false,
-    allowedRoles: [], orders: [], orderLoading: false, ordersOffline: false,
+    // This fixture exercises getPosInvoice (the original Draft queue).
+    selectedStatus: 'Draft', allowedRoles: [], orders: [], orderLoading: false, ordersOffline: false,
   });
   usePOSStore.setState({ posProfile: null, isInitializing: true, error: null, paymentModes: [], loading: false } as never);
   const { OfflineOutbox } = await import('../src/offline/outbox');

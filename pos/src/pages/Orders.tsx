@@ -44,6 +44,8 @@ import {
   type PrintWarningInput,
 } from '../lib/invoice-print-warning';
 import { orderTypeLabel } from '../data/order-types';
+import BillRequestStrip from '../components/BillRequestStrip';
+import Notifications from '../components/Notifications';
 
 function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom_merged_tables'>) {
   if (!order.restaurant_table) return null;
@@ -58,7 +60,7 @@ function checkName(order: Pick<POSInvoice, 'customer' | 'custom_guest_label'>) {
 }
 
 function isOrderEditable(status: string) {
-  return status === 'Draft' || status === 'Unbilled' || status === 'Recently Paid';
+  return status === 'Draft' || status === 'Unbilled';
 }
 
 const OTHER_VOID_REASON = '__other__';
@@ -404,7 +406,9 @@ export default function Orders() {
         });
       }
       // If order was Unbilled, set to Draft and reload draft orders
-      if (selectedStatus === 'Unbilled') {
+      if (selectedStatus === 'Outstanding') {
+        await fetchOrders();
+      } else if (selectedStatus === 'Unbilled') {
         showToast.info(t('success.order_moved_to_draft'));
         setSelectedStatus('Draft');
         fetchOrders();
@@ -429,7 +433,7 @@ export default function Orders() {
       !!selectedOrder.restaurant_table &&
       String(selectedOrder.invoice_printed) === '1';
 
-    if (childOnUnbilledTab) {
+    if (childOnUnbilledTab && selectedStatus !== 'Outstanding') {
       await setSelectedStatus('Unbilled');
     } else {
       await fetchOrders();
@@ -493,15 +497,17 @@ export default function Orders() {
     await selectOrder(inList ?? mapSplitGroupInvoiceToPOSInvoice(sibling));
   }
 
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <p className="text-xl font-semibold text-red-600 mb-2">{t('orders.failed_to_load')}</p>
-          <p className="text-gray-600">{error}</p>
-        </div>
-      </div>
-    );
+  async function openNotificationCheck(kotName: string, isCurrentSession: () => boolean) {
+    const kot = await call.get<{ message: { invoice?: string } }>('frappe.client.get', { doctype: 'URY KOT', name: kotName });
+    if (!isCurrentSession() || !kot.message?.invoice) return false;
+    const response = await call.get<{ message: POSInvoice & { branch: string } }>('frappe.client.get', {
+      doctype: 'POS Invoice', name: kot.message.invoice,
+    });
+    if (!isCurrentSession()) return false;
+    const till = await call.get<{ message: string }>('ury.ury_pos.api.getBranch');
+    if (!isCurrentSession() || !till.message || response.message?.branch !== till.message || response.message.name !== kot.message.invoice) return false;
+    await selectOrder(response.message);
+    return true;
   }
 
   if (ordersOffline) {
@@ -518,8 +524,15 @@ export default function Orders() {
 
       {/* Middle Section - Order Cards */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden pe-96">
-        <div className="flex-1 overflow-y-auto bg-gray-50 p-4 pb-40">
-          {orderLoading ? (
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-4 bg-gray-50 p-4 pb-40 xl:grid-cols-[minmax(0,1fr)_14rem] xl:grid-rows-1">
+          <div className="min-w-0 overflow-y-auto">
+          <BillRequestStrip orders={error ? [] : orders} selectOrder={selectOrder} />
+          {error ? (
+            <div className="p-4 text-center">
+              <p className="font-semibold text-red-600">{t('orders.failed_to_load')}</p>
+              <p className="text-gray-600">{error}</p>
+            </div>
+          ) : orderLoading ? (
             <div className="flex items-center justify-center h-full">
               <Spinner  message={t('common.loading')} />
             </div>
@@ -528,7 +541,7 @@ export default function Orders() {
               <p className="text-gray-500">{t('orders.no_orders_found')}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-screen-xl mx-auto">
+            <div className="grid grid-cols-1 gap-4 max-w-screen-xl mx-auto 2xl:grid-cols-2">
               {orders.map((order) => {
                 const splitBill = isSplitBill(order);
                 const mergedBill = isMergedBill(order);
@@ -573,6 +586,9 @@ export default function Orders() {
                         </p>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
+                        <Badge variant="outline">
+                          {t(String(order.invoice_printed) === '1' ? 'order.printed' : 'order.not_printed')}
+                        </Badge>
                         <Badge variant={getBadgeVariant(order.status)}>
                           {t(`order_status_types.${order.status.toLowerCase().replace(/ /g, '_')}`)}
                         </Badge>
@@ -600,7 +616,12 @@ export default function Orders() {
                       <div className="flex items-center gap-2 text-xs text-gray-500">
                         <Clock className="w-3.5 h-3.5" />
                         <span>{formatDateTime(order.posting_date, order.posting_time)}</span>
+                        {order.age_minutes !== undefined && <span>{t('order.age_minutes', { count: order.age_minutes })}</span>}
                       </div>
+                      {order.waiter && <p className="text-xs text-gray-500">{order.waiter}</p>}
+                      {order.items_preview?.length ? <p className="mt-2 text-sm text-gray-700">
+                        {order.items_preview.map(item => `${item.qty}× ${item.item_name}`).join(', ')}
+                      </p> : null}
 
                       {/* Total - pushed to bottom like MenuCard */}
                       <div className="mt-auto pt-2">
@@ -645,6 +666,8 @@ export default function Orders() {
               </div>
             </div>
           )}
+          </div>
+          <Notifications title="Notifications" onOpenCheck={openNotificationCheck} />
         </div>
       </div>
 
@@ -905,24 +928,33 @@ export default function Orders() {
               )}
             </div>
 
-            {/* Sticky Bottom Section - Single Row: Print | Payment | Total */}
+            {/* Sticky Bottom Section: Print | Split | Settle | Total */}
             <div className="border-t border-border p-6 bg-gray-50 sticky bottom-0 start-0 end-0 z-10">
-              <div className="flex items-center gap-3 w-full">
-                {/* Print Icon Button */}
+              <div className="flex flex-wrap items-center gap-3 w-full">
+                {/* Print Bill / Receipt Button */}
                 <Button
                   variant="outline"
-                  size="icon"
-                  className="flex-shrink-0"
+                  className="min-h-11 shrink-0 gap-2"
                   onClick={handlePrintOrder}
-                  aria-label={t('order.print')}
                   disabled={isPrinting}
                 >
                   {isPrinting ? <Spinner className="w-5 h-5" hideMessage  message={t('common.loading')} /> : <Printer className="w-5 h-5" />}
+                  {t(selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled'
+                    ? 'order.print_bill' : 'order.print_receipt')}
                 </Button>
+                {isOrderEditable(selectedOrder.status) && canSplitBill && (
+                  <Button
+                    variant="outline"
+                    className="min-h-11"
+                    onClick={() => setShowSplitDialog(true)}
+                  >
+                    {t('bill_split.split_bill')}
+                  </Button>
+                )}
                 {/* Payment Button - Only show for Draft, Unbilled, and Recently Paid orders */}
                 {isOrderEditable(selectedOrder.status) && (
                   <Button
-                    className="flex-1"
+                    className="min-h-11 flex-1"
                     onClick={() => {
                       const enablePaymentWithoutPrinting = Boolean(
                         Number(posStore.posProfile?.enable_payment_without_printing) === 1 ||
@@ -935,7 +967,7 @@ export default function Orders() {
                       setShowPaymentDialog(true);
                     }}
                   >
-                    {t('order.payment')}
+                    {t('order.settle_bill')}
                   </Button>
                 )}
                 {/* Total */}

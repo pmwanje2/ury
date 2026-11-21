@@ -237,7 +237,7 @@ describe("Orders Page", () => {
 
     render(<Orders />);
 
-    const paymentBtn = screen.getByRole("button", { name: "order.payment" });
+    const paymentBtn = screen.getByRole("button", { name: "order.settle_bill" });
     fireEvent.click(paymentBtn);
 
     expect(showToast.error).toHaveBeenCalledWith("errors.please_print_first");
@@ -255,7 +255,7 @@ describe("Orders Page", () => {
 
     render(<Orders />);
 
-    const paymentBtn = screen.getByRole("button", { name: "order.payment" });
+    const paymentBtn = screen.getByRole("button", { name: "order.settle_bill" });
     fireEvent.click(paymentBtn);
 
     expect(showToast.error).not.toHaveBeenCalled();

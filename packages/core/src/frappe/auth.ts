@@ -1,6 +1,6 @@
 import { gatewayStatusOf } from '../gateway-status';
 import { db, auth, NETWORK_FAILURE_MARK } from './client';
-import { purgeOfflineSession } from '../storage';
+import { clearAppStorage, purgeOfflineSession } from '../storage';
 
 type LoggedUserResponse = string | null;
 
@@ -88,6 +88,7 @@ export const logout = async () => {
   try {
     const result = await auth.logout();
     // The POS worker must stop serving the old user's cached reads before navigation.
+    clearAppStorage();
     await purgeOfflineSession();
     return result;
   }catch(e){

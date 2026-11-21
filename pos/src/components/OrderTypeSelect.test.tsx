@@ -38,6 +38,7 @@ describe("OrderTypeSelect", () => {
       selectedTable: null,
       tableOrder: null,
       posProfile: {},
+      activeOrders: [],
       isUpdatingOrder: false,
     });
 
@@ -63,6 +64,7 @@ describe("OrderTypeSelect", () => {
       selectedTable: null,
       tableOrder: null,
       posProfile: {},
+      activeOrders: [],
       isUpdatingOrder: false,
     });
 
@@ -91,6 +93,7 @@ describe("OrderTypeSelect", () => {
       selectedTable: null,
       tableOrder: null,
       posProfile: {},
+      activeOrders: [],
       isUpdatingOrder: true,
     });
 

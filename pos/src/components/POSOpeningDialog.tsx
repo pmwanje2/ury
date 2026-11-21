@@ -1,3 +1,4 @@
+import TillLogout from './TillLogout';
 import { ReactNode } from 'react';
 import {
   RefreshCw,
@@ -156,6 +157,7 @@ const POSOpeningDialog = ({
               </Button>
             )}
 
+            <TillLogout />
             {canAccessDesk && (
               <Button
                 onClick={handleSwitchToDesk}

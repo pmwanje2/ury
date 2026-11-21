@@ -1,3 +1,4 @@
+import { useTillLogout } from './TillLogout';
 import { useState, useEffect, useRef } from 'react';
 import { t, tUser } from '../i18n';
 import { useLocation } from 'react-router-dom';
@@ -119,20 +120,11 @@ const Header = () => {
     setShowUserMenu(!showUserMenu);
   };
 
-  const handleLogout = async () => {
-    try {
-      await clearCashierStorage(true);
-      window.location.href = '/login?redirect-to=%2Fpos';
-    } catch (error) {
-      showToast.error(error instanceof Error ? error.message : t('errors.failed_logout'));
-    }
-  };
+  const { loggingOut, handleLogout } = useTillLogout();
 
   const handleClearCache = async () => {
     try {
       await clearCashierStorage();
-      localStorage.clear();
-      sessionStorage.clear();
       window.location.reload();
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : t('errors.failed_logout'));
@@ -293,6 +285,7 @@ const Header = () => {
                   <Button
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors"
+                    disabled={loggingOut}
                     onClick={handleLogout}
                   >
                     <LogOut className="w-4 h-4 me-3" />
