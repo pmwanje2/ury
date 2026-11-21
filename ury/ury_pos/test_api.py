@@ -358,6 +358,8 @@ class TestSplitGroupScope(unittest.TestCase):
         self.query.assert_not_called()
 
     def test_owned_child_omits_hidden_parent_and_renumbers_visible_members(self):
+        for member in self.docs.values():
+            member.custom_split_group = self.original.name
         response = get_split_group('child')
         self.assertEqual([row.name for row in response['invoices']], ['child'])
         child, = response['invoices']
