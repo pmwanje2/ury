@@ -234,17 +234,18 @@ test.each([
   vi.stubGlobal('fetch', fetch);
   await queue.replay();
   const onlineSubmit = vi.fn(async () => 'accepted');
-  await expect(submitOrderOfflineAware({ profile: active, user: operator, order, total: 100, onlineSubmit })).rejects.toThrow(/session|sign.in|verif/i);
+  const refusal = { code: 'URY_OFFLINE_SESSION_UNVERIFIED', message: 'Verify the cashier session online before taking orders or payments.' };
+  await expect(submitOrderOfflineAware({ profile: active, user: operator, order, total: 100, onlineSubmit })).rejects.toMatchObject(refusal);
   expect(onlineSubmit).not.toHaveBeenCalled();
   // A later gateway outage and reloaded store objects cannot undo the denial.
   const next = { ...operator }; const replacement = cashierOutbox({ ...active }, next);
   fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
   await replacement.replay();
   await expect(settleOfflineOrder({ profile: active, user: next, clientOrderId: pending.client_order_id,
-    kind: 'cash', modeOfPayment: 'Cash', amount: 100 })).rejects.toThrow(/session|sign.in|verif/i);
+    kind: 'cash', modeOfPayment: 'Cash', amount: 100 })).rejects.toMatchObject(refusal);
   const onlineSettle = vi.fn(async () => { throw { httpStatus: 504 }; });
   await expect(submitSettlementOfflineAware({ profile: active, user: next, invoice: 'INV-1', due: 100, amount: 100,
-    modeOfPayment: 'Cash', onlineSettle })).rejects.toThrow(/session|sign.in|verif/i);
+    modeOfPayment: 'Cash', onlineSettle })).rejects.toMatchObject(refusal);
   expect(onlineSettle).not.toHaveBeenCalled();
   expect(await replacement.list()).toEqual(before);
   fetch.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json({ name: 'INV-1' }));
