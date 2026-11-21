@@ -59,7 +59,8 @@
     "add_comment": "Agregar comentario",
     "edit_comment": "Editar comentario",
     "pax": "Pax",
-    "insufficient_capacity": "Capacidad insuficiente para agregar más de este artículo"
+    "insufficient_capacity": "Capacidad insuficiente para agregar más de este artículo",
+    "guest_label": "Nombre del huésped (opcional)"
   },
   "order": {
     "select_to_view": "Selecciona un pedido para ver el detalle",
@@ -87,7 +88,15 @@
     "processing": "Procesando...",
     "short_by": "Faltan {{amount}}",
     "change_due": "Cambio: {{amount}}",
-    "success": "Pago exitoso: se recibieron {{amount}}"
+    "success": "Pago exitoso: se recibieron {{amount}}",
+    "room_folio": "Habitación / Folio",
+    "room_posting": "Cargo a habitación",
+    "check_room": "Verificar habitación",
+    "checking_room": "Verificando...",
+    "room_match": "Habitación {{room}} · {{guest}} · sale {{departure}}",
+    "room_no_post": "La cuenta de este huésped no admite cargos a la habitación",
+    "room_check_required": "Verifique la habitación antes del cargo a habitación",
+    "room_check_failed": "No se pudo verificar esta habitación"
   },
   "pos": {
     "not_opened_title": "POS no abierto",
@@ -436,7 +445,9 @@
     "next_bill": "Cuenta siguiente",
     "split_from": "Dividida desde {{invoice}}",
     "related": "Cuentas relacionadas",
-    "open_sibling_failed": "No se pudo abrir la cuenta relacionada"
+    "open_sibling_failed": "No se pudo abrir la cuenta relacionada",
+    "guest_label": "Nombre del huésped para la nueva cuenta (opcional)",
+    "guest_label_placeholder": "p. ej. David"
   },
   "bill_merge": {
     "merge_bill": "Unir cuentas",

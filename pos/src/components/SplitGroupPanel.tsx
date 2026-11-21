@@ -163,8 +163,12 @@ const SplitGroupPanel = ({ invoiceName, onOpenInvoice }: SplitGroupPanelProps) =
                       total: invoice.split_total,
                     })}
                   </span>
-                  {(invoice.customer_name || invoice.customer) && (
-                    <span className="truncate">{invoice.customer_name || invoice.customer}</span>
+                  {(invoice.custom_guest_label || invoice.customer_name || invoice.customer) && (
+                    <span className="truncate">
+                      {[invoice.custom_guest_label, invoice.customer_name || invoice.customer]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
                   )}
                 </div>
               </div>

@@ -58,7 +58,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
   } = useOrderingSession(initialContext)
 
   const [showIdleWarning, setShowIdleWarning] = useState(false)
-  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const idleResetTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const idleWarnMs = (context?.session_idle_timeout_minutes ?? 30) * 60000
 
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
@@ -249,6 +249,8 @@ function TabletLayout({ initialContext }: LayoutProps) {
               menuItem={currentMenuItem}
               onAddToCart={addToCart}
               onBack={goToMenu}
+              menu={menu}
+              itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
             />
           ) : (
             <div className="flex h-full flex-col p-6">
@@ -284,6 +286,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
           submitting={submitting}
           billRequested={billRequested}
           payingOnline={payingOnline}
+          paymentRequest={paymentRequest}
           onIncrement={addToCart}
           onDecrement={decrementCart}
           onSubmit={goToCheckout}

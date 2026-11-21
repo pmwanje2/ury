@@ -6,8 +6,25 @@ import frappe
 from frappe.utils import now_datetime
 
 
+def _ensure_masters():
+    # A blank test site (setup wizard not run) has no tree roots or UOMs.
+    if not frappe.db.exists("UOM", "Nos"):
+        frappe.get_doc({"doctype": "UOM", "uom_name": "Nos"}).insert()
+    for doctype, root, leaf, field in (
+        ("Item Group", "All Item Groups", "Offline Products", "item_group_name"),
+        ("Customer Group", "All Customer Groups", "Offline Individual", "customer_group_name"),
+        ("Territory", "All Territories", "Offline Territory", "territory_name"),
+    ):
+        if not frappe.db.exists(doctype, root):
+            frappe.get_doc({"doctype": doctype, field: root, "is_group": 1}).insert()
+        if not frappe.db.get_value(doctype, {"is_group": 0}):
+            frappe.get_doc({"doctype": doctype, field: leaf, "is_group": 0,
+                frappe.scrub("parent " + doctype): root}).insert()
+
+
 def make_offline_pos():
     frappe.set_user("Administrator")
+    _ensure_masters()
     frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
     suffix = frappe.generate_hash(length=8)
     company = "URY"
@@ -19,11 +36,11 @@ def make_offline_pos():
             "country": "India", "default_currency": "INR",
         }).insert()
     today = now_datetime().date()
-    if not frappe.db.exists("Fiscal Year", {"year_start_date": ("<=", today), "year_end_date": (">=", today)}):
-        frappe.get_doc({
-            "doctype": "Fiscal Year", "year": f"Offline FY {today.year}",
-            "year_start_date": today.replace(month=1, day=1), "year_end_date": today.replace(month=12, day=31),
-        }).insert()
+    if not frappe.db.exists("Fiscal Year", {"year_start_date": ["<=", today],
+            "year_end_date": [">=", today], "disabled": 0}):
+        frappe.get_doc({"doctype": "Fiscal Year", "year": f"Offline FY {today.year}",
+            "year_start_date": today.replace(month=1, day=1),
+            "year_end_date": today.replace(month=12, day=31)}).insert()
     user = frappe.get_doc({
         "doctype": "User", "email": f"offline-{suffix}@example.com",
         "first_name": "Offline Test Cashier", "send_welcome_email": 0,
@@ -87,7 +104,6 @@ def make_offline_pos():
     }).insert()
     profile.customer = customer.name
     profile.save()
-    # v16: a production unit belongs to a mandatory URY Production Department.
     department = frappe.get_doc({
         "doctype": "URY Production Department", "department_name": f"Offline Dept {suffix}",
         "company": company, "branch": branch.name, "department_warehouse": warehouse,
@@ -95,15 +111,18 @@ def make_offline_pos():
     }).insert()
     production = frappe.get_doc({
         "doctype": "URY Production Unit", "production": f"Offline Kitchen {suffix}",
-        "pos_profile": profile.name, "branch": branch.name, "warehouse": warehouse,
         "department": department.name, "company": company, "enabled": 1,
+        "pos_profile": profile.name, "branch": branch.name, "warehouse": warehouse,
         "item_groups": [{"item_group": group}],
     }).insert()
-    # v16 stock validation exempts only items configured Always Available for the branch.
+    # The URY POS stock gate on a version-16 bench without ERPNext's batched
+    # check also refuses non-stock items; the native "Always Available"
+    # configuration bypasses it.
     frappe.get_doc({
-        "doctype": "URY Item Production Configuration", "item": item.name, "branch": branch.name,
-        "department": department.name, "production_unit": production.name, "active": 1,
-        "availability_mode": "Always Available", "controlled_by_sales_plan": 0,
+        "doctype": "URY Item Production Configuration", "item": item.name,
+        "branch": branch.name, "availability_mode": "Always Available", "active": 1,
+        "department": department.name, "production_unit": production.name,
+        "controlled_by_sales_plan": 0,
     }).insert()
     opening = frappe.get_doc({
         "doctype": "POS Opening Entry", "company": company, "pos_profile": profile.name,

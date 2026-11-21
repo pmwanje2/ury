@@ -49,6 +49,7 @@ export interface POSInvoice {
   docstatus?: number;
   no_of_pax?: number;
   custom_comments?: string | null;
+  custom_guest_label?: string | null;
   modified?: string;
 }
 
@@ -102,6 +103,8 @@ export interface SyncOrderRequest {
   last_invoice: string | null;
   last_modified_time?: string;
   comments?: string | null;
+  /** absent keeps the order's label; "" clears it */
+  guest_label?: string;
   room?: string;
 }
 
@@ -129,12 +132,14 @@ export interface SplitBillResponse {
 export async function splitBill(
   sourceInvoice: string,
   itemsToMove: SplitBillItemMove[],
-  customer?: string | null
+  customer?: string | null,
+  guestLabel?: string | null
 ): Promise<SplitBillResponse> {
   const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_bill', {
     source_invoice: sourceInvoice,
     items_to_move: itemsToMove,
     customer: customer || undefined,
+    ...(guestLabel && guestLabel.trim() ? { guest_label: guestLabel.trim() } : {}),
   });
   return res.message as SplitBillResponse;
 }
