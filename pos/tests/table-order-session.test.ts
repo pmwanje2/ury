@@ -122,5 +122,3 @@ test('a table read from before a same-user purge does not restore the old till',
   await aliceReadAcross(() => bobTill());
   expectBobTill();
 });
-
-
