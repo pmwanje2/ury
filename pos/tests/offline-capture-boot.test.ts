@@ -137,3 +137,76 @@ test('boot leaves offline capture off when the loaded till flag is missing', asy
   expect(registered).toEqual([]);
 });
 
+
+test('page load binds the signed-in user before the first menu and profile reads', async () => {
+  const order: string[] = [];
+  const pendingAcks: MessagePort[] = [];
+  let holdAcks = true;
+  const releaseAcks = () => {
+    holdAcks = false;
+    for (const port of pendingAcks.splice(0)) port.postMessage({ ok: true });
+  };
+  vi.stubGlobal('navigator', {
+    serviceWorker: {
+      controller: {
+        scriptURL: `${window.location.origin}/ury-pos-sw.js`,
+        postMessage(message: { type?: string; user?: string }, transfer?: MessagePort[]) {
+          order.push(`${message.type}:${message.user ?? ''}`);
+          const port = transfer?.[0];
+          if (!port) return;
+          if (holdAcks) pendingAcks.push(port);
+          else port.postMessage({ ok: true });
+        },
+      },
+      register: async (url: string) => {
+        registered.push(url);
+        return {};
+      },
+      addEventListener: () => undefined,
+      getRegistrations: async () => [],
+    },
+  });
+  vi.mocked(call.get).mockImplementation(async (method: string) => {
+    order.push(`read:${method}`);
+    if (method === 'ury.ury_pos.api.getPosProfile') return { message: limitedProfile() };
+    if (method === 'ury.ury_pos.api.getMenuCourses') return { message: [] };
+    if (method === 'ury.ury_pos.api.getModeOfPayment') return { message: [{ mode_of_payment: 'Cash', opening_amount: 0 }] };
+    if (method === 'ury.ury_pos.api.getRestaurantMenu') return { message: { items: [] } };
+    if (method === 'ury.ury_pos.api.getPosProfileFull') return { message: fullProfile(1) };
+    return {message: []};
+  });
+
+  const boot = Promise.all([
+    usePOSStore.getState().initializeApp(),
+    useRootStore.getState().fetchPosProfile(),
+  ]);
+  await vi.waitFor(() => {
+    expect(order.some((event) => event.startsWith('URY_BIND_SESSION:') || event.startsWith('read:'))).toBe(true);
+  });
+  expect(order.some((event) => event.startsWith('read:'))).toBe(false);
+  expect(order).toContain(`URY_BIND_SESSION:${cashier}`);
+  releaseAcks();
+  await boot;
+  const boundAt = order.findIndex((event) => event === `URY_BIND_SESSION:${cashier}`);
+  const profileAt = order.findIndex((event) => event === 'read:ury.ury_pos.api.getPosProfile');
+  expect(profileAt).toBeGreaterThan(boundAt);
+
+  order.length = 0;
+  holdAcks = true;
+  sessionStorage.setItem(`posProfile:${cashier}`, JSON.stringify({
+    name: 'Demo Profile',
+    restaurant: 'URY',
+    currency: 'INR', country: 'IN', order_type_customer_map: {}, custom_invoice_warning_time: 0, enable_payment_without_printing: 1,
+  }));
+  usePOSStore.setState({ posProfile: null, menuItems: [], isInitializing: true });
+  const menuBoot = usePOSStore.getState().initializeApp();
+  await vi.waitFor(() => {
+    expect(order.some((event) => event.startsWith('URY_BIND_SESSION:') || event.startsWith('read:'))).toBe(true);
+  });
+  expect(order.some((event) => event.startsWith('read:'))).toBe(false);
+  releaseAcks();
+  await menuBoot;
+  const menuBoundAt = order.findIndex((event) => event === `URY_BIND_SESSION:${cashier}`);
+  const menuAt = order.findIndex((event) => event === 'read:ury.ury_pos.api.getRestaurantMenu');
+  expect(menuAt).toBeGreaterThan(menuBoundAt);
+});

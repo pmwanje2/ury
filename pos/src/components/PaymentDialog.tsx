@@ -6,13 +6,15 @@ import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { call } from '@ury/core';
 import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
+import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
+import { useRootStore } from '../store/root-store';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat, type POSInvoice } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id'> & { invoice_printed?: string | number }) | null;
   onClose: () => void;
   grandTotal: number;
   roundedTotal: number;
@@ -46,6 +48,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   discountPercentage,
   discountAmount
 }) => {
+  const user = useRootStore((state) => state.user);
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile } = usePOSStore();
   const enablePaymentWithoutPrinting = Boolean(
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
@@ -82,7 +85,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
 
-  const handleApplyDiscount = () => {
+  const handleApplyDiscount = async () => {
+    try {
+      await assertOfflineActionAllowed('discount');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : t('errors.invalid_discount'));
+      return;
+    }
     const value = parseFloat(discountValue);
     if (isNaN(value) || value <= 0) {
       setError(t('errors.invalid_discount'));
@@ -209,6 +218,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     setIsProcessing(true);
     setError(null);
     try {
+      await assertOfflineActionAllowed('online invoice settlement');
       const wasAlreadyPrinted = order ? String(order.invoice_printed) !== '0' : false;
       if (!enablePaymentWithoutPrinting && !wasAlreadyPrinted) {
         setError(t('errors.please_print_first'));
@@ -255,18 +265,31 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           invoice,
         });
       } else {
-        await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-          additionalDiscount: discountValue ? parseFloat(discountValue) : null,
-          cashier,
-          customer,
-          invoice,
-          owner,
-          payments: settlementPayments,
-          pos_profile: posProfile,
-          table,
-          submit_invoice: 1,
-          ...roomFields,
+        const settlement = await submitSettlementOfflineAware({
+          profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
+          invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
+          amount: paymentsTotal, due: finalTotal, discount: appliedDiscount,
+          modeOfPayment: payments.length === 1 ? payments[0]?.mode_of_payment ?? '' : '',
+          onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
+            additionalDiscount: discountValue ? parseFloat(discountValue) : null,
+            cashier,
+            customer,
+            invoice,
+            owner,
+            payments: settlementPayments,
+            pos_profile: posProfile,
+            table,
+            submit_invoice: 1,
+            ...roomFields,
+            ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId }),
+          }),
         });
+        if (settlement.offline) {
+          showToast.success(t('offline.saved'));
+          onClose();
+          clearSelectedOrder();
+          return;
+        }
       }
       showToast.success(t('payment.success', { amount: formatCurrency(paymentsTotal) }));
       onClose();

@@ -16,6 +16,7 @@ const json = (message: unknown, status = 200) => new Response(JSON.stringify({ m
 });
 
 beforeEach(async () => {
+  sessionStorage.clear();
   await initI18n('en');
   vi.stubGlobal('indexedDB', new IDBFactory());
   vi.stubGlobal('navigator', { onLine: true, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });
@@ -215,4 +216,53 @@ test('an opted-out till does not queue a gateway settlement', async () => {
     onlineSettle: async () => { throw { httpStatus: 520, message: 'cloudflare' }; },
   })).rejects.toMatchObject({ httpStatus: 520 });
   expect(await queuedIds()).toEqual([]);
+});
+
+test.each([
+  ['401', () => json(null, 401)], ['403', () => json(null, 403)],
+  ['500', () => json(null, 500)], ['validation', () => json(null, 417)],
+  ['Guest', () => json('Guest')], ['another principal', () => json('other@example.com')],
+  ['login redirect', () => new Response(null, { status: 302 })],
+  ['aborted poll', () => { throw new DOMException('Aborted', 'AbortError'); }],
+] as const)('a %s poll blocks stale cashier writes until the queue owner is verified', async (_label, answer) => {
+  const { cashierOutbox, submitOrderOfflineAware, settleOfflineOrder, submitSettlementOfflineAware } = await captureModule();
+  const active = { ...profile }; const operator = { ...user };
+  const queue = cashierOutbox(active, operator);
+  const pending = await queue.capture(order, 100);
+  const before = await queue.list();
+  const fetch = vi.fn().mockImplementationOnce(answer);
+  vi.stubGlobal('fetch', fetch);
+  await queue.replay();
+  const onlineSubmit = vi.fn(async () => 'accepted');
+  const refusal = { code: 'URY_OFFLINE_SESSION_UNVERIFIED', message: 'Verify the cashier session online before taking orders or payments.' };
+  await expect(submitOrderOfflineAware({ profile: active, user: operator, order, total: 100, onlineSubmit })).rejects.toMatchObject(refusal);
+  expect(onlineSubmit).not.toHaveBeenCalled();
+  // A later gateway outage and reloaded store objects cannot undo the denial.
+  const next = { ...operator }; const replacement = cashierOutbox({ ...active }, next);
+  fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+  await replacement.replay();
+  await expect(settleOfflineOrder({ profile: active, user: next, clientOrderId: pending.client_order_id,
+    kind: 'cash', modeOfPayment: 'Cash', amount: 100 })).rejects.toMatchObject(refusal);
+  const onlineSettle = vi.fn(async () => { throw { httpStatus: 504 }; });
+  await expect(submitSettlementOfflineAware({ profile: active, user: next, invoice: 'INV-1', due: 100, amount: 100,
+    modeOfPayment: 'Cash', onlineSettle })).rejects.toMatchObject(refusal);
+  expect(onlineSettle).not.toHaveBeenCalled();
+  expect(await replacement.list()).toEqual(before);
+  fetch.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json({ name: 'INV-1' }));
+  await replacement.replay();
+  expect(await replacement.list()).toEqual([]);
+  expect(JSON.parse(fetch.mock.lastCall![1].body).client_order_id).toBe(pending.client_order_id);
+  await expect(submitOrderOfflineAware({ profile: active, user: operator, order, total: 100, onlineSubmit })).resolves.toMatchObject({ offline: false });
+});
+
+test.each([
+  ['gateway', () => new Response(null, { status: 502 })],
+  ['network', () => { throw new TypeError('Failed to fetch'); }],
+] as const)('a %s poll without a previous denial still permits an offline order', async (_label, answer) => {
+  const { cashierOutbox, submitOrderOfflineAware } = await captureModule();
+  vi.stubGlobal('fetch', vi.fn(answer));
+  await cashierOutbox(profile, user).replay();
+  const onlineSubmit = vi.fn();
+  await expect(submitOrderOfflineAware({ profile, user, order, total: 100, onlineSubmit })).resolves.toMatchObject({ offline: true });
+  expect(onlineSubmit).not.toHaveBeenCalled();
 });

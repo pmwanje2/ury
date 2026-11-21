@@ -1,3 +1,4 @@
+import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call } from '@ury/core';
 
 export interface POSInvoiceItem {
@@ -49,6 +50,7 @@ export interface POSInvoice {
   docstatus?: number;
   no_of_pax?: number;
   custom_comments?: string | null;
+  ury_client_order_id?: string | null;
   custom_guest_label?: string | null;
   modified?: string;
 }
@@ -62,19 +64,22 @@ export interface TableOrder {
  * @param table_no The table number to fetch the order for
  * @returns The order details and customer information if an active order exists
  */
-export async function getTableOrder(table_no: string): Promise<TableOrder> {
+export async function getTableOrder(table_no: string, strict = false): Promise<TableOrder> {
   try {
     const res = await call.get('ury.ury.doctype.ury_order.ury_order.get_order_invoice', { 
       table: table_no
     });
     return res as TableOrder;
   } catch (error) {
+    if (strict) throw error;
     console.error('Error fetching table order:', error);
     return { message: null };
   }
 } 
 
 export interface SyncOrderRequest {
+  client_order_id?: string;
+  round_id?: string;
   table?: string;
   customer?: string;
   items: Array<{
@@ -116,6 +121,7 @@ export interface SyncOrderRequest {
 export type SyncOrderResponse = POSInvoice | { status: 'Failure' };
 
 export const syncOrder = async (data: SyncOrderRequest) => {
+  await assertOfflineActionAllowed('online-order rounds');
   return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
 };
 
@@ -135,6 +141,7 @@ export async function splitBill(
   customer?: string | null,
   guestLabel?: string | null
 ): Promise<SplitBillResponse> {
+  await assertOfflineActionAllowed('split');
   const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_bill', {
     source_invoice: sourceInvoice,
     items_to_move: itemsToMove,
@@ -149,6 +156,7 @@ export async function tableTransfer(
   newTable: string,
   invoice: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
     table,
     newTable,
@@ -161,6 +169,7 @@ export async function captainTransfer(
   newCaptain: string,
   invoice: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.captain_transfer', {
     currentCaptain,
     newCaptain,
@@ -184,6 +193,7 @@ export async function cancelOrder(
   invoice_id: string,
   reason: string
 ): Promise<void> {
+  await assertOfflineActionAllowed('void');
   await call.post('ury.ury.doctype.ury_order.ury_order.cancel_order', {
     invoice_id,
     reason,
@@ -225,6 +235,7 @@ export async function reduceOrderItemQty(
   newQty: number,
   reason?: string
 ): Promise<ReduceOrderItemQtyResponse> {
+  await assertOfflineActionAllowed('quantity reduction');
   const res = await call.post<{ message: ReduceOrderItemQtyResponse }>(
     'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty',
     {

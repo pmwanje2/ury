@@ -72,6 +72,7 @@
 </template>
 
 <script>
+import { purgeOfflineSession } from '../../../packages/core/src/storage';
 import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import urimosaicImage from "@/assets/logos/mosaic.jpg";
 import { t } from "../i18n";
@@ -116,6 +117,7 @@ export default {
       } catch (e) {
         console.error(e);
       }
+      await purgeOfflineSession();
       window.location.href = '/login?redirect-to=%2Fmosaic';
     },
     handleClickOutside(event) {

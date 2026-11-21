@@ -141,6 +141,56 @@ test('the pure read matcher is same-origin and rejects ambiguous parameters', as
 });
 
 
+function firstInstall() {
+  const serviceWorker = Object.assign(new EventTarget(), {
+    controller: null as { scriptURL: string; postMessage: ReturnType<typeof vi.fn> } | null,
+    register: async () => ({ scope: `${window.location.origin}/pos`, active: null }),
+  });
+  const warm = vi.fn().mockResolvedValue(new Response());
+  vi.stubGlobal('navigator', { serviceWorker });
+  vi.stubGlobal('fetch', warm);
+  const claim = (scriptURL: string) => {
+    const worker = { scriptURL, postMessage: vi.fn() };
+    serviceWorker.controller = worker;
+    serviceWorker.dispatchEvent(new Event('controllerchange'));
+    return worker;
+  };
+  return { claim, warm };
+}
+
+test('first install binds the claiming POS worker to the cashier before warming /pos', async () => {
+  const { claim, warm } = firstInstall();
+  const { syncOfflineCapture } = await import('../src/pwa/register-offline');
+  const boot = syncOfflineCapture({ ury_offline_capture: 1 }, 'cashier@ury.com');
+  await Promise.resolve();
+  const worker = claim(`${window.location.origin}/ury-pos-sw.js`);
+  await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledWith(
+    { type: 'URY_BIND_SESSION', user: 'cashier@ury.com' }, [expect.anything()],
+  ));
+  expect(warm).not.toHaveBeenCalled();
+  worker.postMessage.mock.calls[0][1][0].postMessage({ ok: true });
+  await boot;
+  expect(warm).toHaveBeenCalledWith('/pos', { credentials: 'same-origin', cache: 'reload' });
+});
+
+test.each(['/sw.js', 'https://other-tenant.invalid/ury-pos-sw.js'])(
+  'a claim by %s cannot receive the owner or warm the shell while awaiting the POS worker', async (url) => {
+    const { claim, warm } = firstInstall();
+    const { bindOfflineUser, syncOfflineCapture } = await import('../src/pwa/register-offline');
+    const boot = syncOfflineCapture({ ury_offline_capture: 1 }, 'cashier@ury.com');
+    await Promise.resolve();
+    const other = claim(new URL(url, window.location.origin).href);
+    await bindOfflineUser('cashier@ury.com');
+    expect(other.postMessage).not.toHaveBeenCalled();
+    expect(warm).not.toHaveBeenCalled();
+    const pos = claim(`${window.location.origin}/ury-pos-sw.js`);
+    pos.postMessage.mockImplementation((_message, [port]) => port.postMessage({ ok: true }));
+    await boot;
+    expect(pos.postMessage).toHaveBeenCalledOnce();
+    expect(warm).toHaveBeenCalledOnce();
+  },
+);
+
 // Review #110 item 3: the boot path awaits syncOfflineCapture before the till
 // profile is set. The /pos shell warm-up is still sent, but a slow or hung
 // response must not hold the till on the loader.
@@ -152,7 +202,10 @@ test('the /pos shell warm-up is sent but boot does not wait for its response', a
   }));
   vi.stubGlobal('navigator', {
     serviceWorker: {
-      controller: {},
+      controller: {
+        scriptURL: `${window.location.origin}/ury-pos-sw.js`,
+        postMessage: (_message: unknown, [port]: MessagePort[]) => port.postMessage({ ok: true }),
+      },
       register: async () => ({}),
       ready: Promise.resolve({}),
       addEventListener: () => undefined,

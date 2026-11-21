@@ -15,7 +15,9 @@ import { isCashierOnly } from '../lib/roles';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { call, resolveBrand, logout, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
+import { call, resolveBrand, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
+import { clearCashierStorage } from '../offline/cashier';
+import { useOutbox } from '../offline/use-outbox';
 import { showToast } from '@ury/ui';
 import { PrinterStatusButton } from './PrinterWatch';
 import PairTabletDialog from './PairTabletDialog';
@@ -29,6 +31,7 @@ const Header = () => {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
   const { searchQuery, setSearchQuery, setShowVoluntaryClosing, posProfile } = usePOSStore();
+  const outbox = useOutbox(posProfile, user);
   const printStatusDisabled = isPrintStatusDisabled(posProfile);
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
@@ -119,20 +122,22 @@ const Header = () => {
 
   const handleLogout = async () => {
     try {
-      await logout();
+      await clearCashierStorage(true);
       window.location.href = '/login?redirect-to=%2Fpos';
     } catch (error) {
-      showToast.error(t('errors.failed_logout'));
+      showToast.error(error instanceof Error ? error.message : t('errors.failed_logout'));
     }
   };
 
-  const handleClearCache = () => {
-    // Clear all local storage
-    localStorage.clear();
-    // Clear all session storage
-    sessionStorage.clear();
-    // Reload the page
-    window.location.reload();
+  const handleClearCache = async () => {
+    try {
+      await clearCashierStorage();
+      localStorage.clear();
+      sessionStorage.clear();
+      window.location.reload();
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : t('errors.failed_logout'));
+    }
   };
 
   const handleCloseShift = () => {
@@ -219,6 +224,7 @@ const Header = () => {
                   <Button
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    disabled={outbox.offline || outbox.replaying || outbox.rows.length > 0}
                     onClick={handleCloseShift}
                   >
                     <Lock className="w-4 h-4 me-3" />
