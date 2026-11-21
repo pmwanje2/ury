@@ -285,7 +285,7 @@ describe('manager tablet setup translations', () => {
   ])('includes the manager setup strings in %s', async (language, expected) => {
     await initI18n(language);
     expect(t('header.staff_pins')).toContain(expected);
-    for (const key of ['header.pair_tablet', 'pair_tablet.label', 'pair_tablet.login_disabled', 'staff_pins.give_pin', 'staff_pins.login_disabled', 'staff_pins.target_ineligible', 'floor_pin.title', 'floor_pin.refused']) {
+    for (const key of ['header.pair_tablet', 'pair_tablet.label', 'pair_tablet.login_disabled', 'staff_pins.give_pin', 'staff_pins.login_disabled', 'staff_pins.target_ineligible', 'floor_pin.title', 'floor_pin.refused', 'floor_pin.try_again']) {
       expect(t(key), `${language} ${key}`).not.toBe(key);
     }
   });

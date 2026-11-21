@@ -164,6 +164,20 @@ describe('paired floor tablet sign-in', () => {
   });
 
   it.each([
+    ['a rate limit', { message: 'Too Many Requests', httpStatus: 429 }],
+    ['a server error', { message: 'Internal Server Error', httpStatus: 500 }],
+    ['a network failure', new Error('')],
+  ])('shows a try-again message, not a wrong-PIN message, after %s', async (_label, reason) => {
+    boundary.callPost.mockRejectedValue(reason);
+    await render();
+    await enterPin('0527');
+    expect(container.textContent).toContain('Could not check the PIN. Try again.');
+    expect(container.textContent).not.toContain("That PIN didn't work");
+    expect(container.querySelector('[aria-label="4-digit PIN"]')?.textContent).toBe('');
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['URY_FLOOR_PIN_LOCKED', 'PIN sign-in is paused on this tablet. Ask a manager.'],
     ['URY_FLOOR_TILL_CLOSED', 'Sign in with username while the till is closed.'],
     ['URY_FLOOR_DEVICE_NOT_PAIRED', 'Sign in with username to pair this tablet.'],
