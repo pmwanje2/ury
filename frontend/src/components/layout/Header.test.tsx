@@ -34,7 +34,8 @@ vi.mock("../chat/AskBar", () => ({
   default: () => <div data-testid="ask-bar">AskBar</div>,
 }));
 
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (original) => ({
+  ...await original<typeof import("@ury/core")>(),
   logout: vi.fn().mockResolvedValue(undefined),
   call: Object.assign(vi.fn().mockResolvedValue({ message: [] }), {
     get: vi.fn().mockResolvedValue({ message: [] }),
@@ -101,4 +102,15 @@ describe("Header (/ury)", () => {
     const parsed = JSON.parse(stored!);
     expect(parsed.label).toBe("URY");
   });
+});
+
+it("clears the POS worker caches as well as web storage before reloading", async () => {
+  const remove = vi.fn().mockResolvedValue(true);
+  vi.stubGlobal('caches', {keys: async () => ['ury-pos-shell', 'other'], delete: remove});
+  try {
+    render(<BrowserRouter><Header /></BrowserRouter>);
+    await userEvent.click(screen.getByRole('button', {name: 'Admin User'}));
+    await userEvent.click(screen.getByText('Clear Cache'));
+    expect(remove.mock.calls).toEqual([['ury-pos-shell']]);
+  } finally { vi.unstubAllGlobals(); }
 });

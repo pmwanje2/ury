@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { lazyModule } from './helpers/lazy';
 import { deferred } from './helpers/sw-env';
 
-const ORIGIN = 'https://ury.localhost';
+const ORIGIN = window.location.origin;
 let steps: string[];
 let ack: ReturnType<typeof deferred<void>>;
 let messages: unknown[];

@@ -3,7 +3,8 @@ import { beforeEach, expect, it, vi } from 'vitest';
 // M03: the order's guest label lives in the till store next to its comment:
 // set from the order when a table is opened, cleared with the cart.
 
-vi.mock('@ury/core', () => ({
+vi.mock('@ury/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@ury/core')>(),
   call: { get: vi.fn(), post: vi.fn() },
   storage: { setItem: vi.fn(), getItem: vi.fn() },
   siteCurrencyCode: () => null,

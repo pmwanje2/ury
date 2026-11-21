@@ -1,3 +1,4 @@
+import { sessionStorageKey } from '@ury/core';
 import { useCallback, useState } from 'react';
 import { CustomerPicker as CustomerPickerView, type CustomerOption } from '@ury/ui';
 import { addCustomer, searchCustomers } from '../lib/customer-api';
@@ -28,7 +29,7 @@ export function CustomerPicker({ value, onChange, disabled }: CustomerPickerProp
     posProfile?.country ||
     (() => {
       try {
-        const raw = sessionStorage.getItem('posProfile');
+        const raw = sessionStorage.getItem(sessionStorageKey('posProfile'));
         return raw ? JSON.parse(raw)?.country : undefined;
       } catch {
         return undefined;

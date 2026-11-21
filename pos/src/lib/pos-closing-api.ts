@@ -16,6 +16,8 @@
  * the same till. The pre-aggregated POSClosingData shape is still accepted.
  */
 
+import { assertOutboxEmpty } from '../offline/outbox';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call, db } from '@ury/core';
 
 /**
@@ -274,6 +276,8 @@ export async function getMainCashierPosInvoices(
 export async function createSubPosClosing(
   data: SubPosClosingCreateData
 ): Promise<{ name: string }> {
+  await assertOfflineActionAllowed('till close');
+  await assertOutboxEmpty();
   return db.createDoc('Sub POS Closing', { ...data, docstatus: 0 });
 }
 
@@ -283,6 +287,8 @@ export async function createSubPosClosing(
 export async function submitSubPosClosing(
   name: string
 ): Promise<{ name: string }> {
+  await assertOfflineActionAllowed('till close');
+  await assertOutboxEmpty();
   return db.updateDoc('Sub POS Closing', name, { docstatus: 1 });
 }
 
@@ -292,6 +298,8 @@ export async function submitSubPosClosing(
 export async function createPosClosingEntry(
   data: PosClosingEntryCreateData
 ): Promise<{ name: string }> {
+  await assertOfflineActionAllowed('till close');
+  await assertOutboxEmpty();
   return db.createDoc('POS Closing Entry', { ...data, docstatus: 0 });
 }
 
@@ -301,5 +309,7 @@ export async function createPosClosingEntry(
 export async function submitPosClosingEntry(
   name: string
 ): Promise<{ name: string }> {
+  await assertOfflineActionAllowed('till close');
+  await assertOutboxEmpty();
   return db.updateDoc('POS Closing Entry', name, { docstatus: 1 });
 }

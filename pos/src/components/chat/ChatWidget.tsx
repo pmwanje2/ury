@@ -1,3 +1,4 @@
+import { sessionStorageKey } from '@ury/core';
 import {
   createContext,
   useContext,
@@ -73,7 +74,7 @@ export function useAiEnabled() {
 function buildChatContext(activeReport: ReturnType<typeof useActiveReportContext>['activeReport']) {
   const ctx: Record<string, unknown> = { ...(activeReport ?? {}) };
   try {
-    const profile = JSON.parse(window.sessionStorage.getItem('posProfile') || 'null');
+    const profile = JSON.parse(window.sessionStorage.getItem(sessionStorageKey('posProfile')) || 'null');
     if (profile?.branch) ctx.selected_branch = profile.branch;
   } catch {
     // storage unavailable or malformed — send report context only

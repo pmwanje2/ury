@@ -1,3 +1,4 @@
+import { purgeOfflineSession } from '../../../packages/core/src/storage';
 import { defineStore } from "pinia";
 import { useTableStore } from "./Table.js";
 import { useMenuStore } from "./Menu.js";
@@ -239,9 +240,10 @@ export const useAuthStore = defineStore("auth", {
     },
 
     logOut() {
-      this.auth
+      return this.auth
         .logout()
-        .then(() => {
+        .then(async () => {
+          await purgeOfflineSession();
           router.push("/login").then(() => {
             window.location.reload();
           });

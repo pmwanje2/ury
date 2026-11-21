@@ -27,6 +27,7 @@ async function outbox(options: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.stubGlobal('indexedDB', new IDBFactory());
   sends = [];
   persist = vi.fn(async () => true);
@@ -107,9 +108,12 @@ test.each([
 ])('transient authentication responses retain the queued order for a later retry', async (response) => {
   const q = await outbox();
   await q.capture(data, 100);
-  request.mockImplementationOnce(async () => json(user.name)).mockImplementationOnce(async () => response);
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(response);
+  if (response.status === 403) request.mockResolvedValueOnce(json('Guest'));
   await q.replay();
+  expect(request).toHaveBeenCalledTimes(response.status === 403 ? 3 : 2);
   expect((await q.list())[0].state).toBe('pending');
+  await expect(q.capture(data, 100)).rejects.toMatchObject({ code: 'URY_OFFLINE_SESSION_UNVERIFIED' });
 });
 
 test('ids and captured_at survive a lost order acknowledgement and a reload', async () => {
@@ -301,4 +305,72 @@ test('replay is exclusive, exposes Replaying, and prohibits capture while it is 
   expect(q.replaying).toBe(false);
   expect(sends).toHaveLength(1);
   request.mockImplementation(normal);
+});
+
+test.each([401, 403, 500])('HTTP %i on replay of an order retains it and blocks further local settlement', async (status) => {
+  const q = await outbox();
+  const pending = await q.capture(data, 100);
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(json(null, status));
+  await q.replay();
+  await expect(q.settle(pending.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 })).rejects.toThrow(/session|sign.in|verif/i);
+  expect(await q.list()).toEqual([pending]);
+  await q.replay();
+  expect(await q.list()).toEqual([]);
+});
+
+const identityMethod = '/api/method/frappe.auth.get_logged_user';
+const syncMethod = '/api/method/ury.ury.doctype.ury_order.ury_order.sync_order';
+const permission = (exception?: string) => Response.json({ exc_type: 'PermissionError', exception }, { status: 403 });
+
+test.each(['Login to access this method', 'Accès refusé', undefined])('a verified cashier parks a denied row regardless of display text: %s', async (message) => {
+  const q = await outbox();
+  const denied = await q.capture(data, 100);
+  const next = await q.capture({ ...data, customer: 'B' }, 100);
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(permission(message)).mockResolvedValueOnce(json(user.name));
+  await q.replay();
+  expect(request.mock.calls.map(([url]) => url)).toEqual([identityMethod, syncMethod, identityMethod, syncMethod]);
+  expect(await q.list()).toEqual([{ ...denied, state: 'review', reason: 'PermissionError' }]);
+  expect(sends.map((s) => s.data.client_order_id)).toEqual([next.client_order_id]);
+  await expect(q.capture(data, 100)).resolves.toMatchObject({ state: 'pending' });
+});
+
+test.each([
+  ['guest', () => json('Guest')], ['other cashier', () => json('other@example.com')],
+  ['denied identity read', () => permission()], ['application error', () => json(null, 417)],
+  ['gateway outage', () => json(null, 503)], ['transport outage', () => { throw new TypeError('Failed to fetch'); }],
+] as const)('an ambiguous POST refusal followed by %s retains the queue and blocks writes across a later outage', async (_case, probe) => {
+  const q = await outbox();
+  const first = await q.capture(data, 100);
+  const next = await q.capture({ ...data, customer: 'B' }, 100);
+  request.mockResolvedValueOnce(json(user.name)).mockResolvedValueOnce(permission('Accès refusé')).mockImplementationOnce(probe);
+  await q.replay();
+  expect(request.mock.calls.map(([url]) => url)).toEqual([identityMethod, syncMethod, identityMethod]);
+  expect(await q.list()).toEqual([first, next]);
+  await expect(q.capture(data, 100)).rejects.toMatchObject({ code: 'URY_OFFLINE_SESSION_UNVERIFIED' });
+  request.mockResolvedValueOnce(json(null, 502));
+  await q.replay();
+  await expect(q.settle(first.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 })).rejects.toMatchObject({ code: 'URY_OFFLINE_SESSION_UNVERIFIED' });
+  expect(await q.list()).toEqual([first, next]);
+  await q.replay();
+  expect(sends.map((s) => s.data.client_order_id)).toEqual([first.client_order_id, next.client_order_id]);
+  expect(await q.list()).toEqual([]);
+});
+
+test.each(['capture', 'settle', 'gateway settlement', 'reprint'])('%s honors the preceding locked session denial', async (action) => {
+  const q = await outbox();
+  const poller = await outbox();
+  print.mockResolvedValueOnce(false);
+  const pending = await q.capture(data, 100);
+  print.mockClear();
+  const tender = { kind: 'cash', mode_of_payment: 'Cash', amount: 100 };
+  request.mockResolvedValueOnce(json(null, 403));
+  const poll = poller.replay();
+  const operation = action === 'capture' ? q.capture(data, 100)
+    : action === 'settle' ? q.settle(pending.client_order_id, tender)
+    : action === 'gateway settlement' ? q.queueGatewaySettlement({ clientOrderId: pending.client_order_id,
+      roundId: pending.rounds[0].round_id, invoice: 'INV-1', settlement: tender })
+    : q.reprint(pending.client_order_id, 'kot');
+  await Promise.all([poll, expect(operation).rejects.toMatchObject({ code: 'URY_OFFLINE_SESSION_UNVERIFIED' })]);
+  expect(await q.list()).toEqual([pending]);
+  expect(print).not.toHaveBeenCalled();
 });

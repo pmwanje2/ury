@@ -26,10 +26,26 @@ export const storage = {
 export const URY_POS_SCOPE = '/pos';
 export const URY_POS_CACHE_PREFIX = 'ury-pos-';
 // Per-user sessionStorage prefixes the offline cashier writes; purged with the session.
-const OFFLINE_SESSION_PREFIXES = ['ury_open_table_checks'];
+const OFFLINE_SESSION_PREFIXES = ['ury_open_table_checks', 'ury_open_table_checks_session', 'ury_offline_opening', 'posProfile', 'payment_modes'];
 
 export function getUserSessionStorageKey(key: string, user: string | null | undefined): string | null {
   return user && user !== 'Guest' ? `${key}:${user}` : null;
+}
+
+export const getSessionUser = (): string | null => {
+  if (typeof document === 'undefined') return null;
+  const cookie = document.cookie.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('user_id='));
+  if (!cookie) return null;
+  try {
+    return decodeURIComponent(cookie.slice('user_id='.length)) || null;
+  } catch {
+    return null;
+  }
+};
+
+export function sessionStorageKey(key: string): string {
+  return getUserSessionStorageKey(key, getSessionUser()) ?? key;
 }
 
 export function isUryPosRegistration(registration: { scope: string }): boolean {

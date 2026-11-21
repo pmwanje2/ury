@@ -1,3 +1,4 @@
+import { assertOfflineActionAllowed } from '../offline/cashier';
 import { printWithQz } from '@ury/core';
 import {
   getInvoicePrintHtml,
@@ -14,6 +15,7 @@ interface PrintOrderParams {
 }
 
 export async function printOrder({ orderId, posProfile, printFormat }: PrintOrderParams): Promise<'qz' | 'network' | 'socket'> {
+  await assertOfflineActionAllowed('fiscal print');
   const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier } = posProfile;
   const format = printFormat || print_format || '';
 
