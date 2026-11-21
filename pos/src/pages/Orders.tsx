@@ -504,6 +504,10 @@ export default function Orders() {
     );
   }
 
+  if (ordersOffline) {
+    return <p className="p-4 text-center text-amber-800" role="status">{t('offline.orders_unavailable')}</p>;
+  }
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Left Sidebar - Order Types */}
@@ -519,8 +523,6 @@ export default function Orders() {
             <div className="flex items-center justify-center h-full">
               <Spinner  message={t('common.loading')} />
             </div>
-          ) : ordersOffline ? (
-            <p className="p-4 text-center text-amber-800" role="status">{t('offline.orders_unavailable')}</p>
           ) : orders.length === 0 ? (
             <div className="text-center mt-10">
               <p className="text-gray-500">{t('orders.no_orders_found')}</p>
