@@ -330,6 +330,33 @@ describe('captain kitchen notifications', () => {
     }
   });
 
+  it.each([true, false])('without an active primary, opens only a visible split sibling (%s)', async visible => {
+    await renderTables();
+    const open = await vi.waitFor(() => {
+      const button = Array.from(panel().querySelectorAll('button')).find(b => b.textContent === 'Open check');
+      expect(button).toBeDefined(); return button!;
+    });
+    boundary.get.mockImplementation(async method => {
+      if (method === 'frappe.client.get') return {message:{restaurant_table:'T-05', invoice:'INV-SEAT-2'}};
+      if (method.endsWith('.get_table_order_context')) return {message:{permissions:{view:true}, order:null}};
+      if (method.endsWith('.get_split_group')) return {message:{ invoices: visible ? [
+        {name:'INV-SEAT-2', is_original:false, custom_split_from:null, restaurant_table:'T-05', docstatus:0},
+      ] : [], current:'INV-SEAT-2', group:visible ? 'group' : null }};
+      if (method.endsWith('.getPosInvoiceItems')) return {message:[[{name:'row',item_name:'Toast',qty:1}], []]};
+      throw Error(method);
+    });
+    vi.mocked(call.post).mockClear();
+    await act(async () => open.click());
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order');
+    if (visible) {
+      expect(document.body.textContent).toContain('Toast');
+      expect(call.post).toHaveBeenCalled();
+    } else {
+      expect(panel().textContent).toContain('Check unavailable');
+      expect(call.post).not.toHaveBeenCalled();
+    }
+  });
+
   it('opens a kitchen notification on the KOT restaurant table', async () => {
     await renderTables();
     await vi.waitFor(() => expect(container.querySelector('[aria-label="Kitchen"]')).not.toBeNull());

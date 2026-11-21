@@ -2143,7 +2143,7 @@ class TestSplitBillReservations(FrappeTestCase):
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.new_doc")
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.get_doc")
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.has_permission")
-    def test_split_bill_reassigns_kot_only_when_fully_moved(
+    def test_split_bill_refuses_reserved_mixed_ticket(
         self,
         mock_has_permission,
         mock_get_doc,
@@ -2166,7 +2166,7 @@ class TestSplitBillReservations(FrappeTestCase):
         # moved, so its invoice reference must follow to the new invoice.
         # KOT-MIXED: has one moved and one staying item -- URY KOT has only
         # a single (whole-document) invoice link, so a mixed KOT cannot be
-        # correctly reassigned and must be left alone.
+        # correctly reassigned; the entire split must be refused.
         def get_all_side_effect(doctype, filters=None, fields=None, pluck=None, **kwargs):
             if doctype == "URY KOT":
                 return ["KOT-FULL", "KOT-MIXED"]
@@ -2185,19 +2185,13 @@ class TestSplitBillReservations(FrappeTestCase):
 
         mock_get_all.side_effect = get_all_side_effect
 
-        split_bill(
-            "POS-INV-SRC",
-            json.dumps([{"name": "ITEM-ROW-A", "qty": 2}]),
-        )
-
-        mock_db_set_value.assert_any_call(
-            "URY KOT", "KOT-FULL", "invoice", "POS-INV-NEW", update_modified=False
-        )
-        mixed_reassigned = any(
-            call.args[:3] == ("URY KOT", "KOT-MIXED", "invoice")
-            for call in mock_db_set_value.call_args_list
-        )
-        self.assertFalse(mixed_reassigned, "a KOT with staying items must not be reassigned wholesale")
+        with self.assertRaisesRegex(frappe.ValidationError, 'URY-SPLIT-RESERVED-KOT'):
+            split_bill(source.name, [{"name": "ITEM-ROW-A", "qty": 2}])
+        mock_new_doc.assert_not_called()
+        mock_reconcile.assert_not_called()
+        mock_db_set_value.assert_not_called()
+        self.assertIsNone(source.custom_split_group)
+        self.assertEqual([row.qty for row in source.items], [2, 1])
 
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.get_all")
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.db.set_value")
@@ -2227,13 +2221,6 @@ class TestSplitBillReservations(FrappeTestCase):
         top_level_item) -- finds exactly its own item's reservation, with no
         cross-contamination and no orphan.
 
-        This only covers the case the current fix actually handles: a KOT
-        entirely on one side of the split. The genuinely unfixed case (a
-        single KOT mixing moved and staying items) has no correct single
-        `URY KOT.invoice` value under the current one-link-per-document
-        schema and is covered separately by
-        test_split_bill_reassigns_kot_only_when_fully_moved, which asserts
-        it is deliberately left alone rather than guessed at.
         """
         from ury.ury.api.ury_fulfilment_posting_service import _kot_order_ref
 

@@ -67,6 +67,47 @@ class TestKitchenReleaseIntegrity(TestCase):
         self.assertEqual(ticket.invoice, result['new_invoice'])
         self.assert_reserved(ticket, dish)
 
+    def assert_split_refused_without_writes(self, invoice, move_qty):
+        def snapshot():
+            return (
+                invoice.reload().as_dict(),
+                frappe.get_all('POS Invoice', filters={'custom_split_from': invoice.name}, pluck='name'),
+                self.tickets(invoice.name),
+                frappe.get_all('URY Stock Reservation', filters={'branch': self.c.branch.name},
+                               fields=['*'], order_by='name'),
+            )
+
+        before = snapshot()
+        self.assertTrue(before[2] and before[3])
+        with self.assertRaisesRegex(frappe.ValidationError, 'URY-SPLIT-RESERVED-KOT'):
+            split_bill(invoice.name, [dict(name=invoice.items[0].name, qty=move_qty)])
+        self.assertEqual(snapshot(), before)
+
+    def test_refuses_one_released_line_of_a_reserved_mixed_ticket(self):
+        dish = make_made_to_order_item(self.c)
+        invoice = self.order((dish, 'move', False), (dish, 'stay', False))
+        ticket, = self.tickets(invoice.name)
+        self.assertEqual(len(frappe.get_doc('URY KOT', ticket).kot_items), 2)
+        self.assert_split_refused_without_writes(invoice, 1)
+
+    def test_refuses_partial_quantity_of_a_reserved_released_line(self):
+        dish = make_made_to_order_item(self.c)
+        invoice = frappe.get_doc('POS Invoice', send_order(self.c, items=[dict(
+            item=dish.name, item_name=dish.item_name, qty=2, rate=100, reservation_line_key='move',
+        )]).name)
+        self.assert_split_refused_without_writes(invoice, 1)
+
+    def test_held_move_keeps_the_released_ticket_on_source(self):
+        dish = make_made_to_order_item(self.c)
+        invoice = self.order((dish, 'stay', False), (dish, 'held', True))
+        ticket, = self.tickets(invoice.name)
+        result = split_bill(invoice.name, [dict(name=invoice.items[1].name, qty=1)])
+        self.assertEqual(self.tickets(invoice.name), [ticket])
+        self.assert_reserved(frappe.get_doc('URY KOT', ticket), dish)
+        sibling = frappe.get_doc('POS Invoice', result['new_invoice'])
+        self.assertTrue(sibling.items[0].ury_held)
+        self.assertFalse(self.tickets(sibling.name))
+
     def test_guest_repeated_dishes_keep_separate_native_reservations_and_price(self):
         dish = make_made_to_order_item(self.c)
         frappe.set_user('Administrator')
