@@ -96,6 +96,8 @@ T9c also closes two cross-theme gaps found while reconciling the source PRs. The
 
 Other merged theme PRs: T2 #109/#117; T3 #114/#115/#125; T4 #118; T6 #102/#105/#106/#108/#113 (follow-ups #112/#116/#120); T7 #122; T8 #114. B5 must be rerun on the integrated revision before freeze.
 
+B5 split-bill coverage: with branch reservation control off, `test_split_bill_reassigns_kot_only_when_fully_moved` checks that a whole kitchen ticket follows its lines to the new bill and a mixed ticket stays on the source bill. With control on, `test_split_bill_refuses_reserved_mixed_ticket` checks that the same mixed selection refuses the entire split before either bill changes.
+
 T5 accounts for 85 distinct fork commits: 12 ported in #107, 43 in #110,
 24 ported in part 3, four superseded by the v16 default-customer resolver,
 and two dropped test harnesses. Part 3 also finishes UI and projection work
