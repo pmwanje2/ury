@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { call } from '@ury/core';
 import { Button } from '@ury/ui';
 import { initI18n } from '../src/i18n';
 
@@ -151,6 +152,7 @@ beforeEach(async () => {
   }));
   boundary.get.mockReset().mockImplementation(async (method: string) => {
     if (method === 'ury.ury.api.ury_server_time.get_server_time') return { message: '2026-10-20 12:05:00' };
+    if (method.endsWith('.get_table_order_context')) return { message: { permissions: {view:true}, order:{name:'INV'} } };
     if (method === 'frappe.client.get') return { message: { restaurant_table: 'T-05' } };
     throw new Error(`Unexpected method ${method}`);
   });
@@ -286,6 +288,21 @@ describe('captain kitchen notifications', () => {
     await emit('notification');
 
     await vi.waitFor(() => expect(boundary.toastInfo).toHaveBeenCalledWith(expect.stringMatching(/food-ready|kitchen/i)));
+  });
+
+  it('keeps a reassigned check unread on the captain floor', async () => {
+    await renderTables();
+    const open = await vi.waitFor(() => {
+      const el = Array.from(panel().querySelectorAll('button')).find(b => b.textContent === 'Open check');
+      expect(el).toBeDefined(); return el!;
+    });
+    boundary.get.mockImplementation(async method => method === 'frappe.client.get'
+      ? {message:{restaurant_table:'T-05'}} : {message:{order:null, permissions:{view:false}}});
+    vi.mocked(call.post).mockClear();
+    await act(async () => open.click());
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/order');
+    expect(call.post).not.toHaveBeenCalled();
+    expect(panel().textContent).toContain('Check unavailable');
   });
 
   it('opens a kitchen notification on the KOT restaurant table', async () => {

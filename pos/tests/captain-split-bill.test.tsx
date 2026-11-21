@@ -2,11 +2,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { call } from '@ury/core';
+import { call, db } from '@ury/core';
+import { showToast } from '@ury/ui';
+import { getActiveTableOrders } from '../src/captain/lib/captain-table-api';
 import { initI18n, t } from '../src/i18n';
 import CaptainActionsMenu from '../src/captain/components/CaptainActionsMenu';
 import CaptainOrder from '../src/captain/pages/CaptainOrder';
-import { syncOrder } from '../src/lib/order-api';
+import { splitBill, syncOrder } from '../src/lib/order-api';
 
 type CaptainContextTestResult = {
   context: { order: Record<string, unknown> | null; permissions?: Record<string, boolean> };
@@ -198,6 +200,51 @@ afterEach(async () => {
 });
 
 describe('captain split bill actions', () => {
+  it('shows the selected sibling dishes without changing the editable table bill', async () => {
+    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'GROUP' };
+    boundary.getSplitGroup.mockResolvedValue({ invoices: [sibling('POS-INV-1', 1), sibling('POS-INV-2', 2)] });
+    const get = vi.spyOn(call, 'get').mockResolvedValue({ message: [[{name: 'SECOND', item_name: 'Sibling salad', qty: 1}], []] } as never);
+    await renderOrder();
+    const row = await vi.waitFor(() => {
+      const found = Array.from(container.querySelectorAll<HTMLElement>('[role="button"]')).find(el => el.textContent?.includes('POS-INV-2'));
+      expect(found).toBeDefined(); return found!;
+    });
+    await act(async () => row.click());
+    expect(get).toHaveBeenCalledWith('ury.ury_pos.api.getPosInvoiceItems', { invoice: 'POS-INV-2' });
+    expect(document.body.textContent).toContain('Sibling salad');
+    expect(boundary.posStore!.orderId).toBe('POS-INV-1');
+  });
+
+  it('refuses an offline split before RPC and hides the waiter action', async () => {
+    vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+    await expect(splitBill('POS-INV-1', [{name: 'ROW-1', qty: 1}])).rejects.toThrow();
+    expect(call.post).not.toHaveBeenCalled();
+    await renderOrder();
+    await act(async () => button('More actions')!.click());
+    expect(button('Split bill')).toBeUndefined();
+  });
+
+  it('reports a held reduction without promising a kitchen cancellation', async () => {
+    const success = vi.spyOn(showToast, 'success').mockImplementation(() => undefined);
+    Object.assign((boundary.posStore!.activeOrders as object[])[0], {ury_held: 1});
+    Object.assign(boundary.context!, { alreadyOrderedLines: [{ id:'ITEM-1', name: 'Soup', uniqueId:'u1', invoiceItemName:'ROW-1', baseQty:2, confirmedQty:2 }] });
+    vi.mocked(call.post).mockResolvedValue({ message: { cancel_kot_names: [] } } as never);
+    await renderOrder();
+    const reduce = button('Reduce')!;
+    await act(async () => reduce.click());
+    expect(success).toHaveBeenCalledWith('Soup reduced to qty 1.');
+    expect(reduce.textContent).not.toMatch(/notify/i);
+  });
+
+  it('uses the oldest unprinted draft for the primary and merged floor tiles', async () => {
+    const rows = [sibling('OLD',1), sibling('NEW',2), {...sibling('PRINTED',3), invoice_printed:1}];
+    const get = vi.spyOn(db, 'getDocList').mockResolvedValue(rows.map(row => ({...row, custom_merged_tables:'T-06'})) as never);
+    const floor = await getActiveTableOrders('Branch A');
+    expect(floor.get('T-05')?.invoiceName).toBe('OLD');
+    expect(floor.get('T-06')?.invoiceName).toBe('OLD');
+    expect(get).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({orderBy: {field:'creation',order:'asc'}}));
+  });
+
   it('hides Split bill when the server permission flag is false', async () => {
     await act(async () => renderMenu(false));
     expect(button('Split bill')).toBeUndefined();
