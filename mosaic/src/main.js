@@ -1,4 +1,5 @@
 import './index.css';
+import { logout } from './logout';
 import i18n, { applyDocumentLocale } from './i18n';
 applyDocumentLocale();
 import { createApp, reactive } from "vue";
@@ -26,9 +27,7 @@ const auth = reactive({
 		}
 		return await res.json();
 	},
-	async logout() {
-		await fetch("/api/method/logout", { method: "POST" });
-	},
+	logout,
 });
 app.provide("$auth", auth);
 

@@ -41,8 +41,10 @@
             <p class="text-sm font-semibold text-[var(--t3)]">{{ userId }}</p>
           </div>
           <div class="py-2">
+            <p v-if="logoutError" role="alert" class="px-4 text-sm text-red-600">{{ logoutError }}</p>
             <button
               @click="switchToDashboard"
+              :disabled="loggingOut"
               class="flex justify-start items-center w-full px-4 py-2 text-sm font-semibold text-[var(--t2)] hover:bg-[var(--hover)] transition-colors"
             >
               <svg class="w-4 h-4 me-3 text-[var(--t3)]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -55,6 +57,7 @@
             
             <button
               @click="logout"
+              :disabled="loggingOut"
               class="flex justify-start items-center w-full px-4 py-2 text-sm font-semibold text-[var(--rd)] hover:bg-[var(--rd-t)] hover:text-[var(--rd)] transition-colors"
             >
               <svg class="w-4 h-4 me-3 text-[var(--rd)]" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -72,7 +75,7 @@
 </template>
 
 <script>
-import { purgeOfflineSession } from '../../../packages/core/src/storage';
+import { logout } from '../logout';
 import urimosaicImage from "@/assets/logos/mosaic.jpg";
 import { t } from "../i18n";
 import ScopeSelector from "./ScopeSelector.vue";
@@ -94,6 +97,8 @@ export default {
     return {
       imagePath: urimosaicImage,
       showUserMenu: false,
+      loggingOut: false,
+      logoutError: "",
       userName: t("User"),
       userId: "user@example.com"
     };
@@ -110,14 +115,16 @@ export default {
       window.location.href = '/ury/dashboard';
     },
     async logout() {
-      this.showUserMenu = false;
+      if (this.loggingOut) return;
+      this.loggingOut = true;
+      this.logoutError = '';
       try {
-        await fetch('/api/method/logout', { method: 'POST' });
-      } catch (e) {
-        console.error(e);
+        await logout();
+        window.location.href = '/login?redirect-to=%2Fmosaic';
+      } catch {
+        this.logoutError = t('Failed to logout. Please try again.');
+        this.loggingOut = false;
       }
-      await purgeOfflineSession();
-      window.location.href = '/login?redirect-to=%2Fmosaic';
     },
     handleClickOutside(event) {
       if (this.$refs.userMenuRef && !this.$refs.userMenuRef.contains(event.target)) {
