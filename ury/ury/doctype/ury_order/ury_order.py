@@ -14,9 +14,10 @@ from frappe.utils import cint, flt, get_datetime, get_system_timezone, now_datet
 from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
-from ury.ury.api.ury_kot_generate import kot_execute
+from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
 from ury.ury.api.ury_order_reservation_service import (
+    _line_key,
     _line_ref,
     reconcile_order_reservations,
     release_order_reservations,
@@ -705,6 +706,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             new_invoice.append("items", _copy_invoice_item_fields(item, item.qty))
             items_to_remove.append(item)
             moved_line_keys.add(item.get("reservation_line_key") or item.name)
+            moved_line_keys.add(_line_key(item.item_code, item, 1))
         else:
             new_invoice.append("items", _copy_invoice_item_fields(item, move_qty))
             item.qty -= move_qty
@@ -816,7 +818,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
                     fields=["reservation_line_key"],
                 )
                 kot_line_keys = {
-                    row.reservation_line_key for row in kot_item_rows if row.reservation_line_key
+                    row.reservation_line_key for row in kot_item_rows
                 }
                 if kot_line_keys and kot_line_keys.issubset(moved_line_keys):
                     frappe.db.set_value(

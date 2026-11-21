@@ -205,8 +205,8 @@ class TestKOTNoteDiff(OrderingCases, TestCase):
 
     def test_cancellation_links_the_original_ticket_with_the_matching_note(self):
         self.historical_tickets = {
-            "KOT-PLAIN": Row(name="KOT-PLAIN", kot_items=[Row(item="Fish", comments="no onions")]),
-            "KOT-HOT": Row(name="KOT-HOT", kot_items=[Row(item="Fish", comments="extra chilli")]),
+            "KOT-PLAIN": Row(name="KOT-PLAIN", kot_items=[Row(item="Fish", quantity=2, comments="no onions")]),
+            "KOT-HOT": Row(name="KOT-HOT", kot_items=[Row(item="Fish", quantity=1, comments="extra chilli")]),
         }
         self.framework.db.get_list.return_value = [Row(name=name) for name in self.historical_tickets]
         self.kot.create_cancel_kot_doc(
@@ -325,8 +325,8 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
         for row in self.invoice.items:
             row.get = lambda key, default=None, row=row: getattr(row, key, default)
         self.historical_tickets = {
-            "KOT-PLAIN": Row(name="KOT-PLAIN", kot_items=[Row(item="Fish", comments="no onions")], save=MagicMock()),
-            "KOT-HOT": Row(name="KOT-HOT", kot_items=[Row(item="Fish", comments="extra chilli")], save=MagicMock()),
+            "KOT-PLAIN": Row(name="KOT-PLAIN", kot_items=[Row(item="Fish", quantity=2, comments="no onions")], save=MagicMock()),
+            "KOT-HOT": Row(name="KOT-HOT", kot_items=[Row(item="Fish", quantity=1, comments="extra chilli")], save=MagicMock()),
         }
         self.framework.db.get_list.return_value = [Row(name=name) for name in self.historical_tickets]
 

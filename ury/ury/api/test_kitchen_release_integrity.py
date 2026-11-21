@@ -70,7 +70,7 @@ class TestKitchenReleaseIntegrity(TestCase):
     def test_guest_repeated_dishes_keep_separate_native_reservations_and_price(self):
         dish = make_made_to_order_item(self.c)
         frappe.set_user('Administrator')
-        frappe.defaults.set_user_default('Company', self.c.restaurant.company)
+        frappe.defaults.set_user_default('company', self.c.restaurant.company)
         profile = frappe.get_doc(dict(doctype='URY Self Ordering Profile', name=self.c.profile.name, profile_name=self.c.profile.name,
             branch=self.c.branch.name, restaurant=self.c.restaurant.name, pos_profile=self.c.profile.name,
             default_customer=self.c.customer.name, enabled=1, allow_add_to_running_table=1)).insert()

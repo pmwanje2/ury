@@ -400,46 +400,45 @@ def create_cancel_kot_doc(
     is_aggregator = 0
     if pos_invoice.order_type == "Aggregators":
         is_aggregator = 1
-    kot_list = frappe.db.get_list(
-        "URY KOT",
-        filters={
-            "invoice": invoice_id,
-            "type": ("in", ("New Order", "Order Modified", "Duplicate")),
-            "production": production,
-            "docstatus": 1,
-        },
-        fields=("name"),
-        order_by="creation desc, name desc",
+    history = frappe.db.get_list(
+        "URY KOT", filters={"invoice": invoice_id, "production": production, "docstatus": 1,
+                            "type": ("in", ("New Order", "Order Modified", "Duplicate", "Cancelled", "Partially cancelled"))},
+        fields=["name"], order_by="creation asc, name asc", limit_page_length=0,
     )
+    releases = []
 
-    # Find original KOTs related to the cancel items. When the cancel item
-    # carries a stable reservation_line_key, match ONLY the KOT line that
-    # was tagged with that exact key -- this is what lets two identical
-    # item_code lines (different comments/courses, or a plain duplicate) be
-    # told apart. Fall back to the legacy item_code match only when no line
-    # key is available on either side (older/aggregator payloads).
-    original_kots = []
-    for cancelItem in cancel_items:
-        cancel_line_key = cancelItem.get("reservation_line_key")
-        for kot in kot_list:
-            kot_doc = frappe.get_doc("URY KOT", kot.name)
-            kot_cancel_items = kot_doc.kot_items
-            itemCheckFlag = False
-            for kotItem in kot_cancel_items:
-                if (kotItem.get("comments") or "") != (cancelItem.get("comments") or ""):
-                    continue
-                if cancel_line_key and kotItem.get("reservation_line_key"):
-                    if cancel_line_key == kotItem.get("reservation_line_key"):
-                        itemCheckFlag = True
-                elif cancelItem["item_code"] == kotItem.item:
-                    itemCheckFlag = True
-            if itemCheckFlag:
-                original_kots.append(kot_doc.name)
+    def consume(item, key, note, qty, originals=None):
+        matched = []
+        for release in reversed(releases):
+            name, row, remaining = release
+            if originals is not None and name not in originals:
+                continue
+            if row.item != item or (row.get("comments") or "") != (note or ""):
+                continue
+            if key and row.get("reservation_line_key") and key != row.get("reservation_line_key"):
+                continue
+            take = min(qty, remaining)
+            if take > 0:
+                matched.append(name)
+                release[2] -= take
+                qty -= take
+            if qty <= 0:
                 break
+        return matched
 
-    # Remove duplicate KOT names and join them into a single string
-    set_kots = [*set(original_kots)]
-    set_kots = ",".join(set_kots)
+    for entry in history:
+        ticket = frappe.get_doc("URY KOT", entry.name)
+        if ticket.get("type") in ("Cancelled", "Partially cancelled"):
+            originals = {name.strip() for name in (ticket.get("original_kot") or "").split(",")}
+            for row in ticket.kot_items:
+                consume(row.item, row.get("reservation_line_key"), row.get("comments"), flt(row.cancelled_qty), originals)
+        else:
+            releases.extend([ticket.name, row, flt(row.get("quantity"))] for row in ticket.kot_items)
+
+    original_kots = []
+    for row in cancel_items:
+        original_kots.extend(consume(row["item_code"], row.get("reservation_line_key"), row.get("comments"), abs(flt(row["qty"]))))
+    set_kots = ",".join(dict.fromkeys(original_kots))
     kot_cancel_doc = frappe.get_doc(
         {
             "doctype": "URY KOT",
@@ -525,6 +524,12 @@ def kot_execute(
     comments=None,
     offline_printed=0,
 ):
+    return _execute_kot(invoice_id, customer, restaurant_table, current_items, previous_items,
+                        comments, offline_printed, desk=True)
+
+
+def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None, previous_items=None,
+                 comments=None, offline_printed=0, *, desk=False):
     from frappe import _
 
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
@@ -537,6 +542,24 @@ def kot_execute(
 
     current_items = load_json(current_items)
     previous_items = load_json(previous_items)
+
+    if desk:
+        previous_items = [row for row in previous_items or [] if not cint(row.get("ury_held"))]
+        saved = pos_invoice.get("items") or []
+        if any(row.get("reservation_line_key") or cint(row.get("ury_held")) for row in saved):
+            by_name = {row.name: row for row in saved}
+            current_items = [dict(item_code=row.item_code, item_name=row.item_name, qty=row.qty,
+                                  comments=row.get("comment") or "",
+                                  reservation_line_key=row.get("reservation_line_key") or row.name)
+                             for row in saved if not cint(row.get("ury_held"))]
+            baseline = []
+            for row in previous_items:
+                child = by_name.get(row.get("name"))
+                if child and cint(child.get("ury_held")):
+                    continue
+                key = child.get("reservation_line_key") if child else None
+                baseline.append(dict(row, reservation_line_key=key or _line_ref(row)))
+            previous_items = baseline
 
     # Diff current vs previous items PER STABLE LINE (see _line_keyed_items),
     # not per item_code. Two lines of the same item_code (different

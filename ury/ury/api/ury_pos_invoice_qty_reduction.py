@@ -220,7 +220,16 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		)
 	cancel_kot_naming_series = "CNCL-" + (kot_naming_series or "")
 
-	if not held:
+	reconcile_held = False
+	if held:
+		from ury.ury.api.ury_stock_policy import get_branch_stock_policy
+		from ury.ury.api.ury_order_reservation_service import reconcile_order_reservations
+		from ury.ury.doctype.ury_order.ury_order import _previous_line_snapshot
+
+		reconcile_held = get_branch_stock_policy(pos_invoice.branch, pos_invoice.company).reservation_control_enabled
+		if reconcile_held:
+			previous = _previous_line_snapshot(pos_invoice.items)
+	else:
 		from ury.ury.doctype.ury_order.ury_order import _kitchen_snapshot
 
 		# Use the same canonical dish/note groups and persisted keys as the original KOT.
@@ -243,6 +252,15 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		# nothing to totals or KDS/cancel-KOT display beyond the cancel-KOT
 		# already generated for its full original qty.
 		item_row.qty = new_qty
+		if held and new_qty == 0:
+			item_row.ury_held = 0
+		if reconcile_held:
+			reconcile_order_reservations(order_ref=pos_invoice.name, previous_items=previous,
+				accepted_items=_previous_line_snapshot(pos_invoice.items), branch=pos_invoice.branch,
+				company=pos_invoice.company, actor=actor)
+		if held and new_qty == 0 and pos_invoice.docstatus == 0:
+			# ERPNext validates positive draft quantities again at settlement.
+			pos_invoice.remove(item_row)
 		pos_invoice.save(ignore_permissions=False)
 	finally:
 		frappe.flags.ury_qty_reduction = False

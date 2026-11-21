@@ -327,7 +327,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # only, no client-supplied rate ever reaches invoice construction.
         mock_price_items.assert_called_once()
         called_items = mock_price_items.call_args[0][0]
-        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": ""}])
+        self.assertEqual(called_items, [{"item": "Sandwich", "item_name": "Club sandwich", "qty": 1.0, "comment": "", "reservation_line_key": unittest.mock.ANY}])
         # KOT still invoked (existing kitchen pipeline untouched) — and
         # crucially, current_items passed to it is the FULL aggregated
         # per-item state (old Biryani row + new Sandwich row), not just the
@@ -819,7 +819,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_reconcile.assert_called_once()
         _, kwargs = mock_reconcile.call_args
         self.assertEqual(kwargs["order_ref"], "POS-INV-100")
-        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Chicken biryani", "qty": 1.0, "comment": ""}])
+        self.assertEqual(kwargs["accepted_items"], [{"item": "Biryani", "item_name": "Chicken biryani", "qty": 1.0, "comment": "", "reservation_line_key": unittest.mock.ANY}])
         self.assertEqual(kwargs["previous_items"], [])
         self.assertEqual(kwargs["branch"], "Branch A")
         self.assertEqual(kwargs["company"], "Test Company")

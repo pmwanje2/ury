@@ -110,7 +110,7 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
         pos_api.getRoom = MagicMock(return_value=[{"name": "Main Hall"}])
         pos_api.posOpening = MagicMock(return_value=0)
         kot = ModuleType("ury.ury.api.ury_kot_generate")
-        kot.kot_execute = MagicMock()
+        kot._execute_kot = MagicMock()
         kot.process_items_for_cancel_kot = MagicMock()
         printview = ModuleType("frappe.www.printview")
         printview.validate_print_permission = MagicMock()

@@ -1006,7 +1006,7 @@ class TestCreateCancelKotDocLineIdentity(FrappeTestCase):
             {
                 "name": "KOT-B",
                 "kot_items": self._kot_items(
-                    [{"item": "Biryani", "comments": "extra spicy", "reservation_line_key": "ref:Biryani:INVITEM-2"}]
+                    [{"item": "Biryani", "quantity": 1, "comments": "extra spicy", "reservation_line_key": "ref:Biryani:INVITEM-2"}]
                 ),
             }
         )

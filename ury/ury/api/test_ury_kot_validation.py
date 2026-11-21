@@ -442,7 +442,7 @@ class TestProcessInvoice(FrappeTestCase):
         docs = {'POS Invoice': invoice, 'POS Profile': profile,
                 'URY Production Unit': _production_unit_dict(), 'Item': frappe._dict(item_group='Food')}
         with patch.object(frappe, 'get_doc', side_effect=lambda dt, *args, **kw: docs[dt]), \
-             patch.object(frappe, 'get_list', return_value=[]), \
+             patch.object(frappe.db, 'get_value', return_value=None), \
              patch(f'{MODULE}.get_productions_for_branch', return_value=[_production_unit_dict()]), \
              patch(f'{MODULE}.create_kot') as dispatch:
             process_invoice(frappe._dict(name=invoice.name))
@@ -462,7 +462,6 @@ class TestProcessInvoice(FrappeTestCase):
             return 'KOT-FROM-FIRE'
         with patch.object(frappe, 'get_doc', side_effect=document), \
              patch.object(frappe.db, 'get_value', side_effect=current_ticket) as lookup, \
-             patch.object(frappe, 'get_list', return_value=[]), \
              patch(f'{MODULE}.get_productions_for_branch', return_value=[]) as stations:
             process_invoice(invoice)
         lookup.assert_called_once()
@@ -470,7 +469,7 @@ class TestProcessInvoice(FrappeTestCase):
 
     @patch(f"{MODULE}.create_kot")
     @patch(f"{MODULE}.get_productions_for_branch")
-    @patch(f"{MODULE}.frappe.get_list")
+    @patch(f"{MODULE}.frappe.db.get_value")
     @patch(f"{MODULE}.frappe.get_doc")
     def test_process_invoice_creates_kot_when_none_exists(
         self, mock_get_doc, mock_get_list, mock_get_productions, mock_create_kot
@@ -512,7 +511,7 @@ class TestProcessInvoice(FrappeTestCase):
 
     @patch(f"{MODULE}.create_kot")
     @patch(f"{MODULE}.get_productions_for_branch")
-    @patch(f"{MODULE}.frappe.get_list")
+    @patch(f"{MODULE}.frappe.db.get_value")
     @patch(f"{MODULE}.frappe.get_doc")
     def test_process_invoice_skips_when_kot_exists(
         self, mock_get_doc, mock_get_list, mock_get_productions, mock_create_kot

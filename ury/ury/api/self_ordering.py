@@ -30,6 +30,7 @@ import hmac
 import json
 from datetime import timedelta
 from functools import wraps
+from uuid import uuid4
 
 import frappe
 from frappe import _
@@ -47,7 +48,7 @@ from ury.ury.doctype.ury_order.ury_order import (
     price_items_for_invoice,
 )
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
-from ury.ury.api.ury_kot_generate import kot_execute
+from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_order_reservation_service import reconcile_order_reservations
 from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 
@@ -692,7 +693,8 @@ def add_customer_items(session, items):
 
         # The check line, KOT and guest view name the dish as staff lines do; never the client's text.
         item_name = frappe.db.get_value("Item", item_code, "item_name")
-        clean_items.append({"item": item_code, "item_name": item_name, "qty": qty, "comment": comment})
+        clean_items.append({"item": item_code, "item_name": item_name, "qty": qty, "comment": comment,
+                            "reservation_line_key": uuid4().hex})
 
     order_type = "Dine In" if session.table else "Take Away"
 

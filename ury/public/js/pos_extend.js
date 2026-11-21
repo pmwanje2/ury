@@ -251,6 +251,9 @@ frappe.pages["point-of-sale"].on_page_load = function (wrapper) {
               qty: old_item.qty,
               item_name: old_item.item_name,
               name: old_item.name,
+              reservation_line_key: old_item.reservation_line_key,
+              comments: old_item.comment || "",
+              ury_held: old_item.ury_held,
             };
             cur_frm.old_items.push(json_olditem);
           });
