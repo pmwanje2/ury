@@ -14,6 +14,7 @@ import { useNotificationModal } from "./NotificationModal.js";
 export const useTableStore = defineStore("table", {
   state: () => ({
     tables: [],
+    floorRefresh: 0,
     serviceRequests: [],
     serviceRequestsLoading: true,
     serviceRequestsUnavailable: false,
@@ -168,6 +169,8 @@ export const useTableStore = defineStore("table", {
     },
     fetchTable() {
       const room = this.selectedRoom;
+      const refresh = ++this.floorRefresh;
+      const isCurrent = () => refresh === this.floorRefresh && room === this.selectedRoom;
       let tableListLoaded = false;
       this.serviceRequests = [];
       this.serviceRequestsLoading = true;
@@ -175,6 +178,7 @@ export const useTableStore = defineStore("table", {
       this.call
         .get("ury.ury.api.ury_server_time.get_server_time")
         .then((result) => {
+          if (!isCurrent()) return;
           // Match Mosaic's site-local wall-clock offset.
           this.serverTimeOffset = new Date(result.message.replace(" ", "T")).getTime() - Date.now();
         })
@@ -198,7 +202,7 @@ export const useTableStore = defineStore("table", {
           limit: 0,
         })
         .then(async (tables) => {
-          if (room !== this.selectedRoom) return;
+          if (!isCurrent()) return;
           tableListLoaded = true;
           this.tables = tables.sort((a, b) => {
             return a.name.localeCompare(b.name, undefined, {
@@ -224,8 +228,8 @@ export const useTableStore = defineStore("table", {
             orderBy: { field: "creation", order: "desc" },
             limit: 0,
           });
+          if (!isCurrent()) return;
           // Seating starts at the oldest still-open check, including split siblings.
-          // Keep these captured rows so a late response cannot affect another room.
           for (const table of occupiedTables) {
             let oldestTime = Infinity;
             table.open_bill_creation = null;
@@ -241,12 +245,10 @@ export const useTableStore = defineStore("table", {
               }
             }
           }
-          if (room === this.selectedRoom) {
-            await this.attachTableOwners(occupiedTables, room, invoices);
-          }
+          await this.attachTableOwners(occupiedTables, invoices, isCurrent);
         })
         .catch((error) => {
-          if (!tableListLoaded && room === this.selectedRoom) {
+          if (!tableListLoaded && isCurrent()) {
             this.serviceRequestsLoading = false;
             this.serviceRequestsUnavailable = true;
             this.serviceRequestsDenied = false;
@@ -715,8 +717,7 @@ export const useTableStore = defineStore("table", {
           });
       }
     },
-    async attachTableOwners(occupiedTables, room, invoices) {
-      if (room !== this.selectedRoom) return;
+    async attachTableOwners(occupiedTables, invoices, isCurrent) {
       try {
         const visible = new Set(occupiedTables.map((table) => table.name));
         const waiterByTable = new Map();
@@ -740,7 +741,7 @@ export const useTableStore = defineStore("table", {
               filters: [["name", "in", waiterIds]],
               limit: waiterIds.length,
             });
-            if (room !== this.selectedRoom) return;
+            if (!isCurrent()) return;
             for (const user of users || []) {
               const fullName = user && typeof user.full_name === "string" ? user.full_name.trim() : "";
               if (user && user.name && fullName) this.ownerNames[user.name] = fullName;
@@ -749,7 +750,7 @@ export const useTableStore = defineStore("table", {
             console.error(error);
           }
         }
-        if (room !== this.selectedRoom) return;
+        if (!isCurrent()) return;
         for (const table of this.tables) {
           const waiter = waiterByTable.get(table.name);
           table.owner_name = waiter ? this.ownerLabel(waiter) : "";

@@ -331,19 +331,33 @@ def get_dashboard_stats(branch=None, company=None):
 
 	# Grouped by invoice currency: an "all companies" scope can span AED and
 	# OMR, and summing those into one number would be meaningless.
-	start, end = _business_day_bounds(branch)
+	settings_join = ""
+	if branch:
+		filters_dict["start"], filters_dict["end"] = _business_day_bounds(branch)
+		business_day = """
+			TIMESTAMP(b.`posting_date`, b.`posting_time`) >= %(start)s
+			AND TIMESTAMP(b.`posting_date`, b.`posting_time`) < %(end)s
+		"""
+	else:
+		# Shift both timestamps by the outlet cutoff: matching dates select [cutoff, next cutoff).
+		settings_join = "LEFT JOIN `tabURY Report Settings` rs ON rs.`branch` = b.`branch`"
+		filters_dict["site_now"] = get_datetime()
+		business_day = """
+			DATE(TIMESTAMP(b.`posting_date`, b.`posting_time`) - INTERVAL COALESCE(rs.`hours`, 0) HOUR)
+			= DATE(%(site_now)s - INTERVAL COALESCE(rs.`hours`, 0) HOUR)
+		"""
 	rows = frappe.db.sql(
 		f"""
 		SELECT b.`currency` AS currency, COUNT(b.`name`) AS total_invoices,
 			ROUND(SUM(b.`grand_total`), 2) AS grand_total
 		FROM `tabPOS Invoice` b
+		{settings_join}
 		WHERE b.`docstatus` = 1 AND b.`status` IN ('Consolidated', 'Paid')
-			AND TIMESTAMP(b.`posting_date`, b.`posting_time`) >= %(start)s
-			AND TIMESTAMP(b.`posting_date`, b.`posting_time`) < %(end)s
+			AND {business_day}
 			{where_clause}
 		GROUP BY b.`currency`
 		""",
-		{**filters_dict, "start": start, "end": end},
+		filters_dict,
 		as_dict=True,
 	)
 
