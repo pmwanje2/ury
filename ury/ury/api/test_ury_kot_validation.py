@@ -185,7 +185,7 @@ class TestGetProductionsForBranch(FrappeTestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].name, "PROD-001")
         mock_get_all.assert_called_once_with(
-            "URY Production Unit", filters={"branch": "Branch1"}, fields=["name", "item_groups"]
+            "URY Production Unit", filters={"branch": "Branch1"}, fields=["name"]
         )
 
     @patch(f"{MODULE}.frappe.get_all")
@@ -448,6 +448,26 @@ class TestProcessInvoice(FrappeTestCase):
             process_invoice(frappe._dict(name=invoice.name))
             dispatch.assert_not_called()
 
+    def test_fallback_checks_current_ticket_after_locking_the_invoice(self):
+        invoice = _InvoiceStub(_invoice_dict(items=[_kot_item_dict()]))
+        docs = {'POS Invoice': invoice, 'POS Profile': _pos_profile_dict()}
+        locks = []
+        def document(dt, name, **kwargs):
+            if dt == 'POS Invoice' and kwargs.get('for_update'):
+                locks.append(name)
+            return docs[dt]
+        def current_ticket(dt, filters, field, **kwargs):
+            self.assertEqual(locks, [invoice.name])
+            self.assertTrue(kwargs.get('for_update'))
+            return 'KOT-FROM-FIRE'
+        with patch.object(frappe, 'get_doc', side_effect=document), \
+             patch.object(frappe.db, 'get_value', side_effect=current_ticket) as lookup, \
+             patch.object(frappe, 'get_list', return_value=[]), \
+             patch(f'{MODULE}.get_productions_for_branch', return_value=[]) as stations:
+            process_invoice(invoice)
+        lookup.assert_called_once()
+        stations.assert_not_called()
+
     @patch(f"{MODULE}.create_kot")
     @patch(f"{MODULE}.get_productions_for_branch")
     @patch(f"{MODULE}.frappe.get_list")
@@ -471,7 +491,7 @@ class TestProcessInvoice(FrappeTestCase):
         production_unit = _production_unit_dict()
         item = frappe._dict({"item_group": "Food"})
 
-        def get_doc_side_effect(doctype, name):
+        def get_doc_side_effect(doctype, name, **kwargs):
             if doctype == "POS Invoice":
                 return pos_invoice
             elif doctype == "POS Profile":
@@ -501,7 +521,7 @@ class TestProcessInvoice(FrappeTestCase):
         pos_invoice = _invoice_dict(name="POS-INV-001")
         pos_profile = _pos_profile_dict()
 
-        mock_get_doc.side_effect = lambda doctype, name: (
+        mock_get_doc.side_effect = lambda doctype, name, **kwargs: (
             pos_invoice if doctype == "POS Invoice" else pos_profile
         )
         mock_get_list.return_value = [frappe._dict(name="KOT-001")]
