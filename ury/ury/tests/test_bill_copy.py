@@ -53,7 +53,7 @@ class BillCopy(unittest.TestCase):
         from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
         doc = object.__new__(CustomPOSInvoice)
         doc.__dict__.update(name='INV-22', terms='Welcome', customer='AC-012', currency='UGX', outstanding_amount=60)
-        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, patch.object(POSInvoice, 'before_print'):
+        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, patch.object(POSInvoice, 'before_print'), patch('ury.ury.class_overrides.pos_invoice._', lambda x:x):
             f.db.exists.return_value = False
             CustomPOSInvoice.before_print(doc)
         self.assertIn('Charged to account AC-012: 60 UGX', doc.terms)
@@ -137,3 +137,15 @@ class BillCopy(unittest.TestCase):
             finalizer.finalize_print_job('COPY-' + '1'*64 + '-1', 'COMPLETED')
             free.assert_not_called()
             self.assertFalse(any(c.args[0] == 'POS Invoice' for c in f.db.set_value.call_args_list))
+
+    def test_merged_receipt_includes_cash_and_remaining_credit_on_partner(self):
+        form = Path(__file__).resolve().parents[1] / 'print_format/merged_pos_invoice_format/merged_pos_invoice_format.json'
+        doc = MagicMock(customer='AC-12', currency='UGX', outstanding_amount=0, paid_amount=100, change_amount=0,
+                        custom_merged_pos_invoice='B2', grand_total=100, custom_merged_total=80,
+                        payments=[MagicMock(mode_of_payment='Cash', amount=100)])
+        partner = MagicMock(customer='AC-12', currency='UGX', outstanding_amount=60, paid_amount=20,
+                            payments=[MagicMock(mode_of_payment='Visa', amount=20)])
+        doc.ury_print_partner = partner
+        html = Environment().from_string(json.loads(form.read_text())['html']).render(doc=doc, frappe=MagicMock(), _=lambda x:x)
+        for value in ('Cash', 'Visa', 'Charged to account AC-12: 60 UGX'):
+            self.assertIn(value, html)
