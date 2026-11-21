@@ -9,6 +9,9 @@ from frappe.model.document import Document
 
 class URYKOT(Document):
     def on_submit(self):
+        # Printed at the station during an outage; replay must not print or alert again.
+        if self.get("ury_offline_printed"):
+            return
         self.multi_print_kot()
         self.kotDisplayRealtime()
 

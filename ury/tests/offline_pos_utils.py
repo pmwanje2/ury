@@ -92,6 +92,7 @@ def make_offline_pos():
         "selling_price_list": menu.price_list, "branch": branch.name,
         "restaurant": restaurant.name, "custom_kot_naming_series": f"KOT-{suffix}-.#####",
         "role_allowed_for_billing": [{"role": "URY Cashier"}], "remove_items": 1,
+        "ury_offline_capture": 1,
         "applicable_for_users": [{"user": user.name}],
         "payments": [{"mode_of_payment": "Cash", "default": 1}],
     }).insert()
@@ -106,11 +107,11 @@ def make_offline_pos():
     department = frappe.get_doc({
         "doctype": "URY Production Department", "department_name": f"Offline Dept {suffix}",
         "company": company, "branch": branch.name, "department_warehouse": warehouse,
-        "cost_center": cost_center,
+        "cost_center": cost_center, "enabled": 1,
     }).insert()
     production = frappe.get_doc({
         "doctype": "URY Production Unit", "production": f"Offline Kitchen {suffix}",
-        "department": department.name,
+        "department": department.name, "company": company, "enabled": 1,
         "pos_profile": profile.name, "branch": branch.name, "warehouse": warehouse,
         "item_groups": [{"item_group": group}],
     }).insert()
@@ -121,6 +122,7 @@ def make_offline_pos():
         "doctype": "URY Item Production Configuration", "item": item.name,
         "branch": branch.name, "availability_mode": "Always Available", "active": 1,
         "department": department.name, "production_unit": production.name,
+        "controlled_by_sales_plan": 0,
     }).insert()
     opening = frappe.get_doc({
         "doctype": "POS Opening Entry", "company": company, "pos_profile": profile.name,
@@ -134,6 +136,54 @@ def make_offline_pos():
         user=user, branch=branch, room=room, restaurant=restaurant, item=item,
         menu=menu, profile=profile, customer=customer, production=production, opening=opening,
     )
+
+
+def make_made_to_order_item(context):
+    """A native made-to-order menu item with a BOM, raw stock and POS Stock Authority V2 on."""
+    frappe.set_user("Administrator")
+    suffix = frappe.generate_hash(length=8)
+    group = context.item.item_group
+    uom = context.item.stock_uom
+    raw = frappe.get_doc({
+        "doctype": "Item", "item_code": f"Offline Flour {suffix}", "item_name": "Offline Flour",
+        "item_group": group, "stock_uom": uom, "is_stock_item": 1, "valuation_rate": 10,
+    }).insert()
+    dish = frappe.get_doc({
+        "doctype": "Item", "item_code": f"Offline Chapati {suffix}", "item_name": "Offline Chapati",
+        "item_group": group, "stock_uom": uom, "is_stock_item": 1, "valuation_rate": 20,
+    }).insert()
+    bom = frappe.get_doc({
+        "doctype": "BOM", "item": dish.name, "quantity": 1, "company": context.restaurant.company,
+        "is_active": 1, "is_default": 1, "with_operations": 0,
+        "items": [{"item_code": raw.name, "qty": 1, "uom": uom, "rate": 10}],
+    }).insert()
+    bom.submit()
+    department = frappe.db.get_value("URY Production Unit", context.production.name, "department")
+    warehouse = frappe.db.get_value("URY Production Department", department, "department_warehouse")
+    frappe.get_doc({
+        "doctype": "URY Item Production Configuration", "item": dish.name, "branch": context.branch.name,
+        "department": department, "production_unit": context.production.name, "active": 1,
+        "production_policy": "MADE_TO_ORDER", "bom": bom.name,
+        "availability_mode": "Always Available", "controlled_by_sales_plan": 0,
+    }).insert()
+    receipt = frappe.get_doc({
+        "doctype": "Stock Entry", "stock_entry_type": "Material Receipt", "purpose": "Material Receipt",
+        "company": context.restaurant.company,
+        "items": [{"item_code": raw.name, "qty": 10, "t_warehouse": warehouse, "basic_rate": 10,
+                   "uom": uom, "conversion_factor": 1}],
+    }).insert()
+    receipt.submit()
+    menu = frappe.get_doc("URY Menu", context.menu.name)
+    menu.append("items", {"item": dish.name, "item_name": dish.item_name, "rate": 100})
+    menu.save()
+    frappe.get_doc({
+        "doctype": "URY Branch Stock Policy", "branch": context.branch.name,
+        "reservation_control_enabled": 1, "realtime_production_posting_enabled": 1,
+    }).insert()
+    # The resolver memoises per request; drop any value read before the policy existed.
+    frappe.local.ury_branch_stock_policy_cache = {}
+    frappe.set_user(context.user.name)
+    return dish
 
 
 def send_order(context, **kwargs):
