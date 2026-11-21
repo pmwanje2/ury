@@ -382,3 +382,21 @@ test('a failed branch-B primary list clears branch-A Outstanding rows for the sa
   branch = 'B'; await useRootStore.getState().fetchOrders();
   expect(useRootStore.getState().orders).toEqual([]); expect(useRootStore.getState().error).toBeTruthy();
 });
+
+test('the first Outstanding page preserves an acknowledged Register selection in flight for its cashier', async () => {
+  const invoice = { name: 'ACK', branch: 'Primary', creation: '2026-10-01 11:00:00' };
+  useRootStore.setState({ ordersOwner: null, ordersBranch: null, selectedStatus: 'Outstanding' });
+  let finish!: (v: unknown) => void;
+  client.call.get.mockImplementation(async (method, args) => {
+    if (method.endsWith('.getPosInvoiceItems')) return new Promise(resolve => { finish = resolve; });
+    if (method.endsWith('.get_split_group')) return { message: { invoices: [] } };
+    if (method.endsWith('.getBranch')) return { message: 'Primary' };
+    if (args?.doctype === 'POS Invoice') return { message: [invoice] };
+    return { message: [] };
+  });
+  const selection = useRootStore.getState().selectOrder(invoice as never);
+  await useRootStore.getState().fetchOrders();
+  finish({ message: [[{ name: 'ACK-LINE' }], []] });
+  expect(await selection).toBe(true);
+  expect(useRootStore.getState().selectedOrderItems[0]?.name).toBe('ACK-LINE');
+});
