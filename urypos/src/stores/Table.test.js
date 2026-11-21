@@ -794,6 +794,29 @@ describe('floor plan shows the table owner', () => {
     });
   });
 
+  it('keeps the newer owner when an earlier same-room name lookup finishes last', async () => {
+    let finishOld;
+    const oldUsers = new Promise(resolve => { finishOld = resolve; });
+    const table = { name: 'T-05', occupied: 1, is_take_away: 0 };
+    const store = await loadFloor([{ ...table }], [draft], oldUsers);
+    expect(store.db.getDocList).toHaveBeenCalledWith('User', expect.any(Object));
+
+    store.db.getDocList.mockImplementation(async doctype => {
+      if (doctype === 'URY Table') return [{ ...table }];
+      if (doctype === 'POS Invoice') return [{ ...draft, waiter: 'new@example.test' }];
+      if (doctype === 'User') return [{ name: 'new@example.test', full_name: 'New Waiter' }];
+      return [];
+    });
+    store.fetchTable();
+    await flushPromises();
+    await mountFloor();
+    expect(cardText('T-05')).toContain('New Waiter');
+
+    finishOld([{ name: waiter, full_name: 'Old Waiter' }]);
+    await flushPromises();
+    expect(cardText('T-05')).toContain('New Waiter');
+  });
+
   it('shows the same owner on a merged partner table', async () => {
     await loadFloor(
       [

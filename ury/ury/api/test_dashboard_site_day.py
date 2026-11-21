@@ -48,8 +48,40 @@ class TestDashboardSiteTime(TestCase):
     def test_stats_use_site_day_without_report_settings(self):
         self.check_stats_window("Branch A", None, datetime(2026, 10, 2), datetime(2026, 10, 3))
 
+    def aggregate_stats(self, company=None):
+        # The CTEs shadow the two real tables for this single MariaDB query.
+        fixture = """
+            WITH `tabURY Report Settings` (branch, hours) AS (
+                SELECT 'A', 6 UNION ALL SELECT 'B', 0
+            ), `tabPOS Invoice` AS (
+                SELECT sales.*, 'USD' AS currency, 1 AS docstatus, 'Paid' AS status FROM (
+                    SELECT 'prior' AS name, 'A' AS branch, 'Co' AS company,
+                        DATE('2026-10-02') AS posting_date, TIME('01:00') AS posting_time, 100 AS grand_total
+                    UNION ALL SELECT 'opening', 'A', 'Co', '2026-10-02', '06:00', 20
+                    UNION ALL SELECT 'next', 'A', 'Co', '2026-10-03', '06:00', 200
+                    UNION ALL SELECT 'midnight', 'B', 'Co', '2026-10-02', '01:00', 50
+                    UNION ALL SELECT 'unset', 'C', 'Other', '2026-10-02', '00:00', 5
+                ) sales
+            )
+        """
+        sql = frappe.db.sql
+        with patch.object(frappe.db, "sql", side_effect=lambda q, *a, **kw: sql(fixture + q, *a, **kw)), patch(
+            "frappe.get_all", return_value=[],
+        ):
+            stats = get_dashboard_stats(company=company)
+        return stats["orders_today"], stats["todays_sales"]
+
     def test_stats_without_branch_use_site_day(self):
-        self.check_stats_window(None, None, datetime(2026, 10, 2), datetime(2026, 10, 3))
+        # Before A opens: its business day still includes the 01:00 sale.
+        self.assertEqual(self.aggregate_stats(), (3, 155))
+
+    def test_company_stats_use_each_outlets_cutoff(self):
+        self.site_now = datetime(2026, 10, 2, 8)
+        self.assertEqual(self.aggregate_stats(company="Co"), (2, 70))
+
+    def test_all_branch_stats_use_each_outlets_cutoff(self):
+        self.site_now = datetime(2026, 10, 2, 8)
+        self.assertEqual(self.aggregate_stats(), (3, 75))
 
     def test_stats_before_report_cutoff_use_previous_business_day(self):
         self.check_stats_window("Branch A", 6, datetime(2026, 10, 1, 6), datetime(2026, 10, 2, 6))
