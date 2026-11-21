@@ -34,7 +34,15 @@ jobs:
       - name: Run hermetic POS tests
         run: npm test --offline -- ./tests/ --maxWorkers=1
       - name: Run site-less Python tests
-        run: >-
-          PYTHONPATH=.. python3 -m unittest
-          ury.tests.unit.test_offline_capture_fixture
-          ury.ury_pos.test_floor_pin
+        run: |
+          PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_offline_capture_fixture
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_ury_kot_notes
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_ury_hold_fire
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_ury_table_bookings
+          PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_order.test_split_bill_release
+          PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_order.test_cancel_order_reason
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_floor_pin
+          PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_order.test_price_determination
+          PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_menu.test_menu_price_upkeep
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_shown_price_is_billed
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_kds_display_window
