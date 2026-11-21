@@ -340,3 +340,45 @@ test('profile-only readers cannot obtain an unowned legacy key when the cookie i
     expect(sessionStorageKey('posProfile')).toBeNull();
   }
 });
+
+test('discards in-flight Outstanding rows across a cookie handoff', async () => {
+  let finish!: (v: unknown) => void;
+  client.call.get.mockImplementation(async (method, args) => {
+    if (method.endsWith('.getBranch')) return { message: 'Branch A' };
+    if (args?.doctype === 'POS Invoice') return new Promise(resolve => { finish = resolve; });
+    if (args?.doctype === 'POS Invoice Item') return { message: [] };
+    return { message: '2026-10-01 12:00:00' };
+  });
+  useRootStore.setState({ selectedStatus: 'Outstanding' });
+  const pending = useRootStore.getState().fetchOrders();
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  session.user = trainee;
+  finish({ message: [{ name: 'OLD', creation: '2026-10-01 11:00:00' }] });
+  await pending;
+  expect(useRootStore.getState().orders).toEqual([]);
+  expect(useRootStore.getState().orderLoading).toBe(false);
+});
+
+test('selection reports refused item reads and never retains previously loaded lines', async () => {
+  useRootStore.setState({ selectedOrderItems: [{ name: 'previous' } as never] });
+  client.call.get.mockRejectedValue({ httpStatus: 403 });
+  expect(await useRootStore.getState().selectOrder({ name: 'DENIED' } as never)).toBe(false);
+  expect(useRootStore.getState().selectedOrderError).toBeTruthy();
+  expect(useRootStore.getState().selectedOrderItems).toEqual([]);
+});
+
+test('a failed branch-B primary list clears branch-A Outstanding rows for the same owner', async () => {
+  let branch = 'A';
+  client.call.get.mockImplementation(async (method, args) => {
+    if (method.endsWith('.getBranch')) return { message: branch };
+    if (branch === 'B') throw new Error('Denied');
+    if (args?.doctype === 'POS Invoice') return { message: [{ name: 'A-1', creation: '2026-10-01 11:00:00' }] };
+    if (args?.doctype === 'POS Invoice Item') return { message: [] };
+    return { message: '2026-10-01 12:00:00' };
+  });
+  useRootStore.setState({ selectedStatus: 'Outstanding' });
+  await useRootStore.getState().fetchOrders();
+  expect(useRootStore.getState().orders[0]?.name).toBe('A-1');
+  branch = 'B'; await useRootStore.getState().fetchOrders();
+  expect(useRootStore.getState().orders).toEqual([]); expect(useRootStore.getState().error).toBeTruthy();
+});

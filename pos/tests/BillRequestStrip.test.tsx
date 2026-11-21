@@ -30,6 +30,7 @@ async function nativeRead(method: string, args: any = {}) {
       const tableFilter = args.filters.find?.((filter: any[]) => filter[0] === 'table');
       return { message: tableFilter ? requests.filter(request => tableFilter[2].includes(request.table)) : requests };
     }
+    if (args.doctype === 'POS Invoice' && args.filters.name) return { message: search.filter(row => row.name === args.filters.name && row.branch === args.filters.branch && row.status === args.filters.status) };
     if (args.doctype === 'POS Invoice') return { message: queue.filter(invoice =>
       invoice.restaurant_table === args.filters.restaurant_table && invoice.status === 'Draft' &&
       (!args.filters.branch || invoice.branch === args.filters.branch)) };
@@ -47,7 +48,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   await initI18n('en');
-  select = vi.fn(); queue = [check('POS-1')]; search = []; siblings = [];
+  document.cookie = 'user_id=cashier-a; Path=/';
+  select = vi.fn().mockResolvedValue(true); queue = [check('POS-1')]; search = []; siblings = [];
   tables = [{ name: 'Table 1', branch: 'Branch A' }, { name: 'Table B', branch: 'Branch B' }];
   requests = [{ name: 'REQ-1', table: 'Table 1', invoice: 'POS-1', status: 'Pending', requested_at: '2026-10-02 10:05:00' }];
   vi.spyOn(call, 'get').mockImplementation(nativeRead);
@@ -103,7 +105,7 @@ describe('read-only bill-request strip', () => {
   it('searches Outstanding for an off-page invoice and selects only the exact readable draft', async () => {
     queue = []; search = [check('POS-10'), check('POS-1')];
     await render(); await pickup();
-    expect(call.get).toHaveBeenNthCalledWith(4, 'ury.ury_pos.api.searchPosInvoice', { query: 'POS-1', status: 'Draft' });
+    expect(call.get).toHaveBeenNthCalledWith(4, 'frappe.client.get_list', expect.objectContaining({ doctype: 'POS Invoice', filters: { name: 'POS-1', branch: 'Branch A', status: 'Draft', docstatus: 0 } }));
     expect(select).toHaveBeenCalledWith(search[1]);
     expect(call.get).toHaveBeenCalledTimes(4);
   });
@@ -141,7 +143,7 @@ describe('read-only bill-request strip', () => {
     expect(select).not.toHaveBeenCalled();
   });
   it.each([
-    { httpStatus: 404, exception: 'frappe.exceptions.DoesNotExistError', want: 'Bill POS-1 is not open' },
+    { httpStatus: 404, exception: 'frappe.exceptions.DoesNotExistError', want: 'Bill POS-1 was not found' },
     { httpStatus: 403, exception: 'frappe.exceptions.PermissionError', want: 'Bill lookup unavailable' },
   ])('distinguishes $httpStatus at the native split-group lookup from an open bill', async ({ httpStatus, exception, want }) => {
     queue = [];
@@ -255,7 +257,7 @@ describe('read-only bill-request strip', () => {
   it('keeps rows usable on refresh failure and clears the non-blocking note on success', async () => {
     await render();
     const row = container.querySelector('li');
-    vi.mocked(call.get).mockRejectedValueOnce(Error('Offline'));
+    vi.mocked(call.get).mockResolvedValueOnce({message:'Branch A'}).mockRejectedValueOnce(Error('Offline'));
     await click('Refresh');
     expect(container.querySelector('li')).toBe(row);
     expect(container.textContent).toContain('1 waiting');
@@ -278,4 +280,23 @@ describe('read-only bill-request strip', () => {
       expect(locale[group]?.[name], `${lang}: ${key} must not render a raw key`).toEqual(expect.any(String));
     }
   });
+});
+
+it('clears old choices and ignores a late refresh across a cookie handoff', async () => {
+  queue = []; siblings = [{ ...check('OLD-SPLIT'), docstatus: 0 }];
+  await render(); await pickup(); expect(container.textContent).toContain('OLD-SPLIT');
+  let finish!: (r: unknown) => void;
+  vi.mocked(call.get).mockImplementation(async (method, args: any) => args?.doctype === 'URY Service Request'
+    ? new Promise(resolve => { finish = resolve; }) : nativeRead(method, args));
+  await click('Refresh');
+  document.cookie = 'user_id=cashier-b; Path=/';
+  await act(async () => finish({ message: requests }));
+  expect(container.textContent).not.toContain('OLD-SPLIT');
+  expect(container.textContent).not.toContain('POS-1');
+});
+it('clears rows when the branch changes before a failed refresh', async () => {
+  await render();
+  vi.mocked(call.get).mockResolvedValueOnce({message:'Branch B'}).mockRejectedValueOnce(Error('Denied'));
+  await click('Refresh'); expect(container.textContent).not.toContain('POS-1');
+  expect(container.textContent).toContain('Bill requests unavailable');
 });

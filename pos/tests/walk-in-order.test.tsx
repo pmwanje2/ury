@@ -135,3 +135,15 @@ it('hands a cashier the exact check after an acknowledged live send', async () =
   await act(async () => submitButton().click());
   expect(openCheck).toHaveBeenCalledWith(invoice);
 });
+
+it.each(['This order has already been billed. Please reload the page.', 'This order has been modified. Please reload the page to retrieve the latest edits.'])('displays the native send refusal: %s', async reason => {
+  const response = { message: { status: 'Failure' as const }, _server_messages: JSON.stringify([JSON.stringify({message: reason})]) };
+  vi.mocked(syncOrder).mockResolvedValue(response);
+  await submit(); expect(showToast.error).toHaveBeenCalledWith(reason);
+});
+
+it.each(['Take Away', 'Dine In'])('keeps the Orders edit customer on %s after Change', async type => {
+  Object.assign(state, { selectedOrderType: type, selectedTable: type === 'Dine In' ? 'T-1' : null,
+    tableOrder: null, isUpdatingOrder: true, editCustomer: { invoice: 'INV-1', customer: 'ORIGINAL' } });
+  await submit(); expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ invoice: 'INV-1', customer: 'ORIGINAL' }));
+});

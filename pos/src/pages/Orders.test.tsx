@@ -76,6 +76,7 @@ vi.mock("react-router-dom", () => ({
 
 // Mock core functions
 vi.mock("@ury/core", () => ({
+  getSessionUser: () => "cashier@example.com",
   formatCurrency: (amount: number) => `Rs. ${amount}`,
   normalizeFrappeTime: (time: any) => time || "2026-11-03 12:00:00",
   call: {
@@ -315,6 +316,7 @@ describe("Orders guest label", () => {
     render(<Orders />);
     fireEvent.click(screen.getByRole("button", { name: "orders.edit_order" }));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/register"));
+    expect(mockPosStore.setOrderForUpdate).toHaveBeenCalledWith(order.name, order.customer, order.modified);
     expect(setGuestLabel).toHaveBeenCalledWith("Susan");
     vi.unstubAllGlobals();
   });

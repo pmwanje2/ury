@@ -3,19 +3,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
-const { mockDbGetDocList } = vi.hoisted(() => {
+const { mockCandidates } = vi.hoisted(() => {
   return {
-    mockDbGetDocList: vi.fn(),
+    mockCandidates: vi.fn(),
   };
 });
 
-vi.mock("@ury/core", () => {
-  return {
-    db: {
-      getDocList: mockDbGetDocList,
-    },
-  };
-});
+vi.mock("../lib/order-api", () => ({ getCaptainTransferCandidates: mockCandidates }));
 
 vi.mock("@ury/ui", () => ({
   UserPickerDialog: ({
@@ -95,7 +89,7 @@ import CaptainTransferDialog from "./CaptainTransferDialog";
 
 describe("CaptainTransferDialog", () => {
   beforeEach(() => {
-    mockDbGetDocList.mockResolvedValue([
+    mockCandidates.mockResolvedValue([
       { name: "user2", full_name: "User Two" },
       { name: "user3", full_name: "User Three" },
     ]);
@@ -106,6 +100,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -119,6 +114,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={false}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -132,6 +128,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -147,6 +144,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -161,6 +159,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -177,6 +176,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -193,6 +193,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -213,6 +214,7 @@ describe("CaptainTransferDialog", () => {
       <CaptainTransferDialog
         open={true}
         onOpenChange={onOpenChange}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -226,12 +228,13 @@ describe("CaptainTransferDialog", () => {
   });
 
   it("handles empty search results", async () => {
-    mockDbGetDocList.mockResolvedValueOnce([]);
+    mockCandidates.mockResolvedValueOnce([]);
 
     render(
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -243,12 +246,13 @@ describe("CaptainTransferDialog", () => {
   });
 
   it("handles db errors gracefully", async () => {
-    mockDbGetDocList.mockRejectedValueOnce(new Error("Database error"));
+    mockCandidates.mockRejectedValueOnce(new Error("Database error"));
 
     render(
       <CaptainTransferDialog
         open={true}
         onOpenChange={vi.fn()}
+        invoiceName="INV-1"
         currentCaptain="user1"
         onConfirm={vi.fn()}
       />
@@ -256,7 +260,7 @@ describe("CaptainTransferDialog", () => {
 
     await waitFor(() => {
       const errorElements = screen.queryAllByText(/Database error|tables.transfer_failed/);
-      expect(errorElements.length).toBeGreaterThanOrEqual(0);
+      expect(errorElements.length).toBeGreaterThan(0);
     });
   });
 });

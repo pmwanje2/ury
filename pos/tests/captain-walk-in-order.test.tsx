@@ -161,3 +161,9 @@ describe('Captain Dine In walk-in customer resolution', () => {
     expect(syncOrder).toHaveBeenCalledWith(expect.objectContaining({ customer: 'CUST-1' }));
   });
 });
+
+it.each(['This order has already been billed. Please reload the page.', 'This order has been modified. Please reload the page to retrieve the latest edits.'])('displays the native send refusal: %s', async reason => {
+  const response = { message: { status: 'Failure' as const }, _server_messages: JSON.stringify([JSON.stringify({message: reason})]) };
+  vi.mocked(syncOrder).mockResolvedValue(response);
+  await submit(); expect(showToast.error).toHaveBeenCalledWith(reason);
+});

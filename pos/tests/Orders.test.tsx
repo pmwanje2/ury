@@ -25,7 +25,7 @@ const state = vi.hoisted(() => ({
     custom_split_from: '', custom_merged_pos_invoice: '', custom_merged_total: 0,
   },
   items: [{ name: 'ROW-1', item_name: 'Soup', qty: 2, rate: 20, amount: 40 }],
-  fetchOrders: vi.fn(), selectOrder: vi.fn(), setSelectedStatus: vi.fn(),
+  fetchOrders: vi.fn(), selectOrder: vi.fn().mockResolvedValue(true), setSelectedStatus: vi.fn(),
   profile: { name: 'POS-1', print_format: 'Bill', view_all_status: 1, paid_limit: 10 },
   selectedStatus: '',
   error: null as string | null,
@@ -333,20 +333,22 @@ describe('Outstanding settlement working area', () => {
     expect(state.setSelectedStatus).not.toHaveBeenCalled();
   });
 
-  it.each(['denied', 'missing', 'other branch'])('keeps a native Desk fallback for a %s KOT/check', async (failure) => {
+  it.each(['denied', 'missing', 'other branch', 'refused detail'])('keeps a native Desk fallback for a %s KOT/check', async (failure) => {
     const nativeRead = vi.mocked(call.get).getMockImplementation()!;
     vi.mocked(call.get).mockImplementation(async (method, args: any) => {
       if (method === 'frappe.client.get' && args.doctype === 'URY KOT') {
         if (failure === 'denied') throw new Error('Denied');
         return { message: { name: 'KOT-1', invoice: failure === 'missing' ? null : 'POS-OTHER' } };
       }
-      if (method === 'frappe.client.get' && args.doctype === 'POS Invoice') return { message: { ...state.order, name: 'POS-OTHER', branch: 'Branch B' } };
+      if (method === 'frappe.client.get' && args.doctype === 'POS Invoice') return { message: { ...state.order, name: 'POS-OTHER', branch: failure === 'refused detail' ? 'Branch A' : 'Branch B' } };
       return nativeRead(method, args);
     });
+    if (failure === 'refused detail') state.selectOrder.mockResolvedValueOnce(false);
     await renderOrders();
     const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Open check');
     expect(button).toBeDefined(); await act(async () => button!.click());
-    expect(state.selectOrder).not.toHaveBeenCalled();
+    if (failure !== 'refused detail') expect(state.selectOrder).not.toHaveBeenCalled();
+    expect(call.post).not.toHaveBeenCalled();
     expect(container.querySelector('a[href="/app/ury-kot/KOT-1"]')).not.toBeNull();
     expect(container.textContent).toContain('Check unavailable');
   });
