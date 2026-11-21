@@ -26,7 +26,7 @@ export const storage = {
 export const URY_POS_SCOPE = '/pos';
 export const URY_POS_CACHE_PREFIX = 'ury-pos-';
 // Per-user sessionStorage prefixes the offline cashier writes; purged with the session.
-const OFFLINE_SESSION_PREFIXES = ['ury_open_table_checks'];
+const OFFLINE_SESSION_PREFIXES = ['ury_open_table_checks', 'ury_open_table_checks_session', 'ury_offline_opening', 'posProfile', 'payment_modes'];
 
 export function getUserSessionStorageKey(key: string, user: string | null | undefined): string | null {
   return user && user !== 'Guest' ? `${key}:${user}` : null;

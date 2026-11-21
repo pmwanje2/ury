@@ -66,6 +66,8 @@ beforeAll(async () => {
       json(response, 200, { message: cashier });
       return;
     }
+    if (url.includes('getPosProfileFull')) { json(response, 200, { message: profile }); return; }
+    if (url.includes('getPosProfile')) { json(response, 200, { message: { pos_profile: profile.name, company: profile.company } }); return; }
     if (url.includes('check_opening_entry')) {
       json(response, 200, { message: [{ name: 'OPEN-1', company: 'Company A', pos_profile: profile.name }] });
       return;

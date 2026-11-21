@@ -1,4 +1,5 @@
-import { db, auth } from './client';
+import { gatewayStatusOf } from '../gateway-status';
+import { db, auth, NETWORK_FAILURE_MARK } from './client';
 import { purgeOfflineSession } from '../storage';
 
 type LoggedUserResponse = string | null;
@@ -13,15 +14,47 @@ interface UserDoc {
   }>;
 }
 
-export const getLoggedUser = async (): Promise<LoggedUserResponse> => {
+export const getSessionUser = (): LoggedUserResponse => {
+  if (typeof document === 'undefined') return null;
+  const cookie = document.cookie.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('user_id='));
+  if (!cookie) return null;
   try {
-    const response = await auth.getLoggedInUser();
-    return response as LoggedUserResponse;
-  } catch (error) {
-    console.error('Error getting logged user:', error);
+    return decodeURIComponent(cookie.slice('user_id='.length)) || null;
+  } catch {
     return null;
   }
 };
+
+// True only for the client's tagged "no HTTP answer" shape. 401/403 keep
+// their httpStatus; other TypeErrors and messages are not offline.
+export function isNetworkFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as Record<string, unknown>;
+  return failure.httpStatus === 0 && failure[NETWORK_FAILURE_MARK] === true;
+}
+
+// Transport failure or a gateway page (502/503/504/52x). 401/403/500 stay answers.
+export function isLinkDown(error: unknown): boolean {
+  return isNetworkFailure(error) || gatewayStatusOf(error) !== null;
+}
+
+export interface LoggedUserResult {
+  user: LoggedUserResponse;
+  networkFailure: boolean;
+}
+
+export const readLoggedUser = async (): Promise<LoggedUserResult> => {
+  try {
+    const response = await auth.getLoggedInUser();
+    return { user: (response as LoggedUserResponse) || null, networkFailure: false };
+  } catch (error) {
+    console.error('Error getting logged user:', error);
+    return { user: null, networkFailure: isLinkDown(error) };
+  }
+};
+
+export const getLoggedUser = async (): Promise<LoggedUserResponse> => (await readLoggedUser()).user;
 
 export const getUserRoles = async (email: string): Promise<{ roles: string[]; full_name: string }> => {
   try {

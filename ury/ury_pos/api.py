@@ -547,7 +547,7 @@ def getPosInvoice(status, limit, limit_start):
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
+                additional_discount_percentage, discount_amount, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             AND (invoice_printed = 1 OR (invoice_printed = 0 AND COALESCE(restaurant_table, '') = ''))
@@ -570,7 +570,7 @@ def getPosInvoice(status, limit, limit_start):
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
+                additional_discount_percentage, discount_amount, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             AND (invoice_printed = 0 AND restaurant_table IS NOT NULL)
@@ -591,7 +591,7 @@ def getPosInvoice(status, limit, limit_start):
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from, custom_guest_label,
-                custom_merged_pos_invoice, custom_merged_total
+                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             ORDER BY modified desc
@@ -611,7 +611,7 @@ def getPosInvoice(status, limit, limit_start):
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from, custom_guest_label,
-                custom_merged_pos_invoice, custom_merged_total
+                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             ORDER BY modified desc
@@ -685,6 +685,7 @@ def searchPosInvoice(query,status):
             "custom_split_group",
             "custom_split_from",
             "custom_guest_label",
+            "ury_client_order_id",
             "custom_merged_pos_invoice",
             "custom_merged_total",
             "additional_discount_percentage",

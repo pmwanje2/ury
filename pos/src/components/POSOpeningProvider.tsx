@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { isLinkDown, getUserSessionStorageKey } from '@ury/core';
+import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import { useLocation } from 'react-router-dom';
 import {
   checkPOSOpening,
@@ -67,6 +69,16 @@ function getHttpStatus(error: unknown): number | undefined {
   return undefined;
 }
 
+function readConfirmedOpening(key: string | null): POSOpeningEntryRef | null {
+  if (!key) return null;
+  try {
+    const entry = JSON.parse(sessionStorage.getItem(key) || 'null');
+    return entry && typeof entry === 'object' && 'name' in entry ? entry as POSOpeningEntryRef : null;
+  } catch {
+    return null;
+  }
+}
+
 const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [blockingState, setBlockingState] = useState<OpeningBlockingState | null>(null);
@@ -108,6 +120,8 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const checkPOSStatus = useCallback(async (resumeEntry?: POSOpeningEntryRef) => {
     if (!posProfile) return;
 
+    const key = getUserSessionStorageKey('ury_offline_opening', user?.name);
+    const invalidate = () => { if (key) sessionStorage.removeItem(key); };
     setIsLoading(true);
     clearBlockingState();
     setExistingEntry(null);
@@ -126,6 +140,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
       // and the cashier hits the server-side Dependent Checklist validation
       // as a hard error with no UI path to clear it.
       if (response.message === 1 || !entries || entries.length === 0) {
+        invalidate();
         // Gate on the Opening checklist BEFORE the opening screen: the
         // role-based Dependent Checklist validations (grillax port) block
         // POS Opening Entry creation server-side while pending goals have
@@ -184,6 +199,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         matchingEntry.pos_profile === posProfile.name;
 
       if (!isSameContext) {
+        invalidate();
         setBlockingState('crossCompanyOpen');
         setIsLoading(false);
         return;
@@ -196,11 +212,14 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
         try {
           const { logStatus } = await getChecklist(posProfile.name, 'Opening');
           if (logStatus !== 'Complete') {
+            invalidate();
             setNeedsOpeningChecklist(true);
             setIsLoading(false);
             return;
           }
         } catch (error) {
+          if (isLinkDown(error)) throw error;
+          invalidate();
           console.error('Failed to check opening checklist status:', error);
           // On error, block on the checklist for safety.
           setNeedsOpeningChecklist(true);
@@ -212,14 +231,23 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
       if (posProfile.custom_daily_pos_close === 1) {
         const closeResponse = await validatePOSClose(posProfile.name);
         if (closeResponse.message === 'Failed') {
+          invalidate();
           setBlockingState('dailyClosePending');
           setIsLoading(false);
           return;
         }
       }
 
+      if (key && offlineCaptureEnabled(posProfile)) sessionStorage.setItem(key, JSON.stringify(matchingEntry));
       setIsLoading(false);
     } catch (error) {
+      const confirmed = isLinkDown(error) && offlineCaptureEnabled(posProfile) ? readConfirmedOpening(key) : null;
+      if (confirmed && confirmed.pos_profile === posProfile.name && confirmed.company === posProfile.company) {
+        setExistingEntry(confirmed);
+        setIsLoading(false);
+        return;
+      }
+      invalidate();
       console.error('Failed to check POS opening status:', error);
 
       const serverMessage = parseFrappeError(error);

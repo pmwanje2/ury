@@ -4,6 +4,42 @@ import { offlineCaptureEnabled, type OfflineCaptureProfile } from "./runtime-cac
 const SERVICE_WORKER_URL = "/ury-pos-sw.js";
 const SERVICE_WORKER_SCOPE = "/pos";
 
+let binding: { user: string | null; promise: Promise<void> } | null = null;
+
+async function messageControllingWorker(user: string | null): Promise<void> {
+  if (typeof navigator === "undefined" || !navigator.serviceWorker?.controller) return;
+  const controller = navigator.serviceWorker.controller;
+  try {
+    if (new URL(controller.scriptURL, window.location.href).pathname !== SERVICE_WORKER_URL) return;
+  } catch {
+    return;
+  }
+  await tellOfflineWorker(controller, { type: "URY_BIND_SESSION", user });
+}
+
+// Isolation does not depend on this ack: the worker serves a cached read only
+// when its owner tag is the user in the user_id cookie. Waiting (bounded) lets
+// the first reads be stored for the new user once the worker is bound.
+export function bindOfflineUser(user?: string | null): Promise<void> {
+  const key = user ?? null;
+  if (binding?.user === key) return binding.promise;
+  const promise = messageControllingWorker(key).finally(() => {
+    if (binding?.promise === promise) binding = null;
+  });
+  binding = { user: key, promise };
+  return promise;
+}
+
+export function cachedOfflineProfile(user: string | null) {
+  if (!user || user === 'Guest') return null;
+  try {
+    const profile = JSON.parse(sessionStorage.getItem(`posProfile:${user}`) || 'null');
+    return offlineCaptureEnabled(profile) ? profile : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function syncOfflineCapture(
   profile: OfflineCaptureProfile | null | undefined,
   user?: string | null,
@@ -36,4 +72,16 @@ export async function syncOfflineCapture(
   // Not awaited: a slow or failed warm-up must not hold boot. The next
   // controlled load caches the shell.
   void fetch("/pos", { credentials: "same-origin", cache: "reload" }).catch(() => undefined);
+}
+
+// True when the URY POS worker controls this page. It only registers while
+// the till's ury_offline_capture flag is on; flag off unregisters it.
+export function offlineShellActive(): boolean {
+  const controller = typeof navigator !== "undefined" ? navigator.serviceWorker?.controller : null;
+  if (!controller) return false;
+  try {
+    return new URL(controller.scriptURL).href === new URL(SERVICE_WORKER_URL, window.location.origin).href;
+  } catch {
+    return false;
+  }
 }

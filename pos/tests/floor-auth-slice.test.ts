@@ -4,12 +4,12 @@ import { createAuthSlice } from '../src/store/slices/auth-slice';
 // Theme T4 (fork #62): a Guest on a paired, open-till tablet stays in the in-app PIN pad.
 
 const boundary = vi.hoisted(() => ({
-  getLoggedUser: vi.fn(),
+  readLoggedUser: vi.fn(),
   getUserRoles: vi.fn(),
 }));
 
 vi.mock('@ury/core', () => ({
-  getLoggedUser: boundary.getLoggedUser,
+  readLoggedUser: boundary.readLoggedUser,
   getUserRoles: boundary.getUserRoles,
 }));
 
@@ -17,7 +17,7 @@ let location: { href: string };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  boundary.getLoggedUser.mockResolvedValue(null);
+  boundary.readLoggedUser.mockResolvedValue({user: null, networkFailure: false});
   location = { href: '/pos/order' };
   const browserWindow = window;
   vi.stubGlobal('window', new Proxy(browserWindow, {

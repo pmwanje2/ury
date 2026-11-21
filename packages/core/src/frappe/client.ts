@@ -5,6 +5,21 @@ export function createFrappeClient(baseUrl: string | undefined = import.meta.env
 }
 
 const frappe = createFrappeClient();
+// The SDK maps both cancellations and transport failures to status 0. Tag only ERR_NETWORK.
+export const NETWORK_FAILURE_MARK = 'ury_network_failure';
+const transport = (frappe as unknown as { axios: import('axios').AxiosInstance }).axios;
+transport.interceptors.response.use(undefined, (error) => {
+  if (error && typeof error === 'object' && !error.response && error.code === 'ERR_NETWORK') {
+    error.response = {
+      status: 0,
+      statusText: 'Network Error',
+      data: { [NETWORK_FAILURE_MARK]: true },
+      headers: {},
+      config: error.config,
+    };
+  }
+  return Promise.reject(error);
+});
 const frappeCall = frappe.call();
 
 export interface CallFunction {

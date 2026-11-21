@@ -1,5 +1,5 @@
 export { createFrappeClient, call, db, auth } from './frappe/client';
-export { getLoggedUser, getUserRoles, logout, login } from './frappe/auth';
+export { getLoggedUser, readLoggedUser, isLinkDown, getSessionUser, getUserRoles, logout, login } from './frappe/auth';
 export { isUserRestrictedFromTableOrders, shouldMaskAmounts, canCaptainTransfer, derivePOSCapabilities } from './frappe/roles';
 export { parseFrappeError } from './frappe/errors';
 export { watchIdle } from './idle';
