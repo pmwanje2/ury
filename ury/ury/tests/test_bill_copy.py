@@ -67,6 +67,14 @@ class BillCopy(unittest.TestCase):
         html = Environment(autoescape=True).from_string(json.loads(path.read_text())['html']).render(doc=doc, _=lambda x:x)
         self.assertIn('Charged to account AC-012: 60 UGX',html); self.assertIn('Visa: 40 UGX',html)
 
+    def test_fully_on_account_copy_omits_zero_cash(self):
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        doc = frappe._dict(customer='AC-012', currency='UGX', items=[], taxes=[], copy_timestamp='today',
+                           outstanding_amount=100, payments=[frappe._dict(mode_of_payment='Cash', amount=0)])
+        html = Environment(autoescape=True).from_string(json.loads(path.read_text())['html']).render(doc=doc, _=lambda x:x)
+        self.assertIn('Charged to account AC-012: 100 UGX', html)
+        self.assertNotIn('Cash:', html)
+
     def test_durable_attempts_survive_spool_expiry_and_replay(self):
         fn = getattr(api, 'print_bill_copy', None)
         self.assertTrue(callable(fn), 'Missing audited copy dispatcher')

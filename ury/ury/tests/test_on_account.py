@@ -207,6 +207,73 @@ class Credit(unittest.TestCase):
         self.assertEqual(self.target.customer, "AC-1")
         self.assertEqual([p.amount for p in self.target.payments], [0])
 
+    def test_fractional_company_currency_at_credit_limit(self):
+        self.gl.return_value = 0.1
+        self.invoice.rounded_total = self.invoice.grand_total = 0.2
+        self.limit = 0.29
+        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+            self.settle()
+        self.limit = 0.3
+        self.assertEqual(self.settle()["status"], "Submitted")
+
+    def direct_merged_with_update_hook(self, saved_total):
+        from ury.ury.hooks import ury_pos_invoice as hooks
+
+        self.invoice.custom_merged_pos_invoice = self.target.name
+        self.invoice.paid_amount = 40
+        self.invoice.invoice_printed = 1
+        self.limit = 160  # 20 prior + 100 primary + 80 partner - 40 tender
+        persisted = frappe._dict(modified=0, rounded_total=80, invoice_printed=0)
+        self.target.modified = 0
+        hook_target = self.bill(self.target.name, 80)
+
+        def save_partner(doc):
+            if doc.modified != persisted.modified:
+                raise frappe.TimestampMismatchError("stale merged invoice")
+            persisted.modified += 1
+            doc.modified = persisted.modified
+            persisted.rounded_total = doc.rounded_total
+            persisted.invoice_printed = doc.invoice_printed
+
+        def load(doc):
+            for key, val in persisted.items():
+                setattr(doc, key, val)
+            return doc
+
+        def save_from_hook(**kwargs):
+            hook_target.rounded_total = saved_total
+            save_partner(hook_target)
+
+        def submit_partner():
+            save_partner(self.target)
+            self.target.docstatus = 1
+
+        self.target.invoice_printed = 0
+        self.target.reload.side_effect = lambda: load(self.target)
+        self.target.save.side_effect = lambda **kw: save_partner(self.target)
+        self.target.submit.side_effect = submit_partner
+        hook_target.save.side_effect = save_from_hook
+        self.invoice.save.side_effect = lambda: hooks.on_update(self.invoice, "on_update")
+        with patch.object(hooks, "frappe") as hook_frappe:
+            hook_frappe.flags = self.f.flags
+            hook_frappe.get_doc.side_effect = lambda dt, name: load(hook_target)
+            try:
+                return self.settle(cash=40, submit=1)
+            finally:
+                hook_target.save.assert_called_once()
+                self.assertEqual(persisted.invoice_printed, 1)
+
+    def test_direct_merged_submit_uses_partner_saved_by_update_hook(self):
+        self.assertEqual(self.direct_merged_with_update_hook(80)["status"], "Submitted")
+        self.assertEqual(self.target.docstatus, 1)
+        self.assertEqual(self.invoice.docstatus, 1)
+
+    def test_direct_merged_submit_rechecks_repriced_partner_from_update_hook(self):
+        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+            self.direct_merged_with_update_hook(81)
+        self.target.submit.assert_not_called()
+        self.invoice.submit.assert_not_called()
+
     def test_print_then_submit_rechecks_exposure(self):
         self.assertEqual(self.settle(submit=0)["status"], "Draft")
         self.limit = 119
