@@ -10,7 +10,10 @@ from ury.ury_pos import api
 
 class Credit(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(order,'_',lambda msg: msg))
         self.f = self.enterContext(patch.object(order, 'frappe'))
+        self.enterContext(patch('ury.ury_pos.credit.frappe',self.f))
+        self.enterContext(patch.object(api,'getBranch',return_value='West'))
         self.f.PermissionError = PermissionError
         self.f.ValidationError = ValueError
         self.f.throw.side_effect = lambda msg, exc=ValueError, **kw: self.fail_with(exc, msg)
@@ -121,3 +124,22 @@ class Credit(unittest.TestCase):
             self.f.get_roles.return_value=['URY Captain']
             with self.assertRaises(PermissionError): fn('Till','Acme')
             self.gl.assert_not_called()
+
+    def test_till_assignment_allows_cashier_without_profile_desk_read(self):
+        self.f.has_permission.side_effect = lambda dt, *a, **kw: dt != 'POS Profile'
+        self.profile.applicable_for_users = [frappe._dict(user='Cashier')]
+        self.assertEqual(self.settle()['status'], 'Submitted')
+
+    def test_wrong_till_assignment_is_denied(self):
+        self.profile.applicable_for_users = [frappe._dict(user='Other cashier')]
+        with self.assertRaises(PermissionError):
+            self.settle()
+
+    def test_partner_submit_failure_aborts_merged_credit(self):
+        self.invoice.custom_merged_pos_invoice = 'B2'
+        self.limit = 500
+        self.settle(cash=40, submit=0)
+        self.target.submit.side_effect = ValueError('Partner refused')
+        with self.assertRaisesRegex(ValueError, 'Partner refused'):
+            order.submit_order_invoice('B1')
+        self.invoice.submit.assert_not_called()
