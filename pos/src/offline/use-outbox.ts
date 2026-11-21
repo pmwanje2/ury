@@ -9,7 +9,7 @@ export function useOutbox(profile?: OfflineProfile | null, user?: OfflineUser | 
     let disposed = false;
     const refresh = async () => {
       const rows = queue ? await queue.list() : [];
-      if (!disposed) setState({ rows, replaying: !!queue?.replaying, offline: navigator.onLine === false || queue?.reachable === false });
+      if (!disposed) setState({ rows, replaying: !!queue?.replaying, offline: !queue?.sessionBlocked && (navigator.onLine === false || queue?.reachable === false) });
     };
     const wake = () => { void refresh(); if (replay && navigator.onLine !== false && canCaptureOffline(profile, user)) void queue?.replay(); };
     const update = () => { void refresh(); };

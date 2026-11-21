@@ -50,6 +50,7 @@ export async function submitOrderOfflineAware<T>({ profile, user, order, total, 
   { profile: OfflineProfile; user: OfflineUser; order: OfflineOrder; total: number;
     onlineSubmit: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>; clientOrderId?: string }) {
   const queue = cashierOutbox(profile, user);
+  queue.assertSessionAllowed();
   if (typeof navigator !== 'undefined' && navigator.onLine === false || !queue.reachable || clientOrderId) {
     const entry = await queue.capture(order, total, clientOrderId);
     return { offline: true as const, entry };
@@ -89,6 +90,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
+  queue.assertSessionAllowed();
   const kind = offlineCashOrMobile(modeOfPayment, reference);
   // A short named-account settlement (#44) leaves a balance owed. It is not a
   // cash settlement and stays online-only, so the tender must cover the bill.

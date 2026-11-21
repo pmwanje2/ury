@@ -46,7 +46,7 @@ export default function OfflineBanner() {
     <span className="ms-2">{t('offline.pending', { count: pending })}{review.length ? ` · ${t('offline.review_count', { count: review.length })}` : ''}</span>
     {offline && <p>{t('offline.refusals')}</p>}
     {queue?.persistent === false && <p role="alert">{t('offline.persistence_warning')}</p>}
-    {queue && pending > 0 && <details open className="max-h-48 overflow-y-auto"><summary>{t('offline.outbox')}</summary><ul>{rows.filter((row) => row.state === 'pending').map((row) => <PendingOrder key={row.sequence} row={row} queue={queue} modes={paymentModes} disabled={replaying || !canCaptureOffline(posProfile, user)} />)}</ul></details>}
+    {queue && pending > 0 && <details open className="max-h-48 overflow-y-auto"><summary>{t('offline.outbox')}</summary><ul>{rows.filter((row) => row.state === 'pending').map((row) => <PendingOrder key={row.sequence} row={row} queue={queue} modes={paymentModes} disabled={replaying || queue.sessionBlocked || !canCaptureOffline(posProfile, user)} />)}</ul></details>}
     {review.length > 0 && <ul className="mt-1 list-disc ps-5">{review.map((row) => <li key={row.sequence}>{row.client_order_id.slice(0, 8)} · {parseFrappeError({ _server_messages: row.reason }, row.reason || '')}</li>)}</ul>}
   </section>;
 }

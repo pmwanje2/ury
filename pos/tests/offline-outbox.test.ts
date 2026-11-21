@@ -27,6 +27,7 @@ async function outbox(options: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.stubGlobal('indexedDB', new IDBFactory());
   sends = [];
   persist = vi.fn(async () => true);

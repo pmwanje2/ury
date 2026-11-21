@@ -1,4 +1,5 @@
 import { v4 as uuid } from 'uuid';
+import { isGatewayUnreachableStatus } from './gateway';
 import { forgetOpenTableCheck, readOpenTableCheck, rememberOpenTableCheck, type OpenTableCheck } from './open-table-checks';
 
 export interface OfflineProfile {
@@ -95,6 +96,7 @@ export function canCaptureOffline(profile?: OfflineProfile | null, user?: Offlin
     [1, '1', true].includes(profile.ury_offline_capture as number | string | boolean) &&
     !!profile.role_allowed_for_billing?.some((row) => user.roles.includes(row.role));
 }
+class LinkDown extends Error {}
 class NotReady extends Error {}
 class Refused extends Error {}
 
@@ -117,7 +119,18 @@ export class OfflineOutbox {
     this.request = options.request || ((url, init) => fetch(url, init));
     this.print = options.print || (() => false);
   }
+  private get sessionBlockKey() { return `ury_offline_session_blocked:${this.options.user.name}`; }
+  get sessionBlocked() { return sessionStorage.getItem(this.sessionBlockKey) !== null; }
+  assertSessionAllowed() {
+    if (this.sessionBlocked) throw new Error('Verify the cashier session online before taking orders or payments.');
+  }
+  private replayFailure(error: unknown) {
+    this.reachable = !(error instanceof LinkDown);
+    // A later outage cannot undo a server denial, even after the store is reloaded.
+    if (this.reachable) sessionStorage.setItem(this.sessionBlockKey, '1');
+  }
   private allowed() {
+    this.assertSessionAllowed();
     if (!canCaptureOffline(this.options.profile, this.options.user)) throw new Error('Offline capture requires an opted-in POS Profile and its billing role.');
     if (this.replaying) throw new Error('The outbox is Replaying. Wait before capturing or settling.');
   }
@@ -286,13 +299,16 @@ export class OfflineOutbox {
       headers: { Accept: 'application/json', 'Content-Type': 'application/json',
         'X-Frappe-CSRF-Token': (window as Window & { csrf_token?: string }).csrf_token || '' },
       body: payload ? JSON.stringify(payload) : undefined });
+    } catch (error) {
+      if (error instanceof TypeError && !controller.signal.aborted) throw new LinkDown('Network unavailable');
+      throw error;
     } finally { clearTimeout(timeout); }
+    if (isGatewayUnreachableStatus(response.status)) throw new LinkDown('Gateway unavailable');
     if (response.redirected || response.status === 0 || response.status >= 300 && response.status < 400 || /\/login|cloudflareaccess/i.test(response.url) || !response.headers.get('Content-Type')?.includes('application/json')) throw new NotReady('Server session is not ready');
     if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
     let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
     try { body = await response.json(); } catch { throw new NotReady('Server did not return JSON'); }
-    if (response.status === 401 || body.exc_type === 'CSRFTokenError' ||
-      response.status === 403 && /login to access/i.test([body.exception, body._server_messages].join(' '))) throw new NotReady('Server session is not ready');
+    if (response.status === 401 || response.status === 403 || body.exc_type === 'CSRFTokenError') throw new NotReady('Server session is not ready');
     if (!response.ok || body.exc_type || body.exception) throw new Refused(body._server_messages || body.exception || body.exc_type || `HTTP ${response.status}`);
     if (typeof body.message === 'object' && body.message && 'status' in body.message && body.message.status === 'Failure') throw new Refused('Server refused the order');
     return body.message;
@@ -313,7 +329,8 @@ export class OfflineOutbox {
     this.replayPromise = exclusive(async () => {
       try {
         const user = await this.call('frappe.auth.get_logged_user');
-        if (user !== this.options.user.name) { this.reachable = false; return; }
+        if (user !== this.options.user.name) throw new NotReady('Cashier session does not match');
+        sessionStorage.removeItem(this.sessionBlockKey);
         this.reachable = true;
         for (const entry of await this.list()) {
           if (entry.state !== 'pending') continue;
@@ -340,14 +357,14 @@ export class OfflineOutbox {
             forgetOpenTableCheck(entry.owner, entry.order.table);
             await remove(entry);
           } catch (error) {
-            if (!(error instanceof Refused)) { this.reachable = false; break; }
+            if (!(error instanceof Refused)) { this.replayFailure(error); break; }
             entry.state = 'review'; entry.reason = error.message; await save(entry);
           }
         }
         if ((await this.list()).length === 0) {
           await transaction(['outages'], 'readwrite', (tx, result) => { tx.objectStore('outages').delete(this.scope); result(undefined); });
         }
-      } catch { this.reachable = false; }
+      } catch (error) { this.replayFailure(error); }
     }).finally(() => { this.replaying = false; this.replayPromise = undefined; changed(); });
     return this.replayPromise;
   }

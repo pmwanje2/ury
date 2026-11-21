@@ -16,6 +16,7 @@ const json = (message: unknown, status = 200) => new Response(JSON.stringify({ m
 });
 
 beforeEach(async () => {
+  sessionStorage.clear();
   await initI18n('en');
   vi.stubGlobal('indexedDB', new IDBFactory());
   vi.stubGlobal('navigator', { onLine: true, storage: { persist: vi.fn(async () => true) }, locks: testLocks() });

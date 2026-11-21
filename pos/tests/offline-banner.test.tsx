@@ -21,6 +21,7 @@ const waitForUI = (assertion: () => void) => vi.waitFor(async () => {
 });
 
 beforeEach(async () => {
+  sessionStorage.clear();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(call, 'get').mockResolvedValue({ message: [] });
   vi.stubGlobal('indexedDB', new IDBFactory());
