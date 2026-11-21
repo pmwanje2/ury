@@ -340,6 +340,18 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
                          [(2, 2, "no onions"), (1, 1, "extra chilli")])
         self.assertEqual([ticket.docstatus for ticket in self.historical_tickets.values()], [2, 2])
 
+    def test_food_and_drink_rounds_retain_header_and_route_only_new_quantities(self):
+        self.kot.resolve_production_units.side_effect = lambda item_code, **kw: ['Bar' if item_code == 'Tea' else 'Kitchen']
+        self.invoice.custom_guest_label = 'Party A'
+        for qty in (1, 2):
+            items = [dict(item=code, item_name=code, qty=qty, comment=note) for code, note in [('Fish','no onions'),('Tea','no sugar')]]
+            self.order.sync_order(items=items, cashier=None, owner=None, mode_of_payment='Cash', customer='Walk-in', no_of_pax=2,
+                                  last_invoice=None, waiter='waiter@example.com', pos_profile='POS A', order_type='Take Away',
+                                  comments='Serve together' if qty == 1 else None)
+        self.assertEqual([(t.production, t.comments, t.custom_guest_label, r.quantity, r.comments)
+                          for t in self.tickets for r in t.kot_items],
+                         [('Kitchen','Serve together','Party A',1,'no onions'), ('Bar','Serve together','Party A',1,'no sugar')] * 2)
+
     def test_staff_sync_preserves_existing_note_in_the_kot_baseline(self):
         self.seed("no onions")
         with patch.object(self.order, "kot_execute", wraps=self.kot._execute_kot) as execute:

@@ -130,6 +130,15 @@ describe("POSClosingDialog", () => {
     getChecklistMock.mockResolvedValue({ logStatus: "Complete" });
   });
 
+  it("keeps on-account balances outside drawer reconciliation", async () => {
+    getMainCashierPosInvoicesMock.mockResolvedValue([{...mockInvoices[0], outstanding_amount: 600,
+      payments: [{mode_of_payment: "Cash", amount: 400, account:"Cash Account"}]}]);
+    render(<POSClosingDialog open onOpenChange={vi.fn()} />);
+    expect(await screen.findByText("Rs. 600")).toBeInTheDocument();
+    expect(screen.getByTestId("expected-Cash")).toHaveTextContent("1400");
+    expect(screen.queryByTestId("On account")).toBeNull();
+  });
+
   it("renders dialog title when open", async () => {
     render(
       <POSClosingDialog

@@ -48,6 +48,25 @@ class BillCopy(unittest.TestCase):
         html = Environment(autoescape=True).from_string(spec['html']).render(doc=doc, _=lambda x:x)
         for value in ('COPY','INV-22','Rice','VAT','Visa','34','2026-11-21 12:34'): self.assertIn(value, html)
 
+    def test_original_receipt_includes_account_reference_in_print_only_terms(self):
+        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
+        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
+        doc = object.__new__(CustomPOSInvoice)
+        doc.__dict__.update(name='INV-22', terms='Welcome', customer='AC-012', currency='UGX', outstanding_amount=60)
+        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, patch.object(POSInvoice, 'before_print'):
+            f.db.exists.return_value = False
+            CustomPOSInvoice.before_print(doc)
+        self.assertIn('Charged to account AC-012: 60 UGX', doc.terms)
+        self.assertIn('Welcome', doc.terms)
+        f.db.set_value.assert_not_called()
+
+    def test_copy_shows_which_account_owes_the_remaining_balance(self):
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        doc = frappe._dict(customer='AC-012', currency='UGX', items=[], payments=[frappe._dict(mode_of_payment='Visa',amount=40)],
+                           outstanding_amount=60, taxes=[], copy_timestamp='today')
+        html = Environment(autoescape=True).from_string(json.loads(path.read_text())['html']).render(doc=doc, _=lambda x:x)
+        self.assertIn('Charged to account AC-012: 60 UGX',html); self.assertIn('Visa: 40 UGX',html)
+
     def test_durable_attempts_survive_spool_expiry_and_replay(self):
         fn = getattr(api, 'print_bill_copy', None)
         self.assertTrue(callable(fn), 'Missing audited copy dispatcher')

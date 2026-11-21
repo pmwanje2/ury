@@ -17,6 +17,7 @@ it('searches posted checks, previews original tenders, and retries only the copy
   fireEvent.click(await screen.findByRole('button',{name:'Search'}));
   fireEvent.click(await screen.findByRole('button',{name:/INV-8/}));
   for (const label of ['Lunch','VAT','Visa']) expect(screen.getByText(label)).toBeTruthy();
+  expect(screen.getByText(/Amount on account.*75/i)).toBeTruthy();
   expect(screen.queryByRole('button',{name:/edit|settle bill|collect|cancel order/i})).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:'Print copy'}));
   fireEvent.click(await screen.findByRole('button',{name:'Retry copy'}));
