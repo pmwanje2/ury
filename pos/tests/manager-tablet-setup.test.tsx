@@ -183,6 +183,37 @@ describe('Staff PINs dialog', () => {
     expect(container.textContent).toContain(t('errors.floor_pin_not_permitted'));
     expect(container.textContent).not.toContain('URY_FLOOR_PIN_NOT_PERMITTED');
   });
+
+  it('maps URY_FLOOR_PIN_LOGIN_DISABLED on the staff list to its own copy', async () => {
+    const StaffPinsDialog = await dialog('StaffPinsDialog');
+    fixtures.callGet.mockRejectedValue({ message: 'URY_FLOOR_PIN_LOGIN_DISABLED: off' });
+
+    await render(<StaffPinsDialog open={true} onOpenChange={vi.fn()} />);
+    await settle();
+
+    expect(t('staff_pins.login_disabled')).not.toBe('staff_pins.login_disabled');
+    expect(container.textContent).toContain(t('staff_pins.login_disabled'));
+    expect(container.textContent).not.toContain(t('errors.floor_pin_not_permitted'));
+    expect(container.textContent).not.toContain('URY_FLOOR_PIN_LOGIN_DISABLED');
+  });
+
+  it('maps URY_FLOOR_PIN_TARGET_INELIGIBLE on Give PIN to its own copy', async () => {
+    const StaffPinsDialog = await dialog('StaffPinsDialog');
+    fixtures.callGet.mockResolvedValue({
+      message: [{ user: 'waiter@example.test', full_name: 'Waiter One', has_pin: false }],
+    });
+    fixtures.callPost.mockRejectedValue({ message: 'URY_FLOOR_PIN_TARGET_INELIGIBLE: no' });
+
+    await render(<StaffPinsDialog open={true} onOpenChange={vi.fn()} />);
+    await settle();
+    await act(async () => button('Give PIN').click());
+    await settle();
+
+    expect(t('staff_pins.target_ineligible')).not.toBe('staff_pins.target_ineligible');
+    expect(container.textContent).toContain(t('staff_pins.target_ineligible'));
+    expect(container.textContent).not.toContain(t('errors.floor_pin_not_permitted'));
+    expect(container.textContent).not.toContain('URY_FLOOR_PIN_TARGET_INELIGIBLE');
+  });
 });
 
 describe('Pair this tablet dialog', () => {
@@ -229,6 +260,7 @@ describe('Pair this tablet dialog', () => {
   it.each([
     ['URY_FLOOR_PIN_NOT_PERMITTED', 'errors.floor_pin_not_permitted'],
     ['URY_FLOOR_TABLET_LABEL_INVALID', 'pair_tablet.label_invalid'],
+    ['URY_FLOOR_PIN_LOGIN_DISABLED', 'pair_tablet.login_disabled'],
   ])('maps %s to stable localized copy', async (code, key) => {
     const PairTabletDialog = await dialog('PairTabletDialog');
     fixtures.callPost.mockRejectedValue({ message: `${code}: refused` });
@@ -253,7 +285,7 @@ describe('manager tablet setup translations', () => {
   ])('includes the manager setup strings in %s', async (language, expected) => {
     await initI18n(language);
     expect(t('header.staff_pins')).toContain(expected);
-    for (const key of ['header.pair_tablet', 'pair_tablet.label', 'staff_pins.give_pin', 'floor_pin.title', 'floor_pin.refused']) {
+    for (const key of ['header.pair_tablet', 'pair_tablet.label', 'pair_tablet.login_disabled', 'staff_pins.give_pin', 'staff_pins.login_disabled', 'staff_pins.target_ineligible', 'floor_pin.title', 'floor_pin.refused']) {
       expect(t(key), `${language} ${key}`).not.toBe(key);
     }
   });

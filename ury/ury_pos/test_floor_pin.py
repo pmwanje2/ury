@@ -1,8 +1,8 @@
 """Site-less contracts for the paired floor tablet PIN boundary (theme T4, fork #46/#60).
 
-Refusal classes are asserted: manager-endpoint denials are PermissionError, input
-refusals are ValidationError, and PIN sign-in refusals are AuthenticationError
-(the class native LoginManager raises for a failed login).
+Refusal classes are asserted: a missing POS Profile write permission is PermissionError;
+input, configuration and target-user state refusals are ValidationError; and PIN sign-in
+refusals are AuthenticationError (the class native LoginManager raises for a failed login).
 """
 
 import hashlib
@@ -185,14 +185,26 @@ class TestFloorPin(unittest.TestCase):
 
 	# Pairing
 
-	def test_pair_device_requires_pos_profile_write_and_pin_login_enabled(self):
+	def test_pair_device_requires_pos_profile_write(self):
 		api = self.api()
 		self.frappe.has_permission.return_value = False
 		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.pair_device("Floor POS", "A"))
-		self.frappe.has_permission.return_value = True
+		self.frappe.local.cookie_manager.set_cookie.assert_not_called()
+
+	def test_pair_device_refuses_pin_login_off_or_disabled_profile_as_validation(self):
+		api = self.api()
+		for field, value in (("custom_floor_pin_login", 0), ("disabled", 1)):
+			with self.subTest(field=field):
+				self.profile.update(custom_floor_pin_login=1, disabled=0)
+				self.profile[field] = value
+				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: api.pair_device("Floor POS", "Floor tablet A"))
+		self.frappe.local.cookie_manager.set_cookie.assert_not_called()
+
+	def test_pair_device_checks_authorization_before_profile_state(self):
+		api = self.api()
+		self.frappe.has_permission.return_value = False
 		self.profile.custom_floor_pin_login = 0
 		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.pair_device("Floor POS", "A"))
-		self.frappe.local.cookie_manager.set_cookie.assert_not_called()
 
 	def test_pair_device_refuses_a_bad_label_as_input_not_authorization(self):
 		api = self.api()
@@ -305,17 +317,44 @@ class TestFloorPin(unittest.TestCase):
 	def test_issue_pin_refuses_target_outside_branch_or_without_floor_role(self):
 		api = self.api()
 		self.frappe.db.exists.return_value = False
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user))
 		self.frappe.db.exists.return_value = True
 		self.frappe.get_roles.return_value = ["Kitchen User"]
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: api.issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: api.issue_pin(self.user))
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_issue_pin_refuses_stay_signed_in_role_and_system_manager(self):
 		for roles in (["URY Captain", "URY Manager"], ["URY Captain", "System Manager"]):
 			self.frappe.get_roles.return_value = roles
-			self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user))
-		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin("Administrator"))
+			self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin("Administrator"))
+		self.frappe.db.set_value.assert_not_called()
+
+	def test_issue_pin_refuses_a_disabled_target_user(self):
+		self.frappe.db.get_value.side_effect = lambda dt, filters, field=None, **kw: 0 if field == "enabled" else None
+		self.refused("URY_FLOOR_PIN_TARGET_INELIGIBLE", Invalid, lambda: self.api().issue_pin(self.user))
+		self.frappe.db.set_value.assert_not_called()
+
+	def test_manager_endpoints_refuse_when_no_profile_has_pin_login_on_as_validation(self):
+		for field, value in (("custom_floor_pin_login", 0), ("disabled", 1)):
+			with self.subTest(field=field):
+				self.profile.update(custom_floor_pin_login=1, disabled=0)
+				self.profile[field] = value
+				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: self.api().issue_pin(self.user))
+				self.refused("URY_FLOOR_PIN_LOGIN_DISABLED", Invalid, lambda: self.api().pin_staff())
+		self.frappe.db.set_value.assert_not_called()
+
+	def test_manager_endpoints_check_authorization_before_profile_state(self):
+		self.frappe.has_permission.return_value = False
+		self.profile.custom_floor_pin_login = 0
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff())
+
+	def test_manager_endpoints_require_write_on_the_enabled_profile_itself(self):
+		# Doctype-level write alone is not enough: the PIN-enabled profile must be writable.
+		self.frappe.has_permission.side_effect = lambda doctype, ptype="read", doc=None, **kw: doc is None
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().issue_pin(self.user))
+		self.refused("URY_FLOOR_PIN_NOT_PERMITTED", Denied, lambda: self.api().pin_staff())
 		self.frappe.db.set_value.assert_not_called()
 
 	def test_issue_pin_returns_four_digits_and_stores_only_hmac(self):
@@ -417,6 +456,13 @@ class TestFloorPin(unittest.TestCase):
 		self.pair()
 		self.profile.custom_floor_pin_login = 0
 		self.refused("URY_FLOOR_DEVICE_NOT_PAIRED", Unauthenticated, self.sign_in)
+
+	def test_sign_in_refuses_after_the_paired_profile_is_disabled(self):
+		api = self.pair()
+		self.profile.disabled = 1
+		self.refused("URY_FLOOR_DEVICE_NOT_PAIRED", Unauthenticated, self.sign_in)
+		self.assertEqual(api.get_floor_pad(), {"paired": False, "till_open": False})
+		self.frappe.local.login_manager.login_as.assert_not_called()
 
 	def test_sign_in_refuses_when_no_open_pos_opening_entry(self):
 		self.pair()
