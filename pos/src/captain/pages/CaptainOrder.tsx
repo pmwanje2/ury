@@ -132,7 +132,7 @@ export default function CaptainOrder() {
   const [isTransferDestinationsLoading, setIsTransferDestinationsLoading] = useState(false);
   const [isTransferCaptainOpen, setIsTransferCaptainOpen] = useState(false);
   const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
-  const [viewingSibling, setViewingSibling] = useState<SplitGroupInvoice | null>(null);
+  const [viewingSibling, setViewingSibling] = useState<{ source: string; invoice: SplitGroupInvoice } | null>(null);
   const [printingSplitInvoice, setPrintingSplitInvoice] = useState<string | null>(null);
   const [splitGroupRefreshKey, setSplitGroupRefreshKey] = useState(0);
 
@@ -785,13 +785,13 @@ export default function CaptainOrder() {
 
       {context?.order?.custom_split_group && invoiceId && (
         <div className="px-3 pt-3">
-          {viewingSibling && viewingSibling.custom_split_group === context.order.custom_split_group && (
-            <SplitInvoiceDetails key={viewingSibling.name} invoice={viewingSibling} onClose={() => setViewingSibling(null)} />
+          {viewingSibling?.source === invoiceId && (
+            <SplitInvoiceDetails key={viewingSibling.invoice.name} invoice={viewingSibling.invoice} onClose={() => setViewingSibling(null)} />
           )}
           <SplitGroupPanel
             key={`${invoiceId}-${splitGroupRefreshKey}`}
             invoiceName={invoiceId}
-            onOpenInvoice={setViewingSibling}
+            onOpenInvoice={invoice => setViewingSibling({ source: invoiceId, invoice })}
             onPrintInvoice={canPrintBill ? handlePrintSplitInvoice : undefined}
             printingInvoiceName={printingSplitInvoice}
           />

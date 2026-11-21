@@ -431,14 +431,21 @@ def get_split_group(invoice):
                 frappe.clear_last_message()
                 continue
         valid_invoices.append(inv)
+    visible_names = {row.name for row in valid_invoices}
+    # Older groups can be named for an invoice. Only expose the group ID
+    # when all members and parent links in this view are visible.
+    if len(valid_invoices) != len(invoices) or any(
+        row.custom_split_from and row.custom_split_from not in visible_names for row in valid_invoices
+    ):
+        group = None
     invoices = valid_invoices
-
-    visible_names = {row.name for row in invoices}
     total = len(invoices)
     for index, inv in enumerate(invoices, start=1):
         inv["split_index"] = index
         inv["split_total"] = total
         inv["is_original"] = not inv.get("custom_split_from")
+        if group is None:
+            inv["custom_split_group"] = None
         if inv.get("custom_split_from") not in visible_names:
             inv["custom_split_from"] = None
         inv["split_siblings"] = [row["name"] for row in invoices if row["name"] != inv["name"]]
