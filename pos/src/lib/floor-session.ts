@@ -83,7 +83,8 @@ export function useFloorIdle(user: FloorUser | null, profile: StayRoleProfile | 
 export async function floorSignOut(): Promise<void> {
   let logoutFailed = false;
   try {
-    await logout();
+    // @ury/core logout() resolves false when the server logout failed.
+    logoutFailed = (await logout()) === false;
   } catch {
     logoutFailed = true;
   } finally {
