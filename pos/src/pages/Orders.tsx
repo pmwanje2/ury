@@ -1,3 +1,4 @@
+import { qtyReductionMessage } from '../lib/qty-reduction-message';
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus } from 'lucide-react';
 import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
@@ -365,12 +366,7 @@ export default function Orders() {
       // locally-derived key.
       const newQty = item.qty - 1;
       const result = await reduceOrderItemQty(selectedOrder.name, item.name, newQty);
-      const kotNames = result.cancel_kot_names?.length ? result.cancel_kot_names.join(', ') : null;
-      showToast.success(
-        newQty === 0
-          ? `${item.item_name} removed from the order. Cancel-KOT ${kotNames || 'generated'} sent to kitchen.`
-          : `${item.item_name} reduced to qty ${newQty}. Cancel-KOT ${kotNames || 'generated'} sent to kitchen.`
-      );
+      showToast.success(qtyReductionMessage(item.item_name, newQty, result.cancel_kot_names));
       await selectOrder(selectedOrder);
     } catch (err) {
       const parsedMessage = parseFrappeError(err) || (err instanceof Error ? err.message : null);

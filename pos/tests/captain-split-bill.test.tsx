@@ -201,7 +201,7 @@ afterEach(async () => {
 
 describe('captain split bill actions', () => {
   it('shows the selected sibling dishes without changing the editable table bill', async () => {
-    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'GROUP' };
+    boundary.context!.context.order = { ...baseOrder, custom_split_group: 'SPLIT-GROUP-1' };
     boundary.getSplitGroup.mockResolvedValue({ invoices: [sibling('POS-INV-1', 1), sibling('POS-INV-2', 2)] });
     const get = vi.spyOn(call, 'get').mockResolvedValue({ message: [[{name: 'SECOND', item_name: 'Sibling salad', qty: 1}], []] } as never);
     await renderOrder();

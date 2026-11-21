@@ -148,6 +148,7 @@ export async function splitBill(
   customer?: string | null,
   guestLabel?: string | null
 ): Promise<SplitBillResponse> {
+  await assertOfflineActionAllowed('split');
   const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_bill', {
     source_invoice: sourceInvoice,
     items_to_move: itemsToMove,

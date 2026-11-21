@@ -6,6 +6,7 @@ import { AlertTriangle, Square } from 'lucide-react';
 import { Button, Spinner, showToast } from '@ury/ui';
 import { useCaptainContext } from '../hooks/useCaptainContext';
 import { getRooms, getTables, checkTableReservation, type Room, type Table } from '../../lib/table-api';
+import { getTableOrderContext } from '../../lib/table-order-context-api';
 import { getTableOrder } from '../../lib/order-api';
 import { getMergeGroupMembers, sortTablesByMergeGroups, formatReservationTime, isReservationLockWindowActive } from '../../lib/table-utils';
 import { t } from '../../i18n';
@@ -257,6 +258,8 @@ export default function CaptainTables() {
       });
       const tableName = response.message?.restaurant_table;
       if (!isCurrentSession() || !tableName) return false;
+      const target = await getTableOrderContext(tableName);
+      if (!isCurrentSession() || !target?.permissions?.view || !target.order) return false;
       navigate(`/order/table/${encodeURIComponent(tableName)}`);
       return true;
     } catch {

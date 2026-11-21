@@ -1,20 +1,15 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
 import { Button, Input, showToast } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
 import { usePOSStore } from '../store/pos-store';
+import { useOnline } from '../offline/use-online';
 import { fireItems } from '../lib/order-api';
 import { t } from '../i18n';
-
-function subscribeOnline(refresh: () => void) {
-  window.addEventListener('online', refresh);
-  window.addEventListener('offline', refresh);
-  return () => { window.removeEventListener('online', refresh); window.removeEventListener('offline', refresh); };
-}
 
 /** Staff controls; quantities, course selection and authority stay in URY. */
 export function HoldFireControls() {
   const { activeOrders, posProfile, orderId, lastModifiedTime, setItemHeld, orderLoading } = usePOSStore();
-  const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine);
+  const online = useOnline();
   const [busy, setBusy] = useState(false);
   if (!posProfile?.ury_enable_hold_fire || !online) return null;
   const fire = async (selection: { line?: string; course?: string }) => {

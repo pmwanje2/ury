@@ -1,3 +1,4 @@
+import { qtyReductionMessage } from '../../lib/qty-reduction-message';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ClipboardList, Loader2, UtensilsCrossed } from 'lucide-react';
@@ -18,6 +19,8 @@ import {
 } from '../../lib/order-api';
 import { parseFrappeError } from '../../lib/pos-opening-api';
 import { printOrder } from '../../lib/print';
+import { useOnline } from '../../offline/use-online';
+import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
 import { type SplitGroupInvoice, resolvePrintFormat } from '../../lib/invoice-api';
 import { getVacantTablesForBranch, Table } from '../../lib/table-api';
 import { DINE_IN, TAKE_AWAY, orderTypeLabel } from '../../data/order-types';
@@ -129,6 +132,7 @@ export default function CaptainOrder() {
   const [isTransferDestinationsLoading, setIsTransferDestinationsLoading] = useState(false);
   const [isTransferCaptainOpen, setIsTransferCaptainOpen] = useState(false);
   const [isSplitBillOpen, setIsSplitBillOpen] = useState(false);
+  const [viewingSibling, setViewingSibling] = useState<SplitGroupInvoice | null>(null);
   const [printingSplitInvoice, setPrintingSplitInvoice] = useState<string | null>(null);
   const [splitGroupRefreshKey, setSplitGroupRefreshKey] = useState(0);
 
@@ -353,12 +357,7 @@ export default function CaptainOrder() {
       // whenever the working cart has already diverged from the server value.
       const newQty = line.baseQty - 1;
       const result = await reduceOrderItemQty(invoiceId, line.invoiceItemName, newQty);
-      const kotNames = result.cancel_kot_names?.length ? result.cancel_kot_names.join(', ') : null;
-      showToast.success(
-        newQty <= 0
-          ? `${line.name} removed. Cancel-KOT ${kotNames || 'generated'} sent to kitchen.`
-          : `${line.name} reduced to qty ${newQty}. Cancel-KOT ${kotNames || 'generated'} sent to kitchen.`
-      );
+      showToast.success(qtyReductionMessage(line.name, newQty, result.cancel_kot_names));
       if (table) await loadTableOrder(table);
     } catch (error) {
       const parsedMessage = parseFrappeError(error) || (error instanceof Error ? error.message : null);
@@ -378,7 +377,8 @@ export default function CaptainOrder() {
   const canTransferTable = permissions?.transfer_table ?? false;
   const canTransferCaptain = permissions?.transfer_captain ?? false;
   const canPrintBill = permissions?.print_bill ?? false;
-  const canSplitBill = permissions?.split_bill ?? false;
+  const online = useOnline();
+  const canSplitBill = online && Boolean(permissions?.split_bill);
 
   const splitItems = useMemo<BillSplitItem[]>(
     () => activeOrders
@@ -449,12 +449,6 @@ export default function CaptainOrder() {
     await refetchContext();
     await reloadOrder();
     setSplitGroupRefreshKey((key) => key + 1);
-  };
-
-  const handleOpenSplitInvoice = (invoice: SplitGroupInvoice) => {
-    if (invoice.restaurant_table && invoice.restaurant_table !== table) {
-      navigate(`/order/table/${invoice.restaurant_table}`);
-    }
   };
 
   const handlePrintSplitInvoice = async (invoice: SplitGroupInvoice) => {
@@ -626,7 +620,7 @@ export default function CaptainOrder() {
                       >
                         {reducingLineId === line.uniqueId
                           ? t('captain.reducing')
-                          : t('captain.reduce_notify')}
+                          : t(activeOrders.some(item => item.uniqueId === line.uniqueId && item.ury_held) ? 'captain.reduce_qty' : 'captain.reduce_notify')}
                       </button>
                     )}
                   </div>
@@ -791,10 +785,13 @@ export default function CaptainOrder() {
 
       {context?.order?.custom_split_group && invoiceId && (
         <div className="px-3 pt-3">
+          {viewingSibling && viewingSibling.custom_split_group === context.order.custom_split_group && (
+            <SplitInvoiceDetails key={viewingSibling.name} invoice={viewingSibling} onClose={() => setViewingSibling(null)} />
+          )}
           <SplitGroupPanel
             key={`${invoiceId}-${splitGroupRefreshKey}`}
             invoiceName={invoiceId}
-            onOpenInvoice={handleOpenSplitInvoice}
+            onOpenInvoice={setViewingSibling}
             onPrintInvoice={canPrintBill ? handlePrintSplitInvoice : undefined}
             printingInvoiceName={printingSplitInvoice}
           />
