@@ -130,3 +130,9 @@ it('booking read failure is non-fatal and clears a stale badge on refresh', asyn
     error.mockRestore();
   }
 });
+
+it('labels an advisory reservation in Arabic', async () => {
+  await initI18n('ar');
+  await act(async () => root.render(<CaptainTableCard table={table} ownership="free" booking={booking} onTap={() => {}} />));
+  expect(container.textContent).toContain('محجوز');
+});
