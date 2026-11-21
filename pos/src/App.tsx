@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import AppLayout from './components/AppLayout';
 import Orders from './pages/Orders';
 import POS from './pages/POS';
@@ -59,6 +59,14 @@ function useAiSettings() {
 }
 
 
+function RegisterRoute() {
+  const navigate = useNavigate();
+  return <POS onCashierCheck={(invoice) => {
+    void useRootStore.getState().selectOrder(invoice);
+    navigate('/orders');
+  }} />;
+}
+
 function App() {
   const user = useRootStore((state) => state.user);
   const {
@@ -104,7 +112,7 @@ function App() {
                       <Route element={<AppLayout />}>
                         <Route index element={<Navigate to={provisional ? "/register" : homePath(user)} replace />} />
                         <Route path="/dashboard" element={<Dashboard />} />
-                        <Route path="/register" element={<POS />} />
+                        <Route path="/register" element={<RegisterRoute />} />
                         <Route path="/tables" element={<Table />} />
                         <Route path="/table" element={<Table />} />
                         <Route path="/orders" element={<Orders />} />
