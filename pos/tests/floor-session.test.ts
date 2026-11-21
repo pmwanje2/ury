@@ -64,6 +64,19 @@ it('clears the tab, disconnects QZ and returns to the pad after a logout failure
   expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
 });
 
+it('treats a logout that resolves false as failed and sets the failed-logout marker', async () => {
+  // @ury/core logout() catches the server failure, purges the offline session and resolves false.
+  boundary.logout.mockResolvedValue(false);
+  const { floorSignOut } = await floorSession();
+  await floorSignOut();
+  expect(boundary.logout).toHaveBeenCalledOnce();
+  expect(sessionStorage.getItem('ury_floor_logout_failed')).toBe('true');
+  expect(localStorage.getItem('userAuth')).toBeNull();
+  expect(sessionStorage.getItem('posProfile')).toBeNull();
+  expect(boundary.disconnectQzPrinter).toHaveBeenCalledExactlyOnceWith();
+  expect(replacement).toHaveBeenCalledExactlyOnceWith('/pos/order');
+});
+
 it('clears a stale failed-logout marker when logout succeeds', async () => {
   boundary.logout.mockResolvedValue(undefined);
   sessionStorage.setItem('ury_floor_logout_failed', 'true');
