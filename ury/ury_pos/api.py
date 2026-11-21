@@ -2524,3 +2524,127 @@ def is_printer_watch_installed() -> dict:
     except Exception:
         installed = False
     return {"installed": bool(installed)}
+
+
+_CLOSED_STATUSES = ('Paid', 'Partly Paid', 'Unpaid', 'Overdue', 'Consolidated', 'Return')
+_COPY_LOG = 'URY Bill Reprint Log'
+
+
+def _closed_branch(requested=None):
+    if not {'URY Cashier', 'URY Manager'}.intersection(frappe.get_roles()) or not frappe.has_permission('POS Invoice', 'read'):
+        frappe.throw('Not permitted to access closed checks.', frappe.PermissionError)
+    branch = getBranch()
+    if not branch or (requested and requested != branch):
+        frappe.throw('Not permitted outside your assigned branch.', frappe.PermissionError)
+    return branch
+
+
+def _closed_invoice(name, branch, *, for_update=False):
+    from ury.ury.doctype.ury_order.ury_order import _enforce_order_access
+
+    doc = frappe.get_doc('POS Invoice', name, for_update=for_update)
+    if doc.branch != branch or not frappe.has_permission('POS Invoice', 'read', doc=doc):
+        frappe.throw('Not permitted to read this check.', frappe.PermissionError)
+    _enforce_order_access(doc, require_modify=False)
+    if doc.docstatus != 1 or doc.status not in _CLOSED_STATUSES:
+        frappe.throw('Only submitted closed checks can be viewed here.')
+    return doc
+
+
+@frappe.whitelist()
+def search_settled_bills(branch: str | None = None, pos_profile: str | None = None,
+                         date_from: str | None = None, date_to: str | None = None,
+                         bill_no: str | None = None, table: str | None = None,
+                         start: int = 0, page_length: int = 20):
+    branch = _closed_branch(branch)
+    filters = {'branch': branch, 'docstatus': 1, 'status': ['in', _CLOSED_STATUSES]}
+    if date_from and date_to:
+        if date.fromisoformat(date_from) > date.fromisoformat(date_to):
+            frappe.throw('Start date must precede end date.')
+        filters['posting_date'] = ['between', [date_from, date_to]]
+    elif date_from or date_to:
+        filters['posting_date'] = ['>=' if date_from else '<=', date.fromisoformat(date_from or date_to)]
+    if bill_no:
+        filters['name'] = ['like', f'%{bill_no}%']
+    if table:
+        filters['restaurant_table'] = table
+    if pos_profile:
+        filters['pos_profile'] = pos_profile
+    names = frappe.get_list('POS Invoice', filters=filters, fields=['name'], start=max(0, cint(start)),
+                            page_length=max(1, min(50, cint(page_length))), order_by='posting_date desc, posting_time desc, name desc')
+    rows = []
+    for row in names:
+        doc = _closed_invoice(row.name, branch)
+        data = {key: doc.get(key) for key in ('name', 'posting_date', 'posting_time', 'branch', 'restaurant_table',
+                'pos_profile', 'cashier', 'waiter', 'currency', 'grand_total', 'net_total', 'rounded_total',
+                'total_taxes_and_charges', 'outstanding_amount', 'status', 'consolidated_invoice')}
+        for child, fields in [('items', ('item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
+                              ('payments', ('mode_of_payment', 'amount'))]:
+            data[child] = [{key: entry.get(key) for key in fields} for entry in doc.get(child) or []]
+        rows.append(data)
+    return rows
+
+
+def _copy_result(job):
+    return {key: job.get(key) for key in ('status', 'failure_reason', 'print_job_id')}
+
+
+@frappe.whitelist(methods=['POST'])
+def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = None):
+    from hashlib import sha256
+    from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
+    from ury.ury.api.ury_print import _bill_printers
+    from ury.ury.printing.file_store import save_job
+    from ury.ury.printing.service import submit_and_monitor_print_job
+
+    if not idempotency_key or len(idempotency_key) > 128:
+        frappe.throw('A copy request key is required (maximum 128 characters).')
+    branch = _closed_branch()
+    # Serializes copy numbering and retries, including competing cashier sessions.
+    doc = _closed_invoice(invoice, branch, for_update=True)
+    owner = frappe.session.user
+    key = sha256(json.dumps([owner, invoice, idempotency_key]).encode()).hexdigest()
+    previous = frappe.db.get_value(_COPY_LOG, {'request_key': key},
+        ['name', 'print_job_id', 'status', 'failure_reason', 'attempt', 'copy_number'], as_dict=True,
+        order_by='attempt desc', for_update=True)
+    if previous and previous.status not in ('FAILED', 'CANCELED'):
+        return _copy_result(previous)
+    printers = _bill_printers(doc.pos_profile, doc.restaurant_table)
+    if not printers or (printer and printer not in printers):
+        frappe.throw('Select a configured bill printer for this outlet.')
+    printer = printer or printers[0]
+    attempt = previous.attempt + 1 if previous else 1
+    number = previous.copy_number if previous else frappe.db.count(_COPY_LOG, {'invoice': invoice, 'attempt': 1}) + 1
+    job_id = f'COPY-{key}-{attempt}'
+    record = {'doctype': _COPY_LOG, 'name': job_id, 'print_job_id': job_id, 'request_key': key,
+              'invoice': invoice, 'printer': printer, 'job_owner': owner, 'attempt': attempt,
+              'copy_number': number, 'retry_of': previous.name if previous else None, 'status': 'SUBMITTING'}
+    frappe.get_doc(record).insert(ignore_permissions=True)
+    # Claim durably before external I/O. A crash at handoff requires reconciliation;
+    # replaying SUBMITTING/UNKNOWN must never print another physical copy.
+    frappe.db.commit()
+    doc.copy_timestamp = frappe.utils.now()
+    doc.copy_number = number
+    doc._ury_copy_render = _COPY_RENDER_MARKER
+    meta = {'print_job_id': job_id, 'invoice': invoice, 'job_owner': owner, 'retry_of': record['retry_of'],
+            'job_type': 'BILL_COPY', 'reference_doctype': 'POS Invoice', 'reference_name': invoice,
+            'created_at': doc.copy_timestamp, 'printer': printer, 'status': 'SUBMITTING'}
+    if not save_job(job_id, meta):
+        result = {'status': 'Failure', 'message': 'Could not create the print job.'}
+    else:
+        try:
+            result = submit_and_monitor_print_job(doctype='POS Invoice', name=invoice, printer_setting=printer,
+                print_format='URY Bill Copy', doc=doc, job_type='BILL_COPY', extra_metadata={k:v for k,v in meta.items() if k != 'status'})
+        except Exception:
+            frappe.log_error(title='Bill copy dispatch failed')
+            result = {'status': 'Unknown', 'message': 'Copy outcome unknown. Check the printer.'}
+    status = {'Success': 'SUBMITTED', 'Failure': 'FAILED'}.get(result['status'], 'UNKNOWN')
+    update = {'status': status, 'failure_reason': result.get('message')}
+    if status != 'SUBMITTED':
+        save_job(job_id, {**meta, **update})
+    # A fast polling worker can already have recorded the terminal outcome.
+    current = frappe.db.get_value(_COPY_LOG, job_id, ['status', 'print_job_id', 'failure_reason'], as_dict=True, for_update=True)
+    if current and current.status != 'SUBMITTING':
+        return _copy_result(current)
+    frappe.db.set_value(_COPY_LOG, job_id, update)
+    return _copy_result({**record, **update})

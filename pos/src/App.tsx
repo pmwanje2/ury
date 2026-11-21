@@ -116,6 +116,7 @@ function App() {
                         <Route path="/tables" element={<Table />} />
                         <Route path="/table" element={<Table />} />
                         <Route path="/orders" element={<Orders />} />
+                        <Route path="/orders/settled" element={<Orders />} />
                         <Route path="/reservations" element={<Reservations />} />
                         <Route path="/settings" element={<Settings />} />
                         <Route path="/open-entries" element={<OpenEntries />} />

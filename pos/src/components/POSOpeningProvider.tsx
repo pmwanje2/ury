@@ -21,7 +21,12 @@ import { t } from '../i18n';
 
 export const GATED_ROUTES = ['/register', '/tables', '/orders'];
 
+function isSettledRoute(path: string) {
+  return /^(?:\/pos)?\/orders\/settled\/?$/.test(path);
+}
+
 export function isOpeningGatedRoute(pathname: string): boolean {
+  if (isSettledRoute(pathname)) return false;
   return GATED_ROUTES.some(
     (route) =>
       pathname === route ||
@@ -98,6 +103,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const { posProfile, showVoluntaryClosing, setShowVoluntaryClosing } = usePOSStore();
   const { user } = useRootStore();
   const location = useLocation();
+  const settled = isSettledRoute(location.pathname);
   const isGated = isOpeningGatedRoute(location.pathname);
 
   const canAccessDesk = useMemo(() => hasDeskAccess(user), [user]);
@@ -283,10 +289,12 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   }, [clearBlockingState, checkPOSStatus]);
 
   useEffect(() => {
-    if (posProfile) {
+    if (posProfile && !settled) {
       checkPOSStatus();
     }
-  }, [posProfile, checkPOSStatus]);
+  }, [posProfile, checkPOSStatus, settled]);
+
+  if (settled) return <>{children}</>;
 
   if (isLoading) {
     return (

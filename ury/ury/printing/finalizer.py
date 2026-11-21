@@ -15,6 +15,8 @@ It is guarded by a Redis idempotency key so retries / duplicate polls
 cannot run the side effects more than once.
 """
 
+import re
+
 import frappe
 import redis.exceptions
 
@@ -107,6 +109,10 @@ def finalize_print_job(print_job_id, final_state, failure_reason=None):
 
     metadata = get_print_job(print_job_id) or {}
     job_type = metadata.get("job_type", "BILL")
+    if re.fullmatch(r"COPY-[0-9a-f]{64}-[1-9][0-9]*", print_job_id) and job_type != "BILL_COPY":
+        frappe.logger("printing").error({"event": "missing_copy_metadata", "print_job_id": print_job_id})
+        return {"status": "Unknown", "print_job_id": print_job_id}
+
 
     # Persist terminal state back to the file store.
     metadata["status"] = final_state
@@ -117,12 +123,23 @@ def finalize_print_job(print_job_id, final_state, failure_reason=None):
 
     handlers = {
         "BILL": _finalize_bill,
+        "BILL_COPY": _finalize_bill_copy,
         "KOT": _finalize_kot,
         "WAITER_SLIP": _finalize_waiter_slip,
         "KOT_REPRINT": _finalize_kot_reprint,
     }
     handler = handlers.get(job_type, _finalize_bill)
     return handler(print_job_id, final_state, metadata, failure_reason)
+
+
+def _finalize_bill_copy(print_job_id, final_state, metadata, failure_reason):
+    # Loss of printer visibility is not proof the paper never printed.
+    outcome = UNKNOWN if metadata.get("observation_timed_out") else final_state
+    frappe.db.set_value("URY Bill Reprint Log", print_job_id,
+                        {"status": outcome, "failure_reason": failure_reason})
+    frappe.publish_realtime("bill_copy_status", {"print_job_id": print_job_id, "status": outcome},
+                            user=metadata.get("job_owner"), after_commit=True)
+    return {"status": "Finalized", "print_job_id": print_job_id, "job_type": "BILL_COPY", "final_state": outcome}
 
 
 def _finalize_bill(print_job_id, final_state, metadata, failure_reason):

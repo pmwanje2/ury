@@ -100,20 +100,7 @@ def network_printing(
     return PrintResult(result) if isinstance(result, dict) else result
 
 
-@frappe.whitelist()
-def select_network_printer(pos_profile, invoice_id, print_format=None):
-    invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
-    if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
-        frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
-
-    check_split_target_access(invoice_doc, "write")
-    table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
-    if not print_format and pos_profile:
-        print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
-    if not print_format:
-        print_format = "POS Invoice"
-
-    print_jobs = []
+def _bill_printers(pos_profile, table):
     bill_printers = []
 
     if table:
@@ -140,6 +127,25 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
             pluck="printer",
             order_by="idx"
         )
+
+    return bill_printers
+
+
+@frappe.whitelist()
+def select_network_printer(pos_profile, invoice_id, print_format=None):
+    invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
+    if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
+        frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+
+    check_split_target_access(invoice_doc, "write")
+    table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
+    if not print_format and pos_profile:
+        print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
+    if not print_format:
+        print_format = "POS Invoice"
+
+    print_jobs = []
+    bill_printers = _bill_printers(pos_profile, table)
 
     if bill_printers:
         for printer in bill_printers:

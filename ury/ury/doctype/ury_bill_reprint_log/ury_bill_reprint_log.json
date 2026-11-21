@@ -1,0 +1,101 @@
+{
+ "doctype": "DocType",
+ "name": "URY Bill Reprint Log",
+ "module": "URY",
+ "engine": "InnoDB",
+ "autoname": "field:print_job_id",
+ "field_order": [
+  "print_job_id",
+  "invoice",
+  "job_owner",
+  "printer",
+  "status",
+  "failure_reason",
+  "copy_number",
+  "attempt",
+  "retry_of",
+  "request_key"
+ ],
+ "fields": [
+  {
+   "fieldname": "print_job_id",
+   "label": "Print Job ID",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "invoice",
+   "label": "Original Invoice",
+   "fieldtype": "Link",
+   "read_only": 1,
+   "options": "POS Invoice",
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "job_owner",
+   "label": "Requested By",
+   "fieldtype": "Link",
+   "read_only": 1,
+   "options": "User",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "printer",
+   "label": "Printer",
+   "fieldtype": "Link",
+   "read_only": 1,
+   "options": "Network Printer Settings"
+  },
+  {
+   "fieldname": "status",
+   "label": "Outcome",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "failure_reason",
+   "label": "Printer Message",
+   "fieldtype": "Small Text",
+   "read_only": 1
+  },
+  {
+   "fieldname": "copy_number",
+   "label": "Copy Number",
+   "fieldtype": "Int",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "attempt",
+   "label": "Attempt",
+   "fieldtype": "Int",
+   "read_only": 1
+  },
+  {
+   "fieldname": "retry_of",
+   "label": "Retry Of",
+   "fieldtype": "Link",
+   "read_only": 1,
+   "options": "URY Bill Reprint Log"
+  },
+  {
+   "fieldname": "request_key",
+   "label": "Request Key",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "search_index": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC"
+}

@@ -91,6 +91,8 @@ def submit_and_monitor_print_job(
     )
 
     file_path = os.path.join("/", "tmp", f"frappe-pdf-{frappe.generate_hash()}.pdf")
+    copy_id = extra_metadata['print_job_id'] if job_type == 'BILL_COPY' else None
+    handing_off = False
     try:
         with open(file_path, "wb") as f:
             f.write(pdf_content)
@@ -98,9 +100,10 @@ def submit_and_monitor_print_job(
         cups_job_id = None
         print_count = max(1, int(copies or 1))
         for _ in range(print_count):
-            cups_job_id = conn.printFile(print_settings.printer_name, file_path, name, {})
+            handing_off = True
+            cups_job_id = conn.printFile(print_settings.printer_name, file_path, copy_id or name, {})
 
-        print_job_id = _make_print_job_id(print_settings.printer_name, cups_job_id)
+        print_job_id = copy_id or _make_print_job_id(print_settings.printer_name, cups_job_id)
 
         # Determine owner: extra_metadata -> frappe.session.user -> target_doc.owner -> Administrator
         user_owner = (
@@ -154,7 +157,7 @@ def submit_and_monitor_print_job(
             or getattr(target_doc, "pos_profile", None)
             or (frappe.db.get_value("POS Invoice", name, "pos_profile") if doctype == "POS Invoice" else None)
         )
-        if is_print_status_tracking_disabled(pos_profile):
+        if not copy_id and is_print_status_tracking_disabled(pos_profile):
             frappe.logger("printing").info(
                 {
                     "event": "print_job_submitted_tracking_disabled",
@@ -178,16 +181,21 @@ def submit_and_monitor_print_job(
         try:
             # File-store persistence and Redis monitor registration are handled
             # by register_print_job. The poller reads from the file store.
-            register_print_job(metadata)
+            registered = register_print_job(metadata)
+            if copy_id and not registered:
+                raise RuntimeError("Copy monitoring could not be registered")
 
             frappe.enqueue(
                 "ury.ury.printing.print_job_poller.poll_single_print_job",
                 print_job_id=print_job_id,
                 queue="default",
                 timeout=60,
-                now=frappe.flags.in_test,
+                now=frappe.flags.in_test and not copy_id,
+                enqueue_after_commit=bool(copy_id),
             )
         except Exception:
+            if copy_id:
+                raise
             frappe.logger("printing").warning(
                 {"event": "print_job_register_failed", "print_job_id": print_job_id},
                 exc_info=True,
@@ -205,4 +213,4 @@ def submit_and_monitor_print_job(
         }
     except Exception as e:
         frappe.logger("printing").error(f"Failed to submit print job: {e}", exc_info=True)
-        return {"status": "Failure", "message": str(e)}
+        return {"status": "Unknown" if copy_id and handing_off else "Failure", "message": str(e)}
