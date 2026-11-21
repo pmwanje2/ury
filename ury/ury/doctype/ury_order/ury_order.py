@@ -2786,6 +2786,74 @@ def customer_favourite_item(customer_name):
     return result
 
 
+_OTHER_VOID_PREFIX = "Other: "
+_VOID_REASON_NOT_CONFIGURED = (
+    "URY_VOID_REASON_NOT_CONFIGURED: Choose a configured void reason, "
+    "or Other with a note of at least 4 characters."
+)
+
+
+def _configured_void_reasons(pos_profile):
+    """One trimmed reason per line. A missing field or profile keeps free text."""
+    if not isinstance(pos_profile, str) or not pos_profile.strip():
+        return []
+    if not frappe.get_meta("POS Profile").has_field("custom_void_reasons"):
+        return []
+    raw = frappe.db.get_value("POS Profile", pos_profile, "custom_void_reasons")
+    if not isinstance(raw, str):
+        return []
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def _cancel_reason_limit():
+    """POS Invoice.cancel_reason is Data; a blank length uses Frappe's 140."""
+    length = 0
+    try:
+        field = frappe.get_meta("POS Invoice").get_field("cancel_reason")
+        raw = getattr(field, "length", None) if field is not None else None
+        if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+            length = 0
+        else:
+            length = int(raw or 0)
+    except Exception:
+        length = 0
+    return length if length > 0 else 140
+
+
+def _validated_void_reason(pos_invoice, reason):
+    """The trimmed reason to store, or a ValidationError before any side effect."""
+    reasons = _configured_void_reasons(getattr(pos_invoice, "pos_profile", None))
+    if reasons:
+        candidate = reason.strip() if isinstance(reason, str) else None
+        note = (
+            candidate[len(_OTHER_VOID_PREFIX):]
+            if isinstance(candidate, str) and candidate.startswith(_OTHER_VOID_PREFIX)
+            else None
+        )
+        if candidate not in reasons and (note is None or len(note.strip()) < 4):
+            frappe.throw(
+                _("{0} Configured reasons: {1}").format(
+                    _VOID_REASON_NOT_CONFIGURED, "; ".join(reasons),
+                ),
+                title=_("Invalid void reason"),
+            )
+        reason = candidate
+    elif not isinstance(reason, str) or len(reason.strip()) < 4:
+        frappe.throw(
+            _("URY_VOID_REASON_TOO_SHORT: Enter a reason for voiding this order (at least 4 characters)."),
+            title=_("Invalid void reason"),
+        )
+    else:
+        reason = reason.strip()
+    max_length = _cancel_reason_limit()
+    if len(reason) > max_length:
+        frappe.throw(
+            _("URY_VOID_REASON_TOO_LONG: Void reason cannot be longer than {0} characters.").format(max_length),
+            title=_("Invalid void reason"),
+        )
+    return reason
+
+
 @frappe.whitelist()
 def cancel_order(invoice_id, reason):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
@@ -2807,6 +2875,8 @@ def cancel_order(invoice_id, reason):
                 _("You are not allowed to cancel an invoice from another branch."),
                 frappe.PermissionError,
             )
+
+    reason = _validated_void_reason(pos_invoice, reason)
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:
@@ -2944,6 +3014,8 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.customer = customer
     invoice.pos_profile = pos_profile
+    # The settling operator, not the client-sent or originally assigned cashier.
+    invoice.cashier = frappe.session.user
 
     # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
     # POS Invoice.room_number; set before payments so its hooks can read it.
@@ -2977,6 +3049,7 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     if invoice.custom_merged_pos_invoice:
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
+        target.cashier = frappe.session.user
         target.calculate_taxes_and_totals()
         
         doc_req = invoice.rounded_total

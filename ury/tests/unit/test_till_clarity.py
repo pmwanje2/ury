@@ -174,6 +174,10 @@ class TestRoomChargeSettlement(unittest.TestCase):
         ):
             self.enterContext(patch.object(ury_order, target, value))
         self.enterContext(patch.object(ury_order.frappe, "get_value", return_value="Take Away"))
+        # make_invoice records the settling operator (frappe.session.user).
+        self.enterContext(patch.object(
+            ury_order.frappe, "session", SimpleNamespace(user="cashier@example.com"), create=True,
+        ))
         self.enterContext(patch.object(
             ury_order.frappe, "get_cached_doc",
             return_value=frappe._dict(company="Company A", currency="UGX"),

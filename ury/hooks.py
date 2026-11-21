@@ -315,6 +315,10 @@ doc_events = {
         "before_insert":"ury.ury.api.ury_kot_order_number.set_last_invoice_in_pos_open",
         },
     "POS Closing Entry": {
+        # Whole-till consolidation (POS Invoice mode): before_validate clears
+        # the owner-checked list, before_submit rebuilds it from the till.
+        "before_validate": "ury.ury.hooks.ury_pos_closing_entry.before_validate",
+        "before_submit": "ury.ury.hooks.ury_pos_closing_entry.before_submit",
         "before_save": "ury.ury.hooks.ury_pos_closing_entry.before_save",
         "validate":[
             "ury.ury.hooks.ury_pos_closing_entry.validate",
@@ -644,6 +648,7 @@ fixtures = [
                     "POS Profile-restaurant_prefix",
                     "POS Profile-show_image",
                     "POS Profile-custom_daily_pos_close",
+                    "POS Profile-custom_blind_cash_count",
                     "POS Profile-custom_checklist_items",
                     "POS Profile-section_break_wp1tv",
                     "POS Profile-dependent_checklist",
@@ -668,6 +673,7 @@ fixtures = [
                     "Branch-custom_avg_table_time_last_week",
                     "Price List-restaurant_menu",
                     "POS Profile-custom_enable_discount",
+                    "POS Profile-custom_enable_payment_without_printing",
                     "POS Invoice-custom_comments",
                     "POS Invoice-custom_guest_label",
                     "POS Profile-custom_multiple_cashier_configuration",

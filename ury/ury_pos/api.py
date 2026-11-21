@@ -874,6 +874,15 @@ def getPosProfile():
         "custom_invoice_warning_time":invoice_warning_time,
         "enable_payment_without_printing":enable_payment_without_printing,
         "custom_disable_print_status_tracking":disable_print_status_tracking,
+        "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
+        "payment_mode_accounts": {
+            payment.mode_of_payment: frappe.db.get_value(
+                "Mode of Payment Account",
+                {"parent": payment.mode_of_payment, "company": company},
+                "default_account",
+            )
+            for payment in (pos_profiles.get("payments") or [])
+        },
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),
@@ -1160,6 +1169,69 @@ def create_customer(customer_name, mobile_number=None, customer_group="Individua
             "message": str(e)
         }
 
+def _till_invoice_rows(pos_profile, start, end, reader):
+    """Select submitted, unconsolidated till invoices in the inclusive window."""
+    start = frappe.utils.get_datetime(start)
+    end = frappe.utils.get_datetime(end)
+    rows = reader(
+        "POS Invoice",
+        filters={
+            "docstatus": 1,
+            "pos_profile": pos_profile,
+            "consolidated_invoice": ["is", "not set"],
+            "posting_date": ["between", [start.date(), end.date()]],
+        },
+        fields=[
+            "name", "posting_date", "posting_time", "customer", "grand_total",
+            "net_total", "total_qty", "total_taxes_and_charges", "is_return", "return_against",
+        ],
+        order_by="posting_date asc, posting_time asc",
+        limit_page_length=0,
+    )
+    invoices = []
+    for row in rows:
+        # MariaDB returns posting_time as a timedelta, not a datetime.time.
+        timestamp = datetime.combine(
+            frappe.utils.get_datetime(row.posting_date).date(),
+            frappe.utils.get_time(row.posting_time),
+        )
+        if start <= timestamp <= end:
+            invoices.append(row)
+    return invoices
+
+
+@frappe.whitelist(methods=["GET"])
+def get_till_invoices(start, end, pos_profile, user):
+    """Return full invoices for the holder's open till, regardless of cashier.
+
+    The opening, not the client-supplied start, defines the beginning of the
+    inclusive period. Only the opening holder, a URY Manager or a System
+    Manager may read it; invoice reads keep the caller's list permissions.
+    """
+    if frappe.session.user != user and not (
+        {"URY Manager", "System Manager"} & set(frappe.get_roles(frappe.session.user))
+    ):
+        frappe.throw(_("[URY-TILL-NOT-HOLDER] Not permitted"), frappe.PermissionError)
+
+    openings = frappe.get_list(
+        "POS Opening Entry",
+        filters={"docstatus": 1, "status": "Open", "pos_profile": pos_profile, "user": user},
+        fields=["period_start_date"],
+        order_by="period_start_date desc",
+        limit_page_length=1,
+    )
+    if not openings:
+        frappe.throw(_("[URY-TILL-NO-OPEN-SESSION] Not permitted"), frappe.PermissionError)
+
+    def reader(doctype, **query):
+        # Full documents are read below; keep the endpoint's narrow query.
+        query["fields"] = ["name", "posting_date", "posting_time"]
+        return frappe.get_list(doctype, **query)
+
+    rows = _till_invoice_rows(pos_profile, openings[0].period_start_date, end, reader)
+    return [frappe.get_doc("POS Invoice", row.name).as_dict() for row in rows]
+
+
 @frappe.whitelist()
 def get_open_pos_opening_entries(pos_profile):
     """Currently open (status=Open, submitted) POS Opening Entries for the
@@ -1229,21 +1301,19 @@ def validate_pos_close(pos_profile):
     enable_unclosed_pos_check = frappe.db.get_value("POS Profile",pos_profile,"custom_daily_pos_close")
     
     if enable_unclosed_pos_check:
-        current_datetime = frappe.utils.now_datetime()
-        start_of_day = current_datetime.replace(hour=5, minute=0, second=0, microsecond=0)
-        
-        if current_datetime > start_of_day:
-            previous_day = start_of_day - timedelta(days=1)
-            
-        else:
-            previous_day = start_of_day
-    
-        # A session left open for 2+ days (missed close, not just yesterday's)
-        # must still be caught, not just one opened exactly on `previous_day`.
+        from ury.ury.api.ury_dashboard import _business_day_bounds
+
+        branch = frappe.db.get_value("POS Profile", pos_profile, "branch")
+        start_of_day, _end = _business_day_bounds(
+            branch, default_hours=5, now=frappe.utils.now_datetime()
+        )
+
+        # Any session opened before the current business day began is
+        # overdue, however many days it has been left open.
         unclosed_pos_opening = frappe.db.exists(
             "POS Opening Entry",
             {
-                "posting_date": ["<=", previous_day.date()],
+                "period_start_date": ["<", start_of_day],
                 "status": "Open",
                 "pos_profile": pos_profile,
                 "docstatus": 1
@@ -1412,7 +1482,7 @@ def create_pos_opening_entry(pos_profile: str, company: str = None, balance_deta
 
 
 @frappe.whitelist()
-def get_pos_opening_screen_data() -> dict:
+def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     """Return the full context needed by the ORI native POS Opening screen.
 
     This is a read-only, permission-aware context call. It aggregates the
@@ -1420,7 +1490,10 @@ def get_pos_opening_screen_data() -> dict:
     POS Profile data (including branch, restaurant and multi-cashier flags),
     payment modes seeded with an opening amount of zero, the daily-close
     pre-check status, create/submit permission flags, and any existing open
-    POS Opening Entry for the current user.
+    POS Opening Entry for the current user. Also reports another cashier's
+    open entry on the selected profile (holder name and start, never the
+    email), with its ID only when readable, and whether this user may
+    continue on it.
 
     The method does not create or mutate any document; submit-time
     validations (payment accounts, duplicate entries, multi-cashier rules)
@@ -1439,15 +1512,25 @@ def get_pos_opening_screen_data() -> dict:
     # back to the first allowed profile if the helper cannot resolve one.
     pos_profile_data = None
     pos_profile_name = None
-    try:
-        pos_profile_data = getPosProfile()
-        pos_profile_name = pos_profile_data.get("pos_profile")
-    except Exception:
-        pos_profile_data = None
-        pos_profile_name = None
+    if pos_profile:
+        if pos_profile not in {profile["name"] for profile in allowed_profiles}:
+            frappe.throw(
+                _("[URY-OPENING-PROFILE-NOT-ALLOWED] Not permitted to use this POS Profile."),
+                frappe.PermissionError,
+            )
+        pos_profile_name = pos_profile
+    else:
+        try:
+            pos_profile_data = getPosProfile()
+            pos_profile_name = pos_profile_data.get("pos_profile")
+        except Exception:
+            pos_profile_data = None
+            pos_profile_name = None
 
     if not pos_profile_name and allowed_profiles:
         pos_profile_name = allowed_profiles[0]["name"]
+
+    if pos_profile_name and not pos_profile_data:
         try:
             pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
             pos_profile_data = {
@@ -1509,6 +1592,8 @@ def get_pos_opening_screen_data() -> dict:
         order_by="period_start_date desc",
     )
 
+    occupied_entry = _occupied_entry(pos_profile_name, allowed_profiles, multi_cashier, user)
+
     # Currency information for display.
     company_currency = None
     currency_symbol = None
@@ -1544,7 +1629,52 @@ def get_pos_opening_screen_data() -> dict:
         "multi_cashier": multi_cashier,
         "permissions": {"create": can_create, "submit": can_submit},
         "open_entries": open_entries,
+        "occupied_entry": occupied_entry,
     }
+
+
+def _occupied_entry(pos_profile_name, allowed_profiles, multi_cashier, user):
+    """Another cashier's open entry on a single-cashier profile, or None."""
+    if multi_cashier["enabled"] or pos_profile_name not in {profile["name"] for profile in allowed_profiles}:
+        return None
+    other_entries = frappe.get_all(
+        "POS Opening Entry",
+        filters={
+            "pos_profile": pos_profile_name,
+            "user": ["!=", user],
+            "docstatus": 1,
+            "status": "Open",
+        },
+        fields=["name", "user", "period_start_date"],
+        order_by="period_start_date desc",
+        limit=1,
+    )
+    if not other_entries:
+        return None
+    entry = other_entries[0]
+    occupied_entry = {
+        "user_full_name": frappe.db.get_value("User", entry["user"], "full_name") or None,
+        "period_start_date": entry["period_start_date"],
+    }
+    entry_doc = frappe.get_doc("POS Opening Entry", entry["name"])
+    if not frappe.has_permission("POS Opening Entry", "read", doc=entry_doc):
+        return occupied_entry
+    occupied_entry["name"] = entry["name"]
+    # An operator assigned to the profile, with a billing role when the
+    # profile restricts billing, may continue on today's open till.
+    profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+    assigned = any(row.user == user for row in profile_doc.applicable_for_users or [])
+    billing_roles = {row.role for row in profile_doc.role_allowed_for_billing or []}
+    if assigned and (not billing_roles or billing_roles.intersection(frappe.get_roles(user))):
+        from ury.ury.api.ury_dashboard import _business_day_bounds
+
+        start, end = _business_day_bounds(
+            profile_doc.branch, default_hours=5, now=frappe.utils.now_datetime()
+        )
+        opened_at = frappe.utils.get_datetime(entry["period_start_date"])
+        if start <= opened_at < end:
+            occupied_entry["joinable"] = True
+    return occupied_entry
 
 
 def _validate_checklist_branch(pos_profile):
