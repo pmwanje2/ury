@@ -24,7 +24,7 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
     'npm --prefix .. ci --ignore-scripts --no-audit --no-fund',
     'node --test ../tests/pos-workflow.test.cjs',
     'npm test --offline -- ./tests/ --maxWorkers=1',
-    ...[
+    [
       'ury.tests.unit.test_offline_capture_fixture',
       'ury.ury.api.test_ury_kot_notes',
       'ury.ury.api.test_ury_hold_fire',
