@@ -219,3 +219,21 @@ test.each([401, 403])('HTTP %i on the invoice list is still Access Denied', asyn
   expect(text).toContain('Failed to fetch POS invoices');
   expect(text).not.toContain('Orders are unavailable while the link is down.');
 });
+
+test('an outage starting on the orders screen after online sign-in is not an access denial', async () => {
+  useRootStore.setState({user: {name: cashier, roles: ['URY Cashier']}, posProfile: profile as never, error: null, ordersOffline: false});
+  mode = 'gateway'; gatewayStatus = 503;
+  await useRootStore.getState().fetchOrders();
+  expect(useRootStore.getState().ordersOffline).toBe(true);
+  expect(useRootStore.getState().error).toBeNull();
+});
+
+test('v16 merge candidates read the active user’s branch rather than an unscoped previous profile', async () => {
+  const { db } = await import('@ury/core');
+  const { getMergeBillCandidates } = await import('../src/lib/invoice-api');
+  sessionStorage.setItem('posProfile:' + cashier, JSON.stringify({...profile, branch: 'Branch A'}));
+  sessionStorage.setItem('posProfile', JSON.stringify({branch: 'Other'}));
+  const read = vi.spyOn(db, 'getDocList').mockResolvedValue([]);
+  await getMergeBillCandidates({primaryInvoice: 'INV-A', linkedSecondaries: []});
+  expect(read).toHaveBeenCalledWith('POS Invoice', expect.objectContaining({filters: expect.arrayContaining([['branch', '=', 'Branch A']])}));
+});

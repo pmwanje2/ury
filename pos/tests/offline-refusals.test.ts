@@ -20,3 +20,11 @@ test.each([
   await expect(run()).rejects.toThrow(/offline|refused|not available/i);
   expect(post).not.toHaveBeenCalled();
 });
+
+test('an existing line cannot be reduced offline through the v16 quantity action', async () => {
+  vi.stubGlobal('navigator', { onLine: false });
+  const post = vi.spyOn(call, 'post').mockResolvedValue({ message: {} });
+  const { reduceOrderItemQty } = await import('../src/lib/order-api');
+  await expect(reduceOrderItemQty('INV-A', 'ROW-A', 0)).rejects.toThrow(/offline/i);
+  expect(post).not.toHaveBeenCalled();
+});

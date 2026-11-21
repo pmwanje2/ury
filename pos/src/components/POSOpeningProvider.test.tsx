@@ -336,3 +336,17 @@ describe('offline opening confirmation', () => {
     delete profile.ury_offline_capture;
   });
 });
+
+it('a confirmed opening cannot be reused for another opening when its checklist times out', async () => {
+  const profile = mockPosProfile as typeof mockPosProfile & {ury_offline_capture?: number};
+  profile.ury_offline_capture = 1;
+  const key = 'ury_offline_opening:user1';
+  const old = {name: 'OPEN-OLD', company: 'Test', pos_profile: 'POS-001'};
+  sessionStorage.setItem(key, JSON.stringify(old));
+  mockCheckPOSOpening.mockResolvedValue({message: [{...old, name: 'OPEN-NEW'}]});
+  mockGetChecklist.mockRejectedValue({httpStatus: 502});
+  render(<POSOpeningProvider>Register</POSOpeningProvider>);
+  await screen.findByTestId('opening-dialog');
+  expect(sessionStorage.getItem(key)).toBeNull();
+  delete profile.ury_offline_capture;
+});

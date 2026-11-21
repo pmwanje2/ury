@@ -168,3 +168,20 @@ test('opening screen logout keeps a pending queue and does not end the server se
   expect(signOut).not.toHaveBeenCalled();
   expect(await queue.list()).toHaveLength(1);
 });
+
+test('applying a discount is refused offline before the total changes', async () => {
+  usePOSStore.setState({ paymentModes: ['Cash'], fetchPaymentModes: vi.fn(), posProfile: { ...usePOSStore.getState().posProfile!, enable_discount: 1 } });
+  await act(async () => root.render(<PaymentDialog order={{invoice_printed: 1}} onClose={vi.fn()} grandTotal={100} roundedTotal={100} invoice="INV-A" customer="Guest A" posProfile="Till A" table={null} cashier="Cashier" owner="Cashier" fetchOrders={vi.fn()} clearSelectedOrder={vi.fn()} />));
+  await act(async () => button(/^Apply$/).click());
+  expect(container.textContent).toMatch(/refused offline/i);
+});
+
+test('a server logout failure keeps the opening screen and confirmed opening for a retry', async () => {
+  const key = 'ury_offline_opening:cashier@example.com';
+  sessionStorage.setItem(key, 'confirmed');
+  const { auth } = await import('@ury/core');
+  vi.spyOn(auth, 'logout').mockRejectedValue(new Error('lost connection'));
+  const { clearCashierStorage } = await import('../src/offline/cashier');
+  await expect(clearCashierStorage(true)).rejects.toThrow();
+  expect(sessionStorage.getItem(key)).toBe('confirmed');
+});
