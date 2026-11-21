@@ -14,6 +14,9 @@ from ury.ury.api.ury_dashboard import (
 
 
 class TestGetDashboardStats(FrappeTestCase):
+    def setUp(self):
+        self.enterContext(patch("frappe.db.get_value", return_value=None))
+
 
     @patch("ury.ury.api.ury_dashboard.frappe.get_all", return_value=["URY Barsha", "URY JVC"])
     @patch("ury.ury.api.ury_dashboard.frappe.db.count", return_value=0)
@@ -217,10 +220,11 @@ class TestGetNeedsAttention(FrappeTestCase):
         mock_cache_instance.get_value.return_value = None
 
         mock_today.return_value = "2026-08-19"
-        mock_get_datetime.return_value = "2026-08-19 10:00:00"
+        mock_get_datetime.return_value = get_datetime("2026-08-19 10:00:00")
         mock_add_to_date.return_value = "2026-08-19 09:45:00"
 
-        mock_sql.return_value = [{"name": "INV-001", "creation": "2026-08-19 09:00:00"}]
+        self.enterContext(patch("frappe.db.get_value", return_value=None))
+        mock_sql.side_effect = [[{"name": "INV-001", "creation": "2026-08-19 09:00:00"}], []]
         mock_get_all.side_effect = [[], [], []]
 
         result = get_needs_attention(branch="URY Branch")
@@ -242,7 +246,7 @@ class TestGetNeedsAttention(FrappeTestCase):
         mock_cache_instance.get_value.return_value = None
 
         mock_today.return_value = "2026-08-19"
-        mock_get_datetime.return_value = "2026-08-19 10:00:00"
+        mock_get_datetime.return_value = get_datetime("2026-08-19 10:00:00")
         mock_add_to_date.return_value = "2026-08-19 09:45:00"
 
         mock_sql.return_value = []
@@ -270,7 +274,7 @@ class TestGetNeedsAttention(FrappeTestCase):
         mock_cache_obj.return_value = mock_cache_instance
         mock_cache_instance.get_value.return_value = None
 
-        mock_get_datetime.return_value = "2026-08-19 10:00:00"
+        mock_get_datetime.return_value = get_datetime("2026-08-19 10:00:00")
         mock_add_to_date.return_value = "2026-08-19 09:45:00"
         mock_bounds.return_value = ("2026-08-19 06:00:00", "2026-08-20 06:00:00")
 
@@ -281,7 +285,7 @@ class TestGetNeedsAttention(FrappeTestCase):
 
         mock_bounds.assert_called_once_with("URY Branch")
 
-        query, params = mock_sql.call_args[0][0], mock_sql.call_args[0][1]
+        query, params = mock_sql.call_args_list[0].args
         self.assertIn("creation >= %(shift_start)s", query)
         self.assertIn("creation < %(shift_end)s", query)
         self.assertEqual(params["shift_start"], "2026-08-19 06:00:00")

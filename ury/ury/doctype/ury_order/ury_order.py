@@ -950,8 +950,12 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
         )
 
         if not getattr(invoice, "customer", None) or invoice.customer == "Guest":
-            from ury.ury.api.table_reservation import get_completed_reservation_for_table
-            completed_res = get_completed_reservation_for_table(table, branch)
+            from ury.ury.api.table_reservation import (
+                get_completed_reservation_for_table,
+                reservations_enabled,
+            )
+
+            completed_res = get_completed_reservation_for_table(table, branch) if reservations_enabled(branch) else None
             if completed_res and completed_res.get("customer"):
                 invoice.customer = completed_res.get("customer")
                 if completed_res.get("customer_name"):
@@ -1482,22 +1486,95 @@ def _validate_dine_in_pax(no_of_pax, order_type):
     return pax
 
 
-def _has_eligible_captain_transfer_target(branch, room, exclude_user):
-    """Whether at least one other user is assigned to `room` under `branch`,
-    via the same `URY User` child-table (Branch.user) that captain_transfer()
-    itself queries for room-scoped eligibility."""
-    if not branch or not room:
-        return False
+def _authorize_captain_transfer(invoice):
+    pos_invoice_doc = frappe.get_doc("POS Invoice", invoice)
 
-    rows = frappe.db.sql(
+    if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice_doc):
+        frappe.throw(_("Not permitted to transfer this order"), frappe.PermissionError)
+
+    pos_profile = pos_invoice_doc.pos_profile
+    if not pos_profile:
+        frappe.throw(
+            _("Cannot verify transfer permission: order has no POS Profile."),
+            frappe.PermissionError,
+        )
+
+    pos_profile_doc = frappe.get_doc("POS Profile", pos_profile)
+    if not _has_role(frappe.get_roles(), pos_profile_doc.transfer_role_permissions):
+        frappe.throw(
+            _("You are not permitted to transfer captains."),
+            frappe.PermissionError,
+        )
+
+    return pos_invoice_doc, pos_profile_doc
+
+
+def _captain_transfer_refusal(pos_invoice_doc, pos_profile_doc, user):
+    if user == pos_invoice_doc.waiter:
+        return _("The selected user is already the captain of this order.")
+
+    branch_rows = frappe.db.sql(
         """
-        SELECT user
-        FROM `tabURY User`
-        WHERE parent = %s AND room = %s AND user != %s
+            SELECT room
+            FROM `tabURY User`
+            WHERE parent=%s AND user=%s AND parenttype='Branch'
         """,
-        (branch, room, exclude_user),
+        (pos_invoice_doc.branch, user),
+        as_dict=True,
     )
-    return bool(rows)
+    if not branch_rows:
+        return _("The selected user is not assigned to this branch.")
+
+    if user in frappe.STANDARD_USERS:
+        return _("The selected user is not permitted to take table orders.")
+
+    if _has_role(
+        frappe.get_roles(user), pos_profile_doc.role_restricted_for_table_order
+    ):
+        return _("The selected user is not permitted to take table orders.")
+
+    user_doc = frappe.get_doc("User", user)
+    if not user_doc.enabled:
+        return _("The selected user is not active.")
+
+    if pos_profile_doc.custom_enable_multiple_cashier:
+        current_room = frappe.get_value(
+            "URY Table", pos_invoice_doc.restaurant_table, "restaurant_room"
+        )
+        if not any(row.get("room") == current_room for row in branch_rows):
+            return _("Captain transfer is not allowed between different rooms")
+
+    return None
+
+
+def _get_captain_transfer_candidates(pos_invoice_doc, pos_profile_doc):
+    rows = frappe.get_all(
+        "URY User",
+        filters={"parent": pos_invoice_doc.branch, "parenttype": "Branch"},
+        fields=["user"],
+    )
+    candidates = []
+    seen = set()
+    for row in rows:
+        user = row.get("user")
+        if not user or user in seen:
+            continue
+        seen.add(user)
+        if _captain_transfer_refusal(pos_invoice_doc, pos_profile_doc, user):
+            continue
+        user_doc = frappe.get_doc("User", user)
+        candidates.append(
+            {
+                "name": user_doc.name,
+                "full_name": getattr(user_doc, "full_name", "") or "",
+            }
+        )
+
+    return sorted(candidates, key=lambda row: (row["full_name"] or row["name"]).casefold())
+
+
+def _has_eligible_captain_transfer_target(pos_invoice_doc, pos_profile_doc):
+    return bool(_get_captain_transfer_candidates(pos_invoice_doc, pos_profile_doc))
 
 
 @frappe.whitelist()
@@ -1651,16 +1728,10 @@ def get_table_order_context(table):
 
     can_transfer_table = can_modify and has_elevated_access
 
-    # captain_transfer() itself, when custom_enable_multiple_cashier is set,
-    # only allows transferring to a captain assigned to the table's own room
-    # (queried via the Branch.user "URY User" child table). Mirror that here
-    # so the capability reflects whether a transfer is actually possible, not
-    # just whether the role is elevated.
-    can_transfer_captain = bool(order) and has_elevated_access
-    if can_transfer_captain and pos_profile.custom_enable_multiple_cashier:
-        can_transfer_captain = _has_eligible_captain_transfer_target(
-            table_doc.branch, table_doc.restaurant_room, frappe.session.user
-        )
+    can_transfer_captain = bool(order) and has_elevated_access and bool(
+        frappe.has_permission("POS Invoice", "write", doc=invoice)
+        and _has_eligible_captain_transfer_target(invoice, pos_profile)
+    )
 
     can_reprint_kot = (
         bool(order)
@@ -1799,6 +1870,8 @@ def get_captain_context():
         except Exception:
             opening_state = None
 
+    from ury.ury.api.table_reservation import reservations_enabled
+
     return {
         "user": user,
         "roles": user_roles,
@@ -1807,6 +1880,7 @@ def get_captain_context():
         "pos_profile": pos_profile_context,
         "role_restricted_for_table_order": role_restricted_for_table_order,
         "opening_state": opening_state,
+        "reservation_enabled": reservations_enabled(branch),
     }
 
 
@@ -2816,72 +2890,19 @@ def table_transfer(table, newTable, invoice):
 
 
 @frappe.whitelist()
+def get_captain_transfer_candidates(invoice):
+    pos_invoice_doc, pos_profile_doc = _authorize_captain_transfer(invoice)
+    return _get_captain_transfer_candidates(pos_invoice_doc, pos_profile_doc)
+
+
+@frappe.whitelist()
 def captain_transfer(currentCaptain, newCaptain, invoice):
-    pos_invoice_doc = frappe.get_doc("POS Invoice", invoice)
+    pos_invoice_doc, pos_profile_doc = _authorize_captain_transfer(invoice)
 
-    # Invoice-write authorization: server-side, not just the frontend gate.
-    if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice_doc):
-        frappe.throw(_("Not permitted to transfer this order"), frappe.PermissionError)
+    refusal = _captain_transfer_refusal(pos_invoice_doc, pos_profile_doc, newCaptain)
+    if refusal:
+        frappe.throw(refusal, frappe.PermissionError)
 
-    pos_profile = pos_invoice_doc.pos_profile
-    if not pos_profile:
-        frappe.throw(
-            _("Cannot verify transfer permission: order has no POS Profile."),
-            frappe.PermissionError,
-        )
-
-    pos_profile_doc = frappe.get_doc("POS Profile", pos_profile)
-
-    # Transfer-role authorization (POS Profile transfer_role_permissions),
-    # same field/helper as table_transfer().
-    if not _has_role(frappe.get_roles(), pos_profile_doc.transfer_role_permissions):
-        frappe.throw(
-            _("You are not permitted to transfer captains."),
-            frappe.PermissionError,
-        )
-
-    multiple_cashier = pos_profile_doc.custom_enable_multiple_cashier
-    branch = pos_invoice_doc.branch
-
-    # Branch validation: the target user must actually belong to this
-    # invoice's branch (via the same URY User child-table source used
-    # elsewhere for branch/room resolution).
-    new_captain_branch_rows = frappe.db.sql(
-        """
-            SELECT room
-            FROM `tabURY User`
-            WHERE parent=%s AND user=%s
-        """,
-        (branch, newCaptain),
-        as_dict=True,
-    )
-    if not new_captain_branch_rows:
-        frappe.throw(
-            _("The selected user is not assigned to this branch."),
-            frappe.PermissionError,
-        )
-
-    # Target-user eligibility: there's no dedicated "order-taking role"
-    # config field, so — per PHASE0_PERMISSION_MATRIX.md's capability
-    # derivation table (`canTakeTableOrders` = NOT role_restricted_for_
-    # table_order) — reuse the same POS Profile field that already governs
-    # whether a role may take table orders at all, rather than hard-coding a
-    # role name.
-    new_captain_roles = frappe.get_roles(newCaptain)
-    if _has_role(new_captain_roles, pos_profile_doc.role_restricted_for_table_order):
-        frappe.throw(
-            _("The selected user is not permitted to take table orders."),
-            frappe.PermissionError,
-        )
-
-    if multiple_cashier:
-        table = pos_invoice_doc.restaurant_table
-        current_room = frappe.get_value("URY Table", table, "restaurant_room")
-        room_match = any(row["room"] == current_room for row in new_captain_branch_rows)
-        if not room_match:
-            frappe.throw(_("Captain transfer is not allowed between different rooms"))
-
-    current_captain_doc = frappe.get_doc("User", currentCaptain)
     pos_invoice = pos_invoice_doc
     new_captain_doc = frappe.get_doc("User", newCaptain)
 

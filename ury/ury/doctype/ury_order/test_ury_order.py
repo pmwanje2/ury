@@ -1099,7 +1099,7 @@ class TestGetTableOrderContext(FrappeTestCase):
             return_value=True,
         ), patch(
             "ury.ury.doctype.ury_order.ury_order.frappe.get_all",
-            return_value=invoices,
+            side_effect=lambda doctype, **kwargs: [] if doctype == "URY User" else invoices,
         ), patch(
             "ury.ury.doctype.ury_order.ury_order.frappe.get_roles",
             return_value=list(user_roles or []),
@@ -1282,7 +1282,11 @@ class TestGetCaptainContext(FrappeTestCase):
         )
         mock_get_doc.return_value = pos_profile
 
-        result = get_captain_context()
+        pos_profile.get.return_value = None
+        for enabled in (1, 0, None):
+            with patch("frappe.db.get_value", return_value=enabled):
+                result = get_captain_context()
+            self.assertIs(result.get("reservation_enabled"), bool(enabled))
 
         self.assertEqual(result["user"], "captain@example.com")
         self.assertEqual(result["branch"], "Test Branch")

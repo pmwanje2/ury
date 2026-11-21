@@ -2,7 +2,7 @@ import frappe
 import json
 from frappe import _
 from datetime import date, datetime, timedelta
-from frappe.utils import cint, validate_phone_number
+from frappe.utils import cint, nestedset, validate_phone_number
 
 from ury.ury_pos.default_customer import get_default_customer_config
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
@@ -142,34 +142,41 @@ def getMenuCourses():
     courses = frappe.get_all("URY Menu Course", fields=["name", "icon"])
     return [{"name": d.name, "label": _(d.name), "icon": d.icon} for d in courses]
 
-@frappe.whitelist()
-def getBranch():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch
+def _user_branch_assignments():
+    rows = frappe.db.sql("""
+        SELECT b.name AS branch, a.room
         FROM `tabURY User` AS a
         INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
-    if not branch_array:
+        WHERE a.user = %s AND a.parenttype = 'Branch'
+    """, frappe.session.user, as_dict=True)
+    if not rows:
         frappe.throw("User is not Associated with any Branch.Please refresh Page")
 
-    branch_name = branch_array[0].get("branch")
+    branches = {row.get("branch") for row in rows}
+    if len(branches) == 1:
+        return rows
 
-    return branch_name
+    from frappe.core.doctype.user_permission.user_permission import get_user_permissions
+
+    defaults = {
+        permission.get("doc")
+        for permission in get_user_permissions().get("Branch", [])
+        if permission.get("is_default") and permission.get("doc") in branches
+    }
+    if len(defaults) != 1:
+        frappe.throw(_("URY-BRANCH-AMBIGUOUS: Set a default Branch User Permission for an assigned branch."))
+    branch = defaults.pop()
+    return [row for row in rows if row.get("branch") == branch]
+
+
+@frappe.whitelist()
+def getBranch():
+    return _user_branch_assignments()[0].get("branch")
 
 @frappe.whitelist()
 def getBranchRoom():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch , a.room
-        FROM `tabURY User` AS a
-        INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
-    
+    branch_array = _user_branch_assignments()
+
     branch_name = branch_array[0].get("branch")
     room_name = branch_array[0].get("room")
 
@@ -186,23 +193,16 @@ def getBranchRoom():
 
 @frappe.whitelist()
 def getRoom():
-    user = frappe.session.user
-    sql_query = """
-        SELECT b.branch, a.room
-        FROM `tabURY User` AS a
-        INNER JOIN `tabBranch` AS b ON a.parent = b.name
-        WHERE a.user = %s
-    """
-    branch_array = frappe.db.sql(sql_query, user, as_dict=True)
-    
+    branch_array = _user_branch_assignments()
+
     if not branch_array:
         frappe.throw("No branch or room information found for the user. Please contact your administrator.")
-    
+
     room_details = [
         {
             "name": row.get("room"),
             "branch": row.get("branch")
-        } 
+        }
         for row in branch_array
     ]
 
@@ -1127,7 +1127,7 @@ def validate_customer_mobile(mobile_number, country=None):
 
 
 @frappe.whitelist()
-def create_customer(customer_name, mobile_number=None, customer_group="Individual", territory=None, pos_profile=None):
+def create_customer(customer_name, mobile_number=None, customer_group=None, territory=None, pos_profile=None):
     if not frappe.has_permission("Customer", "create"):
         frappe.throw(_("Not permitted to create customers"), frappe.PermissionError)
 
@@ -1163,18 +1163,12 @@ def create_customer(customer_name, mobile_number=None, customer_group="Individua
 
     validate_customer_mobile(mobile_number, country)
 
-    """Create a new customer"""
+    customer_group = customer_group or frappe.db.get_single_value("Selling Settings", "customer_group")
+    if not customer_group:
+        frappe.throw(_("Please set Default Customer Group in Selling Settings."))
+
     try:
-        if not territory:
-            territory = frappe.db.get_single_value("Selling Settings", "territory")
-
-        if territory and not frappe.db.exists("Territory", territory):
-            fallback_territory = frappe.db.get_single_value("Selling Settings", "territory")
-            if fallback_territory and frappe.db.exists("Territory", fallback_territory):
-                territory = fallback_territory
-            else:
-                territory = frappe.db.get_value("Territory", {"is_group": 1}, "name") or territory
-
+        territory = territory or frappe.db.get_single_value("Selling Settings", "territory") or nestedset.get_root_of("Territory")
         customer = frappe.get_doc({
             "doctype": "Customer",
             "customer_name": customer_name,
@@ -1888,7 +1882,7 @@ def _checklist_period_date(branch):
     )
     if open_shift:
         return open_shift[0].posting_date
-    return date.today()
+    return frappe.utils.getdate()
 
 
 def _existing_goal_review(goal, branch, period_date):
@@ -2129,7 +2123,7 @@ def get_checklist(pos_profile, checklist_type):
         filters={
             "pos_profile": pos_profile,
             "checklist_type": checklist_type,
-            "shift_date": date.today(),
+            "shift_date": frappe.utils.getdate(),
         },
         limit=1,
     )
@@ -2254,7 +2248,7 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
         filters={
             "pos_profile": pos_profile,
             "checklist_type": checklist_type,
-            "shift_date": date.today(),
+            "shift_date": frappe.utils.getdate(),
         },
         limit=1,
     )
@@ -2291,7 +2285,7 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
         log_doc.pos_profile = pos_profile
         log_doc.branch = branch
         log_doc.checklist_type = checklist_type
-        log_doc.shift_date = date.today()
+        log_doc.shift_date = frappe.utils.getdate()
 
     if pos_opening_entry:
         log_doc.pos_opening_entry = pos_opening_entry

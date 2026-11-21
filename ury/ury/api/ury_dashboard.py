@@ -331,29 +331,35 @@ def get_dashboard_stats(branch=None, company=None):
 
 	# Grouped by invoice currency: an "all companies" scope can span AED and
 	# OMR, and summing those into one number would be meaningless.
-	if True:
-		rows = frappe.db.sql(
-			f"""
-			SELECT
-				b.`currency` AS currency,
-				COUNT(b.`name`) AS total_invoices,
-				ROUND(SUM(b.`grand_total`), 2) AS grand_total
-			FROM `tabPOS Invoice` b
-			LEFT JOIN `tabURY Report Settings` rs ON (rs.`branch` = b.`branch`)
-			WHERE
-				b.`docstatus` = 1
-				{where_clause}
-				AND b.`status` IN ("Consolidated", "Paid")
-				AND (
-					((rs.`hours` IS NULL OR rs.`hours` = 0) AND b.`posting_date` = curdate())
-					OR (rs.`hours` > 0 AND TIMESTAMP(b.`posting_date`, b.`posting_time`) <= TIMESTAMP(DATE_ADD(curdate(), INTERVAL 1 DAY), CONCAT(LPAD(rs.`hours`, 2, '0'), ':00:00')) AND TIMESTAMP(b.`posting_date`, b.`posting_time`) >= TIMESTAMP(curdate(), CONCAT(LPAD(rs.`hours`, 2, '0'), ':00:00')))
-					OR (rs.`branch` IS NULL AND b.`posting_date` = curdate())
-				)
-			GROUP BY b.`currency`
-			""",
-			filters_dict,
-			as_dict=True,
-		)
+	settings_join = ""
+	if branch:
+		filters_dict["start"], filters_dict["end"] = _business_day_bounds(branch)
+		business_day = """
+			TIMESTAMP(b.`posting_date`, b.`posting_time`) >= %(start)s
+			AND TIMESTAMP(b.`posting_date`, b.`posting_time`) < %(end)s
+		"""
+	else:
+		# Shift both timestamps by the outlet cutoff: matching dates select [cutoff, next cutoff).
+		settings_join = "LEFT JOIN `tabURY Report Settings` rs ON rs.`branch` = b.`branch`"
+		filters_dict["site_now"] = get_datetime()
+		business_day = """
+			DATE(TIMESTAMP(b.`posting_date`, b.`posting_time`) - INTERVAL COALESCE(rs.`hours`, 0) HOUR)
+			= DATE(%(site_now)s - INTERVAL COALESCE(rs.`hours`, 0) HOUR)
+		"""
+	rows = frappe.db.sql(
+		f"""
+		SELECT b.`currency` AS currency, COUNT(b.`name`) AS total_invoices,
+			ROUND(SUM(b.`grand_total`), 2) AS grand_total
+		FROM `tabPOS Invoice` b
+		{settings_join}
+		WHERE b.`docstatus` = 1 AND b.`status` IN ('Consolidated', 'Paid')
+			AND {business_day}
+			{where_clause}
+		GROUP BY b.`currency`
+		""",
+		filters_dict,
+		as_dict=True,
+	)
 
 	breakdown = []
 	for row in rows:
@@ -464,10 +470,18 @@ def get_needs_attention(branch=None):
 			},
 		})
 
-	tables = frappe.get_all(
-		"URY Table",
-		filters={"occupied": 1, "latest_invoice_time": ["<", add_to_date(get_datetime(), minutes=-60)], **({"branch": branch} if branch else {})},
-		fields=["name"],
+	tables = frappe.db.sql(
+		"""
+		SELECT t.`name`
+		FROM `tabURY Table` t
+		JOIN `tabPOS Invoice` i ON i.`restaurant_table` = t.`name` AND i.`docstatus` = 0
+		WHERE t.`occupied` = 1
+		""" + (" AND t.`branch` = %(branch)s" if branch else "") + """
+		GROUP BY t.`name`
+		HAVING MAX(i.`creation`) < %(threshold)s
+		""",
+		{"threshold": add_to_date(get_datetime(), minutes=-60), "branch": branch},
+		as_dict=True,
 	)
 	if tables:
 		items.append({
@@ -523,9 +537,7 @@ def _business_day_bounds(branch, *, default_hours=0, now=None):
 	hours = default_hours if rs_hours is None else rs_hours
 	if now is None:
 		now = get_datetime()
-		day = today()
-	else:
-		day = now.date().isoformat()
+	day = now.date().isoformat()
 	cutoff_today = get_datetime(f"{day} {str(hours).zfill(2)}:00:00")
 	if now < cutoff_today:
 		start = add_to_date(cutoff_today, days=-1)
@@ -549,7 +561,7 @@ def get_shift_metrics(branch=None):
 
 	start, end = _business_day_bounds(branch)
 
-	conditions = "b.`docstatus` = 1 AND b.`status` IN ('Consolidated', 'Paid') AND TIMESTAMP(b.`posting_date`, b.`posting_time`) BETWEEN %(start)s AND %(end)s"
+	conditions = "b.`docstatus` = 1 AND b.`status` IN ('Consolidated', 'Paid') AND TIMESTAMP(b.`posting_date`, b.`posting_time`) >= %(start)s AND TIMESTAMP(b.`posting_date`, b.`posting_time`) < %(end)s"
 	params = {"start": start, "end": end}
 	if branch:
 		conditions += " AND b.`branch` = %(branch)s"
@@ -572,7 +584,7 @@ def get_shift_metrics(branch=None):
 	covers = row.covers or 0
 	avg_per_cover = round(sales / covers, 2) if covers else 0
 
-	kot_conditions = "k.`start_time_prep` IS NOT NULL AND k.`start_time_serv` IS NOT NULL AND k.`creation` BETWEEN %(start)s AND %(end)s"
+	kot_conditions = "k.`order_status` = 'Served' AND k.`start_time_prep` IS NOT NULL AND k.`start_time_serv` IS NOT NULL AND k.`creation` >= %(start)s AND k.`creation` < %(end)s"
 	kot_params = {"start": start, "end": end}
 	if branch:
 		kot_conditions += " AND k.`branch` = %(branch)s"
@@ -606,7 +618,7 @@ def get_shift_metrics(branch=None):
 		"sales": sales,
 		"covers": covers,
 		"avg_per_cover": avg_per_cover,
-		"avg_ticket_minutes": round(ticket_row.avg_ticket_minutes, 1) if ticket_row.avg_ticket_minutes else None,
+		"avg_ticket_minutes": round(ticket_row.avg_ticket_minutes, 1) if ticket_row.avg_ticket_minutes is not None else None,
 	}
 
 	frappe.cache().set_value(cache_key, result, expires_in_sec=60)
@@ -725,8 +737,9 @@ def get_department_activity(branch=None, company=None):
 
 @frappe.whitelist(methods=["GET"])
 def get_baseline(branch=None, weeks=6):
-	weekday = get_datetime().weekday()
-	hour = get_datetime().hour
+	now = get_datetime()
+	weekday = now.weekday()
+	hour = now.hour
 	cache_key = f"ury_dashboard_baseline:{branch}:{weekday}:{hour}"
 	cached = frappe.cache().get_value(cache_key)
 	if cached:
@@ -737,14 +750,15 @@ def get_baseline(branch=None, weeks=6):
 		AND b.`status` IN ('Consolidated', 'Paid')
 		AND WEEKDAY(b.`posting_date`) = %(weekday)s
 		AND HOUR(b.`posting_time`) BETWEEN %(hour_low)s AND %(hour_high)s
-		AND b.`posting_date` >= DATE_SUB(CURDATE(), INTERVAL %(weeks)s WEEK)
-		AND b.`posting_date` < CURDATE()
+		AND b.`posting_date` >= %(start_date)s
+		AND b.`posting_date` < %(end_date)s
 	"""
 	params = {
 		"weekday": weekday,
 		"hour_low": max(hour - 1, 0),
 		"hour_high": min(hour + 1, 23),
-		"weeks": weeks,
+		"start_date": add_to_date(now, weeks=-int(weeks)).date(),
+		"end_date": now.date(),
 	}
 	if branch:
 		conditions += " AND b.`branch` = %(branch)s"

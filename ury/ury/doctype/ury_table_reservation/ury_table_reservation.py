@@ -9,7 +9,13 @@ from frappe.utils import now_datetime, get_datetime
 
 class URYTableReservation(Document):
     def validate(self):
+        from ury.ury.api.table_reservation import ensure_reservations_enabled
+
         self.set_defaults()
+        ensure_reservations_enabled(self.branch)
+        before = self.get_doc_before_save()
+        if before and before.branch != self.branch:
+            ensure_reservations_enabled(before.branch)
         self.validate_mandatory_fields()
         self.validate_status_transitions()
         self.validate_table_branch()

@@ -47,6 +47,10 @@ def process_reservation_no_shows():
         if b not in branch_settings_cache:
             branch_settings_cache[b] = get_branch_reservation_settings(b)
 
+        # A branch that turned reservations off keeps its records as they are.
+        if not cint(branch_settings_cache[b].get("enable_reservation", 0)):
+            continue
+
         grace_mins = cint(branch_settings_cache[b].get("grace_period", 0))
         res_time = get_datetime(res.reserved_at)
         no_show_threshold = res_time + timedelta(minutes=grace_mins)
