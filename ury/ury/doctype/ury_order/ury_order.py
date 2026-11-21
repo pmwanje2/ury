@@ -1,6 +1,7 @@
 # Copyright (c) 2023, Tridz Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+import hashlib
 import json
 from collections import defaultdict
 from uuid import UUID
@@ -1878,6 +1879,9 @@ OFFLINE_REFUSAL_IDS = (
     "URY_OFFLINE_OUTSIDE_SHIFT",
     "URY_OFFLINE_TOTAL_MISMATCH",
     "URY_OFFLINE_APPEND_QTY",
+    "URY_OFFLINE_CAPTURE_DISABLED",
+    "URY_ROUND_PAYLOAD_MISMATCH",
+    "URY_CLIENT_ORDER_ID_IN_USE",
 )
 
 
@@ -1917,6 +1921,49 @@ def _client_order_invoice(client_order_id, invoice_name=None, table=None):
     if table and table not in _get_table_group(invoice.restaurant_table, invoice.get("custom_merged_tables")):
         _offline_refusal("URY_CLIENT_ORDER_ID_MISMATCH", _("Client order ID does not match the requested table."))
     return invoice
+
+
+def require_offline_capture(pos_profile):
+    """Offline-only inputs are honoured only on a till that opted in to offline capture."""
+    if not cint(frappe.db.get_value("POS Profile", pos_profile, "ury_offline_capture")):
+        _offline_refusal("URY_OFFLINE_CAPTURE_DISABLED", _("Offline capture is not enabled for this POS Profile."))
+
+
+def _round_digest(items):
+    """Digest of what a round orders (item, quantity); client names, rates and line order are ignored."""
+    if isinstance(items, str):
+        items = json.loads(items)
+    lines = sorted((str(row.get("item") or row.get("item_code") or ""), flt(row.get("qty"))) for row in items or [])
+    return hashlib.sha256(json.dumps(lines).encode()).hexdigest()
+
+
+def _applied_rounds(invoice):
+    try:
+        rounds = json.loads(invoice.get("ury_applied_rounds") or "{}")
+    except ValueError:
+        return {}
+    return rounds if isinstance(rounds, dict) else {}
+
+
+def _record_round(invoice, round_id, digest=None):
+    invoice.ury_last_round_id = round_id
+    rounds = _applied_rounds(invoice)
+    rounds.setdefault(str(round_id), digest)
+    invoice.ury_applied_rounds = json.dumps(rounds, sort_keys=True)
+
+
+def _is_applied_round(invoice, round_id, digest=None):
+    """Any round already applied to this order, not only the latest; a changed payload is refused."""
+    if round_id is None:
+        return False
+    round_id = str(round_id)
+    rounds = _applied_rounds(invoice)
+    if round_id in rounds:
+        if digest and rounds[round_id] and rounds[round_id] != digest:
+            _offline_refusal("URY_ROUND_PAYLOAD_MISMATCH", _("This round was already saved with different items."))
+        return True
+    # Orders saved before the applied-round ledger only know their latest round.
+    return str(invoice.get("ury_last_round_id") or "") == round_id
 
 
 def _refuse_client_order_rebind(invoice, client_order_id):
@@ -1975,6 +2022,9 @@ def sync_order(
     # append=1 adds one round to the saved lines (offline replay); it never replaces or removes.
     append = cint(append) == 1
     client_order_id = _validate_client_ids(client_order_id, round_id)
+    if append or cint(offline_printed) == 1 or captured_at is not None:
+        require_offline_capture(pos_profile)
+    round_digest = _round_digest(items) if round_id is not None else None
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
     client_invoice = _client_order_invoice(client_order_id, invoice, table)
@@ -2000,8 +2050,8 @@ def sync_order(
     _refuse_client_order_rebind(invoice, client_order_id)
 
     if client_invoice:
-        # A retry of the round already saved returns the saved order: one invoice, one KOT.
-        if round_id is not None and str(invoice.ury_last_round_id or "") == str(round_id):
+        # A retry of any round already saved returns the saved order: one invoice, one KOT.
+        if _is_applied_round(invoice, round_id, round_digest):
             return invoice.as_dict()
         if invoice.docstatus != 0:
             _offline_refusal("URY_ORDER_NOT_OPEN", _("This order is no longer open."))
@@ -2336,10 +2386,20 @@ def sync_order(
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:
-            invoice.ury_last_round_id = round_id
+            _record_round(invoice, round_id, round_digest)
 
     try:
         invoice.save()
+    except frappe.UniqueValidationError as e:
+        # Lost a race with a concurrent first send of the same client order.
+        if client_order_id and frappe.db.get_value(
+            "POS Invoice",
+            {"ury_client_order_id": client_order_id, "name": ("!=", invoice.name or "")},
+            "name",
+            for_update=True,
+        ):
+            _offline_refusal("URY_CLIENT_ORDER_ID_IN_USE", _("This client order is already being saved; retry."))
+        frappe.throw(f"Error while updating order: {e}")
     except Exception as e:
         frappe.throw(f"Error while updating order: {e}")   
 
@@ -2819,12 +2879,8 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     client_order_id = _validate_client_ids(client_order_id, round_id)
     existing_invoice = _client_order_invoice(client_order_id, invoice, table)
     if existing_invoice:
-        # A retry of a settlement that already submitted returns that settlement.
-        if (
-            existing_invoice.docstatus == 1
-            and round_id is not None
-            and str(existing_invoice.ury_last_round_id or "") == str(round_id)
-        ):
+        # A settled client order answers every settle retry, with or without its round id.
+        if existing_invoice.docstatus == 1:
             return {"name": existing_invoice.name, "status": "Submitted"}
         if existing_invoice.docstatus != 0:
             _offline_refusal("URY_ORDER_NOT_OPEN", _("This order is no longer open."))
@@ -2911,7 +2967,7 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:
-            invoice.ury_last_round_id = round_id
+            _record_round(invoice, round_id)
     # invoice.owner = owner
     invoice.save()
 

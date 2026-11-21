@@ -2,7 +2,7 @@ import json
 from collections import defaultdict
 
 import frappe
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, get_datetime
 
 from ury.ury.api.ury_kot_routing import resolve_production_units
 from ury.ury.api.ury_production_context import resolve_production_context
@@ -127,7 +127,6 @@ def create_kot_doc(
     # Printed at the station while the link was down: the kitchen already has it.
     if cint(offline_printed) == 1:
         kot_doc.ury_offline_printed = 1
-        kot_doc.order_status = "Served"
     if restaurant_table:
         room = frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
         restaurant = frappe.db.get_value("URY Table", restaurant_table, "restaurant")
@@ -175,6 +174,15 @@ def create_kot_doc(
             title="ury_kot_generate.create_kot_doc: MTO Work Order creation failed",
             message=frappe.get_traceback(),
         )
+
+    if cint(offline_printed) == 1:
+        from ury.ury.api.ury_fulfilment_posting_service import _service_mutation
+        from ury.ury.api.ury_kot_display import record_kot_served
+
+        # A station-fired ticket takes the normal READY -> Served path. The cashier
+        # holds no kitchen role, so the system records it; the till opt-in is the gate.
+        with _service_mutation():
+            record_kot_served(kot_doc.name, get_datetime(kot_doc.creation))
 
     return kot_doc.name
 
@@ -513,6 +521,10 @@ def kot_execute(
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice):
         frappe.throw(_("Not permitted to execute KOT for this invoice"), frappe.PermissionError)
+    if cint(offline_printed) == 1:
+        from ury.ury.doctype.ury_order.ury_order import require_offline_capture
+
+        require_offline_capture(pos_invoice.pos_profile)
 
     current_items = load_json(current_items)
     previous_items = load_json(previous_items)

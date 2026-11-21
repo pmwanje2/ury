@@ -533,6 +533,7 @@ fixtures = [
                     "POS Invoice-ury_client_order_id",
                     "POS Invoice-ury_last_round_id",
                     "POS Invoice-ury_offline_captured_at",
+                    "POS Invoice-ury_applied_rounds",
                     "POS Invoice-custom_aggregator_id",
                     "POS Invoice-restaurant_info",
                     "POS Invoice-restaurant",
