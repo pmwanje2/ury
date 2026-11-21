@@ -128,7 +128,7 @@ describe('SelfOrderingProfilePage', () => {
     }
     fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }));
     await waitFor(() => expect(call).toHaveBeenCalledWith('frappe.client.insert', {
-      doc: expect.objectContaining({ doctype: 'URY Self Ordering Profile', profile_name: 'Staff QR', guest_display_name: 'Courtyard' }),
+      doc: expect.objectContaining({ doctype: 'URY Self Ordering Profile', name: 'Staff QR', profile_name: 'Staff QR', guest_display_name: 'Courtyard' }),
     }));
     expect(await screen.findByText('No profiles configured yet')).toBeInTheDocument();
   });
