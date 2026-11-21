@@ -17,7 +17,8 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@ury/core")>(),
   logout: vi.fn().mockResolvedValue(undefined),
   withReturnContext: (path: string) => path,
   formatCurrency: (amount: number) => `Rs. ${amount}`,
@@ -248,4 +249,14 @@ describe("Header", () => {
     expect(screen.getAllByRole("button", { name: /Test User/i })).toHaveLength(1);
     expect(screen.getAllByTestId("printer-status-button")).toHaveLength(1);
   });
+});
+
+
+it("renders the site logo with its configured accessible name", () => {
+  vi.stubGlobal("frappe", { boot: { ury_brand: { name: "Example site", logo: "/files/site.png" } } });
+  try {
+    render(<BrowserRouter><Header /></BrowserRouter>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/files/site.png");
+    expect(screen.getByRole("img")).toHaveAccessibleName("Example site");
+  } finally { vi.unstubAllGlobals(); }
 });

@@ -86,7 +86,7 @@ describe('RoleGuard', () => {
 
     await waitFor(() => expect(screen.getByText('Access Denied')).toBeInTheDocument());
     expect(
-      screen.getByText('You need the URY Manager role to access this section.')
+      screen.getByText('You need the POS Manager role to access this section.')
     ).toBeInTheDocument();
   });
 

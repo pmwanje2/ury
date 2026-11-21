@@ -34,7 +34,8 @@ vi.mock("../chat/AskBar", () => ({
   default: () => <div data-testid="ask-bar">AskBar</div>,
 }));
 
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@ury/core")>(),
   logout: vi.fn().mockResolvedValue(undefined),
   call: Object.assign(vi.fn().mockResolvedValue({ message: [] }), {
     get: vi.fn().mockResolvedValue({ message: [] }),
@@ -101,4 +102,14 @@ describe("Header (/ury)", () => {
     const parsed = JSON.parse(stored!);
     expect(parsed.label).toBe("URY");
   });
+});
+
+
+it("renders the site logo with its configured accessible name", () => {
+  vi.stubGlobal("frappe", { boot: { ury_brand: { name: "Example site", logo: "/files/site.png" } } });
+  try {
+    render(<BrowserRouter><Header /></BrowserRouter>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/files/site.png");
+    expect(screen.getByRole("img")).toHaveAccessibleName("Example site");
+  } finally { vi.unstubAllGlobals(); }
 });

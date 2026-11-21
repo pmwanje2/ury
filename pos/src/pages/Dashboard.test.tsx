@@ -58,6 +58,21 @@ describe("Dashboard", () => {
     });
   });
 
+  it("discloses the full native notification behind a compact headline", async () => {
+    const subject = 'Long notification '.repeat(9).trim();
+    vi.stubGlobal('fetch', vi.fn(async url => ({ ok: true, json: async () => ({
+      message: String(url).includes('Notification+Log') ? [{ name: 'N1', subject, creation: '2026-01-01' }] : [],
+    }) })));
+    try {
+      render(<Dashboard />);
+      const full = await screen.findByText(subject);
+      const details = full.closest('details');
+      expect(details).not.toBeNull();
+      expect(details).not.toHaveAttribute('open');
+      expect(details!.querySelector('summary')!.textContent).toContain(subject.slice(0, 96).trimEnd() + '…');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("renders main panels", async () => {
     render(<Dashboard />);
 

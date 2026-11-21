@@ -113,7 +113,7 @@ describe("AuthGuard", () => {
     render(<AuthGuard><div>Content</div></AuthGuard>);
     
     expect(screen.getByText("auth.permission_required")).toBeInTheDocument();
-    expect(screen.getByText(/POS User/)).toBeInTheDocument();
+    expect(screen.queryByText(/POS User/)).not.toBeInTheDocument();
   });
 
   it("renders children when authenticated and authorized", () => {

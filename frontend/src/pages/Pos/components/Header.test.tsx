@@ -22,7 +22,8 @@ vi.mock("../store/pos-store", () => ({
   }),
 }));
 
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@ury/core")>(),
   logout: vi.fn().mockResolvedValue(null),
 }));
 
@@ -76,4 +77,13 @@ describe("Header", () => {
     const logoLink = screen.getByAltText("URY POS").closest("a");
     expect(logoLink).toHaveAttribute("href", "/desk");
   });
+});
+
+it("renders the site logo with its configured accessible name", () => {
+  vi.stubGlobal("frappe", { boot: { ury_brand: { name: "Example site", logo: "/files/site.png" } } });
+  try {
+    render(<BrowserRouter><Header /></BrowserRouter>);
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/files/site.png");
+    expect(screen.getByRole("img")).toHaveAccessibleName("Example site");
+  } finally { vi.unstubAllGlobals(); }
 });

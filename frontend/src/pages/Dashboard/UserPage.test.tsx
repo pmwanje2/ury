@@ -23,7 +23,9 @@ vi.mock("@ury/core", async (importOriginal) => {
   const actual = await importOriginal<any>();
   return {
     ...actual,
-    call: vi.fn(),
+    call: vi.fn(async (_method, args) => ({ message: args.doctype === 'Role'
+      ? ['URY Cashier', 'URY Admin', 'URY Manager', 'URY Captain', 'URY Waiter'].map(name => ({ name }))
+      : [{ parent: 'user@ury.test', role: 'URY Admin' }] })),
   };
 });
 
@@ -76,8 +78,7 @@ describe("UserPage", () => {
     render(<UserPage />);
     await waitFor(() => {
       expect(screen.getByText("user@ury.test")).toBeInTheDocument();
-      expect(screen.getByText("Admin")).toBeInTheDocument();
-      expect(screen.getByText("Manager")).toBeInTheDocument();
+      expect(screen.getByText("POS Admin")).toBeInTheDocument();
     });
   });
 
@@ -95,19 +96,20 @@ describe("UserPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Roles / Access Level")).toBeInTheDocument();
-      expect(screen.getByText("URY Cashier")).toBeInTheDocument();
+      expect(screen.getByText("POS Cashier")).toBeInTheDocument();
     });
 
     // Click the MultiSelect dropdown trigger
-    const selectTrigger = screen.getByText("URY Cashier").closest("div");
+    const selectTrigger = screen.getByText("POS Cashier").closest("div");
     if (selectTrigger) {
       fireEvent.click(selectTrigger);
     }
 
     await waitFor(() => {
-      expect(screen.getByText("URY Admin")).toBeInTheDocument();
-      expect(screen.getByText("URY Manager")).toBeInTheDocument();
-      expect(screen.getByText("URY Captain")).toBeInTheDocument();
+      expect(screen.getByText("POS Admin")).toBeInTheDocument();
+      expect(screen.getByText("POS Manager")).toBeInTheDocument();
+      expect(screen.getByText("POS Captain")).toBeInTheDocument();
+      expect(screen.getByText("POS Waiter")).toBeInTheDocument();
     });
   });
 });

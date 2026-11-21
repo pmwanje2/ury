@@ -33,6 +33,9 @@ class TestLegacySpaCsrfToken(unittest.TestCase):
 				context = {}
 				db = MagicMock()
 				with (
+					patch.object(controller.frappe, "get_cached_doc", return_value=SimpleNamespace(app_name=None, app_logo=None, favicon=None)),
+					patch.object(controller.frappe, "get_hooks", return_value={}),
+					patch.object(controller.frappe, "conf", {}),
 					patch.object(
 						controller.frappe.sessions, "get_csrf_token", return_value="session-token"
 					) as get_csrf_token,
