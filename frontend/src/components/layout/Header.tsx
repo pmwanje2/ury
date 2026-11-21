@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useBranchContext } from '../../context/BranchContext';
 import {
-  logout,
+  logout, purgeOfflineSession,
   call,
   getLoggedUser,
   getUserRoles,
@@ -174,7 +174,8 @@ export const Header: React.FC = () => {
     setUnreadCount(0);
   };
 
-  const handleClearCache = () => {
+  const handleClearCache = async () => {
+    await purgeOfflineSession();
     // Clear all local storage
     localStorage.clear();
     // Clear all session storage

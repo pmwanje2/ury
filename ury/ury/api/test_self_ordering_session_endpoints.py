@@ -490,7 +490,9 @@ class TestGetCustomerMenu(SelfOrderingSessionFixtures):
 		row = next(r for r in get_customer_menu(raw)["items"] if r["item"] == self.a["item"])
 		self.assertEqual(
 			set(row),
-			{"item", "item_name", "rate", "special_dish", "disabled", "item_image", "course", "course_label"},
+			# course_priority and menu_order (#98) only order the guest's category chips.
+			{"item", "item_name", "rate", "special_dish", "disabled", "item_image", "course", "course_label",
+			 "course_priority", "menu_order"},
 		)
 
 	def test_expired_session_cannot_read_the_menu(self):

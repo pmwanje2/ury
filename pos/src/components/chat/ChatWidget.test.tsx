@@ -37,11 +37,10 @@ vi.mock("@ury/ui", () => ({
 }));
 
 // Mock @ury/core
-const mockCall = {
-  post: vi.fn(),
-};
+const mockCall = vi.hoisted(() => ({ post: vi.fn() }));
 
-vi.mock("@ury/core", () => ({
+vi.mock("@ury/core", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@ury/core")>(),
   call: mockCall,
 }));
 

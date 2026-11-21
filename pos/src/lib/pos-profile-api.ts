@@ -97,6 +97,7 @@ export interface PosProfileFull {
 
 // Combined POS Profile with both limited and full fields
 export interface PosProfileCombined extends PosProfileFull {
+  ury_offline_capture?: number | string | boolean;
   // Add limited fields that don't exist in full profile
   waiter: string;
   cashier: string;

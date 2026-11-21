@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
+import { getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
 import { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
@@ -10,7 +10,9 @@ import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
 import { getPaymentModes } from '../lib/payment-api';
-import { syncOfflineCapture } from '../pwa/register-offline';
+import { beginOpenTableRead, openTableReadCurrent, rememberOpenTableCheck, forgetOpenTableCheck } from '../offline/open-table-checks';
+import { offlineCaptureEnabled } from '../pwa/runtime-caching';
+import { bindOfflineUser, cachedOfflineProfile, syncOfflineCapture } from '../pwa/register-offline';
 
 // Constants
 const MAX_QUANTITY = 99;
@@ -253,14 +255,6 @@ interface POSStore extends POSState {
   setShowVoluntaryClosing: (show: boolean) => void;
 }
 
-// Frappe's user_id cookie names the signed-in user; the worker serves cached reads only to them.
-export const signedInUser = (): string | null => {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.split('; ').find((row) => row.startsWith('user_id='));
-  const user = match ? decodeURIComponent(match.slice('user_id='.length)) : '';
-  return user && user !== 'Guest' ? user : null;
-};
-
 const generateUniqueId = (item: OrderItem): string => {
   const variantId = item.selectedVariant?.id || 'default';
   const addonIds = item.selectedAddons?.map(addon => addon.id).sort().join('-') || 'no-addons';
@@ -315,6 +309,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     try {
       set({ isInitializing: true, error: null });
       
+      await bindOfflineUser(getSessionUser());
       const [profileResult, menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
         get().fetchPosProfile(),
         get().fetchMenuItems(),
@@ -345,7 +340,9 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   fetchPosProfile: async () => {
     try {
       let currencySymbolHandled = false;
-      const cached = sessionStorage.getItem('posProfile');
+      const owner = getSessionUser();
+      const key = owner ? `posProfile:${owner}` : 'posProfile';
+      const cached = sessionStorage.getItem(key);
       if (cached) {
         const profile = JSON.parse(cached);
         if (profile && profile.country && 'custom_invoice_warning_time' in profile && !profileLacksDefaultCustomerConfig(profile) && profile.enable_payment_without_printing !== undefined) {
@@ -369,14 +366,16 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         set({ profileLoading: true, error: null });
       }
       const combinedProfile = await getCombinedPosProfile();
+      if (owner !== getSessionUser()) return;
       // The loaded till's ury_offline_capture decides the /pos worker; off unregisters it.
       try {
-        await syncOfflineCapture(combinedProfile as { ury_offline_capture?: unknown }, signedInUser());
+        await syncOfflineCapture(combinedProfile as { ury_offline_capture?: unknown }, getSessionUser());
       } catch (offlineError) {
         console.error('Offline capture setup failed', offlineError);
       }
 
-      sessionStorage.setItem('posProfile', JSON.stringify(combinedProfile));
+      if (owner !== getSessionUser()) return;
+      sessionStorage.setItem(key, JSON.stringify(combinedProfile));
       set({
         posProfile: combinedProfile,
         profileLoading: false,
@@ -388,6 +387,10 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         await get().fetchCurrencySymbol();
       }
     } catch (error) {
+      if (isLinkDown(error) && cachedOfflineProfile(getSessionUser()) && get().posProfile) {
+        set({ profileLoading: false });
+        return;
+      }
       console.error('Error fetching POS profile:', error);
       set({
         error: 'Failed to fetch POS profile',
@@ -754,9 +757,12 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   loadTableOrder: async (table: string) => {
+    const read = beginOpenTableRead(getSessionUser());
+    const stale = () => read ? !openTableReadCurrent(read, getSessionUser()) : !!getSessionUser();
     try {
       set({ orderLoading: true, error: null });
-      const response = await getTableOrder(table);
+      const response = await getTableOrder(table, true);
+      if (stale()) return;
       const order = response.message;
       if (order && order.name && order.items && order.items.length > 0) {
         const orderItems: OrderItem[] = order.items.map(item => {
@@ -791,6 +797,13 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           } as OrderItem;
         });
 
+        if (read && order.ury_client_order_id) {
+          rememberOpenTableCheck(read.user, {
+            table, clientOrderId: order.ury_client_order_id, invoice: order.name,
+            grandTotal: order.grand_total, customer: order.customer, orderType: order.order_type,
+            noOfPax: order.no_of_pax, room: order.custom_restaurant_room,
+          });
+        }
         set({
           tableOrder: response,
           activeOrders: orderItems,
@@ -809,6 +822,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         });
       } else {
         const state = get();
+        if (read && !order?.name) forgetOpenTableCheck(read.user, table);
         const orderCustomer = order && order.customer ? {
           id: order.customer,
           name: order.customer_name || order.customer,
@@ -835,8 +849,10 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         });
       }
     } catch (error) {
+      if (stale()) return;
+      const down = isLinkDown(error) && offlineCaptureEnabled(get().posProfile);
       set({
-        error: 'Failed to load table order',
+        error: down ? null : 'Failed to load table order',
         tableOrder: null,
         activeOrders: [],
         selectedCustomer: null,

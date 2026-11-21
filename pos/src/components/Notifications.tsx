@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
-import { call } from '@ury/core';
+import { call, getSessionUser } from '@ury/core';
 import { tNotification } from '../i18n';
-import { signedInUser } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 import { getRealtimeSocket } from '../lib/realtime';
 
@@ -71,7 +70,7 @@ function UserNotifications({ user, title = 'Recent Notifications', documentType,
   const seenNotificationNames = useRef(new Set<string>());
   const hasLoadedNotifications = useRef(false);
   const onNewUnreadRef = useRef(onNewUnread);
-  const isCurrentSession = () => active.current && signedInUser() === user;
+  const isCurrentSession = () => active.current && getSessionUser() === user;
 
   useEffect(() => {
     onNewUnreadRef.current = onNewUnread;

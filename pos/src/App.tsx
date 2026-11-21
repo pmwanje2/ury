@@ -16,6 +16,7 @@ import CaptainRouteGuard from './captain/components/CaptainRouteGuard';
 import CaptainTables from './captain/pages/CaptainTables';
 import CaptainOrder from './captain/pages/CaptainOrder';
 import { ToastProvider } from '@ury/ui';
+import { useRootStore } from './store/root-store';
 import { usePOSStore } from './store/pos-store';
 import { useEffect, useRef, useState } from 'react';
 import { getActiveLanguage, getActiveDirection } from './i18n';
@@ -62,6 +63,7 @@ function App() {
   } = usePOSStore();
   const chatRef = useRef<ChatWidgetHandle>(null);
   const aiEnabled = useAiSettings();
+  const provisional = useRootStore((state) => state.user?.provisional);
 
   useEffect(() => {
     initializeApp();
@@ -97,7 +99,7 @@ function App() {
                   <ChatWidgetRefProvider chatRef={chatRef}>
                     <Routes>
                       <Route element={<AppLayout />}>
-                        <Route index element={<Navigate to="/dashboard" replace />} />
+                        <Route index element={<Navigate to={provisional ? "/register" : "/dashboard"} replace />} />
                         <Route path="/dashboard" element={<Dashboard />} />
                         <Route path="/register" element={<POS />} />
                         <Route path="/tables" element={<Table />} />

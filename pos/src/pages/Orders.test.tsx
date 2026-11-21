@@ -34,6 +34,7 @@ vi.mock("@ury/ui", () => ({
 // Create a mock store object with correct pagination structure
 const mockRootStoreState = {
   orders: [],
+  ordersOffline: false,
   orderLoading: false,
   error: null,
   selectedStatus: "Unbilled",
@@ -153,6 +154,7 @@ vi.mock("../components/MergedBillPanel", () => ({
 describe("Orders Page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRootStoreState.ordersOffline = false;
     mockRootStoreState.fetchOrders.mockClear();
   });
 
@@ -201,6 +203,19 @@ describe("Orders Page", () => {
     render(<Orders />);
 
     expect(screen.getByText(/order.select_to_view/i)).toBeInTheDocument();
+  });
+
+  it("shows only the outage notice instead of the detail pane that covers phone navigation", () => {
+    mockRootStoreState.ordersOffline = true;
+    const { rerender } = render(<Orders />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("offline.orders_unavailable");
+    expect(screen.queryByText("order.select_to_view")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "orders.pagination.next" })).not.toBeInTheDocument();
+
+    mockRootStoreState.ordersOffline = false;
+    rerender(<Orders />);
+    expect(screen.getByText("order.select_to_view")).toBeInTheDocument();
   });
 
   it("displays pagination controls", () => {

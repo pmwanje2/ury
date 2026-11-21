@@ -1495,6 +1495,9 @@ class TestAssignDeviceTable(unittest.TestCase):
         profile.enable_payment_link = 0
         profile.enable_pay_at_counter = 1
         profile.allow_add_to_running_table = 1
+        # Feedback off, as on a real profile without it: a MagicMock attribute would read as on.
+        profile.enable_feedback = 0
+        profile.feedback_template = None
         return profile
 
     @patch(f"{MOD}._open_session")

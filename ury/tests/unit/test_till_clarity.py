@@ -454,6 +454,15 @@ class TestGuestLabelInCashierLists(unittest.TestCase):
         api.searchPosInvoice("Susan", "Draft")
         self.assertIn("custom_guest_label", self.framework.get_all.call_args.kwargs["fields"])
 
+    def test_settlement_can_reuse_the_client_id_from_lists_and_search(self):
+        for status in ("Draft", "Unbilled", "Recently Paid", "Paid"):
+            with self.subTest(status=status):
+                api.getPosInvoice(status, 2, 0)
+                self.assertIn("ury_client_order_id", self.framework.db.sql.call_args.args[0].split("FROM")[0])
+        self.framework.get_all.return_value = []
+        api.searchPosInvoice("INV-A", "Draft")
+        self.assertIn("ury_client_order_id", self.framework.get_all.call_args.kwargs["fields"])
+
     def test_split_group_selects_the_label(self):
         invoice = frappe._dict(name="POS-1", branch="Branch A", custom_split_group="SG-1")
         self.framework.get_doc.return_value = invoice

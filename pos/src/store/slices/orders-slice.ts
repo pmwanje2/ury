@@ -1,10 +1,13 @@
+import { getSessionUser, sessionStorageKey } from '@ury/core';
+import { cachedOfflineProfile } from '../../pwa/register-offline';
 import { StateCreator } from 'zustand';
 import { OrderType } from '../../data/order-types';
-import { call } from '@ury/core';
+import { isLinkDown, call } from '@ury/core';
 import { getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoiceTax } from '../../lib/invoice-api';
 import { searchPosInvoice } from '../../lib/invoice-api';
 
 export interface POSInvoice {
+  ury_client_order_id?: string | null;
   name: string;
   invoice_printed: number;
   custom_printing_time?: string | null;
@@ -34,6 +37,7 @@ export interface POSInvoice {
 }
 
 export interface OrdersState {
+  ordersOffline: boolean;
   orders: POSInvoice[];
   orderLoading: boolean;
   error: string | null;
@@ -73,6 +77,7 @@ export const createOrdersSlice: StateCreator<
   OrdersSlice
 > = (set, get) => ({
   // Initial state
+  ordersOffline: false,
   orders: [],
   orderLoading: false,
   error: null,
@@ -92,11 +97,11 @@ export const createOrdersSlice: StateCreator<
   // Actions
   fetchOrders: async (page = 1) => {
     try {
-      set({ orderLoading: true, error: null });
+      set({ orderLoading: true, error: null, ordersOffline: false });
       const { orderSearchQuery, selectedStatus } = get();
       
       // Get POS profile to access paid_limit
-      const posProfile = sessionStorage.getItem('posProfile');
+      const posProfile = sessionStorage.getItem(sessionStorageKey('posProfile'));
       const profile = posProfile ? JSON.parse(posProfile) : null;
       const paidLimit = profile?.paid_limit;
       
@@ -133,6 +138,10 @@ export const createOrdersSlice: StateCreator<
         orderLoading: false 
       });
     } catch (error) {
+      if (isLinkDown(error) && cachedOfflineProfile(getSessionUser())) {
+        set({ ordersOffline: true, orderLoading: false, orders: [], selectedOrder: null, error: null });
+        return;
+      }
       set({ 
         error: error instanceof Error ? error.message : 'Failed to fetch orders',
         orderLoading: false 

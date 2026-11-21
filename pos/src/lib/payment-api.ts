@@ -1,4 +1,4 @@
-import { call } from '@ury/core';
+import { call, getSessionUser } from '@ury/core';
 
 interface PaymentMode {
   mode_of_payment: string;
@@ -11,7 +11,9 @@ interface PaymentModeResponse {
 
 export const getPaymentModes = async (): Promise<string[]> => {
   // Check session storage first
-  const cached = sessionStorage.getItem('payment_modes');
+  const owner = getSessionUser();
+  const key = owner ? `payment_modes:${owner}` : 'payment_modes';
+  const cached = sessionStorage.getItem(key);
   if (cached) {
     return JSON.parse(cached);
   }
@@ -22,7 +24,7 @@ export const getPaymentModes = async (): Promise<string[]> => {
     const paymentModes = response.message.map((mode:PaymentMode) => mode.mode_of_payment);
     
     // Cache in session storage
-    sessionStorage.setItem('payment_modes', JSON.stringify(paymentModes));
+    if (owner === getSessionUser()) sessionStorage.setItem(key, JSON.stringify(paymentModes));
     
     return paymentModes;
   } catch (error) {

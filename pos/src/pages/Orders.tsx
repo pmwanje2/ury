@@ -95,7 +95,7 @@ function LinkTag({ icon: Icon, children }: { icon: React.ComponentType<{ classNa
 
 export default function Orders() {
   const { 
-    orders,
+    orders, ordersOffline,
     orderLoading,
     error,
     selectedStatus,
@@ -502,6 +502,10 @@ export default function Orders() {
         </div>
       </div>
     );
+  }
+
+  if (ordersOffline) {
+    return <p className="p-4 text-center text-amber-800" role="status">{t('offline.orders_unavailable')}</p>;
   }
 
   return (
