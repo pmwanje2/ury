@@ -103,6 +103,17 @@ class TestPrintJobFinalizer(FrappeTestCase):
         register_print_job(metadata)
         return metadata
 
+    @patch("ury.ury.printing.finalizer.frappe.db.set_value")
+    @patch("ury.ury.printing.finalizer.frappe.get_all")
+    def test_completed_network_bill_keeps_unprinted_sibling_occupied(self, get_all, set_value):
+        import frappe
+
+        self._register_job("PJ-split")
+        get_all.return_value = [frappe._dict(name="SIBLING", invoice_printed=0)]
+        result = finalize_print_job("PJ-split", COMPLETED)
+        self.assertEqual(result["status"], "Finalized")
+        set_value.assert_called_once_with("POS Invoice", "INV-001", "invoice_printed", 1)
+
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
     @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")

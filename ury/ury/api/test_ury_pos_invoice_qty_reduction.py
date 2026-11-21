@@ -107,6 +107,20 @@ def _kot_doc_recorder():
 class TestQtyReductionOnAllowedOrderType(FrappeTestCase):
 	"""Test successful qty reduction on an order type explicitly allowed by POS Profile."""
 
+	def test_reducing_held_dish_updates_bill_without_kitchen_cancellation(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {"order_type": "Dine In"}.get
+		invoice.items = [frappe._dict(name="ROW-1", item_code="TEA", item_name="Tea", qty=2, ury_held=1)]
+		with patch(f"{MODULE}.frappe.db.exists", return_value=True), \
+		     patch(f"{MODULE}.frappe.get_doc", side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f"{MODULE}.frappe.has_permission", return_value=True), \
+		     patch(f"{MODULE}.process_items_for_cancel_kot") as cancel:
+			result = reduce_order_item_qty(invoice.name, "ROW-1", 1)
+		invoice.save.assert_called_once()
+		self.assertEqual(invoice.items[0].qty, 1)
+		cancel.assert_not_called()
+		self.assertEqual(result["cancel_kot_names"], [])
+
 	def test_reduce_qty_creates_partial_cancel_kot_with_correct_delta(self):
 		"""Reducing item qty from 2 to 1 should:
 		1. Update invoice item qty to 1
