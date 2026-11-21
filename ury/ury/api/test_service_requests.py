@@ -128,14 +128,36 @@ class TestListOpenServiceRequests(FrappeTestCase):
         self.assertEqual(len(result), 1)
 
 
-class _CaptainServiceRequestCase(FrappeTestCase):
+class _CaptainBranchFixture:
     def setUp(self):
         super().setUp()
         self.session = self.enterContext(patch.object(frappe, "session", frappe._dict(user="Captain")))
         self.enterContext(patch.object(frappe, "get_roles", return_value=["URY Captain"]))
 
+        actor_branches = {
+            "Captain": "Branch A",
+            "Captain John": "Branch A",
+            "Captain Jane": "Branch A",
+            "captain@ury.localhost": "Branch A",
+            "Other Branch Captain": "Branch B",
+        }
 
-class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
+        def staff_branches(doctype, *, filters, pluck):
+            if doctype != "URY User" or pluck != "parent":
+                return []
+            return [branch for actor, branch in actor_branches.items()
+                    if filters == {"user": actor, "parenttype": "Branch"}]
+
+        def table_branch(doctype, name, field):
+            if (doctype, name, field) == ("URY Table", "Service Table A", "branch"):
+                return "Branch A"
+            return None
+
+        self.enterContext(patch.object(frappe, "get_all", staff_branches))
+        self.enterContext(patch.object(frappe.db, "get_value", table_branch))
+
+
+class TestAcknowledgeServiceRequest(_CaptainBranchFixture, FrappeTestCase):
     """Tests for acknowledge_service_request() endpoint."""
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
@@ -143,8 +165,7 @@ class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
     def test_changes_status_to_acknowledged(self, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should change request status to 'Acknowledged' and save."""
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-001"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -161,8 +182,7 @@ class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
     def test_returns_updated_status(self, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should return the updated request with new status."""
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-002"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -177,8 +197,7 @@ class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
     def test_saves_after_permission_check_passes(self, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should call save() once the explicit has_permission check passes."""
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-003"
         mock_get_doc.return_value = mock_doc
 
@@ -193,8 +212,7 @@ class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
     def test_handles_already_acknowledged_request(self, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should handle acknowledging an already-acknowledged request."""
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-004"
         mock_doc.status = "Acknowledged"
         mock_get_doc.return_value = mock_doc
@@ -217,7 +235,7 @@ class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
         req.save.assert_not_called()
 
 
-class TestResolveServiceRequest(_CaptainServiceRequestCase):
+class TestResolveServiceRequest(_CaptainBranchFixture, FrappeTestCase):
     """Tests for resolve_service_request() endpoint."""
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
@@ -230,8 +248,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = resolved_time
         self.session.user = "Captain John"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-001"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -253,8 +270,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = resolved_time
         self.session.user = "Captain John"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-002"
         mock_get_doc.return_value = mock_doc
 
@@ -272,8 +288,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = "2026-08-19 14:45:30"
         self.session.user = "captain@ury.localhost"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-003"
         mock_get_doc.return_value = mock_doc
 
@@ -291,8 +306,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = "2026-08-19 14:45:30"
         self.session.user = "Captain Jane"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-004"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -311,8 +325,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = "2026-08-19 14:45:30"
         self.session.user = "Captain"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-005"
         mock_get_doc.return_value = mock_doc
 
@@ -331,8 +344,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = "2026-08-19 14:50:00"
         self.session.user = "Captain"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-006"
         mock_doc.status = "Acknowledged"
         mock_get_doc.return_value = mock_doc
@@ -356,8 +368,7 @@ class TestResolveServiceRequest(_CaptainServiceRequestCase):
         mock_now.return_value = second_time
         self.session.user = "Captain Jane"
 
-        mock_doc = MagicMock()
-        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
+        mock_doc = MagicMock(table="Service Table A")
         mock_doc.name = "SR-007"
         mock_doc.status = "Resolved"
         mock_doc.resolved_at = first_time
