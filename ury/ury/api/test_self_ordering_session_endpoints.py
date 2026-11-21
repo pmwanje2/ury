@@ -12,8 +12,8 @@
 #
 # every one of these four functions is gated by `_resolve_session()`, whose
 # whole security value lives in real DB state — a sha256 token-hash lookup
-# filtered on `status == "Active"`, an `expires_at` comparison that FLIPS the
-# stored row to "Expired" on read, and a sliding-window `expires_at` rewrite
+# filtered on `status == "Active"`, an `expires_at` comparison that refuses a
+# past-expiry row without writing it, and a sliding-window `expires_at` rewrite
 # on every successful call. Mocking `frappe.db.get_value`/`frappe.get_doc`
 # around that turns the gate into a tautology: you end up asserting that a
 # MagicMock returned what you told it to. A previous round of this track
@@ -421,21 +421,20 @@ class TestSessionGate(SelfOrderingSessionFixtures):
 		with self.assertRaises(frappe.PermissionError):
 			get_order_status(raw)
 
-	def test_past_expiry_session_rejected_and_flipped_to_expired(self):
-		"""An Active row whose `expires_at` has passed is rejected AND the
-		stored row is durably marked Expired, so it can never be replayed."""
+	def test_past_expiry_session_rejected_without_writing_the_row(self):
+		"""An Active row whose `expires_at` has passed is refused like any unusable
+		token and is not written: a refusal rolls the request back, so marking it
+		Expired never persisted and only clashed with a concurrent order (1020)."""
 		raw, doc = self.insert_session_at_state(status="Active", expires_in_minutes=-5)
-		self.assertEqual(doc.status, "Active")
+		fields = ["status", "modified", "last_activity", "expires_at"]
+		before = frappe.db.get_value("URY Ordering Session", doc.name, fields, as_dict=True)
 
-		with self.assertRaises(frappe.PermissionError):
-			get_order_status(raw)
+		for _attempt in range(2):
+			with self.assertRaises(frappe.PermissionError) as caught:
+				get_order_status(raw)
+			self.assertEqual(type(caught.exception).__name__, "URYGuestSessionInvalid")
 
-		self.assertEqual(
-			frappe.db.get_value("URY Ordering Session", doc.name, "status"), "Expired"
-		)
-		# and it stays rejected on a retry, now via the status filter
-		with self.assertRaises(frappe.PermissionError):
-			get_order_status(raw)
+		self.assertEqual(frappe.db.get_value("URY Ordering Session", doc.name, fields, as_dict=True), before)
 
 	def test_successful_call_slides_the_expiry_window(self):
 		raw, doc = self.insert_session_at_state(status="Active", expires_in_minutes=1)
