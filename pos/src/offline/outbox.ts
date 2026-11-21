@@ -147,6 +147,7 @@ export class OfflineOutbox {
   async reprint(clientId: string, kind: 'kot' | 'bill'): Promise<void> {
     this.allowed();
     await exclusive(async () => {
+      this.assertSessionAllowed();
       const entry = (await this.list()).find((row) => row.client_order_id === clientId);
       if (!entry || entry.state !== 'pending') throw new Error('Only pending offline orders can be reprinted.');
       if (kind === 'bill') {
@@ -213,6 +214,7 @@ export class OfflineOutbox {
     if (!order.items.length || order.items.some((item) => !Number.isFinite(item.qty) || item.qty <= 0)) throw new Error('Offline rounds require positive quantities; reductions are refused.');
     if (!Number.isFinite(total) || total < 0) throw new Error('Offline total must be a finite nonnegative amount.');
     return exclusive(async () => {
+      this.assertSessionAllowed();
       const outage = await transaction<string>(['outages'], 'readwrite', (tx, result) => {
         const store = tx.objectStore('outages'); const request = store.get(this.scope);
         request.onsuccess = () => { const id = request.result || uuid(); store.put(id, this.scope); result(id); };
@@ -243,6 +245,7 @@ export class OfflineOutbox {
     if (!['cash', 'mobile-money'].includes(tender.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
     if (tender.kind === 'mobile-money' && !tender.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
     return exclusive(async () => {
+      this.assertSessionAllowed();
       const entry = (await this.list()).find((row) => row.client_order_id === clientId);
       if (!entry || entry.state !== 'pending' || entry.next_round) throw new Error('Only an offline order awaiting replay can be settled here.');
       if (entry.settlement) throw new Error('This order already has a settlement.');
@@ -265,6 +268,7 @@ export class OfflineOutbox {
     if (input.settlement.kind === 'mobile-money' && !input.settlement.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
     if (!Number.isFinite(input.settlement.amount) || input.settlement.amount < 0) throw new Error('Offline total must be a finite nonnegative amount.');
     return exclusive(async () => {
+      this.assertSessionAllowed();
       const existing = (await this.list()).find((row) => row.client_order_id === input.clientOrderId);
       if (existing) {
         if (!existing.settlement) {
@@ -310,7 +314,10 @@ export class OfflineOutbox {
     if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
     let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
     try { body = await response.json(); } catch { throw new NotReady('Server did not return JSON'); }
-    if (response.status === 401 || response.status === 403 || body.exc_type === 'CSRFTokenError') throw new NotReady('Server session is not ready');
+    // Frappe also uses PermissionError for guest access to a whitelisted method.
+    const orderPermission = payload && body.exc_type === 'PermissionError' &&
+      !/login to access/i.test([body.exception, body._server_messages, body.message].join(' '));
+    if (response.status === 401 || (response.status === 403 && !orderPermission) || body.exc_type === 'CSRFTokenError') throw new NotReady('Server session is not ready');
     if (!response.ok || body.exc_type || body.exception) throw new Refused(body._server_messages || body.exception || body.exc_type || `HTTP ${response.status}`);
     if (typeof body.message === 'object' && body.message && 'status' in body.message && body.message.status === 'Failure') throw new Refused('Server refused the order');
     return body.message;
