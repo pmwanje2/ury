@@ -84,7 +84,8 @@ the open PR.
 
 | Theme | PR | RED | GREEN | State |
 |---|---|---|---|---|
-| T1 | #93 | `5b5b34da` | `664d8ff4` | open, draft. `pos-tests.yml` (#51, `00b79383`) waits on B5 |
+| T1 | #93 | `5b5b34da` | `664d8ff4` | merged; eight build-closure rows |
+| T1 POS CI | #124 | `108d922f` | `b8f3c4da` | closes the final T1 row on merge; 0 T1 implementation rows remain deferred |
 | N | #95 | `8b6aa8a0`, `80f70004`, `1f98feff` | `042c8e29` | open, draft (new work, no fork rows) |
 | T0 | #96 | `ba3154e3`, `1747bae1`, `6692547b`, `7f0f931e`, `a7578aaf` | `b0d12217` | open, draft |
 | T5 part 3 | local branch `maximus/t5p3-offline-pos-wiring` | `e6a0290a`, `b59ba37e` | `6c24d276`, `3bb914d0` | implemented; landing PR pending |
@@ -558,7 +559,7 @@ T0 notes on rows marked "port" in the rows below:
 | `86813f9b` | 2026-10-16 | #54 | T6 | port | fix(U6a): GREEN reject malformed signatures before secret lookup |  |
 | `5fe9d91b` | 2026-10-16 | #54 | T6 | port | test(U6a): RED native snapshot conflicts need safe retry |  |
 | `3d232574` | 2026-10-16 | #54 | T6 | port | fix(U6a): GREEN return safe native transaction conflict retry |  |
-| `00b79383` | 2026-10-16 | #51 | T1 | port | ci: run hermetic POS tests on hospitality PRs |  |
+| `00b79383` | 2026-10-16 | #51 | T1 | port | ci: run hermetic POS tests on hospitality PRs | PR #124 |
 | `933a5213` | 2026-10-16 | #51 | T1 | dropped | test(pos): RED proof that POS CI fails when a test fails | CI fail-proof, reverted in 123932e4 |
 | `123932e4` | 2026-10-16 | #51 | T1 | dropped | Revert "test(pos): RED proof that POS CI fails when a test fails" | revert of 933a5213 |
 | `24f99f84` | 2026-10-16 | #50 | T3 | port | test: expose sent-note removal authorization bypass (RED) | sent-note removal authorization |
