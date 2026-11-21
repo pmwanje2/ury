@@ -99,6 +99,7 @@ export function canCaptureOffline(profile?: OfflineProfile | null, user?: Offlin
 class LinkDown extends Error {}
 class NotReady extends Error {}
 class Refused extends Error {}
+class OrderPermission extends Refused {}
 
 // The table's open check until it is settled, including one that has already
 // replayed some rounds. It keeps its client id across outages.
@@ -314,10 +315,8 @@ export class OfflineOutbox {
     if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
     let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
     try { body = await response.json(); } catch { throw new NotReady('Server did not return JSON'); }
-    // Frappe also uses PermissionError for guest access to a whitelisted method.
-    const orderPermission = payload && body.exc_type === 'PermissionError' &&
-      !/login to access/i.test([body.exception, body._server_messages, body.message].join(' '));
-    if (response.status === 401 || (response.status === 403 && !orderPermission) || body.exc_type === 'CSRFTokenError') throw new NotReady('Server session is not ready');
+    if (payload && response.status === 403 && body.exc_type === 'PermissionError') throw new OrderPermission(body.exc_type);
+    if (response.status === 401 || response.status === 403 || body.exc_type === 'CSRFTokenError') throw new NotReady('Server session is not ready');
     if (!response.ok || body.exc_type || body.exception) throw new Refused(body._server_messages || body.exception || body.exc_type || `HTTP ${response.status}`);
     if (typeof body.message === 'object' && body.message && 'status' in body.message && body.message.status === 'Failure') throw new Refused('Server refused the order');
     return body.message;
@@ -331,16 +330,19 @@ export class OfflineOutbox {
     };
     rememberOpenTableCheck(entry.owner, check);
   }
+  private async verifyCashier(): Promise<void> {
+    const user = await this.call('frappe.auth.get_logged_user');
+    if (user !== this.options.user.name) throw new NotReady('Cashier session does not match');
+    sessionStorage.removeItem(this.sessionBlockKey);
+    this.reachable = true;
+  }
   async replay(): Promise<void> {
     if (!canCaptureOffline(this.options.profile, this.options.user)) return;
     if (this.replayPromise) return this.replayPromise;
     this.replaying = true; changed();
     this.replayPromise = exclusive(async () => {
       try {
-        const user = await this.call('frappe.auth.get_logged_user');
-        if (user !== this.options.user.name) throw new NotReady('Cashier session does not match');
-        sessionStorage.removeItem(this.sessionBlockKey);
-        this.reachable = true;
+        await this.verifyCashier();
         for (const entry of await this.list()) {
           if (entry.state !== 'pending') continue;
           if (entry.rounds.some((round) => !round.offline_printed) || entry.settlement && !entry.bill_printed) break;
@@ -367,6 +369,11 @@ export class OfflineOutbox {
             await remove(entry);
           } catch (error) {
             if (!(error instanceof Refused)) { this.replayFailure(error); break; }
+            if (error instanceof OrderPermission) {
+              // Keep the session blocked if the identity probe loses its link.
+              sessionStorage.setItem(this.sessionBlockKey, '1');
+              await this.verifyCashier();
+            }
             entry.state = 'review'; entry.reason = error.message; await save(entry);
           }
         }
