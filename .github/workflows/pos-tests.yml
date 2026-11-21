@@ -1,0 +1,40 @@
+name: POS tests
+
+on:
+  pull_request:
+    branches: [maximus/v16-integration]
+  push:
+    branches: [maximus/v16-integration]
+
+permissions:
+  contents: read
+
+jobs:
+  pos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pos
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.20.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # The root lock owns pos and its shared workspaces. Skip the legacy app postinstall.
+      - name: Install locked dependencies
+        run: npm --prefix .. ci --ignore-scripts --no-audit --no-fund
+      - name: Check workflow contract
+        run: node --test ../tests/pos-workflow.test.cjs
+      - name: Run hermetic POS tests
+        run: npm test --offline -- ./tests/ --maxWorkers=1
+      - name: Run site-less Python tests
+        run: >-
+          PYTHONPATH=.. python3 -m unittest
+          ury.tests.unit.test_offline_capture_fixture
+          ury.ury_pos.test_floor_pin
