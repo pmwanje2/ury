@@ -444,6 +444,15 @@ def get_custom_fields():
 				"insert_after": "qz_host",
 				"label": "Disable Print & Printer Status Tracking",
 				"description": "When enabled, hides the printer status indicator in POS.",
+			},
+			{
+				"fieldname": "ury_kds_display_window_hours",
+				"fieldtype": "Int",
+				"label": "Kitchen Display Window (Hours)",
+				"default": "3",
+				"non_negative": 1,
+				"description": "Kitchen and bar screens show tickets created within this many hours (1-24). Empty or 0 uses 3.",
+				"insert_after": "custom_kot_warning_time",
 			}
 		],
   

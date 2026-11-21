@@ -25,6 +25,7 @@ class TestServeKotBlocksCancelled(FrappeTestCase):
             serve_kot("KOT-001")
 
         mock_set_value.assert_not_called()
+        mock_doc.db_set.assert_not_called()
 
     @patch("ury.ury.api.ury_kot_display.frappe.db.set_value")
     @patch("ury.ury.api.ury_kot_display.frappe.has_permission")
@@ -40,6 +41,7 @@ class TestServeKotBlocksCancelled(FrappeTestCase):
             serve_kot("KOT-001")
 
         mock_set_value.assert_not_called()
+        mock_doc.db_set.assert_not_called()
 
     @patch("ury.ury.api.ury_kot_display.get_datetime")
     @patch("ury.ury.api.ury_kot_display.frappe.db.set_value")
@@ -56,7 +58,10 @@ class TestServeKotBlocksCancelled(FrappeTestCase):
 
         serve_kot("KOT-001")
 
-        mock_set_value.assert_any_call("URY KOT", "KOT-001", "order_status", "Served")
+        # One document write (db_set) so Value Change notifications and on_change run.
+        mock_doc.db_set.assert_called_once()
+        self.assertEqual(mock_doc.db_set.call_args.args[0]["order_status"], "Served")
+        mock_set_value.assert_not_called()
 
 
 class TestGetCancelConfirmedOriginalKots(FrappeTestCase):

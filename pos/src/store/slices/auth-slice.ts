@@ -1,5 +1,6 @@
 import { StateCreator } from 'zustand';
 import { getLoggedUser, getUserRoles } from '@ury/core';
+import { isFloorPadActive } from '../../lib/floor-session';
 
 export interface User {
   name: string; // This stores the user ID
@@ -36,6 +37,11 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, _get) => ({
       const response = await getLoggedUser();
       
       if (!response) {
+        // A paired floor tablet with an open till signs in on its own PIN pad.
+        if (isFloorPadActive()) {
+          set({ user: null, isLoading: false });
+          return;
+        }
         // If no user is logged in, redirect to login
         window.location.href = '/login?redirect-to=%2Fpos';
         return;
