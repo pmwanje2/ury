@@ -51,6 +51,34 @@ def parse_to_datetime(val, default_now=None):
     return get_datetime(val)
 
 
+def reservations_enabled(branch):
+    """Reservations are opt-in per Branch (custom_enable_reservation, default 0).
+
+    A branch that has not enabled them sees no reservation reads or writes on
+    its till, order, floor and closing paths.
+
+    Before migrate adds the Branch column (new code already served), the
+    branch reads as disabled instead of failing POS Invoice validate.
+    """
+    if not branch:
+        return False
+    if not frappe.db.has_column("Branch", "custom_enable_reservation"):
+        return False
+    return cint(frappe.db.get_value("Branch", branch, "custom_enable_reservation") or 0) == 1
+
+
+def ensure_reservations_enabled(branch):
+    """Refuse a reservation write on a branch that has not switched reservations on."""
+    if not reservations_enabled(branch):
+        frappe.throw(_("Table reservations are switched off for this branch."))
+
+
+def reservations_enabled_for_table(table):
+    if not table:
+        return False
+    return reservations_enabled(frappe.db.get_value("URY Table", table, "branch"))
+
+
 @frappe.whitelist()
 def get_branch_reservation_settings(branch):
     """
@@ -94,8 +122,10 @@ def get_branch_reservation_settings(branch):
         else:
             grace_period = max(0, cint(grace_period_raw))
 
-        last_day_avg = get_branch_last_day_avg_time(branch)
-        last_week_avg = get_branch_last_week_avg_time(branch)
+        # A settings read never writes the Branch; the averages are
+        # refreshed when a till closes on a branch with reservations enabled.
+        last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
+        last_week_avg = get_branch_last_week_avg_time(branch, update_branch=False)
         calc_duration = get_branch_reservation_duration(branch)
 
         return {
@@ -256,7 +286,7 @@ def check_table_reservation(table):
     """
     Fetches the current active/protecting reservation or upcoming reservation for a table.
     """
-    if not table:
+    if not table or not reservations_enabled_for_table(table):
         return None
 
     try:
@@ -342,6 +372,8 @@ def get_completed_reservation_for_table(table, branch=None):
     if not table:
         return None
     try:
+        if not reservations_enabled(branch or frappe.db.get_value("URY Table", table, "branch")):
+            return None
         # Check current table state - MUST be currently occupied
         is_occupied = frappe.db.get_value("URY Table", table, "occupied")
         if not is_occupied or cint(is_occupied) != 1:
@@ -420,6 +452,8 @@ def create_table_reservation(
     if not branch:
         branch = frappe.db.get_value("URY Table", table, "branch")
 
+    ensure_reservations_enabled(branch)
+
     if not customer_name and customer:
         customer_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
 
@@ -444,7 +478,8 @@ def create_table_reservation(
         doc_dict["pos_opening_entry"] = active_opening.name
 
     doc = frappe.get_doc(doc_dict)
-    doc.insert(ignore_permissions=True, ignore_links=True)
+    # Native DocPerm on URY Table Reservation decides who may reserve.
+    doc.insert()
     frappe.db.commit()
     return doc.name
 
@@ -468,6 +503,8 @@ def update_table_reservation(
         frappe.throw(_("Reservation ID is required."))
 
     doc = frappe.get_doc("URY Table Reservation", reservation_name)
+    doc.check_permission("write")
+    ensure_reservations_enabled(doc.branch)
 
     if doc.status not in ("Requested", "Confirmed", "Active"):
         frappe.throw(_("Cannot edit reservation in {0} status.").format(doc.status))
@@ -493,7 +530,8 @@ def update_table_reservation(
     if notes is not None:
         doc.comments = notes
 
-    doc.save(ignore_permissions=True)
+    ensure_reservations_enabled(doc.branch)
+    doc.save()
     frappe.db.commit()
     return True
 
@@ -548,6 +586,8 @@ def update_reservation_status(reservation_name, status, pos_invoice=None):
         frappe.throw(_("Reservation ID is required."))
 
     doc = frappe.get_doc("URY Table Reservation", reservation_name)
+    doc.check_permission("write")
+    ensure_reservations_enabled(doc.branch or frappe.db.get_value("URY Table", doc.reserved_table, "branch"))
 
     # Validate role permissions for critical status changes
     if status in ("Completed", "Cancelled"):
@@ -580,12 +620,11 @@ def update_reservation_status(reservation_name, status, pos_invoice=None):
             },
         )
 
-    doc.save(ignore_permissions=True)
+    doc.save()
     frappe.db.commit()
     return True
 
 
-@frappe.whitelist()
 def sync_branch_table_occupancy(branch=None):
     """
     Ensures table occupied flags in `tabURY Table` accurately reflect active state.
@@ -682,12 +721,12 @@ def get_active_reservations(branch=None, date=None):
     Cleans up stale table occupied flags if no open invoice/reservation exists.
     """
     try:
+        if not reservations_enabled(branch):
+            return []
+
         from ury.ury.api.reservation_scheduler import process_reservation_no_shows
         process_reservation_no_shows()
         sync_branch_table_occupancy(branch)
-
-        if not branch:
-            return []
 
         now = now_datetime()
         today_date = now.date()
