@@ -1,5 +1,5 @@
 import axios from "axios";
-import qz from "qz-tray";  
+import { loadQz } from "../../../../packages/core/src/print/qz-runtime";
 import { privateKey } from "../../../privateKey";
 
 import {
@@ -9,7 +9,8 @@ import {
     hextorstr,
 } from 'jsrsasign';
 
-export function loadQzPrinter(host){
+export async function loadQzPrinter(host){
+    const qz = await loadQz();
     return new Promise((resolve,reject)=>{
         qz.security.setCertificatePromise((resolve)=>{
             axios.get("/assets/ury/files/cert.pem")
@@ -41,12 +42,13 @@ export function loadQzPrinter(host){
 }
 
 export function disconnectQzPrinter(){
-    if(qz.websocket.isActive())
+    const qz = window.qz;
+    if(qz?.websocket.isActive())
         qz.websocket.disconnect();
 }
 
-export function printWithQz(host,htmlToPrint){
-    
+export async function printWithQz(host,htmlToPrint){
+    const qz = await loadQz();
     return new Promise((resolve,reject)=>{
         qz.security.setSignatureAlgorithm("SHA512"); // Since 2.1
         qz.security.setSignaturePromise(function(toSign) {

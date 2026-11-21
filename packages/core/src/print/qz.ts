@@ -1,4 +1,4 @@
-import qz from 'qz-tray';
+import { loadQz } from './qz-runtime';
 import axios from 'axios';
 import { KEYUTIL, KJUR, stob64, hextorstr } from 'jsrsasign';
 
@@ -18,6 +18,7 @@ function ensureSignKey(): string {
 }
 
 export async function loadQzPrinter(host: string): Promise<void> {
+  const qz = await loadQz();
   qz.security.setCertificatePromise((resolve: (data: string) => void, reject: (err?: string) => void) => {
     axios.get('/assets/ury/files/cert.pem')
       .then(({ data }) => resolve(data))
@@ -29,11 +30,13 @@ export async function loadQzPrinter(host: string): Promise<void> {
 }
 
 export function disconnectQzPrinter(): void {
-  if (qz.websocket.isActive()) qz.websocket.disconnect();
+  const qz = globalThis.window?.qz;
+  if (qz?.websocket.isActive()) qz.websocket.disconnect();
 }
 
 export async function printWithQz(host: string, htmlToPrint: string): Promise<void> {
   const signKey = ensureSignKey();
+  const qz = await loadQz();
 
   qz.security.setSignatureAlgorithm('SHA512');
   qz.security.setSignaturePromise((toSign: string) => (resolve: (sig: string) => void, reject: (err?: string) => void) => {
@@ -53,7 +56,7 @@ export async function printWithQz(host: string, htmlToPrint: string): Promise<vo
     const printer = await qz.printers.getDefault();
     const data = [{ type: 'html', format: 'plain', data: htmlToPrint }];
     const config = qz.configs.create(printer);
-    await qz.print(config, data as any);
+    await qz.print(config, data);
   };
 
   if (qz.websocket.isActive()) {

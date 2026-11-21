@@ -6,6 +6,7 @@ The root lock now also covers the `serve` workspace.
 import json
 import re
 import shlex
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -104,11 +105,21 @@ class FrontendBuildClosure(unittest.TestCase):
                 if name == "urypos" and group == "dependencies":
                     expected.pop("@syncfusion/ej2-vue-calendars")
                     expected.pop("pnpm")
+                    expected.pop("qz-tray")
                     expected["jsrsasign"] = jsrsasign
                 if name == "mosaic" and group == "dependencies":
                     expected.pop("flowbite-vue")
                 with self.subTest(frontend=name, group=group):
                     self.assertEqual(project[group], expected)
+
+    def test_no_manifest_or_lock_declares_qz_tray(self):
+        files = subprocess.check_output(
+            ["git", "ls-files", "*package.json", "*package-lock.json", "*yarn.lock"], cwd=ROOT, text=True
+        ).splitlines()
+        self.assertTrue(files)
+        for path in files:
+            with self.subTest(path=path):
+                self.assertNotRegex((ROOT / path).read_text(), r'(?:^|["/\s])qz-tray(?:["/@])')
 
     def test_legacy_rsa_signing_uses_the_root_lock_security_version(self):
         declared = _json("urypos/package.json")["dependencies"]["jsrsasign"]

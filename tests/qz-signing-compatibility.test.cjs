@@ -15,7 +15,7 @@ for (const keyType of ['pkcs8', 'pkcs1']) {
 test(`actual QZ RSA-SHA512 callback preserves deterministic signatures with synthetic ${keyType} on the locked jsrsasign`, () => {
   const source = readFileSync(resolve(root, 'urypos/src/stores/utils/PrintWithQz.js'));
   const blob = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex');
-  assert.equal(blob, 'e2fda90a4c911f09ba3ff32b195bedb39755cf3d');
+  assert.equal(blob, 'ba56045434e381f96fb86cfda5a8fcd373bb8b0f');
   assert.match(declared, /^\d+\.\d+\.\d+$/);
   assert.equal(localRequire('jsrsasign/package.json').version, declared);
   const marker = 'qz.security.setSignaturePromise(';
