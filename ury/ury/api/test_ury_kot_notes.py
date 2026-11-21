@@ -220,7 +220,9 @@ class TestKOTNoteDiff(OrderingCases, TestCase):
         key = 'ref:Fish:seat'
         line = Row(item='Fish', comments='A', reservation_line_key=key, quantity=1)
         history = [('A-old', 'Kitchen', 'New Order', ''), ('A-void', 'Kitchen', 'Partially cancelled', 'A-old'),
-                   ('A-current', 'Kitchen', 'Order Modified', ''), ('A-other', 'Bar', 'Order Modified', '')]
+                   ('A-current', 'Kitchen', 'Order Modified', ''), ('A-spent', 'Kitchen', 'Order Modified', ''),
+                   ('A-spent-void', 'Kitchen', 'Partially cancelled', 'A-spent'),
+                   ('A-other', 'Bar', 'Order Modified', '')]
         for name, station, kind, original in history:
             self.historical_tickets[name] = Row(name=name, production=station, type=kind, docstatus=1,
                 original_kot=original, kot_items=[line if not original else Row(**vars(line), cancelled_qty=1)])
@@ -340,7 +342,7 @@ class TestStaffKOTNotes(OrderingCases, TestCase):
 
     def test_staff_sync_preserves_existing_note_in_the_kot_baseline(self):
         self.seed("no onions")
-        with patch.object(self.order, "kot_execute", wraps=self.kot.kot_execute) as execute:
+        with patch.object(self.order, "kot_execute", wraps=self.kot._execute_kot) as execute:
             self.order.sync_order(
                 items=[{"item": "Fish", "item_name": "Fish", "qty": 1, "comment": "no onions"}],
                 cashier=None, owner=None, mode_of_payment="Cash", customer="Walk-in", no_of_pax=1,
@@ -400,7 +402,7 @@ class TestSentNotePermissions(OrderingCases, TestCase):
 
     def assert_denied_without_mutation(self, items):
         before = self.invoice_state()
-        with patch.object(self.order, "kot_execute", wraps=self.kot.kot_execute) as execute:
+        with patch.object(self.order, "kot_execute", wraps=self.kot._execute_kot) as execute:
             with self.assertRaisesRegex(PermissionError, "not permitted to reduce or remove items"):
                 self.send(items)
             execute.assert_not_called()
@@ -415,7 +417,7 @@ class TestSentNotePermissions(OrderingCases, TestCase):
         self.pos_profile.ury_enable_hold_fire = 0
         self.invoice.invoice_created = 0
         before = self.invoice_state()
-        with patch.object(self.order, "kot_execute", wraps=self.kot.kot_execute) as execute:
+        with patch.object(self.order, "kot_execute", wraps=self.kot._execute_kot) as execute:
             with self.assertRaisesRegex(ValueError, "line"):
                 self.send(items, **kwargs)
             execute.assert_not_called()
