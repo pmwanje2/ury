@@ -114,3 +114,14 @@ it("clears the POS worker caches as well as web storage before reloading", async
     expect(remove.mock.calls).toEqual([['ury-pos-shell']]);
   } finally { vi.unstubAllGlobals(); }
 });
+
+it('keeps the management session visible and allows retry after a refused logout', async () => {
+  cleanup();
+  const { logout } = await import('@ury/core');
+  vi.mocked(logout).mockResolvedValueOnce(false);
+  render(<BrowserRouter><Header /></BrowserRouter>);
+  await userEvent.click(screen.getByRole('button', {name: 'Admin User'}));
+  await userEvent.click(screen.getByRole('button', {name: 'Logout'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Failed to logout');
+  expect(screen.getByRole('button', {name: 'Logout'})).toBeEnabled();
+});
