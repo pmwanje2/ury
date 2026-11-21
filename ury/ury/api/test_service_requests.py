@@ -128,7 +128,14 @@ class TestListOpenServiceRequests(FrappeTestCase):
         self.assertEqual(len(result), 1)
 
 
-class TestAcknowledgeServiceRequest(FrappeTestCase):
+class _CaptainServiceRequestCase(FrappeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.session = self.enterContext(patch.object(frappe, "session", frappe._dict(user="Captain")))
+        self.enterContext(patch.object(frappe, "get_roles", return_value=["URY Captain"]))
+
+
+class TestAcknowledgeServiceRequest(_CaptainServiceRequestCase):
     """Tests for acknowledge_service_request() endpoint."""
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
@@ -198,20 +205,30 @@ class TestAcknowledgeServiceRequest(FrappeTestCase):
         self.assertEqual(result["status"], "Acknowledged")
         mock_doc.save.assert_called_once()
 
+    @patch.object(frappe, "has_permission", return_value=True)
+    @patch.object(frappe, "get_doc")
+    def test_cannot_acknowledge_table_without_branch(self, mock_get_doc, _mock_has_perm):
+        req = mock_get_doc.return_value
+        req.table = "Unassigned Table"
+        req.status = "Open"
+        with self.assertRaisesRegex(frappe.PermissionError, "^URY_SERVICE_REQUEST_OTHER_BRANCH$"):
+            acknowledge_service_request("SR-001")
+        self.assertEqual(req.status, "Open")
+        req.save.assert_not_called()
 
-class TestResolveServiceRequest(FrappeTestCase):
+
+class TestResolveServiceRequest(_CaptainServiceRequestCase):
     """Tests for resolve_service_request() endpoint."""
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_changes_status_to_resolved(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_changes_status_to_resolved(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should change request status to 'Resolved' and save."""
         resolved_time = "2026-08-19 14:45:30"
         mock_now.return_value = resolved_time
-        mock_session.user = "Captain John"
+        self.session.user = "Captain John"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -227,15 +244,14 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_doc.save.assert_called_once_with()
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_sets_resolved_at_timestamp(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_sets_resolved_at_timestamp(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should set resolved_at to current datetime."""
         resolved_time = "2026-08-19 14:45:30"
         mock_now.return_value = resolved_time
-        mock_session.user = "Captain John"
+        self.session.user = "Captain John"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -248,14 +264,13 @@ class TestResolveServiceRequest(FrappeTestCase):
         self.assertEqual(mock_doc.resolved_at, resolved_time)
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_sets_resolved_by_current_user(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_sets_resolved_by_current_user(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should set resolved_by to the current authenticated user."""
         mock_now.return_value = "2026-08-19 14:45:30"
-        mock_session.user = "captain@ury.localhost"
+        self.session.user = "captain@ury.localhost"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -268,14 +283,13 @@ class TestResolveServiceRequest(FrappeTestCase):
         self.assertEqual(mock_doc.resolved_by, "captain@ury.localhost")
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_returns_updated_status(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_returns_updated_status(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should return the updated request with Resolved status."""
         mock_now.return_value = "2026-08-19 14:45:30"
-        mock_session.user = "Captain Jane"
+        self.session.user = "Captain Jane"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -289,14 +303,13 @@ class TestResolveServiceRequest(FrappeTestCase):
         self.assertEqual(result["status"], "Resolved")
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_saves_after_permission_check_passes(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_saves_after_permission_check_passes(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should call save() once the explicit has_permission check passes."""
         mock_now.return_value = "2026-08-19 14:45:30"
-        mock_session.user = "Captain"
+        self.session.user = "Captain"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -310,14 +323,13 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_doc.save.assert_called_once_with()
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_handles_resolving_acknowledged_request(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_handles_resolving_acknowledged_request(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should handle resolving an acknowledged request."""
         mock_now.return_value = "2026-08-19 14:50:00"
-        mock_session.user = "Captain"
+        self.session.user = "Captain"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -333,17 +345,16 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_doc.save.assert_called_once()
 
     @patch("ury.ury.api.service_requests.frappe.has_permission")
-    @patch("ury.ury.api.service_requests.frappe.session")
     @patch("ury.ury.api.service_requests.frappe.get_doc")
     @patch("ury.ury.api.service_requests.now_datetime")
-    def test_handles_resolving_already_resolved_request(self, mock_now, mock_get_doc, mock_session, mock_has_perm):
+    def test_handles_resolving_already_resolved_request(self, mock_now, mock_get_doc, mock_has_perm):
         mock_has_perm.return_value = True
         """Should handle re-resolving an already-resolved request (updates timestamp and user)."""
         first_time = "2026-08-19 14:30:00"
         second_time = "2026-08-19 14:45:30"
 
         mock_now.return_value = second_time
-        mock_session.user = "Captain Jane"
+        self.session.user = "Captain Jane"
 
         mock_doc = MagicMock()
         mock_doc.table = None  # no table: branch check exempts Administrator (#102)
@@ -359,6 +370,18 @@ class TestResolveServiceRequest(FrappeTestCase):
         self.assertEqual(mock_doc.resolved_at, second_time)
         self.assertEqual(mock_doc.resolved_by, "Captain Jane")
         mock_doc.save.assert_called_once()
+
+    @patch.object(frappe, "has_permission", return_value=True)
+    @patch.object(frappe, "get_doc")
+    def test_cannot_resolve_table_in_another_branch(self, mock_get_doc, _mock_has_perm):
+        self.session.user = "Other Branch Captain"
+        req = mock_get_doc.return_value
+        req.table = "Service Table A"
+        req.status = "Acknowledged"
+        with self.assertRaisesRegex(frappe.PermissionError, "^URY_SERVICE_REQUEST_OTHER_BRANCH$"):
+            resolve_service_request("SR-001")
+        self.assertEqual(req.status, "Acknowledged")
+        req.save.assert_not_called()
 
 
 class TestServiceRequestRealPermissionBoundary(FrappeTestCase):
