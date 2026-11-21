@@ -51,7 +51,7 @@ export const RoleGuard: React.FC<RoleGuardProps> = ({ children }) => {
           <div className="p-6 text-center">
             <h2 className="text-lg font-semibold text-foreground mb-2">{__('Access Denied')}</h2>
             <p className="text-muted-foreground">
-              {__('You need the POS Manager role to access this section.')}
+              {__('You need the Restaurant POS Manager role to access this section.')}
             </p>
           </div>
         </Card>

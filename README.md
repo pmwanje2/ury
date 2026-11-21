@@ -70,9 +70,11 @@ it does not change guest pages. A verified QR link can select the Self Ordering
 Profile’s optional Guest Display Name and its linked restaurant’s image.
 
 The POS uses supported colours, font, size and corner settings from the active
-Website Theme. No theme scripts or custom stylesheets are embedded. Receipt
-identity comes from the native invoice/default Letter Head and Print Settings,
-not the staff logo. POS and guest footers retain URY attribution. Set the
+Website Theme. No theme scripts or custom stylesheets are embedded. The merged
+POS invoice shows the invoice’s restaurant and branch. React QZ and register
+browser printing (including classic POS in the browser) suppress the letterhead.
+Classic QZ leaves letterhead selection to Frappe; network printing forwards
+`no_letterhead`, defaulting to `0`. POS and guest footers retain URY attribution. Set the
 site-config key `ury_source_url` to the public source for the deployed release;
 when unset it links to the upstream repository.
 

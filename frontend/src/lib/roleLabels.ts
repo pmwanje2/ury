@@ -1,10 +1,10 @@
 import { __ } from '../i18n';
 
 const labels: Record<string, string> = {
-  'URY Admin': 'POS Admin',
-  'URY Manager': 'POS Manager',
-  'URY Cashier': 'POS Cashier',
-  'URY Captain': 'POS Captain',
+  'URY Admin': 'Restaurant POS Admin',
+  'URY Manager': 'Restaurant POS Manager',
+  'URY Cashier': 'Restaurant POS Cashier',
+  'URY Captain': 'Restaurant POS Captain',
   'URY Waiter': 'POS Waiter',
   'URY Kitchen User': 'Kitchen Display User',
 };

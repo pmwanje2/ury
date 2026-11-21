@@ -8,9 +8,10 @@ import {
   PackageSearch,
   ArrowRight,
 } from 'lucide-react';
-import { Badge, Card, CardContent, KpiStrip, AttentionFeed, cn } from '@ury/ui';
+import { Badge, Card, CardContent, KpiStrip, messageToPlainText, AttentionFeed, cn } from '@ury/ui';
 import type { AttentionItemProps } from '@ury/ui';
 import { useState, useEffect } from 'react';
+import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency } from '@ury/core';
 import { getOpenPosOpeningEntries, type OpenPosOpeningEntry } from '../lib/pos-closing-api';
@@ -136,6 +137,11 @@ function PanelState({ kind, children }: { kind: 'loading' | 'error' | 'empty'; c
 }
 
 export default function Dashboard() {
+  const recipient = useRootStore((state) => state.user?.name);
+  return <DashboardContent key={recipient} recipient={recipient} />;
+}
+
+function DashboardContent({ recipient }: { recipient?: string }) {
   const { posProfile } = usePOSStore();
   const [stats, setStats] = useState<any[]>([]);
   const [serviceLine, setServiceLine] = useState<any[]>([]);
@@ -295,12 +301,14 @@ export default function Dashboard() {
       }
 
       // Fetch recent notifications
+      if (!recipient || recipient === 'Guest') return;
       setNotificationsLoading(true);
       setNotificationsError(null);
       try {
         const params = new URLSearchParams({
           doctype: 'Notification Log',
-          fields: JSON.stringify(['name', 'subject', 'creation']),
+          filters: JSON.stringify({ for_user: recipient }),
+          fields: JSON.stringify(['name', 'subject', 'email_content', 'creation']),
           order_by: 'creation desc',
           limit_page_length: '10'
         });
@@ -311,7 +319,8 @@ export default function Dashboard() {
         const notificationsData = await notificationsRes.json();
         const processedNotifications = (notificationsData.message || []).map((notif: any) => ({
           id: notif.name,
-          message: tNotification(notif.subject),
+          message: tNotification(messageToPlainText(notif.subject)),
+          body: messageToPlainText(notif.email_content),
           timestamp: getRelativeTime(notif.creation)
         }));
         setNotifications(processedNotifications);
@@ -324,7 +333,7 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
-  }, [posProfile?.branch]);
+  }, [posProfile?.branch, recipient]);
 
   // Fetch open sessions
   useEffect(() => {
@@ -707,6 +716,7 @@ export default function Dashboard() {
                           {notification.message.length > 96 ? `${notification.message.slice(0, 96).trimEnd()}…` : notification.message}
                         </summary>
                         <p className="py-2">{notification.message}</p>
+                        {notification.body && <p className="whitespace-pre-wrap">{notification.body}</p>}
                       </details>
                       <span className="shrink-0 whitespace-nowrap text-xs text-gray-400">
                         {notification.timestamp}
