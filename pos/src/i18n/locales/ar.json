@@ -32,7 +32,8 @@
     "retry": "إعادة المحاولة",
     "today": "اليوم",
     "refresh": "تحديث",
-    "dismiss": "إخفاء"
+    "dismiss": "إخفاء",
+    "reserved": "محجوز"
   },
   "header": {
     "search_placeholder_default": "ابحث عن الطلبات، عناصر القائمة، أو العملاء...",
