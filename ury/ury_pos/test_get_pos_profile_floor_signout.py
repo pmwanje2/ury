@@ -1,4 +1,5 @@
-"""Site-less contracts for opt-in floor-tablet sign-out settings (theme T4, fork #29 U1, #32 U6)."""
+"""Site-less getPosProfile contracts: opt-in floor-tablet sign-out settings (theme T4, fork #29 U1, #32 U6)
+and the payment-mode account map (fork #72, 2c925938 and ac63706d)."""
 
 import json
 import unittest
@@ -44,6 +45,23 @@ class TestFloorSignoutProfile(unittest.TestCase):
             transfer_role_permissions=[],
         )
         self.framework.get_doc.return_value = self.profile
+
+    def test_profile_without_payment_rows_returns_empty_account_map(self):
+        # A site-less double (and a profile read without child rows) has no
+        # payments list; the till's mode-to-account map must then be empty
+        # instead of raising.
+        result = api.getPosProfile()
+        self.assertEqual(result.get("payment_mode_accounts"), {})
+
+    def test_payment_mode_accounts_use_the_profile_company(self):
+        self.profile.payments = [frappe._dict(mode_of_payment="Cash"), frappe._dict(mode_of_payment="Card")]
+        accounts = {"Cash": "Cash - TC", "Card": "Card Clearing - TC"}
+        self.framework.db.get_value.side_effect = lambda doctype, filters, field: (
+            accounts[filters["parent"]]
+            if doctype == "Mode of Payment Account" and filters.get("company") == self.profile.company
+            and field == "default_account" else None
+        )
+        self.assertEqual(api.getPosProfile().get("payment_mode_accounts"), accounts)
 
     def test_returns_configured_floor_settings(self):
         self.profile.custom_floor_idle_signout_seconds = 60

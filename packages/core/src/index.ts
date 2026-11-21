@@ -18,7 +18,16 @@ export type { ReturnContext, BuildDeskUrlOptions } from './frappe/deskLink';
 export type { POSCapabilities } from './frappe/roles';
 export type { User, PosProfileCombined } from './types';
 export { isPrintStatusDisabled } from './types';
-export { storage } from './storage';
+export {
+  storage,
+  purgeOfflineSession,
+  tellOfflineWorker,
+  getUserSessionStorageKey,
+  isUryPosRegistration,
+  URY_POS_SCOPE,
+  URY_POS_CACHE_PREFIX,
+} from './storage';
+export { gatewayStatusOf, isGatewayUnreachableStatus } from './gateway-status';
 export {
   formatCurrency,
   formatCompactCurrency,

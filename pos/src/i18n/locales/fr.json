@@ -676,5 +676,13 @@
     "title": "Articles non envoyés",
     "description": "Vous avez des articles non envoyés. Partir sans les envoyer ?",
     "leave": "Partir"
+  },
+  "offline": {
+    "kot": "Ticket de cuisine",
+    "provisional": "Addition provisoire — ce n’est pas un reçu fiscal",
+    "client_order": "Commande client",
+    "captured": "Saisie",
+    "no_fdn": "Saisie hors ligne ; aucun numéro fiscal.",
+    "refused": "{{action}} est refusé hors ligne. Reconnectez-vous au serveur."
   }
 }

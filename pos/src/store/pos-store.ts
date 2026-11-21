@@ -10,6 +10,7 @@ import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
 import { getPaymentModes } from '../lib/payment-api';
+import { syncOfflineCapture } from '../pwa/register-offline';
 
 // Constants
 const MAX_QUANTITY = 99;
@@ -250,6 +251,14 @@ interface POSStore extends POSState {
   setShowVoluntaryClosing: (show: boolean) => void;
 }
 
+// Frappe's user_id cookie names the signed-in user; the worker serves cached reads only to them.
+const signedInUser = (): string | null => {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.split('; ').find((row) => row.startsWith('user_id='));
+  const user = match ? decodeURIComponent(match.slice('user_id='.length)) : '';
+  return user && user !== 'Guest' ? user : null;
+};
+
 const generateUniqueId = (item: OrderItem): string => {
   const variantId = item.selectedVariant?.id || 'default';
   const addonIds = item.selectedAddons?.map(addon => addon.id).sort().join('-') || 'no-addons';
@@ -358,6 +367,12 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         set({ profileLoading: true, error: null });
       }
       const combinedProfile = await getCombinedPosProfile();
+      // The loaded till's ury_offline_capture decides the /pos worker; off unregisters it.
+      try {
+        await syncOfflineCapture(combinedProfile as { ury_offline_capture?: unknown }, signedInUser());
+      } catch (offlineError) {
+        console.error('Offline capture setup failed', offlineError);
+      }
 
       sessionStorage.setItem('posProfile', JSON.stringify(combinedProfile));
       set({
