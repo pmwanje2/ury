@@ -859,6 +859,7 @@
     "acknowledged": "Acknowledged"
   },
   "floor_pin": {
+    "offline_notice": "Offline: the connection is unavailable. Sign in again before taking orders.",
     "title": "Staff sign-in",
     "pin_prompt": "Enter your 4-digit PIN",
     "clear": "Clear",

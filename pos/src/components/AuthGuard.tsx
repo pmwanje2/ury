@@ -41,7 +41,7 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
 
   // A surviving cookie on a paired tablet must not admit the previous waiter.
   const coldBoot = Boolean(
-    floorPadActive && user && posProfile
+    floorPadActive && user && !user.provisional && posProfile
       && !hasFloorSessionMarker() && !logoutFailed && !isStaySignedIn(user, posProfile),
   );
 
@@ -84,8 +84,8 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     );
   }
 
-  if (floorPadActive && (!user || coldBoot || isColdBootSigningOut || logoutFailed)) {
-    return <FloorPinPad />;
+  if (floorPadActive && (!user || user.provisional || coldBoot || isColdBootSigningOut || logoutFailed)) {
+    return <FloorPinPad offline={user?.provisional} />;
   }
 
   if (!user) {

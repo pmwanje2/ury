@@ -27,7 +27,7 @@ function signedIn() {
   window.location.reload();
 }
 
-export default function FloorPinPad() {
+export default function FloorPinPad({ offline = false }: { offline?: boolean }) {
   const [pin, setPin] = useState('');
   const pinRef = useRef('');
   const [usernameForm, setUsernameForm] = useState(false);
@@ -95,6 +95,7 @@ export default function FloorPinPad() {
         <div className="mb-8 flex justify-center">
           <img src="/assets/ury/pos/ury_pos.png" alt="URY POS" className="h-8 w-auto" />
         </div>
+        {offline && <p role="status" className="mb-4 text-center">{t('floor_pin.offline_notice')}</p>}
         {!usernameForm ? (
           <div className="space-y-6 text-center">
             <h1 className="text-2xl font-semibold text-gray-900">{t('floor_pin.title')}</h1>
