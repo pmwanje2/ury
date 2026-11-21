@@ -3187,7 +3187,9 @@ def _enforce_on_account(invoice, profile, customer_disabled, target=None):
     limit = credit_limit(customer, invoice.company)
     if limit <= 0:
         _offline_refusal('URY-CREDIT-003', _('This customer has no positive credit limit for the company.'))
-    if balance(customer, invoice.company, invoice.name, current=True) + proposed > limit:
+    projected = balance(customer, invoice.company, invoice.name, current=True) + proposed
+    precision = invoice.precision("base_grand_total")
+    if flt(projected, precision) > flt(limit, precision):
         _offline_refusal('URY-CREDIT-004', _('The charge exceeds the available credit.'))
     return True
 
@@ -3327,6 +3329,9 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}
 
+    if target:
+        # Saving the primary runs on_update, which saves a separate copy of the partner.
+        target.reload()
     _submit_and_release_tables(invoice, pos_prof, customer_disabled, target)
     return {"name": invoice.name, "status": "Submitted"}
 

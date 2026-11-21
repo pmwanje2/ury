@@ -91,7 +91,12 @@ class HoldFireTests(OrderingCases, TestCase):
         self.invoice.selling_price_list = "Resolved Menu Price List"
         self.invoice.taxes_and_charges = "Resolved Menu Tax"
         self.invoice.reload.side_effect = self.reload_stored_pricing
-        self.order.make_invoice("Walk-in", [], "untrusted", "POS A", "untrusted", invoice=self.invoice.name)
+        self.invoice.rounded_total = self.invoice.grand_total
+        self.invoice.precision.return_value = 2
+        self.invoice.payments = []
+        self.invoice.append.side_effect = lambda field, data: getattr(self.invoice, field).append(Row(**data))
+        tender = [{"mode_of_payment": "Cash", "amount": self.invoice.grand_total}]
+        self.order.make_invoice("Walk-in", tender, "untrusted", "POS A", "untrusted", invoice=self.invoice.name)
         self.assertEqual(self.invoice.taxes_and_charges, "Resolved Menu Tax")
 
     def test_hold_and_fire_default_off_refuses_hold(self):

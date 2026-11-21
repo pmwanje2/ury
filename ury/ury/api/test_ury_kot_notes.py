@@ -113,7 +113,7 @@ class OrderingCases:
         raise exception(message)
 
     @staticmethod
-    def get_value(doctype, filters, field):
+    def get_value(doctype, filters, field, *, for_update=False):
         if doctype == "Workflow":
             return None  # the fixture site has no Item Price release workflow
         return {"ury_offline_capture": 1, "item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
@@ -622,10 +622,10 @@ class TestGuestItemName(OrderingCases, TestCase):
 
     ITEM_NAMES = {"Fish": "Grilled tilapia", "Tea": "African tea"}
 
-    def get_value(self, doctype, filters, field):
+    def get_value(self, doctype, filters, field, *, for_update=False):
         if doctype == "Item" and field == "item_name":
             return self.ITEM_NAMES.get(filters)
-        return super().get_value(doctype, filters, field)
+        return super().get_value(doctype, filters, field, for_update=for_update)
 
     def test_guest_line_saves_the_item_name_not_the_code(self):
         self.add(code="Fish")
