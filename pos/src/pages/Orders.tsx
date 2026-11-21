@@ -103,7 +103,7 @@ export default function Orders() {
 
 function OwnerOrders({ owner }: { owner: string | null }) {
   const { 
-    orders: list, ordersOwner, ordersOffline,
+    orders: list, ordersOwner, ordersBranch, ordersOffline,
     orderLoading,
     error,
     selectedStatus,
@@ -507,6 +507,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     await selectOrder(inList ?? mapSplitGroupInvoiceToPOSInvoice(sibling));
   }
 
+  async function selectBillRequest(invoice: POSInvoice) {
+    // The store can change before React unmounts the previous branch’s strip.
+    const live = useRootStore.getState();
+    if (!ordersBranch || live.ordersBranch !== ordersBranch || live.ordersOwner !== owner) return false;
+    return selectOrder(invoice);
+  }
+
   async function openNotificationCheck(kotName: string, isCurrentSession: () => boolean) {
     const kot = await call.get<{ message: { invoice?: string } }>('frappe.client.get', { doctype: 'URY KOT', name: kotName });
     if (!isCurrentSession() || !kot.message?.invoice) return false;
@@ -535,7 +542,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       <div className="flex min-w-0 flex-none flex-col lg:min-h-0 lg:flex-1">
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-4 bg-gray-50 p-4 xl:grid-cols-[minmax(0,1fr)_14rem] xl:grid-rows-1">
           <div className="min-w-0 overflow-y-auto">
-          <BillRequestStrip selectOrder={selectOrder} />
+          <BillRequestStrip ordersBranch={sameOwner ? ordersBranch : null} selectOrder={selectBillRequest} />
           {error ? (
             <div className="p-4 text-center">
               <p className="font-semibold text-red-600">{t('orders.failed_to_load')}</p>

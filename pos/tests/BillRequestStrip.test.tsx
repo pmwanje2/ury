@@ -61,7 +61,7 @@ afterEach(async () => {
   expect(call.post).not.toHaveBeenCalled();
   vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals();
 });
-async function render() { await act(async () => root.render(<Strip orders={queue} selectOrder={select} />)); }
+async function render() { await act(async () => root.render(<Strip ordersBranch="Branch A" selectOrder={select} />)); }
 async function click(label: string) {
   const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes(label));
   expect(button, `Action ${label} must be available`).toBeDefined();

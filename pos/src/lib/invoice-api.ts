@@ -89,8 +89,8 @@ interface GetPOSInvoiceItemsResponse {
   message: [POSInvoiceItem[], POSInvoiceTax[]];
 }
 
-const outstandingFields = [
-  'name', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
+export const outstandingFields = [
+  'docstatus', 'name', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
   'custom_merged_tables', 'cashier', 'waiter', 'net_total', 'posting_time', 'total_taxes_and_charges',
   'customer', 'customer_name', 'status', 'mobile_number', 'posting_date', 'rounded_total', 'order_type',
   'custom_split_group', 'custom_split_from', 'custom_guest_label', 'custom_merged_pos_invoice',

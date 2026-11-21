@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSessionOwner } from '../lib/use-session-owner';
 import { call, getSessionUser } from '@ury/core';
 import { Button } from '@ury/ui';
-import { getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, type POSInvoice } from '../lib/invoice-api';
+import { getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, outstandingFields, type POSInvoice } from '../lib/invoice-api';
 import { t } from '../i18n';
 
 interface BillRequest {
@@ -13,26 +13,23 @@ interface BillRequest {
   requested_at: string;
 }
 
-const invoiceFields = ['name', 'restaurant_table', 'status', 'docstatus', 'invoice_printed',
-  'grand_total', 'rounded_total', 'net_total', 'total_taxes_and_charges',
-  'customer', 'mobile_number', 'cashier', 'waiter', 'order_type', 'posting_date', 'posting_time'];
-
 function isOpen(invoice: POSInvoice & { docstatus?: number }) {
   return (invoice.status === 'Draft' || invoice.status === 'Unbilled') &&
     (invoice.docstatus === undefined || invoice.docstatus === 0);
 }
 
 interface Props {
+  ordersBranch: string | null;
   selectOrder: (invoice: POSInvoice) => Promise<boolean>;
 }
 
 export default function BillRequestStrip(props: Props) {
   const owner = useSessionOwner();
   if (!owner || owner === 'Guest') return null;
-  return <OwnerRequests key={owner} {...props} owner={owner} />;
+  return <OwnerRequests key={JSON.stringify([owner, props.ordersBranch])} {...props} owner={owner} />;
 }
 
-function OwnerRequests({ owner, selectOrder }: Props & { owner: string }) {
+function OwnerRequests({ owner, ordersBranch, selectOrder }: Props & { owner: string }) {
   const [requests, setRequests] = useState<BillRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [unavailable, setUnavailable] = useState(false);
@@ -62,9 +59,9 @@ function OwnerRequests({ owner, selectOrder }: Props & { owner: string }) {
       // Use the same session branch as getPosInvoice, never a caller-supplied branch.
       const till = await call.get<{ message: string }>('ury.ury_pos.api.getBranch');
       if (!current() || id !== refreshId.current) return;
+      if (!till.message || till.message !== ordersBranch) throw Error('Till branch unavailable');
       confirmedBranch = till.message;
       if (branch.current !== confirmedBranch) clearRows();
-      if (!till.message) throw Error('Till branch unavailable');
       const tables = await call.get<{ message: Array<{ name: string }> }>('frappe.client.get_list', {
         doctype: 'URY Table', filters: { branch: till.message }, fields: ['name'], limit_page_length: 0,
       });
@@ -96,7 +93,7 @@ function OwnerRequests({ owner, selectOrder }: Props & { owner: string }) {
         setRefreshing(false);
       }
     }
-  }, [current, clearRows]);
+  }, [current, clearRows, ordersBranch]);
 
   useEffect(() => {
     active.current = true;
@@ -122,7 +119,7 @@ function OwnerRequests({ owner, selectOrder }: Props & { owner: string }) {
       if (request.invoice) {
         const result = await call.get<{ message: POSInvoice[] }>('frappe.client.get_list', {
           doctype: 'POS Invoice', filters: { name: request.invoice, branch: scope, status: 'Draft', docstatus: 0 },
-          fields: invoiceFields, limit_page_length: 1,
+          fields: outstandingFields, limit_page_length: 1,
         });
         if (!valid()) return;
         const exact = result.message.find(inv => inv.name === request.invoice && isOpen(inv));
@@ -140,8 +137,8 @@ function OwnerRequests({ owner, selectOrder }: Props & { owner: string }) {
         // The visible queue is paginated; native permission-filtered reads find all table checks.
         const response = await call.get<{ message: POSInvoice[] }>('frappe.client.get_list', {
           doctype: 'POS Invoice',
-          filters: { restaurant_table: request.table, branch: branch.current, status: 'Draft', docstatus: 0 },
-          fields: invoiceFields,
+          filters: { restaurant_table: request.table, branch: scope, status: 'Draft', docstatus: 0 },
+          fields: outstandingFields,
           limit_page_length: 0,
         });
         if (!valid()) return;
