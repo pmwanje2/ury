@@ -73,6 +73,8 @@ export default function CaptainOrder() {
     posProfile,
     paymentModes,
     orderComment,
+    guestLabel,
+    setGuestLabel,
     noOfPax,
     setNoOfPax,
     lastModifiedTime,
@@ -253,6 +255,8 @@ export default function CaptainOrder() {
         invoice: isUpdatingOrder ? orderId : null,
         waiter: user.name,
         comments: orderComment || undefined,
+        // an existing order always sends its label, so clearing the box clears it
+        ...(guestLabel?.trim() || isUpdatingOrder ? { guest_label: guestLabel?.trim() ?? '' } : {}),
       };
 
       const result = await syncOrder(orderData);
@@ -464,6 +468,20 @@ export default function CaptainOrder() {
         // here so a Captain can satisfy it before hitting the send-time
         // validation error. Reused as-is from the Cashier OrderPanel.
         <CustomerSelect disabled={isInteractionDisabled} />
+      )}
+
+      {canModify && (
+        <input
+          type="text"
+          name="guest_label"
+          maxLength={40}
+          value={guestLabel ?? ''}
+          onChange={(e) => setGuestLabel(e.target.value)}
+          placeholder={t('cart.guest_label')}
+          aria-label={t('cart.guest_label')}
+          className="w-full rounded-lg border border-border bg-white px-3 py-3 text-sm"
+          disabled={isInteractionDisabled}
+        />
       )}
 
       {!canModify && (

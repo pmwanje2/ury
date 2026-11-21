@@ -1,7 +1,8 @@
 import { formatCurrency } from '@ury/core'
-import type { CustomerOrder, MenuItem, OrderingContext } from '../../lib/api'
-
-type CartEntry = { item: MenuItem; qty: number }
+import { t } from '../../i18n'
+import type { CartEntry } from '../../hooks/useOrderingSession'
+import type { CustomerOrder, MenuItem, OrderingContext, PaymentRequestResult } from '../../lib/api'
+import { paymentNoticeFor } from '../../lib/payment-outcome'
 
 interface CartPanelProps {
   context: OrderingContext | null
@@ -12,8 +13,11 @@ interface CartPanelProps {
   submitting: boolean
   billRequested: boolean
   payingOnline: boolean
-  onIncrement: (item: MenuItem) => void
-  onDecrement: (itemCode: string) => void
+  paymentRequest?: PaymentRequestResult | null
+  /** Called with the line's note so + adds to the same noted line. */
+  onIncrement: (item: MenuItem, options?: { comment?: string }) => void
+  /** Called with the line's cart key (the item code for a plain line). */
+  onDecrement: (lineKey: string) => void
   onSubmit: () => void
   onRequestBill: () => void
   onPayOnline: () => void
@@ -34,6 +38,7 @@ function CartPanel({
   submitting,
   billRequested,
   payingOnline,
+  paymentRequest,
   onIncrement,
   onDecrement,
   onSubmit,
@@ -41,12 +46,13 @@ function CartPanel({
   onPayOnline,
   className,
 }: CartPanelProps) {
+  const paymentNotice = paymentNoticeFor(paymentRequest)
   return (
     <aside className={className}>
       <div className="flex-1 overflow-y-auto">
         {order && order.items.length > 0 && (
           <section className="mb-4 rounded-lg border p-3">
-            <h2 className="mb-2 text-sm font-medium text-muted-foreground">Your order so far</h2>
+            <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('order.so_far')}</h2>
             <ul className="space-y-1 text-sm">
               {order.items.map((row, idx) => (
                 <li key={`${row.item_code}-${idx}`} className="flex justify-between">
@@ -58,34 +64,39 @@ function CartPanel({
               ))}
             </ul>
             <div className="mt-2 flex justify-between border-t pt-2 text-sm font-semibold">
-              <span>Total</span>
+              <span>{t('order.total')}</span>
               <span>{order.grand_total}</span>
             </div>
           </section>
         )}
 
         <section>
-          <h2 className="mb-2 text-sm font-medium text-muted-foreground">Cart</h2>
+          <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('cart.title')}</h2>
           {cartItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Tap a menu item to add it to your cart.</p>
+            <p className="text-sm text-muted-foreground">{t('cart.empty')}</p>
           ) : (
             <ul className="space-y-2 text-sm">
               {cartItems.map((entry) => (
-                <li key={entry.item.item} className="flex items-center justify-between gap-2">
-                  <span className="flex-1">{entry.item.item_name}</span>
+                <li key={entry.key ?? entry.item.item} className="flex items-center justify-between gap-2">
+                  <span className="flex-1">
+                    {entry.item.item_name}
+                    {context?.capabilities.item_notes_enabled && entry.comment && (
+                      <span className="block text-xs text-muted-foreground">{t('cart.note', { note: entry.comment })}</span>
+                    )}
+                  </span>
                   <span className="flex items-center gap-2">
                     <button
-                      onClick={() => onDecrement(entry.item.item)}
+                      onClick={() => onDecrement(entry.key ?? entry.item.item)}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
-                      aria-label={`Remove one ${entry.item.item_name}`}
+                      aria-label={t('cart.remove_one', { name: entry.item.item_name })}
                     >
                       −
                     </button>
                     <span className="w-4 text-center">{entry.qty}</span>
                     <button
-                      onClick={() => onIncrement(entry.item)}
+                      onClick={() => onIncrement(entry.item, { comment: entry.comment })}
                       className="h-7 w-7 rounded-full border text-sm leading-none"
-                      aria-label={`Add one more ${entry.item.item_name}`}
+                      aria-label={t('cart.add_one', { name: entry.item.item_name })}
                     >
                       +
                     </button>
@@ -99,9 +110,7 @@ function CartPanel({
 
       <div className="border-t pt-3">
         <div className="mb-3 flex items-center justify-between text-sm font-semibold">
-          <span>
-            {cartCount} item{cartCount !== 1 ? 's' : ''}
-          </span>
+          <span>{t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount })}</span>
           <span className="tabular-nums">{formatCurrency(cartTotal)}</span>
         </div>
         <button
@@ -109,7 +118,7 @@ function CartPanel({
           disabled={submitting || cartCount === 0}
           className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground disabled:opacity-50"
         >
-          {submitting ? 'Placing order…' : 'Place Order'}
+          {submitting ? t('order.placing') : t('order.place')}
         </button>
         {context?.capabilities.customer_payment_enabled && order && !order.billed && (
           <button
@@ -117,8 +126,13 @@ function CartPanel({
             disabled={payingOnline}
             onClick={onPayOnline}
           >
-            {payingOnline ? 'Starting payment…' : 'Pay Online'}
+            {payingOnline ? t('payment.starting') : t('payment.pay_online')}
           </button>
+        )}
+        {paymentNotice && (
+          <p role="status" className="mt-2 text-xs text-muted-foreground">
+            {paymentNotice}
+          </p>
         )}
         {context?.capabilities.request_bill_enabled && order && !order.billed && (
           <button
@@ -126,7 +140,7 @@ function CartPanel({
             disabled={billRequested}
             onClick={onRequestBill}
           >
-            {billRequested ? 'Bill requested — staff notified' : 'Request Bill'}
+            {billRequested ? t('bill.requested') : t('bill.request')}
           </button>
         )}
       </div>

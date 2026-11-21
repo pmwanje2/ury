@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
+import { MAX_NOTE_LENGTH } from '../../hooks/useOrderingSession'
 import { getCustomerProduct, type MenuItem, type ProductDetail as ProductDetailData, type ProductOption } from '../../lib/api'
+import { t } from '../../i18n'
+import { useGuestLanguage } from '../../components/LanguageSwitcher'
 
 export interface ProductDetailProps {
   /** Session token for the `get_customer_product` lookup. */
@@ -16,6 +19,14 @@ export interface ProductDetailProps {
   /** Called with the same options shape `useOrderingSession`'s `addToCart` accepts. */
   onAddToCart: (item: MenuItem, options: { comment?: string; variant?: string; addons?: string[] }) => void
   onBack: () => void
+  /**
+   * The guest menu. When given, an add-on is offered only if it is an
+   * enabled menu item, at the menu price billing will charge; an add-on
+   * without a known price cannot be selected.
+   */
+  menu?: MenuItem[]
+  /** Profile `item_notes_enabled`: offer a kitchen note for this line. */
+  itemNotesEnabled?: boolean
 }
 
 /**
@@ -25,18 +36,32 @@ export interface ProductDetailProps {
  * to cart. Purely presentational about navigation — callers wire `onBack`/
  * `onAddToCart` to whatever the hosting layout's navigation is.
  */
-function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: ProductDetailProps) {
+function ProductDetail({
+  session,
+  itemCode,
+  menuItem,
+  onAddToCart,
+  onBack,
+  menu,
+  itemNotesEnabled = false,
+}: ProductDetailProps) {
+  useGuestLanguage()
   const [loading, setLoading] = useState(true)
+  // null with failed=true shows the catalog sentence, translated each render.
   const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
   const [detail, setDetail] = useState<ProductDetailData | null>(null)
   const [qty, setQty] = useState(1)
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null)
   const [selectedAddons, setSelectedAddons] = useState<string[]>([])
+  const [note, setNote] = useState('')
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setFailed(false)
     setDetail(null)
     setQty(1)
     setSelectedVariant(null)
@@ -48,7 +73,8 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load this item. Please try again.')
+          setFailed(true)
+          setError(err instanceof Error ? err.message : null)
         }
       })
       .finally(() => {
@@ -58,7 +84,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
     return () => {
       cancelled = true
     }
-  }, [session, itemCode])
+  }, [session, itemCode, attempt])
 
   function toggleAddon(addonCode: string) {
     setSelectedAddons((prev) =>
@@ -67,10 +93,12 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
   }
 
   function handleAddToCart() {
+    const comment = itemNotesEnabled ? note.trim().slice(0, MAX_NOTE_LENGTH) : ''
     for (let i = 0; i < qty; i += 1) {
       onAddToCart(menuItem, {
         variant: selectedVariant ?? undefined,
         addons: selectedAddons.length > 0 ? selectedAddons : undefined,
+        ...(comment ? { comment } : {}),
       })
     }
     onBack()
@@ -79,9 +107,9 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
   if (loading) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
-        <div className="text-muted-foreground">Loading item...</div>
+        <div className="text-muted-foreground">{t('item.loading')}</div>
         <button onClick={onBack} className="text-sm underline">
-          Back
+          {t('nav.back')}
         </button>
       </div>
     )
@@ -90,21 +118,27 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
   if (error || !detail) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="text-destructive">{error ?? 'Item not found.'}</div>
+        <div className="text-destructive">{error ?? (failed ? t('item.load_error') : t('item.not_found'))}</div>
+        {failed && (
+          <button onClick={() => setAttempt((n) => n + 1)} className="rounded-full border px-4 py-2 text-sm font-medium">
+            {t('feedback.retry')}
+          </button>
+        )}
         <button onClick={onBack} className="rounded-full border px-4 py-2 text-sm font-medium">
-          Back to menu
+          {t('nav.back_to_menu')}
         </button>
       </div>
     )
   }
 
   const image = detail.image ?? menuItem.item_image
+  const addons = menu ? guestAddons(detail.addons, menu) : detail.addons
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="flex items-center gap-2 p-4">
         <button onClick={onBack} className="text-sm underline">
-          Back
+          {t('nav.back')}
         </button>
       </div>
 
@@ -120,7 +154,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
 
         {detail.variants.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold">Variants</div>
+            <div className="text-sm font-semibold">{t('item.variants')}</div>
             <div className="flex flex-col gap-2">
               {detail.variants.map((variant) => (
                 <OptionRow
@@ -136,15 +170,16 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           </div>
         )}
 
-        {detail.addons.length > 0 && (
+        {addons.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold">Add-ons</div>
+            <div className="text-sm font-semibold">{t('item.addons')}</div>
             <div className="flex flex-col gap-2">
-              {detail.addons.map((addon) => (
+              {addons.map((addon) => (
                 <OptionRow
                   key={addon.item_code}
                   option={addon}
                   selected={selectedAddons.includes(addon.item_code)}
+                  disabled={addon.rate === null}
                   onSelect={() => toggleAddon(addon.item_code)}
                 />
               ))}
@@ -152,11 +187,30 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           </div>
         )}
 
+        {itemNotesEnabled && (
+          <div className="flex flex-col gap-1">
+            <label htmlFor="guest-item-note" className="text-sm font-semibold">
+              {t('item.note_label')}
+            </label>
+            <textarea
+              id="guest-item-note"
+              maxLength={MAX_NOTE_LENGTH}
+              value={note}
+              onChange={(event) => setNote(event.target.value.slice(0, MAX_NOTE_LENGTH))}
+              placeholder={t('item.note_placeholder')}
+              className="min-h-20 w-full rounded-md border bg-background p-3 text-base"
+            />
+            <p className="text-right text-xs text-muted-foreground">
+              {note.length}/{MAX_NOTE_LENGTH}
+            </p>
+          </div>
+        )}
+
         <div className="flex items-center gap-4">
           <button
             onClick={() => setQty((q) => Math.max(1, q - 1))}
             className="h-9 w-9 rounded-full border font-semibold"
-            aria-label="Decrease quantity"
+            aria-label={t('item.decrease')}
           >
             -
           </button>
@@ -164,7 +218,7 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           <button
             onClick={() => setQty((q) => q + 1)}
             className="h-9 w-9 rounded-full border font-semibold"
-            aria-label="Increase quantity"
+            aria-label={t('item.increase')}
           >
             +
           </button>
@@ -174,30 +228,48 @@ function ProductDetail({ session, itemCode, menuItem, onAddToCart, onBack }: Pro
           onClick={handleAddToCart}
           className="mt-2 rounded-full bg-primary px-4 py-3 font-semibold text-primary-foreground"
         >
-          Add to cart
+          {t('item.add_to_cart')}
         </button>
       </div>
     </div>
   )
 }
 
+/**
+ * Add-ons as the guest menu prices them: off-menu or disabled add-ons are
+ * dropped, and the rate is the menu rate billing charges (null = unknown).
+ */
+function guestAddons(addons: ProductOption[], menu: MenuItem[]): ProductOption[] {
+  const byCode = new Map(menu.map((entry) => [entry.item, entry]))
+  const offered: ProductOption[] = []
+  for (const addon of addons) {
+    const entry = byCode.get(addon.item_code)
+    if (!entry || entry.disabled) continue
+    const known = typeof entry.rate === 'number' && Number.isFinite(entry.rate) && entry.rate >= 0
+    offered.push({ ...addon, rate: known ? entry.rate : null })
+  }
+  return offered
+}
+
 interface OptionRowProps {
   option: ProductOption
   selected: boolean
   onSelect: () => void
+  disabled?: boolean
 }
 
 /** A single variant/add-on row. `rate` renders a fallback dash when null (see `ProductOption`). */
-function OptionRow({ option, selected, onSelect }: OptionRowProps) {
+function OptionRow({ option, selected, onSelect, disabled = false }: OptionRowProps) {
   return (
     <button
-      onClick={onSelect}
-      className={`flex items-center justify-between rounded-lg border px-4 py-3 text-left ${
+      onClick={disabled ? undefined : onSelect}
+      disabled={disabled}
+      className={`flex items-center justify-between rounded-lg border px-4 py-3 text-left disabled:opacity-60 ${
         selected ? 'border-primary bg-primary/10' : 'border-border'
       }`}
     >
       <span>{option.item_name}</span>
-      <span className="text-muted-foreground">{option.rate ?? '—'}</span>
+      <span className="text-muted-foreground">{option.rate ?? (disabled ? t('item.price_unavailable') : '—')}</span>
     </button>
   )
 }

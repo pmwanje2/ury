@@ -1,7 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { OrderingContext } from '../lib/api'
+import { menuCategories } from '../lib/menu-categories'
+import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CategoryTabs from './shared/CategoryTabs'
 import SearchBar from './shared/SearchBar'
 import MenuGrid from './shared/MenuGrid'
@@ -10,11 +14,14 @@ import CartPage from './shared/CartPage'
 import CheckoutScreen from './shared/CheckoutScreen'
 import OrderStatusScreen from './shared/OrderStatusScreen'
 
+const OTHER = '__other__'
+
 interface LayoutProps {
   initialContext?: OrderingContext
 }
 
 function MobileQRLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -25,6 +32,10 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     submitting,
     error,
     billRequested,
+    requestingAssistance,
+    assistanceCooldown,
+    assistanceMessage,
+    handleRequestAssistance,
     paymentRequest,
     payingOnline,
     screen,
@@ -49,33 +60,36 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  // Extract unique categories from menu
-  const categories = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const item of menu) {
-      const key = item.course || 'Uncategorized'
-      if (!seen.has(key)) {
-        seen.set(key, item.course_label || item.course || 'Uncategorized')
-      }
-    }
-    return Array.from(seen.entries()).map(([course, label]) => ({ course, course_label: label }))
-  }, [menu])
+  // Categories in the menu's configured order (#98); "Other" is translated per render.
+  const groups = useMemo(() => menuCategories(menu), [menu])
+  const categories = groups.map((group) => ({ course: group.course ?? OTHER, course_label: group.label ?? t('menu.other') }))
 
   // Filter menu by category and search
   const filteredMenu = useMemo(() => {
-    let filtered = menu
+    let filtered = groups.flatMap((group) => group.items)
     if (selectedCategory !== null) {
-      filtered = filtered.filter((item) => (item.course || 'Uncategorized') === selectedCategory)
+      filtered = groups.find((group) => (group.course ?? OTHER) === selectedCategory)?.items ?? []
     }
     if (searchQuery) {
       const lowerQuery = searchQuery.toLowerCase()
       filtered = filtered.filter((item) => item.item_name.toLowerCase().includes(lowerQuery))
     }
     return filtered
-  }, [menu, selectedCategory, searchQuery])
+  }, [groups, selectedCategory, searchQuery])
+
+  // The category chips stick below this sticky header, whose height
+  // changes with the language switcher and the location label.
+  const headerRef = useRef<HTMLElement>(null)
+  const [headerHeight, setHeaderHeight] = useState(0)
+  useLayoutEffect(() => {
+    const measure = () => setHeaderHeight(headerRef.current?.offsetHeight ?? 0)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  })
 
   function handleStartOver() {
-    if (window.confirm('Start over? Your current cart will be cleared.')) {
+    if (window.confirm(t('confirm.start_over'))) {
       resetSession()
     }
   }
@@ -99,16 +113,18 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        Loading menu…
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+        <LanguageSwitcher />
+        {t('status.loading_menu')}
       </div>
     )
   }
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -122,16 +138,21 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
   if (screen === 'menu') {
     return (
       <div className="min-h-screen pb-28">
-        <header className="sticky top-0 z-20 flex items-center justify-between border-b bg-background/95 px-4 py-3 backdrop-blur">
-          <h1 className="text-lg font-semibold">
-            {isPickup ? 'Order for Pickup' : context?.table ? `Table ${context.table}` : 'Order'}
-          </h1>
-          <button
-            onClick={handleStartOver}
-            className="rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground"
-          >
-            Start Over
-          </button>
+        <header ref={headerRef} className="sticky top-0 z-20 border-b bg-background/95 px-4 py-3 backdrop-blur">
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-lg font-semibold">
+              {isPickup ? t('header.pickup') : context?.table ? locationLabel(context.table, context.area) : t('header.order')}
+            </h1>
+            <button
+              onClick={handleStartOver}
+              className="rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground"
+            >
+              {t('actions.start_over')}
+            </button>
+          </div>
+          <div className="mt-2">
+            <LanguageSwitcher />
+          </div>
         </header>
 
         {error && (
@@ -140,10 +161,10 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
 
         {order && order.items.length > 0 && (
           <section className="mx-4 mt-4 rounded-lg border p-3">
-            <h2 className="mb-2 text-sm font-medium text-muted-foreground">Your order so far</h2>
+            <h2 className="mb-2 text-sm font-medium text-muted-foreground">{t('order.so_far')}</h2>
             {isPickup && order.pickup_code && (
               <p className="mb-2 rounded-md bg-muted p-2 text-center text-sm font-semibold">
-                Pickup code: {order.pickup_code}
+                {t('order.pickup_code', { code: order.pickup_code })}
               </p>
             )}
             <ul className="space-y-1 text-sm">
@@ -155,9 +176,29 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               ))}
             </ul>
             <div className="mt-2 flex justify-between border-t pt-2 text-sm font-semibold">
-              <span>Total</span>
+              <span>{t('order.total')}</span>
               <span>{order.grand_total}</span>
             </div>
+            {!isPickup && context?.capabilities.request_bill_enabled && !order.billed && (
+              <>
+                <button
+                  className="mt-3 min-h-11 w-full rounded-md border py-2 text-sm font-medium disabled:opacity-50"
+                  disabled={requestingAssistance || assistanceCooldown}
+                  onClick={handleRequestAssistance}
+                >
+                  {requestingAssistance ? t('assistance.calling') : t('assistance.call')}
+                </button>
+                {assistanceMessage && <p role="status" className="mt-2 text-sm">{assistanceMessage}</p>}
+              </>
+            )}
+            {context?.capabilities.feedback_enabled && order.billed && (
+              <a
+                href="/order/feedback"
+                className="mt-3 block w-full rounded-md border py-2 text-center text-sm font-medium"
+              >
+                {t('feedback.rate_visit')}
+              </a>
+            )}
           </section>
         )}
 
@@ -165,10 +206,12 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
           categories={categories}
           activeCourse={selectedCategory}
           onSelect={setSelectedCategory}
+          allLabel={t('menu.all_items')}
+          stickyTop={headerHeight}
         />
 
         <div className="mx-4 mt-4">
-          <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder="Search menu..." />
+          <SearchBar value={searchQuery} onChange={setSearchQuery} placeholder={t('search.placeholder')} />
         </div>
 
         {/* MenuGrid layers V3-44 availability gating (sold-out badge/disabled
@@ -192,7 +235,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
               onClick={goToCart}
               className="w-full rounded-md bg-primary py-3 font-medium text-primary-foreground"
             >
-              View Cart ({cartCount} item{cartCount > 1 ? 's' : ''}) • {cartTotal}
+              {t('cart.view', { items: t(cartCount === 1 ? 'cart.count_one' : 'cart.count_many', { count: cartCount }), total: cartTotal })}
             </button>
           </div>
         )}
@@ -206,7 +249,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
     if (!menuItem) {
       return (
         <div className="flex h-screen items-center justify-center text-destructive">
-          Item not found
+          {t('item.not_found')}
         </div>
       )
     }
@@ -217,6 +260,8 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
         menuItem={menuItem}
         onAddToCart={addToCart}
         onBack={goToMenu}
+        menu={menu}
+        itemNotesEnabled={context?.capabilities.item_notes_enabled ?? false}
       />
     )
   }
@@ -246,13 +291,19 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
           <button
             onClick={goToCart}
             className="rounded-md border px-3 py-2 text-sm font-medium"
-            aria-label="Back to cart"
+            aria-label={t('nav.back_to_cart')}
           >
-            ← Back to cart
+            ← {t('nav.back_to_cart')}
           </button>
-          <h1 className="flex-1 text-center text-lg font-semibold">Checkout</h1>
+          <h1 className="flex-1 text-center text-lg font-semibold">{t('checkout.title')}</h1>
           <span className="w-[92px]" aria-hidden="true" />
         </header>
+        <div className="mx-4 mt-2">
+          <LanguageSwitcher />
+        </div>
+        {error && (
+          <div className="mx-4 mt-3 whitespace-pre-line rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+        )}
         <div className="flex-1 overflow-y-auto pb-4">
           <CheckoutScreen
             capabilities={{

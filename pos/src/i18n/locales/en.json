@@ -77,7 +77,8 @@
     "add_comment": "Add comment",
     "edit_comment": "Edit comment",
     "pax": "Pax",
-    "insufficient_capacity": "Insufficient capacity to add more of this item"
+    "insufficient_capacity": "Insufficient capacity to add more of this item",
+    "guest_label": "Guest name (optional)"
   },
   "order": {
     "select_to_view": "Select an order to view details",
@@ -111,7 +112,15 @@
     "change_due": "Change due: {{amount}}",
     "success": "Payment successful: {{amount}} received",
     "print_invoice": "Print Invoice",
-    "payment_not_processed": "Payment was not processed."
+    "payment_not_processed": "Payment was not processed.",
+    "room_folio": "Room / Folio",
+    "room_posting": "Room posting",
+    "check_room": "Check room",
+    "checking_room": "Checking room...",
+    "room_match": "Room {{room}} · {{guest}} · departs {{departure}}",
+    "room_no_post": "This guest's bill is closed to room charges",
+    "room_check_required": "Check the room before taking Room Charge",
+    "room_check_failed": "Could not check this room"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
@@ -477,7 +486,9 @@
     "next_bill": "Next bill",
     "split_from": "Split from {{invoice}}",
     "related": "Related bills",
-    "open_sibling_failed": "Could not open related bill"
+    "open_sibling_failed": "Could not open related bill",
+    "guest_label": "Guest name for the new bill (optional)",
+    "guest_label_placeholder": "e.g. David"
   },
   "bill_merge": {
     "merge_bill": "Merge bill",

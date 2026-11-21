@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from frappe.utils import validate_phone_number
 
 from ury.ury_pos.default_customer import get_default_customer_config
+from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
 
 #GetTable  decripted temporarily
@@ -82,9 +83,22 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
     menu_items = frappe.get_all(
         "URY Menu Item",
         filters={"parent": menu, "disabled": 0},
-        fields=["item", "item_name", "rate", "special_dish", "disabled", "course"],
+        fields=["item", "item_name", "rate", "special_dish", "disabled", "course", "idx"],
         order_by="item_name asc"
     )
+
+    # Guest screens order categories by the menu's own configuration
+    # (Simphony SLU order): course serving priority, then menu row order.
+    # 0 is the Int default, so it means "not configured".
+    courses = {item.course for item in menu_items if item.course}
+    course_priority = {
+        row.name: row.custom_serving_priority or None
+        for row in frappe.get_all(
+            "URY Menu Course",
+            filters={"name": ["in", list(courses)]},
+            fields=["name", "custom_serving_priority"],
+        )
+    } if courses else {}
 
     menu_items_with_image = [
         {
@@ -96,6 +110,8 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
             "item_image": frappe.db.get_value("Item", item.item, "image"),
             "course": item.course,
             "course_label": _(item.course) if item.course else item.course,
+            "course_priority": course_priority.get(item.course),
+            "menu_order": item.idx,
         }
         for item in menu_items
     ]
@@ -358,6 +374,7 @@ def get_split_group(invoice):
         "grand_total",
         "customer",
         "customer_name",
+        "custom_guest_label",
         "status",
         "docstatus",
         "posting_date",
@@ -528,7 +545,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number, 
                 posting_date, rounded_total, order_type,
-                custom_split_group, custom_split_from,
+                custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
                 additional_discount_percentage, discount_amount
             FROM `tabPOS Invoice` 
@@ -551,7 +568,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number, 
                 posting_date, rounded_total, order_type,
-                custom_split_group, custom_split_from,
+                custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
                 additional_discount_percentage, discount_amount
             FROM `tabPOS Invoice` 
@@ -573,7 +590,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
-                discount_amount, custom_split_group, custom_split_from,
+                discount_amount, custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
@@ -593,7 +610,7 @@ def getPosInvoice(status, limit, limit_start):
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
-                discount_amount, custom_split_group, custom_split_from,
+                discount_amount, custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
@@ -667,6 +684,7 @@ def searchPosInvoice(query,status):
             "total_taxes_and_charges",
             "custom_split_group",
             "custom_split_from",
+            "custom_guest_label",
             "custom_merged_pos_invoice",
             "custom_merged_total",
             "additional_discount_percentage",
@@ -858,6 +876,8 @@ def getPosProfile():
         "custom_disable_print_status_tracking":disable_print_status_tracking,
         "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
+        # optional room lookup before a Room Charge; blank keeps free-text room
+        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),
     }
 
@@ -991,19 +1011,27 @@ def getAggregatorItem(aggregator):
     )
     aggregatorItem = frappe.get_all(
         "Item Price",
-        fields=["item_code", "item_name", "price_list_rate"],
+        fields=["item_code", "item_name"],
         filters={"selling": 1, "price_list": priceList},
     )
-    aggregatorItemList = [
-        {
-            "item": item.item_code,
-            "item_name": item.item_name,
-            "rate": item.price_list_rate,
-            "item_image": frappe.db.get_value("Item", item.item, "image"),
-        }
-        for item in aggregatorItem
-        if not frappe.db.get_value("Item", item.item_code, "disabled")
-    ]
+    # List each item once, at the rate sync_order bills the aggregator (price_items_for_invoice).
+    names = {}
+    for item in aggregatorItem:
+        names.setdefault(item.item_code, item.item_name)
+    release_field, released = item_price_release_states()
+    today = frappe.utils.getdate()
+    for item_code, item_name in names.items():
+        if frappe.db.get_value("Item", item_code, "disabled"):
+            continue
+        price = price_valid_on(item_code, priceList, today, release_field, released, customer=aggregator)
+        if not price:
+            continue
+        aggregatorItemList.append({
+            "item": item_code,
+            "item_name": item_name,
+            "rate": price.price_list_rate,
+            "item_image": frappe.db.get_value("Item", item_code, "image"),
+        })
     return aggregatorItemList
 
 @frappe.whitelist()

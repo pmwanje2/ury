@@ -45,13 +45,18 @@ function MenuGrid({
   branch,
   company,
 }: MenuGridProps) {
+  // Noted lines of the same dish are separate cart entries; badge their total.
+  const qtyByItem: Record<string, number> = {}
+  for (const line of Object.values(cart)) {
+    qtyByItem[line.item.item] = (qtyByItem[line.item.item] ?? 0) + line.qty
+  }
   return (
     <div className={gridClassName}>
       {menu.map((item) => (
         <MenuGridCard
           key={item.item}
           item={item}
-          cartQty={cart[item.item]?.qty ?? 0}
+          cartQty={qtyByItem[item.item] ?? 0}
           showImage={showImage}
           onClick={onItemClick}
           cardClassName={cardClassName}
