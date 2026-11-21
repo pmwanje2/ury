@@ -270,7 +270,7 @@ export const SelfOrderingProfilePage: React.FC = () => {
         });
         showToast.success(__('Profile updated successfully'));
       } else {
-        await call('frappe.client.insert', { doc: docData });
+        await call('frappe.client.insert', { doc: { ...docData, name: formData.profile_name } });
         showToast.success(__('Profile created successfully'));
       }
 
