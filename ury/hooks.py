@@ -169,11 +169,15 @@ ury_demo_transaction_doctypes = [
 # Jinja
 # ----------
 
-# add methods and filters to jinja environment
-# jinja = {
-# 	"methods": "ury.utils.jinja_methods",
-# 	"filters": "ury.utils.jinja_filters"
-# }
+# Receipt print formats call feedback_receipt_link(invoice) and
+# feedback_receipt_qr(invoice, base_url). Neither is a guest endpoint;
+# submit_feedback and get_feedback_form are the only guest entries.
+jinja = {
+    "methods": [
+        "ury.ury.api.self_ordering.feedback_receipt_link",
+        "ury.ury.api.self_ordering.feedback_receipt_qr",
+    ],
+}
 
 # Installation
 # ------------
@@ -572,6 +576,7 @@ fixtures = [
                     "Production Plan-custom_ury_execution_column",
                     "Production Plan-custom_ury_execution_heartbeat",
                     "Production Plan-custom_ury_execution_step",
+                    "URY KOT-custom_guest_label",
                     "URY KOT Items-custom_ury_work_order",
                     "URY Sales Plan-custom_ury_production_plan",
                     "POS Invoice-custom_restaurant_room",
@@ -653,6 +658,7 @@ fixtures = [
                     "Price List-restaurant_menu",
                     "POS Profile-custom_enable_discount",
                     "POS Invoice-custom_comments",
+                    "POS Invoice-custom_guest_label",
                     "POS Profile-custom_multiple_cashier_configuration",
                     "POS Profile-custom_enable_multiple_cashier",
                     "POS Profile User-custom_main_cashier",
@@ -695,6 +701,7 @@ fixtures = [
                     "POS Profile-custom_reprint_kot_format",
                     "POS Invoice-custom_printing_time",
                     "POS Profile-custom_invoice_warning_time",
+                    "POS Profile-custom_room_lookup_method",
                     "POS Profile-buying_price_list",
                     "POS Profile-high_margin",
                     "POS Profile-low_margin",

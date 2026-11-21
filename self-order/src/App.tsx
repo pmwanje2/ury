@@ -4,6 +4,7 @@ import TabletLayout from './layouts/TabletLayout'
 import LandscapeKioskLayout from './layouts/LandscapeKioskLayout'
 import PortraitKioskLayout from './layouts/PortraitKioskLayout'
 import type { OrderingLayout } from './lib/api'
+import GuestFeedback from './components/GuestFeedback'
 
 const LAYOUTS: Record<OrderingLayout, typeof MobileQRLayout> = {
   Mobile: MobileQRLayout,
@@ -21,7 +22,7 @@ const LAYOUTS: Record<OrderingLayout, typeof MobileQRLayout> = {
  * the QR/mobile case) falls through to MobileQRLayout, which does its own
  * token/session bootstrap via useOrderingSession().
  */
-function App() {
+function OrderingApp() {
   const { isDevice, deviceContext, deviceLoading, deviceError } = useDeviceBootstrap()
 
   if (isDevice) {
@@ -44,6 +45,14 @@ function App() {
   }
 
   return <MobileQRLayout />
+}
+
+// /order and /ury/order both serve this app (hooks.py website_route_rules).
+const FEEDBACK_PATH = /\/order\/feedback\/?$/
+
+function App() {
+  if (FEEDBACK_PATH.test(window.location.pathname)) return <GuestFeedback />
+  return <OrderingApp />
 }
 
 export default App

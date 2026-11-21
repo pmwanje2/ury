@@ -58,6 +58,7 @@ vi.mock("../store/root-store", () => ({
 
 const mockPosStore: {
   posProfile: { name: string; enable_payment_without_printing?: number } | null;
+  [key: string]: unknown;
 } = {
   posProfile: { name: "POS-001" },
 };
@@ -243,5 +244,53 @@ describe("Orders Page", () => {
 
     expect(showToast.error).not.toHaveBeenCalled();
     expect(screen.getByTestId("payment-dialog")).toBeInTheDocument();
+  });
+});
+
+// Ported from the fork (Orders.test.tsx M03 + guest-label edit): the check's
+// guest label leads its card and bill detail, so two splits on one walk-in
+// customer are told apart; editing the order keeps its saved label.
+describe("Orders guest label", () => {
+  const order = {
+    name: "ACC-PSINV-0002", status: "Draft", invoice_printed: 1, rounded_total: 100,
+    customer: "Walk In", custom_guest_label: "Susan", posting_date: "2026-11-03",
+    posting_time: "12:00:00", order_type: "Take Away", restaurant_table: null,
+  } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRootStoreState.orders = [order] as any;
+    mockRootStoreState.selectedOrder = order;
+  });
+
+  it("names the check on its card and in the bill detail, ahead of the walk-in customer", () => {
+    render(<Orders />);
+    expect(screen.getAllByText("Susan · Walk In")).toHaveLength(2);
+  });
+
+  it("without a label the card and detail show the customer as before", () => {
+    const plain = { ...order, custom_guest_label: "" };
+    mockRootStoreState.orders = [plain] as any;
+    mockRootStoreState.selectedOrder = plain;
+    render(<Orders />);
+    expect(screen.getAllByText("Walk In")).toHaveLength(2);
+    expect(screen.queryByText(/ · Walk In/)).not.toBeInTheDocument();
+  });
+
+  it("editing the order loads its saved label into the cart", async () => {
+    const setGuestLabel = vi.fn();
+    Object.assign(mockPosStore, {
+      resetOrderState: vi.fn(), setSelectedOrderType: vi.fn(), setOrderForUpdate: vi.fn(),
+      setSelectedTable: vi.fn(), setSelectedCustomer: vi.fn(), addToOrder: vi.fn(), setGuestLabel,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ message: { ...order, items: [] } }),
+    })));
+    render(<Orders />);
+    fireEvent.click(screen.getByRole("button", { name: "orders.edit_order" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/register"));
+    expect(setGuestLabel).toHaveBeenCalledWith("Susan");
+    vi.unstubAllGlobals();
   });
 });
