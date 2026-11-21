@@ -45,10 +45,10 @@ this module.
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from ury.ury.api.ury_kot_generate import (
-	create_order_items,
+	_line_keyed_items,
 	process_items_for_cancel_kot,
 )
 
@@ -209,7 +209,8 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 
 	pos_profile_id = pos_invoice.pos_profile
 	kot_naming_series = pos_profile.custom_kot_naming_series
-	if not kot_naming_series:
+	held = cint(item_row.get("ury_held")) == 1
+	if not held and not kot_naming_series:
 		raise QtyReductionError(
 			KOT_NAMING_SERIES_MISSING,
 			_(
@@ -217,22 +218,14 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 				"Ensure it is configured in POS Profile: {0}"
 			).format(pos_profile.name),
 		)
-	cancel_kot_naming_series = "CNCL-" + kot_naming_series
+	cancel_kot_naming_series = "CNCL-" + (kot_naming_series or "")
 
-	# Snapshot of the invoice items BEFORE the qty change, in the same shape
-	# create_cancel_kot_doc expects for `invoiceItems` (it reads `item["qty"]`
-	# per matching item_code to populate the cancel-KOT row's `quantity`).
-	previous_items_snapshot = create_order_items(
-		[
-			{
-				"item": row.item_code,
-				"qty": row.qty,
-				"item_name": row.item_name,
-				"comment": row.get("comment") or "",
-			}
-			for row in pos_invoice.items
-		]
-	)
+	if not held:
+		from ury.ury.doctype.ury_order.ury_order import _kitchen_snapshot
+
+		# Use the same canonical dish/note groups and persisted keys as the original KOT.
+		previous_items_snapshot = list(_line_keyed_items(_kitchen_snapshot(pos_invoice.items)).values())
+		cancel_line, = _line_keyed_items(_kitchen_snapshot([item_row])).values()
 
 	# Apply the reduction (or full removal) to the invoice, bypassing
 	# validate_invoice's post-print guard for exactly this legitimate write.
@@ -255,23 +248,13 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		frappe.flags.ury_qty_reduction = False
 
 	# Reuse the existing cancel-KOT creation path for exactly the delta.
-	cancel_item = {
-		"item": item_code,
-		"qty": delta,
-		"item_name": item_row.item_name,
-		"comment": reason or "",
-	}
-	created_kot_names = process_items_for_cancel_kot(
-		invoice_id,
-		pos_invoice.customer,
-		pos_invoice.get("restaurant_table"),
-		create_order_items([cancel_item]),
-		reason,
-		pos_profile_id,
-		cancel_kot_naming_series,
-		"Partially cancelled",
-		previous_items_snapshot,
-	)
+	created_kot_names = []
+	if not held:
+		created_kot_names = process_items_for_cancel_kot(
+			invoice_id, pos_invoice.customer, pos_invoice.get("restaurant_table"),
+			[{**cancel_line, "qty": delta}], reason, pos_profile_id, cancel_kot_naming_series,
+			"Partially cancelled", previous_items_snapshot,
+		)
 
 	return {
 		"invoice": invoice_id,

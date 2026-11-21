@@ -1,6 +1,10 @@
 import { call } from '@ury/core';
 
+import { assertOfflineActionAllowed } from '../offline/cashier';
+
 export interface POSInvoiceItem {
+  ury_held?: number;
+  custom_course?: string;
   name: string;
   item_code: string;
   item_name: string;
@@ -36,6 +40,7 @@ export interface POSInvoice {
   order_type: string;
   restaurant_table: string;
   custom_merged_tables?: string | null;
+  custom_split_group?: string | null;
   custom_restaurant_room: string;
   status: string;
   total: number;
@@ -78,6 +83,8 @@ export interface SyncOrderRequest {
   table?: string;
   customer?: string;
   items: Array<{
+    name?: string;
+    ury_held?: number;
     item: string;
     item_name: string;
     rate: number;
@@ -116,8 +123,14 @@ export interface SyncOrderRequest {
 export type SyncOrderResponse = POSInvoice | { status: 'Failure' };
 
 export const syncOrder = async (data: SyncOrderRequest) => {
+  if (data.items.some(item => item.ury_held)) await assertOfflineActionAllowed('hold/fire');
   return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
 };
+
+export async function fireItems(invoice: string, selection: { line?: string; course?: string; last_modified_time?: string }) {
+  await assertOfflineActionAllowed('hold/fire');
+  return call.post('ury.ury.doctype.ury_order.ury_order.fire_items', { invoice, ...selection }) as Promise<{ message: POSInvoice }>;
+}
 
 export interface SplitBillItemMove {
   name: string;

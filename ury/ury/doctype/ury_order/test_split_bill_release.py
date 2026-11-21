@@ -25,7 +25,10 @@ class Doc:
         setattr(self, key, value)
 
     def append(self, field, value):
-        getattr(self, field).append(Row(**value))
+        row = Row(**value)
+        row.name = f"{field}-{len(getattr(self, field)) + 1}"
+        getattr(self, field).append(row)
+        return row
 
     def remove(self, row):
         self.items.remove(row)

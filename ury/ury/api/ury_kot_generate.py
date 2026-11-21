@@ -423,6 +423,8 @@ def create_cancel_kot_doc(
             kot_cancel_items = kot_doc.kot_items
             itemCheckFlag = False
             for kotItem in kot_cancel_items:
+                if (kotItem.get("comments") or "") != (cancelItem.get("comments") or ""):
+                    continue
                 if cancel_line_key and kotItem.get("reservation_line_key"):
                     if cancel_line_key == kotItem.get("reservation_line_key"):
                         itemCheckFlag = True
@@ -484,7 +486,9 @@ def create_cancel_kot_doc(
                     break
         if matched_item is None:
             for item in invoiceItems:
-                if cancelItem["item_code"] == item["item_code"]:
+                if (cancelItem["item_code"] == item["item_code"]
+                        and (cancelItem.get("comments") or "") == (item.get("comments") or "")
+                        and not (cancel_line_key and item.get("reservation_line_key"))):
                     matched_item = item
                     break
         if matched_item is None:
@@ -544,7 +548,7 @@ def kot_execute(
 
     for key, cur in current_lines.items():
         prev = previous_lines.get(key)
-        prev_qty = flt(prev["qty"]) if prev else 0
+        prev_qty = flt(prev["qty"]) if prev and prev["comments"] == cur["comments"] else 0
         # Round to the site precision so float subtraction residue (for
         # example 0.30000000000000004 - 0.3) is not read as a quantity change.
         delta = flt(
@@ -562,7 +566,7 @@ def kot_execute(
 
     removed_item = []
     for key, prev in previous_lines.items():
-        if key in current_lines:
+        if key in current_lines and current_lines[key]["comments"] == prev["comments"]:
             continue
         item = dict(prev)
         item["qty"] = -flt(prev["qty"])
@@ -623,12 +627,12 @@ def compare_two_array(array_1, array_2):
     for index, x in enumerate(array_1):
         a = list(
             filter(
-                lambda y: y["item_code"] == x["item_code"] and flt(y["qty"]) == flt(x["qty"]),
+                lambda y: y["item_code"] == x["item_code"] and (y.get("comments") or "") == (x.get("comments") or "") and flt(y["qty"]) == flt(x["qty"]),
                 array_2,
             )
         )
         if len(a) == 0:
-            b = list(filter(lambda z: z["item_code"] == x["item_code"], array_2))
+            b = list(filter(lambda z: z["item_code"] == x["item_code"] and (z.get("comments") or "") == (x.get("comments") or ""), array_2))
             for qtb in b:
                 x["qty"] = flt(x["qty"]) - flt(qtb["qty"])
             finalarray.append(x)
@@ -640,6 +644,7 @@ def get_removed_items(array_1, array_2):
     removed_objects = [
         obj
         for obj in array_1
-        if obj["item_code"] not in [x["item_code"] for x in array_2]
+        if (obj["item_code"], obj.get("comments") or "")
+        not in [(x["item_code"], x.get("comments") or "") for x in array_2]
     ]
     return removed_objects

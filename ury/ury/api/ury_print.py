@@ -6,7 +6,7 @@ import os
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
+from ury.ury.doctype.ury_order.ury_order import _free_tables_if_no_open_invoices
 
 no_cache = 1
 
@@ -182,12 +182,11 @@ def qz_print_update(invoice):
                 # Update invoice_printed
                 _mark_invoice_printed(invoice, was_printed=0, update_modified=False)
 
-                release_merge_cluster_tables(table)
+                _free_tables_if_no_open_invoices(table)
                 # Validate both updates
                 new_invoice_printed = frappe.db.get_value("POS Invoice", invoice, "invoice_printed")
-                new_table_status = frappe.db.get_value("URY Table", table, "occupied")
                 
-                if new_invoice_printed != 1 or new_table_status != 0:
+                if new_invoice_printed != 1:
                     return {"status": "Failure"}
         
         from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
@@ -221,7 +220,7 @@ def print_pos_page(doctype, name, print_format):
         _mark_invoice_printed(name, was_printed=0)
 
         if restaurant_table:
-            release_merge_cluster_tables(restaurant_table)
+            _free_tables_if_no_open_invoices(restaurant_table)
 
     from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
     trigger_manufacture_on_bill_print(name)

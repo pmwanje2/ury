@@ -10,6 +10,7 @@ import CommentDialog from './CommentDialog';
 import { Button, Badge } from '@ury/ui';
 import { getOrderKotStatus, type KotItemState } from '../lib/kot-status-api';
 import { Spinner } from '@ury/ui';
+import { HoldFireControls } from './HoldFireControls';
 import { syncOrder } from '../lib/order-api';
 import { useRootStore } from '../store/root-store';
 import type { RootState } from '../store/root-store';
@@ -142,6 +143,8 @@ const OrderPanel = () => {
       
       const orderData = {
         items: activeOrders.map(item => ({
+          ...(item.invoiceItemName ? { name: item.invoiceItemName } : {}),
+          ...(posProfile.ury_enable_hold_fire || item.ury_held ? { ury_held: item.ury_held || 0 } : {}),
           item: item.id,
           item_name: item.name,
           rate: item.selectedVariant?.price || item.price,
@@ -275,6 +278,7 @@ const OrderPanel = () => {
       ) : (
         <>
           <div className="flex-1 overflow-y-auto px-6">
+            <HoldFireControls />
             {activeOrders.map((item) => (
               <div
                 key={item.uniqueId}

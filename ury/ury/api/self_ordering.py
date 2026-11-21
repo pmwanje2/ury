@@ -40,6 +40,7 @@ from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
     _resolve_or_create_pos_invoice,
     _ensure_invoice_reservation_ref,
+    _kitchen_snapshot,
     get_menu_name,
     get_restaurant_and_menu_name,
     invoice_pricing_date,
@@ -739,31 +740,9 @@ def add_customer_items(session, items):
         if session.device:
             invoice.custom_ordering_device = session.device
 
-        # Aggregated by item_code, same as current_items_for_kot below (built
-        # after the append). This symmetry matters: add_customer_items()
-        # always appends a NEW row rather than merging into an existing
-        # same-item_code row (simpler, safer for concurrent requests), so a
-        # table's invoice routinely ends up with multiple separate rows for
-        # the same item_code after a few rounds of ordering. kot_execute's
-        # compare_two_array() does an exact-match-then-delta comparison
-        # assuming ONE row per item_code on each side — if `previous_items`
-        # were left as raw per-row entries while `current_items` was
-        # aggregated (as an earlier version of this function had it), a
-        # repeat item_code's several qty=1 previous rows would never
-        # exact-match the aggregated current total, and
-        # compare_two_array's delta loop overwrites (not accumulates)
-        # across multiple matching previous rows -- producing a bogus
-        # cancellation KOT for an item nobody cancelled. Confirmed live via
-        # a real second-order-on-a-multi-round-invoice test.
-        past_qty_by_item = {}
-        past_name_by_item = {}
-        for row in invoice.items:
-            past_qty_by_item[row.item_code] = past_qty_by_item.get(row.item_code, 0) + row.qty
-            past_name_by_item[row.item_code] = row.item_name
-        past_item = [
-            {"item_code": code, "item_name": past_name_by_item[code], "qty": past_qty_by_item[code], "comments": ""}
-            for code in past_qty_by_item
-        ]
+        past_kitchen = _kitchen_snapshot(invoice.items)
+        past_item = [dict(item_code=row.item_code, qty=row.qty, comments=row.get("comment") or "",
+                          reservation_line_key=row.get("reservation_line_key")) for row in invoice.items]
 
         # Mirror sync_order()'s reservation gate (ury_order.py ~L1644) so a
         # self-order cannot silently save/KOT an item whose production
@@ -784,7 +763,7 @@ def add_customer_items(session, items):
             reconcile_order_reservations(
                 order_ref=_ensure_invoice_reservation_ref(invoice),
                 previous_items=past_item,
-                accepted_items=clean_items,
+                accepted_items=past_item + clean_items,
                 branch=invoice.branch,
                 company=_self_order_company,
                 actor=frappe.session.user,
@@ -824,25 +803,10 @@ def add_customer_items(session, items):
             )
 
         try:
-            # kot_execute()'s diff (compare_two_array) expects `current_items`
-            # to be the COMPLETE desired per-item-code quantity state, one
-            # row per item_code — not just the newly-added rows. Passing
-            # clean_items alone here made every pre-existing item look
-            # "removed" (present in previous_items, absent from current),
-            # generating spurious cancellation KOTs for food nobody
-            # cancelled. Aggregate invoice.items (which now includes both
-            # the untouched old rows and the just-appended new ones) by
-            # item_code to build the correct current-state view.
-            qty_by_item = {}
-            name_by_item = {}
-            for row in invoice.items:
-                qty_by_item[row.item_code] = qty_by_item.get(row.item_code, 0) + row.qty
-                name_by_item[row.item_code] = row.item_name
-            current_items_for_kot = [
-                {"item_code": code, "item_name": name_by_item[code], "qty": qty_by_item[code], "comments": ""}
-                for code in qty_by_item
-            ]
-            kot_execute(invoice.name, invoice.customer, invoice.restaurant_table, current_items_for_kot, past_item, None)
+            # Pass the complete post-append state, preserving each note;
+            # passing only the new rows would cancel existing dishes.
+            kot_execute(invoice.name, invoice.customer, invoice.restaurant_table,
+                        _kitchen_snapshot(invoice.items), past_kitchen, None)
         except Exception as e:
             # Same class of bug as sa-post-373-review-fixes Blocker 2 in
             # sync_order(): swallowing this exception let a QR self-order be

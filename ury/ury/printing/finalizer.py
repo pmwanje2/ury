@@ -18,7 +18,7 @@ cannot run the side effects more than once.
 import frappe
 import redis.exceptions
 
-from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
+from ury.ury.doctype.ury_order.ury_order import _free_tables_if_no_open_invoices
 from ury.ury.printing.notifications import notify_print_failure
 from ury.ury.printing.print_job_monitor import get_print_job, update_print_job
 from ury.ury.printing.state_machine import CANCELED, COMPLETED, FAILED, UNKNOWN
@@ -139,7 +139,7 @@ def _finalize_bill(print_job_id, final_state, metadata, failure_reason):
             frappe.db.set_value("POS Invoice", invoice, "invoice_printed", 1)
 
         if restaurant_table:
-            release_merge_cluster_tables(restaurant_table)
+            _free_tables_if_no_open_invoices(restaurant_table)
 
         frappe.publish_realtime(
             "invoice_print_completed",

@@ -74,6 +74,7 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.items = []
         mock_invoice.waiter = "existing_waiter"
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         # Setup mock pos profile. transfer_role_permissions grants this
@@ -82,6 +83,7 @@ class TestURYOrder(FrappeTestCase):
         # Phase 3 ownership check would otherwise deny a plain role-mismatch
         # between session user and invoice.waiter).
         mock_pos_profile = MagicMock()
+        mock_pos_profile.ury_enable_hold_fire = 0
         mock_pos_profile.custom_enable_multiple_cashier = 0
         mock_pos_profile.applicable_for_users = []
         mock_pos_profile.transfer_role_permissions = _role_rows("URY Manager")
@@ -135,11 +137,13 @@ class TestURYOrder(FrappeTestCase):
     @patch("ury.ury.doctype.ury_order.ury_order.frappe.get_doc")
     def test_sync_order_unauthorized(self, mock_get_doc, mock_has_permission, mock_get_order_invoice):
         mock_pos_profile = MagicMock()
+        mock_pos_profile.ury_enable_hold_fire = 0
         mock_pos_profile.role_allowed_for_billing = _role_rows()
         mock_get_doc.return_value = mock_pos_profile
 
         mock_invoice = MagicMock()
         mock_invoice.name = "POS-INV-001"
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         
         # Setup has_permission to return False
@@ -261,9 +265,11 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.items = []
         mock_invoice.waiter = None # Not set yet
         
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         
         mock_pos_profile = MagicMock()
+        mock_pos_profile.ury_enable_hold_fire = 0
         mock_pos_profile.custom_enable_multiple_cashier = 0
         mock_pos_profile.applicable_for_users = []
         mock_get_doc.return_value = mock_pos_profile
@@ -326,6 +332,7 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.as_dict = MagicMock(return_value={"name": "POS-INV-001"})
         mock_reconcile.side_effect = lambda **kwargs: events.append("reconcile")
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         mock_price_items.return_value = [{"item_code": "ITEM-1", "qty": 3}]
         mock_get_doc.return_value = _make_pos_profile(
@@ -380,8 +387,9 @@ class TestURYOrder(FrappeTestCase):
                 "item_name": "Item 1",
                 "qty": 1,
                 "comments": "",
+                "ury_held": 0,
             }],
-            accepted_items=[{"item": "ITEM-1", "qty": 3}],
+            accepted_items=[{"item": "ITEM-1", "qty": 3, "comment": ""}],
             branch="Test Branch",
             company="Company A",
             actor="manager@example.com",
@@ -427,6 +435,7 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.save = MagicMock()
         mock_invoice.as_dict = MagicMock(return_value={"name": "POS-INV-001"})
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         mock_price_items.return_value = [{"item_code": "ITEM-1", "qty": 3}]
         mock_get_doc.return_value = _make_pos_profile(
@@ -506,6 +515,7 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.save = MagicMock()
         mock_invoice.as_dict = MagicMock(return_value={"name": "POS-INV-002"})
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         mock_price_items.return_value = [{"item_code": "ITEM-1", "qty": 3}]
         mock_get_doc.return_value = _make_pos_profile(
@@ -593,6 +603,7 @@ class TestURYOrder(FrappeTestCase):
         mock_reconcile.return_value = None
         mock_kot_execute.side_effect = Exception("Routing error: ITEM-1 has no production unit configured")
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         mock_price_items.return_value = [{"item_code": "ITEM-1", "qty": 1}]
         mock_get_doc.return_value = _make_pos_profile(
@@ -667,6 +678,7 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.waiter = "manager@example.com"
         mock_invoice.selling_price_list = "Standard Selling"
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         mock_price_items.return_value = [{"item_code": "ITEM-1", "qty": 3}]
         mock_reconcile.side_effect = frappe.ValidationError("insufficient stock")
@@ -830,6 +842,7 @@ class TestURYOrder(FrappeTestCase):
         mock_invoice.as_dict = MagicMock(return_value={"name": "POS-INV-NEW"})
         mock_reconcile.side_effect = lambda **kwargs: events.append(("reconcile", kwargs["order_ref"]))
 
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
         mock_price_items.return_value = [{"item_code": "ITEM-1", "qty": 1}]
         mock_get_doc.return_value = _make_pos_profile(
@@ -890,6 +903,8 @@ def _make_pos_profile(
 ):
     profile = MagicMock()
     profile.name = name
+    profile.company = "Company A"
+    profile.ury_enable_hold_fire = 0
     profile.transfer_role_permissions = _role_rows(*transfer_role_permissions)
     profile.role_allowed_for_billing = _role_rows(*role_allowed_for_billing)
     profile.role_restricted_for_table_order = _role_rows(*role_restricted_for_table_order)
@@ -972,6 +987,7 @@ class TestPriceItemsForInvoicePhase1(unittest.TestCase):
         mock_invoice.items = []
         mock_invoice.waiter = "existing_waiter"
         mock_invoice.selling_price_list = "Standard Selling"
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         # billing_user must resolve True, or sync_order's early "Table
@@ -980,6 +996,7 @@ class TestPriceItemsForInvoicePhase1(unittest.TestCase):
         billing_role = MagicMock()
         billing_role.role = "URY Cashier"
         mock_pos_profile = MagicMock()
+        mock_pos_profile.ury_enable_hold_fire = 0
         mock_pos_profile.custom_enable_multiple_cashier = 0
         mock_pos_profile.applicable_for_users = []
         mock_pos_profile.role_allowed_for_billing = [billing_role]
@@ -1294,6 +1311,7 @@ class TestSyncOrderHardening(FrappeTestCase):
         mock_invoice.name = "POS-INV-001"
         mock_invoice.waiter = "captain_b@example.com"
         mock_invoice.invoice_printed = 0
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         mock_pos_profile = _make_pos_profile()  # no elevated/billing roles configured
@@ -1329,6 +1347,7 @@ class TestSyncOrderHardening(FrappeTestCase):
         mock_invoice.name = "POS-INV-001"
         mock_invoice.waiter = "captain_a@example.com"  # is_mine True
         mock_invoice.invoice_printed = 1  # already billed/printed
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         mock_pos_profile = _make_pos_profile()  # not a billing user
@@ -1364,6 +1383,7 @@ class TestSyncOrderHardening(FrappeTestCase):
         mock_invoice.name = None  # new order, no ownership issue
         mock_invoice.waiter = None
         mock_invoice.invoice_printed = 0
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         mock_pos_profile = _make_pos_profile(
@@ -1409,6 +1429,7 @@ class TestSyncOrderHardening(FrappeTestCase):
     ):
         mock_invoice = MagicMock()
         mock_invoice.name = None  # skip ownership block, isolate the table/branch check
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         mock_pos_profile = _make_pos_profile()
@@ -1456,6 +1477,7 @@ class TestSyncOrderHardening(FrappeTestCase):
     ):
         mock_invoice = MagicMock()
         mock_invoice.name = None
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         mock_pos_profile = _make_pos_profile()  # no elevated/billing access
@@ -1500,10 +1522,7 @@ class TestSyncOrderHardening(FrappeTestCase):
         mock_get_order_invoice,
         mock_reconcile,
     ):
-        existing_item = MagicMock()
-        existing_item.item_code = "ITEM-1"
-        existing_item.item_name = "Item One"
-        existing_item.qty = 2
+        existing_item = frappe._dict(name="ROW-1", item_code="ITEM-1", item_name="Item One", qty=2)
 
         mock_invoice = MagicMock()
         mock_invoice.name = "POS-INV-001"
@@ -1517,6 +1536,7 @@ class TestSyncOrderHardening(FrappeTestCase):
         # (last_invoice + last_modified_time branch, not Phase-3 code)
         # doesn't short-circuit before reaching the item-reduction check.
         mock_invoice.modified = "2024-01-01 10:00:00.123456"
+        mock_invoice.pos_profile = "Test Profile"
         mock_get_order_invoice.return_value = mock_invoice
 
         mock_pos_profile = _make_pos_profile(remove_items=0)

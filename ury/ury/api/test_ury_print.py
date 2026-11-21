@@ -206,7 +206,7 @@ class TestQzPrintUpdate(FrappeTestCase):
 
 		mock_db_get_value.side_effect = ["T-01", 0, 1, 0]
 
-		with patch("ury.ury.api.ury_print.release_merge_cluster_tables") as mock_release:
+		with patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices") as mock_release:
 			result = qz_print_update("INV-001")
 
 		self.assertEqual(result, {"status": "Success"})
@@ -231,7 +231,7 @@ class TestQzPrintUpdate(FrappeTestCase):
 
 
 class TestPrintPosPage(FrappeTestCase):
-	@patch("ury.ury.api.ury_print.release_merge_cluster_tables")
+	@patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices")
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.publish_realtime")
@@ -281,7 +281,7 @@ class TestPrintPosPage(FrappeTestCase):
 
 		mock_db_get_value.side_effect = [(None, "Branch-1", "INV-001"), 0]
 
-		with patch("ury.ury.api.ury_print.release_merge_cluster_tables") as mock_release:
+		with patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices") as mock_release:
 			print_pos_page("POS Invoice", "INV-001", "Standard")
 
 		mock_publish.assert_called_once()
@@ -306,7 +306,7 @@ class TestPrintPosPage(FrappeTestCase):
 		# First call: table exists, invoice_printed already 1
 		mock_db_get_value.side_effect = [("T-01", "Branch-1", "INV-001"), 1]
 
-		with patch("ury.ury.api.ury_print.release_merge_cluster_tables") as mock_release:
+		with patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices") as mock_release:
 			print_pos_page("POS Invoice", "INV-001", "Standard")
 
 		mock_publish.assert_called_once()

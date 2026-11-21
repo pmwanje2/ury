@@ -115,7 +115,7 @@ class TestPrintJobFinalizer(FrappeTestCase):
         set_value.assert_called_once_with("POS Invoice", "INV-001", "invoice_printed", 1)
 
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
-    @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
+    @patch("ury.ury.printing.finalizer._free_tables_if_no_open_invoices")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")
     def test_finalize_completed_sets_invoice_printed_and_releases_table(
         self,
@@ -146,7 +146,7 @@ class TestPrintJobFinalizer(FrappeTestCase):
         self.assertEqual(payload["print_job_id"], job_id)
 
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
-    @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
+    @patch("ury.ury.printing.finalizer._free_tables_if_no_open_invoices")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")
     def test_finalize_completed_without_table_does_not_release(
         self,
@@ -170,7 +170,7 @@ class TestPrintJobFinalizer(FrappeTestCase):
         self.assertEqual(event, "invoice_print_completed")
 
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
-    @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
+    @patch("ury.ury.printing.finalizer._free_tables_if_no_open_invoices")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")
     def test_finalize_is_idempotent(
         self,
@@ -196,7 +196,7 @@ class TestPrintJobFinalizer(FrappeTestCase):
 
     @patch("ury.ury.printing.finalizer.notify_print_failure")
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
-    @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
+    @patch("ury.ury.printing.finalizer._free_tables_if_no_open_invoices")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")
     def test_finalize_failed_keeps_invoice_unprinted_and_table_occupied(
         self,
@@ -240,7 +240,7 @@ class TestPrintJobFinalizer(FrappeTestCase):
         self.assertEqual(mock_publish.call_args.kwargs.get("user"), "Administrator")
 
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
-    @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
+    @patch("ury.ury.printing.finalizer._free_tables_if_no_open_invoices")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")
     def test_finalize_canceled_and_unknown_keep_invoice_unprinted(
         self,
@@ -270,7 +270,7 @@ class TestPrintJobFinalizer(FrappeTestCase):
             self.assertEqual(payload["reason"], "vanished")
 
     @patch("ury.ury.printing.finalizer.frappe.publish_realtime")
-    @patch("ury.ury.printing.finalizer.release_merge_cluster_tables")
+    @patch("ury.ury.printing.finalizer._free_tables_if_no_open_invoices")
     @patch("ury.ury.printing.finalizer.frappe.db.set_value")
     def test_finalize_completed_without_metadata_is_safe(
         self,

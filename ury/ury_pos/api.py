@@ -2,7 +2,7 @@ import frappe
 import json
 from frappe import _
 from datetime import date, datetime, timedelta
-from frappe.utils import validate_phone_number
+from frappe.utils import cint, validate_phone_number
 
 from ury.ury_pos.default_customer import get_default_customer_config
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
@@ -938,6 +938,7 @@ def getPosProfileFull(pos_profile):
         "print_format": profile.print_format,
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
+        "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
