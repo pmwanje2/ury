@@ -242,7 +242,7 @@ export class OfflineOutbox {
       const previous = clientId ? rows.find((row) => row.client_order_id === clientId) : undefined;
       if (clientId && (!previous || previous.outage_id !== outage || previous.state !== 'pending' || previous.next_round)) throw new Error('Extra rounds require an order from this same outage.');
       if (previous && (['customer', 'table', 'room', 'order_type', 'no_of_pax'] as const).some((key) => previous.order[key] !== order[key])) throw new Error('Extra rounds cannot change the order context, customer or table offline.');
-      if (!previous && !order.customer && (order.order_type === 'Dine In' || order.order_type === 'Take Away')) {
+      if (reserved && !previous && !order.customer && (order.order_type === 'Dine In' || order.order_type === 'Take Away')) {
         const customer = resolveDefaultCustomer(order.order_type, this.options.profile)?.id;
         if (!customer) throw new Error(t('errors.select_customer'));
         order = { ...order, customer };

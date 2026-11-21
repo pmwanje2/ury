@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-// Tankhill 2026-11-10: on a laptop the waiter order screen (Menu | Order side by
+// On a laptop the waiter order screen (Menu | Order side by
 // side) grew with the 254-item menu, so the whole page scrolled. The order lines
 // and the Total / Send Order bar sat at the top and bottom of a very long page,
 // and the waiter had to scroll down to pick items and back up to see the order.
