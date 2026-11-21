@@ -20,12 +20,14 @@ def serve_kot(name, time=None):
     if kot_doc.type in ("Cancelled", "Partially cancelled"):
         frappe.throw(_("KOT has been cancelled and cannot be served"), frappe.ValidationError)
 
-    record_kot_served(name, kot_doc.creation)
+    record_kot_served(name, kot_doc.creation, kot_doc)
 
 
-def record_kot_served(name, creation_time):
+def record_kot_served(name, creation_time, kot_doc=None):
     """READY (posting intent) then Served with timing; callers own authorization."""
     _ensure_ready_before_serve(name)
+    if kot_doc is None:
+        kot_doc = frappe.get_doc("URY KOT", name)
 
     current_time = get_datetime()
 
