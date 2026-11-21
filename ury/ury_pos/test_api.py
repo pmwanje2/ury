@@ -304,6 +304,26 @@ class TestSplitPreviewScope(unittest.TestCase):
                 getPosInvoiceItems('SYN-SIBLING')
 
 
+    def test_split_render_checks_persisted_target_before_rendering(self):
+        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
+        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
+        from ury.ury.doctype.ury_order import ury_order
+        target = MagicMock()
+        target.name = 'SYN-SIBLING'
+        target.branch = 'Branch A'
+        target.waiter = 'other@example.com'
+        target.get.side_effect = {'custom_split_group': 'group', 'pos_profile': 'profile'}.get
+        profile = frappe._dict(transfer_role_permissions=[], role_allowed_for_billing=[])
+        with patch.object(POSInvoice, 'before_print'), \
+             patch.object(ury_order, 'getBranch', return_value='Branch A'), \
+             patch.object(frappe, 'get_roles', return_value=['URY Captain']), \
+             patch.object(frappe, 'session', frappe._dict(user='captain@example.com')), \
+             patch.object(frappe, 'has_permission', return_value=True), \
+             patch.object(frappe, 'get_doc', side_effect=lambda dt, name: target if dt == 'POS Invoice' else profile):
+            with self.assertRaises(frappe.PermissionError):
+                CustomPOSInvoice.before_print(target, {})
+
+
 class TestCreateCustomerLinkId(unittest.TestCase):
     """Regression: success payload must expose Customer link `name`, which
     can differ from display `customer_name` under series naming."""
