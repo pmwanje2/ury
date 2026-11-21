@@ -433,7 +433,7 @@ export default function Dashboard() {
         const notificationsData = await notificationsRes.json();
         const processedNotifications = (notificationsData.message || []).map((notif: any) => ({
           id: notif.name,
-          message: notif.subject,
+          message: notif.subject ?? '',
           timestamp: getRelativeTime(notif.creation)
         }));
         setNotifications(processedNotifications);
@@ -885,7 +885,12 @@ export default function Dashboard() {
                 <div className="divide-y divide-hair">
                   {notifications.map((notification) => (
                     <div key={notification.id} className="flex items-start justify-between gap-2 py-2 first:pt-0 last:pb-0">
-                      <p className="text-xs leading-relaxed text-muted-foreground">{notification.message}</p>
+                      <details className="min-w-0 break-words text-sm text-muted-foreground">
+                        <summary className="min-h-11 cursor-pointer rounded-sm focus-visible:ring-2 focus-visible:ring-ring">
+                          {notification.message.length > 96 ? `${notification.message.slice(0, 96).trimEnd()}…` : notification.message}
+                        </summary>
+                        <p className="py-2">{notification.message}</p>
+                      </details>
                       <span className="shrink-0 whitespace-nowrap text-xs text-text-tertiary">
                         {notification.timestamp}
                       </span>
