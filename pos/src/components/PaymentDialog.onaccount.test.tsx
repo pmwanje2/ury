@@ -20,8 +20,9 @@ it.each([0,40])('selects the unique approved ID and sends only actual tender %s'
   show('URY Cashier'); fireEvent.change(screen.getByRole('searchbox',{name:/charge to account/i}),{target:{value:'Acme'}});
   const result=await screen.findByRole('button',{name:/AC-2/}); expect(result.textContent).toMatch(/Acme/); for (const n of ['25','225','200']) expect(result.textContent).toContain(n);
   fireEvent.click(result); if(amount) fireEvent.change(screen.getByRole('spinbutton'),{target:{value:String(amount)}});
+  expect(screen.getByRole('status')).toHaveTextContent(new RegExp('On account.*'+(100-amount)));
   fireEvent.click(screen.getByRole('button',{name:/^Pay /}));
   await waitFor(()=>expect(post).toHaveBeenCalledWith(expect.stringContaining('make_invoice'),expect.objectContaining({customer:'AC-2',payments:[{mode_of_payment:'Cash',amount}]})));
   expect(get).toHaveBeenCalledWith('ury.ury_pos.api.credit_accounts',{pos_profile:'Till',query:'Acme'});
 });
-it('captains cannot see balances or settle a short named bill',()=>{show('URY Captain','Named'); expect(screen.queryByRole('searchbox')).toBeNull();expect(screen.getByRole('button',{name:/^Pay /})).toBeDisabled();});
+it('captains cannot see balances or settle a short named bill',()=>{show('URY Captain','Named'); fireEvent.change(screen.getByRole('spinbutton'),{target:{value:'40'}}); expect(screen.queryByRole('searchbox')).toBeNull();expect(screen.getByRole('button',{name:/^Pay /})).toBeDisabled();});
