@@ -127,3 +127,11 @@ it('preserves the session guard', async () => {
 it('respects existing interaction restrictions', async () => {
   state.disabled = true; await submit(); expect(submitButton().disabled).toBe(true); expect(syncOrder).not.toHaveBeenCalled();
 });
+
+it('hands a cashier the exact check after an acknowledged live send', async () => {
+  Object.assign(state.user!, { roles: ['URY Cashier'] });
+  const openCheck = vi.fn();
+  await act(async () => root.render(<OrderPanel onCashierCheck={openCheck} />));
+  await act(async () => submitButton().click());
+  expect(openCheck).toHaveBeenCalledWith(invoice);
+});
