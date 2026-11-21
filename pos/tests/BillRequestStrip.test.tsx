@@ -300,3 +300,13 @@ it('clears rows when the branch changes before a failed refresh', async () => {
   await click('Refresh'); expect(container.textContent).not.toContain('POS-1');
   expect(container.textContent).toContain('Bill requests unavailable');
 });
+
+it('requires a native readable match even when a legacy Orders tab has cached the invoice', async () => {
+  vi.mocked(call.get).mockImplementation(async (method, args: any) => {
+    if (args?.doctype === 'POS Invoice') throw { httpStatus: 403 };
+    return nativeRead(method, args);
+  });
+  await render(); await pickup();
+  expect(select).not.toHaveBeenCalled();
+  expect(container.textContent).toContain('Bill lookup unavailable');
+});
