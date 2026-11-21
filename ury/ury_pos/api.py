@@ -368,6 +368,7 @@ def get_split_group(invoice):
 
     split_fields = [
         "name",
+        "ury_client_order_id",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",

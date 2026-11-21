@@ -12,6 +12,7 @@ import { getOrderKotStatus, type KotItemState } from '../lib/kot-status-api';
 import { Spinner } from '@ury/ui';
 import { HoldFireControls } from './HoldFireControls';
 import { useOutbox } from '../offline/use-outbox';
+import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
 import { syncOrder } from '../lib/order-api';
 import { useRootStore } from '../store/root-store';
@@ -185,7 +186,7 @@ const OrderPanel = () => {
         total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
         clientOrderId: target?.client_order_id,
         onlineSubmit: (ids) => syncOrder({ ...orderData,
-          ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId }),
+          ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId, items: roundItems(orderData.items, ids.roundId) }),
         }),
       });
       const result = submission.offline ? null : submission.response;
