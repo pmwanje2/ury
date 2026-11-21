@@ -229,11 +229,16 @@ class TestRecordSetupFailure(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["app"], "ury")
 
-    @patch("ury.ury.api.minimal.setup_organization.frappe.session")
-    def test_submit_setup_guest_rejected(self, mock_session):
-        mock_session.user = "Guest"
-        with self.assertRaises(frappe.exceptions.ValidationError):
-            submit_setup({})
+    def test_submit_setup_guest_rejected(self):
+        # Maximus fork (T0): submit_setup is System Manager only via frappe.only_for, which reads
+        # the real session, so the Guest must be the real user. A Guest is an authorization denial
+        # (PermissionError), not a validation error.
+        frappe.set_user("Guest")
+        try:
+            with self.assertRaises(frappe.PermissionError):
+                submit_setup({})
+        finally:
+            frappe.set_user("Administrator")
 
     @patch("frappe.db.get_single_value")
     @patch("ury.ury.api.minimal.setup_organization.frappe.session")

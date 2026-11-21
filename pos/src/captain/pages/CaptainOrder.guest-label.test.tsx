@@ -45,6 +45,7 @@ vi.mock("../../lib/table-api", () => ({ getVacantTablesForBranch: vi.fn() }));
 vi.mock("@ury/ui", () => ({
   Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
   Spinner: ({ message }: any) => <div>{message}</div>,
+  ConfirmDialog: () => null,
   cn: (...args: any[]) => args.filter(Boolean).join(" "),
   showToast: { error: vi.fn(), success: vi.fn() },
 }));

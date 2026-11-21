@@ -137,6 +137,7 @@ class TestAcknowledgeServiceRequest(FrappeTestCase):
         mock_has_perm.return_value = True
         """Should change request status to 'Acknowledged' and save."""
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-001"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -154,6 +155,7 @@ class TestAcknowledgeServiceRequest(FrappeTestCase):
         mock_has_perm.return_value = True
         """Should return the updated request with new status."""
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-002"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -169,6 +171,7 @@ class TestAcknowledgeServiceRequest(FrappeTestCase):
         mock_has_perm.return_value = True
         """Should call save() once the explicit has_permission check passes."""
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-003"
         mock_get_doc.return_value = mock_doc
 
@@ -184,6 +187,7 @@ class TestAcknowledgeServiceRequest(FrappeTestCase):
         mock_has_perm.return_value = True
         """Should handle acknowledging an already-acknowledged request."""
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-004"
         mock_doc.status = "Acknowledged"
         mock_get_doc.return_value = mock_doc
@@ -210,6 +214,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "Captain John"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-001"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -233,6 +238,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "Captain John"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-002"
         mock_get_doc.return_value = mock_doc
 
@@ -252,6 +258,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "captain@ury.localhost"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-003"
         mock_get_doc.return_value = mock_doc
 
@@ -271,6 +278,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "Captain Jane"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-004"
         mock_doc.status = "Open"
         mock_get_doc.return_value = mock_doc
@@ -291,6 +299,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "Captain"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-005"
         mock_get_doc.return_value = mock_doc
 
@@ -311,6 +320,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "Captain"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-006"
         mock_doc.status = "Acknowledged"
         mock_get_doc.return_value = mock_doc
@@ -336,6 +346,7 @@ class TestResolveServiceRequest(FrappeTestCase):
         mock_session.user = "Captain Jane"
 
         mock_doc = MagicMock()
+        mock_doc.table = None  # no table: branch check exempts Administrator (#102)
         mock_doc.name = "SR-007"
         mock_doc.status = "Resolved"
         mock_doc.resolved_at = first_time
