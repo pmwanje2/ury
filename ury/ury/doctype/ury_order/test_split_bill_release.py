@@ -240,6 +240,20 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, r"\[URY-SPLIT-NOT-PERMITTED\]"):
             self.order.split_bill(invoice.name, [{"name": "line-1", "qty": 1}])
 
+    def test_fully_moved_keyed_ticket_follows_check_but_partially_identified_ticket_stays(self):
+        invoice = self._invoice(items=[Row(name='row1',item_code='Tea',item_name='Tea',qty=1,reservation_line_key='seat'),
+                                       Row(name='row2',item_code='Tea',item_name='Tea',qty=1,reservation_line_key='other')])
+        self._wire_invoice(invoice)
+        def rows(dt, **kw):
+            if dt == 'URY KOT': return ['whole', 'mixed']
+            if dt != 'URY KOT Items': return []
+            return [Row(reservation_line_key='ref:Tea:seat')] + ([Row(reservation_line_key=None)]
+                if kw['filters']['parent'] == 'mixed' else [])
+        self.framework.get_all.side_effect = rows
+        self.order.split_bill(invoice.name, [{'name':'row1', 'qty':1}])
+        moves = [call.args[1] for call in self.framework.db.set_value.call_args_list if call.args[0]=='URY KOT']
+        self.assertEqual(moves, ['whole'])
+
     def test_split_bill_refuses_room_outside_assignment(self):
         invoice = self._invoice(waiter="captain_a@example.com")
         self._wire_invoice(invoice, room="Back Room")

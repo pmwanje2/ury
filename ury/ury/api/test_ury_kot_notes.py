@@ -244,6 +244,15 @@ class TestKOTNoteDiff(OrderingCases, TestCase):
 
 
 class TestGuestKOTNotes(OrderingCases, TestCase):
+    def test_guest_dish_has_one_distinct_identity_per_accepted_line(self):
+        self.add('warm')
+        self.add('warm')
+        keys = [r.get('reservation_line_key') for r in self.invoice.items]
+        self.assertTrue(all(keys))
+        self.assertEqual(len(set(keys)), 2)
+        self.assertEqual([t.kot_items[0].reservation_line_key for t in self.tickets],
+                         [f'ref:Fish:{k}' for k in keys])
+
     def test_guest_note_reaches_the_real_kot_line(self):
         self.add("no onions")
         self.assertEqual(self.ticket_lines(), [("Fish", 1, "no onions")])

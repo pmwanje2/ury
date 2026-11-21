@@ -104,6 +104,16 @@ class HoldFireTests(OrderingCases, TestCase):
         with self.assertRaisesRegex(ValueError, "URY_HOLD_OFFLINE"):
             self.sync([self.request()], offline_printed=1)
 
+    def test_desk_callback_uses_saved_release_state_keys_and_notes(self):
+        held = self.row('h', held=1, note='later')
+        sent = self.row('s', held=0, note='now')
+        held.reservation_line_key, sent.reservation_line_key = 'cart-h', 'cart-s'
+        self.kot.kot_execute(self.invoice.name, self.invoice.customer, None,
+                             [dict(name=r.name, item_code=r.item_code, item_name=r.item_name, qty=r.qty)
+                              for r in self.invoice.items])
+        self.assertEqual(self.ticket_lines(), [('Fish', 1, 'now')])
+        self.assertEqual(self.tickets[0].kot_items[0].reservation_line_key, 'ref:Fish:cart-s')
+
     def test_fire_line_is_idempotent_preserves_price_notes_and_sends_only_that_line(self):
         self.row()
         self.row("held-2", note="chilli", qty=2)

@@ -137,6 +137,38 @@ class TestQtyReductionOnAllowedOrderType(FrappeTestCase):
 		                 ("ref:TEA:cart-row", "no milk", -1))
 		self.assertEqual(cancel.call_args.args[4], "guest correction")
 
+	def test_zero_held_row_does_not_require_firing(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {'order_type': 'Dine In'}.get
+		invoice.items = [frappe._dict(name='H',item_code='TEA',qty=1,ury_held=1,reservation_line_key='h'),
+		                 frappe._dict(name='S',item_code='TEA',qty=1,reservation_line_key='s')]
+		with patch(f'{MODULE}.frappe.db.exists', return_value=True), \
+		     patch(f'{MODULE}.frappe.get_doc', side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f'{MODULE}.frappe.has_permission', return_value=True), \
+		     patch(f'{MODULE}.process_items_for_cancel_kot') as cancel:
+			result = reduce_order_item_qty(invoice.name, 'H', 0)
+		self.assertEqual((invoice.items[0].qty, invoice.items[0].ury_held), (0, 0))
+		self.assertEqual(result['cancel_kot_names'], [])
+		cancel.assert_not_called()
+
+	def test_held_zero_reconciles_only_the_native_reservation_delta(self):
+		invoice = MagicMock()
+		invoice.branch, invoice.company = 'Branch A', 'Company A'
+		invoice.get.side_effect = {'order_type': 'Dine In'}.get
+		invoice.items = [frappe._dict(name='H',item_code='TEA',item_name='Tea',qty=1,ury_held=1,reservation_line_key='h'),
+		                 frappe._dict(name='S',item_code='TEA',item_name='Tea',qty=1,reservation_line_key='s')]
+		with patch(f'{MODULE}.frappe.db.exists', return_value=True), \
+		     patch(f'{MODULE}.frappe.get_doc', side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f'{MODULE}.frappe.has_permission', return_value=True), \
+		     patch('ury.ury.api.ury_stock_policy.get_branch_stock_policy', return_value=frappe._dict(reservation_control_enabled=1)), \
+		     patch('ury.ury.api.ury_order_reservation_service.reconcile_order_reservations') as reconcile:
+			reduce_order_item_qty(invoice.name, 'H', 0)
+		reconcile.assert_called_once()
+		data = reconcile.call_args.kwargs
+		self.assertEqual(data['order_ref'], invoice.name)
+		for field, qty in [('previous_items', 1), ('accepted_items', 0)]:
+			self.assertEqual({r['reservation_line_key']: r['qty'] for r in data[field]}, {'h': qty, 's': 1})
+
 	def test_reducing_held_dish_updates_bill_without_kitchen_cancellation(self):
 		invoice = MagicMock()
 		invoice.get.side_effect = {"order_type": "Dine In"}.get

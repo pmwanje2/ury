@@ -436,6 +436,18 @@ class TestProcessInvoice(FrappeTestCase):
     def tearDown(self):
         frappe.set_user("Administrator")
 
+    def test_scheduler_never_offers_a_held_line_to_a_station(self):
+        invoice = _InvoiceStub(_invoice_dict(items=[_kot_item_dict(ury_held=1)]))
+        profile = _pos_profile_dict(ury_enable_hold_fire=1)
+        docs = {'POS Invoice': invoice, 'POS Profile': profile,
+                'URY Production Unit': _production_unit_dict(), 'Item': frappe._dict(item_group='Food')}
+        with patch.object(frappe, 'get_doc', side_effect=lambda dt, *args, **kw: docs[dt]), \
+             patch.object(frappe, 'get_list', return_value=[]), \
+             patch(f'{MODULE}.get_productions_for_branch', return_value=[_production_unit_dict()]), \
+             patch(f'{MODULE}.create_kot') as dispatch:
+            process_invoice(frappe._dict(name=invoice.name))
+            dispatch.assert_not_called()
+
     @patch(f"{MODULE}.create_kot")
     @patch(f"{MODULE}.get_productions_for_branch")
     @patch(f"{MODULE}.frappe.get_list")
