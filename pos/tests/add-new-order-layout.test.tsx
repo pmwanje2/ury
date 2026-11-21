@@ -8,6 +8,9 @@ import { useRootStore } from '../src/store/root-store';
 import { usePOSStore } from '../src/store/pos-store';
 import OrderPanel from '../src/components/OrderPanel';
 import ScreenSizeProvider from '../src/components/ScreenSizeProvider';
+import OfflineBanner from '../src/components/OfflineBanner';
+import POS from '../src/pages/POS';
+import { within } from '@testing-library/react';
 
 let container: HTMLDivElement;
 let root: Root;
@@ -58,4 +61,45 @@ test.each([
   expect(panel?.className || '').toMatch(/inset-y-0|h-full/);
   const button = Array.from(container.querySelectorAll('button')).find((node) => node.textContent === 'Add New Order');
   expect(button).toBeTruthy();
+});
+
+test('the phone menu can add a cart line below the offline banner without reserving the desktop cart width', async () => {
+  vi.stubGlobal('innerWidth', 390);
+  vi.stubGlobal('innerHeight', 844);
+  usePOSStore.setState({
+    activeOrders: [],
+    menuItems: [{ id: 'tea', item: 'tea', item_name: 'Tea', name: 'Tea', course: 'Drinks', price: 1000, image: null }],
+  });
+  await act(async () => root.render(
+    <ScreenSizeProvider>
+      <OfflineBanner />
+      <POS />
+    </ScreenSizeProvider>,
+  ));
+  const register = within(container);
+  expect(register.getByRole('status')).toBeVisible();
+  const tea = register.getByRole('button', { name: 'Tea' });
+  // JSDOM has no layout engine: check the width reservation on the actual card's ancestors.
+  expect(tea.closest('.pe-96'), 'desktop cart padding consumes the phone menu').toBeNull();
+  const cart = register.getByTestId('order-panel');
+  expect(cart, 'the cart must not overlay the phone menu').not.toHaveClass('absolute');
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      tea.click();
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    expect(within(cart).getByRole('heading', { name: 'Tea' })).toBeVisible();
+    expect(within(cart).getByRole('button', { name: 'Add New Order' })).toBeEnabled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('a phone without offline capture still sees the desktop-only guard', async () => {
+  vi.stubGlobal('innerWidth', 390);
+  usePOSStore.setState({ posProfile: { ...usePOSStore.getState().posProfile!, ury_offline_capture: 0 } });
+  await act(async () => root.render(<ScreenSizeProvider><POS /></ScreenSizeProvider>));
+  expect(within(container).getByRole('heading', { name: 'Desktop Only' })).toBeVisible();
+  expect(within(container).queryByTestId('order-panel')).toBeNull();
 });
