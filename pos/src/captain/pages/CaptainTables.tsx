@@ -174,6 +174,15 @@ export default function CaptainTables() {
   const handleTableTap = async (table: Table, order: ActiveTableOrder | undefined) => {
     const ownership = resolveOwnership(table, order);
 
+    if (context?.reservation_enabled !== true) {
+      if (ownership === 'free' || ownership === 'mine' || canAccessOtherCaptainsTables) {
+        navigate(`/order/table/${table.name}`);
+      } else {
+        const name = order && (ownerNames.get(order.waiter) ?? order.waiter);
+        showToast.error(name ? t('tables.assigned_to', { owner: name }) : t('tables.table_occupied'));
+      }
+      return;
+    }
     if (ownership === 'free') {
       try {
         const orderRes = await getTableOrder(table.name);

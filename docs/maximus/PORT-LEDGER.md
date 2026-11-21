@@ -89,7 +89,7 @@ the open PR.
 | N | #95 | `8b6aa8a0`, `80f70004`, `1f98feff` | `042c8e29` | open, draft (new work, no fork rows) |
 | T0 | #96 | `ba3154e3`, `1747bae1`, `6692547b`, `7f0f931e`, `a7578aaf` | `b0d12217` | open, draft |
 | T5 part 3 | local branch `maximus/t5p3-offline-pos-wiring` | `e6a0290a`, `b59ba37e` | `6c24d276`, `3bb914d0` | implemented; landing PR pending |
-| T9a | `maximus/t9a-urypos-and-backend` | `a51f9071` | `4adcca54` | implemented on the draft branch; T9b owns the React POS remainder |
+| T9a | `maximus/t9a-urypos-and-backend` | `a51f9071` | `4adcca54` | merged in #126 at `45b8bc5d`; see the T9b supplement for React coverage |
 
 T5 accounts for 85 distinct fork commits: 12 ported in #107, 43 in #110,
 24 ported in part 3, four superseded by the v16 default-customer resolver,
@@ -107,16 +107,19 @@ T0 notes on rows marked "port" in the rows below:
 
 ### T9b — React POS and shared logout
 
-Draft branch `maximus/t9b-pos-ux-remainder`, based on `9181175b`. The row notes distinguish
+Draft branch `maximus/t9b-pos-ux-remainder`, merged forward over #126 (`45b8bc5d`). The row notes distinguish
 React coverage from outstanding Vue/backend work. D56 stays open for those legacy paths.
 The shared #27 rows `1e732d8e` and `1bd5e78d` are maintained by T9a (#126): its API and this
 branch’s `CaptainTables` / `CaptainTableCard` plus `table-bookings.test.tsx` compose the full feature.
-Standalone T9b accepts a missing endpoint. No configuration or customer data is seeded.
+The appointment badge is advisory and separate from the branch’s hard reservation check. No configuration or customer data is seeded.
 
 This keyed supplement updates the corresponding fork rows without editing T9a’s ledger hunks.
 
 | Fork commits | Disposition on v16 |
 |---|---|
+| `e0d5d18e`, `b5e86a30` | Captain and cashier floor dialogs read #126’s invoice-scoped eligible candidates. Search filters this roster locally; a refused read leaves no options. `captain-transfer-dialog.test.tsx`. |
+| `8f4ac36b`, `40f8d9f8` | The cashier table menu requires the transfer role and a positive candidate read for that table’s invoice; closing or switching menus invalidates the read. #126 owns server write eligibility and self-transfer refusal. `captain-transfer-menu.test.tsx`. |
+| `01bd8d07`, `b7ba8a3c` | Captain floor uses #126’s `reservation_enabled` context for hard lock reads and occupancy rules. Cashier floor gates reservation polling and lock checks on branch settings. Both disabled-floor suites exercise these paths; unrelated select and branding changes are outside this disposition. |
 | `492ac51d`, `7dec3e97`, `7d18b8b1` | React captain already sends to the kitchen, locks the pending action and returns to Tables; `captain-walk-in-order` covers anonymous sends. Legacy Cart/Pax and send-state changes remain outside T9b. |
 | `7d6bc789`, `a92006cb` | React retains the matching invoice customer and displays Frappe’s billed-order refusal. Legacy `order-send.js` and server-side blank-update fallback remain outside T9b. |
 | `89429dae`, `3a3a676a` | v16 `sync_order` resolves a new invoice from the order-type/profile default. React supplies the loaded existing invoice customer; direct blank-update RPC parity remains open. |
@@ -127,10 +130,10 @@ This keyed supplement updates the corresponding fork rows without editing T9a’
 | `ca0dfdda`, `f8d76b8e` | Profile, payment modes, customer groups, territories and paid-limit/merge reads use cookie-owned keys; stale responses cannot populate another user’s cache. |
 | `75e634ab`, `091bfa0e` | Resolve branch on the server and read URY Production Unit with native document permissions; `production-api.test.ts`. |
 | `7b3c4430`, `2157f927` | Read the current Frappe cookie locally for cache ownership. Guest/missing cookies cannot read legacy profiles; `profile-cache.test.ts`. |
-| `bd7cc393`, `77368707`, `df3e6f35`, `44c186c4` | Cashier Home opens the branch’s unpaid drafts oldest first, with site-clock ages, item previews and existing settlement controls. Permission-filtered native lists replace the frozen custom query. |
+| `bd7cc393`, `77368707`, `df3e6f35`, `44c186c4` | Cashier Home opens the branch’s unpaid drafts oldest first, with independently optional site-clock ages and item previews. Split cards use a generic label until numbered metadata is available in selected detail. Permission-filtered native lists replace the frozen custom query. |
 | `8f35fad2`, `98b312db` | Bill pickup distinguishes a missing/deleted invoice from an unavailable lookup; `BillRequestStrip.test.tsx`. |
 | `7e7cd07e`, `82075f4f` | Cashier role takes Home precedence across roles; explicit analytics, captain and provisional offline register routes retained. |
-| `57cdac91`, `4ed639cc`, `a7b1ad05` | Bill requests and table checks use the till branch; refresh keeps rows on transient failures. Exact and split bill selection tested. |
+| `57cdac91`, `4ed639cc`, `a7b1ad05` | Bill requests and table checks use the till branch; refresh keeps rows only within the same confirmed branch and cookie owner. Exact and split bill selection tested. |
 | `2d5d6ed5`, `bab890ba`, `f049f262` | Orders mounts #125’s shared Notifications component; native record and exact KOT check navigation use current user/branch. |
 | `6a24e1ca`, `a1fa7644`, `2be36009`, `13435364`, `868e7217` | Reused #125’s native read state, refresh-race guards and site clock; `Notifications.test.tsx` qualifies the shared implementation on cashier Home. |
 | `caf7f11f`, `c7885262` | Open outside T9b: v16 `cancel_order` submits then cancels drafts; the frozen fix uses discard. Legacy `recentOrder.js` still lowercases nullable fields. Both source paths are excluded. |

@@ -942,6 +942,7 @@
     "lookup_unavailable": "Bill lookup unavailable",
     "no_link": "Request has no linked table or bill",
     "no_open_checks": "No open checks for {{table}}",
+    "not_found": "Bill {{invoice}} was not found",
     "not_open": "Bill {{invoice}} is not open",
     "open_record": "Open request",
     "refresh": "Refresh",

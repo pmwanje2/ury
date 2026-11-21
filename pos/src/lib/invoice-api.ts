@@ -82,6 +82,7 @@ interface GetPOSInvoicesParams {
   limit?: number;
   limit_start?: number;
   paid_limit?: number;
+  branch?: string;
 }
 
 interface GetPOSInvoiceItemsResponse {
@@ -96,9 +97,14 @@ const outstandingFields = [
   'custom_merged_total', 'additional_discount_percentage', 'discount_amount', 'ury_client_order_id',
 ];
 
-async function outstandingChecks(limit: number, offset: number, query?: string) {
+export async function getTillBranch() {
   const { message: branch } = await call.get<{ message: string }>('ury.ury_pos.api.getBranch');
   if (!branch) throw new Error('Till branch unavailable');
+  return branch;
+}
+
+async function outstandingChecks(limit: number, offset: number, query?: string, resolvedBranch?: string) {
+  const branch = resolvedBranch || await getTillBranch();
   const { message: rows } = await call.get<{ message: (POSInvoice & { creation: string })[] }>('frappe.client.get_list', {
     doctype: 'POS Invoice', filters: { branch, docstatus: 0, status: 'Draft' }, fields: outstandingFields,
     ...(query ? { or_filters: ['name', 'customer', 'mobile_number'].map(field => [field, 'like', `%${query}%`]) } : {}),
@@ -106,7 +112,7 @@ async function outstandingChecks(limit: number, offset: number, query?: string) 
   });
   const invoices = rows.slice(0, limit);
   if (invoices.length) {
-    const [items, clock] = await Promise.all([
+    const [items, clock] = await Promise.allSettled([
       call.get<{ message: { parent: string; item_name: string; qty: number }[] }>('frappe.client.get_list', {
         doctype: 'POS Invoice Item', parent: 'POS Invoice', fields: ['parent', 'item_name', 'qty'],
         filters: { parenttype: 'POS Invoice', parent: ['in', invoices.map(row => row.name)] },
@@ -118,9 +124,10 @@ async function outstandingChecks(limit: number, offset: number, query?: string) 
     // the till's timezone and daylight saving transitions do not change the age.
     const siteMillis = (value: string) => Date.parse(value.replace(' ', 'T') + 'Z');
     for (const inv of invoices) {
-      const age = siteMillis(clock.message) - siteMillis(inv.creation);
+      const age = clock.status === 'fulfilled' && typeof clock.value.message === 'string' && inv.creation
+        ? siteMillis(clock.value.message) - siteMillis(inv.creation) : NaN;
       if (Number.isFinite(age)) inv.age_minutes = Math.max(0, Math.floor(age / 60000));
-      inv.items_preview = items.message.filter(row => row.parent === inv.name).map(({ item_name, qty }) => ({ item_name, qty }));
+      if (items.status === 'fulfilled' && Array.isArray(items.value.message)) inv.items_preview = items.value.message.filter(row => row.parent === inv.name).map(({ item_name, qty }) => ({ item_name, qty }));
     }
   }
   return { invoices, hasMore: rows.length > limit };
@@ -130,10 +137,10 @@ export async function getPOSInvoices({
   status,
   limit,
   limit_start,
-  paid_limit
+  paid_limit, branch
 }: GetPOSInvoicesParams) {
   try {
-    if (status === 'Outstanding') return await outstandingChecks(limit ?? 20, limit_start ?? 0);
+    if (status === 'Outstanding') return await outstandingChecks(limit ?? 20, limit_start ?? 0, undefined, branch);
     // Use paid_limit as the limit for Recently Paid status
     const actualLimit = status === 'Recently Paid' && paid_limit ? paid_limit : limit;
 
@@ -191,10 +198,10 @@ export async function updateInvoiceStatus(
   }
 }
 
-export async function searchPosInvoice(query: string, status: string) {
+export async function searchPosInvoice(query: string, status: string, branch?: string) {
   try {
     if (status === 'Outstanding') {
-      const { invoices, hasMore } = await outstandingChecks(10, 0, query);
+      const { invoices, hasMore } = await outstandingChecks(10, 0, query, branch);
       return { data: invoices, next: hasMore };
     }
     const response = await call.get('ury.ury_pos.api.searchPosInvoice', {

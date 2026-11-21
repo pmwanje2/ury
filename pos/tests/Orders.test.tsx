@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../src/store/root-store', () => ({
   useRootStore: () => ({
+  ordersOwner: "cashier@example.com",
     orders: state.empty ? [] : [state.order], selectedOrder: state.order, selectedOrderItems: state.items,
     user: { name: 'cashier@example.com', roles: ['URY Cashier'] },
     selectedOrderTaxes: [], selectedStatus: state.selectedStatus || state.order.status,

@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('../store/root-store', () => ({ useRootStore: () => ({
+  ordersOwner: "cashier@example.com",
   orders: [state.order], selectedOrder: state.order,
   selectedOrderItems: [{ name: 'ROW-1', item_name: 'Soup', qty: 2, rate: 20, amount: 40 }],
   selectedOrderTaxes: [], selectedStatus: 'Draft',
@@ -52,6 +53,7 @@ const cancelOrderButton = () =>
   container.querySelector<HTMLButtonElement>(`button[aria-label="${t('orders.cancel_order')}"]`);
 
 beforeEach(async () => {
+  document.cookie = 'user_id=cashier%40example.com; Path=/';
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   state.canCancel = true;
   delete state.profile.custom_void_reasons;

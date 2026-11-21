@@ -175,6 +175,13 @@ export async function tableTransfer(
   });
 }
 
+export async function getCaptainTransferCandidates(invoice: string) {
+  const result = await call.get<{ message: { name: string; full_name?: string }[] }>(
+    'ury.ury.doctype.ury_order.ury_order.get_captain_transfer_candidates', { invoice },
+  );
+  return result.message;
+}
+
 export async function captainTransfer(
   currentCaptain: string,
   newCaptain: string,

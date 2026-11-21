@@ -43,7 +43,7 @@ const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoic
     selectedOrderType,
     selectedTable,
     selectedRoom,
-    tableOrder,
+    tableOrder, editCustomer,
     selectedCustomer,
     selectedAggregator,
     resetOrderState,
@@ -130,7 +130,10 @@ const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoic
       }
 
       const routine = selectedOrderType === DINE_IN || selectedOrderType === 'Take Away';
-      const invoiceCustomer = isUpdatingOrder && tableOrder?.message?.name === orderId ? tableOrder.message.customer : null;
+      const invoiceCustomer = isUpdatingOrder && orderId ? (
+        editCustomer?.invoice === orderId ? editCustomer.customer :
+          tableOrder?.message?.name === orderId ? tableOrder.message.customer : null
+      ) : null;
       const customer = selectedCustomer?.id || invoiceCustomer || (!isUpdatingOrder && outbox.offline && routine
         ? resolveDefaultCustomer(selectedOrderType, posProfile)?.id : '');
       // Validate customer/aggregator details
@@ -200,7 +203,7 @@ const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoic
       // write is rejected (stale last_modified_time, table already occupied,
       // or the invoice was already billed by another user).
       if (result?.message && typeof result.message === 'object' && 'status' in result.message && result.message.status === 'Failure') {
-        showToast.error(isUpdatingOrder ? t('errors.order_modified') : t('errors.order_sync_failed'));
+        showToast.error(parseFrappeError(result, t('errors.order_sync_failed')));
         return;
       }
 

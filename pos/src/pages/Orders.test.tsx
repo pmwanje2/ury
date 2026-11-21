@@ -33,6 +33,7 @@ vi.mock("@ury/ui", () => ({
 
 // Create a mock store object with correct pagination structure
 const mockRootStoreState = {
+  ordersOwner: "cashier@example.com",
   orders: [],
   ordersOffline: false,
   orderLoading: false,

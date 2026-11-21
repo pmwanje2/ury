@@ -32,6 +32,7 @@ export interface CaptainContextOpeningState {
 }
 
 export interface CaptainContext {
+  reservation_enabled?: boolean;
   user: string;
   roles: string[];
   branch: string | null;

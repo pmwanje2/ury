@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ClipboardList, Loader2, UtensilsCrossed } from 'lucide-react';
 import { Button, ConfirmDialog, Spinner, cn, showToast } from '@ury/ui';
-import { formatCurrency } from '@ury/core';
+import { formatCurrency, parseFrappeError as refusalMessage } from '@ury/core';
 import { usePOSStore } from '../../store/pos-store';
 import { useRootStore, RootState } from '../../store/root-store';
 import {
@@ -269,11 +269,7 @@ export default function CaptainOrder() {
       const result = await syncOrder(orderData);
 
       if (result?.message && typeof result.message === 'object' && 'status' in result.message && result.message.status === 'Failure') {
-        showToast.error(
-          isUpdatingOrder
-            ? 'This order was modified by someone else. Please reopen the table and try again.'
-            : 'Failed to send the order. Please try again.'
-        );
+        showToast.error(refusalMessage(result, t('errors.order_sync_failed')));
         return;
       }
 
@@ -918,6 +914,7 @@ export default function CaptainOrder() {
         open={isTransferCaptainOpen}
         onOpenChange={setIsTransferCaptainOpen}
         currentCaptain={currentCaptain}
+        invoiceName={invoiceId ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
 

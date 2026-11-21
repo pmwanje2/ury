@@ -754,6 +754,7 @@
     "lookup_unavailable": "Recherche d’addition indisponible",
     "no_link": "La demande n’est liée à aucune table ni addition",
     "no_open_checks": "Aucune addition ouverte pour {{table}}",
+    "not_found": "L’addition {{invoice}} est introuvable",
     "not_open": "L’addition {{invoice}} n’est pas ouverte",
     "open_record": "Ouvrir la demande",
     "refresh": "Actualiser",

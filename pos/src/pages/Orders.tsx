@@ -18,7 +18,7 @@ import OrderActionsMenu from '../components/OrderActionsMenu';
 import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
 import { printOrder } from '../lib/print';
-import { call } from '@ury/core';
+import { call, getSessionUser } from '@ury/core';
 import { splitBill, cancelOrder } from '../lib/order-api';
 import {
   getOrdersTabForInvoice,
@@ -44,6 +44,7 @@ import {
   type PrintWarningInput,
 } from '../lib/invoice-print-warning';
 import { orderTypeLabel } from '../data/order-types';
+import { useSessionOwner } from '../lib/use-session-owner';
 import BillRequestStrip from '../components/BillRequestStrip';
 import Notifications from '../components/Notifications';
 
@@ -96,13 +97,18 @@ function LinkTag({ icon: Icon, children }: { icon: React.ComponentType<{ classNa
 }
 
 export default function Orders() {
+  const owner = useSessionOwner();
+  return <OwnerOrders key={owner} owner={owner} />;
+}
+
+function OwnerOrders({ owner }: { owner: string | null }) {
   const { 
-    orders, ordersOffline,
+    orders: list, ordersOwner, ordersOffline,
     orderLoading,
     error,
     selectedStatus,
     pagination,
-    selectedOrder,
+    selectedOrder: detail,
     selectedOrderItems,
     selectedOrderTaxes,
     selectedOrderLoading,
@@ -116,6 +122,9 @@ export default function Orders() {
     orderSearchQuery
   } = useRootStore();
 
+  const sameOwner = !!owner && owner !== 'Guest' && ordersOwner === owner;
+  const orders = sameOwner ? list : [];
+  const selectedOrder = sameOwner ? detail : null;
   const posStore = usePOSStore();
   const printWarningMinutes = posStore.posProfile?.custom_invoice_warning_time ?? 0;
   const [clockNow, setClockNow] = React.useState(() => Date.now());
@@ -311,10 +320,11 @@ export default function Orders() {
       if (!res.ok) throw new Error('Failed to fetch order details');
       const data = await res.json();
       const order = data.message;
+      if (order?.name !== selectedOrder.name || owner !== getSessionUser()) throw new Error(t('errors.failed_edit_order'));
       // Fill POS store
       posStore.resetOrderState();
       posStore.setSelectedOrderType(order.order_type);
-      posStore.setOrderForUpdate(order.name);
+      posStore.setOrderForUpdate(order.name, order.customer, order.modified);
       if (order.restaurant_table) {
         posStore.setSelectedTable(order.restaurant_table, order.custom_restaurant_room || null,true);
       }
@@ -506,8 +516,7 @@ export default function Orders() {
     if (!isCurrentSession()) return false;
     const till = await call.get<{ message: string }>('ury.ury_pos.api.getBranch');
     if (!isCurrentSession() || !till.message || response.message?.branch !== till.message || response.message.name !== kot.message.invoice) return false;
-    await selectOrder(response.message);
-    return true;
+    return await selectOrder(response.message) && isCurrentSession();
   }
 
   if (ordersOffline) {
