@@ -298,3 +298,41 @@ describe("POSOpeningProvider", () => {
     expect(screen.queryByText("Orders Content")).not.toBeInTheDocument();
   });
 });
+
+describe('offline opening confirmation', () => {
+  const profile = mockPosProfile as typeof mockPosProfile & { ury_offline_capture?: number };
+  const opening = { name: 'OPEN-1', pos_profile: profile.name, company: profile.company };
+  const workspace = <POSOpeningProvider><div>Register</div></POSOpeningProvider>;
+  beforeEach(() => {
+    sessionStorage.clear();
+    mockPathname = '/register';
+    mockGetChecklist.mockResolvedValue({ logStatus: 'Complete' });
+  });
+  it.each([502, 503, 504, 520, 524, 403, 500])('reuses a confirmed opening only for a link failure (%i)', async (status) => {
+    profile.ury_offline_capture = 1;
+    mockCheckPOSOpening.mockResolvedValue({message: [opening]});
+    const first = render(workspace);
+    await screen.findByText('Register');
+    first.unmount();
+    mockCheckPOSOpening.mockRejectedValue({httpStatus: status});
+    render(workspace);
+    if ([403, 500].includes(status)) await screen.findByTestId('opening-dialog');
+    else await screen.findByText('Register');
+    delete profile.ury_offline_capture;
+  });
+  it('an authoritative closed opening invalidates the old confirmation before the next outage', async () => {
+    profile.ury_offline_capture = 1;
+    mockCheckPOSOpening.mockResolvedValue({message: [opening]});
+    const first = render(workspace);
+    await screen.findByText('Register');
+    first.unmount();
+    mockCheckPOSOpening.mockResolvedValue({message: []});
+    const closed = render(workspace);
+    await screen.findByTestId('opening-screen');
+    closed.unmount();
+    mockCheckPOSOpening.mockRejectedValue({httpStatus: 502});
+    render(workspace);
+    await screen.findByTestId('opening-dialog');
+    delete profile.ury_offline_capture;
+  });
+});
