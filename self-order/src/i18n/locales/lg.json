@@ -46,7 +46,9 @@
     "pay_online": "Sasula ku yintaneeti",
     "starting": "Ntandika okusasula…",
     "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.",
-    "pay_at_counter": "Sasula ku kaunta"
+    "pay_at_counter": "Sasula ku kaunta",
+    "paid": "Kusasuddwa ({{amount}} {{currency}}) — webale.",
+    "remaining": "Osasudde {{paid}} {{currency}} ku ssimu. Nsaba sasula ebisigaddeyo {{remaining}} {{currency}} ku kaunta."
   },
   "bill": {
     "request": "Saba bili",

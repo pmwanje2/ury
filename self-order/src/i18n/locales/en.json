@@ -46,7 +46,9 @@
     "pay_online": "Pay Online",
     "starting": "Starting payment…",
     "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.",
-    "pay_at_counter": "Pay at Counter"
+    "pay_at_counter": "Pay at Counter",
+    "paid": "Paid ({{amount}} {{currency}}) — thank you.",
+    "remaining": "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter."
   },
   "bill": {
     "request": "Request Bill",
