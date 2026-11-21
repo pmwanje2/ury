@@ -29,7 +29,7 @@ branch fetched. That is **695** commits. It equals `git rev-list --no-merges 792
 because everything before `79215b29` on the old line is upstream history (1,402 commits since the
 version-16 merge-base minus 707 upstream commits).
 
-Source PR: the fork merge (first-parent) that brought the commit in. "direct" means it was
+Source PR: the first-parent fork merge or squash PR that brought the commit in. "direct" means it was
 committed to the integration line without a fork PR.
 
 Status:
@@ -128,7 +128,7 @@ This keyed supplement updates the corresponding fork rows with the final split b
 | `89429dae`, `3a3a676a` | v16 `sync_order` resolves a new invoice from the order-type/profile default. React supplies the loaded existing invoice customer; T9c resolves blank updates from the saved invoice, then the configured default. |
 | `499a5d1d`, `d942f807` | React cashier opens the acknowledged invoice in Orders; captain returns to Tables (floor sign-out keeps precedence). T9c returns Vue waiters to Tables and opens the acknowledged check for cashiers. |
 | `e1722257`, `078404d2`, `4ea7132b` | Shared CSRF-safe sign-out, scoped cleanup and pending-action guards. v16 React has no persisted order-tab collection; old tab keys are purged. T9c routes the legacy Vue caller through the shared CSRF POST. |
-| `bd78795d`, `a379feb4`, `05737a5e`, `ebe37108` | Management and POS retain state on logout failure. Successful cleanup includes legacy Mosaic localStorage keys matching `/^.+_.+_strike$/`; another app on the same origin using that pattern can lose matching keys. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. T9c retains the legacy login and cached state on refusal and permits retry. |
+| `bd78795d`, `a379feb4`, `05737a5e`, `ebe37108` | Management and POS retain state on logout failure. Successful cleanup includes legacy Mosaic localStorage keys matching `/^.+_.+_strike$/`; another app on the same origin using that pattern can lose matching keys. Mosaic checks the CSRF POST before purging. #123 worker/outbox protections retained. Legacy Vue waiter/cashier logout preserves foreign strike keys on refusal and successful retry; Mosaic retains its existing strike cleanup. |
 | `c94bd75e`, `7b1d816f` | Orders exposes print, split and settle for eligible checks and applies the profile’s print-before-pay rule. Outstanding and both bill-pickup paths pass the linked invoice and combined amount to settlement even without a split group; the pickup tests verify the dialog total without posting a payment. |
 | `ca0dfdda`, `f8d76b8e` | Profile, payment modes, customer groups, territories and paid-limit/merge reads use cookie-owned keys; stale responses cannot populate another user’s cache. |
 | `75e634ab`, `091bfa0e` | Resolve branch on the server and read URY Production Unit with native document permissions; `production-api.test.ts`. |
@@ -852,21 +852,47 @@ This keyed supplement updates the corresponding fork rows with the final split b
 
 ## Carrier PRs opened after the freeze (urgent-fix rule)
 
-Rows for fixes opened on the version-2 carrier (`codex/ury-build-closure-20261114`) while the port
-runs. A row whose behaviour `version-16` already has is **superseded** with the upstream commit;
-only the fork-specific part is **port**.
+The 36 non-merge commits in `git rev-list --no-merges 32741738..2e7606f9` are the
+post-freeze inventory for `codex/ury-build-closure-20261114` through #119, separate
+from the 695 frozen rows. Source names the carrier PR; Note names the v16 landing.
 
 | Fork commit | Date | Source | Theme | Status | Subject | Note |
 |---|---|---|---|---|---|---|
+| `9cd2f80e` | 2026-11-20 | #94 | T3 | port | test(mosaic): RED station print sends pageWidth so QZ raw HTML is not an 8-dot strip | #115: paper width in dots on the QZ raw HTML element (`station-print.js` and its tests). |
+| `6c33c5d5` | 2026-11-20 | #94 | T3 | port | fix(mosaic): GREEN pass station Paper width to QZ as pageWidth | #115: paper width in dots on the QZ raw HTML element (`station-print.js` and its tests). |
+| `37b6e9d2` | 2026-11-20 | #97 | T6 | port | test(self-order): RED guest header shows the area and location, never a hard-coded Table | #113: guest header uses the translated room area and location (`be527292`, `f59c0ec2`). |
+| `b79a2c29` | 2026-11-20 | #97 | T6 | port | test(self-order): RED the Mobile source pin names the location label, not header.table | #113: guest header uses the translated room area and location (`be527292`, `f59c0ec2`). |
+| `0a2dcdc6` | 2026-11-20 | #97 | T6 | port | fix(self-order): GREEN guest header shows area · location from URY Room (Simphony MOP location label) | #113: guest header uses the translated room area and location (`be527292`, `f59c0ec2`). |
 | `2742264b` | 2026-11-20 | #98 | T6 | superseded (part) | test(self-order): RED guest menu by category in the menu's configured order | grouping and CategoryTabs are upstream `100c43fe` (`self-order/src/layouts/shared/CategoryTabs.tsx`, `TabletLayout.tsx` 64-81, `MobileQRLayout.tsx`); port only the ordering assertions (`course_priority`, `menu_order`); #113 records the final guest/UI disposition. |
 | `9c23ba59` | 2026-11-20 | #98 | T6 | port | test(self-order): RED move the translated-category-label pin to the shared category menu | #113; carries with the T6 guest-language pins |
-| `28d5db61` | 2026-11-20 | #98 | T6 | superseded | test(self-order): RED Mobile category chips stay below the sticky header | version-16 MobileQRLayout header is `z-20` above CategoryTabs; re-check on the v16 layout; #113 records the final guest/UI disposition. |
-| `4d33f2dd` | 2026-11-20 | #98 | T10 | dropped | test(self-order): lint the RED category test | test lint only |
+| `28d5db61` | 2026-11-20 | #98 | T6 | port | test(self-order): RED Mobile category chips stay below the sticky header | #113: MobileQRLayout measures the sticky header and passes `stickyTop={headerHeight}` to CategoryTabs; `guest-menu-categories.test.tsx` checks a 105 px offset. |
+| `4d33f2dd` | 2026-11-20 | #98 | T10 | dropped | test(self-order): lint the RED category test (unused destructured names) | test lint only |
+| `8bd92913` | 2026-11-20 | #99 | T3 | port | test(mosaic): station tickets ask QZ for double-density ESC/POS images (RED) | #115: Standard station printing uses double-density ESC/POS (`station-print.test.js`). |
 | `ddcb74b1` | 2026-11-20 | #98 | T6 | superseded (part) | feat(self-order): GREEN guest menu by category in the menu's configured order | port `resolve_restaurant_menu` `course_priority`/`menu_order` and the sort by `custom_serving_priority` then menu row; version-16 orders categories by first appearance in an item-name-sorted list; #113 records the final guest/UI disposition. |
+| `43d2762c` | 2026-11-20 | #99 | T3 | port | fix(mosaic): station tickets print one dot per column (double-density ESC/POS) (GREEN) | #115: Standard station printing uses double-density ESC/POS (`station-print.test.js`). |
+| `10a0fd4e` | 2026-11-20 | #100 | T3 | port | test(mosaic): station printer command mode Standard (ESC *) or Raster (GS v 0) (RED) | #115: per-station Standard/Raster choice (`af73f73c`, `e0d50e1b`). |
+| `3624525b` | 2026-11-20 | #100 | T3 | port | fix(mosaic): per-station Printer command mode, Raster (GS v 0) for generic ESC/POS printers (GREEN) | #115: per-station Standard/Raster choice (`af73f73c`, `e0d50e1b`). |
 | `edd08bd3` | 2026-11-20 | #101 | T6 | superseded (part) | test: call waiter alerts every staff screen until acknowledged (RED) | upstream `100c43fe` has the staff API (`ury/ury/api/service_requests.py`), `pos/src/lib/service-request-api.ts` and the Captain `ServiceRequestPanel`; the alert, realtime, escalation and branch tests are the fork part, carried as #102; #113 records the final guest/UI disposition. |
 | `013160d4` | 2026-11-20 | #101 | T6 | port | test: fix the call-waiter RED harness and retire the old dedupe assertion (still RED) | #113; the per-table Assistance dedupe and guest rate limit carry with `756c4923` (`request_assistance`, which upstream does not have) |
-| `c06e5757` | 2026-11-20 | #101 | T6 | superseded (part) | feat: call waiter alerts every staff screen until acknowledged (GREEN) | `service_requests.py` list/acknowledge/resolve and `service-request-api.ts` are upstream `100c43fe` verbatim; realtime publish, profile settings and banners are #102; the branch check on acknowledge/resolve and the guest limits carry with `756c4923`; #113 records the final guest/UI disposition. |
+| `c06e5757` | 2026-11-20 | #101 | T6 | superseded (part) | feat: call waiter alerts every staff screen until acknowledged (GREEN) | Native list/acknowledge/resolve handlers and Captain panel exist at `100c43fe`; `pos/src/lib/service-request-api.ts` is byte-identical. #102 adds branch checks, alerts and realtime delivery. |
+| `770bea15` | 2026-11-20 | #103 | T6 | port | test(self-order): RED known guest refusal ids show a translated next step and keep the basket | #113: translated actionable refusal and retained basket (`be527292`, `f59c0ec2`). |
+| `6d223c68` | 2026-11-20 | #103 | T6 | port | test(self-order): RED a known refusal follows a language switch; unknown ids keep server text | #113: translated actionable refusal and retained basket (`be527292`, `f59c0ec2`). |
+| `68ca8978` | 2026-11-20 | #103 | T6 | port | fix(self-order): GREEN known guest refusal ids show a translated next step; the basket is kept | #113: translated actionable refusal and retained basket (`be527292`, `f59c0ec2`). |
+| `e896e428` | 2026-11-20 | #104 | T6 | port | test(guest): RED guest session reads do not write-lock the session row | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `33e7ecee` | 2026-11-20 | #104 | T6 | port | fix(guest): GREEN guest session reads slide expiry with a two-column update, not a full save | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `9f5b4e95` | 2026-11-20 | #101 | T6 | port | test: call waiter re-alerts after acknowledge, per-user realtime, audit and history (RED) | #102: re-alert, per-user delivery, audit and history (`1f4ec2ba`, `c1ff16d7`). |
+| `b4782339` | 2026-11-20 | #101 | T6 | port | fix: call waiter re-alerts after acknowledge, per-user realtime, audit and history (GREEN) | #102: re-alert, per-user delivery, audit and history (`1f4ec2ba`, `c1ff16d7`). |
+| `04ee09c5` | 2026-11-20 | #104 | T6 | port | test(guest): RED a deadlock on the session slide rolls back the whole transaction; short timeouts slide at half | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `d9a2e6ae` | 2026-11-20 | #104 | T6 | port | fix(guest): GREEN a deadlock on the session slide rolls back the transaction, not a lost savepoint | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `7091cb1c` | 2026-11-20 | #111 | T6 | port | test(self-order): guest lines carry the Item name, not the item code (RED) | #112: item-name lookup and append-only pricing coverage (`20722c3d`, `a524f4f8`, `b5991ba9`). |
+| `b75ed156` | 2026-11-20 | #111 | T6 | port | test(self-order): append-only guest test expects the Item name on the priced line (RED) | #112: item-name lookup and append-only pricing coverage (`20722c3d`, `a524f4f8`, `b5991ba9`). |
+| `8484afbd` | 2026-11-20 | #111 | T6 | port | fix(self-order): guest lines carry the Item name, not the item code (GREEN) | #112: item-name lookup and append-only pricing coverage (`20722c3d`, `a524f4f8`, `b5991ba9`). |
+| `6b18fee1` | 2026-11-20 | #104 | T6 | port | test(guest): grant-removal slide test matches the two-column session update | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `e4f4188e` | 2026-11-20 | #104 | T6 | port | test(guest): RED a skipped session slide is logged without an Error Log | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `8e29a65d` | 2026-11-20 | #104 | T6 | port | fix(guest): GREEN a skipped session slide is logged without an Error Log | #116: tests `96577b53` and implementation `1f706e3c` cover the bounded two-column slide, lock failures and app logging. |
+| `cb8b9ea1` | 2026-11-20 | #103 | T6 | port | test(self-order): RED unopened-table refusal names only on-screen actions | #113: translated actionable refusal and retained basket (`be527292`, `f59c0ec2`). |
+| `7b1f03e6` | 2026-11-20 | #103 | T6 | port | fix(self-order): GREEN unopened-table refusal asks for staff, names no hidden button | #113: translated actionable refusal and retained basket (`be527292`, `f59c0ec2`). |
+| `53c69dfd` | 2026-11-21 | #119 | T6 | port | test(guest): RED the session expiry refusal writes nothing and reads like any unusable token | #120: expiry refuses without a write (`ce7bc8d5`, `861fcc37`). |
+| `1eaf6307` | 2026-11-21 | #119 | T6 | port | fix(guest): GREEN the session expiry refusal writes nothing and reads like any unusable token | #120: expiry refuses without a write (`ce7bc8d5`, `861fcc37`). |
 
-The `URY Service Request` model, the staff API and the Captain panel are native on `version-16`
-(`100c43fe`). Our only additions on that line are the very visible alert, realtime push and
-escalation, in #102 (`maximus/service-request-staff-alert`).
+Upstream supplies the `URY Service Request` model and staff handlers. The v16 port gates listing by branch and checks the request’s table branch before acknowledgement or resolution. #102 also carries staff banners, escalation, per-user notifications, re-alerting, audit and history. #113 carries the guest request path and guest limits.
