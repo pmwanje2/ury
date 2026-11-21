@@ -85,7 +85,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
 
-  const handleApplyDiscount = () => {
+  const handleApplyDiscount = async () => {
+    try {
+      await assertOfflineActionAllowed('discount');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : t('errors.invalid_discount'));
+      return;
+    }
     const value = parseFloat(discountValue);
     if (isNaN(value) || value <= 0) {
       setError(t('errors.invalid_discount'));

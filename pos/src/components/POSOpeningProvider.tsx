@@ -192,6 +192,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
             entry.company === posProfile.company
         ) || entries[0];
 
+      if (readConfirmedOpening(key)?.name !== matchingEntry.name) invalidate();
       setExistingEntry(matchingEntry);
 
       const isSameContext =

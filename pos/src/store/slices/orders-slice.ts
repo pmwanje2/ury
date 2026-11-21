@@ -1,3 +1,5 @@
+import { getSessionUser, sessionStorageKey } from '@ury/core';
+import { cachedOfflineProfile } from '../../pwa/register-offline';
 import { StateCreator } from 'zustand';
 import { OrderType } from '../../data/order-types';
 import { isLinkDown, call } from '@ury/core';
@@ -99,7 +101,7 @@ export const createOrdersSlice: StateCreator<
       const { orderSearchQuery, selectedStatus } = get();
       
       // Get POS profile to access paid_limit
-      const posProfile = sessionStorage.getItem('posProfile');
+      const posProfile = sessionStorage.getItem(sessionStorageKey('posProfile'));
       const profile = posProfile ? JSON.parse(posProfile) : null;
       const paidLimit = profile?.paid_limit;
       
@@ -136,7 +138,7 @@ export const createOrdersSlice: StateCreator<
         orderLoading: false 
       });
     } catch (error) {
-      if (isLinkDown(error) && (get() as OrdersState & { user?: { provisional?: boolean } }).user?.provisional) {
+      if (isLinkDown(error) && cachedOfflineProfile(getSessionUser())) {
         set({ ordersOffline: true, orderLoading: false, orders: [], selectedOrder: null, error: null });
         return;
       }

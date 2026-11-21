@@ -1,5 +1,5 @@
 export { createFrappeClient, call, db, auth } from './frappe/client';
-export { getLoggedUser, readLoggedUser, isLinkDown, getSessionUser, getUserRoles, logout, login } from './frappe/auth';
+export { getLoggedUser, readLoggedUser, isLinkDown, getUserRoles, logout, login } from './frappe/auth';
 export { isUserRestrictedFromTableOrders, shouldMaskAmounts, canCaptainTransfer, derivePOSCapabilities } from './frappe/roles';
 export { parseFrappeError } from './frappe/errors';
 export { watchIdle } from './idle';
@@ -22,7 +22,7 @@ export {
   storage,
   purgeOfflineSession,
   tellOfflineWorker,
-  getUserSessionStorageKey,
+  getSessionUser, sessionStorageKey, getUserSessionStorageKey,
   isUryPosRegistration,
   URY_POS_SCOPE,
   URY_POS_CACHE_PREFIX,

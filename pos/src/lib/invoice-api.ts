@@ -1,3 +1,4 @@
+import { sessionStorageKey } from '@ury/core';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { isLinkDown } from '@ury/core';
 import { DOCTYPES } from '../data/doctypes';
@@ -346,7 +347,7 @@ const MERGE_CANDIDATE_FIELDS = [
 ] as const;
 
 function getBranchFromSession(): string {
-  const raw = sessionStorage.getItem('posProfile');
+  const raw = sessionStorage.getItem(sessionStorageKey('posProfile'));
   if (!raw) {
     throw new Error('POS profile not loaded');
   }

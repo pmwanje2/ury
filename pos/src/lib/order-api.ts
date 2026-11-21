@@ -235,6 +235,7 @@ export async function reduceOrderItemQty(
   newQty: number,
   reason?: string
 ): Promise<ReduceOrderItemQtyResponse> {
+  await assertOfflineActionAllowed('quantity reduction');
   const res = await call.post<{ message: ReduceOrderItemQtyResponse }>(
     'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty',
     {

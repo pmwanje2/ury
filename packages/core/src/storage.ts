@@ -32,6 +32,22 @@ export function getUserSessionStorageKey(key: string, user: string | null | unde
   return user && user !== 'Guest' ? `${key}:${user}` : null;
 }
 
+export const getSessionUser = (): string | null => {
+  if (typeof document === 'undefined') return null;
+  const cookie = document.cookie.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith('user_id='));
+  if (!cookie) return null;
+  try {
+    return decodeURIComponent(cookie.slice('user_id='.length)) || null;
+  } catch {
+    return null;
+  }
+};
+
+export function sessionStorageKey(key: string): string {
+  return getUserSessionStorageKey(key, getSessionUser()) ?? key;
+}
+
 export function isUryPosRegistration(registration: { scope: string }): boolean {
   try {
     return new URL(registration.scope).pathname === URY_POS_SCOPE;

@@ -14,18 +14,6 @@ interface UserDoc {
   }>;
 }
 
-export const getSessionUser = (): LoggedUserResponse => {
-  if (typeof document === 'undefined') return null;
-  const cookie = document.cookie.split(';').map((part) => part.trim())
-    .find((part) => part.startsWith('user_id='));
-  if (!cookie) return null;
-  try {
-    return decodeURIComponent(cookie.slice('user_id='.length)) || null;
-  } catch {
-    return null;
-  }
-};
-
 // True only for the client's tagged "no HTTP answer" shape. 401/403 keep
 // their httpStatus; other TypeErrors and messages are not offline.
 export function isNetworkFailure(error: unknown): boolean {
