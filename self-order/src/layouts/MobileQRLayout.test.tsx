@@ -210,11 +210,11 @@ describe("MobileQRLayout", () => {
     })
   })
 
-  it("displays table number in header for dine-in", async () => {
+  it("names the location in the header, never a hard-coded Table (#97)", async () => {
     render(<MobileQRLayout />)
 
     await waitFor(() => {
-      expect(screen.getByText("Table 5")).toBeInTheDocument()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^5$/)
     })
   })
 

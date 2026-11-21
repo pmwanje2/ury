@@ -1,3 +1,5 @@
+import { t } from '../../i18n'
+
 interface CategoryTabsProps {
   /** Array of unique categories derived from menu items. */
   categories: Array<{ course: string; course_label: string }>
@@ -8,6 +10,10 @@ interface CategoryTabsProps {
   activeCourse: string | null
   /** Called when user clicks a category chip; pass `null` for "All". */
   onSelect: (course: string | null) => void
+  /** Label of the "All" chip; guest layouts pass the translated menu.all_items. */
+  allLabel?: string
+  /** Height of a sticky header above the row, in px. */
+  stickyTop?: number
 }
 
 /**
@@ -34,10 +40,11 @@ interface CategoryTabsProps {
  * />
  * ```
  */
-function CategoryTabs({ categories, activeCourse, onSelect }: CategoryTabsProps) {
+function CategoryTabs({ categories, activeCourse, onSelect, allLabel, stickyTop }: CategoryTabsProps) {
   return (
     <nav
-      aria-label="Menu categories"
+      aria-label={t('menu.categories')}
+      style={stickyTop ? { top: `${stickyTop}px` } : undefined}
       className="sticky top-0 z-10 flex gap-2 overflow-x-auto bg-background/95 px-6 py-3 backdrop-blur"
     >
       {/* "All" chip */}
@@ -49,7 +56,7 @@ function CategoryTabs({ categories, activeCourse, onSelect }: CategoryTabsProps)
             : 'border bg-background text-foreground hover:bg-muted'
         }`}
       >
-        All
+        {allLabel ?? t('menu.all')}
       </button>
 
       {/* Category chips */}

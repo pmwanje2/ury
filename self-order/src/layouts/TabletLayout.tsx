@@ -3,6 +3,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { useIdleReset } from '../hooks/useIdleReset'
 import { useOrderingSession } from '../hooks/useOrderingSession'
 import type { MenuItem, OrderingContext } from '../lib/api'
+import { menuCategories } from '../lib/menu-categories'
+import { t } from '../i18n'
+import { locationLabel } from '../i18n/location-label'
+import LanguageSwitcher, { useGuestLanguage } from '../components/LanguageSwitcher'
 import CartPanel from './shared/CartPanel'
 import CategoryTabs from './shared/CategoryTabs'
 import CheckoutScreen from './shared/CheckoutScreen'
@@ -12,6 +16,7 @@ import ProductDetail from './shared/ProductDetail'
 import SearchBar from './shared/SearchBar'
 
 const IDLE_RESET_GRACE_MS = 15000
+const OTHER = '__other__'
 
 interface LayoutProps {
   initialContext?: OrderingContext
@@ -28,6 +33,7 @@ interface LayoutProps {
  * full-screen checkout and status screens, matching MobileQRLayout's pattern.
  */
 function TabletLayout({ initialContext }: LayoutProps) {
+  useGuestLanguage()
   const {
     context,
     menu,
@@ -64,37 +70,19 @@ function TabletLayout({ initialContext }: LayoutProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
-  /**
-   * Extract unique categories from menu items (course/course_label).
-   * Matches PortraitKioskLayout's category logic per the PLAN.
-   */
-  const categories = useMemo(() => {
-    const seen = new Map<string, string>()
-    for (const item of menu) {
-      const key = item.course ?? 'Uncategorized'
-      if (!seen.has(key)) {
-        seen.set(key, item.course_label ?? key)
-      }
-    }
-    return Array.from(seen.entries()).map(([course, course_label]) => ({
-      course,
-      course_label,
-    }))
-  }, [menu])
+  // Categories in the menu's configured order (#98); "Other" is translated per render.
+  const groups = useMemo(() => menuCategories(menu), [menu])
+  const categories = groups.map((group) => ({ course: group.course ?? OTHER, course_label: group.label ?? t('menu.other') }))
 
   /**
    * Filter menu by active category and search term.
    */
   const filteredMenu = useMemo(() => {
-    return menu.filter((item) => {
-      const matchesCategory =
-        selectedCategory === null || (item.course ?? 'Uncategorized') === selectedCategory
-      const matchesSearch =
-        searchTerm === '' ||
-        item.item_name.toLowerCase().includes(searchTerm.toLowerCase())
-      return matchesCategory && matchesSearch
-    })
-  }, [menu, selectedCategory, searchTerm])
+    return groups
+      .filter((group) => selectedCategory === null || (group.course ?? OTHER) === selectedCategory)
+      .flatMap((group) => group.items)
+      .filter((item) => searchTerm === '' || item.item_name.toLowerCase().includes(searchTerm.toLowerCase()))
+  }, [groups, selectedCategory, searchTerm])
 
   /**
    * Handle product card click: if product_detail_enabled, navigate to detail
@@ -109,7 +97,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
   }
 
   function handleReset() {
-    if (window.confirm('Start a new order? Current cart will be cleared.')) {
+    if (window.confirm(t('confirm.new_order'))) {
       resetSession()
     }
   }
@@ -136,16 +124,18 @@ function TabletLayout({ initialContext }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-muted-foreground">
-        Loading menu…
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+        <LanguageSwitcher />
+        {t('status.loading_menu')}
       </div>
     )
   }
 
   if (error && !context) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center text-destructive">
-        {error}
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <LanguageSwitcher />
+        <p className="text-destructive">{error}</p>
       </div>
     )
   }
@@ -158,11 +148,11 @@ function TabletLayout({ initialContext }: LayoutProps) {
           <button
             onClick={goToMenu}
             className="rounded-md border px-3 py-2 text-sm font-medium"
-            aria-label="Back to menu"
+            aria-label={t('nav.back_to_menu')}
           >
-            ← Back to menu
+            ← {t('nav.back_to_menu')}
           </button>
-          <h1 className="flex-1 text-center text-lg font-semibold">Checkout</h1>
+          <h1 className="flex-1 text-center text-lg font-semibold">{t('checkout.title')}</h1>
           <span className="w-[92px]" aria-hidden="true" />
         </header>
         <div className="flex-1 overflow-y-auto pb-4">
@@ -224,13 +214,14 @@ function TabletLayout({ initialContext }: LayoutProps) {
     <div className="flex h-screen flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b bg-background/95 px-6 py-4">
         <h1 className="text-xl font-semibold">
-          {context?.table ? `Table ${context.table}` : 'Order for Pickup'}
+          {context?.table ? locationLabel(context.table, context.area) : t('header.pickup')}
         </h1>
+        <LanguageSwitcher />
         <button
           onClick={handleReset}
           className="rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground"
         >
-          New Order
+          {t('actions.new_order')}
         </button>
       </header>
 
@@ -258,6 +249,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
                 categories={categories}
                 activeCourse={selectedCategory}
                 onSelect={setSelectedCategory}
+                allLabel={t('menu.all_items')}
               />
               <div className="mb-4 mt-3">
                 <SearchBar value={searchTerm} onChange={setSearchTerm} />
@@ -300,16 +292,16 @@ function TabletLayout({ initialContext }: LayoutProps) {
       </div>
 
       <Dialog open={showIdleWarning} onOpenChange={(open) => !open && handleStillHere()}>
-        <DialogContent onClose={handleStillHere}>
+        <DialogContent onClose={handleStillHere} closeLabel={t('dialog.close')}>
           <DialogHeader>
-            <DialogTitle>Still there?</DialogTitle>
+            <DialogTitle>{t('cart.still_there')}</DialogTitle>
           </DialogHeader>
           <DialogFooter>
             <button
               onClick={handleStillHere}
               className="w-full rounded-md bg-primary py-3 text-base font-medium text-primary-foreground"
             >
-              I'm still here
+              {t('cart.still_here')}
             </button>
           </DialogFooter>
         </DialogContent>

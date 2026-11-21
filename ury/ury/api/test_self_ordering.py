@@ -110,6 +110,114 @@ class TestQRTokenRoundtrip(unittest.TestCase):
             _verify_qr_token("not-a-valid-token")
 
 
+class TestRequestAssistance(unittest.TestCase):
+    """Call waiter: a verified guest session raises one native Assistance request for its own table."""
+
+    def setUp(self):
+        from ury.ury.api import self_ordering
+        self.api = self_ordering
+        self.session = MagicMock(table="Table 7", invoice="POS-1", ordering_profile="Profile A")
+        self.session.name = "SESSION-1"
+        self.profile = MagicMock(enable_request_bill=1)
+        self.resolve = self.enterContext(patch(f"{MOD}._resolve_session", return_value=self.session))
+        self.get_doc = self.enterContext(patch(f"{MOD}.frappe.get_doc"))
+        self.exists = self.enterContext(patch(f"{MOD}.frappe.db.exists", return_value=None))
+        self.user = self.enterContext(patch(f"{MOD}.frappe.set_user"))
+        # now_datetime reads System Settings through the patched frappe.get_doc on v16.
+        self.enterContext(patch(f"{MOD}.now_datetime"))
+        self.req = MagicMock()
+        self.req.name = "REQ-ASSIST"
+        self.get_doc.side_effect = lambda doctype, name=None: self.req if isinstance(doctype, dict) else self.profile
+
+    def request(self):
+        method = getattr(self.api, "request_assistance", None)
+        self.assertTrue(callable(method), "Guests cannot request native Assistance yet")
+        return method("opaque-session")
+
+    def test_creates_native_assistance_for_verified_table_and_invoice(self):
+        result = self.request()
+        self.assertEqual(result, {"status": "Requested", "request": "REQ-ASSIST"})
+        self.resolve.assert_called_once_with("opaque-session")
+        payload = self.get_doc.call_args.args[0]
+        self.assertEqual({key: payload[key] for key in ("doctype", "request_type", "table", "invoice", "session", "status")},
+                         {"doctype": "URY Service Request", "request_type": "Assistance", "table": "Table 7",
+                          "invoice": "POS-1", "session": "SESSION-1", "status": "Open"})
+        self.req.insert.assert_called_once_with(ignore_permissions=True)
+
+    def test_disabled_service_requests_are_refused(self):
+        self.profile.enable_request_bill = 0
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.req.insert.assert_not_called()
+
+    def test_table_and_active_order_are_required(self):
+        for field in ("table", "invoice"):
+            with self.subTest(field=field):
+                old = getattr(self.session, field)
+                setattr(self.session, field, None)
+                with self.assertRaises(frappe.ValidationError):
+                    self.request()
+                setattr(self.session, field, old)
+        self.req.insert.assert_not_called()
+
+    def test_expired_or_forged_session_is_refused_before_insertion(self):
+        self.resolve.side_effect = frappe.PermissionError("Expired")
+        with self.assertRaises(frappe.PermissionError):
+            self.request()
+        self.get_doc.assert_not_called()
+
+    def test_insertion_failure_restores_guest_identity(self):
+        self.req.insert.side_effect = frappe.ValidationError("Cannot insert")
+        with self.assertRaises(frappe.ValidationError):
+            self.request()
+        self.assertEqual(self.user.call_args.args, (frappe.session.user,))
+
+    def test_only_post_is_accepted(self):
+        method = getattr(self.api, "request_assistance", None)
+        self.assertTrue(callable(method), "Guests cannot request native Assistance yet")
+        self.assertIn(method, frappe.guest_methods)
+        self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func.get(method), ["POST"])
+
+
+class TestOrderingContextArea(unittest.TestCase):
+    """Simphony MOP: a QR code is a location with a subtype; the guest header shows the table's area."""
+
+    def _profile(self):
+        profile = MagicMock()
+        profile.restaurant = "Outlet"
+        profile.branch = "Branch A"
+        profile.session_idle_timeout_minutes = 30
+        for flag in ("enable_product_detail_page", "show_item_images", "show_item_descriptions", "enable_item_notes",
+                     "enable_request_bill", "enable_customer_payment", "enable_payment_link",
+                     "enable_pay_at_counter", "allow_add_to_running_table", "enable_feedback"):
+            setattr(profile, flag, 0)
+        return profile
+
+    @patch(f"{MOD}.frappe.db.get_value")
+    def test_table_context_carries_its_area(self, mock_get_value):
+        from ury.ury.api.self_ordering import _ordering_context_response
+
+        mock_get_value.side_effect = lambda doctype, name, field: {
+            ("URY Table", "Room 103", "restaurant_room"): "In-Room Dining",
+            ("Branch", "Branch A", "company"): "Company A",
+        }.get((doctype, name, field))
+        context = _ordering_context_response("raw", "QR Table", self._profile(), "Room 103", "Mobile")
+        self.assertEqual(context.get("area", "<missing>"), "In-Room Dining")
+        self.assertEqual(context["table"], "Room 103")
+        self.assertEqual(set(context), {"session", "source", "restaurant", "company", "table", "area", "layout",
+                                        "capabilities", "session_idle_timeout_minutes"})
+
+    @patch(f"{MOD}.frappe.db.get_value")
+    def test_pickup_context_has_no_area_and_reads_no_table(self, mock_get_value):
+        from ury.ury.api.self_ordering import _ordering_context_response
+
+        mock_get_value.return_value = "Company A"
+        context = _ordering_context_response("raw", "QR Pickup", self._profile(), None, "Mobile")
+        self.assertIn("area", context)
+        self.assertIsNone(context["area"])
+        self.assertNotIn("URY Table", [call.args[0] for call in mock_get_value.call_args_list])
+
+
 class TestAddCustomerItemsAppendOnly(unittest.TestCase):
     """The core Phase 3 safety guarantee: add_customer_items() only ever
     appends new rows and re-derives price server-side — it must never trust

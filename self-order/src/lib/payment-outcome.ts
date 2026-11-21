@@ -1,4 +1,5 @@
 import type { PaymentRequestResult } from './api'
+import { t } from '../i18n'
 
 export interface PaymentNotice {
   key: 'payment.paid' | 'payment.remaining' | 'payment.request_created'
@@ -38,16 +39,8 @@ export function paymentOutcome(result: PaymentRequestResult): PaymentOutcome {
   return { redirect, notice: null }
 }
 
-// English copy from the fork catalog; the guest-language catalogs can key on PaymentNotice.key.
-const NOTICE_TEXT: Record<PaymentNotice['key'], string> = {
-  'payment.paid': 'Paid ({{amount}} {{currency}}) — thank you.',
-  'payment.remaining':
-    "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter.",
-  'payment.request_created': 'Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.',
-}
-
 export function paymentNoticeText(notice: PaymentNotice): string {
-  return NOTICE_TEXT[notice.key].replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(notice.params[name] ?? ''))
+  return t(notice.key, notice.params)
 }
 
 /** The notice text for a payment request result, or null when there is nothing to say. */
