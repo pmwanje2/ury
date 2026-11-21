@@ -60,7 +60,7 @@ class TestKitchenReleaseIntegrity(TestCase):
 
     def test_split_moves_whole_released_ticket_to_its_reservation(self):
         dish = make_made_to_order_item(self.c)
-        invoice = self.order((dish, 'move', False), (self.c.item, 'stay', True))
+        invoice = self.order((dish, 'move', False), (dish, 'stay', True))
         ticket, = self.tickets(invoice.name)
         result = split_bill(invoice.name, [dict(name=invoice.items[0].name, qty=1)])
         ticket = frappe.get_doc('URY KOT', ticket)
@@ -70,7 +70,8 @@ class TestKitchenReleaseIntegrity(TestCase):
     def test_guest_repeated_dishes_keep_separate_native_reservations_and_price(self):
         dish = make_made_to_order_item(self.c)
         frappe.set_user('Administrator')
-        profile = frappe.get_doc(dict(doctype='URY Self Ordering Profile', profile_name=self.c.profile.name,
+        frappe.defaults.set_user_default('Company', self.c.restaurant.company)
+        profile = frappe.get_doc(dict(doctype='URY Self Ordering Profile', name=self.c.profile.name, profile_name=self.c.profile.name,
             branch=self.c.branch.name, restaurant=self.c.restaurant.name, pos_profile=self.c.profile.name,
             default_customer=self.c.customer.name, enabled=1, allow_add_to_running_table=1)).insert()
         with patch.object(frappe.db, 'commit'):
@@ -89,11 +90,12 @@ class TestKitchenReleaseIntegrity(TestCase):
 
     def test_zero_reduction_releases_held_reservation_without_ticket(self):
         dish = make_made_to_order_item(self.c)
-        invoice = self.order((dish, 'drop', True), (self.c.item, 'keep', False))
+        invoice = self.order((dish, 'drop', True), (dish, 'keep', False))
         before = self.tickets(invoice.name)
         result = reduce_order_item_qty(invoice.name, invoice.items[0].name, 0)
         self.assertEqual(result['cancel_kot_names'], [])
         self.assertEqual(self.tickets(invoice.name), before)
-        self.assertFalse(invoice.reload().items[0].ury_held)
-        self.assertFalse(frappe.db.exists('URY Stock Reservation', dict(order_ref=invoice.name,
-            top_level_item=dish.name, status='Reserved')))
+        self.assertEqual([row.reservation_line_key for row in invoice.reload().items], ['keep'])
+        remaining = frappe.get_all('URY Stock Reservation', filters=dict(order_ref=invoice.name,
+            top_level_item=dish.name, status='Reserved'), fields=['audit_log'])
+        self.assertEqual({_row_reservation_line_key(row) for row in remaining}, {f'ref:{dish.name}:keep'})
