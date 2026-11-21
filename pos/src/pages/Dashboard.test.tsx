@@ -59,7 +59,7 @@ describe("Dashboard", () => {
     render(<Dashboard />);
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { level: 1, name: "dashboard.title" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: "Shift Overview" })).toBeInTheDocument();
     });
   });
 
