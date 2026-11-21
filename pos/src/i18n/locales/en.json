@@ -818,5 +818,13 @@
     "acknowledge": "Acknowledge",
     "resolve": "Resolve",
     "acknowledged": "Acknowledged"
+  },
+  "offline": {
+    "kot": "Kitchen Order Ticket",
+    "provisional": "Provisional bill — not a fiscal receipt",
+    "client_order": "Client order",
+    "captured": "Captured",
+    "no_fdn": "Offline capture; no fiscal device number.",
+    "refused": "{{action}} is refused offline. Reconnect to the server first."
   }
 }
