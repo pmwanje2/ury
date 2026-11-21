@@ -58,7 +58,9 @@ const en = {
     "pay_online": "Pay Online",
     "starting": "Starting payment…",
     "request_created": "Payment request created ({{amount}} {{currency}}) — a staff member will assist with payment.",
-    "pay_at_counter": "Pay at Counter"
+    "pay_at_counter": "Pay at Counter",
+    "paid": "Paid ({{amount}} {{currency}}) — thank you.",
+    "remaining": "You've paid {{paid}} {{currency}} by phone. Please pay the remaining {{remaining}} {{currency}} at the counter."
   },
   "bill": {
     "request": "Request Bill",
@@ -224,7 +226,9 @@ const sw = {
     "pay_online": "Lipa mtandaoni",
     "starting": "Inaanzisha malipo…",
     "request_created": "Ombi la malipo limeundwa ({{amount}} {{currency}}) — mhudumu atakusaidia kulipa.",
-    "pay_at_counter": "Lipa kwenye kaunta"
+    "pay_at_counter": "Lipa kwenye kaunta",
+    "paid": "Imelipwa ({{amount}} {{currency}}) — asante.",
+    "remaining": "Umelipa {{paid}} {{currency}} kwa simu. Tafadhali lipa kiasi kilichobaki {{remaining}} {{currency}} kwenye kaunta."
   },
   "bill": {
     "request": "Omba bili",
@@ -390,7 +394,9 @@ const lg = {
     "pay_online": "Sasula ku yintaneeti",
     "starting": "Ntandika okusasula…",
     "request_created": "Okusaba okusasula kuteekeddwa ({{amount}} {{currency}}) — omuweereza ajja kukuyamba okusasula.",
-    "pay_at_counter": "Sasula ku kaunta"
+    "pay_at_counter": "Sasula ku kaunta",
+    "paid": "Kusasuddwa ({{amount}} {{currency}}) — webale.",
+    "remaining": "Osasudde {{paid}} {{currency}} ku ssimu. Nsaba sasula ebisigaddeyo {{remaining}} {{currency}} ku kaunta."
   },
   "bill": {
     "request": "Saba bili",
