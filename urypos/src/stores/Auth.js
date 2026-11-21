@@ -1,4 +1,4 @@
-import { purgeOfflineSession } from '../../../packages/core/src/storage';
+import { logout } from '../../../packages/core/src/logout.js';
 import { defineStore } from "pinia";
 import { useTableStore } from "./Table.js";
 import { useMenuStore } from "./Menu.js";
@@ -23,6 +23,7 @@ export const useAuthStore = defineStore("auth", {
     hasAccess: false,
     showPassword: false,
     activeDropdown: false,
+    loggingOut: false,
     cashierisPosOpen: false,
     cashier: null,
     viewItemImage: null,
@@ -239,18 +240,20 @@ export const useAuthStore = defineStore("auth", {
       this.activeDropdown = false;
     },
 
-    logOut() {
-      return this.auth
-        .logout()
-        .then(async () => {
-          await purgeOfflineSession();
-          router.push("/login").then(() => {
-            window.location.reload();
-          });
-          localStorage.removeItem("userAuth", "true");
-          disconnectQzPrinter();
-        })
-        .catch((error) => console.error(error));
+    async logOut() {
+      if (this.loggingOut) return;
+      this.loggingOut = true;
+      try {
+        await logout();
+      } catch {
+        this.loggingOut = false;
+        this.alert.createAlert("Message", "Failed to logout. Please try again.", "OK");
+        return;
+      }
+      this.userAuth = false;
+      disconnectQzPrinter();
+      await router.push("/login");
+      window.location.reload();
     },
   },
 });
