@@ -13,13 +13,15 @@ from ury.www import order
 
 class TestReceiptBrand(unittest.TestCase):
     def test_network_bill_defaults_to_zero_and_forwards_explicit_letterhead_flags(self):
-        printer = MagicMock()
+        invoice, printer = MagicMock(), MagicMock()
         with (patch.object(ury_print, 'frappe') as framework,
-              patch.object(ury_print, 'validate_print_permission')):
-            framework.get_doc.return_value = printer
+              patch.object(ury_print, 'validate_print_permission'),
+              patch.object(ury_print, 'check_split_target_access') as check_split):
+            framework.get_doc.side_effect = lambda doctype, name: invoice if doctype == "POS Invoice" else printer
             for options in ({}, {'no_letterhead': 1}, {'no_letterhead': 0}):
                 with self.subTest(options=options):
                     ury_print.network_printing('POS Invoice', 'INV-1', 'Test printer', print_format='Receipt', **options)
+                    check_split.assert_called_with(invoice, 'write')
                     self.assertEqual(printer.print_doc.call_args.kwargs['no_letterhead'], options.get('no_letterhead', 0))
 
     def test_non_ascii_qr_signature_renders_site_identity_and_no_profile_override(self):

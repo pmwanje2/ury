@@ -107,6 +107,82 @@ def _kot_doc_recorder():
 class TestQtyReductionOnAllowedOrderType(FrappeTestCase):
 	"""Test successful qty reduction on an order type explicitly allowed by POS Profile."""
 
+	def test_reduce_second_unkeyed_dish_references_aggregated_kitchen_line(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {"order_type": "Dine In"}.get
+		invoice.items = [frappe._dict(name=name, item_code="TEA", item_name="Tea", qty=2)
+		                 for name in ("FIRST", "SECOND")]
+		with patch(f"{MODULE}.frappe.db.exists", return_value=True), \
+		     patch(f"{MODULE}.frappe.get_doc", side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f"{MODULE}.frappe.has_permission", return_value=True), \
+		     patch(f"{MODULE}.process_items_for_cancel_kot") as cancel:
+			reduce_order_item_qty(invoice.name, "SECOND", 1)
+		line, = cancel.call_args.args[3]
+		self.assertEqual((line["reservation_line_key"], line["qty"]), ("pos:TEA:1", -1))
+		previous, = cancel.call_args.args[-1]
+		self.assertEqual((previous["reservation_line_key"], previous["qty"]), ("pos:TEA:1", 4))
+
+	def test_reducing_sent_dish_preserves_original_kitchen_note_and_line_key(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {"order_type": "Dine In"}.get
+		invoice.items = [frappe._dict(name="ROW", item_code="TEA", item_name="Tea", qty=2,
+		                             comment="no milk", reservation_line_key="cart-row")]
+		with patch(f"{MODULE}.frappe.db.exists", return_value=True), \
+		     patch(f"{MODULE}.frappe.get_doc", side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f"{MODULE}.frappe.has_permission", return_value=True), \
+		     patch(f"{MODULE}.process_items_for_cancel_kot") as cancel:
+			reduce_order_item_qty(invoice.name, "ROW", 1, reason="guest correction")
+		line = cancel.call_args.args[3][0]
+		self.assertEqual((line["reservation_line_key"], line["comments"], line["qty"]),
+		                 ("ref:TEA:cart-row", "no milk", -1))
+		self.assertEqual(cancel.call_args.args[4], "guest correction")
+
+	def test_zero_held_row_does_not_require_firing(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {'order_type': 'Dine In'}.get
+		invoice.items = [frappe._dict(name='H',item_code='TEA',qty=1,ury_held=1,reservation_line_key='h'),
+		                 frappe._dict(name='S',item_code='TEA',qty=1,reservation_line_key='s')]
+		with patch(f'{MODULE}.frappe.db.exists', return_value=True), \
+		     patch(f'{MODULE}.frappe.get_doc', side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f'{MODULE}.frappe.has_permission', return_value=True), \
+		     patch(f'{MODULE}.process_items_for_cancel_kot') as cancel:
+			result = reduce_order_item_qty(invoice.name, 'H', 0)
+		self.assertEqual((invoice.items[0].qty, invoice.items[0].ury_held), (0, 0))
+		self.assertEqual(result['cancel_kot_names'], [])
+		cancel.assert_not_called()
+
+	def test_held_zero_reconciles_only_the_native_reservation_delta(self):
+		invoice = MagicMock()
+		invoice.branch, invoice.company = 'Branch A', 'Company A'
+		invoice.get.side_effect = {'order_type': 'Dine In'}.get
+		invoice.items = [frappe._dict(name='H',item_code='TEA',item_name='Tea',qty=1,ury_held=1,reservation_line_key='h'),
+		                 frappe._dict(name='S',item_code='TEA',item_name='Tea',qty=1,reservation_line_key='s')]
+		with patch(f'{MODULE}.frappe.db.exists', return_value=True), \
+		     patch(f'{MODULE}.frappe.get_doc', side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f'{MODULE}.frappe.has_permission', return_value=True), \
+		     patch('ury.ury.api.ury_stock_policy.get_branch_stock_policy', return_value=frappe._dict(reservation_control_enabled=1)), \
+		     patch('ury.ury.api.ury_order_reservation_service.reconcile_order_reservations') as reconcile:
+			reduce_order_item_qty(invoice.name, 'H', 0)
+		reconcile.assert_called_once()
+		data = reconcile.call_args.kwargs
+		self.assertEqual(data['order_ref'], invoice.name)
+		for field, qty in [('previous_items', 1), ('accepted_items', 0)]:
+			self.assertEqual({r['reservation_line_key']: r['qty'] for r in data[field]}, {'h': qty, 's': 1})
+
+	def test_reducing_held_dish_updates_bill_without_kitchen_cancellation(self):
+		invoice = MagicMock()
+		invoice.get.side_effect = {"order_type": "Dine In"}.get
+		invoice.items = [frappe._dict(name="ROW-1", item_code="TEA", item_name="Tea", qty=2, ury_held=1)]
+		with patch(f"{MODULE}.frappe.db.exists", return_value=True), \
+		     patch(f"{MODULE}.frappe.get_doc", side_effect=[invoice, _pos_profile_doc()]), \
+		     patch(f"{MODULE}.frappe.has_permission", return_value=True), \
+		     patch(f"{MODULE}.process_items_for_cancel_kot") as cancel:
+			result = reduce_order_item_qty(invoice.name, "ROW-1", 1)
+		invoice.save.assert_called_once()
+		self.assertEqual(invoice.items[0].qty, 1)
+		cancel.assert_not_called()
+		self.assertEqual(result["cancel_kot_names"], [])
+
 	def test_reduce_qty_creates_partial_cancel_kot_with_correct_delta(self):
 		"""Reducing item qty from 2 to 1 should:
 		1. Update invoice item qty to 1

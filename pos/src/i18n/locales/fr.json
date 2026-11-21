@@ -1,4 +1,20 @@
 {
+  "notifications": {
+    "kitchen": "Cuisine",
+    "new_food_ready": "Nouvelle commande prête en cuisine"
+  },
+  "hold_fire": {
+    "title": "Mise en attente et envoi en cuisine",
+    "held": "En attente",
+    "sent": "Envoyé",
+    "ready": "Prêt",
+    "hold": "Attendre",
+    "fire_line": "Envoyer la ligne",
+    "fire_course": "Envoyer le service : {{course}}",
+    "save_first": "Enregistrez la commande pour garder ces articles en attente. Envoyez-les quand vous êtes prêt.",
+    "offline": "Une connexion est nécessaire pour mettre en attente ou envoyer.",
+    "failed": "Envoi impossible. Rechargez la commande et réessayez."
+  },
   "common": {
     "loading": "Chargement...",
     "cancel": "Annuler",

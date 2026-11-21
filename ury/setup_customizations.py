@@ -383,6 +383,13 @@ def get_custom_fields():
 				"insert_after": "company_address",
 			},
 			{
+				"fieldname": "ury_enable_hold_fire",
+				"fieldtype": "Check",
+				"label": "Enable Hold and Fire",
+				"default": "0",
+				"insert_after": "restaurant_info",
+			},
+			{
 				"fieldname": "restaurant",
 				"fieldtype": "Link",
 				"insert_after": "restaurant_info",
@@ -537,13 +544,22 @@ def get_custom_fields():
 			},
 		],
 
-		"POS Invoice Iten": [
+		"POS Invoice Item": [
 			{
 				"fieldname": "comment",
 				"fieldtype": "Data",
 				"label": "Comment",
 				"insert_after": "description",
 				"translatable": 0
+			},
+			{
+				"fieldname": "ury_held",
+				"fieldtype": "Check",
+				"label": "Held",
+				"default": "0",
+				"read_only": 1,
+				"no_copy": 1,
+				"insert_after": "comment",
 			}
 		],
 

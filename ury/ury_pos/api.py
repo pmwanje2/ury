@@ -2,7 +2,7 @@ import frappe
 import json
 from frappe import _
 from datetime import date, datetime, timedelta
-from frappe.utils import validate_phone_number
+from frappe.utils import cint, validate_phone_number
 
 from ury.ury_pos.default_customer import get_default_customer_config
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
@@ -355,6 +355,9 @@ def get_split_group(invoice):
     if pos_invoice.branch and user_branch and pos_invoice.branch != user_branch:
         frappe.throw(frappe._("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
+    from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+
+    check_split_target_access(pos_invoice, "read")
     group = pos_invoice.custom_split_group
     if not group:
         split_from = frappe.db.get_value("POS Invoice", invoice, "custom_split_from")
@@ -365,6 +368,7 @@ def get_split_group(invoice):
 
     split_fields = [
         "name",
+        "ury_client_order_id",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",
@@ -399,6 +403,9 @@ def get_split_group(invoice):
     )
 
     member_names = [inv["name"] for inv in invoices]
+    # Legacy children can lack a group even after their original is cancelled.
+    if pos_invoice.custom_split_from and pos_invoice.custom_split_from not in member_names:
+        member_names.append(pos_invoice.custom_split_from)
     if member_names:
         children = frappe.get_all(
             "POS Invoice",
@@ -418,16 +425,30 @@ def get_split_group(invoice):
     for inv in invoices:
         if inv.get("branch") and user_branch and inv.get("branch") != user_branch:
             continue
-        if not frappe.has_permission("POS Invoice", "read", doc=inv.get("name")):
-            continue
+        if inv.name != invoice:
+            try:
+                check_split_target_access(frappe.get_doc("POS Invoice", inv.name), "read")
+            except frappe.PermissionError:
+                frappe.clear_last_message()
+                continue
         valid_invoices.append(inv)
+    visible_names = {row.name for row in valid_invoices}
+    # Older groups can be named for an invoice. Only expose the group ID
+    # when all members and parent links in this view are visible.
+    if len(valid_invoices) != len(invoices) or any(
+        row.custom_split_from and row.custom_split_from not in visible_names for row in valid_invoices
+    ):
+        group = None
     invoices = valid_invoices
-
     total = len(invoices)
     for index, inv in enumerate(invoices, start=1):
         inv["split_index"] = index
         inv["split_total"] = total
         inv["is_original"] = not inv.get("custom_split_from")
+        if group is None:
+            inv["custom_split_group"] = None
+        if inv.get("custom_split_from") not in visible_names:
+            inv["custom_split_from"] = None
         inv["split_siblings"] = [row["name"] for row in invoices if row["name"] != inv["name"]]
 
     return {"invoices": invoices, "current": invoice, "group": group}
@@ -939,6 +960,7 @@ def getPosProfileFull(pos_profile):
         "print_format": profile.print_format,
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
+        "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
@@ -961,6 +983,9 @@ def getPosInvoiceItems(invoice):
     if orderdItems.branch and user_branch and orderdItems.branch != user_branch:
         frappe.throw(frappe._("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
+    from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+
+    check_split_target_access(orderdItems, "read")
     posItems = orderdItems.items
     for items in posItems:
         itemDetails.append(

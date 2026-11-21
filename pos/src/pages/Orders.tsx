@@ -1,3 +1,4 @@
+import { qtyReductionMessage } from '../lib/qty-reduction-message';
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus } from 'lucide-react';
 import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
@@ -326,10 +327,14 @@ export default function Orders() {
         amount: item.amount,
         image: item.image || null,
         uniqueId: item.name,
+        reservationLineKey: item.reservation_line_key || item.name,
         item: item.item_code,
         item_name: item.item_name,
         item_image: null,
-        course: '',
+        course: item.custom_course || '',
+        invoiceItemName: item.name,
+        ury_held: item.ury_held || 0,
+        comment: item.comment || '',
         description: item.description || '',
         special_dish: 0,
         tax_rate: 0,
@@ -361,12 +366,7 @@ export default function Orders() {
       // locally-derived key.
       const newQty = item.qty - 1;
       const result = await reduceOrderItemQty(selectedOrder.name, item.name, newQty);
-      const kotNames = result.cancel_kot_names?.length ? result.cancel_kot_names.join(', ') : null;
-      showToast.success(
-        newQty === 0
-          ? `${item.item_name} removed from the order. Cancel-KOT ${kotNames || 'generated'} sent to kitchen.`
-          : `${item.item_name} reduced to qty ${newQty}. Cancel-KOT ${kotNames || 'generated'} sent to kitchen.`
-      );
+      showToast.success(qtyReductionMessage(item.item_name, newQty, result.cancel_kot_names));
       await selectOrder(selectedOrder);
     } catch (err) {
       const parsedMessage = parseFrappeError(err) || (err instanceof Error ? err.message : null);

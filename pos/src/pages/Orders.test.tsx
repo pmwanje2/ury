@@ -86,6 +86,7 @@ vi.mock("@ury/core", () => ({
 // Mock order API
 vi.mock("../lib/order-api", () => ({
   splitBill: vi.fn().mockResolvedValue(undefined),
+  reduceOrderItemQty: vi.fn().mockResolvedValue({cancel_kot_names: []}),
 }));
 
 // Mock invoice API
@@ -281,6 +282,15 @@ describe("Orders guest label", () => {
   it("names the check on its card and in the bill detail, ahead of the walk-in customer", () => {
     render(<Orders />);
     expect(screen.getAllByText("Susan · Walk In")).toHaveLength(2);
+  });
+
+  it("reports a reduction without a kitchen dispatch when no cancel ticket was created", async () => {
+    mockRootStoreState.selectedOrderItems = [{ name: 'ROW', item_name: 'Soup', qty: 2, rate: 50, amount: 100 }] as never;
+    try {
+      render(<Orders />);
+      fireEvent.click(screen.getByRole('button', {name: 'Reduce quantity of Soup'}));
+      await waitFor(() => expect(showToast.success).toHaveBeenCalledWith('Soup reduced to qty 1.'));
+    } finally { mockRootStoreState.selectedOrderItems = []; }
   });
 
   it("without a label the card and detail show the customer as before", () => {

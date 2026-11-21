@@ -14,9 +14,10 @@ from frappe.utils import cint, flt, get_datetime, get_system_timezone, now_datet
 from erpnext.controllers.queries import item_query
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
-from ury.ury.api.ury_kot_generate import kot_execute
+from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
 from ury.ury.api.ury_order_reservation_service import (
+    _line_key,
     _line_ref,
     reconcile_order_reservations,
     release_order_reservations,
@@ -412,23 +413,12 @@ def release_tables_after_print(invoice):
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to release tables for this invoice"), frappe.PermissionError)
 
-    tables = _get_table_group(
-        invoice_doc.restaurant_table,
-        invoice_doc.custom_merged_tables,
-    )
-
-    for table in tables:
-
-        frappe.db.set_value(
-            "URY Table",
-            table,
-            {
-                "occupied": 0,
-                "latest_invoice_time": None,
-            },
-        )
-
-    frappe.db.commit()
+    # Same rule as the POS print paths: a table stays occupied while another
+    # draft check (e.g. the other half of a split) is still unprinted.
+    tables = _get_table_group(invoice_doc.restaurant_table, invoice_doc.custom_merged_tables)
+    if not _has_open_pos_invoices_for_cluster(tables):
+        for table in tables:
+            frappe.db.set_value("URY Table", table, {"occupied": 0, "latest_invoice_time": None})
 
     return True
 
@@ -553,6 +543,7 @@ def _copy_invoice_item_fields(item_row, qty):
         base_price_list_rate=item_row.base_price_list_rate,
         comment=item_row.get("comment"),
         custom_course=item_row.get("custom_course"),
+        ury_held=cint(item_row.get("ury_held")),
         cost_center=item_row.cost_center,
         uom=item_row.uom,
         conversion_factor=item_row.conversion_factor,
@@ -587,6 +578,36 @@ def _guest_label(value):
     return label or None
 
 
+def _split_kots_to_move(source, move_map, reservations_enabled):
+    whole, selected, known = set(), set(), set()
+    released_dishes = set()
+    for item in source.items:
+        keys = {item.get("reservation_line_key") or item.name, _line_key(item.item_code, item, 1)}
+        known.update(keys)
+        qty = move_map.get(item.name, 0)
+        if qty > 0:
+            selected.update(keys)
+            if not cint(item.get("ury_held")):
+                released_dishes.add(item.item_code)
+            if qty == item.qty:
+                whole.update(keys)
+
+    movable = []
+    for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
+        rows = frappe.get_all("URY KOT Items", filters={"parent": ticket, "parenttype": "URY KOT"},
+                              fields=["reservation_line_key", "item"])
+        keys = {row.reservation_line_key for row in rows}
+        if keys and keys <= whole:
+            movable.append(ticket)
+        elif reservations_enabled and (keys & selected or any(
+            row.reservation_line_key not in known and row.item in released_dishes for row in rows
+        )):
+            # Fulfilment looks up stock by the single invoice on the kitchen ticket.
+            frappe.throw(_("[URY-SPLIT-RESERVED-KOT] Move the entire released kitchen ticket together."),
+                         frappe.ValidationError)
+    return movable
+
+
 @frappe.whitelist()
 def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
@@ -615,7 +636,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         source,
         pos_profile_name=source.get("pos_profile"),
         require_modify=True,
-        deny_message=_("Not permitted to split this invoice."),
+        deny_message=_("[URY-SPLIT-NOT-PERMITTED] Not permitted to split this invoice."),
     )
 
     if source.docstatus != 0:
@@ -644,6 +665,10 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         frappe.throw(_("Select at least one item to move."))
     if total_remaining_qty <= 0:
         frappe.throw(_("At least one item must remain on the original bill."))
+
+    company = source.company or frappe.db.get_value("Branch", source.branch, "company")
+    reservations_enabled = get_branch_stock_policy(branch=source.branch, company=company).reservation_control_enabled
+    movable_kots = _split_kots_to_move(source, move_map, reservations_enabled)
 
     new_invoice = frappe.new_doc("POS Invoice")
     header_fields = [
@@ -706,7 +731,6 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     ]
 
     items_to_remove = []
-    moved_line_keys = set()
     for item in source.items:
         move_qty = move_map.get(item.name, 0)
         if move_qty <= 0:
@@ -714,7 +738,6 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         if move_qty >= item.qty:
             new_invoice.append("items", _copy_invoice_item_fields(item, item.qty))
             items_to_remove.append(item)
-            moved_line_keys.add(item.get("reservation_line_key") or item.name)
         else:
             new_invoice.append("items", _copy_invoice_item_fields(item, move_qty))
             item.qty -= move_qty
@@ -764,8 +787,6 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         # reservation to a different invoice is modelled the same way any
         # other quantity change is: release/shrink the old side, create the
         # new side).
-        company = source.company or frappe.db.get_value("Branch", source.branch, "company")
-
         accepted_source_items = [
             {
                 "reservation_line_key": item.get("reservation_line_key") or item.name,
@@ -775,7 +796,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             }
             for item in source.items
         ]
-        if get_branch_stock_policy(branch=source.branch, company=company).reservation_control_enabled:
+        if reservations_enabled:
             reconcile_order_reservations(
                 order_ref=source.name,
                 previous_items=previous_source_items,
@@ -794,7 +815,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             }
             for item in new_invoice.items
         ]
-        if get_branch_stock_policy(branch=new_invoice.branch, company=company).reservation_control_enabled:
+        if reservations_enabled:
             reconcile_order_reservations(
                 order_ref=new_invoice.name,
                 previous_items=[],
@@ -804,34 +825,8 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
                 actor=frappe.session.user,
             )
 
-        # Best-effort KOT reassignment: URY KOT has a single `invoice` link
-        # (not a per-line one), so a KOT can only be reassigned wholesale to
-        # the new invoice when EVERY one of its items moved there. A KOT
-        # that mixes moved and staying items has no correct single owner
-        # under the current schema -- that is a genuine data-model gap
-        # (URY KOT Items would need its own invoice/order_ref per row to
-        # resolve it), so such KOTs are deliberately left pointing at the
-        # source invoice rather than guessed at. Downstream fulfilment
-        # posting resolves an order_ref via `_kot_order_ref()` -> KOT.invoice,
-        # so this is what lets `mark_item_ready`/posting find the reservation
-        # that just moved to the new invoice for fully-moved KOTs.
-        if moved_line_keys:
-            kot_names = frappe.get_all(
-                "URY KOT", filters={"invoice": source.name}, pluck="name"
-            )
-            for kot_name in kot_names:
-                kot_item_rows = frappe.get_all(
-                    "URY KOT Items",
-                    filters={"parent": kot_name, "parenttype": "URY KOT"},
-                    fields=["reservation_line_key"],
-                )
-                kot_line_keys = {
-                    row.reservation_line_key for row in kot_item_rows if row.reservation_line_key
-                }
-                if kot_line_keys and kot_line_keys.issubset(moved_line_keys):
-                    frappe.db.set_value(
-                        "URY KOT", kot_name, "invoice", new_invoice.name, update_modified=False
-                    )
+        for ticket in movable_kots:
+            frappe.db.set_value("URY KOT", ticket, "invoice", new_invoice.name, update_modified=False)
     finally:
         frappe.flags.ury_bill_split = False
 
@@ -905,7 +900,13 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
             "custom_merged_tables": ["like", f"%{table}%"]
         }
 
-        invoices = frappe.get_all("POS Invoice", filters=filters, or_filters=or_filters, limit=1)
+        invoices = frappe.get_all(
+            "POS Invoice",
+            filters=filters,
+            or_filters=or_filters,
+            order_by="creation asc",
+            limit=1,
+        )
         invoice_name = invoices[0].name if invoices else None
         branch, menu_name, restaurant = get_restaurant_and_menu_name(table)
 
@@ -1265,6 +1266,17 @@ def _enforce_order_access(invoice, pos_profile_name=None, require_modify=False, 
     return flags
 
 
+def check_split_target_access(invoice, permission):
+    if not (invoice.get("custom_split_group") or invoice.get("custom_split_from")):
+        return
+    if not frappe.has_permission("POS Invoice", permission, doc=invoice):
+        frappe.throw(_("Not permitted to access this check"), frappe.PermissionError)
+    if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles():
+        if not invoice.branch or getBranch() != invoice.branch:
+            frappe.throw(_("Not permitted outside your active branch"), frappe.PermissionError)
+    _enforce_order_access(invoice, require_modify=False)
+
+
 def _branch_has_open_pos(branch):
     """True when the branch has at least one submitted Open POS Opening Entry."""
     return bool(
@@ -1516,6 +1528,7 @@ def get_table_order_context(table):
         "transfer_table": False,
         "transfer_captain": False,
         "print_bill": False,
+        "split_bill": False,
         "reprint_kot": False,
         "settle": False,
         "cancel": False,
@@ -1549,6 +1562,7 @@ def get_table_order_context(table):
             "restaurant_table": table,
             "custom_merged_tables": ["like", f"%{table}%"],
         },
+        order_by="creation asc",
         limit=1,
     )
     invoice_name = invoices[0].name if invoices else None
@@ -1625,6 +1639,10 @@ def get_table_order_context(table):
     invoice_billed = bool(order) and order.get("invoice_printed") == 1
     can_modify = can_view and (not order or not invoice_billed or is_billing_user)
 
+    order_items = (invoice.get("items") or []) if invoice else []
+    can_split_bill = bool(order and can_modify and frappe.has_permission("POS Invoice", "write", doc=invoice)
+                          and (len(order_items) >= 2 or any(flt(row.get("qty")) > 1 for row in order_items)))
+
     # Managers (elevated roles) may correct a sent order even when the
     # profile withholds `remove_items` from ordinary captains.
     may_remove_sent = bool(pos_profile.remove_items) or has_elevated_access
@@ -1682,6 +1700,7 @@ def get_table_order_context(table):
         "transfer_table": can_transfer_table,
         "transfer_captain": can_transfer_captain,
         "print_bill": can_print_bill,
+        "split_bill": can_split_bill,
         "reprint_kot": can_reprint_kot,
         "settle": can_settle,
         "cancel": can_cancel,
@@ -1835,7 +1854,8 @@ def _previous_line_snapshot(invoice_items):
                 "item_code": item.item_code,
                 "item_name": item.item_name,
                 "qty": item.qty,
-                "comments": "",
+                "comments": item.get("comment") or "",
+                "ury_held": cint(item.get("ury_held")),
             }
         )
     return snapshot
@@ -2029,6 +2049,83 @@ def _offline_capture_time(captured_at, pos_profile):
     return captured
 
 
+def _kitchen_snapshot(items):
+    """Keep stable cart identities; legacy unkeyed rounds compare dish/note totals."""
+    rows = []
+    legacy = {}
+    for item in items:
+        if cint(item.get("ury_held")):
+            continue
+        code = item.get("item") or item.get("item_code")
+        note = item.get("comment") or item.get("comments") or ""
+        key = item.get("reservation_line_key")
+        if not key and (code, note) in legacy:
+            legacy[code, note]["qty"] += flt(item.get("qty"))
+            continue
+        row = dict(item_code=code, item_name=item.get("item_name"), qty=flt(item.get("qty")), comments=note)
+        if key:
+            row["reservation_line_key"] = key
+        else:
+            legacy[code, note] = row
+        rows.append(row)
+    return rows
+
+
+def _lock_hold_order(invoice, preserve_resolved=False):
+    if invoice.name:
+        # get_order_invoice resolves these from the current native menu in
+        # memory. Reload the persisted held state, not stale menu settings.
+        resolved = {field: invoice.get(field) for field in ("selling_price_list", "taxes_and_charges")} if preserve_resolved else {}
+        frappe.db.sql("SELECT name FROM `tabPOS Invoice` WHERE name=%s FOR UPDATE", (invoice.name,))
+        invoice.flags.for_update = True
+        invoice.reload()
+        for field, value in resolved.items():
+            setattr(invoice, field, value)
+
+
+@frappe.whitelist()
+def fire_items(invoice, line=None, course=None, last_modified_time=None):
+    """Fire persisted held rows, never client-supplied quantities/prices/courses."""
+    invoice = frappe.get_doc("POS Invoice", invoice)
+    _lock_hold_order(invoice)
+    if not frappe.has_permission("POS Invoice", "write", doc=invoice):
+        frappe.throw(_("Not permitted to modify this order"), frappe.PermissionError)
+    branch = getBranch()
+    if branch and invoice.branch != branch:
+        frappe.throw(_("Not permitted outside your active branch"), frappe.PermissionError)
+    _enforce_order_access(invoice, require_modify=True)
+    profile = frappe.get_doc("POS Profile", invoice.pos_profile)
+    if not cint(getattr(profile, "ury_enable_hold_fire", 0)):
+        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
+    if invoice.docstatus != 0:
+        frappe.throw(_("This order is no longer open."))
+    if invoice.order_type == "Dine In" and _has_role(
+        frappe.get_roles(), profile.role_restricted_for_table_order
+    ):
+        frappe.throw(_("You are not permitted to take Dine In table orders."), frappe.PermissionError)
+    if bool(line) == bool(course):
+        frappe.throw(_("Select exactly one line or course to fire."))
+    selected = [row for row in invoice.items if row.name == line] if line else [
+        row for row in invoice.items if row.get("custom_course") == course
+    ]
+    if not selected:
+        frappe.throw(_("The selected line or course is not on this order."))
+    held = [row for row in selected if cint(row.get("ury_held"))]
+    if not held:
+        return invoice.as_dict()  # retry: nothing is resent, even with an old version
+    if last_modified_time and str(invoice.modified) != str(last_modified_time):
+        frappe.throw(_("Order has been modified. Reload before firing."))
+    previous = _kitchen_snapshot(invoice.items)
+    for row in held:
+        row.ury_held = 0
+    invoice.save()
+    # Do not swallow failure: the native request transaction must roll back
+    # both the held flags and any partial KOT writes together.
+    kot_execute(invoice.name, invoice.customer, invoice.restaurant_table,
+                _kitchen_snapshot(invoice.items), previous, invoice.custom_comments)
+    return invoice.as_dict()
+
+
 @frappe.whitelist()
 def sync_order(
     items,
@@ -2087,6 +2184,11 @@ def sync_order(
         return {"status": "Failure"}
 
     invoice = client_invoice or get_order_invoice(table, invoice, order_type)
+    if invoice.name and invoice.pos_profile and invoice.pos_profile != pos_profile:
+        frappe.throw(_("URY_PROFILE_MISMATCH: This order belongs to a different POS Profile."), frappe.PermissionError)
+    hold_enabled = cint(getattr(posprofile, "ury_enable_hold_fire", 0)) == 1
+    if hold_enabled:
+        _lock_hold_order(invoice, preserve_resolved=True)
     _refuse_client_order_rebind(invoice, client_order_id)
 
     if client_invoice:
@@ -2224,6 +2326,88 @@ def sync_order(
             )
             return {"status": "Failure"}
 
+    past_item = _previous_line_snapshot(invoice.items)
+    previous_rows = {row.get("name"): row for row in invoice.items if row.get("name")}
+
+    # Legacy URY clients send JSON; the POS sends an already formatted list.
+    if isinstance(items, str):
+        items = json.loads(items)
+    # Use the same note for authorization, native pricing/storage and KOTs.
+    items = [{**item, "comment": item.get("comment") or item.get("comments") or ""} for item in items]
+
+    _normalize_current_line_keys(items)
+    has_held = any(cint(item.get("ury_held")) for item in items)
+    if has_held and not hold_enabled:
+        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
+    if has_held and (captured_at is not None or cint(offline_printed)):
+        frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
+    seen_line_names = set()
+    seen_keys = {row["reservation_line_key"] for row in past_item if row.get("reservation_line_key")} if append else set()
+    for item in items:
+        name = item.get("name")
+        if name:
+            if append:
+                frappe.throw(_("Append rounds cannot specify a line name."))
+            if name in seen_line_names:
+                frappe.throw(_("Repeated line names are not allowed."))
+            seen_line_names.add(name)
+        old = previous_rows.get(name)
+        if name and not old:
+            frappe.throw(_("The selected line is not on this order."))
+        if old and old.get("reservation_line_key"):
+            if item.get("reservation_line_key") not in (None, old.get("reservation_line_key")):
+                frappe.throw(_("URY_LINE_KEY_CHANGED: Reload the order before editing this line."))
+            item["reservation_line_key"] = old.get("reservation_line_key")
+        key = item.get("reservation_line_key")
+        if key:
+            if key in seen_keys:
+                frappe.throw(_("URY_LINE_KEY_REUSED: Order lines must have distinct reservation keys."))
+            seen_keys.add(key)
+        if old and not cint(old.get("ury_held")) and cint(item.get("ury_held")):
+            frappe.throw(_("URY_ALREADY_SENT: Sent lines cannot be held again."))
+        if old and cint(old.get("ury_held")) and not cint(item.get("ury_held")):
+            frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Use Fire to send held lines."))
+    if not append:
+        requested_keys = {item["name"]: item.get("reservation_line_key") for item in items if item.get("name")}
+        for old_row, snapshot in zip(invoice.items, past_item, strict=True):
+            if not snapshot.get("reservation_line_key") and requested_keys.get(old_row.get("name")):
+                snapshot["reservation_line_key"] = requested_keys[old_row.get("name")]
+        _backfill_previous_line_keys(past_item, items)
+    held_names = {name for name, row in previous_rows.items() if cint(row.get("ury_held"))}
+    requested_names = {item.get("name") for item in items}
+    if not append and held_names - requested_names and any(not item.get("name") for item in items):
+        frappe.throw(_("URY_HOLD_REQUIRES_FIRE: Reload the held order before editing."))
+
+    if append and any(flt(item.get("qty")) <= 0 for item in items):
+        _offline_refusal("URY_OFFLINE_APPEND_QTY", _("Append rounds must contain only positive quantities."))
+
+    # Authorize before changing headers, payments or lines. Reducing a sent
+    # dish+note quantity emits a kitchen cancellation even if the dish total
+    # stays unchanged. Match the KOT identity and existing remove_items flag;
+    # additions and append-only rounds do not remove the sent baseline.
+    if not append and past_item and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+        requested_qty_by_item = {}
+        for item in items:
+            code = item.get("item")
+            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
+        previous_qty_by_item = {}
+        for item in past_item:
+            code = item["item_code"]
+            previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
+        def sent_quantities(rows):
+            totals = defaultdict(float)
+            for row in _kitchen_snapshot(rows):
+                totals[row["item_code"], row["comments"], row.get("reservation_line_key")] += row["qty"]
+            return totals
+
+        sent_before, sent_after = sent_quantities(past_item), sent_quantities(items)
+        if (any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items())
+                or any(sent_after.get(key, 0) < qty for key, qty in sent_before.items())):
+            frappe.throw(
+                _("You are not permitted to reduce or remove items from this order."),
+                frappe.PermissionError,
+            )
+
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
         invoice.ury_offline_captured_at = captured
@@ -2337,54 +2521,6 @@ def sync_order(
         )
         invoice.invoice_created = 1
 
-    past_item = _previous_line_snapshot(invoice.items)
-
-    # Conditional checking for 'items' type:
-    # - 'ury': JSON passed, hence using isinstance
-    # - 'ury_pos': Already formatted list, hence using else
-    if isinstance(items, str):
-        items = json.loads(items)
-
-    if append and any(flt(item.get("qty")) <= 0 for item in items):
-        _offline_refusal("URY_OFFLINE_APPEND_QTY", _("Append rounds must contain only positive quantities."))
-
-    # Preserve the stable line identity supplied by POS clients. This is
-    # required so same-item lines cannot be reconciled into one reservation,
-    # AND so a quantity change on an existing line matches its own previous
-    # line instead of diffing as remove+add (B02b).
-    items = _normalize_current_line_keys(items)
-    past_item = _backfill_previous_line_keys(past_item, items)
-
-    # Reduction/removal permission: gate any decrease in a previously-sent
-    # item's quantity (including full removal) by POS Profile `remove_items`,
-    # matching Phase 2's can_reduce_items/can_remove_items derivation. Managers
-    # (elevated roles) may still correct a sent order even when the profile
-    # withholds this from ordinary captains — see _can_remove_sent_items().
-    if not append and past_item and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
-        requested_qty_by_item = {}
-        for d in items:
-            requested_qty_by_item[d.get("item")] = requested_qty_by_item.get(
-                d.get("item"), 0
-            ) + flt(d.get("qty"))
-
-        # Aggregate previous qty per item too: a restaurant order can carry
-        # the same item_code across multiple lines (different comments/
-        # courses), so comparing the requested aggregate against each
-        # previous LINE individually would let a real reduction slip through
-        # as long as no single previous line's qty dropped on its own.
-        previous_qty_by_item = {}
-        for prev in past_item:
-            previous_qty_by_item[prev["item_code"]] = previous_qty_by_item.get(
-                prev["item_code"], 0
-            ) + flt(prev["qty"])
-
-        for item_code, prev_qty in previous_qty_by_item.items():
-            if requested_qty_by_item.get(item_code, 0) < prev_qty:
-                frappe.throw(
-                    _("You are not permitted to reduce or remove items from this order."),
-                    frappe.PermissionError,
-                )
-
     # Reject newly-added lines that are disabled or off the active menu
     # before pricing runs; historic lines already on the invoice are exempt
     # (see _validate_sync_items_against_menu docstring).
@@ -2417,7 +2553,10 @@ def sync_order(
 
     if not append:
         invoice.items = []
-    for item_dict in priced_items:
+    for source, item_dict in zip(items, priced_items, strict=True):
+        if source.get("name"):
+            item_dict["name"] = source["name"]
+        item_dict["ury_held"] = cint(source.get("ury_held"))
         invoice.append("items", item_dict)
 
     if expected_total is not None:
@@ -2452,7 +2591,7 @@ def sync_order(
 
     try:
         kot_execute(
-            invoice.name, customer, table, items, [] if append else past_item, comments,
+            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), comments,
             offline_printed=offline_printed,
         )
     except Exception as e:
@@ -3006,6 +3145,7 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
+    _check_held_before_settlement(invoice, preserve_resolved=True)
     _refuse_client_order_rebind(invoice, client_order_id)
 
     if table:
@@ -3103,6 +3243,17 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     return {"name": invoice.name, "status": "Submitted"}
 
 
+def _check_held_before_settlement(invoice, preserve_resolved=False):
+    _lock_hold_order(invoice, preserve_resolved=preserve_resolved)
+    bills = [invoice]
+    if invoice.custom_merged_pos_invoice:
+        linked = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
+        _lock_hold_order(linked)
+        bills.append(linked)
+    if any(cint(row.get("ury_held")) for bill in bills for row in bill.items):
+        frappe.throw(_("URY_HELD_NOT_FIRED: Fire or remove held items before settlement."))
+
+
 def _submit_and_release_tables(invoice):
     try:
         invoice.submit()
@@ -3136,6 +3287,7 @@ def submit_order_invoice(invoice):
     if doc.docstatus == 1:
         return {"name": doc.name, "status": "Submitted"}
 
+    _check_held_before_settlement(doc)
     _submit_and_release_tables(doc)
     return {"name": doc.name, "status": "Submitted"}
         
@@ -3150,15 +3302,9 @@ def cancel_kot(invoice_id):
     kot_naming_series = pos_profile.custom_kot_naming_series
     cancel_kot_naming_series = "CNCL-" + kot_naming_series
 
-    items = []
-    # Create a list of items for the canceled KOT
-    for item in pos_invoice.items:
-        order_item = {
-            "item_code": item.get("item", item.get("item_code")),
-            "qty": item.qty,
-            "item_name": item.item_name,
-        }
-        items.append(order_item)
+    from ury.ury.api.ury_kot_generate import _line_keyed_items
+
+    items = list(_line_keyed_items(_kitchen_snapshot(pos_invoice.items)).values())
 
     if pos_invoice.restaurant_table:
         restaurant_table = pos_invoice.restaurant_table

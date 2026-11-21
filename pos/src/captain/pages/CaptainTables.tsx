@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { call } from '@ury/core';
+import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
+import { getPOSInvoiceItems, getSplitGroup, type POSInvoiceItem } from '../../lib/invoice-api';
+import Notifications from '../../components/Notifications';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Square } from 'lucide-react';
 import { Button, Spinner, showToast } from '@ury/ui';
 import { useCaptainContext } from '../hooks/useCaptainContext';
 import { getRooms, getTables, checkTableReservation, type Room, type Table } from '../../lib/table-api';
+import { getTableOrderContext } from '../../lib/table-order-context-api';
 import { getTableOrder } from '../../lib/order-api';
 import { getMergeGroupMembers, sortTablesByMergeGroups, formatReservationTime, isReservationLockWindowActive } from '../../lib/table-utils';
 import { t } from '../../i18n';
@@ -47,6 +52,8 @@ export default function CaptainTables() {
   const [ownerNames, setOwnerNames] = useState<Map<string, string>>(new Map());
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
+  const [readyCheck, setReadyCheck] = useState<{ name: string; items: POSInvoiceItem[] } | null>(null);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // `get_captain_context()`'s `rooms` field (from `getRoom()` in
   // `ury/ury_pos/api.py`) reflects the Captain's own room *assignment*, not
@@ -246,6 +253,36 @@ export default function CaptainTables() {
     showToast.error(ownerName ? t('tables.assigned_to', { owner: ownerName }) : t('tables.table_occupied'));
   };
 
+  const openKitchenCheck = useCallback(async (kotName: string, isCurrentSession: () => boolean) => {
+    try {
+      const response = await call.get<{ message: { restaurant_table?: string | null; invoice?: string } }>('frappe.client.get', {
+        doctype: 'URY KOT',
+        name: kotName,
+      });
+      const tableName = response.message?.restaurant_table;
+      const invoice = response.message?.invoice;
+      if (!isCurrentSession() || !tableName || !invoice) return false;
+      const target = await getTableOrderContext(tableName);
+      if (!isCurrentSession() || !target) return false;
+      if (target.order?.name === invoice) {
+        if (!target.permissions?.view) return false;
+        navigate(`/order/table/${encodeURIComponent(tableName)}`);
+      } else {
+        if (!target.order) {
+          const group = await getSplitGroup(invoice);
+          if (!isCurrentSession() || !group.invoices.some(check => check.name === invoice &&
+            !check.is_original && check.restaurant_table === tableName && check.docstatus === 0)) return false;
+        }
+        const { items } = await getPOSInvoiceItems(invoice);
+        if (!isCurrentSession()) return false;
+        setReadyCheck({ name: invoice, items });
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, [navigate]);
+
   const isLoading = contextLoading || (roomsLoading && branchRooms.length === 0);
   const error = contextError;
 
@@ -302,7 +339,8 @@ export default function CaptainTables() {
         )}
       </div>
 
-      <div className="flex-1 p-3">
+      <div className="flex flex-1 flex-col gap-3 p-3 xl:flex-row xl:items-start">
+      <div className="min-w-0 flex-1">
         {branchRooms.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-gray-500">
             <AlertTriangle className="h-8 w-8" />
@@ -345,6 +383,27 @@ export default function CaptainTables() {
             })}
           </div>
         )}
+      </div>
+      {readyCheck && <SplitInvoiceDetails invoice={readyCheck} loadedItems={readyCheck.items} onClose={() => setReadyCheck(null)} />}
+      <aside className="w-full shrink-0 xl:sticky xl:top-32 xl:w-80">
+        <Button
+          variant="outline"
+          className="w-full xl:hidden"
+          aria-expanded={showNotifications}
+          aria-controls="floor-kitchen-notifications"
+          onClick={() => setShowNotifications(value => !value)}
+        >
+          {t('notifications.kitchen')}
+        </Button>
+        <div id="floor-kitchen-notifications" className={showNotifications ? 'mt-2 xl:mt-0' : 'hidden xl:block'}>
+          <Notifications
+            title={t('notifications.kitchen')}
+            documentType="URY KOT"
+            onOpenCheck={openKitchenCheck}
+            onNewUnread={() => showToast.info(t('notifications.new_food_ready'))}
+          />
+        </div>
+      </aside>
       </div>
     </div>
   );

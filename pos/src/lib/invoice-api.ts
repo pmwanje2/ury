@@ -193,6 +193,7 @@ export function getOrdersTabForInvoice(
 export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInvoice {
   return {
     name: inv.name,
+    ury_client_order_id: inv.ury_client_order_id,
     invoice_printed: inv.invoice_printed,
     custom_printing_time: inv.custom_printing_time ?? null,
     grand_total: inv.grand_total,

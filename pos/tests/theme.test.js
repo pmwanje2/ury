@@ -1,10 +1,15 @@
-const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { execFileSync } = require('node:child_process');
-const { resolve } = require('node:path');
-const test = require('node:test');
+import assert from 'node:assert/strict';
+import { globSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { test } from 'vitest';
+import stockBlueColors from 'tailwindcss/colors';
+import postcss from 'postcss';
+import tailwindcss from 'tailwindcss';
 
-const css = readFileSync('packages/ui/src/styles/theme.css', 'utf8');
+const pos = process.cwd();
+const escapeClassName = createRequire(resolve(pos, 'package.json'))('tailwindcss/lib/util/escapeClassName').default;
+const css = readFileSync(resolve(pos, '../packages/ui/src/styles/theme.css'), 'utf8');
 const blocks = Object.fromEntries([':root', '.dark'].map((selector) => {
   const body = css.match(new RegExp(selector.replace('.', '\\.') + '\\s*\\{([^}]+)\\}'))[1];
   return [selector, Object.fromEntries(Array.from(body.matchAll(/(--[\w-]+):\s*([^;]+);/g), (match) => [match[1], match[2]]))];
@@ -19,7 +24,7 @@ function rgb(hsl) {
   });
 }
 test('Standard blue tokens render the exact stock Tailwind palette', () => {
-  const stockBlue = require('tailwindcss/colors').blue;
+  const stockBlue = stockBlueColors.blue;
   for (const [step, hex] of Object.entries(stockBlue)) {
     const value = blocks[':root'][`--blue-${step}`];
     assert.ok(value, `Standard is missing --blue-${step}`);
@@ -37,12 +42,14 @@ test('shared Tailwind blue colours consume theme variables with opacity support'
 
 test('the POS Tailwind config compiles every used blue utility through the shared tokens', async () => {
   const config = (await import('../tailwind.config.js')).default;
-  const classes = [...new Set(execFileSync('rg', ['--no-filename', '-o',
-    String.raw`\b(?:[\w-]+:)*[\w-]+-blue-\d+(?:/\d+)?`, 'pos/src'], { encoding: 'utf8' }).trim().split('\n'))];
-  const result = await require('postcss')([require('tailwindcss')({
-    ...config, content: config.content.map((path) => resolve('pos', path)),
+  const classes = new Set(globSync('src/**/*', { cwd: pos, withFileTypes: true }).filter(entry => entry.isFile()).flatMap(entry => {
+    const source = readFileSync(resolve(entry.parentPath, entry.name), 'utf8');
+    return source.includes('\0') ? [] : source.match(/\b(?:[\w-]+:)*[\w-]+-blue-\d+(?:\/\d+)?/g) || [];
+  }));
+  assert.ok(classes.size, 'expected POS blue utilities');
+  const result = await postcss([tailwindcss({
+    ...config, content: config.content.map((path) => resolve(pos, path)),
   })]).process('@tailwind utilities;', { from: undefined });
-  const escapeClassName = require('tailwindcss/lib/util/escapeClassName').default;
   for (const name of classes) {
     const rules = [];
     result.root.walkRules((rule) => {

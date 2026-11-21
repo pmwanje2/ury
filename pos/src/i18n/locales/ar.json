@@ -700,6 +700,8 @@
     "send_order": "إرسال الطلب"
   },
   "notifications": {
+    "kitchen": "المطبخ",
+    "new_food_ready": "طلب جديد جاهز من المطبخ",
     "guest_bill": "ضيف طلب الفاتورة",
     "plan_draft_ready": "مسودة خطة المبيعات ليوم {{date}} جاهزة للمراجعة",
     "yield_below": "المردود دون المعيار في صنف محضَّر",

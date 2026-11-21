@@ -81,10 +81,10 @@ def _site_less_frappe():
             resolve_default_customer=MagicMock(),
         ),
         "ury.ury.api.ury_kot_generate": _stub(
-            "ury.ury.api.ury_kot_generate", kot_execute=MagicMock(), process_items_for_cancel_kot=MagicMock(),
+            "ury.ury.api.ury_kot_generate", _execute_kot=MagicMock(), process_items_for_cancel_kot=MagicMock(),
         ),
         "ury.ury.api.ury_order_reservation_service": _stub(
-            "ury.ury.api.ury_order_reservation_service", _line_ref=MagicMock(),
+            "ury.ury.api.ury_order_reservation_service", _line_key=MagicMock(), _line_ref=MagicMock(),
             reconcile_order_reservations=MagicMock(), release_order_reservations=MagicMock(),
             resolve_production_context=MagicMock(return_value=None), _warehouse_for_context=MagicMock(),
         ),
