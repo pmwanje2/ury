@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { MAX_NOTE_LENGTH } from '../../hooks/useOrderingSession'
 import { getCustomerProduct, type MenuItem, type ProductDetail as ProductDetailData, type ProductOption } from '../../lib/api'
+import { t } from '../../i18n'
+import { useGuestLanguage } from '../../components/LanguageSwitcher'
 
 export interface ProductDetailProps {
   /** Session token for the `get_customer_product` lookup. */
@@ -43,8 +45,11 @@ function ProductDetail({
   menu,
   itemNotesEnabled = false,
 }: ProductDetailProps) {
+  useGuestLanguage()
   const [loading, setLoading] = useState(true)
+  // null with failed=true shows the catalog sentence, translated each render.
   const [error, setError] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
   const [detail, setDetail] = useState<ProductDetailData | null>(null)
   const [qty, setQty] = useState(1)
   const [selectedVariant, setSelectedVariant] = useState<string | null>(null)
@@ -56,6 +61,7 @@ function ProductDetail({
     let cancelled = false
     setLoading(true)
     setError(null)
+    setFailed(false)
     setDetail(null)
     setQty(1)
     setSelectedVariant(null)
@@ -67,7 +73,8 @@ function ProductDetail({
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load this item. Please try again.')
+          setFailed(true)
+          setError(err instanceof Error ? err.message : null)
         }
       })
       .finally(() => {
@@ -100,9 +107,9 @@ function ProductDetail({
   if (loading) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
-        <div className="text-muted-foreground">Loading item...</div>
+        <div className="text-muted-foreground">{t('item.loading')}</div>
         <button onClick={onBack} className="text-sm underline">
-          Back
+          {t('nav.back')}
         </button>
       </div>
     )
@@ -111,14 +118,14 @@ function ProductDetail({
   if (error || !detail) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="text-destructive">{error ?? 'Item not found.'}</div>
-        {error && (
+        <div className="text-destructive">{error ?? (failed ? t('item.load_error') : t('item.not_found'))}</div>
+        {failed && (
           <button onClick={() => setAttempt((n) => n + 1)} className="rounded-full border px-4 py-2 text-sm font-medium">
-            Retry
+            {t('feedback.retry')}
           </button>
         )}
         <button onClick={onBack} className="rounded-full border px-4 py-2 text-sm font-medium">
-          Back to menu
+          {t('nav.back_to_menu')}
         </button>
       </div>
     )
@@ -131,7 +138,7 @@ function ProductDetail({
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="flex items-center gap-2 p-4">
         <button onClick={onBack} className="text-sm underline">
-          Back
+          {t('nav.back')}
         </button>
       </div>
 
@@ -147,7 +154,7 @@ function ProductDetail({
 
         {detail.variants.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold">Variants</div>
+            <div className="text-sm font-semibold">{t('item.variants')}</div>
             <div className="flex flex-col gap-2">
               {detail.variants.map((variant) => (
                 <OptionRow
@@ -165,7 +172,7 @@ function ProductDetail({
 
         {addons.length > 0 && (
           <div className="flex flex-col gap-2">
-            <div className="text-sm font-semibold">Add-ons</div>
+            <div className="text-sm font-semibold">{t('item.addons')}</div>
             <div className="flex flex-col gap-2">
               {addons.map((addon) => (
                 <OptionRow
@@ -183,14 +190,14 @@ function ProductDetail({
         {itemNotesEnabled && (
           <div className="flex flex-col gap-1">
             <label htmlFor="guest-item-note" className="text-sm font-semibold">
-              Note for the kitchen
+              {t('item.note_label')}
             </label>
             <textarea
               id="guest-item-note"
               maxLength={MAX_NOTE_LENGTH}
               value={note}
               onChange={(event) => setNote(event.target.value.slice(0, MAX_NOTE_LENGTH))}
-              placeholder="For example, no onions"
+              placeholder={t('item.note_placeholder')}
               className="min-h-20 w-full rounded-md border bg-background p-3 text-base"
             />
             <p className="text-right text-xs text-muted-foreground">
@@ -203,7 +210,7 @@ function ProductDetail({
           <button
             onClick={() => setQty((q) => Math.max(1, q - 1))}
             className="h-9 w-9 rounded-full border font-semibold"
-            aria-label="Decrease quantity"
+            aria-label={t('item.decrease')}
           >
             -
           </button>
@@ -211,7 +218,7 @@ function ProductDetail({
           <button
             onClick={() => setQty((q) => q + 1)}
             className="h-9 w-9 rounded-full border font-semibold"
-            aria-label="Increase quantity"
+            aria-label={t('item.increase')}
           >
             +
           </button>
@@ -221,7 +228,7 @@ function ProductDetail({
           onClick={handleAddToCart}
           className="mt-2 rounded-full bg-primary px-4 py-3 font-semibold text-primary-foreground"
         >
-          Add to cart
+          {t('item.add_to_cart')}
         </button>
       </div>
     </div>
@@ -262,7 +269,7 @@ function OptionRow({ option, selected, onSelect, disabled = false }: OptionRowPr
       }`}
     >
       <span>{option.item_name}</span>
-      <span className="text-muted-foreground">{option.rate ?? (disabled ? 'Price unavailable' : '—')}</span>
+      <span className="text-muted-foreground">{option.rate ?? (disabled ? t('item.price_unavailable') : '—')}</span>
     </button>
   )
 }

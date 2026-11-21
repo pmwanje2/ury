@@ -150,7 +150,8 @@ describe("PortraitKioskLayout", () => {
     )
 
     render(<PortraitKioskLayout />)
-    expect(screen.getByText(/Table T5/)).toBeInTheDocument()
+    // #97: the location's own label, never a hard-coded "Table".
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^T5$/)
   })
 
   it("displays New Order button", () => {

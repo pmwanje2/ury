@@ -56,4 +56,22 @@ describe('guest phone payment outcome', () => {
     expect(paymentNoticeText({ key: 'payment.request_created', params: { amount: 12000, currency: 'UGX' } }))
       .toBe('Payment request created (12000 UGX) — a staff member will assist with payment.')
   })
+
+  it.each([
+    ['sw', 'Imelipwa (12000 UGX) — asante.', 'Umelipa 12000 UGX kwa simu. Tafadhali lipa kiasi kilichobaki 3000 UGX kwenye kaunta.'],
+    ['lg', 'Kusasuddwa (12000 UGX) — webale.', 'Osasudde 12000 UGX ku ssimu. Nsaba sasula ebisigaddeyo 3000 UGX ku kaunta.'],
+  ])('renders each notice in the %s guest language (T6d review B2)', async (code, paid, remaining) => {
+    const i18n = await import('../i18n')
+    await i18n.initI18n(code, { setCookie() {} })
+    try {
+      const { paymentNoticeText } = await load()
+      expect(paymentNoticeText({ key: 'payment.paid', params: { amount: 12000, currency: 'UGX' } })).toBe(paid)
+      expect(paymentNoticeText({ key: 'payment.remaining', params: { paid: 12000, remaining: 3000, currency: 'UGX' } }))
+        .toBe(remaining)
+      expect(paymentNoticeText({ key: 'payment.request_created', params: { amount: 12000, currency: 'UGX' } }))
+        .toBe(i18n.t('payment.request_created', { amount: 12000, currency: 'UGX' }))
+    } finally {
+      await i18n.initI18n('en', { setCookie() {} })
+    }
+  })
 })

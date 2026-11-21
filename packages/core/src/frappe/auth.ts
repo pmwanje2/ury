@@ -1,4 +1,5 @@
 import { db, auth } from './client';
+import { purgeOfflineSession } from '../storage';
 
 type LoggedUserResponse = string | null;
 
@@ -64,7 +65,10 @@ export const login = async (username: string, password: string): Promise<void> =
 
 export const logout = async () => {
   try {
-    return auth.logout();
+    const result = await auth.logout();
+    // The POS worker must stop serving the old user's cached reads before navigation.
+    await purgeOfflineSession();
+    return result;
   }catch(e){
     console.error('Error logging out:', e);
     return false;

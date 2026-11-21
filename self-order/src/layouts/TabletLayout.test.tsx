@@ -107,13 +107,13 @@ describe("TabletLayout", () => {
     expect(screen.getByText("Biryani")).toBeInTheDocument()
   })
 
-  it("displays the table number in header", () => {
+  it("names the location in the header, never a hard-coded Table (#97)", () => {
     useOrderingSessionMock.mockReturnValue(
       createMockOrderingSession()
     )
 
     render(<TabletLayout />)
-    expect(screen.getByText(/Table 5/)).toBeInTheDocument()
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(/^5$/)
   })
 
   it("displays New Order button", () => {

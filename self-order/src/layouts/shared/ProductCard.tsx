@@ -1,4 +1,5 @@
 import type { MenuItem } from '../../lib/api'
+import { t } from '../../i18n'
 
 export interface ProductCardProps {
   item: MenuItem
@@ -47,7 +48,7 @@ function ProductCard({
         {unavailableMessage ? (
           <div className="mt-1 text-sm font-semibold text-destructive">{unavailableMessage}</div>
         ) : (
-          cartQty > 0 && <div className="mt-1 text-sm font-semibold text-primary">In cart: {cartQty}</div>
+          cartQty > 0 && <div className="mt-1 text-sm font-semibold text-primary">{t('cart.in_cart', { qty: cartQty })}</div>
         )}
       </div>
     </button>

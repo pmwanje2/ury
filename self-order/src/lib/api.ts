@@ -27,6 +27,8 @@ export interface OrderingContext {
    * branch -> company lookup — see self_ordering.py's `_ordering_context_response`. */
   company: string
   table: string | null
+  /** The table's URY Room, so the header reads "Area · Location". */
+  area?: string | null
   layout: OrderingLayout
   capabilities: OrderingCapabilities
   /** Per-profile idle timeout (defaults to 30 server-side) — used to configure
@@ -43,6 +45,10 @@ export interface MenuItem {
   item_image: string | null
   course: string | null
   course_label: string | null
+  /** URY Menu Course.custom_serving_priority; null when not configured. */
+  course_priority?: number | null
+  /** URY Menu Item row order on the menu. */
+  menu_order?: number | null
 }
 
 export interface MenuResponse {
@@ -88,6 +94,8 @@ export interface OrderStatus {
 // round trip the backend doesn't offer for an already-open session).
 const SESSION_KEY = 'ury_order_session'
 const CONTEXT_KEY = 'ury_order_context'
+// The QR token the stored context was opened with, so a reload of the same QR resumes it.
+const QR_TOKEN_KEY = 'ury_order_qr'
 
 export function getStoredSession(): string | null {
   return sessionStorage.getItem(SESSION_KEY)
@@ -103,9 +111,11 @@ export function getStoredContext(): OrderingContext | null {
   }
 }
 
-function storeContext(context: OrderingContext) {
+function storeContext(context: OrderingContext, qrToken?: string) {
   sessionStorage.setItem(SESSION_KEY, context.session)
   sessionStorage.setItem(CONTEXT_KEY, JSON.stringify(context))
+  if (qrToken) sessionStorage.setItem(QR_TOKEN_KEY, qrToken)
+  else sessionStorage.removeItem(QR_TOKEN_KEY)
 }
 
 // Every whitelisted Frappe method response is wrapped as {"message": <actual
@@ -122,9 +132,21 @@ interface FrappeResponse<T> {
   message: T
 }
 
-export async function bootstrap(token: string): Promise<OrderingContext> {
+export async function bootstrap(token: string, options: { resume?: boolean } = {}): Promise<OrderingContext> {
+  // A reload keeps the QR in the URL. Resume only the context from that
+  // same QR; a different table/link must still bootstrap its own session.
+  // Menu/order reads continue to validate the opaque session server-side.
+  // `resume: false` drops the stored session first (the server refused it).
+  if (options.resume === false) {
+    sessionStorage.removeItem(SESSION_KEY)
+    sessionStorage.removeItem(CONTEXT_KEY)
+    sessionStorage.removeItem(QR_TOKEN_KEY)
+  } else {
+    const stored = getStoredContext()
+    if (stored?.session && sessionStorage.getItem(QR_TOKEN_KEY) === token) return stored
+  }
   const response = await call.get<FrappeResponse<OrderingContext>>(`${M}.get_ordering_context`, { token })
-  storeContext(response.message)
+  storeContext(response.message, token)
   return response.message
 }
 
@@ -239,6 +261,11 @@ export async function submitFeedback(
 
 export async function requestBill(session: string): Promise<{ status: string; request: string }> {
   const response = await call.post<FrappeResponse<{ status: string; request: string }>>(`${M}.request_bill`, { session })
+  return response.message
+}
+
+export async function requestAssistance(session: string): Promise<{ status: string; request: string }> {
+  const response = await call.post<FrappeResponse<{ status: string; request: string }>>(`${M}.request_assistance`, { session })
   return response.message
 }
 

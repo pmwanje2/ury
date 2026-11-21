@@ -315,6 +315,10 @@ doc_events = {
         "before_insert":"ury.ury.api.ury_kot_order_number.set_last_invoice_in_pos_open",
         },
     "POS Closing Entry": {
+        # Whole-till consolidation (POS Invoice mode): before_validate clears
+        # the owner-checked list, before_submit rebuilds it from the till.
+        "before_validate": "ury.ury.hooks.ury_pos_closing_entry.before_validate",
+        "before_submit": "ury.ury.hooks.ury_pos_closing_entry.before_submit",
         "before_save": "ury.ury.hooks.ury_pos_closing_entry.before_save",
         "validate":[
             "ury.ury.hooks.ury_pos_closing_entry.validate",
@@ -453,6 +457,11 @@ before_request = [
 ]
 after_request = ["ury.ury.controllers.serve_pwa.after_request"]
 
+# /ury-pos-sw.js is the POS service worker. Scope "/pos" needs Service-Worker-Allowed, which
+# /assets cannot send. The root /sw.js stays free for other apps.
+# Registration stays opt-in in the POS client.
+page_renderer = ["ury.offline_sw.OfflineServiceWorkerPage"]
+
 website_redirects = [
     {
         "source": "/setup-wizard",
@@ -534,6 +543,10 @@ fixtures = [
                     "POS Invoice-cashier",
                     "POS Invoice-invoice_printed",
                     "POS Invoice-invoice_created",
+                    "POS Invoice-ury_client_order_id",
+                    "POS Invoice-ury_last_round_id",
+                    "POS Invoice-ury_offline_captured_at",
+                    "POS Invoice-ury_applied_rounds",
                     "POS Invoice-custom_aggregator_id",
                     "POS Invoice-restaurant_info",
                     "POS Invoice-restaurant",
@@ -578,6 +591,7 @@ fixtures = [
                     "Production Plan-custom_ury_execution_step",
                     "URY KOT-custom_guest_label",
                     "URY KOT Items-custom_ury_work_order",
+                    "URY KOT-ury_offline_printed",
                     "URY Sales Plan-custom_ury_production_plan",
                     "POS Invoice-custom_restaurant_room",
                     "POS Invoice-column_break_gd1mq",
@@ -629,10 +643,12 @@ fixtures = [
                     "POS Profile-role_masked_for_amounts",
                     "POS Profile-view_all_status",
                     "POS Profile-remove_items",
+                    "POS Profile-ury_offline_capture",
                     "POS Profile-custom_qty_reduction_allowed_order_types",
                     "POS Profile-restaurant_prefix",
                     "POS Profile-show_image",
                     "POS Profile-custom_daily_pos_close",
+                    "POS Profile-custom_blind_cash_count",
                     "POS Profile-custom_checklist_items",
                     "POS Profile-section_break_wp1tv",
                     "POS Profile-dependent_checklist",
@@ -657,6 +673,7 @@ fixtures = [
                     "Branch-custom_avg_table_time_last_week",
                     "Price List-restaurant_menu",
                     "POS Profile-custom_enable_discount",
+                    "POS Profile-custom_enable_payment_without_printing",
                     "POS Invoice-custom_comments",
                     "POS Invoice-custom_guest_label",
                     "POS Profile-custom_multiple_cashier_configuration",

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { t } from '../../i18n'
+import { useGuestLanguage } from '../../components/LanguageSwitcher'
 
 interface SearchBarProps {
   value: string
@@ -14,7 +16,8 @@ interface SearchBarProps {
  * - Includes inline SVG icons (search and clear button)
  * - No external icon library dependency
  */
-function SearchBar({ value, onChange, placeholder = 'Search menu...' }: SearchBarProps) {
+function SearchBar({ value, onChange, placeholder }: SearchBarProps) {
+  useGuestLanguage()
   const [localValue, setLocalValue] = useState(value)
 
   // Update local state when parent value changes
@@ -61,9 +64,9 @@ function SearchBar({ value, onChange, placeholder = 'Search menu...' }: SearchBa
           type="text"
           value={localValue}
           onChange={(e) => setLocalValue(e.target.value)}
-          placeholder={placeholder}
+          placeholder={placeholder ?? t('search.placeholder')}
           className="flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Search menu"
+          aria-label={t('search.label')}
         />
 
         {/* Clear Button */}
@@ -71,7 +74,7 @@ function SearchBar({ value, onChange, placeholder = 'Search menu...' }: SearchBa
           <button
             onClick={handleClear}
             className="flex-shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-label="Clear search"
+            aria-label={t('search.clear')}
             type="button"
           >
             <svg
