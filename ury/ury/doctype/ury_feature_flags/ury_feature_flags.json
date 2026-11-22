@@ -21,7 +21,7 @@
    "fieldname": "pos_stock_authority_v2_help",
    "fieldtype": "HTML",
    "label": "Warning",
-   "options": "<div class=\"text-muted\">This flag routes real POS invoices away from ERPNext's native stock posting into the new (not yet fully integration-tested) fulfilment services. Leave OFF unless you have explicitly been told to enable it as part of a signed-off rollout. See V3-70-fulfilment-accounting-transition-checklist.md.</div>"
+   "options": "<div class=\"text-muted\">This flag routes real POS invoices away from standard stock posting into the new (not yet fully integration-tested) fulfilment services. Leave OFF unless you have explicitly been told to enable it as part of a signed-off rollout. See V3-70-fulfilment-accounting-transition-checklist.md.</div>"
   }
  ],
  "index_web_pages_for_search": 1,
