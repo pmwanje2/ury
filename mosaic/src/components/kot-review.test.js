@@ -9,13 +9,14 @@ import * as Vue from "vue";
 import postcss from "postcss";
 import tailwindcss from "tailwindcss";
 import i18n, { isRTL, t as translate } from "../i18n";
+import AvailabilityDrawer from "./AvailabilityDrawer.vue";
 // Modules this theme adds load lazily so each test fails on its own assertion before they exist.
 const optional = name => import(/* @vite-ignore */ `./${name}`).catch(error => {
   if (/Failed to (?:load|fetch)|Cannot find module|does not exist/i.test(String(error?.message))) return {};
   throw error;
 });
 // v16 kot.vue imports t and isRTL from ../i18n; the harness strips imports and passes them in.
-const helpers = { ...await optional("kitchen-actions.js"), ...await optional("station-print.js"), t: translate, isRTL };
+const helpers = { ...await optional("kitchen-actions.js"), ...await optional("station-print.js"), t: translate, isRTL, AvailabilityDrawer };
 
 const source = await readFile(join(dirname(fileURLToPath(import.meta.url)), "kot.vue"), "utf8");
 const { descriptor } = parse(source);

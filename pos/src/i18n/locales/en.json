@@ -58,6 +58,16 @@
     "staff_pins": "Staff PINs"
   },
   "menu": {
+    "manage_availability": "Manage availability",
+    "mark_sold_out": "Mark sold out",
+    "mark_available": "Available again",
+    "daily_count": "Daily count",
+    "set_count": "Set count",
+    "reset_on_open": "Reset at first opening",
+    "availability_update_failed": "Could not update availability. Try again.",
+    "availability_load_failed": "Could not load availability. Try again.",
+    "no_availability_overrides": "No availability changes for this location.",
+    "sold_out_count": "Sold out ({{count}})",
     "special_items": "Special Items",
     "available_chip": "Available",
     "unavailable": "Unavailable",

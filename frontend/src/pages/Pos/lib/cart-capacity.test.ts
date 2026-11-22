@@ -1,11 +1,12 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const getItemAvailabilityMock = vi.fn()
+const getMenuAvailability = vi.fn()
 
 vi.mock('./availability-api', () => ({
-  getItemAvailability: (...args: any[]) => getItemAvailabilityMock(...args),
+  getMenuAvailability: (...args: any[]) => getMenuAvailability(...args),
 }))
+vi.mock('./realtime', () => ({ useMenuAvailabilityChannel: () => {} }))
 
 import { cartQtyForItem, remainingHeadroom, useCartAvailability } from './cart-capacity'
 import type { ItemAvailability } from './availability-api'
@@ -67,14 +68,14 @@ describe('remainingHeadroom', () => {
 // documented policy. These tests pin both properties down.
 describe('useCartAvailability', () => {
   beforeEach(() => {
-    getItemAvailabilityMock.mockReset()
+    getMenuAvailability.mockReset()
   })
 
   it('does not fetch when branch or company is missing', () => {
     const { result } = renderHook(() =>
       useCartAvailability({ itemCodes: ['COFFEE'], branch: undefined, company: 'URY' }),
     )
-    expect(getItemAvailabilityMock).not.toHaveBeenCalled()
+    expect(getMenuAvailability).not.toHaveBeenCalled()
     expect(result.current.availabilityByItem).toEqual({})
     expect(result.current.loading).toBe(false)
   })
@@ -83,14 +84,12 @@ describe('useCartAvailability', () => {
     const { result } = renderHook(() =>
       useCartAvailability({ itemCodes: [], branch: 'Kozhikode', company: 'URY' }),
     )
-    expect(getItemAvailabilityMock).not.toHaveBeenCalled()
+    expect(getMenuAvailability).not.toHaveBeenCalled()
     expect(result.current.availabilityByItem).toEqual({})
   })
 
-  it('fetches availability once per distinct item_code, deduping repeats', async () => {
-    getItemAvailabilityMock.mockImplementation(({ item_code }) =>
-      Promise.resolve(buildAvailability({ item_code })),
-    )
+  it('fetches one batch of distinct item codes', async () => {
+    getMenuAvailability.mockResolvedValue({ COFFEE: buildAvailability(), TEA: buildAvailability({ item_code: 'TEA' }) })
 
     const { result } = renderHook(() =>
       useCartAvailability({ itemCodes: ['COFFEE', 'COFFEE', 'TEA'], branch: 'Kozhikode', company: 'URY' }),
@@ -98,16 +97,12 @@ describe('useCartAvailability', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    expect(getItemAvailabilityMock).toHaveBeenCalledTimes(2)
+    expect(getMenuAvailability).toHaveBeenCalledExactlyOnceWith('Kozhikode', 'URY', ['COFFEE', 'TEA'])
     expect(Object.keys(result.current.availabilityByItem).sort()).toEqual(['COFFEE', 'TEA'])
   })
 
-  it('fails open: a rejected lookup for one item is omitted, not surfaced as an error, and other items still resolve', async () => {
-    getItemAvailabilityMock.mockImplementation(({ item_code }: { item_code: string }) =>
-      item_code === 'COFFEE'
-        ? Promise.reject(new Error('network error'))
-        : Promise.resolve(buildAvailability({ item_code })),
-    )
+  it('fails open when the batch cannot be loaded', async () => {
+    getMenuAvailability.mockRejectedValue(new Error('network error'))
 
     const { result } = renderHook(() =>
       useCartAvailability({ itemCodes: ['COFFEE', 'TEA'], branch: 'Kozhikode', company: 'URY' }),
@@ -115,12 +110,11 @@ describe('useCartAvailability', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    expect(result.current.availabilityByItem.COFFEE).toBeUndefined()
-    expect(result.current.availabilityByItem.TEA).toBeDefined()
+    expect(result.current.availabilityByItem).toEqual({})
   })
 
   it('resets to empty and does not re-fetch stale results when the item set changes to empty', async () => {
-    getItemAvailabilityMock.mockResolvedValue(buildAvailability())
+    getMenuAvailability.mockResolvedValue({ COFFEE: buildAvailability() })
 
     const { result, rerender } = renderHook(
       ({ itemCodes }) => useCartAvailability({ itemCodes, branch: 'Kozhikode', company: 'URY' }),

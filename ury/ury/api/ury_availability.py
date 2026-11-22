@@ -97,12 +97,14 @@ wiring the real session/POS-Profile/permission check. Every call path in
 requires no change anywhere else in this module.
 """
 
+from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 import json
 import math
 
 import frappe
 from frappe import _
-from frappe.utils import getdate, now_datetime
+from frappe.utils import get_datetime, getdate, now_datetime
 
 from ury.ury.api.ury_bom_compiler import compile_bom_vector
 from ury.ury.api.ury_production_context import resolve_production_context
@@ -130,6 +132,10 @@ POLICY_MADE_TO_ORDER = "MADE_TO_ORDER"
 POLICY_DIRECT_RETAIL = "DIRECT_RETAIL"
 POLICY_BUNDLE = "BUNDLE"
 MAX_BATCH_CODES = 500
+OVERRIDE_DOCTYPE = "URY Item Availability"
+OVERRIDE_FIELDS = ["item", "status", "countdown_enabled", "remaining_qty", "daily_limit", "auto_reset_on_open"]
+MANAGE_ROLES = frozenset({"URY Manager", "URY Admin", "System Manager"})
+MARK_ROLES = MANAGE_ROLES | {"URY Cashier", "URY Captain", "URY Waiter", "Kitchen User", "Kitchen Cook"}
 
 
 def _verify_branch_scope(user, branch, company):
@@ -147,7 +153,7 @@ def _verify_branch_scope(user, branch, company):
 	handling in `ury_kot_item_execution_service.py`.
 	"""
 	if not branch or not company:
-		frappe.throw(_("Branch and company are required"), frappe.ValidationError)
+		frappe.throw(_("[AVAIL-SCOPE] Branch and company are required."), frappe.ValidationError)
 
 	if user == "Administrator":
 		return
@@ -157,12 +163,12 @@ def _verify_branch_scope(user, branch, company):
 		return
 
 	branch_company = frappe.db.get_value("Branch", branch, "company")
-	if branch_company and branch_company != company:
-		frappe.throw(_("Branch does not belong to the given company"), frappe.PermissionError)
+	if branch_company != company:
+		frappe.throw(_("[AVAIL-SCOPE] Branch does not belong to the given company."), frappe.PermissionError)
 
 	assigned = frappe.db.exists("URY User", {"parenttype": "Branch", "parent": branch, "user": user})
 	if not assigned:
-		frappe.throw(_("You are not permitted to view availability for this branch"), frappe.PermissionError)
+		frappe.throw(_("[AVAIL-SCOPE] You are not permitted to view availability for this branch."), frappe.PermissionError)
 
 
 def _resolve_production_config(item_code, branch, company, department=None):
@@ -324,15 +330,70 @@ def _catalog_response(item_code, branch, company, department, mode, enabled):
 	return response
 
 
+def _read_overrides(branch, codes=None):
+	filters = {"branch": branch}
+	if codes is not None:
+		filters["item"] = ("in", codes)
+	return {
+		row["item"]: row
+		for row in frappe.get_all(OVERRIDE_DOCTYPE, filters=filters, fields=OVERRIDE_FIELDS)
+	}
+
+
+def _operational_response(item_code, branch, company, department, mode, enabled, override):
+	response = _catalog_response(item_code, branch, company, department, mode, enabled)
+	if not enabled or not override:
+		return response
+	if override["status"] == "Sold Out":
+		response.update(sellable=False, available_qty=0, source="MANUAL", reason_code="SOLD_OUT_MANUAL")
+	elif override["countdown_enabled"]:
+		remaining = override["remaining_qty"]
+		response.update(
+			sellable=remaining > 0, available_qty=remaining, source="COUNT_DOWN",
+			reason_code="AVAILABLE" if remaining > 0 else "COUNT_EXHAUSTED",
+		)
+	return response
+
+
+def _evaluate_item(item_code, branch, company, department, mode, enabled, override):
+	response = _operational_response(item_code, branch, company, department, mode, enabled, override)
+	if response["sellable"] and mode != "NATIVE":
+		cap = response["available_qty"]
+		response = _compute_production_availability(item_code, branch, company, department)
+		production_qty = response["available_qty"]
+		if response["sellable"] and cap is not None and (production_qty is None or cap <= production_qty):
+			response.update(available_qty=cap, source="COUNT_DOWN")
+	if override:
+		response.update(
+			manual_status=override["status"], auto_reset_on_open=bool(override["auto_reset_on_open"]),
+			daily_limit=override["daily_limit"] if override["countdown_enabled"] else None,
+		)
+	return response
+
+
 def compute_item_availability(item_code, branch, company, department=None, *, policy=None):
 	"""Evaluate an item after the caller has verified its branch/company scope."""
 	enabled = _catalog_gate(item_code)
 	if policy is None:
 		policy = get_branch_stock_policy(branch, company)
 	mode = _stock_policy_mode(policy)
+	override = frappe.db.get_value(
+		OVERRIDE_DOCTYPE, {"branch": branch, "item": item_code}, OVERRIDE_FIELDS, as_dict=True,
+	) if enabled else None
+	return _evaluate_item(item_code, branch, company, department, mode, enabled, override)
+
+
+def get_reservation_availability(item_code, branch, company, department=None):
+	"""Reservation changes reconcile Layer 2 only; order admission owns Layers 0c/1."""
+	_verify_branch_scope(frappe.session.user, branch, company)
+	mode = _stock_policy_mode(get_branch_stock_policy(branch, company))
+	enabled = _catalog_gate(item_code)
 	if not enabled or mode == "NATIVE":
 		return _catalog_response(item_code, branch, company, department, mode, enabled)
+	return _compute_production_availability(item_code, branch, company, department)
 
+
+def _compute_production_availability(item_code, branch, company, department):
 	config = _resolve_production_config(item_code, branch, company, department)
 	if config is None:
 		return _fail_closed(item_code, company, branch, department, None, "CONFIGURATION_ERROR")
@@ -434,11 +495,6 @@ def _batch_availability(codes, branch, company, policy):
 	"""Read availability for the caller's already-resolved menu item codes."""
 	codes = list(dict.fromkeys(codes))
 	mode = _stock_policy_mode(policy)
-	if mode == "RESERVATION_CONTROLLED":
-		return {
-			code: compute_item_availability(code, branch, company, policy=policy)
-			for code in codes
-		}
 	if not codes:
 		return {}
 
@@ -446,8 +502,9 @@ def _batch_availability(codes, branch, company, policy):
 		row["name"]: row["disabled"]
 		for row in frappe.get_all("Item", filters={"name": ["in", codes]}, fields=["name", "disabled"])
 	}
+	overrides = _read_overrides(branch, codes)
 	return {
-		code: _catalog_response(code, branch, company, None, mode, disabled.get(code) == 0)
+		code: _evaluate_item(code, branch, company, None, mode, disabled.get(code) == 0, overrides.get(code))
 		for code in codes
 	}
 
@@ -472,6 +529,256 @@ def get_menu_availability(branch, company, item_codes):
 		"as_of": now_datetime(),
 		"items": _batch_availability(item_codes, branch, company, policy),
 	}
+
+
+def _branch_menu_items(branch):
+	"""Union of the branch's operational active, room, and order-type menus."""
+	restaurants = frappe.get_all(
+		"URY Restaurant", filters={"branch": branch}, fields=["name", "active_menu", "room_wise_menu", "order_type_wise_menu"],
+	)
+	menus = {r["active_menu"] for r in restaurants if r["active_menu"]}
+	for table, configuration in (("Menu for Room", "room_wise_menu"), ("Order Type Menu", "order_type_wise_menu")):
+		parents = [r["name"] for r in restaurants if r[configuration]]
+		if parents:
+			menus.update(frappe.get_all(table, filters={"parent": ("in", parents), "parenttype": "URY Restaurant"}, pluck="menu"))
+	if not menus:
+		return []
+	rows = frappe.get_all(
+		"URY Menu Item", filters={"parent": ("in", sorted(menus)), "parenttype": "URY Menu", "disabled": 0},
+		fields=["item", "item_name"], order_by="item_name asc, item asc",
+	)
+	return list({r["item"]: {"item": r["item"], "name": r["item_name"] or r["item"]} for r in rows}.values())
+
+
+def _branch_company(branch, *, lock=False):
+	company = frappe.db.get_value("Branch", branch, "company", for_update=lock) if branch else None
+	if not company:
+		frappe.throw(_("[AVAIL-SCOPE] Select a valid branch."), frappe.PermissionError)
+	return company
+
+
+@frappe.whitelist(methods=["GET"])
+def get_branch_availability_menu(branch):
+	company = _branch_company(branch)
+	_verify_branch_scope(frappe.session.user, branch, company)
+	return {"company": company, "items": _branch_menu_items(branch)}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_branch_availability_overrides(branch, company):
+	_verify_branch_scope(frappe.session.user, branch, company)
+	rows = frappe.get_all(
+		OVERRIDE_DOCTYPE, filters={"branch": branch},
+		fields=OVERRIDE_FIELDS + ["last_reset_on", "reason", "updated_by", "updated_at"], order_by="item asc",
+	)
+	if rows:
+		names = {r["name"]: r["item_name"] for r in frappe.get_all(
+			"Item", filters={"name": ("in", [r["item"] for r in rows])}, fields=["name", "item_name"],
+		)}
+		for row in rows:
+			row["item_name"] = names.get(row["item"]) or row["item"]
+	return rows
+
+
+def _publish_availability(branch, items, source):
+	if items:
+		frappe.publish_realtime(
+			f"menu_availability_update_{branch}",
+			{"affected_items": sorted(set(items)), "branch": branch, "source": source},
+			after_commit=True,
+		)
+
+
+def _whole_count(value):
+	try:
+		number = Decimal(str(value))
+		if number.is_finite() and 0 <= number <= 2147483647 and number == number.to_integral_value():
+			return int(number)
+	except (InvalidOperation, ValueError):
+		pass
+	frappe.throw(_("[AVAIL-COUNT-INVALID] Enter a non-negative whole count."), frappe.ValidationError)
+
+
+@frappe.whitelist(methods=["POST"])
+def set_item_availability(branch, item_code, status=None, count=None, reset_policy=None, reason=None):
+	"""The only public write path; floor staff can make only the safe transition."""
+	user = frappe.session.user
+	roles = set(frappe.get_roles(user))
+	manager = bool(roles & MANAGE_ROLES)
+	if not (roles & MARK_ROLES) or (not manager and (status != "Sold Out" or count is not None or reset_policy is not None)):
+		frappe.throw(_("[AVAIL-ROLE] You do not have permission to make this change."), frappe.PermissionError)
+	company = _branch_company(branch)
+	_verify_branch_scope(user, branch, company)
+	if status not in (None, "Available", "Sold Out") or reset_policy not in (None, "Never", "Start of business day"):
+		frappe.throw(_("[AVAIL-COUNT-INVALID] Select a valid status and reset option."), frappe.ValidationError)
+	if status is None and count is None and reset_policy is None:
+		frappe.throw(_("[AVAIL-COUNT-INVALID] Choose an availability change."), frappe.ValidationError)
+	if count is not None:
+		count = _whole_count(count)
+	if not any(r["item"] == item_code for r in _branch_menu_items(branch)):
+		frappe.throw(_("[AVAIL-NOT-ON-MENU] This item is not on a menu for this branch."), frappe.ValidationError)
+
+	# Serialize new rows and first openings. Counts lock only their item rows.
+	_branch_company(branch, lock=True)
+	name = frappe.db.get_value(OVERRIDE_DOCTYPE, {"branch": branch, "item": item_code}, "name", for_update=True)
+	doc = frappe.get_doc(OVERRIDE_DOCTYPE, name, for_update=True) if name else frappe.new_doc(OVERRIDE_DOCTYPE)
+	stamp = now_datetime()
+	if not name:
+		doc.branch, doc.item = branch, item_code
+		# A mark made after opening must survive another cashier opening today.
+		doc.last_reset_on = frappe.db.get_value(
+			"POS Opening Entry", {"branch": branch, "docstatus": 1, "posting_date": ("<=", getdate(stamp))},
+			"posting_date", order_by="posting_date desc",
+		)
+	if status is not None:
+		doc.status = status
+	if count is not None:
+		doc.countdown_enabled, doc.daily_limit, doc.remaining_qty = 1, count, count
+		doc.count_started_at = stamp
+	if reset_policy is not None:
+		doc.auto_reset_on_open = int(reset_policy == "Start of business day")
+	doc.reason, doc.updated_by, doc.updated_at = reason, user, stamp
+	doc.flags.availability_operation = True
+	doc.save(ignore_permissions=True)
+	_publish_availability(branch, [item_code], "MANUAL")
+	return compute_item_availability(item_code, branch, company)
+
+
+def _item_totals(lines):
+	totals = defaultdict(Decimal)
+	for line in lines:
+		code = line.get("item") or line.get("item_code")
+		if not code:
+			continue
+		try:
+			qty = Decimal(str(line.get("qty") or 0))
+			if qty.is_finite():
+				totals[code] += qty
+				continue
+		except InvalidOperation:
+			pass
+		frappe.throw(_("[AVAIL-COUNT-INVALID] Enter a valid quantity."), frappe.ValidationError)
+	return totals
+
+
+def _void_sources(invoice):
+	"""Returns follow the original check, not the creation time of a split bill."""
+	names = set()
+	current = getattr(invoice, "name", None)
+	created_at = getattr(invoice, "creation", None)
+	parent = getattr(invoice, "custom_split_from", None)
+	if current:
+		names.add(current)
+	while parent:
+		if parent in names:
+			return names, None
+		names.add(parent)
+		row = frappe.db.get_value("POS Invoice", parent, ["creation", "custom_split_from"], as_dict=True)
+		if not row:
+			return names, None
+		created_at, parent = row["creation"], row["custom_split_from"]
+	return names, created_at
+
+
+def _items_with_preparation(invoices, codes):
+	"""Conservatively withhold returns once any of this dish has been started."""
+	params = (*sorted(invoices), *codes)
+	invoice_markers = ", ".join(["%s"] * len(invoices))
+	markers = ", ".join(["%s"] * len(codes))
+	return {row[0] for row in frappe.db.sql(
+		f"""SELECT i.item
+		FROM `tabURY KOT` k
+		INNER JOIN `tabURY KOT Items` i ON i.parent = k.name AND i.parenttype = 'URY KOT'
+		LEFT JOIN `tabURY KOT Item Execution` e ON e.kot_item = i.name
+		LEFT JOIN `tabURY KOT Execution` t ON t.kot = k.name
+		WHERE k.invoice IN ({invoice_markers}) AND k.type IN ('New Order', 'Order Modified') AND k.docstatus = 1
+		AND i.item IN ({markers})
+		AND (e.started_at IS NOT NULL OR e.ready_at IS NOT NULL OR e.served_at IS NOT NULL
+			OR (e.name IS NULL AND (t.started_at IS NOT NULL OR t.ready_at IS NOT NULL OR t.served_at IS NOT NULL))
+			OR k.order_status = 'Served')
+		FOR UPDATE""",
+		params,
+	)}
+
+
+def apply_count_delta(branch, previous_items, accepted_items, *, invoice=None, prepared=None):
+	"""Apply operational admission and net quantity changes in the order transaction."""
+	before, after = _item_totals(previous_items), _item_totals(accepted_items)
+	deltas = {code: after[code] - before[code] for code in before.keys() | after.keys() if after[code] != before[code]}
+	if not branch or not deltas:
+		return
+	rows = frappe.db.get_values(
+		OVERRIDE_DOCTYPE, {"branch": branch, "item": ("in", sorted(deltas))},
+		OVERRIDE_FIELDS + ["count_started_at"], as_dict=True, for_update=True, order_by="item asc",
+	)
+	reductions = [row["item"] for row in rows if row["countdown_enabled"] and deltas[row["item"]] < 0]
+	invoice_names, created_at = _void_sources(invoice) if invoice and reductions else ((), None)
+	if prepared is None:
+		prepared = _items_with_preparation(invoice_names, reductions) if invoice_names else ()
+	changed = []
+	for row in rows:
+		code = row["item"]
+		delta = deltas[code]
+		if delta > 0 and row["status"] == "Sold Out":
+			name = frappe.db.get_value("Item", code, "item_name") or _("This item")
+			frappe.throw(_("[AVAIL-SOLD-OUT] {0} is sold out.").format(name), frappe.ValidationError)
+		if not row["countdown_enabled"]:
+			continue
+		if delta > 0:
+			qty = _whole_count(delta)
+			frappe.db.sql(
+				"""UPDATE `tabURY Item Availability` SET remaining_qty = remaining_qty - %s
+				WHERE branch = %s AND item = %s AND countdown_enabled = 1 AND remaining_qty >= %s""",
+				(qty, branch, code, qty),
+			)
+			if frappe.db._cursor.rowcount != 1:
+				name = frappe.db.get_value("Item", code, "item_name") or _("This item")
+				frappe.throw(_("[AVAIL-COUNT-EXHAUSTED] {0} is sold out.").format(name), frappe.ValidationError)
+		else:
+			# Older orders did not necessarily consume the active allocation.
+			started_at = row.get("count_started_at")
+			if code in prepared or (
+				started_at and invoice and (not created_at or get_datetime(created_at) < get_datetime(started_at))
+			):
+				continue
+			qty = int(-delta)
+			if not qty:
+				continue
+			frappe.db.sql(
+				"""UPDATE `tabURY Item Availability` SET remaining_qty = LEAST(daily_limit, remaining_qty + %s)
+				WHERE branch = %s AND item = %s AND countdown_enabled = 1 AND remaining_qty < daily_limit""",
+				(qty, branch, code),
+			)
+			if not frappe.db._cursor.rowcount:
+				continue
+		changed.append(code)
+	_publish_availability(branch, changed, "COUNT_DOWN")
+
+
+def reset_branch_availability(branch, posting_date, opening=None):
+	if not branch or not posting_date:
+		return
+	_branch_company(branch, lock=True)
+	stamp = now_datetime()
+	# Later tills must not reset a row opted in or changed after the first opening.
+	if opening and frappe.db.exists("POS Opening Entry", {
+		"branch": branch, "docstatus": 1, "posting_date": posting_date, "name": ("!=", opening),
+	}):
+		return
+	where = "branch = %s AND auto_reset_on_open = 1 AND (last_reset_on IS NULL OR last_reset_on < %s)"
+	affected = frappe.db.sql(
+		f"SELECT item FROM `tabURY Item Availability` WHERE {where} ORDER BY item FOR UPDATE", (branch, posting_date),
+	)
+	if not affected:
+		return
+	frappe.db.sql(
+		f"""UPDATE `tabURY Item Availability`
+		SET status = 'Available', remaining_qty = CASE WHEN countdown_enabled = 1 THEN daily_limit ELSE remaining_qty END,
+			last_reset_on = %s, count_started_at = %s, updated_at = %s, updated_by = %s, reason = NULL
+		WHERE {where}""",
+		(posting_date, stamp, stamp, frappe.session.user, branch, posting_date),
+	)
+	_publish_availability(branch, [row[0] for row in affected], "COUNT_DOWN")
 
 
 def _fill_pre_produced(response, item_code, branch, company, department, warehouse, config=None):

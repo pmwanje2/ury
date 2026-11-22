@@ -13,6 +13,10 @@
     "./default-customer": {
       "types": "./src/utils/defaultCustomer.ts",
       "import": "./src/utils/defaultCustomer.ts"
+    },
+    "./availability": {
+      "types": "./src/availability.ts",
+      "import": "./src/availability.ts"
     }
   },
   "scripts": {

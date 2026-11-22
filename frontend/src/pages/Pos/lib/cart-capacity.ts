@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { getItemAvailability, ItemAvailability } from './availability-api';
+import type { ItemAvailability } from './availability-api';
+import { useMenuAvailability } from './use-menu-availability';
 
 /**
  * B04: real-time cart capacity tracking.
@@ -10,7 +10,7 @@ import { getItemAvailability, ItemAvailability } from './availability-api';
  * only ever caught when `sync_order` rejected the whole order with
  * "Insufficient capacity for <item>: ... (required X, available Y)".
  *
- * This module fetches the same V3-44 `get_item_availability` figure the
+ * This module fetches the same batch availability figure the
  * menu grid already uses for the "Sold out" badge (see
  * `availability-api.ts`'s cache-invalidation policy notes) and exposes a
  * per-item-code remaining-headroom figure: `available_qty` minus the total
@@ -49,43 +49,8 @@ export interface CartCapacityResult {
  * math is done separately from the fetched `available_qty` snapshot).
  */
 export const useCartAvailability = ({ itemCodes, branch, company }: CartCapacityParams): CartCapacityResult => {
-  const [availabilityByItem, setAvailabilityByItem] = useState<Record<string, ItemAvailability>>({});
-  const [loading, setLoading] = useState(false);
-
-  const distinctItemCodes = Array.from(new Set(itemCodes.filter(Boolean))).sort();
-  const key = distinctItemCodes.join(',');
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!branch || !company || distinctItemCodes.length === 0) {
-      setAvailabilityByItem({});
-      return;
-    }
-
-    setLoading(true);
-    Promise.all(
-      distinctItemCodes.map((item_code) =>
-        getItemAvailability({ item_code, branch, company })
-          .then((result) => [item_code, result] as const)
-          .catch(() => [item_code, null] as const),
-      ),
-    ).then((results) => {
-      if (cancelled) return;
-      const next: Record<string, ItemAvailability> = {};
-      for (const [item_code, result] of results) {
-        if (result) next[item_code] = result;
-      }
-      setAvailabilityByItem(next);
-      setLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, branch, company]);
-
-  return { availabilityByItem, loading };
+  const { availabilityMap, loading } = useMenuAvailability(itemCodes.map(item => ({ item })), branch, company);
+  return { availabilityByItem: availabilityMap, loading };
 };
 
 /**

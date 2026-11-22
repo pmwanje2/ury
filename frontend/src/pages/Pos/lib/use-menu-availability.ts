@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  getItemAvailability,
-  ItemAvailability,
-} from './availability-api';
+import { getMenuAvailability, type ItemAvailability } from './availability-api';
+import { useMenuAvailabilityChannel } from './realtime';
 
 export type AvailabilityTier = 0 | 1 | 2;
 
@@ -26,7 +24,8 @@ export function getAvailabilityTier(availability?: ItemAvailability | null): Ava
   }
 
   const reasonCode = availability.reason_code;
-  if (reasonCode === 'PLAN_EXHAUSTED' || reasonCode === 'FG_OUT_OF_STOCK') {
+  if (reasonCode === 'PLAN_EXHAUSTED' || reasonCode === 'FG_OUT_OF_STOCK' ||
+      reasonCode === 'SOLD_OUT_MANUAL' || reasonCode === 'COUNT_EXHAUSTED') {
     return 1;
   }
 
@@ -56,99 +55,51 @@ export function sortMenuItemsByAvailability<T extends { item: string; name: stri
   });
 }
 
-const CHECK_CONCURRENCY = 8;
-
-const runWithConcurrency = async <T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> => {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const laneCount = Math.max(1, Math.min(limit, items.length));
-  const lanes = new Array(laneCount).fill(0).map(async () => {
-    while (cursor < items.length) {
-      const current = cursor++;
-      results[current] = await worker(items[current]);
-    }
-  });
-  await Promise.all(lanes);
-  return results;
-};
-
-export interface UseMenuAvailabilityResult {
-  availabilityMap: Record<string, ItemAvailability>;
-  refetchItem: (itemCode: string) => Promise<void>;
-}
+const EMPTY: Record<string, ItemAvailability> = {};
 
 export function useMenuAvailability(
   items: Array<{ item: string }>,
   branch?: string,
   company?: string
-): UseMenuAvailabilityResult {
-  const [availabilityMap, setAvailabilityMap] = useState<Record<string, ItemAvailability>>({});
-  const activeFetchRef = useRef<number>(0);
-  const fetchedKeyRef = useRef<string>('');
-
-  const distinctItemCodes = Array.from(new Set(items.map((i) => i.item).filter(Boolean))).sort();
-  const itemsKey = distinctItemCodes.join(',');
-
+) {
+  const itemsKey = JSON.stringify([...new Set(items.map(row => row.item).filter(Boolean))].sort());
+  const scope = JSON.stringify([branch, company, itemsKey]);
+  const [snapshot, setSnapshot] = useState<{ scope: string; items: Record<string, ItemAvailability> }>();
+  const refreshRef = useRef<() => void>(() => {});
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
-    let cancelled = false;
-    const fetchId = ++activeFetchRef.current;
-
-    if (!branch || !company || distinctItemCodes.length === 0) {
-      if (Object.keys(availabilityMap).length > 0) {
-        setAvailabilityMap({});
-      }
-      return;
-    }
-
-    const currentKey = `${branch}:${company}:${itemsKey}`;
-    if (fetchedKeyRef.current === currentKey) {
-      return;
-    }
-    fetchedKeyRef.current = currentKey;
-
-    runWithConcurrency(distinctItemCodes, CHECK_CONCURRENCY, async (item_code) => {
-      try {
-        const result = await getItemAvailability({ item_code, branch, company });
-        return [item_code, result] as const;
-      } catch {
-        return [item_code, null] as const;
-      }
-    }).then((results) => {
-      if (cancelled || fetchId !== activeFetchRef.current) return;
-      const next: Record<string, ItemAvailability> = {};
-      for (const [item_code, result] of results) {
-        if (result) {
-          next[item_code] = result;
-        }
-      }
-      setAvailabilityMap(next);
-    });
-
-    return () => {
-      cancelled = true;
+    const codes = JSON.parse(itemsKey) as string[];
+    if (!branch || !company || !codes.length) { setLoading(false); return; }
+    let active = true;
+    let inFlight = false;
+    let eventTimer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (inFlight) return;
+      inFlight = true;
+      void getMenuAvailability(branch, company, codes).then(items => {
+        if (active) setSnapshot({ scope, items });
+      }).catch(() => { /* Keep the last successful snapshot. */ }).finally(() => {
+        inFlight = false;
+        if (active) setLoading(false);
+      });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey, branch, company]);
-
-  const refetchItem = async (itemCode: string) => {
-    if (!branch || !company || !itemCode) return;
-    try {
-      const result = await getItemAvailability(
-        { item_code: itemCode, branch, company },
-        { skipCache: true }
-      );
-      setAvailabilityMap((prev) => ({
-        ...prev,
-        [itemCode]: result,
-      }));
-    } catch {
-      // Fail-open
-    }
-  };
-
-  return { availabilityMap, refetchItem };
+    const visible = () => { if (document.visibilityState === 'visible') refresh(); };
+    refreshRef.current = () => {
+      clearTimeout(eventTimer);
+      eventTimer = setTimeout(visible, 500);
+    };
+    setLoading(true);
+    refresh();
+    const timer = setInterval(visible, 60_000);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      clearTimeout(eventTimer);
+      document.removeEventListener('visibilitychange', visible);
+      refreshRef.current = () => {};
+    };
+  }, [itemsKey, scope, branch, company]);
+  useMenuAvailabilityChannel(branch, () => refreshRef.current());
+  return { availabilityMap: snapshot?.scope === scope ? snapshot.items : EMPTY, loading };
 }

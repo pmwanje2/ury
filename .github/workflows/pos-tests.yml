@@ -48,3 +48,4 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_kds_display_window
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_backfill_invoice_employee_attribution
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_availability_tiers
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_menu_availability_operations

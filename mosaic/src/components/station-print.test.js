@@ -9,6 +9,7 @@ import { compile } from "@vue/compiler-dom";
 import { parse } from "@vue/compiler-sfc";
 import { renderToString } from "@vue/server-renderer";
 import i18n, { isRTL, t as translate } from "../i18n";
+import AvailabilityDrawer from "./AvailabilityDrawer.vue";
 
 const onTestFinishedRealTimers = () => onTestFinished(() => { vi.useRealTimers(); });
 const here = dirname(fileURLToPath(import.meta.url));
@@ -354,14 +355,14 @@ function componentDefinition() {
   const module = stationModule || {};
   return new Function(
     "FrappeApp", "window", "navigator", "localStorage", "fetch", "io", "console",
-    "createStationPrinter", "kitchenErrorMessage", "t", "isRTL",
+    "createStationPrinter", "kitchenErrorMessage", "t", "isRTL", "AvailabilityDrawer",
     componentSource.replace(/^import .*;\s*$/gm, "").replace("export default", "return"),
   )(
     class { call() { return callDouble(); } auth() { return { getLoggedInUser: async () => "chef@example.test" }; } },
     { location: { hostname: "synthetic.test", protocol: "https:", port: "", origin: "https://synthetic.test" }, addEventListener() {}, removeEventListener() {} },
     { onLine: true }, storage(), async () => ({ json: async () => ({ message: { site_name: "synthetic.test" } }) }),
     () => ({ connected: true, on() {}, off() {} }), { log() {}, error() {} },
-    module.createStationPrinter, kitchenActions.kitchenErrorMessage, translate, isRTL,
+    module.createStationPrinter, kitchenActions.kitchenErrorMessage, translate, isRTL, AvailabilityDrawer,
   );
 }
 

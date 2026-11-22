@@ -2,6 +2,12 @@ import frappe
 from frappe.utils import today
 from frappe.utils import  get_datetime,today,now
 
+
+def reset_item_availability_on_open(doc, method=None):
+    from ury.ury.api.ury_availability import reset_branch_availability
+
+    reset_branch_availability(doc.get("branch"), doc.get("posting_date"), opening=doc.name)
+
 def validate(doc,method):
     set_cashier_room(doc,method)
     

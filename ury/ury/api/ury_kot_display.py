@@ -361,9 +361,12 @@ def _matches_production_order_type(kot, production_filters):
 
 
 @frappe.whitelist()
-def kot_list():
+def kot_list(production_unit=None):
     today = frappe.utils.now()
     branch = None if is_kitchen_admin() else getBranch()
+    availability_branch = branch
+    if not availability_branch and production_unit:
+        availability_branch = frappe.db.get_value("URY Production Unit", production_unit, "branch")
 
     pos_profile_filters = {}
     if branch:
@@ -422,6 +425,8 @@ def kot_list():
         "KOT": KOT,
         "Dashboard": dashboard,
         "Branch": branch,
+        "availability_branch": availability_branch,
+        "roles": frappe.get_roles(),
         "server_time": today,
         "kot_alert_time": kot_alert_time,
         "audio_alert": audio_alert,

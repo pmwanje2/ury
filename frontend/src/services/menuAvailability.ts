@@ -1,24 +1,5 @@
 import { call } from '@ury/core';
-import { getItemAvailability, ItemAvailability } from '../pages/Pos/lib/availability-api';
-
-/**
- * Read-only client that composes two existing whitelisted endpoints to
- * answer "which items in the catalog aren't sellable right now, and why":
- *
- *  - `frappe.client.get_list` on `Item` -- the catalog to check. There is no
- *    dedicated "list items with availability" endpoint, so this fetches a
- *    bounded page of enabled items (see `ITEM_CHECK_LIMIT`) the same way
- *    `ItemProductionConfigPage.tsx` already does.
- *  - `ury.ury.api.ury_availability.get_item_availability` (via the existing
- *    `getItemAvailability` adapter in `pages/Pos/lib/availability-api.ts`)
- *    -- called once per item. That endpoint is single-item only (no bulk
- *    variant exists in `ury_availability.py`), so this module fans the
- *    calls out with bounded concurrency rather than one at a time.
- *
- * This module never re-derives sellability -- `sellable` / `reason_code`
- * are passed through verbatim from the server, exactly like
- * `availability-api.ts` itself does.
- */
+import { getMenuAvailability, type ItemAvailability } from '../pages/Pos/lib/availability-api';
 
 export interface CatalogItem {
   item_code: string;
@@ -31,31 +12,11 @@ export interface CatalogItem {
  * this cap is never silently hidden from the user. */
 export const ITEM_CHECK_LIMIT = 200;
 
-const CHECK_CONCURRENCY = 8;
-
 export interface AvailabilityCheckResult {
   checked: ItemAvailability[];
   /** item_codes whose availability call errored (network/server error) -- excluded from `checked`. */
   failed: string[];
 }
-
-const runWithConcurrency = async <T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> => {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const laneCount = Math.max(1, Math.min(limit, items.length));
-  const lanes = new Array(laneCount).fill(0).map(async () => {
-    while (cursor < items.length) {
-      const current = cursor++;
-      results[current] = await worker(items[current]);
-    }
-  });
-  await Promise.all(lanes);
-  return results;
-};
 
 interface FrappeListResponse<T> {
   message?: T[];
@@ -107,16 +68,12 @@ export const menuAvailabilityService = {
 
   /** Checks availability for every given item, at the given branch/company. */
   async checkAvailability(items: CatalogItem[], branch: string, company: string): Promise<AvailabilityCheckResult> {
-    const failed: string[] = [];
-    const outcomes = await runWithConcurrency(items, CHECK_CONCURRENCY, async (item) => {
-      try {
-        return await getItemAvailability({ item_code: item.item_code, branch, company });
-      } catch {
-        failed.push(item.item_code);
-        return null;
-      }
-    });
-    const checked = outcomes.filter((outcome): outcome is ItemAvailability => outcome !== null);
-    return { checked, failed };
+    const codes = [...new Set(items.map(item => item.item_code))];
+    try {
+      const entries = await getMenuAvailability(branch, company, codes);
+      return { checked: codes.flatMap(code => entries[code] ? [entries[code]] : []), failed: codes.filter(code => !entries[code]) };
+    } catch {
+      return { checked: [], failed: codes };
+    }
   },
 };

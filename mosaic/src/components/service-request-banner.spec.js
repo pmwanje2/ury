@@ -6,7 +6,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 // alerts). Only the SDK, socket, site-name fetch and audio are replaced.
 
 const SR = "ury.ury.api.service_requests";
-const server = vi.hoisted(() => ({ open: [], settings: { sound: 1, escalate_minutes: 3 }, reads: [] }));
+const server = vi.hoisted(() => ({ open: [], settings: { sound: 1, escalate_minutes: 3 }, reads: [], writes: [], roles: [] }));
 const socket = vi.hoisted(() => {
   const handlers = new Map();
   return {
@@ -26,14 +26,20 @@ vi.mock("frappe-js-sdk", () => ({
     auth() { return { getLoggedInUser: async () => "cook@example.test" }; }
     call() {
       return {
-        post: async () => ({}),
+        post: async (method, args) => {
+          if (method.endsWith("get_menu_availability")) return { message: { items: { FISH: { sellable: true } } } };
+          if (method.endsWith("set_item_availability")) server.writes.push(args);
+          return {};
+        },
         get: async (method, args) => {
           server.reads.push({ method, args });
           if (method === `${SR}.list_open_service_requests`) return { message: structuredClone(server.open) };
           if (method === `${SR}.get_service_request_alert_settings`) return { message: server.settings };
+          if (method.endsWith("get_branch_availability_menu"))
+            return { message: { company: "C1", items: [{ item: "FISH", name: "Fish" }] } };
           return { message: {
             Branch: "Branch A", kot_alert_time: 9999, audio_alert: 0, daily_order_number: 0,
-            server_time: "2026-11-20 14:58:00", KOT: [],
+            server_time: "2026-11-20 14:58:00", KOT: [], roles: server.roles,
           } };
         },
       };
@@ -63,6 +69,8 @@ beforeEach(() => {
   server.open = [];
   server.settings = { sound: 1, escalate_minutes: 3 };
   server.reads.length = 0;
+  server.writes.length = 0;
+  server.roles = [];
   socket.handlers.clear();
   socket.emitted.length = 0;
   chimes.length = 0;
@@ -74,6 +82,21 @@ afterEach(() => {
 });
 
 describe("Mosaic call-waiter banner", () => {
+  it("lets kitchen staff mark a menu dish sold out but hides the drawer from readers", async () => {
+    await board();
+    expect(wrapper.find('[data-testid="sold-out-toggle"]').exists()).toBe(false);
+    wrapper.unmount();
+    server.roles = ["Kitchen User"];
+    await board();
+    const toggle = wrapper.find('[data-testid="sold-out-toggle"]');
+    expect(toggle.exists(), "No branch availability drawer for kitchen staff").toBe(true);
+    await toggle.trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Fish");
+    await wrapper.find('[data-testid="mark-sold-out"]').trigger("click");
+    expect(server.writes).toContainEqual({ branch: "Branch A", item_code: "FISH", status: "Sold Out" });
+    expect(wrapper.text()).not.toMatch(/\b(?:URY|Frappe|ERPNext|Kamra)\b/i);
+  });
   it("shows a full-width banner with table, type and minutes waiting", async () => {
     server.open = [callWaiter()];
     await board();

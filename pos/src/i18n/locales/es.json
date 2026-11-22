@@ -40,7 +40,17 @@
     "staff_pins": "PIN del personal"
   },
   "menu": {
-    "special_items": "Artículos especiales"
+    "special_items": "Artículos especiales",
+    "manage_availability": "Gestionar disponibilidad",
+    "mark_sold_out": "Marcar como agotado",
+    "mark_available": "Disponible de nuevo",
+    "daily_count": "Cantidad diaria",
+    "set_count": "Fijar cantidad",
+    "reset_on_open": "Restablecer en la primera apertura",
+    "availability_update_failed": "No se pudo actualizar la disponibilidad. Inténtalo de nuevo.",
+    "availability_load_failed": "No se pudo cargar la disponibilidad. Inténtalo de nuevo.",
+    "no_availability_overrides": "No hay cambios de disponibilidad para este local.",
+    "sold_out_count": "Agotados ({{count}})"
   },
   "pos_sidebar": {
     "categories": "Categorías",

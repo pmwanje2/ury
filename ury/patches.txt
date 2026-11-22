@@ -50,3 +50,4 @@ ury.patches.v3_44.backfill_wastage_datetime
 ury.patches.v2_0.kds_display_window_field
 ury.patches.v2_0.fix_waiter_order_slip_print_format #2026-11-21 v16 guest label
 ury.patches.v2_0.hold_fire_fields
+ury.patches.v2_0.unique_item_availability

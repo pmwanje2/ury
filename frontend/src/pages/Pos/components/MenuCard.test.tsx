@@ -1,16 +1,7 @@
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const getItemAvailabilityMock = vi.fn();
-
-vi.mock('../lib/availability-api', async () => {
-  const actual = await vi.importActual<typeof import('../lib/availability-api')>('../lib/availability-api');
-  return {
-    ...actual,
-    getItemAvailability: (...args: any[]) => getItemAvailabilityMock(...args),
-  };
-});
+import { describe, expect, it, vi } from 'vitest';
+import type { ItemAvailability } from '../lib/availability-api';
 
 vi.mock('@ury/core', () => ({
   formatCurrency: (amount: number) => `Rs. ${amount}`,
@@ -25,28 +16,20 @@ const baseProps = {
   item_image: null,
   course: 'Main Course',
   item: 'ITEM-BIRYANI',
-  branch: 'Kozhikode',
-  company: 'URY',
 };
 
 describe('MenuCard availability gating', () => {
-  beforeEach(() => {
-    cleanup();
-    getItemAvailabilityMock.mockReset();
-  });
-
   it('stays clickable and shows no badge for a sellable item', async () => {
-    getItemAvailabilityMock.mockResolvedValueOnce({
+    const availability = {
       item_code: 'ITEM-BIRYANI',
       sellable: true,
       available_qty: 5,
       reason_code: 'AVAILABLE',
-    });
+    } as ItemAvailability;
     const onClick = vi.fn();
 
-    render(<MenuCard {...baseProps} onClick={onClick} />);
+    render(<MenuCard {...baseProps} onClick={onClick} availability={availability} />);
 
-    await waitFor(() => expect(getItemAvailabilityMock).toHaveBeenCalled());
     expect(screen.queryByText(/sold out|not available|unavailable/i)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByText('Chicken Biryani'));
@@ -54,15 +37,15 @@ describe('MenuCard availability gating', () => {
   });
 
   it('disables the card and shows the reason message for a PLAN_EXHAUSTED item', async () => {
-    getItemAvailabilityMock.mockResolvedValueOnce({
+    const availability = {
       item_code: 'ITEM-BIRYANI',
       sellable: false,
       available_qty: 0,
       reason_code: 'PLAN_EXHAUSTED',
-    });
+    } as ItemAvailability;
     const onClick = vi.fn();
 
-    render(<MenuCard {...baseProps} onClick={onClick} />);
+    render(<MenuCard {...baseProps} onClick={onClick} availability={availability} />);
 
     expect(await screen.findByText('Sold out')).toBeInTheDocument();
 

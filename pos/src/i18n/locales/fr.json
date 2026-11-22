@@ -57,7 +57,17 @@
     "staff_pins": "PIN du personnel"
   },
   "menu": {
-    "special_items": "Plats spéciaux"
+    "special_items": "Plats spéciaux",
+    "manage_availability": "Gérer la disponibilité",
+    "mark_sold_out": "Marquer comme épuisé",
+    "mark_available": "De nouveau disponible",
+    "daily_count": "Quantité quotidienne",
+    "set_count": "Définir la quantité",
+    "reset_on_open": "Réinitialiser à la première ouverture",
+    "availability_update_failed": "Impossible de mettre à jour la disponibilité. Réessayez.",
+    "availability_load_failed": "Impossible de charger la disponibilité. Réessayez.",
+    "no_availability_overrides": "Aucun changement de disponibilité pour cet établissement.",
+    "sold_out_count": "Épuisé ({{count}})"
   },
   "pos_sidebar": {
     "categories": "Catégories",

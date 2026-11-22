@@ -39,6 +39,7 @@ export * from './components/sidebar';
 export * from './components/comment-dialog';
 export * from './components/expandable-search';
 export * from './components/menu-item-card';
+export * from './components/availability-actions';
 export * from './components/product-configurator';
 export * from './components/table-picker-dialog';
 export * from './components/user-picker-dialog';

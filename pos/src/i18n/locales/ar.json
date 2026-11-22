@@ -65,6 +65,16 @@
     "staff_pins": "أرقام PIN للموظفين"
   },
   "menu": {
+    "manage_availability": "إدارة التوفر",
+    "mark_sold_out": "وضع علامة نفاد الكمية",
+    "mark_available": "متاح مجددًا",
+    "daily_count": "الكمية اليومية",
+    "set_count": "تحديد الكمية",
+    "reset_on_open": "إعادة الضبط عند أول فتح",
+    "availability_update_failed": "تعذر تحديث التوفر. حاول مرة أخرى.",
+    "availability_load_failed": "تعذر تحميل التوفر. حاول مرة أخرى.",
+    "no_availability_overrides": "لا توجد تغييرات في التوفر لهذا الموقع.",
+    "sold_out_count": "نفدت الكمية ({{count}})",
     "special_items": "أصناف مميزة",
     "available_chip": "متاح",
     "unavailable": "غير متاح",

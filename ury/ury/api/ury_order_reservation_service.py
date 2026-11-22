@@ -4,7 +4,7 @@ This module IS wired into ``sync_order`` (see ``ury/ury/doctype/ury_order/
 ury_order.py::sync_order``, which calls ``reconcile_order_reservations``
 directly). It provides the reservation reconciliation primitive, keeps line/
 context isolation in the reservation layer, and (as of D1) re-checks each
-line against ``ury_availability.get_item_availability`` before committing an
+line against production availability before committing an
 increased reservation, so order acceptance cannot reserve stock for an item
 the display-layer availability engine would refuse to sell.
 """
@@ -16,7 +16,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
-from ury.ury.api.ury_availability import _resolve_production_config, get_item_availability
+from ury.ury.api.ury_availability import _resolve_production_config, get_reservation_availability as get_item_availability
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.ury_reservation_service import (
 	FULFILLED,

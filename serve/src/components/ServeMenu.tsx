@@ -3,8 +3,11 @@ import { Search } from 'lucide-react'
 import { ProductConfigurator, cn, Spinner } from '@ury/ui'
 import { formatCurrency, db } from '@ury/core'
 import { useServeStore, type MenuItem, type OrderItem } from '../store/serve-store'
+import { useRootStore } from '../store/root-store'
+import { availabilityPermissions } from '@ury/core/availability'
 import ServeMenuCard from './ServeMenuCard'
-import { getMenuAvailability, isUnavailable, type MenuAvailability } from '../lib/availability-api'
+import { getMenuAvailability, isUnavailable, setItemAvailability, type MenuAvailability } from '../lib/availability-api'
+import { subscribeMenuAvailability } from '../lib/menu-realtime'
 
 const EMPTY_AVAILABILITY: MenuAvailability = {}
 
@@ -83,6 +86,9 @@ export default function ServeMenu({
   const codesKey = JSON.stringify([...new Set(menuItems.filter((item) => !item.disabled).map(({ item }) => item))].sort())
   const scope = JSON.stringify([branch, company, codesKey])
   const availabilityMap = availability?.scope === scope ? availability.items : EMPTY_AVAILABILITY
+  const user = useRootStore(state => state.user)
+  const { canMark, canRestore } = availabilityPermissions(user?.roles)
+  const refreshAvailability = useRef<() => Promise<void>>(async () => {})
 
   useEffect(() => {
     void fetchMenuItems()
@@ -92,27 +98,33 @@ export default function ServeMenu({
     const codes = JSON.parse(codesKey) as string[]
     if (!branch || !company || !codes.length) return
     let active = true
-    let inFlight = false
-    const refresh = async () => {
-      if (inFlight) return
-      inFlight = true
-      try {
-        const items = await getMenuAvailability(branch, company, codes)
-        if (active) setAvailability({ scope, items })
-      } catch {
-        // Unknown on first load; keep the last successful refresh.
-      } finally {
-        inFlight = false
-      }
+    let inFlight: Promise<void> | undefined
+    const refresh = () => {
+      if (inFlight) return inFlight
+      inFlight = getMenuAvailability(branch, company, codes)
+        .then(items => { if (active) setAvailability({ scope, items }) })
+        .catch(() => { /* Keep the last successful refresh. */ })
+        .finally(() => { inFlight = undefined })
+      return inFlight
     }
+    const refreshAfterFlight = async () => {
+      if (inFlight) await inFlight
+      if (active) await refresh()
+    }
+    refreshAvailability.current = refreshAfterFlight
     const refreshIfVisible = () => {
       if (document.visibilityState === 'visible') void refresh()
     }
     void refresh()
     const timer = setInterval(refreshIfVisible, 60_000)
+    const unsubscribe = subscribeMenuAvailability(branch, () => {
+      if (document.visibilityState === 'visible') void refreshAfterFlight()
+    })
     document.addEventListener('visibilitychange', refreshIfVisible)
     return () => {
       active = false
+      refreshAvailability.current = async () => {}
+      unsubscribe()
       clearInterval(timer)
       document.removeEventListener('visibilitychange', refreshIfVisible)
     }
@@ -311,6 +323,12 @@ export default function ServeMenu({
               course={item.course_label || item.course}
               disabled={disabled}
               availability={availabilityMap[item.item]}
+              availabilityActions={canMark && branch ? {
+                canRestore, update: async change => {
+                  await setItemAvailability(branch, item.item, change)
+                  await refreshAvailability.current()
+                },
+              } : undefined}
               quantity={qty}
               onClick={() => handleQuickAdd(item)}
               onConfigure={() => openConfigurator(item)}
