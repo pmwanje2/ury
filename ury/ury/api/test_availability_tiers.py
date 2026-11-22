@@ -26,7 +26,7 @@ class TestAvailabilityTiers(unittest.TestCase):
         self.frappe.get_all.side_effect = lambda dt, **kw: [
             {"name": code, "disabled": self.items[code]}
             for code in kw["filters"]["name"][1] if code in self.items
-        ] if dt == "Item" else self.fail(f"Unexpected batch read: {dt}")
+        ] if dt == "Item" else [] if dt == "URY Item Availability" else self.fail(f"Unexpected batch read: {dt}")
         self.modules["frappe.utils"].getdate = lambda: None
         del self.modules["ury.ury.api.ury_stock_policy"]
         self.modules["ury.ury.api.ury_stock_policy"] = self.load("ury_stock_policy", self.modules)
@@ -69,6 +69,8 @@ class TestAvailabilityTiers(unittest.TestCase):
             return COMPANY
         if doctype == "URY Self Ordering Profile":
             return BRANCH
+        if doctype == "URY Item Availability":
+            return None
         self.fail(f"Unexpected value read: {doctype}")
 
     def enable_reservations(self):
@@ -119,7 +121,8 @@ class TestAvailabilityTiers(unittest.TestCase):
         self.assertEqual(set(response["items"]), set(self.items))
         self.assertEqual(response["stock_policy_mode"], "NATIVE")
         self.assertTrue(all(row["sellable"] and row["available_qty"] is None for row in response["items"].values()))
-        self.frappe.get_all.assert_called_once_with(
+        self.assertEqual(self.frappe.get_all.call_count, 2)
+        self.frappe.get_all.assert_any_call(
             "Item", filters={"name": ["in", list(self.items)]}, fields=["name", "disabled"]
         )
         self.frappe.db.get_value.assert_called_once()

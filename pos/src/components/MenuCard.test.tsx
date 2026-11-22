@@ -17,6 +17,30 @@ const entry = (fields: Partial<ItemAvailability>): ItemAvailability => ({
 });
 
 describe('MenuCard availability gating', () => {
+  it('lets a cashier mark a dish sold out without adding it to an order', async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    const onClick = vi.fn();
+    render(<MenuCard {...baseProps} onClick={onClick} availability={entry({})}
+      availabilityActions={{ canRestore: false, update }} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Manage availability' }));
+    expect(screen.queryByRole('button', { name: 'Set count' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Mark sold out' }));
+    expect(update).toHaveBeenCalledWith({ status: 'Sold Out' });
+    expect(onClick).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toMatch(/\b(?:URY|Frappe|ERPNext|Kamra)\b/i);
+  });
+
+  it('lets a manager restore and set a count on a blocked card', async () => {
+    const update = vi.fn().mockResolvedValue(undefined);
+    render(<MenuCard {...baseProps} availability={entry({ sellable: false, reason_code: 'SOLD_OUT_MANUAL' })}
+      availabilityActions={{ canRestore: true, update }} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Manage availability' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Available again' }));
+    expect(update).toHaveBeenCalledWith({ status: 'Available' });
+    await userEvent.type(screen.getByLabelText('Daily count'), '7');
+    await userEvent.click(screen.getByRole('button', { name: 'Set count' }));
+    expect(update).toHaveBeenCalledWith({ count: 7, reset_policy: 'Start of business day' });
+  });
   it('keeps an unconstrained native item clickable with no chip', async () => {
     const onClick = vi.fn();
     render(<MenuCard {...baseProps} onClick={onClick} availability={entry({})} />);

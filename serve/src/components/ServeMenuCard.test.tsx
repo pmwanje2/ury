@@ -16,6 +16,15 @@ const entry = (fields: Partial<ItemAvailability>): ItemAvailability => ({
 })
 
 describe('ServeMenuCard availability badge', () => {
+  it('keeps manager availability controls reachable for a sold-out dish', async () => {
+    const update = vi.fn().mockResolvedValue(undefined)
+    render(<ServeMenuCard {...baseProps} availability={entry({ sellable: false, reason_code: 'SOLD_OUT_MANUAL' })}
+      availabilityActions={{ canRestore: true, update }} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Manage availability' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Available again' }))
+    expect(update).toHaveBeenCalledWith({ status: 'Available' })
+    expect(document.body.textContent).not.toMatch(/\b(?:URY|Frappe|ERPNext|Kamra)\b/i)
+  })
   it('shows “N left” when available_qty is low', () => {
     render(<ServeMenuCard {...baseProps} availability={entry({ available_qty: 2 })} />)
     expect(screen.getByText('2 left')).toBeInTheDocument()
