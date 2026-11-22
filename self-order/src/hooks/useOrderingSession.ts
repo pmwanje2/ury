@@ -17,7 +17,7 @@ import {
   type PaymentRequestResult,
 } from '../lib/api'
 import { paymentOutcome } from '../lib/payment-outcome'
-import { getAvailabilityMessage, getItemAvailability } from '../lib/availability'
+import { getAvailabilityMessage, getMenuAvailability, isUnavailable, type MenuAvailability } from '../lib/availability'
 import { t } from '../i18n'
 import { useGuestLanguage } from '../components/LanguageSwitcher'
 
@@ -30,6 +30,7 @@ type CatalogErrorKey = 'missing_code' | 'load_menu' | 'place_order' | 'request_b
 type ShownError =
   | { source: 'catalog'; key: CatalogErrorKey }
   | { source: 'server'; text: string }
+  | { source: 'availability'; itemName: string; reason: string }
 
 function catalogError(key: CatalogErrorKey): string {
   switch (key) {
@@ -144,6 +145,8 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   const token = useQueryToken()
   const [context, setContext] = useState<OrderingContext | null>(null)
   const [menu, setMenu] = useState<MenuItem[]>([])
+  const [availability, setAvailability] = useState<MenuAvailability>({})
+  const availabilityRequest = useRef(0)
   const [order, setOrder] = useState<CustomerOrder | null>(null)
   const [orderStatus, setOrderStatus] = useState<OrderStatus | null>(null)
   const [cart, setCart] = useState<Cart>({})
@@ -198,6 +201,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       const load = async (session: string) => {
         const menuResponse = await getMenu(session)
         setMenu(menuResponse.items.filter((item) => !item.disabled))
+        setAvailability(menuResponse.availability ?? {})
         await loadOrder(session)
       }
       try {
@@ -223,6 +227,27 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     init()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const session = context?.session
+  useEffect(() => {
+    if (!session) return
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      const request = ++availabilityRequest.current
+      void getMenuAvailability(session).then((next) => {
+        if (request === availabilityRequest.current) setAvailability(next)
+      }).catch(() => {
+        // Display-only refresh: don't replace the last successful snapshot.
+      })
+    }
+    const timer = setInterval(refresh, 60_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      ++availabilityRequest.current
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [session])
 
   useEffect(() => {
     if (!assistanceCooldown) return
@@ -263,6 +288,8 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setShownError(null)
     setContext(null)
     setMenu([])
+    ++availabilityRequest.current
+    setAvailability({})
     setScreen('menu')
     setDetailItemCode(null)
     init()
@@ -272,7 +299,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     item: MenuItem,
     options?: { comment?: string; variant?: string; addons?: string[] },
   ) {
-    if (item.disabled || !hasPrice(item)) return
+    if (item.disabled || !hasPrice(item) || isUnavailable(availability[item.item])) return
     const note = context?.capabilities.item_notes_enabled
       ? (options?.comment ?? '').trim().slice(0, MAX_NOTE_LENGTH)
       : ''
@@ -280,7 +307,8 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     // off-menu, disabled or unpriced add-ons are not orderable.
     const addons = (options?.addons ?? [])
       .map((code) => menu.find((candidate) => candidate.item === code))
-      .filter((addon): addon is MenuItem => !!addon && !addon.disabled && hasPrice(addon))
+      .filter((addon): addon is MenuItem =>
+        !!addon && !addon.disabled && hasPrice(addon) && !isUnavailable(availability[addon.item]))
     setCart((prev) => {
       let next = addLine(prev, item, note, options?.variant)
       for (const addon of addons) next = addLine(next, addon, '')
@@ -356,23 +384,17 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     setSubmitting(true)
     setShownError(null)
     try {
-      // Live (skipCache) re-check right before order-confirmation — the
-      // display-only availability cache used while browsing the menu
-      // (MenuGrid, ~30s TTL) is too stale to trust at submit time. Mirrors
-      // ProductDialog.handleAddToOrder()'s pre-submit check in the main POS
-      // app (pos frontend, ProductDialog.tsx) against the same
-      // getItemAvailability(..., { skipCache: true }) contract documented
-      // in lib/availability.ts.
-      if (context.restaurant && context.company) {
-        for (const entry of cartItems) {
-          const availability = await getItemAvailability(
-            { item_code: entry.item.item, branch: context.restaurant, company: context.company },
-            { skipCache: true },
-          )
-          if (!availability.sellable) {
-            setShownError({ source: 'server', text: `${entry.item.item_name}: ${getAvailabilityMessage(availability.reason_code)}` })
-            return false
-          }
+      const request = ++availabilityRequest.current
+      const fresh = await getMenuAvailability(context.session)
+      if (request === availabilityRequest.current) setAvailability(fresh)
+      for (const entry of cartItems) {
+        const itemAvailability = fresh[entry.item.item]
+        if (!itemAvailability || isUnavailable(itemAvailability)) {
+          setShownError({
+            source: 'availability', itemName: entry.item.item_name,
+            reason: itemAvailability?.reason_code ?? 'MENU_ITEM_DISABLED',
+          })
+          return false
         }
       }
 
@@ -386,8 +408,8 @@ export function useOrderingSession(initialContext?: OrderingContext) {
       setOrder(updated)
       setCart({})
       return true
-    } catch (err) {
-      setShownError(serverTextOrCatalog(err, 'place_order', true))
+    } catch {
+      setShownError({ source: 'catalog', key: 'place_order' })
       return false
     } finally {
       setSubmitting(false)
@@ -446,7 +468,9 @@ export function useOrderingSession(initialContext?: OrderingContext) {
     ? null
     : shownError.source === 'server'
       ? shownError.text
-      : catalogError(shownError.key)
+      : shownError.source === 'availability'
+        ? `${shownError.itemName}: ${getAvailabilityMessage(shownError.reason)}`
+        : catalogError(shownError.key)
   const assistanceMessage = assistanceStatus == null
     ? null
     : assistanceStatus === 'Already Requested'
@@ -456,6 +480,7 @@ export function useOrderingSession(initialContext?: OrderingContext) {
   return {
     context,
     menu,
+    availability,
     order,
     orderStatus,
     cart,

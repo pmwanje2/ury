@@ -1,11 +1,11 @@
-import { FC, useEffect, useState } from 'react';
+import type { FC } from 'react';
 import { MenuItemCard } from '@ury/ui';
 import { formatCurrency } from '@ury/core';
 import { t } from '../i18n';
 import {
   getAvailabilityMessage,
-  getItemAvailability,
-  ItemAvailability,
+  isUnavailable,
+  type ItemAvailability,
 } from '../lib/availability-api';
 
 interface MenuCardProps {
@@ -17,8 +17,6 @@ interface MenuCardProps {
   item: string;
   onClick?: () => void;
   disabled?: boolean;
-  branch?: string;
-  company?: string;
   availability?: ItemAvailability | null;
 }
 
@@ -27,45 +25,12 @@ const MenuCard: FC<MenuCardProps> = ({
   price,
   item_image,
   course,
-  item,
   onClick,
   disabled,
-  branch,
-  company,
-  availability: propAvailability,
+  availability,
 }) => {
-  const [internalAvailability, setInternalAvailability] = useState<ItemAvailability | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (propAvailability !== undefined) {
-      return;
-    }
-    if (!branch || !company || !item) {
-      setInternalAvailability(null);
-      return;
-    }
-    getItemAvailability({ item_code: item, branch, company })
-      .then((result) => {
-        if (!cancelled) setInternalAvailability(result);
-      })
-      .catch(() => {
-        if (!cancelled) setInternalAvailability(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [item, branch, company, propAvailability]);
-
-  const availability = propAvailability !== undefined ? propAvailability : internalAvailability;
-
-  // `available_qty == null` means "unconstrained" (e.g. an "Always
-  // Available" override) -- never treat it as zero/out-of-stock.
-  const isUnavailable =
-    !!availability &&
-    (!availability.sellable ||
-      (availability.available_qty != null && availability.available_qty <= 0));
-  const unavailableMessage = isUnavailable
+  const unavailable = isUnavailable(availability);
+  const unavailableMessage = unavailable
     ? getAvailabilityMessage(availability?.reason_code)
     : null;
 
@@ -77,10 +42,7 @@ const MenuCard: FC<MenuCardProps> = ({
   } | null => {
     if (!availability) return null;
 
-    if (
-      !availability.sellable ||
-      (availability.available_qty != null && availability.available_qty <= 0)
-    ) {
+    if (unavailable) {
       return {
         variant: 'tagDestructive',
         text: unavailableMessage || t('menu.unavailable'),
@@ -97,6 +59,7 @@ const MenuCard: FC<MenuCardProps> = ({
     }
 
     if (availability.available_qty == null) {
+      if (availability.stock_policy_mode === 'NATIVE' && availability.source === 'CATALOG') return null;
       return { variant: 'tagSuccess', text: t('menu.available_chip'), showDot: true };
     }
 
@@ -116,7 +79,7 @@ const MenuCard: FC<MenuCardProps> = ({
       imageUrl={item_image}
       course={course}
       onClick={onClick}
-      disabled={disabled || isUnavailable}
+      disabled={disabled || unavailable}
       availabilityTag={availabilityTag}
     />
   );

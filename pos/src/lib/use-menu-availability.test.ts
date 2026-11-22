@@ -17,6 +17,7 @@ vi.mock('./availability-api', async (importOriginal) => ({
   getItemAvailability,
   getMenuAvailability,
 }));
+vi.mock('./realtime', () => ({ getRealtimeSocket: async () => ({ on: vi.fn(), off: vi.fn() }) }));
 
 it('loads 258 items with one batch call and no per-item calls', async () => {
   const items = Array.from({ length: 258 }, (_, index) => ({ item: `ITEM-${String(index).padStart(3, '0')}` }));

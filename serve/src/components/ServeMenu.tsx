@@ -4,6 +4,9 @@ import { ProductConfigurator, cn, Spinner } from '@ury/ui'
 import { formatCurrency, db } from '@ury/core'
 import { useServeStore, type MenuItem, type OrderItem } from '../store/serve-store'
 import ServeMenuCard from './ServeMenuCard'
+import { getMenuAvailability, isUnavailable, type MenuAvailability } from '../lib/availability-api'
+
+const EMPTY_AVAILABILITY: MenuAvailability = {}
 
 export interface ServeMenuProps {
   canAddItems: boolean
@@ -75,10 +78,45 @@ export default function ServeMenu({
   const [comments, setComments] = useState('')
   const [selectedAddons, setSelectedAddons] = useState<Array<{ id: string; name: string; price: number }>>([])
   const fetchTokenRef = useRef(0)
+  const [availability, setAvailability] = useState<{ scope: string; items: MenuAvailability }>()
+  const { branch, company } = posProfile ?? {}
+  const codesKey = JSON.stringify([...new Set(menuItems.filter((item) => !item.disabled).map(({ item }) => item))].sort())
+  const scope = JSON.stringify([branch, company, codesKey])
+  const availabilityMap = availability?.scope === scope ? availability.items : EMPTY_AVAILABILITY
 
   useEffect(() => {
     void fetchMenuItems()
   }, [fetchMenuItems])
+
+  useEffect(() => {
+    const codes = JSON.parse(codesKey) as string[]
+    if (!branch || !company || !codes.length) return
+    let active = true
+    let inFlight = false
+    const refresh = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        const items = await getMenuAvailability(branch, company, codes)
+        if (active) setAvailability({ scope, items })
+      } catch {
+        // Unknown on first load; keep the last successful refresh.
+      } finally {
+        inFlight = false
+      }
+    }
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    void refresh()
+    const timer = setInterval(refreshIfVisible, 60_000)
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    return () => {
+      active = false
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+    }
+  }, [branch, company, codesKey, scope])
 
   useEffect(() => {
     if (!selectedItem || !editing) return
@@ -143,7 +181,7 @@ export default function ServeMenu({
   const showImage = Boolean(posProfile?.show_image)
 
   const openConfigurator = (item: MenuItem) => {
-    if (disabled) return
+    if (disabled || isUnavailable(availabilityMap[item.item])) return
     setSelectedItem(item)
     setQuantity('1')
     setComments('')
@@ -153,7 +191,7 @@ export default function ServeMenu({
   }
 
   const handleQuickAdd = (item: MenuItem) => {
-    if (disabled || item.disabled) return
+    if (disabled || item.disabled || isUnavailable(availabilityMap[item.item])) return
     void addToOrder({ ...item, quantity: 1 })
   }
 
@@ -181,6 +219,8 @@ export default function ServeMenu({
 
   const handleSubmit = useCallback(() => {
     if (!selectedItem || !isPositiveQty(quantity) || itemFetchLoading) return
+    if (isUnavailable(availabilityMap[selectedItem.item]) ||
+      selectedAddons.some((addon) => isUnavailable(availabilityMap[addon.id]))) return
     const qty = Number(quantity)
     void addToOrder({
       ...selectedItem,
@@ -193,7 +233,7 @@ export default function ServeMenu({
     })
     setEditing(false)
     setSelectedItem(null)
-  }, [selectedItem, quantity, comments, selectedAddons, addToOrder, menuItems, setSelectedItem, itemFetchLoading])
+  }, [selectedItem, quantity, comments, selectedAddons, addToOrder, menuItems, setSelectedItem, itemFetchLoading, availabilityMap])
 
   if (menuLoading && menuItems.length === 0) {
     return <Spinner message="Loading menu…" />
@@ -269,10 +309,8 @@ export default function ServeMenu({
               price={item.price}
               imageUrl={showImage ? item.image : null}
               course={item.course_label || item.course}
-              item={item.item}
               disabled={disabled}
-              branch={posProfile?.branch}
-              company={posProfile?.company}
+              availability={availabilityMap[item.item]}
               quantity={qty}
               onClick={() => handleQuickAdd(item)}
               onConfigure={() => openConfigurator(item)}

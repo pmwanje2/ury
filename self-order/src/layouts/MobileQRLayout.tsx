@@ -26,6 +26,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
   const {
     context,
     menu,
+    availability,
     order,
     orderStatus,
     cart,
@@ -231,8 +232,7 @@ function MobileQRLayout({ initialContext }: LayoutProps) {
           gridClassName="mx-4 mt-4 grid grid-cols-2 gap-3"
           cardClassName="flex flex-col cursor-pointer overflow-hidden rounded-lg border transition active:scale-[0.98]"
           imageClassName="h-24 w-full object-cover"
-          branch={context?.restaurant}
-          company={context?.company}
+          availability={availability}
         />
 
         {cartCount > 0 && (

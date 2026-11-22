@@ -153,6 +153,7 @@ describe("LandscapeKioskLayout", () => {
   const defaultSessionMock = {
     context: baseContext,
     menu: sampleMenu,
+    availability: {},
     order: mockOrder,
     orderStatus: mockOrderStatus,
     cart: {},

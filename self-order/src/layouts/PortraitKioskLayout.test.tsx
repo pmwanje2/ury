@@ -65,6 +65,7 @@ const createMockOrderingSession = (overrides = {}) => ({
     session_idle_timeout_minutes: 30,
   },
   menu: mockMenuItems,
+  availability: {},
   order: null,
   orderStatus: null,
   cart: {},

@@ -1,4 +1,5 @@
 import { call } from '@ury/core'
+import type { MenuAvailability } from './availability'
 
 const M = 'ury.ury.api.self_ordering'
 
@@ -22,9 +23,7 @@ export interface OrderingContext {
   session: string
   source: string
   restaurant: string
-  /** Company for the V3-44 availability display check (get_item_availability
-   * requires branch+company). Sourced server-side from the ordering profile's
-   * branch -> company lookup — see self_ordering.py's `_ordering_context_response`. */
+  /** Compatibility field. Menu availability is scoped by the session on the server. */
   company: string
   table: string | null
   /** The table's URY Room, so the header reads "Area · Location". */
@@ -53,6 +52,7 @@ export interface MenuItem {
 
 export interface MenuResponse {
   items: MenuItem[]
+  availability?: MenuAvailability
   modified_time: string | null
   name: string | null
 }

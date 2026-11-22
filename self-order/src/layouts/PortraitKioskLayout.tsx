@@ -45,6 +45,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
   const {
     context,
     menu,
+    availability,
     order,
     orderStatus,
     cart,
@@ -380,8 +381,7 @@ function PortraitKioskLayout({ initialContext }: LayoutProps) {
           gridClassName="grid flex-1 grid-cols-2 gap-4 self-start"
           cardClassName="flex flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
           imageClassName="h-48 w-full object-cover"
-          branch={context?.restaurant}
-          company={context?.company}
+          availability={availability}
         />
       </div>
 

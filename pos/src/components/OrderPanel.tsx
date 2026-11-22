@@ -20,7 +20,8 @@ import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
 import { DINE_IN, orderTypeLabel } from '../data/order-types';
 import { t } from '../i18n';
-import { useCartAvailability, cartQtyForItem, remainingHeadroom } from '../lib/cart-capacity';
+import { cartQtyForItem, remainingHeadroom } from '../lib/cart-capacity';
+import type { MenuAvailability } from '../lib/availability-api';
 
 const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'warning' | 'info' | 'success' }> = {
   QUEUED: { label: 'order.kot_sent', variant: 'cancelled' },
@@ -29,7 +30,12 @@ const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'w
   SERVED: { label: 'order.kot_served', variant: 'success' },
 };
 
-const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoice) => void }) => {
+const EMPTY_AVAILABILITY: MenuAvailability = {};
+
+const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPTY_AVAILABILITY }: {
+  onCashierCheck?: (invoice: SavedInvoice) => void;
+  availabilityMap?: MenuAvailability;
+}) => {
   const { 
     activeOrders, 
     removeFromOrder, 
@@ -64,15 +70,6 @@ const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoic
   const [editingItem, setEditingItem] = useState<typeof activeOrders[0] | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
-
-  // B04: real-time cart capacity headroom, keyed by item_code. Display-only
-  // (see cart-capacity.ts docstring) -- sync_order remains the sole
-  // transactional authority against oversell.
-  const { availabilityByItem } = useCartAvailability({
-    itemCodes: activeOrders.map((item) => item.item),
-    branch: posProfile?.branch,
-    company: posProfile?.company,
-  });
 
   // Read-only kitchen state per item_code for a running (saved) order.
   const [kotState, setKotState] = useState<Record<string, KotItemState>>({});
@@ -498,4 +495,4 @@ const OrderPanel = ({ onCashierCheck }: { onCashierCheck?: (invoice: SavedInvoic
   );
 };
 
-export default OrderPanel; 
+export default OrderPanel;

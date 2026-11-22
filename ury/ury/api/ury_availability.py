@@ -15,8 +15,8 @@ a pure, READ-ONLY composition over three already-accepted read-only modules:
   mutating entry points (`create_reservation`/`release_reservation`/etc.) --
   see "Read-only, not reservation" below.
 
-The single whitelisted endpoint is `get_item_availability`. It answers "can
-this item be ordered at this branch right now, and why not" for display
+The staff endpoints `get_item_availability` and `get_menu_availability`
+answer "can this item be ordered at this branch right now, and why not" for display
 purposes (menus, dashboards, KDS). It never reserves, never mutates Bin/
 Stock Ledger Entry/menu `disabled` state, and is not a substitute for the
 transaction-time authoritative check + reservation that real order
@@ -24,6 +24,12 @@ acceptance must still perform against `ury_reservation_service` directly
 (V3-40's "Cache, Reservation, and Reconciliation Invariants": "Cached
 availability may drive menus, dashboards, and UX, but order acceptance must
 re-check transactionally").
+
+## Stock policy tiers
+
+The catalog gate applies in both tiers. Tier 1 (native) stops there: enabled
+items are sellable with no capacity limit. Only a branch that enables
+reservation control runs the Tier 2 production engine below.
 
 ## Read-only, not reservation
 
@@ -91,6 +97,7 @@ wiring the real session/POS-Profile/permission check. Every call path in
 requires no change anywhere else in this module.
 """
 
+import json
 import math
 
 import frappe
@@ -106,6 +113,7 @@ from ury.ury.api.ury_inventory_projection import (
 )
 from ury.ury.api.ury_projection_service import project_mto_capacity
 from ury.ury.api.ury_sales_plan_commit import resolve_plan_item_rows
+from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 
 # Imported for its side effect of making `URY Stock Reservation` a real,
 # loaded doctype module in this app (ury_inventory_projection's reservation
@@ -121,6 +129,7 @@ POLICY_PRE_PRODUCED = "PRE_PRODUCED"
 POLICY_MADE_TO_ORDER = "MADE_TO_ORDER"
 POLICY_DIRECT_RETAIL = "DIRECT_RETAIL"
 POLICY_BUNDLE = "BUNDLE"
+MAX_BATCH_CODES = 500
 
 
 def _verify_branch_scope(user, branch, company):
@@ -252,7 +261,10 @@ def _resolve_plan_remaining(item_code, branch, company, department=None):
 	return {"plan_qty": plan_qty, "plan_remaining": plan_remaining}
 
 
-def _base_response(item_code, company, branch, department, production_policy):
+def _base_response(
+	item_code, company, branch, department, production_policy,
+	*, stock_policy_mode="RESERVATION_CONTROLLED", source="PRODUCTION",
+):
 	return {
 		"item_code": item_code,
 		"sellable": False,
@@ -269,6 +281,8 @@ def _base_response(item_code, company, branch, department, production_policy):
 		"max_producible": None,
 		"blocking_component": None,
 		"reason_code": "CONFIGURATION_ERROR",
+		"stock_policy_mode": stock_policy_mode,
+		"source": source,
 		"as_of": now_datetime(),
 	}
 
@@ -281,22 +295,43 @@ def _fail_closed(item_code, company, branch, department, production_policy, reas
 
 @frappe.whitelist(allow_guest=False)
 def get_item_availability(item_code, branch, company, department=None):
-	"""Return V3-40's minimum response shape for `item_code` at `branch`/`company`.
-
-	Read-only display endpoint -- see module docstring for the full contract,
-	reservation-vs-display distinction, and the V3-13/V3-15/V3-23
-	reconciliation debt this function's helpers document.
-
-	Scope is server-verified (fail-closed only, pending real session wiring;
-	see `_verify_branch_scope`) and never trusted purely from client input
-	beyond that presence check. All reads are scoped strictly to the given
-	`branch`/`company`/(`department`) -- no cross-branch or cross-company
-	aggregation.
-	"""
+	"""Return read-only item availability within the staff member's scope."""
 	if not item_code:
 		frappe.throw(_("Item code is required"), frappe.ValidationError)
 
 	_verify_branch_scope(frappe.session.user, branch, company)
+	return compute_item_availability(item_code, branch, company, department)
+
+
+def _catalog_gate(item_code):
+	"""An unknown item is not sellable, just like a disabled one."""
+	return frappe.db.get_value("Item", item_code, "disabled") == 0
+
+
+def _stock_policy_mode(policy):
+	return "RESERVATION_CONTROLLED" if policy.reservation_control_enabled else "NATIVE"
+
+
+def _catalog_response(item_code, branch, company, department, mode, enabled):
+	response = _base_response(
+		item_code, company, branch, department, None, stock_policy_mode=mode, source="CATALOG"
+	)
+	response.update(
+		sellable=enabled,
+		available_qty=None if enabled else 0,
+		reason_code="AVAILABLE" if enabled else "ITEM_DISABLED",
+	)
+	return response
+
+
+def compute_item_availability(item_code, branch, company, department=None, *, policy=None):
+	"""Evaluate an item after the caller has verified its branch/company scope."""
+	enabled = _catalog_gate(item_code)
+	if policy is None:
+		policy = get_branch_stock_policy(branch, company)
+	mode = _stock_policy_mode(policy)
+	if not enabled or mode == "NATIVE":
+		return _catalog_response(item_code, branch, company, department, mode, enabled)
 
 	config = _resolve_production_config(item_code, branch, company, department)
 	if config is None:
@@ -393,6 +428,50 @@ def get_item_availability(item_code, branch, company, department=None):
 			response["max_producible"] = None
 
 	return response
+
+
+def _batch_availability(codes, branch, company, policy):
+	"""Read availability for the caller's already-resolved menu item codes."""
+	codes = list(dict.fromkeys(codes))
+	mode = _stock_policy_mode(policy)
+	if mode == "RESERVATION_CONTROLLED":
+		return {
+			code: compute_item_availability(code, branch, company, policy=policy)
+			for code in codes
+		}
+	if not codes:
+		return {}
+
+	disabled = {
+		row["name"]: row["disabled"]
+		for row in frappe.get_all("Item", filters={"name": ["in", codes]}, fields=["name", "disabled"])
+	}
+	return {
+		code: _catalog_response(code, branch, company, None, mode, disabled.get(code) == 0)
+		for code in codes
+	}
+
+
+@frappe.whitelist(methods=["GET", "POST"])
+def get_menu_availability(branch, company, item_codes):
+	"""Read a staff menu's item codes in one request; ordering still checks menu membership."""
+	_verify_branch_scope(frappe.session.user, branch, company)
+	if isinstance(item_codes, str):
+		try:
+			item_codes = json.loads(item_codes)
+		except ValueError:
+			item_codes = None
+	if not isinstance(item_codes, list) or any(not isinstance(code, str) for code in item_codes):
+		frappe.throw(_("Item codes must be a list of strings"), frappe.ValidationError)
+	if len(item_codes) > MAX_BATCH_CODES:
+		frappe.throw(_("No more than {0} item codes are allowed").format(MAX_BATCH_CODES), frappe.ValidationError)
+
+	policy = get_branch_stock_policy(branch, company)
+	return {
+		"stock_policy_mode": _stock_policy_mode(policy),
+		"as_of": now_datetime(),
+		"items": _batch_availability(item_codes, branch, company, policy),
+	}
 
 
 def _fill_pre_produced(response, item_code, branch, company, department, warehouse, config=None):

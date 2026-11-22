@@ -62,12 +62,16 @@ def _site_less_frappe():
     reservations.reconcile_order_reservations = MagicMock()
     stock_policy = ModuleType("ury.ury.api.ury_stock_policy")
     stock_policy.get_branch_stock_policy = MagicMock()
+    availability = ModuleType("ury.ury.api.ury_availability")
+    availability._batch_availability = MagicMock()
+    availability._catalog_gate = MagicMock()
     return framework, {
         "frappe": framework, "frappe.utils": utils, "frappe.rate_limiter": rate_limiter,
         "ury.ury_pos.api": pos_api, "ury.ury.doctype.ury_order.ury_order": order,
         "ury.ury.api.ury_kot_generate": kot, "ury.ury.api.item_price": item_price,
         "ury.ury.api.ury_order_reservation_service": reservations,
         "ury.ury.api.ury_stock_policy": stock_policy,
+        "ury.ury.api.ury_availability": availability,
     }
 
 
