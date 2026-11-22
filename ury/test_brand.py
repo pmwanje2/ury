@@ -145,6 +145,11 @@ class TestSiteBrand(unittest.TestCase):
             ctx = self.brand_module().get_brand_context(surface)
             self.assertNotRegex(ctx["brand_json"], r"(?i)frappe|erpnext|kamra|\bury\b")
 
+    def test_white_label_asset_and_outlet_image_survive_the_legacy_asset_filter(self):
+        for path in ("/assets/ury/Images/maximus-mark.svg", "/assets/ury/custom/outlet.svg"):
+            self.settings.app_logo = path
+            self.assertEqual(self.brand_module().get_brand()["logo"], path)
+
     def test_set_settings_return_only_the_three_public_brand_fields(self):
         self.set_brand()
         brand = self.brand_module()

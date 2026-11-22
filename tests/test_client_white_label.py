@@ -1,4 +1,5 @@
 """Check presentation, not stable document, RPC or route identifiers."""
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -42,3 +43,10 @@ class ClientBrand(unittest.TestCase):
         for file in (ROOT / "ury").glob("*/workspace/*/*.json"):
             data = json.loads(file.read_text())
             self.assertNotRegex(data["title"], VENDOR, str(file))
+
+    def test_legacy_favicon_urls_serve_the_shared_maximus_icon(self):
+        # SiteOps maximus_branding/public/images/favicon.ico, shared across tenant sites.
+        for app in ("pos", "serve", "mosaic", "urypos"):
+            with self.subTest(app=app):
+                icon = (ROOT / app / "public/ury.ico").read_bytes()
+                self.assertEqual(hashlib.sha256(icon).hexdigest(), "f8410ea5598b43087f77e64a6b8732f6a7ae6b0a09c94497b383e1e92df95c9c")
