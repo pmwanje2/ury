@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { parseFrappeError } from '@ury/core'
+import { parseFrappeError, clientMessage } from '@ury/core'
 import { t } from '../i18n'
 import { useGuestLanguage } from '../components/LanguageSwitcher'
 import { bootstrapDevice, type OrderingContext } from '../lib/api'
@@ -23,7 +23,7 @@ function shownDeviceError(err: unknown): ShownDeviceError {
   // A bare string rejection is not an ERP response.
   if (typeof err !== 'object') return { source: 'catalog' }
   const parsed = parseFrappeError(err, CATALOG_FALLBACK)
-  return parsed === CATALOG_FALLBACK ? { source: 'catalog' } : { source: 'server', text: parsed }
+  return parsed === CATALOG_FALLBACK ? { source: 'catalog' } : { source: 'server', text: clientMessage(parsed) }
 }
 
 /**

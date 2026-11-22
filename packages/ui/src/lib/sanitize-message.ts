@@ -1,5 +1,7 @@
 import DOMPurify, { type Config } from 'dompurify';
 
+import { clientMessage } from '../../../core/src/brand';
+
 const MESSAGE_HTML_CONFIG: Config = {
   ALLOWED_TAGS: ['strong', 'b', 'em', 'i', 'br'],
   ALLOWED_ATTR: [],
@@ -11,7 +13,7 @@ const MESSAGE_HTML_CONFIG: Config = {
  */
 export function sanitizeMessageHtml(input: string): string {
   if (!input) return '';
-  return DOMPurify.sanitize(input, MESSAGE_HTML_CONFIG);
+  return DOMPurify.sanitize(clientMessage(input), MESSAGE_HTML_CONFIG);
 }
 
 /**

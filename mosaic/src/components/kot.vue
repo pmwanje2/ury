@@ -385,6 +385,7 @@
 </template>
 
 <script>
+import { clientMessage } from "../../../packages/core/src/brand.ts";
 import { FrappeApp } from "frappe-js-sdk";
 import Masonry from "masonry-layout";
 import io from "socket.io-client";
@@ -567,7 +568,7 @@ export default {
         this.stationSettings = this.stationPrinter.configure(next);
         this.showPrintSettings = false;
       } catch (error) {
-        this.stationSettingsError = error.message;
+        this.stationSettingsError = clientMessage(error.message || t("Could not load printer settings."));
       }
     },
     playAlertSound(path) {
@@ -839,7 +840,7 @@ export default {
         })
         .catch((error) => {
           console.error(error);
-          alert(error?.message || t("Failed to resolve item disposition."));
+          alert(clientMessage(error?.message || t("Failed to resolve item disposition.")));
         });
     },
     async orderDelayNotify(kot) {

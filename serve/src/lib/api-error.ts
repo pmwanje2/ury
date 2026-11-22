@@ -12,5 +12,5 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
       // Malformed server messages must not hide the original error.
     }
   }
-  return value.message || value.exception || fallback
+  return messageToPlainText(value.message || value.exception || fallback) || fallback
 }

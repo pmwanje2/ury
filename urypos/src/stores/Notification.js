@@ -1,3 +1,4 @@
+import { clientMessage } from "../../../packages/core/src/brand.ts";
 import { defineStore } from "pinia";
 
 export const useNotifications = defineStore("notification", {
@@ -43,7 +44,7 @@ export const useNotifications = defineStore("notification", {
 
       // Add message to notification element
       const messageEl = document.createElement("h2");
-      messageEl.textContent = message;
+      messageEl.textContent = clientMessage(String(message ?? ""));
       messageEl.classList.add("mt-2");
 
       // Add message to notification element

@@ -1,3 +1,4 @@
+import { clientMessage } from "../../../packages/core/src/brand.ts";
 import { defineStore } from "pinia";
 
 export const useAlert = defineStore("alert", {
@@ -47,14 +48,14 @@ export const useAlert = defineStore("alert", {
 
         const heading = document.createElement("h2");
         heading.classList.add("text-base", "font-semibold", "mb-4");
-        heading.textContent = title;
+        heading.textContent = clientMessage(String(title ?? ""));
 
         const divider = document.createElement("hr");
         divider.classList.add("my-6", "border-t", "border-gray-300");
 
         const messageParagraph = document.createElement("p");
         messageParagraph.classList.add("mb-4", "text-justify", "text-sm");
-        messageParagraph.textContent = message;
+        messageParagraph.textContent = clientMessage(String(message ?? ""));
 
         const closeButton = document.createElement("button");
         closeButton.classList.add(

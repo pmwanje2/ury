@@ -313,7 +313,7 @@ def _resolve_fulfilment_record(kot_or_fulfilment_ref, company):
 
 	if not record:
 		frappe.throw(
-			_("No URY Fulfilment Record found for {0}").format(kot_or_fulfilment_ref),
+			_("No Restaurant Fulfilment Record found for {0}").format(kot_or_fulfilment_ref),
 			frappe.ValidationError,
 		)
 

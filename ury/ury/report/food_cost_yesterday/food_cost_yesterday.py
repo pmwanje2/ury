@@ -12,7 +12,7 @@ def execute(filters=None):
     branch = filters.get('branch')
 
     if not frappe.db.exists("URY Report Settings", branch):
-        frappe.throw(f"URY Report Settings not found for branch: {branch}. Create it to set the buying price list.")
+        frappe.throw(f"Restaurant Report Settings not found for branch: {branch}. Create it to set the buying price list.")
 
     report_settings = frappe.get_doc("URY Report Settings", branch)
 

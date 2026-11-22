@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { parseFrappeError } from '@ury/core'
+import { parseFrappeError, clientMessage } from '@ury/core'
 import {
   addItems,
   bootstrap,
@@ -59,7 +59,7 @@ function serverTextOrCatalog(err: unknown, key: CatalogErrorKey, stripCodes = fa
     .split('\n')
     .map(line => line.replace(/^Error while placing order:\s*/, '').trim())
     .filter(Boolean))].join('\n') : parsed
-  return { source: 'server', text }
+  return { source: 'server', text: clientMessage(text) }
 }
 
 // Same keys api.ts uses internally for sessionStorage persistence. api.ts

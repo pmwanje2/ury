@@ -164,7 +164,7 @@ def generate_purchase_material_request_for_sales_plan(sales_plan):
 			{
 				"type": "store_warehouse_not_configured",
 				"message": _(
-					"URY Production Settings: Store Warehouse is not configured. "
+					"Restaurant Production Settings: Store Warehouse is not configured. "
 					"The Purchase requirement is known but the Material Request cannot be created."
 				),
 			}
