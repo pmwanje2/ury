@@ -17,6 +17,7 @@ class TestAvailabilityTiers(unittest.TestCase):
     def setUp(self):
         self.frappe, self.modules = _site_less_frappe()
         self.frappe.session.user = "Administrator"
+        self.frappe.request = None
         self.frappe.set_user.side_effect = lambda user: setattr(self.frappe.session, "user", user)
         self.frappe.local = type("Local", (), {})()
         self.items = {"Fish": 0, "Disabled": 1}
@@ -46,7 +47,9 @@ class TestAvailabilityTiers(unittest.TestCase):
         self.frappe.get_doc.return_value = type("Profile", (), {
             "restaurant": "R1", "branch": BRANCH, "enabled": 1, "allow_add_to_running_table": 1,
         })()
-        session = type("Session", (), {"ordering_profile": "PROFILE", "table": "T1", "invoice": None})()
+        session = type("Session", (), {
+            "name": "SESSION", "ordering_profile": "PROFILE", "table": "T1", "invoice": None,
+        })()
         self.session = self.enterContext(patch.object(self.guest, "_resolve_session", return_value=session))
 
     @staticmethod
@@ -151,7 +154,8 @@ class TestAvailabilityTiers(unittest.TestCase):
     def test_guest_menu_availability_uses_profile_branch(self):
         self.frappe.session.user = "Guest"
         response = self.guest.get_customer_menu_availability("valid-session")
-        self.session.assert_called_once_with("valid-session")
+        # Background polling is not guest activity and must not renew the session.
+        self.session.assert_called_once_with("valid-session", refresh_activity=False)
         self.guest.resolve_restaurant_menu.assert_called_once_with(
             branch=BRANCH, room=None, order_type="Dine In", cashier=False
         )
