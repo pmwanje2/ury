@@ -1103,25 +1103,29 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
     release_field, released = item_price_release_states()
 
     for d in items:
+        item_code = d.get("item")
+        item_name = d.get("item_name")
 
-        course = frappe.db.get_value("URY Menu Item", {"item": d.get("item"), "parent": menu}, "course")
+        course = frappe.db.get_value("URY Menu Item", {"item": item_code, "parent": menu}, "course")
 
         item_price = price_valid_on(
-            d.get("item"), price_list, posting_date, release_field, released, customer=customer,
+            item_code, price_list, posting_date, release_field, released, customer=customer,
         )
 
         if not item_price:
             frappe.throw(
-                _("[URY-PRICE-NOT-VALID] No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(d.get("item"), price_list, posting_date),
+                _("[URY-PRICE-NOT-VALID] No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
                 frappe.ValidationError,
             )
 
         else:
-            department_warehouse = _department_warehouse_for_item(d.get("item"), branch, company)
+            if not item_name or item_name == item_code:
+                item_name = frappe.db.get_value("Item", item_code, "item_name") or item_name or item_code
+            department_warehouse = _department_warehouse_for_item(item_code, branch, company)
             priced_items.append(
                 dict(
-                    item_code=d.get("item"),
-                    item_name=d.get("item_name"),
+                    item_code=item_code,
+                    item_name=item_name,
                     qty=d.get("qty"),
                     reservation_line_key=d.get("reservation_line_key"),
                     **({"custom_course": course} if course else {}),

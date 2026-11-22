@@ -601,7 +601,11 @@ def _sanitize_invoice_for_customer(invoice):
         "items": [
             {
                 "item_code": row.item_code,
-                "item_name": row.item_name,
+                "item_name": (
+                    frappe.db.get_value("Item", row.item_code, "item_name") or row.item_name or row.item_code
+                    if not row.item_name or row.item_name == row.item_code
+                    else row.item_name
+                ),
                 "qty": row.qty,
                 # The native line comment has no guest provenance: it may
                 # contain internal kitchen/staff instructions. Keep it on the
