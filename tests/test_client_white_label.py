@@ -50,3 +50,10 @@ class ClientBrand(unittest.TestCase):
             with self.subTest(app=app):
                 icon = (ROOT / app / "public/ury.ico").read_bytes()
                 self.assertEqual(hashlib.sha256(icon).hexdigest(), "f8410ea5598b43087f77e64a6b8732f6a7ae6b0a09c94497b383e1e92df95c9c")
+
+    def test_native_html_field_copy(self):
+        for file in (ROOT / "ury").glob("*/doctype/*/*.json"):
+            for field in json.loads(file.read_text()).get("fields", []):
+                if field.get("fieldtype") == "HTML":
+                    copy = re.sub("<[^>]+>", "", field.get("options") or "")
+                    self.assertNotRegex(copy, VENDOR, f"{file.name}: {field['fieldname']}")
