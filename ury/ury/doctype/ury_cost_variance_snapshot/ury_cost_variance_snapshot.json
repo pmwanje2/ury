@@ -76,7 +76,7 @@
    "read_only": 1
   },
   {
-   "description": "Currently theoretical-equivalent: no real ERPNext posting exists for this fulfilment path yet (V3-73's flag defaults off). See ury_cost_variance_attribution.compute_posted_cost.",
+   "description": "Currently theoretical-equivalent: no real Maximus posting exists for this fulfilment path yet (V3-73's flag defaults off). See ury_cost_variance_attribution.compute_posted_cost.",
    "fieldname": "posted_cost",
    "fieldtype": "Currency",
    "in_list_view": 1,

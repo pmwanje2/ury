@@ -199,7 +199,7 @@ def prepare_production(production_plan):
 		frappe.throw(_("{0} does not exist.").format(production_plan), frappe.DoesNotExistError)
 	if not locked.get(PP_SALES_PLAN_FIELD):
 		frappe.throw(
-			_("{0} has no linked URY Sales Plan; it is not a department production plan.").format(production_plan),
+			_("{0} has no linked Restaurant Sales Plan; it is not a department production plan.").format(production_plan),
 			frappe.ValidationError,
 		)
 	if cint(locked.get("docstatus")) != 1:

@@ -11,7 +11,7 @@
  "icon": "chef-hat",
  "idx": 0,
  "is_hidden": 0,
- "label": "URY Operate",
+ "label": "Maximus Operate",
  "links": [
   {
    "hidden": 0,
@@ -191,7 +191,7 @@
    "doc_view": "List"
   }
  ],
- "title": "URY Operate",
+ "title": "Maximus Operate",
  "standard": 1,
  "type": "Workspace",
  "link_type": "DocType"

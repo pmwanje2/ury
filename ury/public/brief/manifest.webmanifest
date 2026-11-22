@@ -1,8 +1,8 @@
 {
   "id": "/ury/brief/",
-  "name": "URY Brief",
+  "name": "Maximus Brief",
   "short_name": "Brief",
-  "description": "Daily executive brief for URY restaurants",
+  "description": "Daily executive brief for Maximus restaurants",
   "start_url": "/ury/brief/",
   "scope": "/ury/brief/",
   "display": "standalone",

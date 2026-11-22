@@ -37,7 +37,7 @@
   },
   {
    "default": "0",
-   "description": "Tier gate 1. When on, URY reconciles order reservations at sync_order and availability subtracts reservations. No stock-ledger change of any kind. Prerequisite for the other two gates.",
+   "description": "Tier gate 1. When on, Maximus reconciles order reservations at sync_order and availability subtracts reservations. No stock-ledger change of any kind. Prerequisite for the other two gates.",
    "fieldname": "reservation_control_enabled",
    "fieldtype": "Check",
    "in_list_view": 1,

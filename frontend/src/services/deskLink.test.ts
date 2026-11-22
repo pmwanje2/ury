@@ -94,12 +94,12 @@ describe('deskLink helpers', () => {
   });
 
   it('appLabelForPath returns correct labels for paths', () => {
-    expect(appLabelForPath('/ury/wastage')).toBe('URY');
+    expect(appLabelForPath('/ury/wastage')).toBe('Maximus');
     expect(appLabelForPath('/pos/orders')).toBe('POS');
     expect(appLabelForPath('/mosaic')).toBe('Mosaic');
     expect(appLabelForPath('/ury/order/abc')).toBe('Self Ordering');
     expect(appLabelForPath('/ury/pos/x')).toBe('POS');
-    expect(appLabelForPath('/unknown')).toBe('URY');
+    expect(appLabelForPath('/unknown')).toBe('Maximus');
   });
 
   it('getCurrentReturnContext returns null when pathname is not an app path', () => {
@@ -131,7 +131,7 @@ describe('deskLink helpers', () => {
     const context = getCurrentReturnContext();
     expect(context).not.toBeNull();
     expect(context?.path).toBe('/ury/wastage?dept=x');
-    expect(context?.label).toBe('URY');
+    expect(context?.label).toBe('Maximus');
   });
 
   it('getCurrentReturnContext restores properly after test', () => {

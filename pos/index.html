@@ -4,16 +4,16 @@
 <html lang="{{ user_lang }}" dir="{{ 'rtl' if is_rtl else 'ltr' }}">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="{{ (brand.favicon if brand and brand.favicon else '/assets/ury/pos/ury.ico') | e }}" />
+    <link rel="icon" href="{{ (brand.favicon if brand and brand.favicon else '/assets/ury/Images/maximus-mark.svg') | e }}" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     {% if theme_style %}{% include "templates/includes/ury_theme.html" %}{% endif %}
-    <title>{{ (brand.name if brand and brand.name else 'URY POS') | e }}</title>
+    <title>{{ (brand.name if brand and brand.name else 'Maximus POS') | e }}</title>
   </head>
   <body>
     <div id="root"></div>
     <footer class="py-2 text-center text-xs text-muted-foreground">
-      {{ (brand.name if brand and brand.name else 'URY POS') | e }} · built on URY (AGPL-3.0) · <a href="{{ brand_source_url | e }}" class="underline">Source</a>
+      {{ (brand.name if brand and brand.name else 'Maximus POS') | e }} · AGPL-3.0 · <a href="{{ brand_source_url | e }}" class="underline">Source</a>
     </footer>
     <script>
       window.csrf_token = "{{ csrf_token }}";

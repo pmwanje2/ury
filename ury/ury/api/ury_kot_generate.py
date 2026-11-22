@@ -235,7 +235,7 @@ def process_items_for_kot(
     )
     if not productions:
         frappe.throw(
-            "Create URY Production unit against POS Profile: %s " % pos_profile.name
+            "Create Restaurant Production unit against POS Profile: %s " % pos_profile.name
         )
 
     # Build a map of production unit -> items for that unit using the unified resolver

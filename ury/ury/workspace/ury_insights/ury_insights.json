@@ -11,7 +11,7 @@
  "icon": "sparkles",
  "idx": 0,
  "is_hidden": 0,
- "label": "URY Insights",
+ "label": "Maximus Insights",
  "link_type": "DocType",
  "links": [
   {
@@ -164,7 +164,7 @@
    "doc_view": "List"
   }
  ],
- "title": "URY AI Insights",
+ "title": "Maximus AI Insights",
  "type": "Workspace",
  "standard": 1,
  "parent_page": ""

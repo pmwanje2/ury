@@ -48,7 +48,7 @@ def dismiss_insight(name):
 	require_manager()
 
 	if not frappe.db.exists("URY Insight", name):
-		frappe.throw(frappe._("URY Insight {0} not found").format(name), frappe.DoesNotExistError)
+		frappe.throw(frappe._("Restaurant Insight {0} not found").format(name), frappe.DoesNotExistError)
 
 	frappe.db.set_value(
 		"URY Insight",

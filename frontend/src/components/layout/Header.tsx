@@ -6,14 +6,9 @@ import {
   call,
   getLoggedUser,
   getUserRoles,
-  withReturnContext,
-  appLabelForPath,
-  DESK_RETURN_STORAGE_KEY,
 } from '@ury/core';
 import { useCompanyContext } from '../../context/CompanyContext';
 import { Breadcrumbs } from './Breadcrumbs';
-import { useDeskPermission } from '../DeskLink';
-import uryLogo from '../../../Public/URY-bg.png';
 import { buttonVariants, messageToPlainText } from '@ury/ui';
 import AskBar from '../chat/AskBar';
 import {
@@ -71,10 +66,9 @@ function stripHtml(html: string): string {
 
 
 export const Header: React.FC = () => {
-  const brand = resolveBrand({ name: __('URY Logo'), logo: uryLogo });
+  const brand = resolveBrand({ name: __('Maximus Logo'), logo: '/assets/ury/Images/maximus-mark.svg' });
   const { activeBranchId, setActiveBranchId, branches, activeBranch } = useBranchContext();
   const { activeCompanyId, setActiveCompanyId, companies, activeCompany } = useCompanyContext();
-  const deskPermission = useDeskPermission('User');
 
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -208,25 +202,9 @@ export const Header: React.FC = () => {
       <div className="flex items-center justify-between h-12 px-4 md:px-6">
         {/* Left Section: Logo, Brand & Breadcrumb */}
         <div className="flex items-center gap-4 min-w-0">
-          <a
-            href="/desk"
-            onClick={() => {
-              try {
-                sessionStorage.setItem(
-                  DESK_RETURN_STORAGE_KEY,
-                  JSON.stringify({
-                    path: window.location.pathname + window.location.search,
-                    label: appLabelForPath(window.location.pathname),
-                  })
-                );
-              } catch (e) {
-                /* ignore */
-              }
-            }}
-            className="flex items-center gap-3 group shrink-0"
-          >
+          <div className="flex items-center gap-3 group shrink-0">
             <img src={brand.logo} alt={brand.name} className="h-8 w-auto" />
-          </a>
+          </div>
           <div className="hidden sm:block h-4 w-px bg-border shrink-0" />
           <Breadcrumbs />
         </div>
@@ -417,30 +395,6 @@ export const Header: React.FC = () => {
                     <RefreshCw className="w-4 h-4" />
                     <span>{__('Clear Cache')}</span>
                   </button>
-
-                  {deskPermission?.read && (
-                    <button
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        try {
-                          sessionStorage.setItem(
-                            DESK_RETURN_STORAGE_KEY,
-                            JSON.stringify({
-                              path: window.location.pathname + window.location.search,
-                              label: appLabelForPath(window.location.pathname),
-                            })
-                          );
-                        } catch (e) {
-                          /* ignore */
-                        }
-                        window.location.href = withReturnContext('/desk/ury');
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2 text-sm text-foreground hover:bg-muted transition-colors"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      <span>{__('Switch to Desk')}</span>
-                    </button>
-                  )}
 
                   {logoutState === 'failed' && <p role="alert">{__('Failed to logout. Please try again.')}</p>}
                   <button

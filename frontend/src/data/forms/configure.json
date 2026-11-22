@@ -7,19 +7,19 @@
   },
   {
     "id": "ury-room",
-    "label": "URY Room",
+    "label": "Maximus Room",
     "route": "/app/ury-room/new-ury-room-1",
     "description": "Set up rooms or areas in your restaurant."
   },
   {
     "id": "ury-table",
-    "label": "URY Table",
+    "label": "Maximus Table",
     "route": "/app/ury-table/new-ury-table-1",
     "description": "Configure tables for dine-in orders."
   },
   {
     "id": "ury-menu",
-    "label": "URY Menu",
+    "label": "Maximus Menu",
     "route": "/app/ury-menu/new-ury-menu-1",
     "description": "Add menu items, categories, and prices."
   },

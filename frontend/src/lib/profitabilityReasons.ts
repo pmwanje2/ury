@@ -17,10 +17,10 @@ export const PROFITABILITY_REASON_LABELS: Record<string, string> = {
   MISSING_COST_ATTRIBUTION: 'Cost could not be attributed for these items.',
   UNATTRIBUTED_REVENUE: 'Some revenue could not be matched to a department on the approved Sales Plan.',
   // The one every row currently carries: V3-74's compute_variance returns
-  // posted_cost=None until a fulfilment Stock Entry is posted to ERPNext, so
+  // posted_cost=None until a fulfilment Stock Entry is posted to stock, so
   // every row is theoretical-only until the Store Issue/Wastage posting
   // chain actually writes stock movements.
-  UNATTRIBUTED_COST: 'Theoretical cost only — no stock has been posted to ERPNext for this item yet.',
+  UNATTRIBUTED_COST: 'Theoretical cost only — no stock has been posted to stock for this item yet.',
 };
 
 /** Human-readable label for a reason code, falling back to the raw code for

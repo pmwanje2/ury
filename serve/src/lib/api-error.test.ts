@@ -12,3 +12,8 @@ describe('API validation messages', () => {
     expect(apiErrorMessage(null, 'Fallback')).toBe('Fallback')
   })
 })
+
+it('keeps a readable unwrapped refusal without the framework exception name', () => {
+  expect(apiErrorMessage({ exception: 'frappe.exceptions.PermissionError: Access denied for URY KOT' }, 'Try again'))
+    .toBe('Access denied for Maximus KOT')
+})

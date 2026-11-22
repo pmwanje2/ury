@@ -11,7 +11,7 @@
  "icon": "calendar-check",
  "idx": 0,
  "is_hidden": 0,
- "label": "URY Plan",
+ "label": "Maximus Plan",
  "links": [
   {
    "hidden": 0,
@@ -125,7 +125,7 @@
    "doc_view": "List"
   }
  ],
- "title": "URY Plan",
+ "title": "Maximus Plan",
  "standard": 1,
  "type": "Workspace",
  "link_type": "DocType"

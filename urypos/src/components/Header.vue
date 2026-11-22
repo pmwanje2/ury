@@ -71,13 +71,6 @@
               >
                 Reload
               </a>
-
-              <a
-                href="#"
-                class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                @click="this.auth.routeToHome()"
-                >Switch To Desk
-              </a>
               <div class="border-t border-gray-200"></div>
               <button
                 type="button"
@@ -103,7 +96,6 @@ import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import { useAuthStore } from "@/stores/Auth.js";
 import { posOpening } from "@/stores/posOpening.js";
 import { posClosing } from "@/stores/posClosing.js";
-import uriPosImage from "@/assets/logos/URY_POS.jpg";
 import { tabFunctions } from "@/stores/bottomTabs.js";
 import { useTableStore } from "@/stores/Table.js";
 
@@ -120,7 +112,7 @@ export default {
   },
   data() {
     return {
-      brand: resolveBrand({ name: "URY POS logo", logo: uriPosImage }),
+      brand: resolveBrand({ name: "Maximus POS", logo: "/assets/ury/Images/maximus-mark.svg" }),
     };
   },
   methods: {

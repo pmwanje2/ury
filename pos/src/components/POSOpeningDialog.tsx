@@ -55,7 +55,7 @@ const POSOpeningDialog = ({
   onContinue,
   onCloseNow,
 }: POSOpeningDialogProps) => {
-  const handleSwitchToDesk = () => {
+  const openWorkspace = () => {
     // Opens in a new tab, so the POS tab itself is still there to come back
     // to -- but the desk tab still gets a "Back to POS" chip via the return
     // context, since users routinely lose track of which tab is which.
@@ -160,12 +160,12 @@ const POSOpeningDialog = ({
             <TillLogout />
             {canAccessDesk && (
               <Button
-                onClick={handleSwitchToDesk}
+                onClick={openWorkspace}
                 variant="outline"
                 className="w-full border-border text-gray-700 hover:bg-gray-50 font-medium py-3 px-6 rounded-lg transition-colors duration-200"
               >
                 <Monitor className="w-5 h-5 me-2" />
-                {t('pos.switch_to_desk')}
+                {t('pos.open_workspace')}
               </Button>
             )}
           </div>

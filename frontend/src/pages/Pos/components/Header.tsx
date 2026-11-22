@@ -12,11 +12,11 @@ import { Button, Input, buttonVariants } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { resolveBrand, logout, DESK_RETURN_STORAGE_KEY } from '@ury/core';
+import { resolveBrand, logout } from '@ury/core';
 import { showToast } from '@ury/ui';
 
 const Header = () => {
-  const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
+  const brand = resolveBrand({ name: 'Maximus POS', logo: '/assets/ury/Images/maximus-mark.svg' });
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const user = useRootStore((state: RootState) => state.user);
@@ -108,29 +108,13 @@ const Header = () => {
       <div className="flex items-center justify-between h-[52px] px-[18px] gap-3">
         {/* Logo */}
         <div className="flex items-center">
-          <a
-            href="/desk"
-            onClick={() => {
-              try {
-                sessionStorage.setItem(
-                  DESK_RETURN_STORAGE_KEY,
-                  JSON.stringify({
-                    path: window.location.pathname + window.location.search,
-                    label: 'POS',
-                  })
-                );
-              } catch (e) {
-                /* ignore */
-              }
-            }}
-            className="flex items-center gap-3"
-          >
+          <div className="flex items-center gap-3">
             <img
               src={brand.logo}
               alt={brand.name}
               className="h-5 w-auto"
             />
-          </a>
+          </div>
         </div>
 
         {/* Search Bar */}

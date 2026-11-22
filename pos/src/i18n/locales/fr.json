@@ -50,7 +50,7 @@
     "service_board": "Tableau de service",
     "close_shift": "Clôturer la session",
     "switch_to_dashboard": "Aller au tableau de bord",
-    "switch_to_desk": "Accéder au bureau",
+    "open_workspace": "Accéder au bureau",
     "search_placeholder_reservations": "Rechercher des réservations par client, table...",
     "switch_waiter": "Changer de serveur",
     "pair_tablet": "Appairer cette tablette",
@@ -138,7 +138,7 @@
     "not_closed_message": "Veuillez fermer l'entrée PDV précédente pour continuer.",
     "reload_page": "Recharger la page",
     "contact_manager": "Si le problème persiste, contactez votre responsable.",
-    "switch_to_desk": "Accéder au bureau",
+    "open_workspace": "Accéder au bureau",
     "opening": {
       "title": "Ouvrir la session PDV",
       "session_details": "Détails de la session",

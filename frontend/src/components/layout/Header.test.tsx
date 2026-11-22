@@ -69,39 +69,20 @@ describe("Header (/ury)", () => {
     vi.clearAllMocks();
   });
 
-  it("renders URY logo linking to /desk", () => {
+  it("renders the Maximus logo without a Desk link", () => {
     render(
       <BrowserRouter>
         <Header />
       </BrowserRouter>
     );
 
-    const logo = screen.getByAltText("URY Logo");
+    const logo = screen.getByAltText("Maximus Logo");
     expect(logo).toBeInTheDocument();
 
     const logoLink = logo.closest("a");
-    expect(logoLink).toHaveAttribute("href", "/desk");
+    expect(logoLink).toBeNull();
   });
 
-  it("sets return context in sessionStorage when URY logo is clicked", async () => {
-    render(
-      <BrowserRouter>
-        <Header />
-      </BrowserRouter>
-    );
-
-    const logo = screen.getByAltText("URY Logo");
-    const logoLink = logo.closest("a");
-    expect(logoLink).not.toBeNull();
-
-    logoLink?.addEventListener("click", (e) => e.preventDefault());
-    await userEvent.click(logoLink!);
-
-    const stored = sessionStorage.getItem("ury:desk_return_to");
-    expect(stored).not.toBeNull();
-    const parsed = JSON.parse(stored!);
-    expect(parsed.label).toBe("URY");
-  });
 });
 
 it("clears the POS worker caches as well as web storage before reloading", async () => {

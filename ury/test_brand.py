@@ -18,7 +18,7 @@ from jinja2 import Environment, FileSystemLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = {"pos": "pos", "urypos": "urypos", "mosaic": "mosaic", "order": "self-order", "serve": "serve"}
-DEFAULT_TITLES = {"pos": "URY POS", "urypos": "URY POS", "mosaic": "Mosaic", "order": "Order", "serve": "URY Serve"}
+DEFAULT_TITLES = {"pos": "Maximus POS", "urypos": "Maximus POS", "mosaic": "Maximus Kitchen", "order": "Maximus Order", "serve": "Maximus Serve"}
 SITE_BRAND = {"name": 'Example\\Site "</script><script>evil()</script>', "logo": '/files/logo"<&.png', "favicon": '/files/favicon"<&.ico'}
 STAFF_BRAND = {"name": 'Counter "</script><script>evil()</script>', "logo": '/files/counter"<&.png', "favicon": '/files/counter"<&.ico'}
 
@@ -135,6 +135,20 @@ class TestSiteBrand(unittest.TestCase):
 
     def test_empty_settings_return_none_not_frappe_defaults(self):
         self.assertIsNone(self.brand_module().get_brand())
+
+    def test_upstream_site_and_hook_identity_do_not_reach_boot(self):
+        self.settings.app_name = "ERPNext"
+        self.settings.app_logo = "/assets/frappe/images/frappe-framework-logo.svg"
+        self.settings.favicon = "/assets/erpnext/images/favicon.png"
+        for surface in ("site", "staff", "guest"):
+            self.hooks = {"name": ["Powered by URY"]}
+            ctx = self.brand_module().get_brand_context(surface)
+            self.assertNotRegex(ctx["brand_json"], r"(?i)frappe|erpnext|kamra|\bury\b")
+
+    def test_white_label_asset_and_outlet_image_survive_the_legacy_asset_filter(self):
+        for path in ("/assets/ury/Images/maximus-mark.svg", "/assets/ury/custom/outlet.svg"):
+            self.settings.app_logo = path
+            self.assertEqual(self.brand_module().get_brand()["logo"], path)
 
     def test_set_settings_return_only_the_three_public_brand_fields(self):
         self.set_brand()
@@ -329,8 +343,7 @@ class TestSiteBrand(unittest.TestCase):
             with self.subTest(page=page):
                 parsed = PageParser(self.render(page, self.context(page)))
                 self.assertEqual(parsed.title, DEFAULT_TITLES[page])
-                asset = "pos" if page == "order" else page
-                self.assertEqual(parsed.favicon, f"/assets/ury/{asset}/ury.ico")
+                self.assertEqual(parsed.favicon, "/assets/ury/Images/maximus-mark.svg")
 
     def test_pos_and_guest_order_offer_public_source_and_escaped_brand(self):
         self.set_brand()
@@ -338,11 +351,11 @@ class TestSiteBrand(unittest.TestCase):
             with self.subTest(page=page):
                 context = self.context(page)
                 parsed = PageParser(self.render(page, context))
-                self.assertIn(SITE_BRAND["name"] + " · built on URY (AGPL-3.0) · Source", " ".join(parsed.footer.split()))
+                self.assertIn(SITE_BRAND["name"] + " · AGPL-3.0 · Source", " ".join(parsed.footer.split()))
                 if page == "order":
-                    for marker in ("footer.built_on", "footer.source"):
+                    for marker in ("footer.source",):
                         self.assertIn(f'data-guest-i18n="{marker}"', self.render(page, context))
-                self.assertEqual(parsed.source, "https://github.com/ury-erp/ury")
+                self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/maximus/v16-integration")
                 self.framework.conf["ury_source_url"] = "https://github.com/pmwanje2/ury/tree/public-release"
                 parsed = PageParser(self.render(page, self.context(page)))
                 self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/public-release")

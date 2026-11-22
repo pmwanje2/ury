@@ -78,7 +78,7 @@
    "fieldname": "erpnext_stock_entry",
    "fieldtype": "Link",
    "options": "Stock Entry",
-   "label": "ERPNext Stock Entry",
+   "label": "Maximus Stock Entry",
    "read_only": 1
   },
   {

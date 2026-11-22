@@ -1,13 +1,13 @@
 {
  "charts": [],
- "content": "[{\"id\":\"cf875878bd\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Today</b></span>\",\"col\":12}},{\"id\":\"6f05de72b3\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"URY Wastage Today\",\"col\":3}},{\"id\":\"aa598e36ac\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"URY Cancelled Bills Today\",\"col\":3}},{\"id\":\"1b1f584899\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Dashboards</b></span>\",\"col\":12}},{\"id\":\"70791fe204\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB10 Margin & Cost\",\"col\":4}},{\"id\":\"77689370b3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB11 Wastage & Shrinkage\",\"col\":4}},{\"id\":\"8138d52c97\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB15 Leakage\",\"col\":4}},{\"id\":\"8266b221ea\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Detail reports</b></span>\",\"col\":12}},{\"id\":\"b597baeb61\",\"type\":\"card\",\"data\":{\"card_name\":\"Statements\",\"col\":4}},{\"id\":\"5dbd5c1260\",\"type\":\"card\",\"data\":{\"card_name\":\"Margin & Cost\",\"col\":4}},{\"id\":\"7a2f31f4fd\",\"type\":\"card\",\"data\":{\"card_name\":\"Wastage & Leakage\",\"col\":4}}]",
+ "content": "[{\"id\":\"cf875878bd\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Today</b></span>\",\"col\":12}},{\"id\":\"6f05de72b3\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Maximus Wastage Today\",\"col\":3}},{\"id\":\"aa598e36ac\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Maximus Cancelled Bills Today\",\"col\":3}},{\"id\":\"1b1f584899\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Dashboards</b></span>\",\"col\":12}},{\"id\":\"70791fe204\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB10 Margin & Cost\",\"col\":4}},{\"id\":\"77689370b3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB11 Wastage & Shrinkage\",\"col\":4}},{\"id\":\"8138d52c97\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB15 Leakage\",\"col\":4}},{\"id\":\"8266b221ea\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Detail reports</b></span>\",\"col\":12}},{\"id\":\"b597baeb61\",\"type\":\"card\",\"data\":{\"card_name\":\"Statements\",\"col\":4}},{\"id\":\"5dbd5c1260\",\"type\":\"card\",\"data\":{\"card_name\":\"Margin & Cost\",\"col\":4}},{\"id\":\"7a2f31f4fd\",\"type\":\"card\",\"data\":{\"card_name\":\"Wastage & Leakage\",\"col\":4}}]",
  "creation": "2026-11-03 05:07:32.211107",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
  "icon": "wallet",
  "is_hidden": 0,
- "label": "URY Analytics Finance",
+ "label": "Maximus Analytics Finance",
  "links": [
   {
    "hidden": 0,
@@ -153,11 +153,11 @@
  "name": "URY Analytics Finance",
  "number_cards": [
   {
-   "label": "URY Wastage Today",
+   "label": "Maximus Wastage Today",
    "number_card_name": "URY Wastage Today"
   },
   {
-   "label": "URY Cancelled Bills Today",
+   "label": "Maximus Cancelled Bills Today",
    "number_card_name": "URY Cancelled Bills Today"
   }
  ],
@@ -191,6 +191,6 @@
   }
  ],
  "standard": 1,
- "title": "URY Analytics Finance",
+ "title": "Maximus Analytics Finance",
  "type": "Workspace"
 }

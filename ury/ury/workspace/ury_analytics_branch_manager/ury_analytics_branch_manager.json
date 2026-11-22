@@ -1,13 +1,13 @@
 {
  "charts": [],
- "content": "[{\"id\":\"cf875878bd\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Today</b></span>\",\"col\":12}},{\"id\":\"5589d87f38\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"URY Sales Today\",\"col\":3}},{\"id\":\"652488cbfe\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"URY Bills Today\",\"col\":3}},{\"id\":\"a0e8bafa5a\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"URY Average Bill Today\",\"col\":3}},{\"id\":\"17bb8abf7f\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"URY Unsettled Bills\",\"col\":3}},{\"id\":\"1b1f584899\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Dashboards</b></span>\",\"col\":12}},{\"id\":\"2098495829\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB02 Branch Daily Manager\",\"col\":4}},{\"id\":\"aa4e16e9d6\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB03 Sales & Revenue Deep-dive\",\"col\":4}},{\"id\":\"600d7eef67\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB09 Payments & Cash-up\",\"col\":4}},{\"id\":\"8266b221ea\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Detail reports</b></span>\",\"col\":12}},{\"id\":\"3be97ad29f\",\"type\":\"card\",\"data\":{\"card_name\":\"Sales\",\"col\":4}},{\"id\":\"29b83fa5c1\",\"type\":\"card\",\"data\":{\"card_name\":\"Payments & Cash-up\",\"col\":4}}]",
+ "content": "[{\"id\":\"cf875878bd\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Today</b></span>\",\"col\":12}},{\"id\":\"5589d87f38\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Maximus Sales Today\",\"col\":3}},{\"id\":\"652488cbfe\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Maximus Bills Today\",\"col\":3}},{\"id\":\"a0e8bafa5a\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Maximus Average Bill Today\",\"col\":3}},{\"id\":\"17bb8abf7f\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Maximus Unsettled Bills\",\"col\":3}},{\"id\":\"1b1f584899\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Dashboards</b></span>\",\"col\":12}},{\"id\":\"2098495829\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB02 Branch Daily Manager\",\"col\":4}},{\"id\":\"aa4e16e9d6\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB03 Sales & Revenue Deep-dive\",\"col\":4}},{\"id\":\"600d7eef67\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"DB09 Payments & Cash-up\",\"col\":4}},{\"id\":\"8266b221ea\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Detail reports</b></span>\",\"col\":12}},{\"id\":\"3be97ad29f\",\"type\":\"card\",\"data\":{\"card_name\":\"Sales\",\"col\":4}},{\"id\":\"29b83fa5c1\",\"type\":\"card\",\"data\":{\"card_name\":\"Payments & Cash-up\",\"col\":4}}]",
  "creation": "2026-11-03 05:07:31.148520",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
  "icon": "layout-dashboard",
  "is_hidden": 0,
- "label": "URY Analytics Branch Manager",
+ "label": "Maximus Analytics Branch Manager",
  "links": [
   {
    "hidden": 0,
@@ -114,19 +114,19 @@
  "name": "URY Analytics Branch Manager",
  "number_cards": [
   {
-   "label": "URY Sales Today",
+   "label": "Maximus Sales Today",
    "number_card_name": "URY Sales Today"
   },
   {
-   "label": "URY Bills Today",
+   "label": "Maximus Bills Today",
    "number_card_name": "URY Bills Today"
   },
   {
-   "label": "URY Average Bill Today",
+   "label": "Maximus Average Bill Today",
    "number_card_name": "URY Average Bill Today"
   },
   {
-   "label": "URY Unsettled Bills",
+   "label": "Maximus Unsettled Bills",
    "number_card_name": "URY Unsettled Bills"
   }
  ],
@@ -160,6 +160,6 @@
   }
  ],
  "standard": 1,
- "title": "URY Analytics Branch Manager",
+ "title": "Maximus Analytics Branch Manager",
  "type": "Workspace"
 }

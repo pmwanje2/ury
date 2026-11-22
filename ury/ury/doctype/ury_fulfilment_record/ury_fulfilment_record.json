@@ -91,17 +91,17 @@
   },
   {
    "default": "0",
-   "description": "Always False for pre-produced fulfilment as of V3-71: this record never posts to a real ERPNext stock document (no Stock Entry, no Bin mutation). Flipping this to True is exclusively V3-73's integration-boundary responsibility, gated by the V3-70 evidence bar.",
+   "description": "Always False for pre-produced fulfilment as of V3-71: this record never posts to a real Maximus stock document (no Stock Entry, no Bin mutation). Flipping this to True is exclusively V3-73's integration-boundary responsibility, gated by the V3-70 evidence bar.",
    "fieldname": "posted_to_erpnext",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Posted To ERPNext",
+   "label": "Posted To Maximus",
    "read_only": 1
   },
   {
    "fieldname": "posting_reference",
    "fieldtype": "Data",
-   "label": "ERPNext Posting Reference",
+   "label": "Maximus Posting Reference",
    "read_only": 1
   },
   {

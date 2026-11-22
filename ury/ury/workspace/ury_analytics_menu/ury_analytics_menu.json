@@ -7,7 +7,7 @@
  "doctype": "Workspace",
  "icon": "book-open",
  "is_hidden": 0,
- "label": "URY Analytics Menu",
+ "label": "Maximus Analytics Menu",
  "links": [
   {
    "hidden": 0,
@@ -153,6 +153,6 @@
   }
  ],
  "standard": 1,
- "title": "URY Analytics Menu",
+ "title": "Maximus Analytics Menu",
  "type": "Workspace"
 }

@@ -76,7 +76,7 @@ export function getSetupSocket(): Promise<Socket> {
       });
 
       s.on('connect_error', (err) => {
-        console.error('[URY realtime] Socket connect error:', err.message);
+        console.error('[Live updates] Socket connect error:', err.message);
         connectPromise = null; // allow retry on next call
         reject(err);
       });
@@ -84,7 +84,7 @@ export function getSetupSocket(): Promise<Socket> {
       // If no connect event in 10 s, reject so callers don't hang forever
       const timeout = setTimeout(() => {
         connectPromise = null;
-        reject(new Error('[URY realtime] Socket connection timed out'));
+        reject(new Error('[Live updates] Socket connection timed out'));
       }, 10_000);
 
       s.once('connect', () => clearTimeout(timeout));
@@ -121,7 +121,7 @@ export function subscribeRealtimeEvent(
       onSubscribed?.();
     })
     .catch((err) => {
-      console.error(`[URY realtime] Failed to subscribe to "${eventName}":`, err);
+      console.error(`[Live updates] Failed to subscribe to "${eventName}":`, err);
       // Even on socket error, call onSubscribed so the API call is not blocked
       // forever — the progress UI will stay static but setup still completes.
       if (!cancelled) onSubscribed?.();

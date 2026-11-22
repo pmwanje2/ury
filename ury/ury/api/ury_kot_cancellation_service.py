@@ -473,7 +473,7 @@ def cancel_partial(kot, item_states, actor=None, reason=None, manager_confirmed_
 			ITEM_LEVEL_STATE_REQUIRED,
 			_(
 				"cancel_partial requires item_states describing per-item "
-				"execution state, which URY KOT Execution does not yet track "
+				"execution state, which Restaurant KOT Execution does not yet track "
 				"(KOT-level only, per V3-53's documented scope decision); "
 				"partial cancellation cannot be safely applied for KOT {0}"
 			).format(kot),
@@ -483,7 +483,7 @@ def cancel_partial(kot, item_states, actor=None, reason=None, manager_confirmed_
 		ITEM_LEVEL_STATE_REQUIRED,
 		_(
 			"Partial cancellation for KOT {0} requires item-level execution "
-			"state, which does not exist yet (URY KOT Execution is KOT-level "
+			"state, which does not exist yet (Restaurant KOT Execution is KOT-level "
 			"only, per V3-53's documented scope decision). Failing closed "
 			"rather than guessing or applying an all-or-nothing cancellation "
 			"across mixed started/not-started items."

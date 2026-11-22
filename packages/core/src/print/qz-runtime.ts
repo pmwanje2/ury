@@ -27,7 +27,7 @@ export function loadQz(): Promise<QzBridge> {
   if (!loading) {
     loading = new Promise<QzBridge>((resolve, reject) => {
       const script = document.createElement('script');
-      const fail = () => { script.remove(); reject(new Error('QZ_UNAVAILABLE: Frappe QZ script did not load')); };
+      const fail = () => { script.remove(); reject(new Error('QZ_UNAVAILABLE: Print helper did not load')); };
       script.src = '/assets/frappe/node_modules/qz-tray/qz-tray.js';
       script.onload = () => window.qz ? resolve(window.qz) : fail();
       script.onerror = fail;

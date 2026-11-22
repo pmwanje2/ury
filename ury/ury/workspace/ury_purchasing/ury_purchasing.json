@@ -11,7 +11,7 @@
  "icon": "shopping-cart",
  "idx": 0,
  "is_hidden": 0,
- "label": "URY Purchasing",
+ "label": "Maximus Purchasing",
  "link_type": "DocType",
  "links": [
   {
@@ -240,7 +240,7 @@
    "doc_view": "List"
   }
  ],
- "title": "URY Purchasing",
+ "title": "Maximus Purchasing",
  "type": "Workspace",
  "standard": 1,
  "parent_page": ""

@@ -12,11 +12,10 @@ import {
   Lock,
 } from 'lucide-react';
 import { Button, Input } from '@ury/ui';
-import { isCashierOnly } from '../lib/roles';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
 import type { RootState } from '../store/root-store';
-import { call, resolveBrand, withReturnContext, DESK_RETURN_STORAGE_KEY, isPrintStatusDisabled } from '@ury/core';
+import { call, resolveBrand, isPrintStatusDisabled } from '@ury/core';
 import { clearCashierStorage } from '../offline/cashier';
 import { useOutbox } from '../offline/use-outbox';
 import { showToast } from '@ury/ui';
@@ -25,7 +24,7 @@ import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
 
 const Header = () => {
-  const brand = resolveBrand({ name: 'URY POS', logo: '/assets/ury/pos/ury_pos.png' });
+  const brand = resolveBrand({ name: 'Maximus POS', logo: '/assets/ury/Images/maximus-mark.svg' });
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const user = useRootStore((state: RootState) => state.user);
@@ -143,29 +142,13 @@ const Header = () => {
       <div className="flex items-center justify-between h-12 px-4 md:px-6">
         {/* Logo */}
         <div className="flex items-center">
-          <a
-            href="/desk"
-            onClick={() => {
-              try {
-                sessionStorage.setItem(
-                  DESK_RETURN_STORAGE_KEY,
-                  JSON.stringify({
-                    path: window.location.pathname + window.location.search,
-                    label: 'POS',
-                  })
-                );
-              } catch (e) {
-                /* ignore */
-              }
-            }}
-            className="flex items-center gap-3"
-          >
+          <div className="flex items-center gap-3">
             <img
               src={brand.logo}
               alt={brand.name}
               className="h-8 w-auto"
             />
-          </a>
+          </div>
         </div>
 
         {/* Search Bar */}
@@ -229,31 +212,6 @@ const Header = () => {
                   >
                     <Monitor className="w-4 h-4 me-3" />
                     {t('header.switch_to_dashboard')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                    /* withReturnContext carries a return path so the desk shows
-                       a floating "Back to POS" chip (return_to_app.js) --
-                       otherwise a cashier who steps into the desk for a
-                       not-yet-migrated feature has no obvious way back. */
-                    onClick={() => {
-                      try {
-                        sessionStorage.setItem(DESK_RETURN_STORAGE_KEY, JSON.stringify({
-                          path: window.location.pathname + window.location.search,
-                          label: 'POS',
-                        }));
-                      } catch (e) {
-                        /* ignore */
-                      }
-                      // Cashier-only users cannot open the URY workspace; send them to their dashboard.
-                      window.location.href = withReturnContext(
-                        isCashierOnly(user?.roles) ? '/desk/pos-operations' : '/desk/ury'
-                      );
-                    }}
-                  >
-                    <Monitor className="w-4 h-4 me-3" />
-                    {t('header.switch_to_desk')}
                   </Button>
                   <Button
                     variant="ghost"

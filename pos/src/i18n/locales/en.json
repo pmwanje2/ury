@@ -50,7 +50,7 @@
     "service_board": "Service Board",
     "close_shift": "Close Shift",
     "switch_to_dashboard": "Switch to Dashboard",
-    "switch_to_desk": "Switch To Desk",
+    "open_workspace": "Open workspace",
     "search_placeholder_reservations": "Search reservations by customer, table...",
     "user_fallback": "User",
     "switch_waiter": "Switch waiter",
@@ -160,7 +160,7 @@
     "not_closed_message": "Please close the previous POS Entry to continue.",
     "reload_page": "Reload Page",
     "contact_manager": "If this keeps happening, contact your manager.",
-    "switch_to_desk": "Switch to Desk",
+    "open_workspace": "Open workspace",
     "opening": {
       "title": "Open POS Session",
       "session_details": "Session Details",

@@ -1,8 +1,8 @@
 {
   "id": "/ury/serve/",
-  "name": "URY Serve",
+  "name": "Maximus Serve",
   "short_name": "Serve",
-  "description": "Staff order-taking for URY restaurants",
+  "description": "Staff order-taking for Maximus restaurants",
   "start_url": "/ury/serve/",
   "scope": "/ury/serve/",
   "display": "standalone",

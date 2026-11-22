@@ -4,7 +4,7 @@ import { Spinner } from '@ury/ui';
 import { t } from '../i18n';
 
 const InitialLoader: React.FC = () => {
-  const brand = resolveBrand({ name: 'URY POS' });
+  const brand = resolveBrand({ name: 'Maximus POS' });
   return (
     <div className="fixed inset-0 bg-background flex items-center justify-center">
       <div className="text-center">

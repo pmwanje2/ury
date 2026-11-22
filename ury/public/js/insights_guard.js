@@ -52,7 +52,7 @@
 			code.textContent = siteCmd(hint.cmd);
 			msg.appendChild(code);
 		} else {
-			msg.textContent = "Analytics needs Frappe Insights; ask your administrator.";
+			msg.textContent = "Analytics is unavailable. Ask your administrator.";
 		}
 		el.appendChild(msg);
 		const bar = document.createElement("span");

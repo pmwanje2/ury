@@ -54,9 +54,10 @@
 
 	/** Strip anything that could smuggle markup into the chip's text. */
 	const sanitizeLabel = (label) => {
-		if (typeof label !== "string") return "URY";
+		if (typeof label !== "string") return "Maximus";
 		const cleaned = label.replace(/[^\w\s()&-]/g, "").trim();
-		return cleaned.slice(0, 32) || "URY";
+		if (/\b(?:ury|frappe|erpnext|kamra)\b/i.test(cleaned)) return "Maximus";
+		return cleaned.slice(0, 32) || "Maximus";
 	};
 
 	const readSession = (key) => {

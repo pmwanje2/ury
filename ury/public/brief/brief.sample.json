@@ -4,7 +4,7 @@
   "date": "2026-11-01",
   "currency": "INR",
   "locale": "en-IN",
-  "scope": {"companies": ["URY Demo Co"], "branches": ["Main Branch", "Airport Kiosk"]},
+  "scope": {"companies": ["Maximus Demo Co"], "branches": ["Main Branch", "Airport Kiosk"]},
   "slides": [
     {
       "id": "yesterday",

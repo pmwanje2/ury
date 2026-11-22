@@ -273,12 +273,12 @@ export const BomPage: React.FC = () => {
 
       setBoms(mergedBoms);
       if (isManualRefresh) {
-        showToast.success(__('BOMs synced with ERPNext'));
+        showToast.success(__('BOMs synced with Maximus'));
         fetchBranchBoms();
       }
     } catch (err: any) {
       console.error('Failed to fetch BOMs', err);
-      showToast.error(err?.message || __('Failed to load BOMs from ERPNext'));
+      showToast.error(err?.message || __('Failed to load BOMs from Maximus'));
       setBoms([]);
     } finally {
       setLoading(false);
@@ -520,7 +520,7 @@ export const BomPage: React.FC = () => {
             <span>{__('Bill of Materials (BOM)')}</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {__('View recipe configurations, raw materials, and production costs from ERPNext')}
+            {__('View recipe configurations, raw materials, and production costs from Maximus')}
           </p>
         </div>
       </div>
@@ -606,7 +606,7 @@ export const BomPage: React.FC = () => {
             onClick={() => fetchBoms(true)}
             disabled={refreshing || loading}
             className="h-9 px-2.5"
-            title={__('Sync with ERPNext')}
+            title={__('Sync with Maximus')}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>
@@ -627,7 +627,7 @@ export const BomPage: React.FC = () => {
           <p className="text-muted-foreground max-w-sm text-sm">
             {search || itemFilter !== 'all' || statusFilter !== 'all'
               ? __('No BOMs match your selected search or filters. Try adjusting your search query.')
-              : __('No Bill of Materials found in ERPNext. BOMs created in ERPNext will appear here.')}
+              : __('No Bill of Materials found in Maximus. BOMs created in Maximus will appear here.')}
           </p>
         </Card>
       ) : viewMode === 'grid' ? (
@@ -758,7 +758,7 @@ export const BomPage: React.FC = () => {
             {loadingDoc && (
               <div className="p-2 bg-muted/40 rounded-md text-xs text-muted-foreground flex items-center gap-2">
                 <Spinner className="w-3 h-3 text-primary" />
-                <span>{__('Loading latest authoritative details from ERPNext...')}</span>
+                <span>{__('Loading latest authoritative details from Maximus...')}</span>
               </div>
             )}
 
@@ -798,7 +798,7 @@ export const BomPage: React.FC = () => {
               </div>
 
               <div className="text-end">
-                <DeskLink doctype="BOM" name={selectedBom.name} label={__('Open in ERPNext Desk')} />
+                <DeskLink doctype="BOM" name={selectedBom.name} label={__('Open record')} />
               </div>
             </div>
 
@@ -974,7 +974,7 @@ export const BomPage: React.FC = () => {
 
             {/* Drawer Footer with Close and DeskLink */}
             <div className="pt-3 border-t border-hair flex items-center justify-between gap-2.5">
-              <DeskLink doctype="BOM" name={selectedBom.name} label={__('Open in ERPNext Desk')} />
+              <DeskLink doctype="BOM" name={selectedBom.name} label={__('Open record')} />
               <Button
                 type="button"
                 variant="outline"

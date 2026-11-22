@@ -315,7 +315,7 @@ def _store_warehouse_not_configured_blocker():
 	return {
 		"type": "store_warehouse_not_configured",
 		"message": _(
-			"URY Production Settings: Store Warehouse is not configured. Store "
+			"Restaurant Production Settings: Store Warehouse is not configured. Store "
 			"availability cannot be read, and the Purchase requirement cannot be "
 			"computed, until it is."
 		),

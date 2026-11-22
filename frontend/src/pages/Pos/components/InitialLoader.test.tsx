@@ -16,7 +16,7 @@ vi.mock("../i18n", () => ({
 describe("InitialLoader", () => {
   it("renders with correct text content", () => {
     render(<InitialLoader />);
-    expect(screen.getByText("Loading URY POS")).toBeInTheDocument();
+    expect(screen.getByText("Loading Maximus POS")).toBeInTheDocument();
     expect(screen.getByText("Please wait while we set up your POS")).toBeInTheDocument();
   });
 

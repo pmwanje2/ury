@@ -312,7 +312,7 @@ def _resolve_access(company, branch, department):
         assigned_branch = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "branch")
         if not assigned_branch or assigned_branch != branch:
             frappe.throw(
-                _("URY Manager may only view profitability for their assigned branch ({0})").format(
+                _("Restaurant Manager may only view profitability for their assigned branch ({0})").format(
                     DEPARTMENT_SCOPE_MISMATCH
                 ),
                 frappe.PermissionError,

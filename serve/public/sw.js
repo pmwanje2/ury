@@ -1,4 +1,4 @@
-/* URY Serve staff PWA service worker.
+/* Maximus Serve staff PWA service worker.
  *
  * Scope: /ury/serve/ only (registered at /ury/serve/sw.js).
  * Does not control /pos, /ury (management), or /ury/order.
@@ -17,7 +17,7 @@
 /* eslint-disable no-restricted-globals */
 
 const CACHE_PREFIX = "ury-serve-";
-const CACHE_NAME = "ury-serve-shell-v1";
+const CACHE_NAME = "ury-serve-shell-v2";
 const SCOPE_PREFIX = "/ury/serve";
 const OFFLINE_URL = "/assets/ury/serve/offline.html";
 
@@ -29,7 +29,7 @@ const PRECACHE_URLS = [
 	"/assets/ury/serve/icons/icon-192-maskable.png",
 	"/assets/ury/serve/icons/icon-512-maskable.png",
 	"/assets/ury/serve/icons/apple-touch-icon.png",
-	"/assets/ury/serve/ury.ico",
+	"/assets/ury/Images/maximus-mark.svg",
 ];
 
 /** Stale Serve caches only — never touch other apps' Cache Storage keys. */

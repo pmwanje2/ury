@@ -110,7 +110,7 @@
    "reqd": 1
   },
   {
-   "description": "Actively scopes KOT (kitchen order ticket) visibility to this unit's chef. Distinct from 'Department Manager' on URY Production Department, which is informational only and not currently enforced by any access logic.",
+   "description": "Actively scopes KOT (kitchen order ticket) visibility to this unit's chef. Distinct from 'Department Manager' on Maximus Production Department, which is informational only and not currently enforced by any access logic.",
    "fieldname": "lead_chef",
    "fieldtype": "Link",
    "label": "Lead Chef",

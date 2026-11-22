@@ -639,7 +639,7 @@ def create_or_get_posting_intent_for_ready(execution_doc, actor=None):
 				"Stock posting for this item is handled by Native POS in this "
 				"branch's current mode (POS Stock Authority V2 is not enabled), "
 				"so fulfilment posting cannot also post a Stock Entry for it. "
-				"Enable 'POS Stock Authority V2 Enabled' in URY Feature Flags "
+				"Enable 'POS Stock Authority V2 Enabled' in Restaurant Feature Flags "
 				"for this branch before fulfilment posting can be authoritative."
 			),
 		)

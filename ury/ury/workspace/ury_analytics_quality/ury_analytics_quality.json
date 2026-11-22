@@ -7,7 +7,7 @@
  "doctype": "Workspace",
  "icon": "shield-check",
  "is_hidden": 0,
- "label": "URY Analytics Quality",
+ "label": "Maximus Analytics Quality",
  "links": [
   {
    "hidden": 0,
@@ -54,6 +54,6 @@
   }
  ],
  "standard": 1,
- "title": "URY Analytics Quality",
+ "title": "Maximus Analytics Quality",
  "type": "Workspace"
 }

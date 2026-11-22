@@ -1,21 +1,21 @@
 from . import __version__ as app_version
 
 app_name = "ury"
-app_title = "URY"
+app_title = "Maximus"
 app_publisher = "Tridz Technologies Pvt. Ltd"
 app_description = "A Complete Restaurant Order Taking Software"
 app_email = "info@tridz.com"
 app_license = "MIT"
-app_logo_url = "/assets/ury/Images/ury-logo.jpg"
-app_icon_title = "URY"
+app_logo_url = "/assets/ury/Images/maximus-mark.svg"
+app_icon_title = "Maximus"
 required_apps = ["erpnext"]
 # Includes in <head>
 # ------------------
 add_to_apps_screen = [
   {
     "name": "ury",
-    "logo": "/assets/ury/Images/ury.png",
-    "title": "URY",
+    "logo": "/assets/ury/Images/maximus-mark.svg",
+    "title": "Maximus",
     "route": "/ury",
     "has_permission": "ury.permission.check_app_permission"
   }
@@ -69,7 +69,7 @@ doctype_js = {
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
 # Splash Image in Website Settings
-website_context = {"splash_image": "/assets/ury/Images/ury-logo.jpg"}
+website_context = {"splash_image": "/assets/ury/Images/maximus-mark.svg"}
 
 website_route_rules = [
     {"from_route": "/urypos/<path:app_path>", "to_route": "urypos"},

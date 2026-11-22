@@ -9,7 +9,7 @@
  "fields": [
   {
    "default": "0",
-   "description": "Controls whether the AI assistant (floating chat widget / ask bar) renders at all for users on the URY dashboard.",
+   "description": "Controls whether the AI assistant (floating chat widget / ask bar) renders at all for users on the Maximus dashboard.",
    "fieldname": "enabled",
    "fieldtype": "Check",
    "label": "AI Assistant Enabled"

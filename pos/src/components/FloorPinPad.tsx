@@ -93,7 +93,7 @@ export default function FloorPinPad({ offline = false }: { offline?: boolean }) 
     <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 p-4">
       <div className="w-full max-w-md rounded-lg bg-white px-6 py-8 shadow-md">
         <div className="mb-8 flex justify-center">
-          <img src="/assets/ury/pos/ury_pos.png" alt="URY POS" className="h-8 w-auto" />
+          <img src="/assets/ury/Images/maximus-mark.svg" alt="Maximus POS" className="h-8 w-auto" />
         </div>
         {offline && <p role="status" className="mb-4 text-center">{t('floor_pin.offline_notice')}</p>}
         {!usernameForm ? (

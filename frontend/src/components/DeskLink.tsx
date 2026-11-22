@@ -62,7 +62,7 @@ export const useDeskPermission = (doctype: string): DeskPermission | null => {
 export const DeskLink: React.FC<DeskLinkProps> = ({
   doctype,
   name,
-  label = 'Open in Desk',
+  label = 'Open record',
   iconOnly = false,
   className,
 }) => {
@@ -71,7 +71,7 @@ export const DeskLink: React.FC<DeskLinkProps> = ({
   if (!name || !permission?.read) return null;
 
   const href = buildDeskUrl(doctype, name);
-  const title = `${label}: ${doctype} ${name}`;
+  const title = `${label}: ${doctype.replace(/^URY /, '')} ${name}`;
 
   if (iconOnly) {
     return (

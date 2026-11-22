@@ -177,6 +177,7 @@ def _attach_ury_tools(agent_doc):
 # instructions still match one of these was never customised by an operator,
 # so it is safe to upgrade it to the current seed on migrate.
 _PREVIOUS_SEED_INSTRUCTION_HASHES = {
+	"7123884905ab01bdcdc10368e884c3c1050641cf4796f96b34a3c50c204958c8",
 	"50574c714975d082be155ac9fa77b483fa4302dbb3783ae8f95d4c6446a20d82",
 	"b3b0c720a4af878aba161803ba267990384afb3d888ccc0c72dc27bf8b392431",
 	"d672e29541e3da9eab665b7676d7f43fde5f894743bfe1340fc792936c910851",

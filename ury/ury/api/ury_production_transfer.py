@@ -153,7 +153,7 @@ def generate_transfer_material_request_for_production_plan(production_plan):
 	sales_plan = plan_doc.get(PP_SALES_PLAN_FIELD)
 	if not sales_plan:
 		frappe.throw(
-			_("{0} has no linked URY Sales Plan; it is not a department production plan.").format(production_plan),
+			_("{0} has no linked Restaurant Sales Plan; it is not a department production plan.").format(production_plan),
 			frappe.ValidationError,
 		)
 	department = plan_doc.get(PP_DEPARTMENT_FIELD)
@@ -377,7 +377,7 @@ def execute_store_to_department_transfer(production_plan):
 	sales_plan = plan_doc.get(PP_SALES_PLAN_FIELD)
 	if not sales_plan:
 		frappe.throw(
-			_("{0} has no linked URY Sales Plan; it is not a department production plan.").format(production_plan),
+			_("{0} has no linked Restaurant Sales Plan; it is not a department production plan.").format(production_plan),
 			frappe.ValidationError,
 		)
 	department = plan_doc.get(PP_DEPARTMENT_FIELD)
@@ -538,7 +538,7 @@ def _store_warehouse_not_configured_blocker():
 	return {
 		"type": "store_warehouse_not_configured",
 		"message": _(
-			"URY Production Settings: Store Warehouse is not configured. Store stock cannot be "
+			"Restaurant Production Settings: Store Warehouse is not configured. Store stock cannot be "
 			"read or transferred until it is."
 		),
 	}
