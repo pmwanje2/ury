@@ -9,6 +9,9 @@ import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
+import { useMenuAvailability } from '../lib/use-menu-availability';
+
+const EMPTY_MENU: Array<{ item: string }> = [];
 
 export default function POS({ onCashierCheck }: React.ComponentProps<typeof OrderPanel>) {
   const {
@@ -20,7 +23,10 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
     error,
     isMenuInteractionDisabled,
     isInitializing,
+    menuItems,
+    posProfile,
   } = usePOSStore();
+  const { availabilityMap } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -132,9 +138,9 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
           </div>
         </div>
 
-        <MenuList onItemClick={handleItemClick} />
+        <MenuList onItemClick={handleItemClick} availabilityMap={availabilityMap} />
       </div>
-      <OrderPanel onCashierCheck={onCashierCheck} />
+      <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
     </div>
   );

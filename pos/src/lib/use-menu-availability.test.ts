@@ -1,9 +1,36 @@
-import { describe, expect, it } from 'vitest';
+import { renderHook, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import {
   getAvailabilityTier,
   sortMenuItemsByAvailability,
+  useMenuAvailability,
 } from './use-menu-availability';
-import { ItemAvailability } from './availability-api';
+import type { ItemAvailability } from './availability-api';
+
+const { getItemAvailability, getMenuAvailability } = vi.hoisted(() => ({
+  getItemAvailability: vi.fn(),
+  getMenuAvailability: vi.fn(),
+}));
+
+vi.mock('./availability-api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./availability-api')>(),
+  getItemAvailability,
+  getMenuAvailability,
+}));
+vi.mock('./realtime', () => ({ getRealtimeSocket: async () => ({ on: vi.fn(), off: vi.fn() }) }));
+
+it('loads 258 items with one batch call and no per-item calls', async () => {
+  const items = Array.from({ length: 258 }, (_, index) => ({ item: `ITEM-${String(index).padStart(3, '0')}` }));
+  const availability = Object.fromEntries(items.map(({ item }) =>
+    [item, { item_code: item, sellable: true, available_qty: null, reason_code: 'AVAILABLE' }]));
+  getMenuAvailability.mockResolvedValue(availability);
+  getItemAvailability.mockImplementation(async ({ item_code }) => availability[item_code]);
+  const { result } = renderHook(() => useMenuAvailability(items, 'B1', 'C1'));
+
+  await waitFor(() => expect(Object.keys(result.current.availabilityMap)).toHaveLength(258));
+  expect(getItemAvailability).not.toHaveBeenCalled();
+  expect(getMenuAvailability).toHaveBeenCalledExactlyOnceWith('B1', 'C1', items.map(({ item }) => item));
+});
 
 describe('use-menu-availability sorting', () => {
   const createAvailability = (overrides: Partial<ItemAvailability>): ItemAvailability => ({

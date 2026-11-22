@@ -43,6 +43,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
   const {
     context,
     menu,
+    availability,
     order,
     orderStatus,
     cart,
@@ -338,8 +339,7 @@ function LandscapeKioskLayout({ initialContext }: LayoutProps) {
             gridClassName="grid grid-cols-4 gap-6 xl:grid-cols-5"
             cardClassName="flex min-w-[180px] flex-col overflow-hidden rounded-2xl border text-left text-lg transition active:scale-[0.97]"
             imageClassName="h-40 w-full object-cover"
-            branch={context?.restaurant}
-            company={context?.company}
+            availability={availability}
           />
 
           {visibleMenu.length === 0 && (

@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
 import { MenuItemCard } from '@ury/ui'
 import { formatCurrency } from '@ury/core'
 import {
   getAvailabilityMessage,
-  getItemAvailability,
+  isUnavailable,
   type ItemAvailability,
 } from '../lib/availability-api'
 
@@ -12,10 +11,8 @@ interface Props {
   price: number
   imageUrl: string | null
   course?: string
-  item: string
   disabled?: boolean
-  branch?: string | null
-  company?: string | null
+  availability?: ItemAvailability
   onClick?: () => void
   onConfigure?: () => void
   quantity?: number
@@ -26,7 +23,7 @@ interface Props {
 }
 
 function getAvailabilityTag(
-  availability: ItemAvailability | null,
+  availability: ItemAvailability | undefined,
   unavailableMessage: string | null
 ): {
   variant: 'tagDestructive' | 'tagWarning' | 'tagSuccess'
@@ -35,13 +32,10 @@ function getAvailabilityTag(
 } | null {
   if (!availability) return null
 
-  if (
-    !availability.sellable ||
-    (availability.available_qty != null && availability.available_qty <= 0)
-  ) {
+  if (unavailableMessage) {
     return {
       variant: 'tagDestructive',
-      text: unavailableMessage || 'Unavailable',
+      text: unavailableMessage,
       showDot: false,
     }
   }
@@ -55,6 +49,7 @@ function getAvailabilityTag(
   }
 
   if (availability.available_qty == null) {
+    if (availability.stock_policy_mode === 'NATIVE' && availability.source === 'CATALOG') return null
     return { variant: 'tagSuccess', text: 'Available', showDot: true }
   }
 
@@ -71,10 +66,8 @@ export default function ServeMenuCard({
   price,
   imageUrl,
   course,
-  item,
   disabled,
-  branch,
-  company,
+  availability,
   onClick,
   onConfigure,
   quantity,
@@ -83,32 +76,7 @@ export default function ServeMenuCard({
   incrementDisabled,
   decrementDisabled,
 }: Props) {
-  const [availability, setAvailability] = useState<ItemAvailability | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    if (!branch || !company || !item) {
-      setAvailability(null)
-      return
-    }
-    getItemAvailability({ item_code: item, branch, company })
-      .then((result) => {
-        if (!cancelled) setAvailability(result)
-      })
-      .catch(() => {
-        if (!cancelled) setAvailability(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [item, branch, company])
-
-  // `available_qty == null` means unconstrained — never treat as out of stock.
-  const isUnavailable =
-    !!availability &&
-    (!availability.sellable ||
-      (availability.available_qty != null && availability.available_qty <= 0))
-  const unavailableMessage = isUnavailable
+  const unavailableMessage = isUnavailable(availability)
     ? getAvailabilityMessage(availability?.reason_code)
     : null
   const availabilityTag = getAvailabilityTag(availability, unavailableMessage)

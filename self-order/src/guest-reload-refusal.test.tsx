@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { call } from '@ury/core'
 import MobileQRLayout from './layouts/MobileQRLayout'
+import { t } from './i18n'
 import type { OrderingContext } from './lib/api'
 
 // Loaded lazily: without the guest i18n module the page stays as it is, so each
@@ -51,6 +52,9 @@ beforeEach(async () => {
   })
   reads = async (path, args) => {
     if (path.endsWith('get_customer_menu')) return { message: menu }
+    if (path.endsWith('get_customer_menu_availability')) {
+      return { message: { Soup: { item_code: 'Soup', sellable: true, available_qty: null, reason_code: 'AVAILABLE' } } }
+    }
     if (path.endsWith('get_customer_order')) return { message: args?.session === 'session-a' ? order : emptyOrder }
     return writes(path, args)
   }
@@ -204,7 +208,7 @@ describe('translated ERP refusals', () => {
     ['sw', 'Tafadhali mwombe mhudumu afungue meza yako kwanza.', 'Weka oda'],
     ['lg', 'Nsaba osabe omuweereza aggulawo emmeeza yo okusooka.', 'Teeka oda'],
   ]
-  it.each(refusals)('shows the %s server sentence once without the legacy wrapper', async (language, sentence, placeOrder) => {
+  it.each(refusals)('uses the %s catalog on submit instead of server messages', async (language, sentence, placeOrder) => {
     await initI18n(language, { setCookie() {} })
     writes.mockRejectedValue({ _server_messages: JSON.stringify([
       JSON.stringify({ message: `[QR-WAITER-OPENS-TABLE] ${sentence}` }),
@@ -212,18 +216,21 @@ describe('translated ERP refusals', () => {
     ]) })
     await render()
     await placeSoup(placeOrder)
-    expect(container.textContent!.split(sentence)).toHaveLength(2)
+    expect(writes).toHaveBeenCalledWith('ury.ury.api.self_ordering.add_customer_items', expect.anything())
+    expect(container.textContent).toContain(t('errors.place_order'))
+    expect(container.textContent).not.toContain(sentence)
     expect(container.textContent).not.toContain('Error while placing order')
     expect(container.textContent).not.toContain('QR-WAITER-OPENS-TABLE')
     expect(button(placeOrder)).toBeDefined()
   })
 
-  it.each(refusals)('removes the legacy wrapper from an exception-only %s refusal', async (language, sentence, placeOrder) => {
+  it.each(refusals)('uses the %s catalog on submit for an exception-only refusal', async (language, sentence, placeOrder) => {
     await initI18n(language, { setCookie() {} })
     writes.mockRejectedValue({ exception: `frappe.exceptions.ValidationError: Error while placing order: [QR-WAITER-OPENS-TABLE] ${sentence}` })
     await render()
     await placeSoup(placeOrder)
-    expect(container.textContent).toContain(sentence)
+    expect(container.textContent).toContain(t('errors.place_order'))
+    expect(container.textContent).not.toContain(sentence)
     expect(container.textContent).not.toContain('Error while placing order')
   })
 
@@ -256,13 +263,14 @@ describe('translated ERP refusals', () => {
     expect(container.textContent).not.toContain('URY-GUEST-BILL-DISABLED')
   })
 
-  it('preserves distinct validation reasons rather than taking only the first message', async () => {
+  it('never renders raw validation messages from order submission', async () => {
     writes.mockRejectedValue({ _server_messages: JSON.stringify([
       JSON.stringify({ message: 'Please ask staff.' }), JSON.stringify({ message: 'Your bill is printed.' }),
     ]) })
     await render()
     await placeSoup('Place Order')
-    expect(container.textContent).toContain('Please ask staff.')
-    expect(container.textContent).toContain('Your bill is printed.')
+    expect(container.textContent).toContain(t('errors.place_order'))
+    expect(container.textContent).not.toContain('Please ask staff.')
+    expect(container.textContent).not.toContain('Your bill is printed.')
   })
 })

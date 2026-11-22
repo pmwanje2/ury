@@ -114,6 +114,8 @@ class OrderingCases:
 
     @staticmethod
     def get_value(doctype, filters, field, *, for_update=False):
+        if doctype == "Item" and field == "disabled":
+            return 0
         if doctype == "Workflow":
             return None  # the fixture site has no Item Price release workflow
         return {"ury_offline_capture": 1, "item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",

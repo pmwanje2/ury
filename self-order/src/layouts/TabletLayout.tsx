@@ -37,6 +37,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
   const {
     context,
     menu,
+    availability,
     order,
     orderStatus,
     cart,
@@ -262,8 +263,7 @@ function TabletLayout({ initialContext }: LayoutProps) {
                 gridClassName="grid grid-cols-3 gap-4 lg:grid-cols-4"
                 cardClassName="flex min-w-[150px] flex-col overflow-hidden rounded-xl border text-left transition active:scale-[0.98]"
                 imageClassName="h-32 w-full object-cover"
-                branch={context?.restaurant}
-                company={context?.company}
+                availability={availability}
               />
             </div>
           )}

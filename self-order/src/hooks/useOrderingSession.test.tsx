@@ -22,14 +22,18 @@ vi.mock('../lib/api', () => ({
 }))
 
 const getItemAvailabilityMock = vi.fn()
+const getMenuAvailabilityMock = vi.fn()
 const getAvailabilityMessageMock = vi.fn((reasonCode: string) => `unavailable: ${reasonCode}`)
 
-vi.mock('../lib/availability', () => ({
+vi.mock('../lib/availability', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/availability')>(),
   getItemAvailability: (...args: any[]) => getItemAvailabilityMock(...args),
-  getAvailabilityMessage: (...args: any[]) => getAvailabilityMessageMock(...args),
+  getMenuAvailability: (...args: any[]) => getMenuAvailabilityMock(...args),
+  getAvailabilityMessage: (reasonCode: string) => getAvailabilityMessageMock(reasonCode),
 }))
 
 import { useOrderingSession } from './useOrderingSession'
+import { t } from '../i18n'
 import type { CustomerOrder, MenuItem, OrderingContext } from '../lib/api'
 
 const buildContext = (overrides: Partial<OrderingContext> = {}): OrderingContext => ({
@@ -107,6 +111,10 @@ describe('useOrderingSession', () => {
     createPaymentRequestMock.mockReset()
     getStoredContextMock.mockReset()
     getItemAvailabilityMock.mockReset()
+    getMenuAvailabilityMock.mockReset().mockResolvedValue({
+      COFFEE: { item_code: 'COFFEE', sellable: true, available_qty: null, reason_code: 'AVAILABLE' },
+      TEA: { item_code: 'TEA', sellable: true, available_qty: null, reason_code: 'AVAILABLE' },
+    })
     getAvailabilityMessageMock.mockClear()
     sessionStorage.clear()
     vi.stubGlobal('location', { ...window.location, search: '' })
@@ -232,6 +240,34 @@ describe('useOrderingSession', () => {
   // order-submit time. These tests pin down exactly what the hook does and
   // does not check.
   describe('submitCart availability re-check (B04 cart-capacity risk)', () => {
+    it('submitCart never calls the staff availability endpoint', async () => {
+      const view = await renderReady()
+      const coffee = { item_code: 'COFFEE', sellable: true, available_qty: null, reason_code: 'AVAILABLE' }
+      getItemAvailabilityMock.mockResolvedValue(coffee)
+      getMenuAvailabilityMock.mockResolvedValue({ COFFEE: coffee })
+      addItemsMock.mockResolvedValueOnce(buildOrder())
+      act(() => view.result.current.addToCart(buildMenuItem()))
+      await act(async () => {
+        expect(await view.result.current.submitCart()).toBe(true)
+      })
+      expect(getItemAvailabilityMock).not.toHaveBeenCalled()
+      expect(getMenuAvailabilityMock).toHaveBeenCalledExactlyOnceWith('SESSION-1')
+    })
+
+    it('submitCart shows catalog copy when the availability check fails', async () => {
+      const view = await renderReady()
+      const error = new Error('Frappe: Function ury.ury.api.ury_availability.get_item_availability is not whitelisted')
+      getItemAvailabilityMock.mockRejectedValueOnce(error)
+      getMenuAvailabilityMock.mockRejectedValueOnce(error)
+      act(() => view.result.current.addToCart(buildMenuItem()))
+      await act(async () => {
+        expect(await view.result.current.submitCart()).toBe(false)
+      })
+      expect(view.result.current.error).toBe(t('errors.place_order'))
+      expect(view.result.current.error).not.toMatch(/whitelisted|ury|frappe/i)
+      expect(addItemsMock).not.toHaveBeenCalled()
+    })
+
     it('does nothing and returns false when the cart is empty', async () => {
       const view = await renderReady()
       let ok: boolean | undefined
@@ -243,7 +279,7 @@ describe('useOrderingSession', () => {
       expect(addItemsMock).not.toHaveBeenCalled()
     })
 
-    it('re-checks availability with skipCache:true for every cart line before submitting', async () => {
+    it('uses one live batch to re-check all cart lines before submitting', async () => {
       const context = buildContext({ restaurant: 'Kozhikode', company: 'URY' })
       const view = await renderReady({ context })
       const coffee = buildMenuItem({ item: 'COFFEE' })
@@ -253,7 +289,6 @@ describe('useOrderingSession', () => {
         view.result.current.addToCart(tea)
       })
 
-      getItemAvailabilityMock.mockResolvedValue({ sellable: true, reason_code: 'AVAILABLE' })
       addItemsMock.mockResolvedValueOnce(buildOrder({ invoice: 'INV-1' }))
 
       let ok: boolean | undefined
@@ -262,11 +297,7 @@ describe('useOrderingSession', () => {
       })
 
       expect(ok).toBe(true)
-      expect(getItemAvailabilityMock).toHaveBeenCalledTimes(2)
-      expect(getItemAvailabilityMock).toHaveBeenCalledWith(
-        { item_code: 'COFFEE', branch: 'Kozhikode', company: 'URY' },
-        { skipCache: true },
-      )
+      expect(getMenuAvailabilityMock).toHaveBeenCalledExactlyOnceWith('SESSION-1')
       expect(addItemsMock).toHaveBeenCalledWith('SESSION-1', [
         { item: 'COFFEE', qty: 1, comment: undefined },
         { item: 'TEA', qty: 1, comment: undefined },
@@ -285,7 +316,7 @@ describe('useOrderingSession', () => {
         view.result.current.addToCart(coffee)
       })
 
-      getItemAvailabilityMock.mockResolvedValueOnce({ sellable: false, reason_code: 'NO_CAPACITY' })
+      getMenuAvailabilityMock.mockResolvedValueOnce({ COFFEE: { sellable: false, reason_code: 'NO_CAPACITY' } })
 
       let ok: boolean | undefined
       await act(async () => {
@@ -300,7 +331,7 @@ describe('useOrderingSession', () => {
       expect(view.result.current.cart[coffee.item].qty).toBe(4)
     })
 
-    it('skips the availability re-check entirely when context has no restaurant/company', async () => {
+    it('still verifies the session when context has no restaurant/company', async () => {
       const context = buildContext({ restaurant: '', company: '' })
       const view = await renderReady({ context })
       act(() => view.result.current.addToCart(buildMenuItem()))
@@ -311,13 +342,13 @@ describe('useOrderingSession', () => {
       })
 
       expect(getItemAvailabilityMock).not.toHaveBeenCalled()
+      expect(getMenuAvailabilityMock).toHaveBeenCalledExactlyOnceWith('SESSION-1')
       expect(addItemsMock).toHaveBeenCalled()
     })
 
     it('clears the cart and updates the order on success', async () => {
       const view = await renderReady()
       act(() => view.result.current.addToCart(buildMenuItem()))
-      getItemAvailabilityMock.mockResolvedValue({ sellable: true, reason_code: 'AVAILABLE' })
       const updated = buildOrder({ invoice: 'INV-9' })
       addItemsMock.mockResolvedValueOnce(updated)
 
@@ -333,7 +364,6 @@ describe('useOrderingSession', () => {
     it('surfaces a friendly error and never throws when addItems rejects', async () => {
       const view = await renderReady()
       act(() => view.result.current.addToCart(buildMenuItem()))
-      getItemAvailabilityMock.mockResolvedValue({ sellable: true, reason_code: 'AVAILABLE' })
       addItemsMock.mockRejectedValueOnce(new Error('server down'))
 
       let ok: boolean | undefined
@@ -342,7 +372,7 @@ describe('useOrderingSession', () => {
       })
 
       expect(ok).toBe(false)
-      expect(view.result.current.error).toBe('server down')
+      expect(view.result.current.error).toBe(t('errors.place_order'))
       expect(view.result.current.submitting).toBe(false)
       // Failed submission must not silently clear what the customer picked.
       expect(Object.keys(view.result.current.cart)).toHaveLength(1)

@@ -37,6 +37,7 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
       'ury.ury.api.test_shown_price_is_billed',
       'ury.ury.api.test_kds_display_window',
       'ury.tests.unit.test_backfill_invoice_employee_attribution',
+      'ury.ury.api.test_availability_tiers',
     ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',
   ]);
 });

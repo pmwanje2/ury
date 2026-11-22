@@ -16,11 +16,13 @@ and its branch-isolation guarantee.
 """
 
 from unittest.mock import patch
+from uuid import uuid4
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from ury.ury.api.ury_availability import _resolve_plan_remaining, get_item_availability
+from ury.ury.api.ury_stock_policy import POLICY_ALL_OFF, StockPolicy
 
 MODULE = "ury.ury.api.ury_availability"
 
@@ -49,7 +51,47 @@ def _config(**overrides):
     return base
 
 
-class TestGetItemAvailabilityPreProduced(FrappeTestCase):
+class TestTier1NativeAvailability(FrappeTestCase):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(frappe.set_user, frappe.session.user)
+        frappe.set_user("Administrator")
+        # Seed only the catalog in the isolated test transaction. No
+        # production configuration, plan, policy row or stock is necessary.
+        self.item = frappe.get_doc({
+            "doctype": "Item",
+            "name": f"_Test Native Availability {uuid4().hex}",
+            "disabled": 0,
+        })
+        self.item.item_code = self.item.name
+        self.item.item_name = "Test Native Availability"
+        self.item.db_insert()
+        self.enterContext(patch(f"{MODULE}.get_branch_stock_policy", return_value=POLICY_ALL_OFF, create=True))
+
+    def test_enabled_item_is_sellable_without_production_config(self):
+        result = get_item_availability(self.item.name, "Branch A", "Company A")
+        self.assertEqual(result["reason_code"], "AVAILABLE")
+        self.assertTrue(result["sellable"])
+        self.assertIsNone(result["available_qty"])
+
+    def test_disabled_item_cannot_be_sold(self):
+        frappe.db.set_value("Item", self.item.name, "disabled", 1)
+        result = get_item_availability(self.item.name, "Branch A", "Company A")
+        self.assertEqual(result["reason_code"], "ITEM_DISABLED")
+        self.assertFalse(result["sellable"])
+        self.assertEqual(result["available_qty"], 0)
+
+
+class Tier2AvailabilityCase(FrappeTestCase):
+    """Keep the existing engine oracles opted into Tier 2, with enabled items."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch(f"{MODULE}.get_branch_stock_policy", return_value=StockPolicy(True, False, False), create=True))
+        self.enterContext(patch(f"{MODULE}._catalog_gate", return_value=True, create=True))
+
+
+class TestGetItemAvailabilityPreProduced(Tier2AvailabilityCase):
 
     @patch(f"{MODULE}._resolve_plan_remaining")
     @patch(f"{MODULE}.project_fg_allocatable")
@@ -150,7 +192,7 @@ class TestGetItemAvailabilityPreProduced(FrappeTestCase):
         self.assertFalse(result["sellable"])
 
 
-class TestGetItemAvailabilityMadeToOrder(FrappeTestCase):
+class TestGetItemAvailabilityMadeToOrder(Tier2AvailabilityCase):
 
     @patch(f"{MODULE}.compile_bom_vector")
     @patch(f"{MODULE}._resolve_production_config")
@@ -224,7 +266,7 @@ class TestGetItemAvailabilityMadeToOrder(FrappeTestCase):
         self.assertEqual(result["blocking_component"], "PATTY")
 
 
-class TestGetItemAvailabilityFailClosed(FrappeTestCase):
+class TestGetItemAvailabilityFailClosed(Tier2AvailabilityCase):
 
     @patch(f"{MODULE}._resolve_production_config")
     def test_missing_department(self, mock_config):
@@ -290,7 +332,7 @@ class TestGetItemAvailabilityFailClosed(FrappeTestCase):
             get_item_availability("ITEM-CAKE", "Branch A", "")
 
 
-class TestGetItemAvailabilityBranchIsolation(FrappeTestCase):
+class TestGetItemAvailabilityBranchIsolation(Tier2AvailabilityCase):
 
     @patch(f"{MODULE}._resolve_plan_remaining")
     @patch(f"{MODULE}.project_fg_allocatable")
@@ -353,7 +395,7 @@ class TestGetItemAvailabilityBranchIsolation(FrappeTestCase):
         self.assertIn(("ITEM-CAKE", "Kitchen Warehouse B - URY", "Company A"), fg_calls)
 
 
-class TestGetItemAvailabilityDirectRetail(FrappeTestCase):
+class TestGetItemAvailabilityDirectRetail(Tier2AvailabilityCase):
 
     @patch(f"{MODULE}.get_allocatable_qty")
     @patch(f"{MODULE}._resolve_production_config")
@@ -371,7 +413,7 @@ class TestGetItemAvailabilityDirectRetail(FrappeTestCase):
         self.assertEqual(result["production_policy"], "DIRECT_RETAIL")
 
 
-class TestGetItemAvailabilityBundle(FrappeTestCase):
+class TestGetItemAvailabilityBundle(Tier2AvailabilityCase):
 
     @patch(f"{MODULE}.project_fg_allocatable")
     @patch(f"{MODULE}._fetch_bundle_children")
@@ -440,7 +482,7 @@ class TestGetItemAvailabilityBundle(FrappeTestCase):
         self.assertEqual(result["blocking_component"], "ITEM-CHILD-2")
 
 
-class TestAvailabilityProductionContextIntegration(FrappeTestCase):
+class TestAvailabilityProductionContextIntegration(Tier2AvailabilityCase):
     @patch(f"{MODULE}.project_fg_allocatable")
     @patch(f"{MODULE}._resolve_plan_remaining")
     @patch(
@@ -498,7 +540,7 @@ class TestAvailabilityProductionContextIntegration(FrappeTestCase):
         )
 
 
-class TestControlledBySalesPlanPolarity(FrappeTestCase):
+class TestControlledBySalesPlanPolarity(Tier2AvailabilityCase):
     """Regression coverage for B-1: `controlled_by_sales_plan` doctype default
     must be 1 (mandatory plan gating), and the code must keep failing closed
     for existing/default rows when no plan is active."""
@@ -623,7 +665,7 @@ class TestControlledBySalesPlanPolarity(FrappeTestCase):
         self.assertEqual(result["available_qty"], 50)
 
 
-class TestAvailabilityModeOverride(FrappeTestCase):
+class TestAvailabilityModeOverride(Tier2AvailabilityCase):
     """Regression coverage for B-2: the 'Always Available' override must
     never force sellable over a structural/config error, but must be able to
     override a purely commercial not-sellable reason (e.g. FG_OUT_OF_STOCK)."""
@@ -668,7 +710,7 @@ class TestAvailabilityModeOverride(FrappeTestCase):
         self.assertFalse(result["sellable"])
 
 
-class TestStockAvailableAvailabilityMode(FrappeTestCase):
+class TestStockAvailableAvailabilityMode(Tier2AvailabilityCase):
     """Coverage for the "Stock Available" availability_mode: an availability
     override (not a production-policy change) that bypasses every Sales Plan
     gate -- no active plan required, exhausted plans ignored, regardless of

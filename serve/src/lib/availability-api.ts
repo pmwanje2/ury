@@ -40,6 +40,20 @@ export interface ItemAvailability {
   blocking_component: string | null
   reason_code: AvailabilityReasonCode | string
   as_of: string
+  stock_policy_mode?: 'NATIVE' | 'RESERVATION_CONTROLLED'
+  source?: 'CATALOG' | 'PRODUCTION' | 'MANUAL' | 'COUNT_DOWN'
+}
+
+export type MenuAvailability = Record<string, ItemAvailability>
+
+export const isUnavailable = (entry?: ItemAvailability | null): boolean =>
+  !!entry && (!entry.sellable || (entry.available_qty != null && entry.available_qty <= 0))
+
+export async function getMenuAvailability(branch: string, company: string, itemCodes: string[]): Promise<MenuAvailability> {
+  const response = await call.post<{ message: { items: MenuAvailability } }>(
+    'ury.ury.api.ury_availability.get_menu_availability', { branch, company, item_codes: itemCodes },
+  )
+  return response.message.items
 }
 
 export interface GetItemAvailabilityParams {
@@ -50,6 +64,10 @@ export interface GetItemAvailabilityParams {
 }
 
 export const AVAILABILITY_REASON_MESSAGES: Record<string, string> = {
+  ITEM_DISABLED: 'Currently unavailable',
+  MENU_ITEM_DISABLED: 'Currently unavailable',
+  SOLD_OUT_MANUAL: 'Sold out',
+  COUNT_EXHAUSTED: 'Sold out',
   AVAILABLE: 'Available',
   NOT_PRODUCED: 'Not available today',
   PLAN_EXHAUSTED: 'Sold out',

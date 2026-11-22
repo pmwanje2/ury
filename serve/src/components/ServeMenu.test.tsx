@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { menuItem, storeState, storeMocks } = vi.hoisted(() => {
+const { menuItem, storeState, storeMocks, getItemAvailability, getMenuAvailability } = vi.hoisted(() => {
   const menuItem = {
     id: 'ITEM-BIR',
     item: 'ITEM-BIR',
@@ -27,17 +27,21 @@ const { menuItem, storeState, storeMocks } = vi.hoisted(() => {
     setQuickFilter: vi.fn(),
   }
   const storeState = {
+    menuItems: [menuItem],
     activeOrders: [] as Array<
       typeof menuItem & { quantity: number; uniqueId: string; invoiceItemName?: string }
     >,
     selectedItem: null as typeof menuItem | null,
   }
-  return { menuItem, storeState, storeMocks }
+  return {
+    menuItem, storeState, storeMocks, getMenuAvailability: vi.fn().mockResolvedValue({}),
+    getItemAvailability: vi.fn().mockResolvedValue({ sellable: true, available_qty: 99 }),
+  }
 })
 
 vi.mock('../store/serve-store', () => ({
   useServeStore: () => ({
-    menuItems: [menuItem],
+    menuItems: storeState.menuItems,
     menuLoading: false,
     selectedCategory: '',
     setSelectedCategory: storeMocks.setSelectedCategory,
@@ -62,8 +66,10 @@ vi.mock('../store/serve-store', () => ({
   }),
 }))
 
-vi.mock('../lib/availability-api', () => ({
-  getItemAvailability: vi.fn().mockResolvedValue({ sellable: true, available_qty: 99 }),
+vi.mock('../lib/availability-api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/availability-api')>(),
+  getItemAvailability,
+  getMenuAvailability,
   getAvailabilityMessage: vi.fn(),
 }))
 
@@ -102,6 +108,9 @@ function dispatchPointer(
 
 describe('ServeMenu quantity ergonomics', () => {
   beforeEach(() => {
+    storeState.menuItems = [menuItem]
+    getItemAvailability.mockClear()
+    getMenuAvailability.mockClear()
     storeState.activeOrders = []
     storeState.selectedItem = null
     storeMocks.addToOrder.mockReset()
@@ -113,6 +122,14 @@ describe('ServeMenu quantity ergonomics', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('loads 50 items with one batch call and zero per-card calls', async () => {
+    const codes = Array.from({ length: 50 }, (_, i) => `ITEM-${String(i).padStart(2, '0')}`)
+    storeState.menuItems = codes.map((item) => ({ ...menuItem, id: item, item }))
+    await act(async () => { render(<ServeMenu canAddItems />) })
+    expect(getItemAvailability).not.toHaveBeenCalled()
+    expect(getMenuAvailability).toHaveBeenCalledExactlyOnceWith('BR', 'CO', codes)
   })
 
   it('single tap quick-adds exactly once and Options overlay is gone', async () => {

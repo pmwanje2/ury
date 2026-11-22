@@ -4,13 +4,17 @@ import MenuCard from './MenuCard';
 import { Spinner } from '@ury/ui';
 import { cn } from '@ury/ui';
 import { t } from '../i18n';
-import { useMenuAvailability, sortMenuItemsByAvailability } from '../lib/use-menu-availability';
+import { sortMenuItemsByAvailability } from '../lib/use-menu-availability';
+import type { MenuAvailability } from '../lib/availability-api';
+
+const EMPTY_AVAILABILITY: MenuAvailability = {};
 
 interface MenuListProps {
   onItemClick: (item: any) => void;
+  availabilityMap?: MenuAvailability;
 }
 
-const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
+const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPTY_AVAILABILITY }) => {
   const {
     menuItems,
     menuLoading,
@@ -20,19 +24,12 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
     quickFilter,
     fetchMenuItems,
     isMenuInteractionDisabled,
-    isOrderInteractionDisabled,
-    posProfile
+    isOrderInteractionDisabled
   } = usePOSStore();
 
   useEffect(() => {
     fetchMenuItems();
   }, [fetchMenuItems]);
-
-  const { availabilityMap } = useMenuAvailability(
-    menuItems,
-    posProfile?.branch,
-    posProfile?.company
-  );
 
   const filteredItems = useMemo(() => {
     const filtered = menuItems.filter(item => {
@@ -89,8 +86,6 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
                 item={item.item}
                 onClick={() => onItemClick(item)}
                 disabled={isInteractionDisabled}
-                branch={posProfile?.branch}
-                company={posProfile?.company}
                 availability={availabilityMap[item.item]}
               />
             ))}
@@ -101,4 +96,4 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick }) => {
   );
 };
 
-export default MenuList; 
+export default MenuList;

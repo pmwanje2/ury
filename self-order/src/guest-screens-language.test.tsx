@@ -56,6 +56,9 @@ beforeEach(async () => {
   let order: unknown = { invoice: null, items: [], grand_total: 0, billed: false }
   vi.spyOn(call, 'post').mockImplementation(async (path: string) => {
     if (path.endsWith('get_customer_menu')) return { message: menu }
+    if (path.endsWith('get_customer_menu_availability')) {
+      return { message: { Soup: { item_code: 'Soup', sellable: true, available_qty: null, reason_code: 'AVAILABLE' } } }
+    }
     if (path.endsWith('get_customer_order')) return { message: order }
     if (path.endsWith('add_customer_items')) { order = placed; return { message: placed } }
     if (path.endsWith('get_order_status')) return { message: status }

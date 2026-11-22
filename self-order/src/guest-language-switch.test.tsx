@@ -33,7 +33,6 @@ const context: OrderingContext = {
   session: 'synthetic-session',
   source: 'QR Table',
   restaurant: 'Restaurant A',
-  // No company: the display-only availability lookup stays off in these tests.
   company: '',
   table: 'T-07',
   layout: 'Mobile',
@@ -79,6 +78,9 @@ beforeEach(async () => {
   })
   vi.spyOn(call, 'post').mockImplementation(async (path: string, args?: Record<string, unknown>) => {
     if (String(path).endsWith('get_customer_menu')) return { message: menu }
+    if (String(path).endsWith('get_customer_menu_availability')) {
+      return { message: { Soup: { item_code: 'Soup', sellable: true, available_qty: null, reason_code: 'AVAILABLE' } } }
+    }
     if (String(path).endsWith('get_customer_order')) return { message: order }
     return writes(path, args)
   })
@@ -232,7 +234,7 @@ describe('guest language switch', () => {
     expect(button('Weka oda')).toBeDefined()
   })
 
-  it('keeps the server refusal text when the language changes', async () => {
+  it('keeps the refusal private and retranslates its catalog fallback', async () => {
     writes.mockRejectedValue({
       _server_messages: JSON.stringify([
         JSON.stringify({ message: '[QR-WAITER-OPENS-TABLE] Please ask a waiter to open your table first.' }),
@@ -241,11 +243,13 @@ describe('guest language switch', () => {
     await render(<MobileQRLayout initialContext={context} />)
     await addSoupAndCheckout()
     await click(button('Place Order'), 'Place Order')
-    expect(container.textContent).toContain('Please ask a waiter to open your table first.')
+    expect(writes).toHaveBeenCalledWith('ury.ury.api.self_ordering.add_customer_items', expect.anything())
+    expect(container.textContent).toContain('Could not place the order. Please try again.')
+    expect(container.textContent).not.toContain('Please ask a waiter to open your table first.')
     expect(container.textContent).not.toContain('[QR-WAITER-OPENS-TABLE]')
     await click(button('Kiswahili'), 'Kiswahili')
-    expect(container.textContent).toContain('Please ask a waiter to open your table first.')
-    expect(container.textContent).not.toContain('Imeshindwa kuweka oda')
+    expect(container.textContent).toContain('Imeshindwa kuweka oda. Tafadhali jaribu tena.')
+    expect(container.textContent).not.toContain('Please ask a waiter to open your table first.')
     expect(button('Weka oda')).toBeDefined()
   })
 

@@ -48,6 +48,7 @@ from ury.ury.doctype.ury_order.ury_order import (
     price_items_for_invoice,
 )
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
+from ury.ury.api.ury_availability import _batch_availability, _catalog_gate
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_order_reservation_service import reconcile_order_reservations
 from ury.ury.api.ury_stock_policy import get_branch_stock_policy
@@ -289,7 +290,7 @@ def _refuse_session():
     frappe.throw(_("Ordering session expired or invalid. Please rescan the QR code."), URYGuestSessionInvalid)
 
 
-def _resolve_session(session_token):
+def _resolve_session(session_token, *, refresh_activity=True):
     if not session_token:
         frappe.throw(_("Missing ordering session"), frappe.PermissionError)
     if not isinstance(session_token, str) or len(session_token) > 512:
@@ -314,6 +315,8 @@ def _resolve_session(session_token):
         # persisted, and its FOR UPDATE re-read raised 1020 against a concurrent order.
         if not session.expires_at or session.expires_at < now_datetime():
             _refuse_session()
+        if not refresh_activity:
+            return session
 
         # Sliding idle expiry without a full save: save() re-reads the row FOR
         # UPDATE, and concurrent guest reads then fail with QueryDeadlockError
@@ -362,10 +365,8 @@ def _ordering_context_response(raw_session_token, source, profile, table, layout
         "session": raw_session_token,
         "source": source,
         "restaurant": profile.restaurant,
-        # Company for the V3-44 availability display check (get_item_availability
-        # requires branch+company; see self-order's lib/availability.ts). Derived
-        # from profile.branch the same way _resolve_or_create_pos_invoice() already
-        # does (see this file's invoice.company fallback), never guessed client-side.
+        # Compatibility field. Availability now derives scope from the
+        # ordering profile's branch on the server, not this client context.
         "company": frappe.db.get_value("Branch", profile.branch, "company"),
         "table": table,
         # The table's URY Room (area), so a room reads "In-Room Dining · Room 103".
@@ -460,22 +461,33 @@ def assign_device_table(device_id, device_credential, staff_pin, table):
 # Menu / product (customer-safe DTOs)
 # ---------------------------------------------------------------------------
 
+def _customer_menu_with_availability(session):
+    """Resolve both views from the verified session's branch, never its restaurant name."""
+    branch = frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "branch")
+    menu = resolve_restaurant_menu(
+        branch=branch, room=None, order_type="Dine In" if session.table else "Take Away", cashier=False,
+    )
+    company = frappe.db.get_value("Branch", branch, "company")
+    policy = get_branch_stock_policy(branch, company)
+    entries = _batch_availability([row["item"] for row in menu["items"]], branch, company, policy)
+    guest_fields = ("item_code", "sellable", "available_qty", "reason_code")
+    availability = {code: {field: row[field] for field in guest_fields} for code, row in entries.items()}
+    return {**menu, "availability": availability}
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_customer_menu(session):
     session = _resolve_session(session)
-    order_type = "Dine In" if session.table else "Take Away"
-
     with _elevated():
-        menu = resolve_restaurant_menu(
-            branch=frappe.db.get_value("URY Self Ordering Profile", session.ordering_profile, "branch"),
-            room=None,
-            order_type=order_type,
-            cashier=False,
-        )
+        return _customer_menu_with_availability(session)
 
-    # resolve_restaurant_menu() already returns a sanitized item list
-    # (item/item_name/rate/course/image) — no raw Item doc fields leak here.
-    return menu
+
+@frappe.whitelist(allow_guest=True, methods=["POST"])
+def get_customer_menu_availability(session):
+    session = _resolve_session(session, refresh_activity=False)
+    _limit_guest_session("get_customer_menu_availability", session.name, (20, 60), namespace="availability")
+    with _elevated():
+        return _customer_menu_with_availability(session)["availability"]
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -684,6 +696,8 @@ def add_customer_items(session, items):
 
         if not item_code or item_code not in menu_names:
             frappe.throw(_("Item {0} is not available on this menu").format(item_code), frappe.ValidationError)
+        if not _catalog_gate(item_code):
+            frappe.throw(_("This item is currently unavailable and cannot be added to the order."), frappe.ValidationError)
         try:
             qty = float(qty)
         except (TypeError, ValueError):
@@ -944,17 +958,18 @@ _PAYMENT_REQUEST_LIMIT = (10, 600)
 _PAYMENT_STATUS_LIMIT = (60, 600)
 
 
-def _limit_guest_payment(endpoint, session_name, limit):
-    """Charge Frappe's native limiter on the verified ordering session."""
+def _limit_guest_session(endpoint, session_name, limit, *, namespace):
+    """Charge the native limiter on the verified session ID, not its bearer token."""
     if not frappe.request:
         return
     original_form = frappe.local.form_dict
     try:
         # A guest-supplied budget key in the request is replaced, never trusted.
         frappe.local.form_dict = frappe._dict(original_form)
-        frappe.form_dict._ury_payment_budget = f"payment:{session_name}"
+        key = f"_ury_{namespace}_budget"
+        frappe.form_dict[key] = f"{namespace}:{session_name}"
         rate_limit(
-            key="_ury_payment_budget", limit=limit[0], seconds=limit[1], ip_based=False,
+            key=key, limit=limit[0], seconds=limit[1], ip_based=False,
             endpoint=f"ury.ury.api.self_ordering.{endpoint}",
         )(lambda: None)()
     finally:
@@ -1035,7 +1050,7 @@ def _phone_gateway(pos_profile_name, company):
 @_retry_on_lock_conflict
 def create_payment_request(session):
     session = _resolve_session(session)
-    _limit_guest_payment("create_payment_request", session.name, _PAYMENT_REQUEST_LIMIT)
+    _limit_guest_session("create_payment_request", session.name, _PAYMENT_REQUEST_LIMIT, namespace="payment")
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not (profile.enable_customer_payment or profile.enable_payment_link):
@@ -1199,7 +1214,7 @@ def _payment_request_response(pr, payment_url, paid_amount, remaining_amount):
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def get_payment_status(session):
     session = _resolve_session(session)
-    _limit_guest_payment("get_payment_status", session.name, _PAYMENT_STATUS_LIMIT)
+    _limit_guest_session("get_payment_status", session.name, _PAYMENT_STATUS_LIMIT, namespace="payment")
     if not session.invoice:
         return {"status": None}
 

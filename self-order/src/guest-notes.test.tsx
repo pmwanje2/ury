@@ -22,9 +22,10 @@ vi.mock('./lib/api', async () => {
   }
 })
 
-vi.mock('./lib/availability', () => ({
-  getItemAvailability: vi.fn(async () => ({ sellable: true, reason_code: 'AVAILABLE' })),
-  getAvailabilityMessage: vi.fn(() => ''),
+vi.mock('./lib/availability', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./lib/availability')>(),
+  getMenuAvailability: vi.fn(async () => Object.fromEntries(menu.map(({ item }) =>
+    [item, { item_code: item, sellable: true, available_qty: null, reason_code: 'AVAILABLE' }]))),
 }))
 
 import { useOrderingSession, type CartEntry } from './hooks/useOrderingSession'
@@ -224,7 +225,7 @@ describe('noted cart lines (CartPage, MenuGrid)', () => {
 
   it('badges the menu card with every line of that dish', async () => {
     render(
-      <MenuGrid menu={[fish]} cart={Object.fromEntries(lines.map(line => [line.key, line]))} showImage={false}
+      <MenuGrid availability={{}} menu={[fish]} cart={Object.fromEntries(lines.map(line => [line.key, line]))} showImage={false}
         onItemClick={vi.fn()} gridClassName="grid" cardClassName="card" />,
     )
     expect(screen.getByText('In cart: 3')).toBeInTheDocument()
