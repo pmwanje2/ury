@@ -661,9 +661,29 @@ def _item_totals(lines):
 	return totals
 
 
-def _items_with_preparation(invoice, codes):
+def _void_sources(invoice):
+	"""Returns follow the original check, not the creation time of a split bill."""
+	names = set()
+	current = getattr(invoice, "name", None)
+	created_at = getattr(invoice, "creation", None)
+	parent = getattr(invoice, "custom_split_from", None)
+	if current:
+		names.add(current)
+	while parent:
+		if parent in names:
+			return names, None
+		names.add(parent)
+		row = frappe.db.get_value("POS Invoice", parent, ["creation", "custom_split_from"], as_dict=True)
+		if not row:
+			return names, None
+		created_at, parent = row["creation"], row["custom_split_from"]
+	return names, created_at
+
+
+def _items_with_preparation(invoices, codes):
 	"""Conservatively withhold returns once any of this dish has been started."""
-	params = (invoice, *codes)
+	params = (*sorted(invoices), *codes)
+	invoice_markers = ", ".join(["%s"] * len(invoices))
 	markers = ", ".join(["%s"] * len(codes))
 	return {row[0] for row in frappe.db.sql(
 		f"""SELECT i.item
@@ -671,7 +691,7 @@ def _items_with_preparation(invoice, codes):
 		INNER JOIN `tabURY KOT Items` i ON i.parent = k.name AND i.parenttype = 'URY KOT'
 		LEFT JOIN `tabURY KOT Item Execution` e ON e.kot_item = i.name
 		LEFT JOIN `tabURY KOT Execution` t ON t.kot = k.name
-		WHERE k.invoice = %s AND k.type IN ('New Order', 'Order Modified') AND k.docstatus = 1
+		WHERE k.invoice IN ({invoice_markers}) AND k.type IN ('New Order', 'Order Modified') AND k.docstatus = 1
 		AND i.item IN ({markers})
 		AND (e.started_at IS NOT NULL OR e.ready_at IS NOT NULL OR e.served_at IS NOT NULL
 			OR (e.name IS NULL AND (t.started_at IS NOT NULL OR t.ready_at IS NOT NULL OR t.served_at IS NOT NULL))
@@ -692,8 +712,9 @@ def apply_count_delta(branch, previous_items, accepted_items, *, invoice=None, p
 		OVERRIDE_FIELDS + ["count_started_at"], as_dict=True, for_update=True, order_by="item asc",
 	)
 	reductions = [row["item"] for row in rows if row["countdown_enabled"] and deltas[row["item"]] < 0]
+	invoice_names, created_at = _void_sources(invoice) if invoice and reductions else ((), None)
 	if prepared is None:
-		prepared = _items_with_preparation(invoice.name, reductions) if invoice and invoice.name and reductions else ()
+		prepared = _items_with_preparation(invoice_names, reductions) if invoice_names else ()
 	changed = []
 	for row in rows:
 		code = row["item"]
@@ -716,8 +737,9 @@ def apply_count_delta(branch, previous_items, accepted_items, *, invoice=None, p
 		else:
 			# Older orders did not necessarily consume the active allocation.
 			started_at = row.get("count_started_at")
-			created_at = getattr(invoice, "creation", None)
-			if code in prepared or (started_at and created_at and get_datetime(created_at) < get_datetime(started_at)):
+			if code in prepared or (
+				started_at and invoice and (not created_at or get_datetime(created_at) < get_datetime(started_at))
+			):
 				continue
 			qty = int(-delta)
 			if not qty:
