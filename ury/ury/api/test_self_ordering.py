@@ -35,6 +35,15 @@ from ury.ury.api.self_ordering import (
 MOD = "ury.ury.api.self_ordering"
 
 
+def _order_db_value(doctype, name, field=None, *args, **kwargs):
+    if (doctype, field) == ("Item", "disabled"):
+        return 0  # Dishes in these order fixtures are enabled in the Item master.
+    if (doctype, field) == ("Item", "item_name"):
+        return {"Sandwich": "Club sandwich", "Biryani": "Chicken biryani"}.get(name)
+    if (doctype, field) == ("URY Menu", "name"):
+        return "Menu A"
+
+
 class TestQRTokenRoundtrip(unittest.TestCase):
     @patch(f"{MOD}.frappe.db.get_value")
     @patch(f"{MOD}.frappe.db.exists")
@@ -233,6 +242,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         patcher = patch(f"{MOD}.get_branch_stock_policy", return_value=StockPolicy(True, False, False))
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.enterContext(patch(f"{MOD}.frappe.db.get_values", return_value=[]))  # No availability overrides.
 
     def _session_doc(self, table="Table 7", invoice=None, source="QR Table"):
         session = MagicMock()
@@ -285,7 +295,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
         existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2, comment="")
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
         invoice.invoice_created = 1
@@ -312,10 +322,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
 
-        # The guest line is named from the Item (as staff lines are), never from its code.
-        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
-            "Club sandwich" if (doctype, field) == ("Item", "item_name") else "Menu A"
-        )
+        mock_db_get_value.side_effect = _order_db_value
 
         result = add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -388,7 +395,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
         existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2)
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
         invoice.invoice_created = 1
@@ -410,7 +417,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
 
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = _order_db_value
 
         add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -463,7 +470,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}, {"item": "Sandwich"}]}
 
         existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2)
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
         invoice.invoice_created = 1
@@ -485,7 +492,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
 
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = _order_db_value
 
         add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -514,6 +521,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         confirmed live: two invoices got created for one table/session
         instead of the running order being updated once."""
         mock_db_exists.return_value = True
+        mock_db_get_value.side_effect = _order_db_value
         session = self._session_doc(table="Table 9", invoice=None)
         mock_resolve_session.return_value = session
 
@@ -542,7 +550,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
 
         # Brand-new invoice: restaurant_table starts unset, exactly as
         # _resolve_or_create_pos_invoice() actually leaves it.
-        new_invoice = MagicMock()
+        new_invoice = MagicMock(set_posting_time=0)
         new_invoice.customer = None
         new_invoice.items = []
         new_invoice.invoice_created = 0
@@ -616,7 +624,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         # state that exposed the bug.
         existing_row_1 = frappe._dict(item_code="Biryani", item_name="Biryani", qty=1, comment="")
         existing_row_2 = frappe._dict(item_code="Biryani", item_name="Biryani", qty=1, comment="")
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row_1, existing_row_2]
         invoice.invoice_created = 1
@@ -637,7 +645,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         priced_sandwich = {"item_code": "Sandwich", "item_name": "Sandwich", "qty": 1, "comment": "",
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = _order_db_value
 
         add_customer_items("session-token", [{"item": "Sandwich", "qty": 1}])
 
@@ -702,7 +710,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_resolve_menu.return_value = {"items": [{"item": "Sandwich"}]}
 
         existing_row = frappe._dict(item_code="Biryani", item_name="Biryani", qty=2)
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = [existing_row]
         invoice.invoice_created = 1
@@ -723,7 +731,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         priced_sandwich = {"item_code": "Sandwich", "item_name": "Sandwich", "qty": 1, "comment": "",
                             "rate": 120, "price_list_rate": 120, "base_price_list_rate": 120, "cost_center": "CC"}
         mock_price_items.return_value = [priced_sandwich]
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = _order_db_value
 
         # kot_execute() blows up -- e.g. KOT routing/printer failure.
         mock_kot.side_effect = Exception("kitchen printer offline")
@@ -786,7 +794,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         mock_get_doc.side_effect = get_doc_side_effect
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}]}
 
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = []
         invoice.invoice_created = 1
@@ -805,9 +813,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         priced_biryani = {"item_code": "Biryani", "item_name": "Biryani", "qty": 1, "comment": "",
                            "rate": 100, "price_list_rate": 100, "base_price_list_rate": 100, "cost_center": "CC"}
         mock_price_items.return_value = [priced_biryani]
-        mock_db_get_value.side_effect = lambda doctype, name, field=None, *a, **kw: (
-            "Chicken biryani" if (doctype, field) == ("Item", "item_name") else "Menu A"
-        )
+        mock_db_get_value.side_effect = _order_db_value
         mock_reconcile.return_value = None  # available -- no rejection
 
         add_customer_items("session-token", [{"item": "Biryani", "qty": 1}])
@@ -885,7 +891,7 @@ class TestAddCustomerItemsAppendOnly(unittest.TestCase):
         invoice.grand_total = 100
         invoice.name = "POS-INV-100"
         mock_resolve_invoice.return_value = (invoice, "POS-INV-100")
-        mock_db_get_value.return_value = "Menu A"
+        mock_db_get_value.side_effect = _order_db_value
 
         mock_reconcile.side_effect = frappe.ValidationError(
             "Biryani is not available for order (reason: PLAN_EXHAUSTED). Please refresh the menu."
@@ -1001,6 +1007,7 @@ class TestGuestItemName(unittest.TestCase):
         patcher = patch(f"{MOD}.get_branch_stock_policy", return_value=StockPolicy(True, False, False))
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.enterContext(patch(f"{MOD}.frappe.db.get_values", return_value=[]))
 
     def _add(self, items, existing_rows=()):
         """Run add_customer_items with a pricing stub that copies item_name as
@@ -1011,7 +1018,7 @@ class TestGuestItemName(unittest.TestCase):
         profile = MagicMock(enabled=1, allow_add_to_running_table=1, branch="Branch A",
                             pos_profile="POS Profile A", default_customer="Walk-in Customer")
 
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = "Walk-in Customer"
         invoice.items = list(existing_rows)
         invoice.invoice_created = 1
@@ -1029,7 +1036,7 @@ class TestGuestItemName(unittest.TestCase):
         def get_value(doctype, name, field=None, *args, **kwargs):
             if (doctype, field) == ("Item", "item_name"):
                 return self.ITEM_NAMES.get(name)
-            return "Menu A"
+            return _order_db_value(doctype, name, field, *args, **kwargs)
 
         def price(lines, *args, **kwargs):
             return [{"item_code": d["item"], "item_name": d.get("item_name"), "qty": d["qty"],
@@ -1593,6 +1600,7 @@ class TestQRPickup(unittest.TestCase):
         patcher = patch(f"{MOD}.get_branch_stock_policy", return_value=StockPolicy(True, False, False))
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.enterContext(patch(f"{MOD}.frappe.db.get_values", return_value=[]))
 
     @patch(f"{MOD}.frappe.db.exists")
     @patch(f"{MOD}.frappe.get_doc")
@@ -1633,6 +1641,7 @@ class TestQRPickup(unittest.TestCase):
         mock_resolve_menu, mock_resolve_invoice, mock_price_items, mock_kot,
     ):
         mock_db_exists.return_value = True
+        mock_db_get_value.side_effect = _order_db_value
 
         session = MagicMock()
         session.table = None
@@ -1663,7 +1672,7 @@ class TestQRPickup(unittest.TestCase):
         mock_get_doc.side_effect = get_doc_side_effect
         mock_resolve_menu.return_value = {"items": [{"item": "Biryani"}]}
 
-        invoice = MagicMock()
+        invoice = MagicMock(set_posting_time=0)
         invoice.customer = None
         invoice.items = []
         invoice.invoice_created = 0

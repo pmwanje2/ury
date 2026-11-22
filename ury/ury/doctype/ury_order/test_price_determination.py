@@ -158,7 +158,7 @@ class FakePriceBook:
         if doctype == "POS Profile":
             return "CC"
         if doctype == "Item":
-            return {"stock_uom": "Nos", "sales_uom": self.sales_uom}[fieldname]
+            return {"stock_uom": "Nos", "sales_uom": self.sales_uom, "item_name": "Grilled fish"}[fieldname]
         return None
 
     def get_cached_doc(self, doctype, name):
