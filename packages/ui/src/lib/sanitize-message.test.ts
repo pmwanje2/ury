@@ -5,7 +5,9 @@ describe('sanitizeMessageHtml', () => {
   it('keeps allowed emphasis tags', () => {
     const input =
       'Field <strong>require_active_menu_for_planning</strong> does not exist on <strong>URY Production Settings</strong>';
-    expect(sanitizeMessageHtml(input)).toBe(input);
+    expect(sanitizeMessageHtml(input)).toBe(
+      'Field <strong>require_active_menu_for_planning</strong> does not exist on <strong>Maximus Production Settings</strong>'
+    );
   });
 
   it('strips script tags and event handlers', () => {
@@ -31,10 +33,15 @@ describe('messageToPlainText', () => {
       messageToPlainText(
         'Field <strong>require_active_menu_for_planning</strong> does not exist on <strong>URY Production Settings</strong>'
       )
-    ).toBe('Field require_active_menu_for_planning does not exist on URY Production Settings');
+    ).toBe('Field require_active_menu_for_planning does not exist on Maximus Production Settings');
   });
 
   it('does not leave script content', () => {
     expect(messageToPlainText('<script>alert(1)</script>oops')).toBe('oops');
   });
+});
+
+it('shows the actionable refusal, preserving the reference and similar words', () => {
+  expect(messageToPlainText('[URY-CLOSE-LATE-INVOICE] Review INV-93 in ERPNext before closing the Luxury Room.'))
+    .toBe('Review INV-93 in Maximus before closing the Luxury Room.');
 });
