@@ -308,7 +308,7 @@ const LogYieldCheckForm: React.FC<LogYieldCheckFormProps> = ({ authorization, on
           {formatQty(authorization.authorized_qty)} {authorization.stock_uom || ''}
         </span>
         <span className="mt-1 text-xs font-normal text-text-tertiary">
-          {__('This is the authorized quantity and is not editable here. If the actual quantity physically issued differs, record it on the URY Yield Check document in the Desk.')}
+          {__('This is the authorized quantity and is not editable here. If the actual quantity physically issued differs, record it on the yield check record.')}
         </span>
       </label>
       <label className="flex flex-col text-xs font-medium text-muted-foreground">
@@ -1124,7 +1124,7 @@ const DepartmentStockContent: React.FC = () => {
 
             {/* Link to the editable URY Stock Movement document in the desk. This screen is read-only. */}
             <div className="pt-3">
-              <DeskLink doctype="URY Stock Movement" name={selectedMovement.name} label={__('Open in Desk')} />
+              <DeskLink doctype="URY Stock Movement" name={selectedMovement.name} label={__('Open record')} />
             </div>
           </>
         )}

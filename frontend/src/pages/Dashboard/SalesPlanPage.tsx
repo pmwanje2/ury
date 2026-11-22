@@ -1102,7 +1102,7 @@ export const SalesPlanPage: React.FC = () => {
             {isEditable && (
               <Select
                 aria-label={__('Enforcement Mode')}
-                title={__('Hard: block order placement once plan_remaining hits 0. Soft: allow the order, over-plan status is computable from committed_qty + fulfilled_qty > qty. Alert: allow the order and notify branch-scoped Production Manager/URY Manager recipients when the plan is exceeded.')}
+                title={__('Hard: block order placement once plan_remaining hits 0. Soft: allow the order, over-plan status is computable from committed_qty + fulfilled_qty > qty. Alert: allow the order and notify branch-scoped production or restaurant managers recipients when the plan is exceeded.')}
                 value={enforcementMode}
                 onChange={(event) => setEnforcementMode(event.target.value as 'Hard' | 'Soft' | 'Alert')}
                 disabled={loading || saving}

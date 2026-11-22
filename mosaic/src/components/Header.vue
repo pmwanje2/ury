@@ -77,7 +77,6 @@
 <script>
 import { logout } from '../logout';
 import { resolveBrand } from "../../../packages/core/src/brand.ts";
-import urimosaicImage from "@/assets/logos/mosaic.jpg";
 import { t } from "../i18n";
 import ScopeSelector from "./ScopeSelector.vue";
 import { productionScopeKey } from "../composables/productionScope";
@@ -96,7 +95,7 @@ export default {
   },
   data() {
     return {
-      brand: resolveBrand({ name: t("Logo"), logo: urimosaicImage }),
+      brand: resolveBrand({ name: t("Maximus Kitchen"), logo: "/assets/ury/Images/maximus-mark.svg" }),
       showUserMenu: false,
       loggingOut: false,
       logoutError: "",

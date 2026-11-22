@@ -49,7 +49,7 @@ export const RETURN_TO_ALLOWED_PREFIXES = ['/ury', '/pos', '/mosaic', '/urypos',
 const APP_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['/ury/order', 'Self Ordering'],
   ['/ury/pos', 'POS'],
-  ['/ury', 'URY'],
+  ['/ury', 'Maximus'],
   ['/pos', 'POS'],
   ['/mosaic', 'Mosaic'],
   ['/urypos', 'POS (Legacy)'],
@@ -74,7 +74,7 @@ export const isReturnPathAllowed = (path: unknown): path is string => {
 /** Display name for the app owning `path` (`'URY'` as a neutral fallback). */
 export const appLabelForPath = (path: string): string => {
   const match = APP_LABELS.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`));
-  return match ? match[1] : 'URY';
+  return match ? match[1] : 'Maximus';
 };
 
 export interface ReturnContext {

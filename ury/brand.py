@@ -6,7 +6,7 @@ from urllib.parse import quote_plus
 
 import frappe
 
-DEFAULT_SOURCE_URL = "https://github.com/ury-erp/ury"
+DEFAULT_SOURCE_URL = "https://github.com/pmwanje2/ury/tree/maximus/v16-integration"
 
 
 def get_theme():
@@ -174,6 +174,12 @@ def get_brand(surface="site"):
             values = hooks.get(key)
             if isinstance(values, list) and values and isinstance(values[-1], str) and values[-1].strip():
                 brand[key] = values[-1]
+    # Installed upstream defaults and older staff hooks are not site identity.
+    if brand["name"] and re.search(r"\b(?:ury|frappe|erpnext|kamra)\b", brand["name"], re.I):
+        brand["name"] = None
+    for key in ("logo", "favicon"):
+        if brand[key] and re.search(r"/assets/(?:ury|erpnext|frappe|kamra)/", brand[key], re.I):
+            brand[key] = None
     return brand if any(brand.values()) else None
 
 

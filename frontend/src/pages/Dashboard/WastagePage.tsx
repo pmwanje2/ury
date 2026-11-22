@@ -475,7 +475,7 @@ const WastageContent: React.FC = () => {
                 record's fields still happens in the desk. Rendered only for
                 users whose desk permissions actually allow opening it. */}
             <div className="pt-3">
-              <DeskLink doctype="URY Wastage" name={selectedRow.name} label={__('Open in Desk')} />
+              <DeskLink doctype="URY Wastage" name={selectedRow.name} label={__('Open record')} />
             </div>
           </>
         )}

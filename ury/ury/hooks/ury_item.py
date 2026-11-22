@@ -18,12 +18,12 @@ def update_variants_add_on(doc, event):
 	if doc.custom_pos_add_on_items:
 		for row in doc.custom_pos_add_on_items:
 			if not frappe.db.exists("URY Menu Item", {"item": row.item}):
-				frappe.throw(f"Item '{row.item}' in POS Add On Items is not in URY Menu")
+				frappe.throw(f"Item '{row.item}' in POS Add On Items is not on the restaurant menu")
 
 	if doc.custom_pos_item_variants:
 		for row in doc.custom_pos_item_variants:
 			if not frappe.db.exists("URY Menu Item", {"item": row.item}):
-				frappe.throw(f"Item '{row.item}' in POS Item Variants is not in URY Menu")
+				frappe.throw(f"Item '{row.item}' in POS Item Variants is not on the restaurant menu")
 
 
 YIELD_STANDARD_FIELDS = (

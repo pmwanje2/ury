@@ -424,7 +424,7 @@ describe('BomPage - View Only BOM Inspection', () => {
 
     // Verify footer only has Close and DeskLink (no create, submit, amend, cancel, or delete buttons)
     expect(screen.getByRole('button', { name: /Close/i })).toBeInTheDocument();
-    expect(screen.getAllByText('Open in ERPNext Desk').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Open record').length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: /Save as Draft/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Create & Submit/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Submit BOM/i })).not.toBeInTheDocument();

@@ -2,7 +2,6 @@ import { resolveBrand } from '@ury/core';
 import { ReactNode } from 'react';
 import { Button, Card, Page } from '@ury/ui';
 import { Check } from 'lucide-react';
-import uryLogo from '../../../Public/photo_2026-08-19_13-24-09.jpg';
 import { __ } from '../../i18n';
 
 interface WizardLayoutProps {
@@ -34,7 +33,7 @@ export function WizardLayout({
   isNextLoading,
   secondaryAction,
 }: WizardLayoutProps) {
-  const brand = resolveBrand({ name: __('URY Logo'), logo: uryLogo });
+  const brand = resolveBrand({ name: __('Maximus Logo'), logo: '/assets/ury/Images/maximus-mark.svg' });
   return (
     <div className="min-h-screen w-full flex flex-col bg-background text-foreground font-inter text-sm">
       {/* Header bar — mirrors components/layout/Header.tsx */}

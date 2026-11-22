@@ -117,7 +117,7 @@
   {
    "depends_on": "eval:doc.production_policy==\"BUNDLE\"",
    "mandatory_depends_on": "eval:doc.production_policy==\"BUNDLE\"",
-   "description": "The ERPNext Product Bundle whose children define the components of this combo item. Required when Production Policy is BUNDLE.",
+   "description": "The Maximus Product Bundle whose children define the components of this combo item. Required when Production Policy is BUNDLE.",
    "fieldname": "product_bundle",
    "fieldtype": "Link",
    "label": "Product Bundle",

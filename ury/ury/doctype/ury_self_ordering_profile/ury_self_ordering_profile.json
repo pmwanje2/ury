@@ -64,7 +64,7 @@
    "reqd": 1
   },
   {
-   "description": "Optional guest-page name. Leave blank to keep the site brand. The guest logo uses the linked URY Restaurant image.",
+   "description": "Optional guest-page name. Leave blank to keep the site brand. The guest logo uses the linked Maximus Restaurant image.",
    "fieldname": "guest_display_name",
    "fieldtype": "Data",
    "label": "Guest Display Name"

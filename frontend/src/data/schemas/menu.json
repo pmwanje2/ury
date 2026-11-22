@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "URY Menu Schema",
-  "description": "Form and data schema for URY Restaurant Menu management",
+  "title": "Maximus Menu Schema",
+  "description": "Form and data schema for Maximus Restaurant Menu management",
   "type": "object",
   "properties": {
     "menu_name": {

@@ -1,5 +1,5 @@
 import TillLogout from './TillLogout';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { isLinkDown, getUserSessionStorageKey } from '@ury/core';
 import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import { useLocation } from 'react-router-dom';
@@ -12,7 +12,6 @@ import {
 import { getChecklist } from '../lib/checklist-api';
 import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
-import { User } from '../store/slices/auth-slice';
 import POSOpeningDialog from './POSOpeningDialog';
 import POSOpeningScreen from './POSOpeningScreen';
 import ChecklistGateDialog from './ChecklistGateDialog';
@@ -47,13 +46,6 @@ export type OpeningBlockingState =
   | 'crossCompanyOpen'
   | 'genericError';
 
-const DESK_ROLES = ['System Manager', 'Desk User'];
-
-function hasDeskAccess(user: User | null): boolean {
-  if (!user) return false;
-  if (user.name === 'Administrator') return true;
-  return user.roles.some((role) => DESK_ROLES.includes(role));
-}
 
 function normalizeOpenEntries(
   message: number | POSOpeningEntryRef[]
@@ -106,7 +98,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   const settled = isSettledRoute(location.pathname);
   const isGated = isOpeningGatedRoute(location.pathname);
 
-  const canAccessDesk = useMemo(() => hasDeskAccess(user), [user]);
+  const canAccessDesk = user?.name === 'Administrator';
 
   const clearBlockingState = useCallback(() => {
     setBlockingState(null);

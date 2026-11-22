@@ -12,9 +12,9 @@ const { compile } = require('@vue/compiler-dom');
 const { parse } = require('@vue/compiler-sfc');
 
 const fixtures = [
-  ['urypos/src/components/Header.vue', 'URY POS logo', '/ury-pos-default.jpg'],
-  ['urypos/src/components/Login.vue', 'URY POS logo', '/ury-pos-default.jpg'],
-  ['mosaic/src/components/Header.vue', 'Logo', '/mosaic-default.jpg'],
+  ['urypos/src/components/Header.vue', 'Maximus POS', '/assets/ury/Images/maximus-mark.svg'],
+  ['urypos/src/components/Login.vue', 'Maximus POS', '/assets/ury/Images/maximus-mark.svg'],
+  ['mosaic/src/components/Header.vue', 'Maximus Kitchen', '/assets/ury/Images/maximus-mark.svg'],
 ];
 
 for (const [file, defaultAlt, defaultLogo] of fixtures) {

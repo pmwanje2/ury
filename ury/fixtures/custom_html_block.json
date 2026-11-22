@@ -3,7 +3,7 @@
     {
      "docstatus": 0,
      "doctype": "Custom HTML Block",
-     "html":"<a href=\"/pos\">\n    <img class=\"uryposlogo\" src=\"/assets/ury/Images/URY-POS.jpg\"/>\n</a>",
+     "html":"<a href=\"/pos\">\n    <img class=\"uryposlogo\" src=\"/assets/ury/Images/maximus-mark.svg\"/>\n</a>",
      "modified": "2025-07-24 16:50:40.049812",
      "name": "URY POS",
      "private": 0,

@@ -19,9 +19,9 @@ frappe.setup.on("before_load", function () {
 
     slide.fields.splice(idx + 1, 0, {
         fieldname: "setup_ury_demo",
-        label: __("Generate URY Demo Data"),
+        label: __("Generate Restaurant Demo Data"),
         fieldtype: "Check",
         default: 0,
-        description: __("If checked, we will create URY demo data for you to explore the system. This demo data can be erased later.")
+        description: __("If checked, we will create restaurant demo data for you to explore the system. This demo data can be erased later.")
     });
 });

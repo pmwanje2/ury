@@ -89,7 +89,7 @@ describe("Header", () => {
       </BrowserRouter>
     );
 
-    expect(screen.getByAltText("URY POS")).toBeInTheDocument();
+    expect(screen.getByAltText("Maximus POS")).toBeInTheDocument();
   });
 
   it("renders the search bar with appropriate placeholder", () => {
@@ -128,37 +128,16 @@ describe("Header", () => {
 
     expect(screen.getByText("header.logout")).toBeInTheDocument();
     expect(screen.getByText("header.clear_cache")).toBeInTheDocument();
-    expect(screen.getByText("header.switch_to_desk")).toBeInTheDocument();
+    expect(screen.queryByText("header.switch_to_desk")).toBeNull();
   });
 
-  it("navigates to /desk/ury when switch to desk is clicked", async () => {
-    const originalLocation = window.location;
-    delete (window as any).location;
-    window.location = { ...originalLocation, href: "" } as any;
-
-    render(
-      <BrowserRouter>
-        <Header />
-      </BrowserRouter>
-    );
-
-    const userButton = screen.getByRole("button", { name: /Test User/i });
-    await userEvent.click(userButton);
-
-    const switchBtn = screen.getByText("header.switch_to_desk");
-    await userEvent.click(switchBtn);
-
-    expect(window.location.href).toContain("/desk/ury");
-
-    window.location = originalLocation as any;
-  });
 
   it.each([
-    [["URY Cashier"], "/desk/pos-operations"],
-    [["URY Cashier", "URY Manager"], "/desk/ury"],
-    [["URY Cashier", "URY Admin"], "/desk/ury"],
-    [["URY Cashier", "System Manager"], "/desk/ury"],
-  ])("switch to desk for roles %j goes to %s", async (roles, expected) => {
+    [["URY Cashier"]],
+    [["URY Cashier", "URY Manager"]],
+    [["URY Cashier", "URY Admin"]],
+    [["URY Cashier", "System Manager"]],
+  ])("omits the Desk switch for roles %j", async (roles) => {
     mockUser.roles = roles;
     const originalLocation = window.location;
     delete (window as any).location;
@@ -170,43 +149,23 @@ describe("Header", () => {
       </BrowserRouter>
     );
     await userEvent.click(screen.getByRole("button", { name: /Test User/i }));
-    await userEvent.click(screen.getByText("header.switch_to_desk"));
-
-    expect(window.location.href).toContain(expected);
-    expect(window.location.href).not.toContain("/pos/dashboard");
+    expect(screen.queryByText("header.switch_to_desk")).toBeNull();
 
     window.location = originalLocation as any;
     mockUser.roles = [];
   });
 
-  it("renders logo link to /desk", () => {
+  it("keeps the logo outside Desk navigation", () => {
     render(
       <BrowserRouter>
         <Header />
       </BrowserRouter>
     );
 
-    const logoLink = screen.getByAltText("URY POS").closest("a");
-    expect(logoLink).toHaveAttribute("href", "/desk");
+    const logoLink = screen.getByAltText("Maximus POS").closest("a");
+    expect(logoLink).toBeNull();
   });
 
-  it("stores return context in sessionStorage when logo link is clicked", async () => {
-    render(
-      <BrowserRouter>
-        <Header />
-      </BrowserRouter>
-    );
-
-    const logoLink = screen.getByAltText("URY POS").closest("a");
-    expect(logoLink).not.toBeNull();
-    logoLink?.addEventListener("click", (e) => e.preventDefault());
-    await userEvent.click(logoLink!);
-
-    const stored = sessionStorage.getItem("ury:desk_return_to");
-    expect(stored).not.toBeNull();
-    const parsed = JSON.parse(stored!);
-    expect(parsed.label).toBe("POS");
-  });
 
   it("renders the printer status button next to the user menu when enabled", () => {
     render(

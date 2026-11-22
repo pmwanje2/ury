@@ -20,7 +20,7 @@
     "checking_pos_status": "Checking POS status...",
     "cancelling": "Cancelling...",
     "confirm_cancel": "Confirm Cancel",
-    "loading_ury_pos": "Loading URY POS...",
+    "loading_ury_pos": "Loading Maximus POS...",
     "please_wait_setup": "Please wait while we set things up"
   },
   "header": {
@@ -32,7 +32,7 @@
     "shift_overview": "Shift Overview",
     "service_board": "Service Board",
     "close_shift": "Close Shift",
-    "switch_to_desk": "Switch To Desk"
+    "open_workspace": "Open workspace"
   },
   "menu": {
     "special_items": "Special Items"
@@ -93,7 +93,7 @@
     "not_closed_message": "Please close the previous POS Entry to continue.",
     "reload_page": "Reload Page",
     "contact_manager": "If this keeps happening, contact your manager.",
-    "switch_to_desk": "Switch to Desk",
+    "open_workspace": "Open workspace",
     "opening": {
       "title": "Open POS Session",
       "session_details": "Session Details",
@@ -450,7 +450,7 @@
     "session_opened_success": "POS session opened"
   },
   "login": {
-    "title": "URY Serve",
+    "title": "Maximus Serve",
     "username": "Username or Email",
     "password": "Password",
     "login": "Login",

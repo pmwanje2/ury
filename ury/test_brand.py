@@ -350,7 +350,7 @@ class TestSiteBrand(unittest.TestCase):
                 if page == "order":
                     for marker in ("footer.source",):
                         self.assertIn(f'data-guest-i18n="{marker}"', self.render(page, context))
-                self.assertEqual(parsed.source, "https://github.com/ury-erp/ury")
+                self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/maximus/v16-integration")
                 self.framework.conf["ury_source_url"] = "https://github.com/pmwanje2/ury/tree/public-release"
                 parsed = PageParser(self.render(page, self.context(page)))
                 self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/public-release")

@@ -11,7 +11,7 @@
  "icon": "shield-check",
  "idx": 0,
  "is_hidden": 0,
- "label": "URY Control",
+ "label": "Maximus Control",
  "link_type": "DocType",
  "links": [
   {
@@ -211,7 +211,7 @@
    "doc_view": "List"
   }
  ],
- "title": "URY Control",
+ "title": "Maximus Control",
  "type": "Workspace",
  "standard": 1,
  "parent_page": ""

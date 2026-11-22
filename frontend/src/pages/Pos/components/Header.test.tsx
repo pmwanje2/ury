@@ -68,14 +68,14 @@ describe("Header", () => {
     expect(container.textContent.length).toBeGreaterThan(0);
   });
 
-  it("renders logo link to /desk", () => {
+  it("keeps the logo outside Desk navigation", () => {
     render(
       <BrowserRouter>
         <Header />
       </BrowserRouter>
     );
-    const logoLink = screen.getByAltText("URY POS").closest("a");
-    expect(logoLink).toHaveAttribute("href", "/desk");
+    const logoLink = screen.getByAltText("Maximus POS").closest("a");
+    expect(logoLink).toBeNull();
   });
 });
 

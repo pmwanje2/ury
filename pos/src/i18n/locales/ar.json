@@ -57,7 +57,7 @@
     "service_board": "لوحة الخدمة",
     "close_shift": "إغلاق الوردية",
     "switch_to_dashboard": "الذهاب إلى لوحة التحكم",
-    "switch_to_desk": "التبديل إلى المكتب",
+    "open_workspace": "التبديل إلى المكتب",
     "search_placeholder_reservations": "ابحث في الحجوزات بالعميل أو الطاولة...",
     "user_fallback": "مستخدم",
     "switch_waiter": "تبديل النادل",
@@ -160,7 +160,7 @@
     "not_closed_message": "يجب إغلاق وردية نقطة البيع السابقة قبل البدء بوردية جديدة. يرجى إغلاقها للمتابعة.",
     "reload_page": "إعادة تحميل الصفحة",
     "contact_manager": "إذا استمرت المشكلة، يرجى التواصل مع المدير.",
-    "switch_to_desk": "التبديل إلى لوحة التحكم (Desk)",
+    "open_workspace": "التبديل إلى لوحة التحكم (Desk)",
     "opening": {
       "title": "فتح وردية نقطة البيع",
       "session_details": "تفاصيل الوردية",

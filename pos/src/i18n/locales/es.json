@@ -33,7 +33,7 @@
     "service_board": "Tablero de servicio",
     "close_shift": "Cerrar turno",
     "switch_to_dashboard": "Ir al panel de turno",
-    "switch_to_desk": "Ir al escritorio",
+    "open_workspace": "Ir al escritorio",
     "search_placeholder_reservations": "Buscar reservas por cliente, mesa...",
     "switch_waiter": "Cambiar de mesero",
     "pair_tablet": "Vincular esta tableta",
@@ -108,7 +108,7 @@
     "not_closed_message": "Cierra la entrada de POS anterior para continuar.",
     "reload_page": "Recargar página",
     "contact_manager": "Si esto sigue ocurriendo, contacta a tu administrador.",
-    "switch_to_desk": "Ir al escritorio",
+    "open_workspace": "Ir al escritorio",
     "opening": {
       "title": "Abrir sesión de POS",
       "session_details": "Detalle de la sesión",

@@ -133,12 +133,12 @@ export default function App() {
 
   const threadRoute = route.name === "thread" && huf ? route : null;
   const threadTitle = threadRoute ? chats.rows?.find((r) => r.id === threadRoute.id)?.title : undefined;
-  const name = brief?.scope?.companies?.length ? brief.scope.companies.join(", ") : "URY Brief";
+  const name = brief?.scope?.companies?.length ? brief.scope.companies.join(", ") : "Maximus Brief";
   const installable = !isStandalone() ? () => setSheet(true) : undefined;
 
   return (
     <div className="app">
-      {!brief && <TopBar title="URY Brief" initials={initials(who || "B")} onSettings={() => setSettings(true)} onInstall={installable} onSignOut={() => signOut()} />}
+      {!brief && <TopBar title="Maximus Brief" initials={initials(who || "B")} onSettings={() => setSettings(true)} onInstall={installable} onSignOut={() => signOut()} />}
       {update && (
         <p className="banner" role="status">New version available.
           <button type="button" onClick={() => update.postMessage({ type: "SKIP_WAITING" })}>Reload</button>

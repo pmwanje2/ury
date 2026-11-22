@@ -1,4 +1,4 @@
-/** PWA registration for URY Serve (staff). Expected by the Serve frontend entry. */
+/** PWA registration for Maximus Serve (staff). Expected by the Serve frontend entry. */
 
 export const SERVE_SW_URL = "/ury/serve/sw.js";
 export const SERVE_SCOPE = "/ury/serve/";
@@ -20,7 +20,7 @@ export async function registerServiceWorker(): Promise<RegisterServiceWorkerResu
       updateViaCache: "none",
     });
   } catch (error) {
-    console.error("URY Serve: service worker registration failed", error);
+    console.error("Maximus Serve: service worker registration failed", error);
     return undefined;
   }
 }

@@ -11,7 +11,7 @@
  "fields": [
   {
    "default": "0",
-   "description": "V3-73 kill switch for routing POS Invoice stock authority through the new fulfilment services (V3-71/V3-72) instead of ERPNext's native update_stock=1 posting. MUST stay unchecked (0/False) in every real deployment until the evidence bar in V3-70-fulfilment-accounting-transition-checklist.md Section 6 is met and a human has explicitly signed off per Section 7. Toggling this on is a deliberate, out-of-band admin action only — it is never set by any code path in this app.",
+   "description": "V3-73 kill switch for routing POS Invoice stock authority through the new fulfilment services (V3-71/V3-72) instead of Maximus's native update_stock=1 posting. MUST stay unchecked (0/False) in every real deployment until the evidence bar in V3-70-fulfilment-accounting-transition-checklist.md Section 6 is met and a human has explicitly signed off per Section 7. Toggling this on is a deliberate, out-of-band admin action only — it is never set by any code path in this app.",
    "fieldname": "pos_stock_authority_v2",
    "fieldtype": "Check",
    "in_list_view": 1,

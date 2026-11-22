@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "app_id": "brief",
-  "title": "URY Brief",
+  "title": "Maximus Brief",
   "description": "The owner's daily brief and chat analyst.",
   "version": "1.0.0",
   "route": "/ury/brief",

@@ -200,7 +200,7 @@ export const ItemMasterPage: React.FC = () => {
       setItems(list);
     } catch (err: any) {
       console.error('Failed to fetch items', err);
-      showToast.error(err?.message || __('Failed to load items from ERPNext'));
+      showToast.error(err?.message || __('Failed to load items from Maximus'));
       setItems([]);
     } finally {
       setLoading(false);
@@ -491,7 +491,7 @@ export const ItemMasterPage: React.FC = () => {
           },
         });
 
-        showToast.success(__('Item created successfully in ERPNext'));
+        showToast.success(__('Item created successfully in Maximus'));
       }
 
       setIsDrawerOpen(false);
@@ -559,7 +559,7 @@ export const ItemMasterPage: React.FC = () => {
       }
 
       showToast.error(
-        __('{0}. If this item is linked to existing transactions in ERPNext, deactivate it by toggling Disabled instead.', [errorMsg])
+        __('{0}. If this item is linked to existing transactions in Maximus, deactivate it by toggling Disabled instead.', [errorMsg])
       );
     } finally {
       setDeleting(false);
@@ -845,7 +845,7 @@ export const ItemMasterPage: React.FC = () => {
             onClick={() => fetchItems(true)}
             disabled={refreshing || loading}
             className="h-9 px-2.5"
-            title={__('Sync with ERPNext')}
+            title={__('Sync with Maximus')}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>
@@ -1013,9 +1013,9 @@ export const ItemMasterPage: React.FC = () => {
           {editingItem && (
             <div className="flex items-center justify-between pb-3 border-b border-border text-xs">
               <span className="text-muted-foreground">
-                {__('ERPNext ID:')} <span className="font-mono font-medium text-foreground">{editingItem.name}</span>
+                {__('Maximus ID:')} <span className="font-mono font-medium text-foreground">{editingItem.name}</span>
               </span>
-              <DeskLink doctype="Item" name={editingItem.name} label={__('Open in ERPNext Desk')} />
+              <DeskLink doctype="Item" name={editingItem.name} label={__('Open record')} />
             </div>
           )}
 
@@ -1047,7 +1047,7 @@ export const ItemMasterPage: React.FC = () => {
               required
             />
             <p className="text-[11px] text-muted-foreground mt-1">
-              {__('Unique identifier stored in ERPNext. Renaming will update linked records automatically.')}
+              {__('Unique identifier stored in Maximus. Renaming will update linked records automatically.')}
             </p>
           </div>
 
@@ -1183,7 +1183,7 @@ export const ItemMasterPage: React.FC = () => {
                   {__('Is Sales Item')}
                 </label>
                 <p className="text-[11px] text-muted-foreground">
-                  {__('Available for selling in URY POS & Sales Invoices')}
+                  {__('Available for selling in Maximus POS & Sales Invoices')}
                 </p>
               </div>
               <Switch
@@ -1361,7 +1361,7 @@ export const ItemMasterPage: React.FC = () => {
         open={isDeleteDialogOpen}
         onOpenChange={setIsDeleteDialogOpen}
         title={__('Delete Item')}
-        description={__('Are you sure you want to permanently delete "{0}" ({1})? This will delete the item from ERPNext and URY.', [(itemToDelete?.item_name || itemToDelete?.name) ?? "", (itemToDelete?.item_code || itemToDelete?.name) ?? ""])}
+        description={__('Are you sure you want to permanently delete "{0}" ({1})? This will delete the item from Maximus.', [(itemToDelete?.item_name || itemToDelete?.name) ?? "", (itemToDelete?.item_code || itemToDelete?.name) ?? ""])}
         confirmLabel={__('Delete Item')}
         confirmVariant="danger"
         isSubmitting={deleting}

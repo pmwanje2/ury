@@ -103,7 +103,6 @@
 <script>
 import { resolveBrand } from "../../../packages/core/src/brand.ts";
 import { useAuthStore } from "@/stores/Auth.js";
-import uriPosImage from "@/assets/logos/URY_POS.jpg";
 
 export default {
   setup() {
@@ -112,7 +111,7 @@ export default {
   },
   data() {
     return {
-      brand: resolveBrand({ name: "URY POS logo", logo: uriPosImage }),
+      brand: resolveBrand({ name: "Maximus POS", logo: "/assets/ury/Images/maximus-mark.svg" }),
     };
   },
 };

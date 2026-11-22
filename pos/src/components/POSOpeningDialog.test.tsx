@@ -123,7 +123,7 @@ describe("POSOpeningDialog", () => {
       />
     );
 
-    expect(screen.getByText("pos.switch_to_desk")).toBeInTheDocument();
+    expect(screen.getByText("pos.open_workspace")).toBeInTheDocument();
   });
 
   it("opens /desk/ury in a new tab when switch to desk is clicked", async () => {
@@ -139,7 +139,7 @@ describe("POSOpeningDialog", () => {
       />
     );
 
-    const switchBtn = screen.getByText("pos.switch_to_desk");
+    const switchBtn = screen.getByText("pos.open_workspace");
     await user.click(switchBtn);
 
     expect(windowOpenSpy).toHaveBeenCalledWith(
@@ -160,6 +160,6 @@ describe("POSOpeningDialog", () => {
       />
     );
 
-    expect(screen.queryByText("pos.switch_to_desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("pos.open_workspace")).not.toBeInTheDocument();
   });
 });

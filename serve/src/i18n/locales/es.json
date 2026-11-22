@@ -20,7 +20,7 @@
     "checking_pos_status": "Verificando estado del POS...",
     "cancelling": "Cancelando...",
     "confirm_cancel": "Confirmar cancelación",
-    "loading_ury_pos": "Cargando URY POS...",
+    "loading_ury_pos": "Cargando Maximus POS...",
     "please_wait_setup": "Espera mientras configuramos todo"
   },
   "header": {
@@ -32,7 +32,7 @@
     "shift_overview": "Resumen del turno",
     "service_board": "Tablero de servicio",
     "close_shift": "Cerrar turno",
-    "switch_to_desk": "Ir al escritorio"
+    "open_workspace": "Ir al escritorio"
   },
   "menu": {
     "special_items": "Artículos especiales"
@@ -93,7 +93,7 @@
     "not_closed_message": "Cierra la entrada de POS anterior para continuar.",
     "reload_page": "Recargar página",
     "contact_manager": "Si esto sigue ocurriendo, contacta a tu administrador.",
-    "switch_to_desk": "Ir al escritorio",
+    "open_workspace": "Ir al escritorio",
     "opening": {
       "title": "Abrir sesión de POS",
       "session_details": "Detalle de la sesión",
@@ -450,7 +450,7 @@
     "session_opened_success": "Sesión de POS abierta"
   },
   "login": {
-    "title": "URY Serve",
+    "title": "Maximus Serve",
     "username": "Usuario o correo",
     "password": "Contraseña",
     "login": "Iniciar sesión",
