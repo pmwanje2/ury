@@ -22,14 +22,17 @@ vi.mock('../lib/api', () => ({
 }))
 
 const getItemAvailabilityMock = vi.fn()
+const getMenuAvailabilityMock = vi.fn()
 const getAvailabilityMessageMock = vi.fn((reasonCode: string) => `unavailable: ${reasonCode}`)
 
 vi.mock('../lib/availability', () => ({
   getItemAvailability: (...args: any[]) => getItemAvailabilityMock(...args),
+  getMenuAvailability: (...args: any[]) => getMenuAvailabilityMock(...args),
   getAvailabilityMessage: (...args: any[]) => getAvailabilityMessageMock(...args),
 }))
 
 import { useOrderingSession } from './useOrderingSession'
+import { t } from '../i18n'
 import type { CustomerOrder, MenuItem, OrderingContext } from '../lib/api'
 
 const buildContext = (overrides: Partial<OrderingContext> = {}): OrderingContext => ({
@@ -107,6 +110,7 @@ describe('useOrderingSession', () => {
     createPaymentRequestMock.mockReset()
     getStoredContextMock.mockReset()
     getItemAvailabilityMock.mockReset()
+    getMenuAvailabilityMock.mockReset()
     getAvailabilityMessageMock.mockClear()
     sessionStorage.clear()
     vi.stubGlobal('location', { ...window.location, search: '' })
@@ -232,6 +236,34 @@ describe('useOrderingSession', () => {
   // order-submit time. These tests pin down exactly what the hook does and
   // does not check.
   describe('submitCart availability re-check (B04 cart-capacity risk)', () => {
+    it('submitCart never calls the staff availability endpoint', async () => {
+      const view = await renderReady()
+      const coffee = { item_code: 'COFFEE', sellable: true, available_qty: null, reason_code: 'AVAILABLE' }
+      getItemAvailabilityMock.mockResolvedValue(coffee)
+      getMenuAvailabilityMock.mockResolvedValue({ COFFEE: coffee })
+      addItemsMock.mockResolvedValueOnce(buildOrder())
+      act(() => view.result.current.addToCart(buildMenuItem()))
+      await act(async () => {
+        expect(await view.result.current.submitCart()).toBe(true)
+      })
+      expect(getItemAvailabilityMock).not.toHaveBeenCalled()
+      expect(getMenuAvailabilityMock).toHaveBeenCalledExactlyOnceWith('SESSION-1')
+    })
+
+    it('submitCart shows catalog copy when the availability check fails', async () => {
+      const view = await renderReady()
+      const error = new Error('Frappe: Function ury.ury.api.ury_availability.get_item_availability is not whitelisted')
+      getItemAvailabilityMock.mockRejectedValueOnce(error)
+      getMenuAvailabilityMock.mockRejectedValueOnce(error)
+      act(() => view.result.current.addToCart(buildMenuItem()))
+      await act(async () => {
+        expect(await view.result.current.submitCart()).toBe(false)
+      })
+      expect(view.result.current.error).toBe(t('errors.place_order'))
+      expect(view.result.current.error).not.toMatch(/whitelisted|ury|frappe/i)
+      expect(addItemsMock).not.toHaveBeenCalled()
+    })
+
     it('does nothing and returns false when the cart is empty', async () => {
       const view = await renderReady()
       let ok: boolean | undefined

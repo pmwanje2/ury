@@ -42,6 +42,24 @@ describe('MenuGrid availability gating (self-order)', () => {
     getItemAvailabilityMock.mockReset()
   })
 
+  it('keeps an unconstrained item clickable (available_qty null)', async () => {
+    const entry = {
+      item_code: sellableItem.item, sellable: true, available_qty: null, reason_code: 'AVAILABLE',
+    } as const
+    getItemAvailabilityMock.mockResolvedValueOnce(entry)
+    const onItemClick = vi.fn()
+    // Give both versions the same availability: the old card fetch above,
+    // the replacement via the menu's inline map.
+    const props = { availability: { [sellableItem.item]: entry }, branch: 'B1', company: 'C1' }
+    render(
+      <MenuGrid {...props} menu={[sellableItem]} cart={{}} showImage={false}
+        onItemClick={onItemClick} gridClassName="grid" cardClassName="card" />,
+    )
+    await userEvent.click(screen.getByText('Veg Fried Rice'))
+    expect(screen.queryByText(/not available|sold out|unavailable/i)).not.toBeInTheDocument()
+    expect(onItemClick).toHaveBeenCalledWith(sellableItem)
+  })
+
   it('keeps a sellable item clickable and shows no unavailable badge', async () => {
     getItemAvailabilityMock.mockResolvedValueOnce({
       item_code: sellableItem.item,

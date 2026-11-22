@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const callGetMock = vi.fn()
+const callPostMock = vi.fn()
 
 vi.mock('@ury/core', () => ({
   call: {
     get: (...args: any[]) => callGetMock(...args),
+    post: (...args: any[]) => callPostMock(...args),
   },
 }))
 
@@ -15,6 +17,7 @@ import {
   invalidateAvailabilityCache,
   ItemAvailability,
 } from './availability'
+import * as availability from './availability'
 
 const buildAvailability = (overrides: Partial<ItemAvailability> = {}): ItemAvailability => ({
   item_code: 'ITEM-001',
@@ -39,7 +42,21 @@ const buildAvailability = (overrides: Partial<ItemAvailability> = {}): ItemAvail
 describe('availability service (self-order)', () => {
   beforeEach(() => {
     callGetMock.mockReset()
+    callPostMock.mockReset()
     invalidateAvailabilityCache()
+  })
+
+  it('posts only the ordering session to the guest batch endpoint', async () => {
+    const payload = { FISH: { item_code: 'FISH', sellable: true, available_qty: null, reason_code: 'AVAILABLE' } }
+    callPostMock.mockResolvedValueOnce({ message: payload })
+    const result = await (availability as unknown as {
+      getMenuAvailability: (session: string) => Promise<unknown>
+    }).getMenuAvailability('ORDERING-SESSION')
+    expect(callPostMock).toHaveBeenCalledExactlyOnceWith(
+      'ury.ury.api.self_ordering.get_customer_menu_availability', { session: 'ORDERING-SESSION' },
+    )
+    expect(callGetMock).not.toHaveBeenCalled()
+    expect(result).toEqual(payload)
   })
 
   it('fetches availability and passes the server response through verbatim', async () => {
