@@ -178,7 +178,7 @@ def get_brand(surface="site"):
     if brand["name"] and re.search(r"\b(?:ury|frappe|erpnext|kamra)\b", brand["name"], re.I):
         brand["name"] = None
     for key in ("logo", "favicon"):
-        if brand[key] and re.search(r"/assets/(?:ury|erpnext|frappe|kamra)/", brand[key], re.I):
+        if brand[key] and re.search(r"/assets/(?:erpnext|frappe|kamra)/", brand[key], re.I):
             brand[key] = None
     return brand if any(brand.values()) else None
 
