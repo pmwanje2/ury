@@ -312,6 +312,7 @@ doc_events = {
         # checklist gate must also be wired to before_submit -- otherwise
         # the cashier can open the shift before the Order Taker submitted.
         "before_submit": "ury.ury.hooks.pos_opening.update_daily_checklists",
+        "on_submit": "ury.ury.hooks.ury_pos_opening_entry.reset_item_availability_on_open",
         "before_insert":"ury.ury.api.ury_kot_order_number.set_last_invoice_in_pos_open",
         },
     "POS Closing Entry": {

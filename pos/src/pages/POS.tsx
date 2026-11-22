@@ -10,6 +10,10 @@ import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
 import { useMenuAvailability } from '../lib/use-menu-availability';
+import { useRootStore } from '../store/root-store';
+import { availabilityPermissions, type AvailabilityChange } from '@ury/core/availability';
+import { setItemAvailability } from '../lib/availability-api';
+import { SoldOutSheet } from '../components/SoldOutSheet';
 
 const EMPTY_MENU: Array<{ item: string }> = [];
 
@@ -26,7 +30,18 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
     menuItems,
     posProfile,
   } = usePOSStore();
-  const { availabilityMap } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
+  const { availabilityMap, refetchAll } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
+  const user = useRootStore(state => state.user);
+  const { canMark, canRestore } = availabilityPermissions(user?.roles);
+  const branch = posProfile?.branch;
+  const company = posProfile?.company;
+  const itemAvailabilityActions = canMark && branch ? (item: string) => ({
+    canRestore,
+    update: async (change: AvailabilityChange) => {
+      await setItemAvailability(branch, item, change);
+      await refetchAll();
+    },
+  }) : undefined;
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -134,11 +149,13 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
               
               <QuickFilterButton filter="all" icon={Star} label={t('common.all')} />
               <QuickFilterButton filter="special" icon={TrendingUp} label={t('menu.special_items')} />
+              {branch && company && itemAvailabilityActions && <SoldOutSheet key={branch}
+                branch={branch} company={company} availability={availabilityMap} actions={itemAvailabilityActions} />}
             </div>
           </div>
         </div>
 
-        <MenuList onItemClick={handleItemClick} availabilityMap={availabilityMap} />
+        <MenuList onItemClick={handleItemClick} availabilityMap={availabilityMap} itemAvailabilityActions={itemAvailabilityActions} />
       </div>
       <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}

@@ -48,7 +48,7 @@ from ury.ury.doctype.ury_order.ury_order import (
     price_items_for_invoice,
 )
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
-from ury.ury.api.ury_availability import _batch_availability, _catalog_gate
+from ury.ury.api.ury_availability import _batch_availability, _catalog_gate, apply_count_delta
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_order_reservation_service import reconcile_order_reservations
 from ury.ury.api.ury_stock_policy import get_branch_stock_policy
@@ -759,6 +759,7 @@ def add_customer_items(session, items):
         past_kitchen = _kitchen_snapshot(invoice.items)
         past_item = [dict(item_code=row.item_code, qty=row.qty, comments=row.get("comment") or "",
                           reservation_line_key=row.get("reservation_line_key")) for row in invoice.items]
+        apply_count_delta(invoice.branch, past_item, past_item + clean_items, invoice=invoice)
 
         # Mirror sync_order()'s reservation gate (ury_order.py ~L1644) so a
         # self-order cannot silently save/KOT an item whose production

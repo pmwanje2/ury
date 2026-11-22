@@ -1,4 +1,4 @@
-import { MenuItemCard } from '@ury/ui'
+import { AvailabilityActionMenu, MenuItemCard, type AvailabilityActions } from '@ury/ui'
 import { formatCurrency } from '@ury/core'
 import {
   getAvailabilityMessage,
@@ -13,6 +13,7 @@ interface Props {
   course?: string
   disabled?: boolean
   availability?: ItemAvailability
+  availabilityActions?: AvailabilityActions
   onClick?: () => void
   onConfigure?: () => void
   quantity?: number
@@ -20,6 +21,16 @@ interface Props {
   onDecrement?: () => void
   incrementDisabled?: boolean
   decrementDisabled?: boolean
+}
+
+const availabilityLabels = {
+  manage: 'Manage availability',
+  soldOut: 'Mark sold out',
+  restore: 'Available again',
+  dailyCount: 'Daily count',
+  setCount: 'Set count',
+  reset: 'Reset at first opening',
+  error: 'Could not update availability. Try again.',
 }
 
 function getAvailabilityTag(
@@ -68,6 +79,7 @@ export default function ServeMenuCard({
   course,
   disabled,
   availability,
+  availabilityActions,
   onClick,
   onConfigure,
   quantity,
@@ -81,7 +93,7 @@ export default function ServeMenuCard({
     : null
   const availabilityTag = getAvailabilityTag(availability, unavailableMessage)
 
-  return (
+  const card = (
     <MenuItemCard
       name={name}
       priceLabel={formatCurrency(price)}
@@ -99,4 +111,13 @@ export default function ServeMenuCard({
       decrementDisabled={decrementDisabled}
     />
   )
+  if (!availabilityActions) return card
+  return <div className="relative">
+    {card}
+    <div className="absolute right-1 top-1 z-10">
+      <AvailabilityActionMenu actions={availabilityActions} labels={availabilityLabels}
+        manualSoldOut={availability?.manual_status === 'Sold Out' || availability?.reason_code === 'SOLD_OUT_MANUAL'}
+        dailyLimit={availability?.daily_limit} autoReset={availability?.auto_reset_on_open} />
+    </div>
+  </div>
 }

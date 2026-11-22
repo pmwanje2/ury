@@ -1,4 +1,5 @@
 import { call } from '@ury/core'
+import type { AvailabilityChange } from '@ury/core/availability'
 
 /**
  * Read-only adapter for menu display. Order acceptance stays on sync_order /
@@ -42,9 +43,16 @@ export interface ItemAvailability {
   as_of: string
   stock_policy_mode?: 'NATIVE' | 'RESERVATION_CONTROLLED'
   source?: 'CATALOG' | 'PRODUCTION' | 'MANUAL' | 'COUNT_DOWN'
+  manual_status?: 'Available' | 'Sold Out'
+  daily_limit?: number | null
+  auto_reset_on_open?: boolean
 }
 
 export type MenuAvailability = Record<string, ItemAvailability>
+
+export async function setItemAvailability(branch: string, itemCode: string, change: AvailabilityChange) {
+  await call.post('ury.ury.api.ury_availability.set_item_availability', { branch, item_code: itemCode, ...change })
+}
 
 export const isUnavailable = (entry?: ItemAvailability | null): boolean =>
   !!entry && (!entry.sellable || (entry.available_qty != null && entry.available_qty <= 0))

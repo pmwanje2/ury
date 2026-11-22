@@ -6,7 +6,7 @@ import { formatCurrency } from '@ury/core';
 import { Button, Dialog, DialogContent, Input } from '@ury/ui';
 import { db } from '@ury/core';
 import { t } from '../i18n';
-import { getItemAvailability, getAvailabilityMessage } from '../lib/availability-api';
+import { getMenuAvailability, getAvailabilityMessage } from '../lib/availability-api';
 
 interface Variant {
   id: string;
@@ -261,14 +261,8 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
 
     try {
       setIsCheckingAvailability(true);
-      const availability = await getItemAvailability(
-        {
-          item_code: selectedItem.item,
-          branch: posProfile.branch,
-          company: posProfile.company,
-        },
-        { skipCache: true }
-      );
+      const batch = await getMenuAvailability(posProfile.branch, posProfile.company, [selectedItem.item]);
+      const availability = batch[selectedItem.item];
 
       if (!availability.sellable) {
         // Item is not sellable — show user-facing error message
@@ -277,8 +271,8 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         setIsCheckingAvailability(false);
         return;
       }
-    } catch (error: any) {
-      setAvailabilityError(error.message || 'Failed to verify item availability');
+    } catch {
+      setAvailabilityError('Failed to verify item availability');
       setIsCheckingAvailability(false);
       return;
     }
@@ -541,4 +535,4 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
   );
 };
 
-export default ProductDialog; 
+export default ProductDialog;

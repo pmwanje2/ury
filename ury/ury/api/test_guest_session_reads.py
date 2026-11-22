@@ -65,6 +65,7 @@ def _site_less_frappe():
     availability = ModuleType("ury.ury.api.ury_availability")
     availability._batch_availability = MagicMock()
     availability._catalog_gate = MagicMock()
+    availability.apply_count_delta = MagicMock()
     return framework, {
         "frappe": framework, "frappe.utils": utils, "frappe.rate_limiter": rate_limiter,
         "ury.ury_pos.api": pos_api, "ury.ury.doctype.ury_order.ury_order": order,

@@ -82,23 +82,35 @@ export function useMenuAvailability(
     const refreshIfVisible = () => {
       if (document.visibilityState === 'visible') void refresh();
     };
+    const refreshAfterFlight = async () => {
+      if (inFlight) await inFlight;
+      if (active) await refresh();
+    };
 
-    refreshRef.current = refresh;
+    refreshRef.current = refreshAfterFlight;
     void refresh();
     const timer = setInterval(refreshIfVisible, 60_000);
     document.addEventListener('visibilitychange', refreshIfVisible);
     const channel = `menu_availability_update_${branch}`;
+    let eventTimer: ReturnType<typeof setTimeout> | undefined;
+    const onAvailabilityUpdate = () => {
+      clearTimeout(eventTimer);
+      eventTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') void refreshAfterFlight();
+      }, 500);
+    };
     let unsubscribe: (() => void) | undefined;
     void getRealtimeSocket().then((socket) => {
       if (!active) return;
-      socket.on(channel, refreshIfVisible);
-      unsubscribe = () => { socket.off(channel, refreshIfVisible); };
+      socket.on(channel, onAvailabilityUpdate);
+      unsubscribe = () => { socket.off(channel, onAvailabilityUpdate); };
     }).catch(() => { /* The periodic refresh does not depend on the socket. */ });
 
     return () => {
       active = false;
       refreshRef.current = async () => {};
       clearInterval(timer);
+      clearTimeout(eventTimer);
       document.removeEventListener('visibilitychange', refreshIfVisible);
       unsubscribe?.();
     };

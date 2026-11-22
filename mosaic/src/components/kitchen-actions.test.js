@@ -10,6 +10,7 @@ import { compile } from "@vue/compiler-dom";
 import { parse } from "@vue/compiler-sfc";
 import { renderToString } from "@vue/server-renderer";
 import i18n, { isRTL, t as translate } from "../i18n";
+import AvailabilityDrawer from "./AvailabilityDrawer.vue";
 
 // Exercise the real component methods without a DOM, site, or a test runner.
 const source = await readFile(join(dirname(fileURLToPath(import.meta.url)), "kot.vue"), "utf8");
@@ -21,7 +22,7 @@ const optional = name => import(/* @vite-ignore */ `./${name}`).catch(error => {
 });
 const helpers = { ...await optional("kitchen-actions.js"), ...await optional("station-print.js") };
 // v16 kot.vue imports t and isRTL from ../i18n; the harness strips imports and passes them in.
-const scope = () => ({ ...helpers, t: translate, isRTL });
+const scope = () => ({ ...helpers, t: translate, isRTL, AvailabilityDrawer });
 const KOT_LIST = "ury.ury.api.ury_kot_display.kot_list";
 afterEach(() => { vi.useRealTimers(); });
 
@@ -485,7 +486,7 @@ test("reconnect resyncs the server clock and chimes once for all missed station 
   k.connect();
   await settle();
   assert.deepEqual(state.kot.map(kot => kot.name), ["MISSED", "MISSED-2", "KNOWN"], "Socket.IO does not replay disconnected tickets");
-  assert.deepEqual(k.requests, Array.from({ length: 2 }, () => ({ method: "ury.ury.api.ury_kot_display.kot_list", args: {} })));
+  assert.deepEqual(k.requests, Array.from({ length: 2 }, () => ({ method: KOT_LIST, args: { production_unit: "Kitchen" } })));
   assert.equal(state.serverTimeOffset, 3600000, "Reconnect must also refresh the site-clock offset");
   assert.equal(state.calculateTimeRemaining("13:00:00"), "0 : 5");
   assert.deepEqual(k.chimes, ["https://test/snapshot-alert.wav"], "Reconnect must combine missed station tickets into one chime using the snapshot sound");

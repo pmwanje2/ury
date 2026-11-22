@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { usePOSStore } from '../store/pos-store';
 import MenuCard from './MenuCard';
-import { Spinner } from '@ury/ui';
+import { Spinner, type AvailabilityActions } from '@ury/ui';
 import { cn } from '@ury/ui';
 import { t } from '../i18n';
 import { sortMenuItemsByAvailability } from '../lib/use-menu-availability';
@@ -12,9 +12,10 @@ const EMPTY_AVAILABILITY: MenuAvailability = {};
 interface MenuListProps {
   onItemClick: (item: any) => void;
   availabilityMap?: MenuAvailability;
+  itemAvailabilityActions?: (item: string) => AvailabilityActions;
 }
 
-const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPTY_AVAILABILITY }) => {
+const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPTY_AVAILABILITY, itemAvailabilityActions }) => {
   const {
     menuItems,
     menuLoading,
@@ -87,6 +88,7 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
                 onClick={() => onItemClick(item)}
                 disabled={isInteractionDisabled}
                 availability={availabilityMap[item.item]}
+                availabilityActions={itemAvailabilityActions?.(item.item)}
               />
             ))}
           </div>

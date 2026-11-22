@@ -75,6 +75,7 @@
     </div>
     <p v-if="printError" role="alert" class="mb-4 rounded p-3" style="background: var(--rd-t); border: 1px solid var(--rd); color: var(--rd)">{{ printError }}</p>
     <button v-if="branch" @click="openPrintSettings" class="mb-4 rounded border px-4 py-2 font-semibold" style="border-color: var(--ac); color: var(--ac)">{{ __("Manager settings") }}</button>
+    <AvailabilityDrawer :branch="availabilityBranch" :roles="availabilityRoles" :call="call" :socket="availabilitySocket" />
 
     <div v-if="showPrintSettings && canManagePrintSettings" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto" style="background: rgba(13, 13, 15, 0.4)">
       <form @submit.prevent="savePrintSettings" role="dialog" aria-modal="true" aria-labelledby="station-print-title" class="w-full max-w-lg rounded-lg p-6" style="background: var(--panel); border: 1px solid var(--hair); box-shadow: 0 8px 30px rgba(0,0,0,.12)">
@@ -392,6 +393,7 @@ import io from "socket.io-client";
 import { t, isRTL } from "../i18n";
 import { canRecallKot, isKotLate, kitchenErrorMessage, recentServedQuery, rememberKot } from "./kitchen-actions.js";
 import { createStationPrinter } from "./station-print.js";
+import AvailabilityDrawer from "./AvailabilityDrawer.vue";
 
 let host = window.location.hostname;
 let port = window.location.port;
@@ -446,6 +448,7 @@ initializeSocket(); // Initialize the socket after fetching the site name
 
 const frappe = new FrappeApp(url);
 export default {
+  components: { AvailabilityDrawer },
   // inject: ["$auth", "$socket"],
   props: ["production"],
   data() {
@@ -460,6 +463,8 @@ export default {
       masonry: null,
       call: frappe.call(),
       branch: "",
+      availabilityBranch: "",
+      availabilityRoles: [],
       kot_channel: "",
       kot_error_channel: "",
       clickedItems: new Set(),
@@ -670,7 +675,7 @@ export default {
       return new Promise((resolve, reject) => {
         try {
           this.call
-            .get("ury.ury.api.ury_kot_display.kot_list", {})
+            .get("ury.ury.api.ury_kot_display.kot_list", { production_unit: this.production })
             .then((result) => {
               // A newer connect/disconnect (or unmount) owns the board; drop this older snapshot.
               if (generation !== this.resyncGeneration) { resolve(); return; }
@@ -678,6 +683,8 @@ export default {
                 kot => kot.production === this.production && !this.knownKots.has(kot.name)
               );
               this.branch = result.message.Branch;
+              this.availabilityBranch = result.message.availability_branch ?? this.branch ?? "";
+              this.availabilityRoles = result.message.roles ?? [];
               const serverNow = new Date(String(result.message.server_time || "").replace(" ", "T")).getTime();
               if (Number.isFinite(serverNow)) this.serverTimeOffset = serverNow - Date.now();
               this.kot_alert_time = result.message.kot_alert_time;
@@ -1160,6 +1167,9 @@ export default {
     document.removeEventListener("click", this.hideAudioAlertMessage);
   },
   computed: {
+    availabilitySocket() {
+      return this.availabilityBranch ? socket : undefined;
+    },
     sortedKotItems() {
       return (kot) => {
         return kot.kot_items.sort((a, b) => a.serve_priority - b.serve_priority);

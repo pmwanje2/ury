@@ -2606,6 +2606,9 @@ def sync_order(
         room=opening_room or room,
         order_type=effective_order_type,
     )
+    from ury.ury.api.ury_availability import apply_count_delta
+
+    apply_count_delta(invoice.branch, past_item, past_item + items if append else items, invoice=invoice)
 
     menu = _resolve_menu_for_sync(invoice.branch, table=table or invoice.restaurant_table, room=opening_room or room, order_type=effective_order_type) or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
 
@@ -3016,7 +3019,7 @@ def _validated_void_reason(pos_invoice, reason):
 
 @frappe.whitelist()
 def cancel_order(invoice_id, reason):
-    pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
+    pos_invoice = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
 
     # Authorization gate: the session user must hold cancel rights on this
     # specific invoice before any mutation happens.
@@ -3040,6 +3043,10 @@ def cancel_order(invoice_id, reason):
         frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
 
     reason = _validated_void_reason(pos_invoice, reason)
+
+    from ury.ury.api.ury_availability import apply_count_delta
+
+    apply_count_delta(pos_invoice.branch, pos_invoice.items, [], invoice=pos_invoice)
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:

@@ -113,6 +113,10 @@ class TestCancelOrderReason(unittest.TestCase):
         self.release = MagicMock()
         self.kot = MagicMock()
         self.reservations = MagicMock()
+        self.count_delta = MagicMock()
+        availability = ModuleType("ury.ury.api.ury_availability")
+        availability.apply_count_delta = self.count_delta
+        self.enterContext(patch.dict(sys.modules, {availability.__name__: availability}))
         for target, replacement in (
             ("frappe", self.framework),
             ("_", lambda message: message),
@@ -149,6 +153,7 @@ class TestCancelOrderReason(unittest.TestCase):
         self.release.assert_not_called()
         self.kot.assert_not_called()
         self.reservations.assert_not_called()
+        self.count_delta.assert_not_called()
         self.assertEqual(self.invoice.method_calls, [])
         # Reading the configured list is not a table, KOT, or invoice write.
         db_writes = [call[0] for call in self.framework.db.method_calls if call[0] != "get_value"]

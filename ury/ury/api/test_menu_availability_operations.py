@@ -2,12 +2,13 @@
 
 import ast
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import date
 import json
 from pathlib import Path
 import sqlite3
 import tempfile
-from threading import Barrier
+from threading import Barrier, local
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
@@ -29,11 +30,12 @@ class TestAvailabilityOperations(unittest.TestCase):
 
     def setUp(self):
         tiers.TestAvailabilityTiers.setUp(self)
-        self.row = Doc(name="override", branch=BRANCH, item="Fish", status="Sold Out",
+        self.row = Doc(name="override", branch=BRANCH, item="Fish", status="Sold Out", flags=SimpleNamespace(),
                        countdown_enabled=1, remaining_qty=3, daily_limit=3, auto_reset_on_open=1,
                        last_reset_on=None, reason="Kitchen closed", updated_by="operator", updated_at=None)
         self.frappe.get_all.side_effect = self.get_all
         self.frappe.db.get_values.side_effect = self.get_all
+        self.frappe._dict.side_effect = Doc
 
     def get_all(self, doctype, filters=None, fields=None, **kwargs):
         if doctype == DT:
@@ -97,7 +99,7 @@ class TestAvailabilityOperations(unittest.TestCase):
         session = self.session.return_value
         session.device = None
         session.source = "QR"
-        invoice = SimpleNamespace(branch=BRANCH, company=COMPANY, restaurant_table="T1", customer="Walk in",
+        invoice = SimpleNamespace(name="INV-1", branch=BRANCH, company=COMPANY, restaurant_table="T1", customer="Walk in",
                                   items=[], selling_price_list="Lunch")
         self.guest._resolve_or_create_pos_invoice.return_value = (invoice, "INV-1")
         class ReachedPricing(Exception):
@@ -120,7 +122,7 @@ class TestAvailabilityOperations(unittest.TestCase):
         self.frappe.db.exists.return_value = True
         self.frappe.get_doc.return_value = self.row
         self.row.save = Mock()
-        self.api.resolve_restaurant_menu = Mock(return_value={"items": [{"item": "Fish"}]})
+        self.api._branch_menu_items = Mock(return_value=[{"item": "Fish", "name": "Fish"}])
         for role in ("URY Cashier", "URY Waiter", "URY Captain", "Kitchen User", "Kitchen Cook"):
             with self.subTest(role=role):
                 self.frappe.get_roles.return_value = [role]
@@ -147,19 +149,22 @@ class TestAvailabilityOperations(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         path = Path(temp.name) / "test.sqlite"
-        with sqlite3.connect(path) as conn:
+        with closing(sqlite3.connect(path)) as conn, conn:
             conn.execute("""CREATE TABLE `tabURY Item Availability` (
                 name TEXT, branch TEXT, item TEXT, status TEXT, countdown_enabled INT,
                 remaining_qty INT, daily_limit INT, auto_reset_on_open INT,
-                last_reset_on TEXT, updated_at TEXT, updated_by TEXT, reason TEXT,
+                last_reset_on TEXT, count_started_at TEXT, updated_at TEXT, updated_by TEXT, reason TEXT,
                 UNIQUE (branch, item))""")
-            conn.execute("INSERT INTO `tabURY Item Availability` VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                         ("override", BRANCH, "Fish", "Available", 1, 1, 3, 1, None, None, None, None))
+            conn.execute("INSERT INTO `tabURY Item Availability` VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                         ("override", BRANCH, "Fish", "Available", 1, 1, 3, 1, None, None, None, None, None))
+
+        self.frappe.db._cursor = local()
 
         def sql(query, values=(), as_dict=False):
             # SQLite serializes writers; the conditional UPDATE is still real, not mocked.
             query = query.replace("%s", "?").replace("FOR UPDATE", "")
-            with sqlite3.connect(path, timeout=8) as conn:
+            values = tuple(v.isoformat() if isinstance(v, date) else v for v in values)
+            with closing(sqlite3.connect(path, timeout=8)) as conn, conn:
                 conn.create_function("LEAST", 2, min)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(query, values)

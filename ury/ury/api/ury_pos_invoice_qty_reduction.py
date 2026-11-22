@@ -126,7 +126,7 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 	if not invoice_id or not frappe.db.exists("POS Invoice", invoice_id):
 		raise QtyReductionError(INVOICE_NOT_FOUND, _("POS Invoice {0} not found").format(invoice_id))
 
-	pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
+	pos_invoice = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
 
 	if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice, user=actor):
 		raise QtyReductionError(
@@ -219,6 +219,13 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 			).format(pos_profile.name),
 		)
 	cancel_kot_naming_series = "CNCL-" + (kot_naming_series or "")
+
+	from ury.ury.api.ury_availability import apply_count_delta
+
+	apply_count_delta(
+		pos_invoice.branch, [{"item": item_code, "qty": current_qty}],
+		[{"item": item_code, "qty": new_qty}], invoice=pos_invoice,
+	)
 
 	reconcile_held = False
 	if held:

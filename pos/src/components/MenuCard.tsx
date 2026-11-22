@@ -1,7 +1,8 @@
 import type { FC } from 'react';
-import { MenuItemCard } from '@ury/ui';
+import { AvailabilityActionMenu, MenuItemCard, type AvailabilityActions } from '@ury/ui';
 import { formatCurrency } from '@ury/core';
 import { t } from '../i18n';
+import { availabilityActionLabels } from '../lib/availability-labels';
 import {
   getAvailabilityMessage,
   isUnavailable,
@@ -18,6 +19,7 @@ interface MenuCardProps {
   onClick?: () => void;
   disabled?: boolean;
   availability?: ItemAvailability | null;
+  availabilityActions?: AvailabilityActions;
 }
 
 const MenuCard: FC<MenuCardProps> = ({
@@ -28,6 +30,7 @@ const MenuCard: FC<MenuCardProps> = ({
   onClick,
   disabled,
   availability,
+  availabilityActions,
 }) => {
   const unavailable = isUnavailable(availability);
   const unavailableMessage = unavailable
@@ -72,7 +75,7 @@ const MenuCard: FC<MenuCardProps> = ({
 
   const availabilityTag = getAvailabilityTag();
 
-  return (
+  const card = (
     <MenuItemCard
       name={name}
       priceLabel={formatCurrency(price)}
@@ -83,6 +86,15 @@ const MenuCard: FC<MenuCardProps> = ({
       availabilityTag={availabilityTag}
     />
   );
+  if (!availabilityActions) return card;
+  return <div className="relative">
+    {card}
+    <div className="pointer-events-auto absolute right-1 top-1 z-10">
+      <AvailabilityActionMenu actions={availabilityActions} labels={availabilityActionLabels()}
+        manualSoldOut={availability?.manual_status === 'Sold Out' || availability?.reason_code === 'SOLD_OUT_MANUAL'}
+        dailyLimit={availability?.daily_limit} autoReset={availability?.auto_reset_on_open} />
+    </div>
+  </div>;
 };
 
 export default MenuCard;

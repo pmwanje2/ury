@@ -1,5 +1,6 @@
 import { t } from '../i18n';
 import { call } from '@ury/core';
+import type { AvailabilityChange } from '@ury/core/availability';
 
 /**
  * Thin, read-only adapter over V3-44's `get_item_availability` whitelisted
@@ -61,9 +62,33 @@ export interface ItemAvailability {
   as_of: string;
   stock_policy_mode?: 'NATIVE' | 'RESERVATION_CONTROLLED';
   source?: 'CATALOG' | 'PRODUCTION' | 'MANUAL' | 'COUNT_DOWN';
+  manual_status?: 'Available' | 'Sold Out';
+  daily_limit?: number | null;
+  auto_reset_on_open?: boolean;
 }
 
 export type MenuAvailability = Record<string, ItemAvailability>;
+
+export async function setItemAvailability(branch: string, itemCode: string, change: AvailabilityChange) {
+  await call.post('ury.ury.api.ury_availability.set_item_availability', { branch, item_code: itemCode, ...change });
+}
+
+export interface AvailabilityOverride {
+  item: string;
+  item_name: string;
+  status: 'Available' | 'Sold Out';
+  countdown_enabled: number;
+  remaining_qty: number;
+  daily_limit: number;
+  auto_reset_on_open: number;
+}
+
+export async function getAvailabilityOverrides(branch: string, company: string) {
+  const response = await call.get<{ message: AvailabilityOverride[] }>(
+    'ury.ury.api.ury_availability.get_branch_availability_overrides', { branch, company },
+  );
+  return response.message;
+}
 
 export const isUnavailable = (entry?: ItemAvailability | null): boolean =>
   !!entry && (!entry.sellable || (entry.available_qty != null && entry.available_qty <= 0));

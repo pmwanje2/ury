@@ -60,6 +60,19 @@ export interface ItemAvailability {
   as_of: string;
 }
 
+export async function getMenuAvailability(branch: string, company: string, itemCodes: string[]) {
+  const unique = [...new Set(itemCodes.filter(Boolean))];
+  const batches = [];
+  for (let i = 0; i < unique.length; i += 500) {
+    batches.push(call.post<{ message: { items: Record<string, ItemAvailability> } }>(
+      'ury.ury.api.ury_availability.get_menu_availability',
+      { branch, company, item_codes: unique.slice(i, i + 500) },
+    ));
+  }
+  const results = await Promise.all(batches);
+  return Object.assign({}, ...results.map(response => response.message.items)) as Record<string, ItemAvailability>;
+}
+
 export interface GetItemAvailabilityParams {
   item_code: string;
   branch: string;
@@ -76,6 +89,10 @@ export const AVAILABILITY_REASON_MESSAGES: Record<string, string> = {
   AVAILABLE: 'Available',
   NOT_PRODUCED: 'Not available today',
   PLAN_EXHAUSTED: 'Sold out',
+  SOLD_OUT_MANUAL: 'Sold out',
+  COUNT_EXHAUSTED: 'Sold out',
+  ITEM_DISABLED: 'Currently unavailable',
+  MENU_ITEM_DISABLED: 'Currently unavailable',
   FG_OUT_OF_STOCK: 'Sold out',
   NO_ACTIVE_PLAN: 'Not available today',
   BLOCKING_COMPONENT: 'Temporarily unavailable',
