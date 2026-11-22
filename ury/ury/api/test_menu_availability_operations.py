@@ -3,7 +3,7 @@
 import ast
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from datetime import date
+from datetime import date, datetime
 import json
 from pathlib import Path
 import sqlite3
@@ -11,10 +11,12 @@ import tempfile
 from threading import Barrier, local
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from ury.ury.api import test_availability_tiers as tiers
 from ury.ury.api.test_guest_session_reads import Doc
+from ury.ury.api import test_ury_hold_fire
+from ury.ury.api.test_ury_kot_notes import OrderingCases
 
 DT = "URY Item Availability"
 APP = Path(__file__).resolve().parents[1]
@@ -205,6 +207,17 @@ class TestAvailabilityOperations(unittest.TestCase):
         apply(BRANCH, FISH, [])
         self.assertEqual(sql("SELECT remaining_qty FROM `tabURY Item Availability`")[0][0], 2)
 
+    def test_split_from_an_older_count_does_not_refill_the_new_count(self):
+        apply = self.require("apply_count_delta")
+        sql = self.sql_db()
+        self.row.count_started_at = datetime(2026, 11, 22, 9)
+        split = SimpleNamespace(name="INV-CHILD", creation=datetime(2026, 11, 22, 10), custom_split_from="INV-ROOT")
+        self.frappe.db.get_value.side_effect = lambda dt, *args, **kw: (
+            Doc(creation=datetime(2026, 11, 22, 8), custom_split_from=None)
+            if dt == "POS Invoice" else self.get_value(dt, *args, **kw))
+        apply(BRANCH, FISH, [], invoice=split, prepared=())
+        self.assertEqual(sql("SELECT remaining_qty FROM `tabURY Item Availability`")[0][0], 1)
+
     def test_first_opening_resets_but_second_opening_does_not(self):
         reset = self.require("reset_branch_availability")
         sql = self.sql_db()
@@ -238,3 +251,32 @@ class TestAvailabilityOperations(unittest.TestCase):
                                 and n.func.id == "apply_count_delta" for n in ast.walk(fn)), method)
         hook = (APP.parent / "hooks.py").read_text()
         self.assertIn('"on_submit": "ury.ury.hooks.ury_pos_opening_entry.reset_item_availability_on_open"', hook)
+
+
+class TestStaffAvailability(OrderingCases, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.framework.session.user = "waiter@example.com"
+        self.invoice.modified = "2026-10-16 12:00:00"
+
+    sync = test_ury_hold_fire.HoldFireTests.sync
+
+    def test_pos_rejects_manual_sold_out_before_saving_in_both_tiers(self):
+        self.framework.db.get_values.return_value = [
+            Doc(item="Fish", status="Sold Out", countdown_enabled=0),
+        ]
+        for enabled in (False, True):
+            with self.subTest(reservation_control_enabled=enabled), patch.object(
+                self.order, "get_branch_stock_policy", return_value=SimpleNamespace(reservation_control_enabled=enabled),
+            ), patch.object(self.order, "reconcile_order_reservations") as reserve:
+                with self.assertRaisesRegex(ValueError, r"\[AVAIL-SOLD-OUT\]"):
+                    self.sync([{"item": "Fish", "item_name": "Fish", "qty": 1, "rate": 100}])
+                self.invoice.save.assert_not_called()
+                reserve.assert_not_called()
+
+    def test_no_availability_row_causes_no_count_writes(self):
+        self.framework.db.get_values.return_value = []
+        self.sync([{"item": "Fish", "item_name": "Fish", "qty": 1, "rate": 100}])
+        self.invoice.save.assert_called_once()
+        self.assertFalse(any("tabURY Item Availability" in str(call)
+                             for call in self.framework.db.sql.call_args_list))

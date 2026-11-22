@@ -169,6 +169,7 @@ class TestCancelOrderReason(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.release.reset_mock()
                 self.reservations.reset_mock()
+                self.count_delta.reset_mock()
                 self.kot.reset_mock()
                 self.invoice.reset_mock()
                 self.framework.db.reset_mock()
