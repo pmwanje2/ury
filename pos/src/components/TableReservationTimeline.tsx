@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
-import { Clock, User, Phone, BookLock } from 'lucide-react';
+import { User, Phone, BookLock } from 'lucide-react';
 import { Badge } from '@ury/ui';
 import type { Table, TableReservation } from '../lib/table-api';
 import { t } from '../i18n';
@@ -295,26 +295,22 @@ export default function TableReservationTimeline({
             : 'shadow-2xs hover:shadow-md'
           } ${getStatusColorClasses(res.status)}`}
       >
-        {/* Top Row: Table Name badge + Time + Compact Status */}
+        {/* Top Row: the status, whole. A table's row already names the table, and the
+            last row shows the times, so a short card repeats neither; in the free
+            layout the table name yields (truncates) to the status. */}
         <div className="flex items-center justify-between gap-1.5 min-w-0">
-          <span
-            className={`text-[11px] font-bold px-1.5 py-0.5 rounded shadow-2xs shrink-0 ${isCancelled
-                ? 'bg-white/95 text-red-950 border border-red-200'
-                : 'bg-white/90 text-gray-900 border border-gray-200/60'
-              }`}
-          >
-            {resTable}
-          </span>
+          {!tableRows && (
+            <span
+              className={`text-[11px] font-bold px-1.5 py-0.5 rounded shadow-2xs min-w-0 truncate ${isCancelled
+                  ? 'bg-white/95 text-red-950 border border-red-200'
+                  : 'bg-white/90 text-gray-900 border border-gray-200/60'
+                }`}
+            >
+              {resTable}
+            </span>
+          )}
 
-          <span
-            className={`text-xs font-bold truncate flex items-center gap-1 ${isCancelled ? 'text-red-900' : 'text-gray-800'
-              }`}
-          >
-            <Clock className="w-3 h-3 shrink-0 opacity-60" />
-            {item.timeStr}
-          </span>
-
-          <div className="shrink-0 text-[10px] scale-90 origin-right">
+          <div className="ml-auto shrink-0 text-[10px] scale-90 origin-right">
             {getStatusBadge(res.status)}
           </div>
         </div>

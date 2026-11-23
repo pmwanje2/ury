@@ -370,28 +370,3 @@ def update_branch_avg_table_times(branch):
     })
 
     return last_day_val, last_week_val
-
-
-def get_branch_reservation_duration(branch, *, target_turn_time, min_avg_table_time):
-    """
-    Centralized authority to determine the expected reservation duration (in minutes) for a branch.
-    Both limits are the Branch's own settings (custom_target_turn_time, custom_min_avg_table_time).
-    Selection logic:
-    1. Try Last Day Average Table Time, if it is at least min_avg_table_time.
-    2. Else try Last Week Average Table Time, if it is at least min_avg_table_time.
-    3. Else fall back to the Branch's target turn time.
-    """
-    if not branch:
-        return target_turn_time
-
-    # Read-only: the Branch averages are written only by
-    # update_branch_avg_table_times at till close.
-    last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
-    if last_day_avg and last_day_avg >= min_avg_table_time:
-        return int(round(last_day_avg))
-
-    last_week_avg = get_branch_last_week_avg_time(branch, update_branch=False)
-    if last_week_avg and last_week_avg >= min_avg_table_time:
-        return int(round(last_week_avg))
-
-    return target_turn_time

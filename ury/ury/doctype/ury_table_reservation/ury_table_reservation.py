@@ -165,6 +165,10 @@ class URYTableReservation(Document):
         if before and before.status == "Seated":
             return  # unseating: its slot stayed held while the party sat
 
+        # The Minimum Reservation Notice applies to the booking time, as in
+        # Simphony: when the booking is made or its time moves, not when staff
+        # edit its notes, covers, phone or table.
+        time_moved = not before or get_datetime(before.reserved_at) != get_datetime(self.reserved_at)
 
         from ury.ury.api.table_reservation import validate_reservation_rules
         validate_reservation_rules(
@@ -173,4 +177,5 @@ class URYTableReservation(Document):
             reserved_at=self.reserved_at,
             no_of_pax=self.no_of_pax,
             exclude_name=self.name,
+            check_notice=time_moved,
         )

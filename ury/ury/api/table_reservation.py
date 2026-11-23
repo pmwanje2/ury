@@ -6,7 +6,6 @@ from frappe import _
 from frappe.utils import (
     get_datetime,
     now_datetime,
-    add_to_date,
     flt,
     cint,
     get_time,
@@ -15,19 +14,17 @@ from datetime import datetime, timedelta, time
 from ury.ury.report.average_table_time.average_table_time import (
     get_branch_last_day_avg_time,
     get_branch_last_week_avg_time,
-    get_branch_reservation_duration,
 )
 
 
 # Reservation timing is Branch configuration (fixtures/custom_field.json), next to
-# custom_buffer_time and custom_grace_period: settings key -> Branch field.
+# custom_buffer_time and custom_grace_period: settings key -> Branch field. Each maps
+# to an Oracle Simphony TMS parameter; Simphony has no other reservation timing.
 RESERVATION_TIMING_FIELDS = {
     "grace_period": "custom_grace_period",
     "unset_grace_policy": "custom_unset_grace_policy",
     "min_reservation_notice": "custom_min_reservation_notice",
     "target_turn_time": "custom_target_turn_time",
-    "min_avg_table_time": "custom_min_avg_table_time",
-    "seated_lookup_hours": "custom_seated_lookup_hours",
 }
 # custom_unset_grace_policy's option that stops a branch without a grace period switching reservations on.
 REFUSE_TO_ENABLE = "Refuse to Enable"
@@ -67,6 +64,12 @@ def parse_to_datetime(val, default_now=None):
     return get_datetime(val)
 
 
+def _reservation_columns_exist():
+    """Whether migrate has added every Branch reservation column yet."""
+    return all(frappe.db.has_column("Branch", column)
+        for column in ("custom_enable_reservation", *RESERVATION_TIMING_FIELDS.values()))
+
+
 def reservations_enabled(branch):
     """Reservations are opt-in per Branch (custom_enable_reservation, default 0).
 
@@ -77,11 +80,8 @@ def reservations_enabled(branch):
     branch reads as disabled instead of failing POS Invoice validate, or
     booking without its timing settings.
     """
-    if not branch:
+    if not branch or not _reservation_columns_exist():
         return False
-    for column in ("custom_enable_reservation", *RESERVATION_TIMING_FIELDS.values()):
-        if not frappe.db.has_column("Branch", column):
-            return False
     return cint(frappe.db.get_value("Branch", branch, "custom_enable_reservation") or 0) == 1
 
 
@@ -102,14 +102,15 @@ def _timing_setting(values, key):
     return seeded_setting(fieldname) if _is_unset(value) else value
 
 
-def branch_timing_setting(branch, key):
-    """Read one Branch timing setting on its own, for paths that need nothing else."""
-    fieldname = RESERVATION_TIMING_FIELDS[key]
-    return _timing_setting({fieldname: frappe.db.get_value("Branch", branch, fieldname)}, key)
+def _is_unset_or_not_positive(value):
+    """Clearing an Int field in Desk saves 0: for a grace or a turn time, 0 means unset."""
+    return _is_unset(value) or cint(value) <= 0
 
 
-def _grace_is_unset(grace):
-    return _is_unset(grace) or cint(grace) <= 0
+def _positive_setting(values, fieldname):
+    """A setting that must be positive; blank, zero or negative takes its seeded default."""
+    value = values.get(fieldname)
+    return cint(seeded_setting(fieldname) if _is_unset_or_not_positive(value) else value)
 
 
 def _reservation_settings(branch_doc, branch=None):
@@ -118,7 +119,11 @@ def _reservation_settings(branch_doc, branch=None):
     A blank or zero grace takes the grace field's seed, so it never means No
     Show at the booked minute. Under "Refuse to Enable" such a branch cannot
     be saved with reservations on; a row that skipped that save still reads
-    the seed.
+    the seed. A blank or zero Target Turn Time likewise takes its seed, so a
+    booking never holds its table for no time at all.
+
+    The Target Turn Time alone sets each booking's hold, as in Simphony. The
+    measured average table times are report figures only.
     """
     buffer_time_raw = branch_doc.get("custom_buffer_time")
     if buffer_time_raw is None or str(buffer_time_raw).strip() == "":
@@ -126,15 +131,8 @@ def _reservation_settings(branch_doc, branch=None):
     else:
         buffer_time = max(0, cint(buffer_time_raw))
 
-    grace_period = branch_doc.get("custom_grace_period")
-    if _grace_is_unset(grace_period):
-        grace_period = seeded_setting("custom_grace_period")
-    grace_period = max(0, cint(grace_period))
-
-    target_turn_time = max(0, cint(_timing_setting(branch_doc, "target_turn_time")))
-    min_avg_table_time = max(0, cint(_timing_setting(branch_doc, "min_avg_table_time")))
-    calc_duration = get_branch_reservation_duration(
-        branch, target_turn_time=target_turn_time, min_avg_table_time=min_avg_table_time)
+    grace_period = max(0, _positive_setting(branch_doc, "custom_grace_period"))
+    target_turn_time = max(0, _positive_setting(branch_doc, "custom_target_turn_time"))
 
     if branch:
         # A settings read never writes the Branch; the averages are
@@ -151,21 +149,28 @@ def _reservation_settings(branch_doc, branch=None):
         "unset_grace_policy": _timing_setting(branch_doc, "unset_grace_policy"),
         "min_reservation_notice": cint(_timing_setting(branch_doc, "min_reservation_notice")),
         "target_turn_time": target_turn_time,
-        "min_avg_table_time": min_avg_table_time,
-        "seated_lookup_hours": max(0, cint(_timing_setting(branch_doc, "seated_lookup_hours"))),
         "avg_table_time_last_day": round(flt(last_day_avg), 2),
         "avg_table_time_last_week": round(flt(last_week_avg), 2),
-        "calculated_duration": cint(calc_duration),
+        # Kept for callers of the settings API: the hold, which is the Target Turn Time.
+        "calculated_duration": target_turn_time,
     }
 
 
 def validate_branch_reservation_settings(doc, method=None):
-    """Branch validate: under "Refuse to Enable", a branch with no grace period cannot switch reservations on."""
+    """Branch validate, while the branch takes bookings.
+
+    A Target Turn Time must be positive (Desk saves a cleared Int as 0), and
+    under "Refuse to Enable" the branch needs a grace period. A turn time not
+    on the document at all (before migrate) is left to its seeded default.
+    """
     if not cint(doc.get("custom_enable_reservation") or 0):
         return
+    turn_time = doc.get("custom_target_turn_time")
+    if turn_time is not None and _is_unset_or_not_positive(turn_time):
+        frappe.throw(_("Set a target turn time of at least one minute before switching reservations on for this branch."))
     if _timing_setting(doc, "unset_grace_policy") != REFUSE_TO_ENABLE:
         return
-    if _grace_is_unset(doc.get("custom_grace_period")):
+    if _is_unset_or_not_positive(doc.get("custom_grace_period")):
         frappe.throw(_("Set a grace period before switching reservations on for this branch."))
 
 
@@ -185,10 +190,10 @@ def reservations_enabled_for_table(table):
 def get_branch_reservation_settings(branch):
     """
     Returns reservation configuration and metrics for the specified branch.
-    Without a branch, or when the read fails, reservations are off and each
-    timing is its seeded default.
+    Without a branch, before migrate adds the reservation columns, or when the
+    read fails, reservations are off and each timing is its seeded default.
     """
-    if not branch:
+    if not branch or not _reservation_columns_exist():
         return _reservation_settings({})
 
     try:
@@ -274,12 +279,13 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
             )
 
 
-def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_name=None):
+def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_name=None, check_notice=True):
     """
     Comprehensive validation order:
     1. Mandatory table check
     2. Capacity check (no_of_pax <= table.no_of_seats)
-    3. Past datetime check (reserved_at >= now_datetime())
+    3. Minimum Reservation Notice (reserved_at >= now + notice), only when
+       check_notice: the booking's time is being made or moved
     4. Occupancy check & expected release calculation
     5. Overlapping reservation window conflicts check
     """
@@ -319,8 +325,10 @@ def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_
 
     # The Branch's Minimum Reservation Notice. Its seed, -1, accepts a time one
     # minute back, for clock and network delay between the POS and the server.
+    # Like Simphony's, it applies to the booking time: an edit that keeps the
+    # time (notes, covers, phone, table) is never held to it.
     notice = settings["min_reservation_notice"]
-    if res_start < current_now + timedelta(minutes=notice):
+    if check_notice and res_start < current_now + timedelta(minutes=notice):
         if notice > 0:
             frappe.throw(_("A reservation needs at least {0} minutes' notice.").format(notice))
         frappe.throw(_("Reservation date and time cannot be in the past."))
@@ -439,11 +447,17 @@ def check_table_reservation(table):
 
 
 @frappe.whitelist()
-def get_completed_reservation_for_table(table, branch=None):
+def get_completed_reservation_for_table(table, branch=None, pos_invoice=None):
     """
-    Returns the recent Seated reservation for a table ONLY IF the table is currently
+    Returns the table's Seated reservation ONLY IF the table is currently
     Occupied (occupied = 1) and no submitted invoice exists yet for that reservation.
     If the table is Available (occupied = 0), returns None.
+
+    As in Simphony, the party is bound to its table and to the check opened for
+    it, with no lookback window: a table holds at most one Seated party (seating
+    refuses a second), and that party belongs to `pos_invoice` only when it is
+    bound to no check yet or to that very check. A new check (no `pos_invoice`)
+    never takes a party already bound to another check.
     The name is kept from upstream (ury-erp/ury#358), where arrival was "Completed";
     ury_order imports it under this name.
     """
@@ -458,13 +472,9 @@ def get_completed_reservation_for_table(table, branch=None):
         if not is_occupied or cint(is_occupied) != 1:
             return None
 
-        # The Branch's Seated Party Lookup: how long ago the party may have been seated.
-        lookup_hours = max(0, cint(branch_timing_setting(table_branch, "seated_lookup_hours")))
-        now = now_datetime()
         filters = {
             "reserved_table": table,
             "status": "Seated",
-            "modified": [">", add_to_date(now, hours=-lookup_hours)],
         }
         if branch:
             filters["branch"] = branch
@@ -478,6 +488,8 @@ def get_completed_reservation_for_table(table, branch=None):
         )
         if reservations:
             res = reservations[0]
+            if res.get("pos_invoice") and res.get("pos_invoice") != pos_invoice:
+                return None  # bound to another check
             if res.get("pos_invoice"):
                 inv_status = frappe.db.get_value("POS Invoice", res.get("pos_invoice"), "docstatus")
                 if inv_status == 1:
@@ -707,13 +719,39 @@ def update_reservation_status(reservation_name, status, pos_invoice=None, cancel
 def reservation_stay_minutes(settings):
     """How long a booking holds its table after its time: [reserved_at - buffer, reserved_at + stay).
 
-    The last day's average table time, unless it is below the Branch's minimum;
-    then the branch's calculated duration (an average, or its target turn time).
+    The Branch's Target Turn Time, as Simphony's Target Turn Times set the
+    seating duration that prevents overbooking. A measured average table time
+    is a report figure and never changes the hold.
     """
-    stay = flt(settings.get("avg_table_time_last_day"))
-    if not stay or stay < settings["min_avg_table_time"]:
-        return flt(settings["calculated_duration"])
-    return stay
+    return flt(settings["target_turn_time"])
+
+
+def bind_seated_reservation_to_check(doc, method=None):
+    """POS Invoice after_insert: the check opened on a table binds the party seated there.
+
+    Simphony seats a party into a guest check on its table. Here the Seated
+    reservation on the check's table (one at most) takes this check as its
+    pos_invoice, unless it is already bound to a check. Only a Dine-In sale
+    (never a credit note) on a branch taking bookings binds. It never blocks
+    the check: a failure is logged, not raised.
+    """
+    if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
+        return
+    table = doc.get("restaurant_table")
+    branch = doc.get("branch")
+    if not table or not reservations_enabled(branch):
+        return
+    try:
+        for res in frappe.db.get_all(
+            "URY Table Reservation",
+            filters={"reserved_table": table, "branch": branch, "status": "Seated"},
+            fields=["name", "pos_invoice"],
+        ):
+            if not res.pos_invoice:
+                frappe.db.set_value("URY Table Reservation", res.name, "pos_invoice", doc.name,
+                    update_modified=False)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Reservation check binding")
 
 
 def open_checks_on(tables):
