@@ -157,3 +157,119 @@ class BillCopy(unittest.TestCase):
         html = Environment().from_string(json.loads(form.read_text())['html']).render(doc=doc, frappe=MagicMock(), _=lambda x:x)
         for value in ('Cash', 'Visa', 'Charged to account AC-12: 60 UGX'):
             self.assertIn(value, html)
+
+    def test_print_bill_copy_does_not_require_cups_for_browser_or_qz_print(self):
+        records = []
+        doc = frappe._dict(
+            name='INV-B1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[frappe._dict(item_name='Tea', qty=1, amount=5000)],
+            taxes=[], payments=[frappe._dict(mode_of_payment='Cash', amount=5000)],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            self.assertEqual(arg['doctype'], 'URY Bill Reprint Log')
+            rec = frappe._dict(arg)
+            return type('Row', (), {'insert': lambda _, **kw: records.append(rec) or rec})()
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=[]):
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'test-cashier'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.return_value = None
+            f.db.count.side_effect = lambda dt, flt=None: sum(1 for r in records if r.get('attempt') == 1)
+            f.utils.now.return_value = '2026-11-23 12:34:00'
+            f.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+                f'<article><h1>COPY #{doc.copy_number}</h1><p>{name}</p></article>'
+            )
+
+            browser = api.print_bill_copy('INV-B1', idempotency_key='browser-key', delivery='browser')
+            qz = api.print_bill_copy('INV-B1', idempotency_key='qz-key', delivery='qz')
+
+        self.assertEqual(browser['status'], 'COMPLETED')
+        self.assertEqual(browser['copy_number'], 1)
+        self.assertEqual(browser['delivery'], 'browser')
+        self.assertIn('COPY #1', browser['html'])
+        self.assertIn('copy_number=1', browser['print_url'])
+        self.assertEqual(qz['status'], 'COMPLETED')
+        self.assertEqual(qz['copy_number'], 2)
+        self.assertEqual(qz['delivery'], 'qz')
+        self.assertIn('COPY #2', qz['html'])
+        self.assertEqual(len(records), 2)
+        self.assertIsNone(records[0]['printer'])
+        self.assertEqual(records[0]['copy_number'], 1)
+        self.assertEqual(records[1]['copy_number'], 2)
+
+    def test_printview_populates_copy_number_and_renders_hash_n(self):
+        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
+        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
+
+        doc = object.__new__(CustomPOSInvoice)
+        doc.__dict__.update(name='POS-INV-00024', docstatus=1, customer='Walk In', currency='UGX', outstanding_amount=0)
+        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, \
+             patch.object(POSInvoice, 'before_print'), \
+             patch('ury.ury.doctype.ury_order.ury_order.check_split_target_access'):
+            f.db.exists.return_value = True
+            f.get_doc.return_value = frappe._dict(name='POS-INV-00024', docstatus=1, custom_merged_pos_invoice=None)
+            f.form_dict = {}
+            f.db.get_value.return_value = 3
+            CustomPOSInvoice.before_print(doc)
+        self.assertEqual(doc.copy_number, 3)
+
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        copy_html = json.loads(path.read_text())['html']
+        # Direct /printview without in-memory copy_number still prints COPY #n
+        pv_doc = frappe._dict(
+            name='POS-INV-00024', docstatus=1, currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=100, rounded_total=100, outstanding_amount=0, copy_timestamp='2026-11-23 12:34',
+        )
+        fake_f = MagicMock()
+        fake_f.db.get_value.return_value = None
+        html_default = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
+        self.assertIn('COPY #1', html_default)
+        fake_f.db.get_value.return_value = 4
+        html_logged = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
+        self.assertIn('COPY #4', html_logged)
+
+    def test_bill_copy_includes_merged_partner_items_payments_and_efris(self):
+        """Reproduces Hydrogen's billcopy-merged live probe (POS-INV-00031 + partner POS-INV-00030)."""
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        partner = frappe._dict(
+            name='POS-INV-00030', docstatus=1, currency='UGX', customer='Walk In',
+            items=[frappe._dict(item_name='Water', qty=1, amount=10000)],
+            taxes=[frappe._dict(description='Exempt', tax_amount=0)],
+            payments=[frappe._dict(mode_of_payment='Cash', amount=10000)],
+            grand_total=10000, rounded_total=10000, outstanding_amount=0,
+            efris_e_invoice='EINV-30', tax_id=None,
+        )
+        primary = frappe._dict(
+            name='POS-INV-00031', docstatus=1, currency='UGX', customer='Walk In',
+            custom_merged_pos_invoice='POS-INV-00030', ury_print_partner=partner,
+            items=[frappe._dict(item_name='Burger', qty=1, amount=15000)],
+            taxes=[frappe._dict(description='VAT 18%', tax_amount=2288)],
+            payments=[frappe._dict(mode_of_payment='Card', amount=15000)],
+            grand_total=15000, rounded_total=15000, outstanding_amount=0,
+            efris_e_invoice='EINV-31', tax_id=None, copy_number=1, copy_timestamp='2026-11-23 12:34',
+        )
+        e_invoices = {
+            'EINV-31': frappe._dict(taxes=[frappe._dict(tax_category_code='01:A: Standard (18%)', net_amount=12712, tax_amount=2288)]),
+            'EINV-30': frappe._dict(taxes=[frappe._dict(tax_category_code='03:C: Exempt', net_amount=10000, tax_amount=0)]),
+        }
+        efris_map = {
+            'POS-INV-00031': {'state': 'fiscalised', 'fdn': '326041234567', 'verification_code': 'VC-31', 'qr': 'data:image/png;base64,AAA', 'sandbox': 0, 'is_return': 0},
+            'POS-INV-00030': {'state': 'fiscalised', 'fdn': '326041234568', 'verification_code': 'VC-30', 'qr': 'data:image/png;base64,BBB', 'sandbox': 0, 'is_return': 0},
+        }
+        fake_f = MagicMock()
+        fake_f.get_doc.side_effect = lambda dt, name: e_invoices[name]
+        fake_f.utils.fmt_money.side_effect = lambda val, **kw: f'UGX {val}'
+        html = Environment(autoescape=False).from_string(json.loads(path.read_text())['html']).render(
+            doc=primary, frappe=fake_f, _=lambda x: x, efris_receipt_data=lambda b: efris_map[b.name],
+        )
+        for token in ('COPY #1', 'POS-INV-00031', 'Burger', 'Card', '326041234567', 'A: Standard (18%)',
+                      'POS-INV-00030', 'Water', 'Cash', '326041234568', 'C: Exempt', '25000'):
+            self.assertIn(token, html, token)

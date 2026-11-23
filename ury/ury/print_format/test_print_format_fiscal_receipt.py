@@ -60,9 +60,10 @@ def bill(name="POS-INV-0001", docstatus=1, **fields):
 		customer="Walk In", customer_name="Walk In", currency="UGX", waiter=None, company="Demo Restaurant",
 		items=[Doc(item_code="RICE", item_name="Rice", description="", qty=1, stock_uom="Nos", uom="Nos",
 		           discount_amount=0, distributed_discount_amount=0, rate=1000, amount=1000)],
-		payments=[Doc(mode_of_payment="Cash", amount=1000)], taxes=[], custom_merged_pos_invoice=None,
+		payments=[Doc(mode_of_payment="Cash", amount=1000, account="Cash - DR")], taxes=[], custom_merged_pos_invoice=None,
 		ury_print_partner=None, outstanding_amount=0, total_qty=1, net_total=847.46, grand_total=1000,
 		rounded_total=1000, paid_amount=1000, change_amount=0, tax_id=None, efris_e_invoice=None,
+		kamra_ref=None, room_number=None,
 		copy_number=1, copy_timestamp="2026-11-23 12:34",
 	)
 	values.update(fields)
@@ -73,7 +74,8 @@ def fiscalised(**extra):
 	return {"state": "fiscalised", "fdn": FDN, "verification_code": CODE, "qr": QR, "sandbox": 0, "is_return": 0, **extra}
 
 
-def render(name, doc, efris=None, e_invoices=None):
+def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Clearing - DR",
+           guest_name="Jane Guest", copy_log_max=None):
 	"""Render one shipped format; efris maps invoice name -> efris_receipt_data() result (None: app absent)."""
 	calls = []
 
@@ -81,12 +83,29 @@ def render(name, doc, efris=None, e_invoices=None):
 		assert doctype == "E Invoice", doctype
 		return (e_invoices or {})[docname]
 
+	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False):
+		if doctype == "URY Bill Reprint Log":
+			return copy_log_max
+		if doctype == "Company" and fieldname == "custom_guest_ledger_clearing":
+			return clearing
+		if doctype == "Folio":
+			return Doc(guest_name=guest_name, reservation="RES-1")
+		if doctype == "Reservation" and fieldname == "room":
+			return "ROOM-0204"
+		if doctype == "Room" and fieldname == "room_number":
+			return "204"
+		return None
+
 	env = SandboxedEnvironment(undefined=DebugUndefined, autoescape=False)
 	env.globals.update(
 		_=lambda text: text,
 		frappe=SimpleNamespace(
 			get_fullname=lambda user=None: user or "cashier@example.com",
 			get_doc=get_doc,
+			get_meta=lambda doctype: SimpleNamespace(
+				has_field=lambda field: doctype == "Company" and field == "custom_guest_ledger_clearing" and clearing is not None
+			),
+			db=SimpleNamespace(get_value=get_value),
 			utils=SimpleNamespace(formatdate=str, now=lambda: "2026-11-23 12:00",
 			                      fmt_money=lambda value, **kwargs: f"UGX {value}"),
 		),
@@ -163,22 +182,78 @@ class MergedFormatFiscalReceipt(unittest.TestCase):
 		self.assertIn("324013579999", html)
 
 	def test_a_room_charge_prints_the_room_and_a_guest_signature_line(self):
-		flat = text(render(MERGED, bill(room_number="101"))[0])
+		rc = bill(
+			room_number="101",
+			payments=[Doc(mode_of_payment="Room Charge", amount=1000, account="Guest Ledger Clearing - DR")],
+		)
+		flat = text(render(MERGED, rc)[0])
 		self.assertIn("ROOM CHARGE", flat)
 		self.assertIn("Room : 101", flat)
 		self.assertIn("Guest signature", flat)
-		self.assertNotIn("Guest signature", text(render(MERGED, bill())[0]))
+		# Cash payment must not print a ROOM CHARGE voucher even if room_number or kamra_ref is present.
+		cash_flat = text(render(MERGED, bill(room_number="101", kamra_ref="FOL-1"))[0])
+		self.assertNotIn("ROOM CHARGE", cash_flat)
+		self.assertNotIn("Guest signature", cash_flat)
+
+	def test_merged_top_banner_is_pending_when_partner_is_pending_efris(self):
+		partner = bill(name="POS-INV-0002")
+		doc = bill(custom_merged_pos_invoice="POS-INV-0002", custom_merged_pos_invoice_details=[], custom_merged_total=0,
+		           ury_print_partner=partner)
+		efris = {doc.name: fiscalised(), partner.name: {"state": "pending", "sandbox": 0}}
+		html, calls = render(MERGED, doc, efris)
+		self.assertEqual(calls, [doc.name, partner.name])
+		heading = text(re.search(r"<h4[^>]*>(.*?)</h4>", html, re.DOTALL).group(1))
+		self.assertEqual(heading, "FISCAL RECEIPT PENDING")
+
+	def test_merged_room_charge_resolves_partner_room_and_folio(self):
+		partner = bill(
+			name="POS-INV-0002",
+			room_number="204",
+			payments=[Doc(mode_of_payment="Guest Folio", amount=1000, account="Guest Ledger Clearing - DR")],
+		)
+		doc = bill(
+			custom_merged_pos_invoice="POS-INV-0002", custom_merged_pos_invoice_details=[], custom_merged_total=1000,
+			ury_print_partner=partner,
+		)
+		flat = text(render(MERGED, doc)[0])
+		self.assertIn("ROOM CHARGE", flat)
+		self.assertIn("Room : 204", flat)
+		self.assertIn("Guest signature", flat)
+
+		# Folio-only room service resolves room from Reservation -> Room and prints guest name.
+		folio_doc = bill(
+			kamra_ref="FOL-1",
+			room_number=None,
+			payments=[Doc(mode_of_payment="Guest Folio", amount=1000, account="Guest Ledger Clearing - DR")],
+		)
+		folio_flat = text(render(MERGED, folio_doc)[0])
+		self.assertIn("ROOM CHARGE", folio_flat)
+		self.assertIn("Room : 204", folio_flat)
+		self.assertIn("Jane Guest", folio_flat)
+
+	def test_pending_credit_note_uses_credit_note_pending_top_banner(self):
+		for state in ("credit_note_pending", "pending"):
+			with self.subTest(state=state):
+				doc = bill(is_return=1)
+				html = render(MERGED, doc, {doc.name: {"state": state, "application_ref": "CN-1", "sandbox": 0}})[0]
+				heading = text(re.search(r"<h4[^>]*>(.*?)</h4>", html, re.DOTALL).group(1))
+				self.assertEqual(heading, "CREDIT NOTE (PENDING URA APPROVAL)")
+		approved_html = render(MERGED, bill(is_return=1), {bill().name: fiscalised(is_return=1, original_fdn="111")})[0]
+		self.assertEqual(text(re.search(r"<h4[^>]*>(.*?)</h4>", approved_html, re.DOTALL).group(1)), "REFUND")
 
 	def test_fiscal_and_room_values_are_escaped(self):
-		doc = bill(room_number=XSS, tax_id=XSS)
+		doc = bill(
+			room_number=XSS,
+			tax_id=XSS,
+			payments=[Doc(mode_of_payment="Room Charge", amount=1000, account="Guest Ledger Clearing - DR")],
+		)
 		html = render(MERGED, doc, {doc.name: fiscalised(fdn=XSS, verification_code=XSS)})[0]
 		self.assertNotIn(XSS, html)
 		self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
 
 	def test_the_standard_format_is_re_synced_on_migrate(self):
-		# Frappe re-imports a standard Print Format from its JSON only when `modified` advances
-		# (past the escaped version this branch stacks on, fix/print-format-escape-user-values).
-		self.assertGreater(spec(MERGED)["modified"], "2026-11-23 21:00:00.000000")
+		# Frappe re-imports a standard Print Format from its JSON only when `modified` advances.
+		self.assertGreater(spec(MERGED)["modified"], "2026-11-23 22:00:00.000000")
 
 
 class BillCopyFiscalReceipt(unittest.TestCase):
@@ -186,9 +261,30 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 		doc = bill(efris_e_invoice="EINV-1")
 		html, _calls = render(COPY, doc, {doc.name: fiscalised()}, {"EINV-1": SimpleNamespace(taxes=TAXES)})
 		flat = text(html)
-		for needle in ("COPY", FDN, CODE, "A: Standard (18%)"):
+		for needle in ("COPY #1", FDN, CODE, "A: Standard (18%)"):
 			self.assertIn(needle, flat)
 		self.assertIn(f'src="{QR}"', html)
+
+	def test_a_copy_without_in_memory_number_falls_back_to_log_or_hash_one(self):
+		flat_default = text(render(COPY, bill(copy_number=None))[0])
+		self.assertIn("COPY #1", flat_default)
+		flat_logged = text(render(COPY, bill(copy_number=None), copy_log_max=5)[0])
+		self.assertIn("COPY #5", flat_logged)
+
+	def test_a_copy_of_a_merged_bill_includes_partner_items_payments_and_fdn(self):
+		partner = bill(
+			name="POS-INV-0002",
+			items=[Doc(item_code="TEA", item_name="Masala Tea", qty=2, amount=4000)],
+			payments=[Doc(mode_of_payment="Mobile Money", amount=4000, account="MoMo - DR")],
+			grand_total=4000, rounded_total=4000,
+		)
+		doc = bill(custom_merged_pos_invoice="POS-INV-0002", ury_print_partner=partner)
+		efris = {doc.name: fiscalised(), partner.name: fiscalised(fdn="324013579999", verification_code="VC-PARTNER")}
+		html, calls = render(COPY, doc, efris)
+		flat = text(html)
+		self.assertEqual(calls, [doc.name, partner.name])
+		for needle in ("POS-INV-0001", "Rice", FDN, "POS-INV-0002", "Masala Tea", "Mobile Money", "324013579999", "VC-PARTNER"):
+			self.assertIn(needle, flat, needle)
 
 	def test_a_copy_of_a_pending_bill_stays_pending(self):
 		doc = bill()
@@ -203,7 +299,7 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 			self.assertNotIn(needle, flat)
 
 	def test_the_standard_format_is_re_synced_on_migrate(self):
-		self.assertGreater(spec(COPY)["modified"], "2026-11-23 21:00:00.000000")
+		self.assertGreater(spec(COPY)["modified"], "2026-11-23 22:00:00.000000")
 
 
 if __name__ == "__main__":

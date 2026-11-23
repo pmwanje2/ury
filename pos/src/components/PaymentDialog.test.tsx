@@ -248,7 +248,7 @@ describe("PaymentDialog", () => {
     expect(checkbox.checked).toBe(true);
   });
 
-  it("hides print invoice checkbox when enable_payment_without_printing is 0", () => {
+  it("shows print invoice checkbox checked by default even when enable_payment_without_printing is 0", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash", "Card"],
       fetchPaymentModes: vi.fn(),
@@ -271,7 +271,9 @@ describe("PaymentDialog", () => {
       />
     );
 
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox).toBeInTheDocument();
+    expect(checkbox.checked).toBe(true);
   });
 
   it("prints invoice and completes payment when print invoice is checked", async () => {
@@ -407,7 +409,7 @@ describe("PaymentDialog", () => {
     expect(showToast.error).not.toHaveBeenCalled();
   });
 
-  it("does not call printOrder when enable_payment_without_printing is 0 and Pay is clicked", async () => {
+  it("prints fiscal receipt after settlement when enable_payment_without_printing is 0 and bill was printed", async () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
@@ -431,24 +433,25 @@ describe("PaymentDialog", () => {
       />
     );
 
-    // Checkbox is hidden when the flag is disabled
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    // Print receipt checkbox stays visible and checked so the fiscal receipt is never silently dropped
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox).toBeInTheDocument();
+    expect(checkbox.checked).toBe(true);
 
     const payButton = screen.getByText(/payment.pay_button/);
     fireEvent.click(payButton);
 
     await waitFor(() => {
-      // Submits directly with no duplicate reprint
       expect(call.post).toHaveBeenCalledWith(
         "ury.ury.doctype.ury_order.ury_order.make_invoice",
-        expect.objectContaining({ submit_invoice: 1 })
+        expect.objectContaining({ submit_invoice: 0 })
       );
+      expect(call.post).toHaveBeenCalledWith(
+        "ury.ury.doctype.ury_order.ury_order.submit_order_invoice",
+        { invoice: "INV001" }
+      );
+      expect(printOrder).toHaveBeenCalledWith(expect.objectContaining({ orderId: "INV001" }));
     });
-    expect(printOrder).not.toHaveBeenCalled();
-    expect(call.post).not.toHaveBeenCalledWith(
-      "ury.ury.doctype.ury_order.ury_order.submit_order_invoice",
-      expect.anything()
-    );
   });
 
   it("completes payment directly if print invoice is unchecked but invoice was already printed", async () => {
