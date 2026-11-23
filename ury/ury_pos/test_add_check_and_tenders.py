@@ -184,6 +184,30 @@ class TestTillTenderConfiguration(Loaded):
         self.accounts["Cash"] = None
         self.assertEqual(self.api.getPosProfile()["room_charge_modes"], [])
 
+    def test_an_unset_clearing_account_reports_room_charge_unconfigured(self):
+        self.clearing = None
+        profile = self.api.getPosProfile()
+        self.assertEqual(profile["room_charge_modes"], [])
+        self.assertTrue(profile["room_charge_unconfigured"])
+
+    def test_a_room_lookup_profile_without_clearing_field_reports_room_charge_unconfigured(self):
+        self.has_clearing_field = False
+        self.profile.custom_room_lookup_method = "pms_bridge.room_charge_lookup"
+        profile = self.api.getPosProfile()
+        self.assertEqual(profile["room_charge_modes"], [])
+        self.assertTrue(profile["room_charge_unconfigured"])
+
+    def test_a_standalone_site_without_clearing_field_or_lookup_does_not_flag_room_charge_unconfigured(self):
+        self.has_clearing_field = False
+        profile = self.api.getPosProfile()
+        self.assertEqual(profile["room_charge_modes"], [])
+        self.assertFalse(profile["room_charge_unconfigured"])
+
+    def test_a_mapped_clearing_account_reports_room_charge_configured(self):
+        profile = self.api.getPosProfile()
+        self.assertEqual(profile["room_charge_modes"], ["Guest Folio"])
+        self.assertFalse(profile["room_charge_unconfigured"])
+
 
 if __name__ == "__main__":
     unittest.main()

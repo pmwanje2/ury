@@ -36,3 +36,11 @@ it('an older server without the keys prefills nothing and has no room-charge ten
   expect(profile.default_payment_mode).toBe('');
   expect(profile.room_charge_modes).toEqual([]);
 });
+
+it('carries room_charge_unconfigured into the combined profile and defaults to false', async () => {
+  answer({ room_charge_modes: [], room_charge_unconfigured: true });
+  expect((await getCombinedPosProfile()).room_charge_unconfigured).toBe(true);
+
+  answer({ room_charge_modes: [] });
+  expect((await getCombinedPosProfile()).room_charge_unconfigured).toBe(false);
+});

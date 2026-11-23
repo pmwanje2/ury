@@ -142,6 +142,10 @@ class Check:
         self.invoice_printed = 0
         self.docstatus = 0
         self.additional_discount_percentage = 0
+        self.discount_amount = 0
+        self.apply_discount_on = "Grand Total"
+        self.paid_amount = 0
+        self.room_number = None
         self.grand_total = self.rounded_total = 0
         self.__dict__.update(fields)
 
@@ -369,6 +373,171 @@ class TestSettlementTotalsPreview(Loaded):
         self.check.pos_profile = "Pool Bar Till"
         with self.assertRaises(NotPermitted):
             self.preview()
+
+
+class PaymentRow(Row):
+    """A POS Invoice Payment child-row double."""
+
+    def as_dict(self, no_default_fields=False, no_child_table_fields=False, no_private_properties=False, **kw):
+        row = dict(self)
+        row["doctype"] = "Sales Invoice Payment"
+        if no_default_fields:
+            for key in ("doctype", "name", "owner", "creation", "modified", "modified_by", "docstatus", "idx"):
+                row.pop(key, None)
+        if no_child_table_fields:
+            for key in ("parent", "parentfield", "parenttype"):
+                row.pop(key, None)
+        return row
+
+
+class TestAddCheckDiscountsAndTenders(Loaded):
+    """P1: Simphony Add Check carries source bill-level discounts and tenders onto one check,
+    or refuses cleanly when a tender/discount cannot be moved."""
+
+    def setUp(self):
+        super().setUp()
+        self.allowed_modes = []
+        self.frappe.get_all.side_effect = self._get_all
+        self.destination = Check(
+            "CHK-1",
+            items=[dish("d1", "chicken", 1, 15.0, "k-chicken")],
+            restaurant_table="T-101",
+            payments=[PaymentRow(mode_of_payment="Cash", amount=0.0)],
+        )
+        self.source = Check(
+            "CHK-2",
+            items=[dish("s1", "tea", 1, 5.0, "k-tea")],
+            restaurant_table="T-102",
+            payments=[PaymentRow(mode_of_payment="Cash", amount=0.0)],
+        )
+
+    def _get_all(self, doctype, filters=None, pluck=None, **kw):
+        if doctype == "URY KOT":
+            return list(self.kots.get(filters["invoice"], []))
+        if doctype == "POS Payment Method":
+            return list(self.allowed_modes)
+        return []
+
+    def test_merging_a_discounted_source_onto_an_undiscounted_destination_keeps_the_discount(self):
+        self.source.additional_discount_percentage = 10.0
+        self.source.discount_amount = 0.59
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.destination.additional_discount_percentage, 0)
+        self.assertAlmostEqual(self.destination.discount_amount, 0.59, places=2)
+        self.assertEqual(self.destination.apply_discount_on, "Grand Total")
+
+    def test_merging_two_differently_discounted_checks_sums_both_discount_amounts(self):
+        self.destination.additional_discount_percentage = 10.0
+        self.destination.discount_amount = 1.77
+        self.source.additional_discount_percentage = 25.0
+        self.source.discount_amount = 1.48
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.destination.additional_discount_percentage, 0)
+        self.assertAlmostEqual(self.destination.discount_amount, 3.25, places=2)
+
+    def test_merging_an_undiscounted_source_onto_a_discounted_destination_does_not_expand_discount(self):
+        self.destination.additional_discount_percentage = 10.0
+        self.destination.discount_amount = 1.77
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.destination.additional_discount_percentage, 0)
+        self.assertAlmostEqual(self.destination.discount_amount, 1.77, places=2)
+
+    def test_merging_checks_with_conflicting_discount_bases_is_refused(self):
+        self.destination.apply_discount_on = "Net Total"
+        self.destination.discount_amount = 1.50
+        self.source.apply_discount_on = "Grand Total"
+        self.source.discount_amount = 0.59
+        with self.assertRaisesRegex(Refused, "different bases"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_source_tender_moves_onto_destination_as_one_tender_set(self):
+        self.source.payments = [PaymentRow(name="p2", parent="CHK-2", mode_of_payment="Cash", amount=5.90)]
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(
+            [(row.mode_of_payment, round(float(row.amount), 2)) for row in self.destination.payments],
+            [("Cash", 5.90)],
+        )
+
+    def test_matching_tenders_on_destination_and_source_combine_without_duplicates(self):
+        self.destination.payments = [PaymentRow(mode_of_payment="Cash", amount=10.0)]
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Cash", amount=5.90),
+            PaymentRow(mode_of_payment="Mobile Money", amount=4.0),
+        ]
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(
+            [(row.mode_of_payment, round(float(row.amount), 2)) for row in self.destination.payments],
+            [("Cash", 15.90), ("Mobile Money", 4.0)],
+        )
+
+    def test_source_tender_with_external_reference_refuses_merge(self):
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Card", amount=5.90, reference_no="AUTH-991"),
+        ]
+        with self.assertRaisesRegex(Refused, "external payment reference"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_source_tender_not_configured_on_destination_profile_refuses_merge(self):
+        self.allowed_modes = ["Cash", "Mobile Money"]
+        self.source.payments = [PaymentRow(mode_of_payment="Voucher", amount=5.0)]
+        with self.assertRaisesRegex(Refused, "not configured on POS Profile"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_negative_source_tender_refuses_merge(self):
+        self.source.payments = [PaymentRow(mode_of_payment="Cash", amount=-5.0)]
+        with self.assertRaisesRegex(Refused, "negative tender"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_conflicting_room_charge_references_refuse_merge(self):
+        self.destination.room_number = "101"
+        self.source.room_number = "202"
+        with self.assertRaisesRegex(Refused, "room-charge"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_make_invoice_without_new_discount_keeps_carried_fixed_discount_and_clears_stale_percentage(self):
+        profile = Row(name="Lakeside Till", company="Lakeside Hotel", currency="USD", customer="Walk-in",
+                      custom_enable_discount=1, allow_discount_change=1)
+        self.frappe.get_cached_doc.return_value = profile
+        self.frappe.get_value.return_value = "Dine In"
+        self.frappe.db.get_value.return_value = 0
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        for helper in ("_validate_client_ids", "_lock_settlement_customer", "_client_order_invoice",
+                       "_check_held_before_settlement", "_refuse_client_order_rebind", "_set_settlement_customer",
+                       "_enforce_on_account"):
+            self.enterContext(patch.object(self.order, helper, return_value=None))
+        self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=0))
+
+        carried = Check("CHK-CARRIED", additional_discount_percentage=0, discount_amount=0.59,
+                        rounded_total=23.01, grand_total=23.01)
+        with patch.object(self.order, "get_order_invoice", return_value=carried):
+            self.order.make_invoice(
+                customer="Walk-in", payments=[{"mode_of_payment": "Mobile Money", "amount": 23.01}],
+                cashier="cashier", pos_profile="Lakeside Till", owner="cashier",
+                additionalDiscount=None, invoice="CHK-CARRIED", submit_invoice=0,
+            )
+        self.assertEqual(carried.additional_discount_percentage, 0)
+        self.assertAlmostEqual(carried.discount_amount, 0.59, places=2)
+
+        stale = Check("CHK-STALE", additional_discount_percentage=30, discount_amount=75.0,
+                      rounded_total=175.0, grand_total=175.0)
+        with patch.object(self.order, "get_order_invoice", return_value=stale):
+            self.order.make_invoice(
+                customer="Walk-in", payments=[{"mode_of_payment": "Mobile Money", "amount": 250.0}],
+                cashier="cashier", pos_profile="Lakeside Till", owner="cashier",
+                additionalDiscount=None, invoice="CHK-STALE", submit_invoice=0,
+            )
+        self.assertEqual(stale.additional_discount_percentage, 0)
+        self.assertEqual(stale.discount_amount, 0)
 
 
 if __name__ == "__main__":

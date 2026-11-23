@@ -151,4 +151,132 @@ describe("the room-charge tender is the POS Profile's", () => {
     await waitFor(() => expect(call.post).toHaveBeenCalledWith(MAKE_INVOICE, expect.anything()));
     expect(vi.mocked(call.post).mock.calls[0][1]).not.toHaveProperty("room_number");
   });
+
+  it("shows a clear setup message when room charge has no clearing account mapped", async () => {
+    setTill(["Cash", "Guest Folio"], {
+      default_payment_mode: "Cash",
+      room_charge_modes: [],
+      room_charge_unconfigured: true,
+    });
+    renderDialog(100, 100);
+    const notice = screen.getByTestId("room-charge-setup-notice");
+    expect(notice).toHaveTextContent("payment.room_charge_not_configured");
+    expect(roomBox()).toBeNull();
+    await waitFor(() => expect(tender(0).value).toBe("100"));
+    expect(payButton().disabled).toBe(false);
+  });
+
+  it("hides the setup message once room charge is mapped", () => {
+    setTill(["Cash", "Guest Folio"], {
+      default_payment_mode: "Cash",
+      room_charge_modes: ["Guest Folio"],
+      room_charge_unconfigured: false,
+    });
+    renderDialog(100, 100);
+    expect(screen.queryByTestId("room-charge-setup-notice")).toBeNull();
+  });
+});
+
+describe("unapplied typed discount is never sent on Pay", () => {
+  const discountInput = () =>
+    document.querySelector<HTMLInputElement>('input[type="number"]:not([step])')!;
+
+  it("does not send an unapplied typed discount on direct Pay", async () => {
+    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0 });
+    renderDialog(35.4, 35.4);
+    await waitFor(() => expect(tender(0).value).toBe("35.4"));
+
+    fireEvent.change(discountInput(), { target: { value: "10" } });
+    fireEvent.click(payButton());
+
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          additionalDiscount: null,
+          payments: [{ mode_of_payment: "Cash", amount: 35.4 }],
+          submit_invoice: 1,
+        }),
+      ),
+    );
+  });
+
+  it("does not send an unapplied typed discount on print-then-submit Pay", async () => {
+    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 1 });
+    renderDialog(35.4, 35.4);
+    await waitFor(() => expect(tender(0).value).toBe("35.4"));
+
+    fireEvent.change(discountInput(), { target: { value: "10" } });
+    fireEvent.click(payButton());
+
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          additionalDiscount: null,
+          payments: [{ mode_of_payment: "Cash", amount: 35.4 }],
+          submit_invoice: 0,
+        }),
+      ),
+    );
+  });
+
+  it("sends the last server-previewed discount when the box is edited without pressing Apply again", async () => {
+    vi.mocked(call.get).mockResolvedValue({ message: { grand_total: 31.86, rounded_total: 31.86 } });
+    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0 });
+    renderDialog(35.4, 35.4);
+    await waitFor(() => expect(tender(0).value).toBe("35.4"));
+
+    fireEvent.change(discountInput(), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
+    await waitFor(() => expect(tender(0).value).toBe("31.86"));
+
+    fireEvent.change(discountInput(), { target: { value: "25" } });
+    fireEvent.click(payButton());
+
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          additionalDiscount: 10,
+          payments: [{ mode_of_payment: "Cash", amount: 31.86 }],
+        }),
+      ),
+    );
+  });
+
+  it("preserves a carried fixed bill discount without inventing a percentage", async () => {
+    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0 });
+    render(
+      <PaymentDialog
+        order={{ invoice_printed: 1 }}
+        onClose={vi.fn()}
+        grandTotal={23.01}
+        roundedTotal={23.01}
+        invoice="BILL-1"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={0}
+        discountAmount={0.59}
+      />,
+    );
+    await waitFor(() => expect(tender(0).value).toBe("23.01"));
+    expect(discountInput().value).toBe("");
+
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          additionalDiscount: null,
+          payments: [{ mode_of_payment: "Cash", amount: 23.01 }],
+        }),
+      ),
+    );
+  });
 });

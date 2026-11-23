@@ -318,5 +318,78 @@ class TestLegacyLinkedBillSync(Loaded):
         self.assertEqual(self.partner.saved, 1)
 
 
+class TestReturnCopySafety(unittest.TestCase):
+    """P1: native returns of consolidated checks never auto-populate merge/split links."""
+
+    REPO_URY = Path(__file__).resolve().parents[2]  # ury/
+    EXPECTED_NO_COPY = (
+        "POS Invoice-custom_merged_pos_invoice",
+        "POS Invoice-custom_split_from",
+        "POS Invoice-custom_merged_total",
+    )
+
+    def _custom_fields(self):
+        import json
+
+        path = self.REPO_URY / "fixtures" / "custom_field.json"
+        return {row["name"]: row for row in json.loads(path.read_text(encoding="utf-8"))}
+
+    def test_merge_and_split_custom_fields_mark_no_copy_so_native_returns_stay_clean(self):
+        fields = self._custom_fields()
+        for name in self.EXPECTED_NO_COPY:
+            self.assertIn(name, fields, f"{name} missing from custom_field.json")
+            self.assertEqual(
+                fields[name].get("no_copy"),
+                1,
+                f"{name} has no_copy={fields[name].get('no_copy')!r}; Frappe map_fields copies it onto returns",
+            )
+
+    def test_native_return_mapper_leaves_merge_and_split_links_empty(self):
+        """Frappe's make_return_doc -> map_fields auto-populates any POS Invoice Link field
+        pointing to POS Invoice when no_copy is 0, corrupting Return tab totals and tripping
+        [HOSP-POS-RETURN-MERGED]."""
+        fields = self._custom_fields()
+        auto_populated = sorted(
+            row["fieldname"]
+            for row in fields.values()
+            if row.get("dt") == "POS Invoice"
+            and row.get("fieldtype") == "Link"
+            and row.get("options") == "POS Invoice"
+            and not row.get("no_copy")
+        )
+        self.assertEqual(auto_populated, [])
+
+    def test_existing_site_patch_sets_no_copy_and_is_registered(self):
+        patch_entry = "ury.patches.v2_0.no_copy_merge_split_fields"
+        patches_txt = (self.REPO_URY / "patches.txt").read_text(encoding="utf-8").splitlines()
+        registered = [line.split("#", 1)[0].strip() for line in patches_txt]
+        self.assertIn(patch_entry, registered, "no_copy patch must be registered in ury/patches.txt")
+
+        patch_file = self.REPO_URY / "patches" / "v2_0" / "no_copy_merge_split_fields.py"
+        self.assertTrue(patch_file.exists(), f"missing patch file {patch_file}")
+
+        framework, modules = _framework()
+        state = {name: 0 for name in self.EXPECTED_NO_COPY}
+        framework.db.exists.side_effect = lambda dt, name: dt == "Custom Field" and name in state
+        framework.db.get_value.side_effect = lambda dt, name, field, *a, **k: (
+            state[name] if dt == "Custom Field" and field == "no_copy" else None
+        )
+
+        def set_val(dt, name, field, value, *args, **kwargs):
+            if dt == "Custom Field" and field == "no_copy":
+                state[name] = value
+
+        framework.db.set_value.side_effect = set_val
+
+        with patch.dict(sys.modules, modules):
+            spec = importlib.util.spec_from_file_location(patch_entry, patch_file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.execute()
+
+        self.assertEqual(state, {name: 1 for name in self.EXPECTED_NO_COPY})
+        framework.clear_cache.assert_called_with(doctype="POS Invoice")
+
+
 if __name__ == "__main__":
     unittest.main()
