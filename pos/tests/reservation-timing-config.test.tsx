@@ -107,19 +107,28 @@ async function saveAt(dialog: HTMLElement, clock?: string) {
   await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: /save changes/i })); });
 }
 
-it("refuses an edit inside the branch's minimum notice, with the notice", async () => {
+it("refuses moving a booking inside the branch's minimum notice, with the notice", async () => {
   boundary.settings = { ...boundary.settings, min_reservation_notice: 480 };
   const dialog = await openEdit();
-  await saveAt(dialog);
+  await saveAt(dialog, '19:30');
   await waitFor(() => expect(dialog.textContent).toMatch(/at least 480 minutes/));
   expect(saved()).toBe(false);
 });
 
-it("saves an edit outside the branch's minimum notice", async () => {
+it("saves moving a booking outside the branch's minimum notice", async () => {
   boundary.settings = { ...boundary.settings, min_reservation_notice: 360 };
+  const dialog = await openEdit();
+  await saveAt(dialog, '19:30');
+  await waitFor(() => expect(saved()).toBe(true));
+});
+
+it('saves an edit that keeps the time, even inside the notice', async () => {
+  // The notice applies to the booking time (Simphony), not to notes, covers or the phone.
+  boundary.settings = { ...boundary.settings, min_reservation_notice: 480 };
   const dialog = await openEdit();
   await saveAt(dialog);
   await waitFor(() => expect(saved()).toBe(true));
+  expect(dialog.textContent).not.toMatch(/at least 480 minutes/);
 });
 
 it('a negative notice accepts a time that many minutes back, and no further', async () => {

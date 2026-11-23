@@ -204,7 +204,10 @@ const TableReservationEditDialog = ({
     }
 
     const selectedDt = new Date(`${reservationDate}T${reservationTime}:00`);
-    if (minNoticeMinutes != null && !isNaN(selectedDt.getTime())
+    // The notice applies to the booking time, as in Simphony: only when this edit moves it.
+    const bookedAt = (reservation.reserved_at || '').replace('T', ' ').slice(0, 16);
+    const timeMoved = `${reservationDate} ${reservationTime}` !== bookedAt;
+    if (timeMoved && minNoticeMinutes != null && !isNaN(selectedDt.getTime())
         && isInsideReservationNotice(selectedDt, minNoticeMinutes)) {
       setValidationError(minNoticeMinutes > 0
         ? t('reservations.min_notice', { minutes: minNoticeMinutes })

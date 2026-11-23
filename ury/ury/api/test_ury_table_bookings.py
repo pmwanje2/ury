@@ -111,16 +111,16 @@ class TestCaptainGridReadsTableReservations(_Grid):
         self.clock("19:45")
         self.assertEqual(self.read().get("T1", {}).get("status"), "Seated")
 
-    def test_a_party_seated_early_shows_after_a_short_till_average(self):
-        # The last till averaged 60 minutes; a 21:00 party seated early is at its table at 19:40.
-        self.till_closed(60)
+    def test_a_party_seated_early_shows_with_a_short_turn_time(self):
+        # A 60 minute Target Turn Time; a 21:00 party seated early is at its table at 19:40.
+        self.site.rows["Branch"]["Branch A"].custom_target_turn_time = 60
         self.booking("TR-1", "21:00", status="Seated", guest="Ada Lovelace")
         self.clock("19:40")
         self.assertEqual(self.read().get("T1", {}).get("status"), "Seated")
 
-    def test_a_booking_inside_its_lock_shows_after_a_fast_till_close(self):
-        # Branch A: 30 minute buffer, 15 minute grace. The last till averaged 20 minutes.
-        self.till_closed(20)
+    def test_a_booking_inside_its_lock_shows_with_a_short_turn_time(self):
+        # Branch A: 30 minute buffer, 15 minute grace, here a 20 minute Target Turn Time.
+        self.site.rows["Branch"]["Branch A"].custom_target_turn_time = 20
         self.booking("TR-1", "19:00")
         self.clock("18:35")  # 19:00's lock began at 18:30, though 19:00 is beyond 18:35 + 20
         self.assertEqual(self.read().get("T1", {}).get("scheduled_time"), f"{DAY} 19:00:00")
@@ -130,21 +130,25 @@ class TestCaptainGridReadsTableReservations(_Grid):
         self.clock("18:25")
         self.assertEqual(self.read().get("T2", {}).get("scheduled_time"), f"{DAY} 18:00:00")
 
-    def test_a_short_till_average_narrows_the_arriving_window(self):
-        self.till_closed(45)
-        self.booking("TR-1", "20:00")  # 90 minutes out, its lock (19:30) not begun
+    def test_a_short_turn_time_narrows_the_arriving_window(self):
+        self.site.rows["Branch"]["Branch A"].custom_target_turn_time = 45
+        self.booking("TR-1", "20:00")  # 90 minutes out: beyond a 45 minute stay, its lock (19:30) not begun
         self.booking("TR-2", "19:10", table="T2")
         self.assertEqual(set(self.read()), {"T2"})
 
-    def test_a_quiet_last_till_falls_back_to_the_last_week_average(self):
-        # The last till averaged 10 minutes (below the 15 minute floor), the last week 45.
-        self.site.rows["Branch"]["Branch A"].update(
-            custom_avg_table_time_last_day=10, custom_avg_table_time_last_week=45)
-        self.booking("TR-1", "20:00")  # 90 minutes out: beyond a 45 minute stay, its lock not begun
+    def test_a_measured_till_average_never_changes_the_window(self):
+        # #139 R4: the Target Turn Time alone sets the stay, as in Simphony; the
+        # measured averages are report figures.
+        self.booking("TR-1", "20:00")  # 90 minutes out: inside Branch A's 90 minute turn time
         self.booking("TR-2", "19:10", table="T2")
-        self.assertEqual(set(self.read()), {"T2"})
+        for day, week in ((45, 45), (10, 45), (20, 20)):
+            with self.subTest(last_day=day, last_week=week):
+                self.site.closed_till_average = day
+                self.site.rows["Branch"]["Branch A"].update(
+                    custom_avg_table_time_last_day=day, custom_avg_table_time_last_week=week)
+                self.assertEqual(set(self.read()), {"T1", "T2"})
 
-    def test_the_grid_reads_the_till_average_stored_at_close_not_the_sales_history(self):
+    def test_a_floor_poll_never_reads_closed_tills_or_their_bills(self):
         self.till_closed(60)
         self.booking("TR-1", "19:00")
         self.read()

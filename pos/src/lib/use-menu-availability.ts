@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMenuAvailability, isUnavailable, type ItemAvailability, type MenuAvailability } from './availability-api';
 import { getRealtimeSocket } from './realtime';
+import { useOnline } from '../offline/use-online';
 
 export type AvailabilityTier = 0 | 1 | 2;
 
@@ -62,6 +63,9 @@ export function useMenuAvailability(
   const codesKey = JSON.stringify([...new Set(items.map(({ item }) => item).filter(Boolean))].sort());
   const scope = JSON.stringify([branch, company, codesKey]);
   const [snapshot, setSnapshot] = useState<{ scope: string; items: MenuAvailability }>();
+  // The shown counts are not known to be current: a refresh failed, or the device went offline since.
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  const online = useOnline();
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refetchAll = useCallback(() => refreshRef.current(), []);
 
@@ -71,11 +75,15 @@ export function useMenuAvailability(
 
     let active = true;
     let inFlight: Promise<void> | undefined;
+    // Realtime updates are missed while offline: only a read sent after the last outage confirms the counts.
+    let outages = 0;
     const refresh = () => {
       if (inFlight) return inFlight;
+      const sentAfter = outages;
       inFlight = getMenuAvailability(branch, company, codes)
-        .then((items) => { if (active) setSnapshot({ scope, items }); })
-        .catch(() => { /* Unknown on first load; keep the last successful refresh. */ })
+        .then((items) => { if (active) { setSnapshot({ scope, items }); setUnconfirmed(sentAfter !== outages); } })
+        // Unknown on first load; otherwise keep the last successful refresh, marked unconfirmed.
+        .catch(() => { if (active) setUnconfirmed(true); })
         .finally(() => { inFlight = undefined; });
       return inFlight;
     };
@@ -91,6 +99,10 @@ export function useMenuAvailability(
     void refresh();
     const timer = setInterval(refreshIfVisible, 60_000);
     document.addEventListener('visibilitychange', refreshIfVisible);
+    const onOffline = () => { outages += 1; setUnconfirmed(true); };
+    const onOnline = () => { void refreshAfterFlight(); };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
     const channel = `menu_availability_update_${branch}`;
     let eventTimer: ReturnType<typeof setTimeout> | undefined;
     const onAvailabilityUpdate = () => {
@@ -112,9 +124,17 @@ export function useMenuAvailability(
       clearInterval(timer);
       clearTimeout(eventTimer);
       document.removeEventListener('visibilitychange', refreshIfVisible);
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
       unsubscribe?.();
     };
   }, [branch, company, codesKey, scope]);
 
-  return { availabilityMap: snapshot?.scope === scope ? snapshot.items : EMPTY_AVAILABILITY, refetchAll };
+  const current = snapshot?.scope === scope;
+  return {
+    availabilityMap: current ? snapshot.items : EMPTY_AVAILABILITY,
+    /** The shown counts are not confirmed (offline, a failed refresh, or not re-read since reconnecting): Simphony's "[N]?". */
+    availabilityStale: current && (unconfirmed || !online),
+    refetchAll,
+  };
 }

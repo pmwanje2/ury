@@ -268,7 +268,11 @@ doc_events = {
     "POS Invoice": {
         "before_insert": "ury.ury.hooks.ury_pos_invoice.before_insert",
         "validate": "ury.ury.hooks.ury_pos_invoice.validate",
-        "after_insert":"ury.ury.api.ury_kot_order_number.set_order_number",
+        "after_insert": [
+            "ury.ury.api.ury_kot_order_number.set_order_number",
+            # A check opened on a table binds the party seated there (Simphony seats into a guest check).
+            "ury.ury.api.table_reservation.bind_seated_reservation_to_check",
+        ],
         "before_submit": "ury.ury.hooks.ury_pos_invoice.before_submit",
         "on_submit": [
             "ury.ury.hooks.ury_pos_invoice.on_submit",
@@ -675,8 +679,6 @@ fixtures = [
                     "Branch-custom_unset_grace_policy",
                     "Branch-custom_min_reservation_notice",
                     "Branch-custom_target_turn_time",
-                    "Branch-custom_min_avg_table_time",
-                    "Branch-custom_seated_lookup_hours",
                     "Branch-custom_avg_table_time_last_day",
                     "Branch-custom_avg_table_time_last_week",
                     "Price List-restaurant_menu",

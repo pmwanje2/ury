@@ -50,7 +50,8 @@
     "availability_update_failed": "No se pudo actualizar la disponibilidad. Inténtalo de nuevo.",
     "availability_load_failed": "No se pudo cargar la disponibilidad. Inténtalo de nuevo.",
     "no_availability_overrides": "No hay cambios de disponibilidad para este local.",
-    "sold_out_count": "Agotados ({{count}})"
+    "sold_out_count": "Agotados ({{count}})",
+    "qty_left_unconfirmed": "¿Quedan {{qty}}?"
   },
   "pos_sidebar": {
     "categories": "Categorías",
@@ -78,6 +79,7 @@
   "order": {
     "select_to_view": "Selecciona un pedido para ver el detalle",
     "items_title": "Artículos del pedido",
+    "covers": "Comensales: {{count}}",
     "taxes_charges": "Impuestos y cargos",
     "cancel_order": "Cancelar pedido",
     "enter_cancel_reason": "Ingresa el motivo de cancelación",

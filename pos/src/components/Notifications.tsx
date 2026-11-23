@@ -198,7 +198,7 @@ function UserNotifications({ user, title = 'Recent Notifications', documentType,
   }
 
   return (
-    <section aria-label={title} className="flex max-h-60 min-w-0 flex-col rounded-lg border border-gray-200 bg-white p-4 xl:h-full xl:max-h-full">
+    <section aria-label={title} className="flex max-h-60 min-w-0 flex-col rounded-lg border border-gray-200 bg-white p-4 2xl:h-full 2xl:max-h-full">
       <div className="flex shrink-0 items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 font-semibold"><Bell className="h-4 w-4 text-blue-600" />{title}</h2>
         <button className="min-h-11 px-2 text-sm text-blue-700 underline" onClick={() => refreshRef.current()}>Refresh</button>

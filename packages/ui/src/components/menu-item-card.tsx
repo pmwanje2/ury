@@ -62,6 +62,8 @@ export function MenuItemCard({
   const isDisabled = Boolean(disabled || unavailableMessage)
   const showImage = Boolean(imageUrl) && !imageFailed
   const showQtyControls = typeof quantity === 'number' && quantity > 0
+  // Cards that can show the stepper keep room for it under their content.
+  const hasStepper = Boolean(onIncrement || onDecrement)
   const canIncrement = Boolean(onIncrement) && !isDisabled && !incrementDisabled
   const canDecrement = Boolean(onDecrement) && !isDisabled && !decrementDisabled
 
@@ -143,7 +145,8 @@ export function MenuItemCard({
       aria-label={onConfigure ? `${name}. Options available` : name}
       aria-keyshortcuts={onConfigure ? 'Shift+Enter' : undefined}
       className={cn(
-        'relative flex h-60 cursor-pointer flex-col overflow-hidden rounded-lg bg-white shadow-sm transition-shadow hover:shadow-md',
+        // min-h, not h: a wrapped stock chip grows the card instead of running under the stepper.
+        'relative flex min-h-60 cursor-pointer flex-col overflow-hidden rounded-lg bg-white shadow-sm transition-shadow hover:shadow-md',
         isDisabled && 'pointer-events-none cursor-not-allowed opacity-50',
         className
       )}
@@ -200,28 +203,29 @@ export function MenuItemCard({
         <h3 className="line-clamp-2 text-sm font-medium leading-5 text-gray-900" title={name}>
           {name}
         </h3>
-        {/* Course and price share a row so the stepper below can keep full-size
-            touch targets: on a 2-column phone grid the card is ~166px wide and
-            the stepper alone is ~112px, so a price beside it would collide. */}
-        <div className="mt-1 flex items-baseline justify-between gap-2">
-          <p className="min-w-0 truncate text-xs text-gray-500" title={course}>
-            {course || ' '}
-          </p>
+        {/* The course gets a row of its own so it is never squeezed against the
+            price ("Bevera…"); the row is kept when there is no course so prices
+            line up across the grid. Price and stock chip share the next row and
+            end above the stepper zone: on a 2-column phone grid the card is
+            ~166px wide and the stepper alone is ~112px, so neither may sit
+            beside it. */}
+        <p className="max-w-full truncate text-xs leading-4 text-gray-500" title={course}>
+          {course || '\u00a0'}
+        </p>
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="shrink-0 text-sm font-semibold tabular-nums text-gray-900">
             {priceLabel}
           </span>
-        </div>
-        {availabilityTag ? (
-          <div className="mt-2">
+          {availabilityTag ? (
             <Badge size="tag" variant={availabilityTag.variant}>
               {availabilityTag.showDot ? (
                 <span className="h-[5px] w-[5px] flex-none rounded-full bg-current" />
               ) : null}
               {availabilityTag.text}
             </Badge>
-          </div>
-        ) : null}
-        <div className="mt-auto h-11" aria-hidden />
+          ) : null}
+        </div>
+        {hasStepper ? <div className="mt-auto h-11 shrink-0" aria-hidden /> : null}
       </div>
       {showQtyControls && (
         <div

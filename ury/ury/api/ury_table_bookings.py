@@ -5,8 +5,7 @@ from datetime import timedelta
 import frappe
 from frappe.utils import cint, get_datetime, now_datetime
 
-from ury.ury.api.table_reservation import grace_period_minutes, non_negative_timing, reservations_enabled
-from ury.ury.report.average_table_time.average_table_time import reservation_duration_from
+from ury.ury.api.table_reservation import positive_timing, reservations_enabled
 
 CONFIRMED, SEATED = "Confirmed", "Seated"
 
@@ -19,19 +18,14 @@ def get_upcoming_bookings(branch):
 		return {}
 
 	now = now_datetime()  # Frappe's site-local clock, not UTC or the client clock.
-	# The averages a till close stored on the Branch: a floor poll never re-reads closed tills.
-	# Grace and turn time resolve as check_table_reservation resolves them.
+	# Grace and the Target Turn Time (the stay, as in Simphony) resolve as check_table_reservation
+	# resolves them. One Branch read: a floor poll never reads closed tills or their bills.
 	settings = frappe.db.get_value("Branch", branch, [
-		"custom_buffer_time", "custom_grace_period",
-		"custom_target_turn_time", "custom_min_avg_table_time",
-		"custom_avg_table_time_last_day", "custom_avg_table_time_last_week",
+		"custom_buffer_time", "custom_grace_period", "custom_target_turn_time",
 	], as_dict=True) or {}
-	stay = timedelta(minutes=reservation_duration_from(
-		settings.get("custom_avg_table_time_last_day"), settings.get("custom_avg_table_time_last_week"),
-		target_turn_time=non_negative_timing(settings, "target_turn_time"),
-		min_avg_table_time=non_negative_timing(settings, "min_avg_table_time")))
+	stay = timedelta(minutes=positive_timing(settings, "custom_target_turn_time"))
 	buffer = timedelta(minutes=max(0, cint(settings.get("custom_buffer_time"))))
-	grace = timedelta(minutes=grace_period_minutes(settings.get("custom_grace_period")))
+	grace = timedelta(minutes=positive_timing(settings, "custom_grace_period"))
 
 	try:
 		rows = frappe.get_list(
