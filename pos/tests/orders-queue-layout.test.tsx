@@ -152,6 +152,17 @@ describe('U-1 order card header', () => {
     expect(getComputedStyle(total).whiteSpace).toBe('nowrap');
   });
 
+  it('lets the total drop under the reference on a narrow card rather than cut the reference short', async () => {
+    // Measured at 1440px: two cards per row are ~186px wide, so an unwrapping
+    // row 1 showed "POS-IN…" on every card. Wrapping keeps the reference whole
+    // and the total right-aligned on its own line.
+    await renderOrders();
+    const card = orderCard();
+    const total = onlyElementWithText(card, formatCurrency(125000));
+    expect(getComputedStyle(total.parentElement!).flexWrap).toBe('wrap');
+    expect(getComputedStyle(total).marginInlineStart).toBe('auto');
+  });
+
   it('gives table and order type their own line that never wraps word by word', async () => {
     await renderOrders();
     const card = orderCard();
