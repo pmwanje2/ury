@@ -271,6 +271,11 @@ class TestPrintedCheckLineIdentity(Loaded):
         self.validate(Check(name="CHK-NEW", new=True, items=[line("r1", "soda", 1, "k1")]))
         self.frappe.get_doc.assert_not_called()
 
+    def test_a_saved_draft_return_is_not_held_to_the_printed_check_rule(self):
+        """A return refunds a paid check; correcting its draft quantity is not editing a printed bill."""
+        self.stored = Check(name="RET-1", is_return=1, items=[line("r1", "soda", -1, "k1")])
+        self.validate(Check(name="RET-1", is_return=1, items=[line("r1", "soda", -2, "k1")]))
+
 
 class TestLegacyLinkedBillSync(Loaded):
     """G12 for bills linked before Add Check consolidated lines: both post exactly once with their own tenders."""
