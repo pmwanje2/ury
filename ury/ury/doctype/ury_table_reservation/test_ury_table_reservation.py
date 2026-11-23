@@ -252,10 +252,17 @@ class TestURYTableReservation(FrappeTestCase):
             )
 
     def test_the_branch_minimum_notice_refuses_a_booking_inside_it(self):
-        frappe.db.set_value("Branch", self.branch, "custom_min_reservation_notice", 30)
-        self.addCleanup(frappe.db.set_value, "Branch", self.branch, "custom_min_reservation_notice", -1)
+        # 45, not the branch's 30-minute buffer, whose occupied-table refusal also says "30 minutes".
+        frappe.db.set_value("Branch", self.branch, "custom_min_reservation_notice", 45)
+
+        def restore_seeded_notice():
+            # tearDown commits before cleanups run, so the restore commits too.
+            frappe.db.set_value("Branch", self.branch, "custom_min_reservation_notice", -1)
+            frappe.db.commit()
+
+        self.addCleanup(restore_seeded_notice)
         soon = (now_datetime() + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
-        with self.assertRaisesRegex(frappe.ValidationError, "30 minutes"):
+        with self.assertRaisesRegex(frappe.ValidationError, "at least 45 minutes' notice"):
             create_table_reservation(
                 table="_Test Reservation Table 1",
                 customer="_Test Reservation Customer",
