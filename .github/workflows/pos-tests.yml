@@ -57,6 +57,8 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_backfill_invoice_employee_attribution
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_availability_tiers
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_menu_availability_operations
+          PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_reservation_merge_safety
+          PYTHONPATH=.. python3 -m unittest ury.ury.api.test_table_reservation_lifecycle
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_pos_invoice_list_fields
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_waiter_name
           PYTHONPATH=.. python3 -m unittest ury.ury.hooks.test_pos_invoice_money_integrity

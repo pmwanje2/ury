@@ -50,11 +50,11 @@ const TableReservationCompleteDialog: React.FC<Props> = ({
         <DialogHeader className="px-8 pt-8 pb-5 shrink-0">
           <DialogTitle className="text-xl flex items-center gap-2">
             <CheckCircle2 className="w-6 h-6 text-blue-600" />
-            {t('reservations.complete_title')}
+            {t('reservations.seat_title')}
           </DialogTitle>
 
           <DialogDescription className="text-sm text-gray-600 mt-1">
-            {t('reservations.complete_description', { table: tableName, time: formattedTime })}
+            {t('reservations.seat_description', { table: tableName, time: formattedTime })}
           </DialogDescription>
         </DialogHeader>
 
@@ -131,7 +131,7 @@ const TableReservationCompleteDialog: React.FC<Props> = ({
             disabled={loading}
             className="bg-blue-600 hover:bg-blue-700 text-white"
           >
-            {t('reservations.complete_action')}
+            {t('reservations.seat_action')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -33,10 +33,12 @@ export interface ActiveTableOrder {
   invoicePrinted: boolean;
 }
 
+/** A URY Table Reservation badge for the grid: Confirmed (arriving) or Seated (at the table). */
 export interface UpcomingBooking {
   scheduled_time: string;
   party_size: number | null;
   customer_name: string;
+  status: 'Confirmed' | 'Seated';
   server_now: string;
 }
 
