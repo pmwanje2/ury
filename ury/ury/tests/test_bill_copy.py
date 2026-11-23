@@ -41,8 +41,11 @@ class BillCopy(unittest.TestCase):
     def test_copy_refusals_show_a_neutral_code(self):
         from ury.ury.doctype.ury_bill_reprint_log import ury_bill_reprint_log as reprint_log
         from ury.ury.printing import api as printing
-        raise_it = lambda message, exc: (_ for _ in ()).throw(exc(message))
-        doc = MagicMock(name='log'); doc.is_new.return_value = False
+        def raise_it(message, exc):
+            raise exc(message)
+
+        doc = MagicMock(name='log')
+        doc.is_new.return_value = False
         with patch.object(reprint_log, 'frappe') as f:
             f.PermissionError = PermissionError
             f.throw.side_effect = raise_it
