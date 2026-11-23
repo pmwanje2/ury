@@ -3,8 +3,11 @@
 Site-less: reads the shipped sources only. What a user can see from the backend is
 the translation source column, message strings (frappe.throw, returned reasons, Error
 Log titles) and DocType labels/descriptions. Docstrings and comments are developer
-text and stay. "HUF App" is the vendor app's DocType name, an identifier passed to
-frappe.db, never shown, so it is the one string allowed.
+text and stay. "HUF App" (the vendor app's DocType) and "Huf User" (its Role) are
+identifiers passed to frappe.db, never shown, so they are the strings allowed. Any
+other sentence (a string with whitespace) naming the vendor in any case is shown text:
+"huf app is not installed on this site" reaches the settings page as ``reason``.
+dev_seed/ is developer demo seeding run from bench, not tenant-facing behaviour.
 """
 
 import ast
@@ -16,7 +19,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VENDOR = re.compile(r"\bHUF\b")
-IDENTIFIERS = {"HUF App"}
+SENTENCE_VENDOR = re.compile(r"(?i)\bhuf\b")
+IDENTIFIERS = {"HUF App", "Huf User"}
+
+
+def _names_vendor(value):
+	if value in IDENTIFIERS:
+		return False
+	return bool(VENDOR.search(value) or (re.search(r"\s", value.strip()) and SENTENCE_VENDOR.search(value)))
 
 
 def _docstring_nodes(tree):
@@ -33,13 +43,13 @@ class AssistantVendorName(unittest.TestCase):
 	def test_python_message_strings_never_name_the_vendor(self):
 		offenders = []
 		for path in sorted(ROOT.rglob("*.py")):
-			if "tests" in path.parts or path.name.startswith("test_"):
+			if "tests" in path.parts or "dev_seed" in path.parts or path.name.startswith("test_"):
 				continue
 			tree = ast.parse(path.read_text(encoding="utf-8"))
 			docs = _docstring_nodes(tree)
 			for node in ast.walk(tree):
 				if (isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs
-						and node.value not in IDENTIFIERS and VENDOR.search(node.value)):
+						and _names_vendor(node.value)):
 					offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
 		self.assertGreater(len(list(ROOT.rglob("*.py"))), 50)
 		self.assertEqual(offenders, [])
