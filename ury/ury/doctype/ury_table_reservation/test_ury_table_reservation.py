@@ -251,6 +251,21 @@ class TestURYTableReservation(FrappeTestCase):
                 branch=self.branch,
             )
 
+    def test_the_branch_minimum_notice_refuses_a_booking_inside_it(self):
+        frappe.db.set_value("Branch", self.branch, "custom_min_reservation_notice", 30)
+        self.addCleanup(frappe.db.set_value, "Branch", self.branch, "custom_min_reservation_notice", -1)
+        soon = (now_datetime() + timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+        with self.assertRaisesRegex(frappe.ValidationError, "30 minutes"):
+            create_table_reservation(
+                table="_Test Reservation Table 1",
+                customer="_Test Reservation Customer",
+                customer_name="Customer Short Notice",
+                customer_phone="9876543210",
+                no_of_pax=2,
+                reserved_at=soon,
+                branch=self.branch,
+            )
+
     def test_past_datetime_validation(self):
         # Booking in the past should fail.
         past_time = (now_datetime() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -525,3 +540,58 @@ class TestNativeReservationBranchGuard(FrappeTestCase):
         ):
             URYTableReservation.validate(doc)
         doc.validate_conflicts.assert_not_called()
+
+
+# R3: each reservation timing is a Branch setting seeded by the Custom Field fixture.
+TIMING_SEEDS = {
+    "custom_grace_period": "15",
+    "custom_unset_grace_policy": "Use Default Grace Period",
+    "custom_min_reservation_notice": "-1",
+    "custom_target_turn_time": "60",
+    "custom_min_avg_table_time": "15",
+    "custom_seated_lookup_hours": "12",
+}
+
+
+class TestBranchReservationTimingOnTheSite(FrappeTestCase):
+    """On a migrated site each timing is a seeded Branch column, and the grace policy runs on Branch save."""
+
+    def test_each_timing_is_a_branch_column_with_its_seed(self):
+        meta = frappe.get_meta("Branch")
+        for fieldname, seed in TIMING_SEEDS.items():
+            with self.subTest(field=fieldname):
+                field = meta.get_field(fieldname)
+                self.assertIsNotNone(field, f"Branch has no {fieldname} setting")
+                self.assertEqual(str(field.default), seed)
+                # The column default is what an existing Branch row gets when migrate adds the column.
+                column = frappe.db.sql(
+                    """SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tabBranch' AND COLUMN_NAME = %s""",
+                    fieldname,
+                )
+                self.assertEqual(str(column[0][0]).strip("'") if column else None, seed)
+        new_branch = frappe.new_doc("Branch")
+        self.assertEqual({fieldname: str(new_branch.get(fieldname)) for fieldname in TIMING_SEEDS}, TIMING_SEEDS)
+
+    def test_refuse_to_enable_stops_a_branch_without_a_grace_on_save(self):
+        name = "_Test R3 Grace Policy"
+
+        def branch(grace):
+            return frappe.get_doc({
+                "doctype": "Branch",
+                "branch": name,
+                "user": [{"doctype": "URY User", "user": "Administrator"}],
+                "custom_enable_reservation": 1,
+                "custom_unset_grace_policy": "Refuse to Enable",
+                "custom_grace_period": grace,
+            })
+
+        with self.assertRaisesRegex(frappe.ValidationError, "grace period"):
+            branch(0).insert(ignore_permissions=True)
+        self.assertFalse(frappe.db.exists("Branch", name))
+        branch(10).insert(ignore_permissions=True)
+        self.addCleanup(frappe.delete_doc, "Branch", name, force=1, ignore_permissions=True)
+        saved = frappe.get_doc("Branch", name)
+        saved.custom_grace_period = 0
+        with self.assertRaisesRegex(frappe.ValidationError, "grace period"):
+            saved.save(ignore_permissions=True)
