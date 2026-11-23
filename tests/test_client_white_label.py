@@ -51,6 +51,15 @@ class ClientBrand(unittest.TestCase):
                 icon = (ROOT / app / "public/ury.ico").read_bytes()
                 self.assertEqual(hashlib.sha256(icon).hexdigest(), "f8410ea5598b43087f77e64a6b8732f6a7ae6b0a09c94497b383e1e92df95c9c")
 
+    def test_upstream_wordmark_is_not_shipped(self):
+        # The blue upstream wordmark the Vue apps shipped but no page references.
+        wordmarks = {"72cafa53f6e2859e66e41157f82365d82acb72395e573cf47ebd54acceed35e3",
+                     "9b69718cb3882d6e466683e9d7041943563b29377361e029c17439dd7a8ffccd"}
+        for base in [ROOT / app / "public" for app in APPS] + [ROOT / "ury/public/Images"]:
+            for file in sorted(path for path in base.rglob("*") if path.is_file()):
+                with self.subTest(file=str(file.relative_to(ROOT))):
+                    self.assertNotIn(hashlib.sha256(file.read_bytes()).hexdigest(), wordmarks)
+
     def test_native_html_field_copy(self):
         for file in (ROOT / "ury").glob("*/doctype/*/*.json"):
             for field in json.loads(file.read_text()).get("fields", []):

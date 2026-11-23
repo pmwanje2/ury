@@ -35,8 +35,26 @@ class BillCopy(unittest.TestCase):
             f.PermissionError = PermissionError
             f.throw.side_effect = lambda message, exc: (_ for _ in ()).throw(exc(message))
             doc = MagicMock(name='job'); doc.as_dict.return_value = dict(job_type='BILL', status='COMPLETED')
-            with self.assertRaisesRegex(PermissionError, 'URY-COPY-001'): virtual.URYPrintJob.db_update(doc)
+            with self.assertRaisesRegex(PermissionError, r'^\[POS-COPY-001\] '): virtual.URYPrintJob.db_update(doc)
             save.assert_not_called()
+
+    def test_copy_refusals_show_a_neutral_code(self):
+        from ury.ury.doctype.ury_bill_reprint_log import ury_bill_reprint_log as reprint_log
+        from ury.ury.printing import api as printing
+        raise_it = lambda message, exc: (_ for _ in ()).throw(exc(message))
+        doc = MagicMock(name='log'); doc.is_new.return_value = False
+        with patch.object(reprint_log, 'frappe') as f:
+            f.PermissionError = PermissionError
+            f.throw.side_effect = raise_it
+            for event in (reprint_log.URYBillReprintLog.validate, reprint_log.URYBillReprintLog.on_trash):
+                with self.subTest(event=event.__name__), self.assertRaisesRegex(PermissionError, r'^\[POS-COPY-001\] '):
+                    event(doc)
+        with patch.object(printing, 'get_job', return_value=dict(job_type='BILL_COPY')), \
+             patch.object(printing, 'frappe') as f, patch.object(printing, '_', side_effect=lambda message: message):
+            f.PermissionError = PermissionError
+            f.throw.side_effect = raise_it
+            with self.assertRaisesRegex(PermissionError, r'^\[POS-COPY-001\] Retry from the closed check\.$'):
+                printing.retry_print_job('COPY-test-1')
 
     def test_native_format_renders_original_details(self):
         path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'

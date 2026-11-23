@@ -145,6 +145,23 @@ class TestSiteBrand(unittest.TestCase):
             ctx = self.brand_module().get_brand_context(surface)
             self.assertNotRegex(ctx["brand_json"], r"(?i)frappe|erpnext|kamra|\bury\b")
 
+    def test_refusal_code_shows_a_neutral_prefix_before_the_stable_key(self):
+        brand = self.brand_module()
+        self.assertEqual(brand.coded_message("CLOSE-LATE-INVOICE", "Close the till later."),
+                         "[POS-CLOSE-LATE-INVOICE] Close the till later.")
+        self.framework.conf["ury_message_code_prefix"] = "MAX"
+        self.assertEqual(brand.coded_message("CLOSE-LATE-INVOICE", "Close the till later."),
+                         "[MAX-CLOSE-LATE-INVOICE] Close the till later.")
+
+    def test_refusal_code_prefix_never_names_the_engine_or_breaks_the_code(self):
+        brand = self.brand_module()
+        for prefix in ("URY", "ury", "Kamra", "ERPNEXT", "Frappe", "XURY", "", "P S", "<b>", "max",
+                       "ABCDEFGHIJK", 7, None):
+            with self.subTest(prefix=prefix):
+                self.framework.conf["ury_message_code_prefix"] = prefix
+                self.assertEqual(brand.coded_message("TILL-NOT-HOLDER", "Not permitted"),
+                                 "[POS-TILL-NOT-HOLDER] Not permitted")
+
     def test_white_label_asset_and_outlet_image_survive_the_legacy_asset_filter(self):
         for path in ("/assets/ury/Images/maximus-mark.svg", "/assets/ury/custom/outlet.svg"):
             self.settings.app_logo = path
