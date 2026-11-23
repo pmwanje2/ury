@@ -27,7 +27,7 @@ def process_reservation_no_shows():
     confirmed_reservations = frappe.db.get_all(
         "URY Table Reservation",
         filters={"status": ["in", ["Confirmed", "Seated"]]},
-        fields=["name", "branch", "reserved_at", "reserved_table", "status"],
+        fields=["name", "branch", "reserved_at", "reserved_table", "status", "pos_invoice"],
     )
 
     if not confirmed_reservations:

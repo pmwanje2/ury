@@ -273,6 +273,7 @@ export default function TableReservationTimeline({
     const res = item.reservation;
     const isHovered = hoveredId === res.name;
     const resTable = res.reserved_table || (res as any).table || 'Table';
+    const guestName = res.customer_name || res.customer;
     const isCancelled = res.status === 'Cancelled' || (res.status as string) === 'Canceled';
 
     return (
@@ -288,7 +289,7 @@ export default function TableReservationTimeline({
           height: `${CARD_HEIGHT}px`,
           zIndex: isHovered ? 40 : 10,
         }}
-        className={`absolute rounded-lg border p-2 flex flex-col justify-between overflow-hidden transition-all duration-150 select-none ${
+        className={`absolute rounded-lg border px-2 py-1.5 flex flex-col justify-between overflow-hidden transition-all duration-150 select-none ${
           onSelectReservation ? 'cursor-pointer' : 'cursor-default'
         } ${isHovered
             ? `shadow-xl scale-[1.01] ${getStatusHoverRingClass(res.status)}`
@@ -298,7 +299,7 @@ export default function TableReservationTimeline({
         {/* Top Row: the status, whole. A table's row already names the table, and the
             last row shows the times, so a short card repeats neither; in the free
             layout the table name yields (truncates) to the status. */}
-        <div className="flex items-center justify-between gap-1.5 min-w-0">
+        <div className="shrink-0 flex items-center justify-between gap-1.5 min-w-0">
           {!tableRows && (
             <span
               className={`text-[11px] font-bold px-1.5 py-0.5 rounded shadow-2xs min-w-0 truncate ${isCancelled
@@ -317,11 +318,13 @@ export default function TableReservationTimeline({
 
         {/* Middle Row: Customer Name & Guest Count */}
         <div
-          className={`text-[11px] font-medium truncate flex items-center gap-1 mt-0.5 ${isCancelled ? 'text-red-950' : 'text-gray-800'
+          className={`shrink-0 min-w-0 text-[11px] font-medium flex items-center gap-1 ${isCancelled ? 'text-red-950' : 'text-gray-800'
             }`}
         >
           <User className="w-3 h-3 shrink-0 opacity-60" />
-          <span className="truncate font-semibold">{res.customer_name || res.customer}</span>
+          <span className="min-w-0 truncate font-semibold" title={guestName}>
+            {guestName}
+          </span>
           {res.no_of_pax ? (
             <span className={`text-[10px] shrink-0 ${isCancelled ? 'text-red-700/80' : 'text-gray-500'}`}>
               ({res.no_of_pax}p)
@@ -331,16 +334,19 @@ export default function TableReservationTimeline({
 
         {/* Bottom Row: Phone / Time range */}
         <div
-          className={`flex items-center justify-between text-[10px] pt-0.5 ${isCancelled ? 'text-red-700/80' : 'text-gray-500'
+          className={`shrink-0 min-w-0 flex items-center justify-between gap-1 text-[10px] ${isCancelled ? 'text-red-700/80' : 'text-gray-500'
             }`}
         >
-          <span className={`text-[10px] ${isCancelled ? 'text-red-800' : 'text-gray-600'}`}>
+          <span className={`shrink-0 whitespace-nowrap text-[10px] ${isCancelled ? 'text-red-800' : 'text-gray-600'}`}>
             {item.timeStr} - {item.endTimeStr}
           </span>
           {res.customer_phone && (
-            <span className="flex items-center gap-0.5 opacity-70 truncate text-[10px]">
+            <span
+              className="flex items-center gap-0.5 opacity-70 min-w-0 truncate text-[10px]"
+              title={res.customer_phone}
+            >
               <Phone className="w-2.5 h-2.5 shrink-0" />
-              {res.customer_phone}
+              <span className="min-w-0 truncate">{res.customer_phone}</span>
             </span>
           )}
         </div>

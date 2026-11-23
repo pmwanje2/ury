@@ -132,9 +132,9 @@ class URYTableReservation(Document):
             frappe.throw(_("Another party is already seated at table {0}.").format(self.reserved_table))
 
     def validate_unseat(self):
-        from ury.ury.api.table_reservation import open_checks_on
+        from ury.ury.api.table_reservation import _bound_check_or_split_is_open, open_checks_on
 
-        if open_checks_on([self.reserved_table]):
+        if open_checks_on([self.reserved_table]) or _bound_check_or_split_is_open(self.pos_invoice):
             frappe.throw(
                 _("Table {0} has an open check: a party can be unseated only before it orders.").format(
                     self.reserved_table
@@ -167,8 +167,10 @@ class URYTableReservation(Document):
 
         # The Minimum Reservation Notice applies to the booking time, as in
         # Simphony: when the booking is made or its time moves, not when staff
-        # edit its notes, covers, phone or table.
+        # edit its notes, covers, phone or table. The occupied-table buffer
+        # check applies only when the booking's time or table is set or moved.
         time_moved = not before or get_datetime(before.reserved_at) != get_datetime(self.reserved_at)
+        table_moved = not before or before.reserved_table != self.reserved_table
 
         from ury.ury.api.table_reservation import validate_reservation_rules
         validate_reservation_rules(
@@ -178,4 +180,5 @@ class URYTableReservation(Document):
             no_of_pax=self.no_of_pax,
             exclude_name=self.name,
             check_notice=time_moved,
+            check_occupancy=time_moved or table_moved,
         )
