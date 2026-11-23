@@ -1072,10 +1072,15 @@ def end_seated_visit(reservation_name):
 
     Saved under the session user's own authority; a user without it leaves the
     party Seated, and the scheduler (as Administrator) ends it on its next run.
+    Pre-checked without throwing so unauthorized polls leave no `_server_messages`.
     """
     try:
         reservation = frappe.get_doc("URY Table Reservation", reservation_name)
         if reservation.status != "Seated":
+            return False
+        if not frappe.has_permission(
+            "URY Table Reservation", "write", doc=reservation, throw=False
+        ) or not is_user_authorized_to_set_status(reservation, "Completed"):
             return False
         reservation.status = "Completed"
         reservation.save()
