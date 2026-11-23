@@ -14,7 +14,10 @@ export interface POSInvoice {
   grand_total: number;
   restaurant_table: string | null;
   cashier: string;
+  /** the waiter's User id, usually an email address */
   waiter: string;
+  /** the waiter's full name, when the server resolves it; not read from POS Invoice */
+  waiter_name?: string | null;
   net_total: number;
   posting_time: string;
   total_taxes_and_charges: number;
@@ -22,6 +25,10 @@ export interface POSInvoice {
   customer_name?: string;
   /** a short name for this check (Susan, Seat 2); not a Customer */
   custom_guest_label?: string | null;
+  /** covers (guest count) on the check */
+  no_of_pax?: number | null;
+  /** when the check was opened (site time); open checks are aged from it */
+  creation?: string;
   status: 'Draft' | 'Unbilled' | 'Recently Paid' | 'Paid' | 'Consolidated' | 'Return';
   mobile_number: string;
   posting_date: string;
@@ -94,7 +101,7 @@ export const outstandingFields = [
   'custom_merged_tables', 'cashier', 'waiter', 'net_total', 'posting_time', 'total_taxes_and_charges',
   'customer', 'customer_name', 'status', 'mobile_number', 'posting_date', 'rounded_total', 'order_type',
   'custom_split_group', 'custom_split_from', 'custom_guest_label', 'custom_merged_pos_invoice',
-  'custom_merged_total', 'additional_discount_percentage', 'discount_amount', 'ury_client_order_id',
+  'custom_merged_total', 'additional_discount_percentage', 'discount_amount', 'ury_client_order_id', 'no_of_pax',
 ];
 
 export async function getTillBranch() {
@@ -103,34 +110,65 @@ export async function getTillBranch() {
   return branch;
 }
 
+/**
+ * Adds what an open-check card shows beyond the list row: how long the check
+ * has been open (age_minutes, from its creation and the site clock) and its
+ * first items. Either part is left out when it cannot be read.
+ */
+async function enrichOpenChecks<T extends POSInvoice>(invoices: T[]): Promise<T[]> {
+  if (!invoices.length) return invoices;
+  const [items, clock] = await Promise.allSettled([
+    call.get<{ message: { parent: string; item_name: string; qty: number }[] }>('frappe.client.get_list', {
+      doctype: 'POS Invoice Item', parent: 'POS Invoice', fields: ['parent', 'item_name', 'qty'],
+      filters: { parenttype: 'POS Invoice', parent: ['in', invoices.map(row => row.name)] },
+      order_by: 'parent asc, idx asc', limit_page_length: 0,
+    }),
+    call.get<{ message: string }>('ury.ury.api.ury_server_time.get_server_time'),
+  ]);
+  // Both values are site-local wall times. Parse in the same fixed offset so
+  // the till's timezone and daylight saving transitions do not change the age.
+  const siteMillis = (value: string) => Date.parse(value.replace(' ', 'T') + 'Z');
+  for (const inv of invoices) {
+    const age = clock.status === 'fulfilled' && typeof clock.value.message === 'string' && inv.creation
+      ? siteMillis(clock.value.message) - siteMillis(inv.creation) : NaN;
+    if (Number.isFinite(age)) inv.age_minutes = Math.max(0, Math.floor(age / 60000));
+    if (items.status === 'fulfilled' && Array.isArray(items.value.message)) inv.items_preview = items.value.message.filter(row => row.parent === inv.name).map(({ item_name, qty }) => ({ item_name, qty }));
+  }
+  return invoices;
+}
+
+/** The queues that list open (unsettled) checks, which carry an age. */
+const isOpenCheckQueue = (status: string) => status === 'Draft' || status === 'Unbilled';
+
 async function outstandingChecks(limit: number, offset: number, query?: string, resolvedBranch?: string) {
   const branch = resolvedBranch || await getTillBranch();
   const { message: rows } = await call.get<{ message: (POSInvoice & { creation: string })[] }>('frappe.client.get_list', {
     doctype: 'POS Invoice', filters: { branch, docstatus: 0, status: 'Draft' }, fields: outstandingFields,
-    ...(query ? { or_filters: ['name', 'customer', 'mobile_number'].map(field => [field, 'like', `%${query}%`]) } : {}),
+    ...(query ? { or_filters: ['name', 'customer', 'customer_name', 'mobile_number'].map(field => [field, 'like', `%${query}%`]) } : {}),
     order_by: 'creation asc, name asc', limit_start: offset, limit_page_length: limit + 1,
   });
-  const invoices = rows.slice(0, limit);
-  if (invoices.length) {
-    const [items, clock] = await Promise.allSettled([
-      call.get<{ message: { parent: string; item_name: string; qty: number }[] }>('frappe.client.get_list', {
-        doctype: 'POS Invoice Item', parent: 'POS Invoice', fields: ['parent', 'item_name', 'qty'],
-        filters: { parenttype: 'POS Invoice', parent: ['in', invoices.map(row => row.name)] },
-        order_by: 'parent asc, idx asc', limit_page_length: 0,
-      }),
-      call.get<{ message: string }>('ury.ury.api.ury_server_time.get_server_time'),
-    ]);
-    // Both values are site-local wall times. Parse in the same fixed offset so
-    // the till's timezone and daylight saving transitions do not change the age.
-    const siteMillis = (value: string) => Date.parse(value.replace(' ', 'T') + 'Z');
-    for (const inv of invoices) {
-      const age = clock.status === 'fulfilled' && typeof clock.value.message === 'string' && inv.creation
-        ? siteMillis(clock.value.message) - siteMillis(inv.creation) : NaN;
-      if (Number.isFinite(age)) inv.age_minutes = Math.max(0, Math.floor(age / 60000));
-      if (items.status === 'fulfilled' && Array.isArray(items.value.message)) inv.items_preview = items.value.message.filter(row => row.parent === inv.name).map(({ item_name, qty }) => ({ item_name, qty }));
-    }
-  }
+  const invoices = await enrichOpenChecks(rows.slice(0, limit));
   return { invoices, hasMore: rows.length > limit };
+}
+
+/**
+ * Open checks per open queue for the till's branch, as the order status rail
+ * shows them. Outstanding is every open check; Unbilled is the unprinted ones
+ * on a table; Draft is the rest, as getPosInvoice splits them.
+ */
+export async function getOpenCheckCounts(resolvedBranch?: string | null): Promise<Partial<Record<OrderStatusType, number>>> {
+  const branch = resolvedBranch || await getTillBranch();
+  const open = { branch, docstatus: 0, status: 'Draft' };
+  const count = async (filters: Record<string, unknown>) => {
+    const { message } = await call.get<{ message: number }>('frappe.client.get_count', { doctype: 'POS Invoice', filters });
+    if (typeof message !== 'number' || !Number.isFinite(message)) throw new Error('Count unavailable');
+    return message;
+  };
+  const [outstanding, unbilled] = await Promise.all([
+    count(open),
+    count({ ...open, invoice_printed: 0, restaurant_table: ['is', 'set'] }),
+  ]);
+  return { Outstanding: outstanding, Draft: Math.max(0, outstanding - unbilled), Unbilled: unbilled };
 }
 
 export async function getPOSInvoices({
@@ -153,8 +191,11 @@ export async function getPOSInvoices({
       }
     );
 
+    const invoices = isOpenCheckQueue(status)
+      ? await enrichOpenChecks(response.message.data)
+      : response.message.data;
     return {
-      invoices: response.message.data,
+      invoices,
       hasMore: response.message.next
     };
   } catch (error) {
@@ -204,10 +245,11 @@ export async function searchPosInvoice(query: string, status: string, branch?: s
       const { invoices, hasMore } = await outstandingChecks(10, 0, query, branch);
       return { data: invoices, next: hasMore };
     }
-    const response = await call.get('ury.ury_pos.api.searchPosInvoice', {
+    const response = await call.get<{ message: { data: POSInvoice[]; next: boolean } }>('ury.ury_pos.api.searchPosInvoice', {
       query,
       status,
     });
+    if (isOpenCheckQueue(status) && Array.isArray(response.message?.data)) await enrichOpenChecks(response.message.data);
     return response.message;
   } catch (error) {
     console.error('Error searching POS invoices:', error);
@@ -259,6 +301,7 @@ export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInv
     customer: inv.customer,
     customer_name: inv.customer_name,
     custom_guest_label: inv.custom_guest_label ?? null,
+    no_of_pax: inv.no_of_pax ?? null,
     status: inv.status,
     mobile_number: inv.mobile_number ?? '',
     posting_date: inv.posting_date,

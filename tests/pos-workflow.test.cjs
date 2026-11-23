@@ -5,6 +5,7 @@ const test = require('node:test');
 const yaml = require('js-yaml');
 
 const file = resolve(__dirname, '../.github/workflows/pos-tests.yml');
+const PRINT_JINJA = 'ury/ury/print_format/print-jinja-requirements.txt';
 
 test('integration PRs and pushes run the locked, site-less POS suite', () => {
   assert.ok(existsSync(file), 'missing .github/workflows/pos-tests.yml');
@@ -24,6 +25,11 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
     'npm --prefix .. ci --ignore-scripts --no-audit --no-fund',
     'node --test ../tests/pos-workflow.test.cjs',
     'npm test --offline -- ./tests/ --maxWorkers=1',
+    // MenuItemCard and the other shared components are also rendered by serve.
+    'npm --prefix ../packages/ui test --offline -- --maxWorkers=1',
+    'npm --prefix ../serve test --offline -- --maxWorkers=1',
+    // The print-format tests render with the Jinja2 and MarkupSafe that Frappe v16 pins.
+    `python3 -m pip install --user --break-system-packages --no-deps --only-binary=:all: --require-hashes -r ../${PRINT_JINJA}`,
     [
       'ury.tests.unit.test_offline_capture_fixture',
       'ury.ury.api.test_ury_kot_notes',
@@ -41,6 +47,17 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
       'ury.ury.api.test_menu_availability_operations',
       'ury.tests.unit.test_reservation_merge_safety',
       'ury.ury.api.test_table_reservation_lifecycle',
+      'ury.ury_pos.test_pos_invoice_list_fields',
+      'ury.ury.print_format.test_print_format_waiter_name',
     ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',
   ]);
+});
+
+test('the print Jinja is the hash-pinned version Frappe v16 pins', () => {
+  const requirements = resolve(__dirname, '..', PRINT_JINJA);
+  assert.ok(existsSync(requirements), `missing ${PRINT_JINJA}`);
+  const pins = readFileSync(requirements, 'utf8').replace(/\\\n/g, ' ').split('\n')
+    .map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+  assert.deepEqual(pins.map(line => line.split(/\s+/)[0]), ['jinja2==3.1.6', 'markupsafe==3.0.3']);
+  for (const line of pins) assert.match(line, /--hash=sha256:[0-9a-f]{64}/, line);
 });

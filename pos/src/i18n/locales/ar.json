@@ -79,6 +79,7 @@
     "available_chip": "متاح",
     "unavailable": "غير متاح",
     "qty_left": "متبقي {{qty}}",
+    "qty_left_unconfirmed": "متبقي {{qty}}؟",
     "availability": {
       "default": "غير متاح حاليًا",
       "not_today": "غير متاح اليوم",
@@ -113,6 +114,7 @@
   "order": {
     "select_to_view": "حدد طلبًا لعرض التفاصيل",
     "items_title": "عناصر الطلب",
+    "covers": "عدد الأشخاص: {{count}}",
     "taxes_charges": "الضرائب والرسوم",
     "cancel_order": "إلغاء الطلب",
     "enter_cancel_reason": "أدخل سبب الإلغاء",

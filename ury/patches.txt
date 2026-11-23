@@ -48,6 +48,6 @@ ury.patches.v3_39.set_pos_invoice_default_print_format
 ury.patches.v3_43.add_network_printer_settings_queue_name
 ury.patches.v3_44.backfill_wastage_datetime
 ury.patches.v2_0.kds_display_window_field
-ury.patches.v2_0.fix_waiter_order_slip_print_format #2026-11-21 v16 guest label
+ury.patches.v2_0.fix_waiter_order_slip_print_format #2026-11-23 escaped waiter name
 ury.patches.v2_0.hold_fire_fields
 ury.patches.v2_0.unique_item_availability

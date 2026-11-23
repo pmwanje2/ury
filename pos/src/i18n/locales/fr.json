@@ -67,7 +67,8 @@
     "availability_update_failed": "Impossible de mettre à jour la disponibilité. Réessayez.",
     "availability_load_failed": "Impossible de charger la disponibilité. Réessayez.",
     "no_availability_overrides": "Aucun changement de disponibilité pour cet établissement.",
-    "sold_out_count": "Épuisé ({{count}})"
+    "sold_out_count": "Épuisé ({{count}})",
+    "qty_left_unconfirmed": "{{qty}} restant(s) ?"
   },
   "pos_sidebar": {
     "categories": "Catégories",
@@ -95,6 +96,7 @@
   "order": {
     "select_to_view": "Sélectionnez une commande pour voir les détails",
     "items_title": "Articles de la commande",
+    "covers": "Couverts : {{count}}",
     "taxes_charges": "Taxes et frais",
     "cancel_order": "Annuler la commande",
     "enter_cancel_reason": "Saisir le motif d'annulation",
