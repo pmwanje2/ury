@@ -97,6 +97,14 @@ it('labels a seated party on its occupied table as seated, never as reserved', a
   }
 });
 
+it('never shows a seated party beside Free once its table is no longer occupied', async () => {
+  // The floor released the table (no order for 30 minutes, or cleared without a bill).
+  await act(async () => root.render(<CaptainTableCard table={table} ownership="free"
+    booking={{ ...booking, status: 'Seated', server_now: '2026-10-14 19:40:00' }} onTap={() => {}} />));
+  expect(container.textContent).toContain('Free');
+  expect(container.textContent).not.toContain('Seated');
+});
+
 it('renders no reservation badge when a table has no booking', async () => {
   await act(async () => root.render(<CaptainTableCard table={table} ownership="free" onTap={() => {}} />));
   expect(container.textContent).not.toContain('Reserved');

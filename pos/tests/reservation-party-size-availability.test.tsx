@@ -56,3 +56,30 @@ it('sends the party size to the available-tables call and re-asks when it change
   });
   await waitFor(() => expect(availabilityCalls().at(-1)).toEqual(expect.objectContaining({ no_of_pax: 6 })));
 });
+
+const saveButton = () => screen.getByRole('button', { name: /save changes/i });
+
+it('keeps Save disabled while the tables for the party are loading', async () => {
+  let release: (tables: unknown[]) => void = () => {};
+  boundary.get.mockImplementation(() => new Promise(resolve => { release = tables => resolve({ message: tables }); }));
+  render(<TableReservationEditDialog open reservation={reservation as never} onOpenChange={() => {}}
+    onConfirm={async () => {}} />);
+  await waitFor(() => expect(availabilityCalls()).toHaveLength(1));
+  expect(saveButton()).toBeDisabled();
+  await act(async () => { release([table('Table 4', 4)]); });
+  await waitFor(() => expect(saveButton()).toBeEnabled());
+});
+
+it('clearing the party size to retype it neither asks for one guest nor drops the table', async () => {
+  render(<TableReservationEditDialog open reservation={reservation as never} onOpenChange={() => {}}
+    onConfirm={async () => {}} />);
+  await waitFor(() => expect(availabilityCalls()).toHaveLength(1));
+  const pax = screen.getByRole('spinbutton') as HTMLInputElement;
+  await act(async () => { fireEvent.change(pax, { target: { value: '' } }); });
+  expect(pax.value).toBe('');
+  expect(availabilityCalls().map(args => args.no_of_pax)).not.toContain(1);
+  expect(screen.getByRole('heading', { name: 'Table 4' })).toBeInTheDocument();
+  await act(async () => { fireEvent.change(pax, { target: { value: '6' } }); });
+  await waitFor(() => expect(availabilityCalls().at(-1)).toEqual(expect.objectContaining({ no_of_pax: 6 })));
+  expect(availabilityCalls().map(args => args.no_of_pax)).not.toContain(1);
+});

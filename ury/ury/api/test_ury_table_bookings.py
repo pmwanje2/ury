@@ -103,6 +103,63 @@ class TestCaptainGridReadsTableReservations(_Site):
         self.assertNotIn("URY Table Reservation", per_table)
         self.assertNotIn("URY Table", per_table)
 
+    def test_a_seated_party_shows_however_long_it_has_been_at_the_table(self):
+        # Seated at 16:00 and still eating at 19:45: far outside 19:45 +/- 90 minutes.
+        self.booking("TR-1", "16:00", status="Seated", guest="Ada Lovelace")
+        self.clock("19:45")
+        self.assertEqual(self.read().get("T1", {}).get("status"), "Seated")
+
+    def test_a_party_seated_early_shows_after_a_short_till_average(self):
+        # The last till averaged 60 minutes; a 21:00 party seated early is at its table at 19:40.
+        self.till_closed(60)
+        self.booking("TR-1", "21:00", status="Seated", guest="Ada Lovelace")
+        self.clock("19:40")
+        self.assertEqual(self.read().get("T1", {}).get("status"), "Seated")
+
+    def test_a_booking_inside_its_lock_shows_after_a_fast_till_close(self):
+        # Branch A: 30 minute buffer, 15 minute grace. The last till averaged 20 minutes.
+        self.till_closed(20)
+        self.booking("TR-1", "19:00")
+        self.clock("18:35")  # 19:00's lock began at 18:30, though 19:00 is beyond 18:35 + 20
+        self.assertEqual(self.read().get("T1", {}).get("scheduled_time"), f"{DAY} 19:00:00")
+        # A grace longer than the stay: 18:00's lock runs to 18:30, past 18:25 - 20.
+        self.site.rows["Branch"]["Branch A"].custom_grace_period = 30
+        self.booking("TR-2", "18:00", table="T2")
+        self.clock("18:25")
+        self.assertEqual(self.read().get("T2", {}).get("scheduled_time"), f"{DAY} 18:00:00")
+
+    def test_a_short_till_average_narrows_the_arriving_window(self):
+        self.till_closed(45)
+        self.booking("TR-1", "20:00")  # 90 minutes out, its lock (19:30) not begun
+        self.booking("TR-2", "19:10", table="T2")
+        self.assertEqual(set(self.read()), {"T2"})
+
+    def test_the_grid_reads_the_till_average_stored_at_close_not_the_sales_history(self):
+        self.till_closed(60)
+        self.booking("TR-1", "19:00")
+        self.read()
+        history = [q for q in self.site.sql_log if "`tabPOS Closing Entry`" in q or "`tabPOS Invoice`" in q]
+        self.assertEqual(history, [], "every floor poll re-reads closed tills and their bills")
+        self.assertEqual(len(self.reservation_reads()), 1)
+
+    def test_a_seated_party_wins_its_table_until_the_next_booking_locks_it(self):
+        # 18:00 Seated (90 minute stay ends 19:30), next booking 20:00 (its 30 minute buffer starts 19:30).
+        self.booking("TR-1", "18:00", status="Seated", guest="Ada Lovelace")
+        self.booking("TR-2", "20:00", guest="Grace Hopper")
+        self.clock("19:05")
+        self.assertEqual(self.read()["T1"]["status"], "Seated")
+        self.clock("19:35")
+        self.assertEqual(self.read()["T1"]["scheduled_time"], f"{DAY} 20:00:00")
+
+    def test_user_permission_keeps_a_desk_on_its_own_branch(self):
+        self.site.put("Branch", "Branch B", custom_enable_reservation=1, custom_buffer_time=30,
+            custom_grace_period=15, custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
+        self.table("B1", 4, branch="Branch B", room=None)
+        self.booking("TR-B", "19:00", table="B1", branch="Branch B")
+        self.site.roles = ["URY Captain"]
+        self.site.user_permissions["Branch"] = {"Branch A"}
+        self.assertEqual(self.read("Branch B"), {})
+
     def test_the_window_crosses_midnight_on_the_site_clock(self):
         self.booking("TR-1", "23:45")
         self.site.now = at("23:45") + timedelta(minutes=45)  # 00:30 the next day
