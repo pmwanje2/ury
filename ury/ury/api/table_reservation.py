@@ -112,6 +112,18 @@ def _grace_is_unset(grace):
     return _is_unset(grace) or cint(grace) <= 0
 
 
+def grace_period_minutes(grace):
+    """A Branch grace period: a blank or zero one takes the grace field's seed."""
+    if _grace_is_unset(grace):
+        grace = seeded_setting("custom_grace_period")
+    return max(0, cint(grace))
+
+
+def non_negative_timing(values, key):
+    """A Branch timing that cannot go below zero, from a Branch row; a blank one takes its seed."""
+    return max(0, cint(_timing_setting(values, key)))
+
+
 def _reservation_settings(branch_doc, branch=None):
     """Reservation settings from a Branch row (an empty one without a branch).
 
@@ -126,13 +138,9 @@ def _reservation_settings(branch_doc, branch=None):
     else:
         buffer_time = max(0, cint(buffer_time_raw))
 
-    grace_period = branch_doc.get("custom_grace_period")
-    if _grace_is_unset(grace_period):
-        grace_period = seeded_setting("custom_grace_period")
-    grace_period = max(0, cint(grace_period))
-
-    target_turn_time = max(0, cint(_timing_setting(branch_doc, "target_turn_time")))
-    min_avg_table_time = max(0, cint(_timing_setting(branch_doc, "min_avg_table_time")))
+    grace_period = grace_period_minutes(branch_doc.get("custom_grace_period"))
+    target_turn_time = non_negative_timing(branch_doc, "target_turn_time")
+    min_avg_table_time = non_negative_timing(branch_doc, "min_avg_table_time")
     calc_duration = get_branch_reservation_duration(
         branch, target_turn_time=target_turn_time, min_avg_table_time=min_avg_table_time)
 
@@ -631,12 +639,36 @@ def is_user_authorized_for_reservation_status_change(doc=None, user=None):
     concierge and managers hold it, waiters do not. URY ships it as the native
     Permission Type cancel_reservation on URY Table Reservation, checked on the
     booking itself so DocPerm, Custom DocPerm, if_owner and User Permission all
-    apply. Closing the bill completes a Seated party under the closer's own
-    authority, so it meets this check too.
+    apply. Closing the bill completes a Seated party as a system transition
+    and never meets this check.
     """
     if doc is None:
         return False
     return frappe.has_permission("URY Table Reservation", "cancel_reservation", doc=doc, user=user)
+
+
+def is_user_authorized_to_mark_no_show(doc=None, user=None):
+    """
+    Whether the user may mark this booking No Show by hand.
+
+    Simphony grants Mark as No Show (32007) apart from Cancel Reservation
+    Entry (32012). URY ships it as the native Permission Type mark_no_show on
+    URY Table Reservation, checked on the booking itself. The site clock's own
+    No Show after the grace period is a system transition and never meets
+    this check.
+    """
+    if doc is None:
+        return False
+    return frappe.has_permission("URY Table Reservation", "mark_no_show", doc=doc, user=user)
+
+
+def is_user_authorized_to_set_status(doc, status):
+    """A move to Completed or Cancelled by hand needs cancel_reservation; to No Show, mark_no_show."""
+    if status in ("Completed", "Cancelled"):
+        return is_user_authorized_for_reservation_status_change(doc=doc)
+    if status == "No Show":
+        return is_user_authorized_to_mark_no_show(doc=doc)
+    return True
 
 
 @frappe.whitelist()
@@ -652,9 +684,9 @@ def update_reservation_status(reservation_name, status, pos_invoice=None, cancel
     doc.check_permission("write")
     ensure_reservations_enabled(doc.branch or frappe.db.get_value("URY Table", doc.reserved_table, "branch"))
 
-    # Validate role permissions for critical status changes
-    if status in ("Completed", "Cancelled"):
-        if not is_user_authorized_for_reservation_status_change(doc=doc):
+    # Completing, cancelling and No Show each need their own privilege on this booking.
+    if status in ("Completed", "Cancelled", "No Show"):
+        if not is_user_authorized_to_set_status(doc, status):
             frappe.throw(
                 _("Not permitted to change reservation status to {0}.").format(status),
                 frappe.PermissionError,
@@ -901,6 +933,8 @@ def get_active_reservations(branch=None, date=None):
             # The POS offers Cancel from this, evaluated natively on each booking.
             res["can_cancel"] = res.get("status") in ("Requested", "Confirmed", "Active") and bool(
                 is_user_authorized_for_reservation_status_change(doc=res.name))
+            res["can_mark_no_show"] = res.get("status") in ("Confirmed", "Active") and bool(
+                is_user_authorized_to_mark_no_show(doc=res.name))
 
             result.append(res)
 
@@ -1051,10 +1085,12 @@ def complete_seated_reservation_on_submit(doc, method=None):
     on its table or a merged partner, and only once no earlier check on those
     tables and no other part of this split bill is still open. A party linked
     to another bill, or whose hold had ended before this bill was opened, is
-    someone else's. The save runs under the closer's own authority (native
-    DocPerm and the Completed gate any completion meets), so the Version names
-    the closer, and a closer without that authority leaves the party Seated.
-    It never blocks the payment: a refusal or failure is logged, not raised.
+    someone else's. As in Simphony TMS, closing the check needs no reservation
+    privilege: the save is the system transition Seated -> Completed, and
+    nothing else. It still runs under the closer's own write permission and
+    User Permission, so the Version names the closer, and a closer without
+    them leaves the party Seated. It never blocks the payment: a refusal or
+    failure is logged, not raised.
     """
     if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
         return
@@ -1085,6 +1121,7 @@ def complete_seated_reservation_on_submit(doc, method=None):
             reservation = frappe.get_doc("URY Table Reservation", res.name)
             reservation.status = "Completed"
             reservation.pos_invoice = doc.name
+            reservation.flags.system_transition = ("Seated", "Completed")
             reservation.save()
         except Exception:
             frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")

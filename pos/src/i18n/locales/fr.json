@@ -391,6 +391,7 @@
     "select_table_placeholder": "Sélectionner une table",
     "no_tables_for_slot": "Aucune table n'est disponible pour la date et l'heure sélectionnées.",
     "cancel_title": "Annuler la réservation",
+    "mark_no_show": "Marquer comme absent",
     "cancel_description": "Êtes-vous sûr de vouloir annuler cette réservation ?",
     "keep_reservation": "Conserver la réservation",
     "cancel_reservation": "Annuler la réservation",

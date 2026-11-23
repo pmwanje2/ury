@@ -6,6 +6,11 @@ from frappe.model.document import Document
 from frappe import _
 from frappe.utils import now_datetime, get_datetime
 
+# The moves the system makes by its own rule, never by a user's choice: the
+# site clock's No Show after the grace period (process_reservation_no_shows)
+# and the closed check's Seated -> Completed (complete_seated_reservation_on_submit).
+SYSTEM_TRANSITIONS = frozenset({("Confirmed", "No Show"), ("Seated", "Completed")})
+
 
 class URYTableReservation(Document):
     def validate(self):
@@ -102,10 +107,12 @@ class URYTableReservation(Document):
             "No Show": [],
         }
 
-        # Completing or cancelling needs the user's own authority, whatever the save path.
-        if new_status in ("Completed", "Cancelled"):
-            from ury.ury.api.table_reservation import is_user_authorized_for_reservation_status_change
-            if not is_user_authorized_for_reservation_status_change(doc=self):
+        # Completing, cancelling or marking No Show by hand needs the user's own
+        # privilege, whatever the save path; only a system transition does not.
+        transition = (old_status, new_status)
+        if not (transition in SYSTEM_TRANSITIONS and self.flags.system_transition == transition):
+            from ury.ury.api.table_reservation import is_user_authorized_to_set_status
+            if not is_user_authorized_to_set_status(self, new_status):
                 frappe.throw(
                     _("Not permitted to change reservation status to {0}.").format(new_status),
                     frappe.PermissionError,

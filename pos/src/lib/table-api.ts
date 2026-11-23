@@ -76,6 +76,8 @@ export interface TableReservation {
   lock_start_time?: string;
   /** The server's native cancel_reservation check on this booking for this user. */
   can_cancel?: boolean;
+  /** The server's native mark_no_show check on this booking for this user. */
+  can_mark_no_show?: boolean;
 }
 
 export interface Table {

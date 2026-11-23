@@ -12,6 +12,7 @@ import {
   Undo2,
   User,
   Users,
+  UserX,
   XCircle,
 } from 'lucide-react';
 import {
@@ -282,6 +283,18 @@ export default function Reservations() {
       showToast.error(extractErrorMessage(err, t('reservations.update_failed')));
     } finally {
       setCancelLoading(false);
+    }
+  };
+
+  // Mark as No Show, offered only where the server's mark_no_show check allows it.
+  const handleMarkNoShow = async (res: TableReservation) => {
+    setMenuOpenId(null);
+    try {
+      await updateTableReservationStatus(res.name, 'No Show');
+      await fetchReservationsData(selectedDate);
+    } catch (err) {
+      console.error('Failed to mark the reservation No Show:', err);
+      showToast.error(extractErrorMessage(err, t('reservations.update_failed')));
     }
   };
 
@@ -653,6 +666,17 @@ export default function Reservations() {
                                   >
                                     <XCircle className="w-3.5 h-3.5 text-red-600" />
                                     <span>{t('reservations.cancel_title')}</span>
+                                  </button>
+                                )}
+
+                                {res.can_mark_no_show && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMarkNoShow(res)}
+                                    className="w-full text-start px-4 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                                  >
+                                    <UserX className="w-3.5 h-3.5 text-gray-600" />
+                                    <span>{t('reservations.mark_no_show')}</span>
                                   </button>
                                 )}
                               </div>

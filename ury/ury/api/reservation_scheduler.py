@@ -65,6 +65,8 @@ def process_reservation_no_shows():
                 # Double check status hasn't changed concurrently
                 if doc.status == "Confirmed":
                     doc.status = "No Show"
+                    # The site clock's own rule, not a user's Mark as No Show.
+                    doc.flags.system_transition = ("Confirmed", "No Show")
                     try:
                         doc.save(ignore_permissions=True)
                     except Exception:

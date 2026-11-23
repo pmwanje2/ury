@@ -484,6 +484,7 @@
     "select_table_placeholder": "Select a table",
     "no_tables_for_slot": "No tables are available for the selected date and time.",
     "cancel_title": "Cancel Reservation",
+    "mark_no_show": "Mark as No Show",
     "cancel_description": "Are you sure you want to cancel this reservation?",
     "keep_reservation": "Keep Reservation",
     "cancel_reservation": "Cancel Reservation",
