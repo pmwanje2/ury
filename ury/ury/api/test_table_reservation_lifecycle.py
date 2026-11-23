@@ -1278,8 +1278,10 @@ class TestTheSeatedPartyIsBoundToItsTableAndCheck(_Timing):
         self.site.rows["URY Table"]["T1"].occupied = 1
 
     def check(self, name, table="T1", **values):
-        return Row(doctype="POS Invoice", name=name, restaurant_table=table, branch="Branch A",
-            order_type="Dine In", is_return=0, docstatus=0, **values)
+        check = Row(doctype="POS Invoice", name=name, restaurant_table=table, branch="Branch A",
+            order_type="Dine In", is_return=0, docstatus=0)
+        check.update(values)
+        return check
 
     def found(self, pos_invoice=None, branch="Branch A"):
         return (self.api.get_completed_reservation_for_table("T1", branch, pos_invoice=pos_invoice) or {}).get("name")
