@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 from ury.ury.api.test_table_reservation_lifecycle import DAY, Refused, _Site, at
 
 
-class TestCaptainGridReadsTableReservations(_Site):
+class _Grid(_Site):
     def setUp(self):
         super().setUp()
         self.frappe.whitelist = MagicMock(side_effect=lambda *a, **k: (lambda function: function))
@@ -21,7 +21,7 @@ class TestCaptainGridReadsTableReservations(_Site):
         self.site.rows["Appointment"] = {}
         self.frappe.db.get_single_value = lambda doctype, field: 120
         self.bookings = self.load("ury.ury.api.ury_table_bookings", "ury/api/ury_table_bookings.py")
-        self.clock("18:30")  # no till has closed, so the branch's stay is the 90 minute default
+        self.clock("18:30")  # no till has closed, so the stay is Branch A's 90 minute target turn time
 
     def read(self, branch="Branch A"):
         result = self.bookings.get_upcoming_bookings(branch)
@@ -34,6 +34,8 @@ class TestCaptainGridReadsTableReservations(_Site):
     def reservation_reads(self):
         return [c for c in self.frappe.get_list.call_args_list if c.args[0] == "URY Table Reservation"]
 
+
+class TestCaptainGridReadsTableReservations(_Grid):
     def test_confirmed_and_seated_reservations_annotate_their_tables(self):
         self.booking("TR-1", "19:00", guest="Grace Hopper", pax=4)
         self.booking("TR-2", "18:00", table="T2", status="Seated", guest="Ada Lovelace", pax=2)
@@ -173,6 +175,52 @@ class TestCaptainGridReadsTableReservations(_Site):
         self.site.now = at("23:45") + timedelta(minutes=45)  # 00:30 the next day
         self.assertEqual(self.read()["T1"]["server_now"], "2026-11-24 00:30:00")
 
+
+
+class TestTheGridAgreesWithTheLockCheckOnEveryBranchSetting(_Grid):
+    """R3: the grid resolves grace and turn time as check_table_reservation does."""
+
+    def branch(self, **values):
+        self.site.rows["Branch"]["Branch A"].update(values)
+
+    def seed(self, fieldname, value):
+        field = next(f for f in self.site.custom_fields if f.get("dt") == "Branch" and f["fieldname"] == fieldname)
+        field["default"] = value
+
+    def locks(self, table="T1"):
+        return self.api.check_table_reservation(table)["is_lock_window_active"]
+
+    def test_a_blank_or_zero_grace_locks_the_table_for_the_seeded_grace(self):
+        # Neon R2 (Branch B, custom_grace_period = 0, 5 minutes past a Confirmed booking):
+        # check_table_reservation locked the table for the seeded 15 minutes while the grid
+        # computed no grace and badged the older Seated party instead.
+        self.booking("TR-S", "17:00", status="Seated", guest="Ada Lovelace")
+        self.booking("TR-C", "18:25", guest="Grace Hopper")
+        for grace in (0, None, ""):
+            with self.subTest(grace=grace):
+                self.branch(custom_grace_period=grace)
+                self.assertTrue(self.locks())
+                self.assertEqual(self.read()["T1"]["customer_name"], "Grace Hopper")
+
+    def test_the_grid_takes_the_grace_seed_the_site_ships_not_a_copy_of_it(self):
+        self.seed("custom_grace_period", "40")
+        self.branch(custom_grace_period=0)
+        self.booking("TR-S", "17:00", status="Seated", guest="Ada Lovelace")
+        self.booking("TR-C", "18:00", guest="Grace Hopper")  # 30 minutes past: inside 40, past 15
+        self.assertTrue(self.locks())
+        self.assertEqual(self.read()["T1"]["customer_name"], "Grace Hopper")
+
+    def test_the_grid_s_stay_is_the_branch_s_target_turn_time(self):
+        # Guard on the #139 R3 merge: no till has closed, so every hold is the turn time.
+        self.booking("TR-1", "19:10")  # 40 minutes out
+        self.booking("TR-2", "19:20", table="T2")  # 50 minutes out; its 30 minute buffer starts 18:50
+        self.branch(custom_target_turn_time=45)
+        self.assertEqual(self.api.check_table_reservation("T1")["duration_minutes"], 45)
+        self.assertEqual(set(self.read()), {"T1"})
+        self.branch(custom_target_turn_time=None)  # blank: the seed, 60
+        self.seed("custom_target_turn_time", "55")
+        self.assertEqual(self.api.check_table_reservation("T2")["duration_minutes"], 55)
+        self.assertEqual(set(self.read()), {"T1", "T2"})
 
 if __name__ == "__main__":
     unittest.main()

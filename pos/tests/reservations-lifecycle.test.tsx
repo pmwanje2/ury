@@ -145,6 +145,44 @@ it('offers Cancel on exactly the bookings the server says this user may cancel, 
   expect(screen.getByRole('button', { name: /cancel reservation/i })).toBeInTheDocument();
 });
 
+it('offers Mark as No Show on exactly the bookings the server says this user may mark', async () => {
+  // Simphony 32007 Mark as No Show is its own privilege, apart from 32012 Cancel Reservation
+  // Entry: the server evaluates the native mark_no_show permission per booking.
+  boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  boundary.reservations = [
+    { ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true, can_mark_no_show: false },
+    { ...booking('TR-2', 'Table 2', 'Ada', 'Confirmed', '20:00'), can_cancel: false, can_mark_no_show: true },
+  ];
+  await openBook();
+  const menus = actionMenus();
+  expect(menus).toHaveLength(2);
+  await act(async () => { fireEvent.click(menus[0]); });
+  expect(screen.getByRole('button', { name: /cancel reservation/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /mark as no show/i })).toBeNull();
+  await act(async () => { fireEvent.click(menus[1]); });
+  expect(screen.queryByRole('button', { name: /cancel reservation/i })).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /mark as no show/i })); });
+  await waitFor(() => expect(boundary.post).toHaveBeenCalledWith(`${RESERVATION}update_reservation_status`,
+    expect.objectContaining({ reservation_name: 'TR-2', status: 'No Show' })));
+});
+
+it('a captain the server does not let mark No Show never sees it', async () => {
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: false }];
+  await openBook();
+  await act(async () => { fireEvent.click(actionMenus()[0]); });
+  expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /mark as no show/i })).toBeNull();
+});
+
+it('a refused No Show is shown to the host', async () => {
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_mark_no_show: true }];
+  boundary.post.mockRejectedValue(new Error('Not permitted to change reservation status to No Show.'));
+  await openBook();
+  await act(async () => { fireEvent.click(actionMenus()[0]); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /mark as no show/i })); });
+  await waitFor(() => expect(showToast.error).toHaveBeenCalledWith('Not permitted to change reservation status to No Show.'));
+});
+
 it('a hotel desk the server lets cancel sees Cancel without any till role', async () => {
   boundary.user = { name: 'desk@fixture.invalid', roles: ['Front Desk'] };
   boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true }];
