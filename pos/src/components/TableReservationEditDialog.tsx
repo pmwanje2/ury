@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Clock, Phone, Users } from 'lucide-react';
 
 import {
@@ -52,6 +52,7 @@ interface TableReservationEditDialogProps {
 const TableReservationEditDialog = ({
   open,
   reservation,
+  availableTables,
   onOpenChange,
   onConfirm,
   minNoticeMinutes,
@@ -101,6 +102,12 @@ const TableReservationEditDialog = ({
     }
   }, [open, reservation]);
 
+  const bookedAt = (reservation?.reserved_at || '').replace('T', ' ').slice(0, 16);
+  const timeMoved =
+    Boolean(reservationDate && reservationTime) &&
+    `${reservationDate} ${reservationTime}` !== bookedAt;
+  const paxChanged = noOfPax !== (reservation?.no_of_pax || 1);
+
   // Fetch available tables from backend when branch, date, time, or reservation changes
   useEffect(() => {
     if (!open || !targetBranch || !reservationDate || !reservationTime) {
@@ -114,6 +121,7 @@ const TableReservationEditDialog = ({
     const formattedReservedAt = `${reservationDate} ${
       reservationTime.length === 5 ? reservationTime + ':00' : reservationTime
     }`;
+    const slotTimeMoved = `${reservationDate} ${reservationTime}` !== bookedAt;
 
     getAvailableTablesForReservation(
       targetBranch,
@@ -126,9 +134,11 @@ const TableReservationEditDialog = ({
         const list = tables || [];
         setAvailableTablesList(list);
 
-        // If the selected table becomes unavailable after date/time change, clear table selection
+        // Preserve the booking's existing table on non-time, same-party-size edits even if a walk-in
+        // overlaps its buffer; clear it when moving the booking time or party size makes it unavailable.
         setSelectedTable((prev) => {
           if (!prev) return '';
+          if (!slotTimeMoved && !paxChanged && prev === reservation?.reserved_table) return prev;
           const isStillAvailable = list.some((t) => t.name === prev);
           return isStillAvailable ? prev : '';
         });
@@ -145,9 +155,25 @@ const TableReservationEditDialog = ({
     return () => {
       isMounted = false;
     };
-  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, noOfPax]);
+  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, reservation?.reserved_table, bookedAt, noOfPax, paxChanged]);
 
-  const tablesList = availableTablesList;
+  const tablesList = useMemo(() => {
+    if (!reservation?.reserved_table || timeMoved || paxChanged) return availableTablesList;
+    if (availableTablesList.some((t) => t.name === reservation.reserved_table)) {
+      return availableTablesList;
+    }
+    const existing = availableTables?.find((t) => t.name === reservation.reserved_table);
+    const preserved: Table = existing || {
+      name: reservation.reserved_table,
+      occupied: 0,
+      latest_invoice_time: null,
+      is_take_away: 0,
+      restaurant_room: '',
+      table_shape: 'Rectangle',
+      no_of_seats: 0,
+    };
+    return [preserved, ...availableTablesList];
+  }, [availableTablesList, availableTables, reservation, timeMoved, paxChanged]);
 
   const handleCustomerChange = (selected: Customer | null) => {
     setCustomer(selected);
@@ -285,11 +311,14 @@ const TableReservationEditDialog = ({
                 value={selectedTable}
                 options={tablesList.map((tbl) => ({
                   value: tbl.name,
-                  label: t('reservations.table_option_label', {
-                    name: tbl.name,
-                    room: tbl.restaurant_room,
-                    seats: tbl.no_of_seats || 0,
-                  }),
+                  label:
+                    tbl.restaurant_room || tbl.no_of_seats
+                      ? t('reservations.table_option_label', {
+                          name: tbl.name,
+                          room: tbl.restaurant_room,
+                          seats: tbl.no_of_seats || 0,
+                        })
+                      : tbl.name,
                 }))}
                 placeholder={
                   loadingTables

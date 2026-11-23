@@ -164,19 +164,23 @@ def _reservation_settings(branch_doc, branch=None):
 def validate_branch_reservation_settings(doc, method=None):
     """Branch validate, while the branch takes bookings.
 
-    A Target Turn Time must be positive (Desk saves a cleared Int as 0), and
-    under "Refuse to Enable" the branch needs a grace period. A turn time not
-    on the document at all (before migrate) is left to its seeded default.
+    A Target Turn Time must be positive (Desk sends None when an Int field is
+    cleared, and Frappe otherwise stores cint(None) == 0). Under "Refuse to
+    Enable" the branch also needs a positive grace period; under "Use Default
+    Grace Period", a cleared, zero or negative grace restores the seeded
+    default on save so Desk never persists 0 while runtime reads the seed.
+    Missing columns (before migrate) are left to their seeded defaults.
     """
     if not cint(doc.get("custom_enable_reservation") or 0):
         return
-    turn_time = doc.get("custom_target_turn_time")
-    if turn_time is not None and _is_unset_or_not_positive(turn_time):
-        frappe.throw(_("Set a target turn time of at least one minute before switching reservations on for this branch."))
-    if _timing_setting(doc, "unset_grace_policy") != REFUSE_TO_ENABLE:
-        return
-    if _is_unset_or_not_positive(doc.get("custom_grace_period")):
-        frappe.throw(_("Set a grace period before switching reservations on for this branch."))
+    if frappe.db.has_column("Branch", "custom_target_turn_time"):
+        if _is_unset_or_not_positive(doc.get("custom_target_turn_time")):
+            frappe.throw(_("Set a target turn time of at least one minute before switching reservations on for this branch."))
+    if _timing_setting(doc, "unset_grace_policy") == REFUSE_TO_ENABLE:
+        if _is_unset_or_not_positive(doc.get("custom_grace_period")):
+            frappe.throw(_("Set a grace period before switching reservations on for this branch."))
+    elif frappe.db.has_column("Branch", "custom_grace_period") and _is_unset_or_not_positive(doc.get("custom_grace_period")):
+        doc.custom_grace_period = cint(seeded_setting("custom_grace_period"))
 
 
 def ensure_reservations_enabled(branch):
@@ -284,14 +288,23 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
             )
 
 
-def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_name=None, check_notice=True):
+def validate_reservation_rules(
+    table,
+    branch,
+    reserved_at,
+    no_of_pax=1,
+    exclude_name=None,
+    check_notice=True,
+    check_occupancy=True,
+):
     """
     Comprehensive validation order:
     1. Mandatory table check
     2. Capacity check (no_of_pax <= table.no_of_seats)
     3. Minimum Reservation Notice (reserved_at >= now + notice), only when
        check_notice: the booking's time is being made or moved
-    4. Occupancy check & expected release calculation
+    4. Occupancy check & expected release calculation, only when
+       check_occupancy: the booking's time or table is being set or moved
     5. Overlapping reservation window conflicts check
     """
     if not table:
@@ -340,8 +353,9 @@ def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_
 
     # 3. Buffer-Time & Table Occupancy Validation
     # Case A: Table is free (occupied == 0) -> proceed
-    # Case B: Table is occupied (occupied == 1) -> check expected finish time
-    if cint(table_data.get("occupied") or 0) == 1:
+    # Case B: Table is occupied (occupied == 1) -> check expected finish time,
+    #         only when the booking's table or time is being set or moved.
+    if check_occupancy and cint(table_data.get("occupied") or 0) == 1:
         active_inv_creation = frappe.db.get_value(
             "POS Invoice",
             {"restaurant_table": table, "docstatus": 0},
@@ -493,11 +507,14 @@ def get_completed_reservation_for_table(table, branch=None, pos_invoice=None):
         )
         if reservations:
             res = reservations[0]
-            if res.get("pos_invoice") and res.get("pos_invoice") != pos_invoice:
-                return None  # bound to another check
-            if res.get("pos_invoice"):
-                inv_status = frappe.db.get_value("POS Invoice", res.get("pos_invoice"), "docstatus")
-                if inv_status == 1:
+            bound = res.get("pos_invoice")
+            if bound:
+                inv_status = frappe.db.get_value("POS Invoice", bound, "docstatus")
+                if inv_status is not None and cint(inv_status) == 2:
+                    bound = None
+                elif bound != pos_invoice:
+                    return None  # bound to another check
+                elif inv_status == 1:
                     return None
             return res
         return None
@@ -731,32 +748,293 @@ def reservation_stay_minutes(settings):
     return flt(settings["target_turn_time"])
 
 
+def _is_discarded_or_cancelled_check(pos_invoice):
+    """Whether a bound POS Invoice was discarded or cancelled (docstatus == 2)."""
+    if not pos_invoice:
+        return False
+    docstatus = frappe.db.get_value("POS Invoice", pos_invoice, "docstatus")
+    return docstatus is not None and cint(docstatus) == 2
+
+
+def _table_with_merged_partners(table):
+    """The table itself plus any live merged partner tables from URY Table.merged_with."""
+    if not table:
+        return []
+    tables = [table]
+    merged_with = frappe.db.get_value("URY Table", table, "merged_with")
+    if merged_with:
+        for partner in str(merged_with).split(","):
+            partner = partner.strip()
+            if partner and partner not in tables:
+                tables.append(partner)
+    return tables
+
+
+def _invoice_tables(doc):
+    """All tables covered by a POS Invoice: its own table, live merged partners, and custom_merged_tables."""
+    tables = []
+    primary = doc.get("restaurant_table")
+    if primary:
+        for table in _table_with_merged_partners(primary):
+            if table not in tables:
+                tables.append(table)
+    for partner in (doc.get("custom_merged_tables") or "").split(","):
+        partner = partner.strip()
+        if partner and partner not in tables:
+            tables.append(partner)
+    return tables
+
+
+def _split_family_check_names(doc):
+    """Check names belonging to the same split bill as doc (including doc itself)."""
+    names = set()
+    doc_name = doc.get("name")
+    if doc_name:
+        names.add(doc_name)
+    split_from = doc.get("custom_split_from")
+    if split_from:
+        names.add(split_from)
+    group = doc.get("custom_split_group")
+    if group:
+        for member in frappe.db.get_all("POS Invoice", filters={"custom_split_group": group}, pluck="name"):
+            if member:
+                names.add(member)
+    if doc_name:
+        for child in frappe.db.get_all("POS Invoice", filters={"custom_split_from": doc_name}, pluck="name"):
+            if child:
+                names.add(child)
+    return names
+
+
+def _same_split_bill(doc, other_invoice_name):
+    """Whether doc and other_invoice_name are parts of the same split bill."""
+    if not other_invoice_name:
+        return False
+    doc_name = doc.get("name")
+    if other_invoice_name == doc_name:
+        return True
+    if doc.get("custom_split_from") == other_invoice_name:
+        return True
+    other = frappe.db.get_value(
+        "POS Invoice",
+        other_invoice_name,
+        ["custom_split_group", "custom_split_from"],
+        as_dict=True,
+    )
+    if not other:
+        return False
+    group = doc.get("custom_split_group")
+    if group and other.get("custom_split_group") == group:
+        return True
+    if doc_name and other.get("custom_split_from") == doc_name:
+        return True
+    return False
+
+
+def _open_split_siblings_of(invoice_name, exclude_name=None):
+    """Open draft POS Invoices (docstatus = 0) in invoice_name's split family (including itself)."""
+    if not invoice_name:
+        return []
+    row = frappe.db.get_value(
+        "POS Invoice",
+        invoice_name,
+        ["name", "docstatus", "custom_split_group", "custom_split_from"],
+        as_dict=True,
+    )
+    if not row:
+        return []
+    found = {}
+    if cint(row.get("docstatus")) == 0 and row.get("name") != exclude_name:
+        found[row["name"]] = row
+    group = row.get("custom_split_group")
+    if group:
+        for check in frappe.db.get_all(
+            "POS Invoice",
+            filters={"docstatus": 0, "custom_split_group": group},
+            fields=["name", "creation"],
+            order_by="creation asc",
+        ):
+            if check.name != exclude_name:
+                found[check.name] = check
+    for check in frappe.db.get_all(
+        "POS Invoice",
+        filters={"docstatus": 0, "custom_split_from": invoice_name},
+        fields=["name", "creation"],
+        order_by="creation asc",
+    ):
+        if check.name != exclude_name:
+            found[check.name] = check
+    split_from = row.get("custom_split_from")
+    if split_from and split_from != exclude_name:
+        parent = frappe.db.get_value(
+            "POS Invoice", split_from, ["name", "docstatus", "creation"], as_dict=True
+        )
+        if parent and cint(parent.get("docstatus")) == 0:
+            found[parent["name"]] = parent
+    return list(found.values())
+
+
+def _bound_check_or_split_is_open(pos_invoice):
+    """Whether the reservation's bound check, or any check split with/from it, is still open."""
+    return bool(_open_split_siblings_of(pos_invoice))
+
+
 def bind_seated_reservation_to_check(doc, method=None):
-    """POS Invoice after_insert: the check opened on a table binds the party seated there.
+    """POS Invoice after_insert: the check opened on a table (or merged partner) binds the party seated there.
 
     Simphony seats a party into a guest check on its table. Here the Seated
-    reservation on the check's table (one at most) takes this check as its
-    pos_invoice, unless it is already bound to a check. Only a Dine-In sale
-    (never a credit note) on a branch taking bookings binds. It never blocks
-    the check: a failure is logged, not raised.
+    reservation on the check's table or any merged partner takes this check as
+    its pos_invoice, unless it is already bound to an active (non-voided) check.
+    Only a Dine-In sale (never a credit note) on a branch taking bookings binds.
+    It never blocks the check: a failure is logged, not raised.
     """
     if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
         return
-    table = doc.get("restaurant_table")
     branch = doc.get("branch")
-    if not table or not reservations_enabled(branch):
+    tables = _invoice_tables(doc)
+    if not tables or not reservations_enabled(branch):
         return
     try:
         for res in frappe.db.get_all(
             "URY Table Reservation",
-            filters={"reserved_table": table, "branch": branch, "status": "Seated"},
+            filters={"reserved_table": ["in", tables], "branch": branch, "status": "Seated"},
             fields=["name", "pos_invoice"],
         ):
-            if not res.pos_invoice:
+            if not res.pos_invoice or _is_discarded_or_cancelled_check(res.pos_invoice):
                 frappe.db.set_value("URY Table Reservation", res.name, "pos_invoice", doc.name,
                     update_modified=False)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Reservation check binding")
+
+
+def release_reservation_check_binding(doc, method=None):
+    """POS Invoice on_discard / on_cancel / on_trash: release a Seated party's link to a voided check."""
+    doc_name = doc.get("name")
+    branch = doc.get("branch")
+    if not doc_name or not reservations_enabled(branch):
+        return
+    try:
+        linked = frappe.db.get_all(
+            "URY Table Reservation",
+            filters={"pos_invoice": doc_name, "status": "Seated"},
+            fields=["name"],
+        )
+        if not linked:
+            return
+        siblings = _open_split_siblings_of(doc_name, exclude_name=doc_name)
+        replacement = siblings[0]["name"] if siblings else None
+        for res in linked:
+            frappe.db.set_value(
+                "URY Table Reservation",
+                res.name,
+                "pos_invoice",
+                replacement,
+                update_modified=False,
+            )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Reservation check binding release")
+
+
+def _doc_field(doc, key, default=None):
+    """Read a field from a Document, dict/Row, or test stub without invoking MagicMock.get."""
+    if isinstance(doc, dict):
+        return doc.get(key, default)
+    val = getattr(doc, key, default)
+    return default if val is None else val
+
+
+def _seated_reservations_moving_with_check(from_table, pos_invoice):
+    """Seated reservation(s) that belong to pos_invoice and should follow it on table_transfer."""
+    branch = _doc_field(pos_invoice, "branch") or frappe.db.get_value("URY Table", from_table, "branch")
+    if not branch or not reservations_enabled(branch):
+        return []
+    inv_name = _doc_field(pos_invoice, "name")
+    is_dine_in_sale = (
+        not cint(_doc_field(pos_invoice, "is_return", 0))
+        and (_doc_field(pos_invoice, "order_type") or "Dine In") == "Dine In"
+    )
+
+    candidates = {}
+    if inv_name:
+        for res in frappe.db.get_all(
+            "URY Table Reservation",
+            filters={"branch": branch, "status": "Seated", "pos_invoice": inv_name},
+            fields=["name", "reserved_table", "pos_invoice"],
+        ):
+            candidates[res.name] = res
+    if from_table:
+        for res in frappe.db.get_all(
+            "URY Table Reservation",
+            filters={"branch": branch, "status": "Seated", "reserved_table": from_table},
+            fields=["name", "reserved_table", "pos_invoice"],
+        ):
+            candidates.setdefault(res.name, res)
+
+    remaining_open_on_old = [
+        c for c in open_checks_on([from_table]) if c.name != inv_name
+    ] if from_table else []
+
+    moving = []
+    for res in candidates.values():
+        bound = res.get("pos_invoice")
+        if bound and _is_discarded_or_cancelled_check(bound):
+            bound = None
+        if bound:
+            if bound == inv_name:
+                moving.append(res)
+            elif _same_split_bill(pos_invoice, bound):
+                party_still_on_old = any(
+                    _same_split_bill(check, bound) for check in remaining_open_on_old
+                )
+                if not party_still_on_old:
+                    moving.append(res)
+        elif is_dine_in_sale and not remaining_open_on_old:
+            moving.append(res)
+    return moving
+
+
+def validate_seated_reservation_transfer(from_table, to_table, pos_invoice):
+    """Refuse transferring a Seated party onto a table (or merged cluster) that already seats another party."""
+    moving = _seated_reservations_moving_with_check(from_table, pos_invoice)
+    if not moving:
+        return []
+    moving_names = {res.name for res in moving}
+    target_tables = _table_with_merged_partners(to_table)
+    existing_on_target = frappe.db.get_all(
+        "URY Table Reservation",
+        filters={"reserved_table": ["in", target_tables], "status": "Seated"},
+        fields=["name", "reserved_table"],
+    )
+    for ex in existing_on_target:
+        if ex.name not in moving_names:
+            frappe.throw(_("Another party is already seated at table {0}.").format(ex.reserved_table or to_table))
+    return moving
+
+
+def transfer_seated_reservation(from_table, to_table, pos_invoice):
+    """Move any Seated reservation belonging to pos_invoice onto to_table (Simphony: reservation follows its check)."""
+    moving = validate_seated_reservation_transfer(from_table, to_table, pos_invoice)
+    inv_name = _doc_field(pos_invoice, "name")
+    moved_names = []
+    for res in moving:
+        old_table = res.get("reserved_table")
+        updates = {"reserved_table": to_table}
+        if not res.get("pos_invoice") or _is_discarded_or_cancelled_check(res.get("pos_invoice")):
+            if inv_name:
+                updates["pos_invoice"] = inv_name
+        frappe.db.set_value("URY Table Reservation", res.name, updates, update_modified=False)
+        moved_names.append(res.name)
+        if old_table and old_table not in (from_table, to_table):
+            still_open = [c for c in open_checks_on([old_table]) if c.name != inv_name]
+            other_seated = frappe.db.exists(
+                "URY Table Reservation",
+                {"reserved_table": old_table, "status": "Seated", "name": ["!=", res.name]},
+            )
+            if not still_open and not other_seated:
+                frappe.db.set_value(
+                    "URY Table", old_table, {"occupied": 0, "latest_invoice_time": None}, update_modified=False
+                )
+    return moved_names
 
 
 def open_checks_on(tables):
@@ -779,6 +1057,8 @@ def open_checks_on(tables):
 
 def seated_visit_has_ended(reservation, settings, now):
     """A Seated party with no open check has gone when its table was cleared or its hold ran out."""
+    if _bound_check_or_split_is_open(reservation.get("pos_invoice")):
+        return False  # bound check (or a split sibling) is still open, even on a transferred table
     if open_checks_on([reservation.reserved_table]):
         return False  # still ordering, or paying a printed check
     if not cint(frappe.db.get_value("URY Table", reservation.reserved_table, "occupied") or 0):
@@ -1030,7 +1310,23 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
 
         expected_duration = settings["calculated_duration"]
 
-        # 3. Check current occupancy conflicts
+        # 3. Check current occupancy conflicts (preserving an edited booking's own table while its time is unchanged)
+        keep_table_despite_occupancy = None
+        if exclude_reservation:
+            excluded = frappe.db.get_value(
+                "URY Table Reservation",
+                exclude_reservation,
+                ["reserved_table", "reserved_at"],
+                as_dict=True,
+            )
+            if (
+                excluded
+                and excluded.get("reserved_table")
+                and excluded.get("reserved_at")
+                and parse_to_datetime(excluded.get("reserved_at"), current_now) == res_start
+            ):
+                keep_table_despite_occupancy = excluded.get("reserved_table")
+
         occupied_tables = {t.name: t for t in tables if cint(t.get("occupied") or 0) == 1}
         occupied_conflicts = set()
 
@@ -1044,6 +1340,8 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
             inv_map = {inv.restaurant_table: inv.creation for inv in active_invoices}
 
             for t_name, t_data in occupied_tables.items():
+                if t_name == keep_table_despite_occupancy:
+                    continue
                 occupied_start_raw = inv_map.get(t_name) or t_data.get("latest_invoice_time") or current_now
                 occupied_start_dt = parse_to_datetime(occupied_start_raw, current_now)
                 expected_finish = occupied_start_dt + timedelta(minutes=expected_duration)
@@ -1099,8 +1397,33 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
         return []
 
 
+def _has_other_open_split_check(doc, bound_name=None):
+    """Whether another check in doc's (or bound_name's) split family is still open (docstatus = 0)."""
+    doc_name = doc.get("name")
+    if bound_name and _open_split_siblings_of(bound_name, exclude_name=doc_name):
+        return True
+    if doc_name and _open_split_siblings_of(doc_name, exclude_name=doc_name):
+        return True
+    group = doc.get("custom_split_group")
+    if group:
+        for check in frappe.db.get_all(
+            "POS Invoice",
+            filters={"docstatus": 0, "custom_split_group": group},
+            fields=["name"],
+        ):
+            if check.name != doc_name:
+                return True
+    split_from = doc.get("custom_split_from")
+    if split_from and split_from != doc_name:
+        if cint(frappe.db.get_value("POS Invoice", split_from, "docstatus")) == 0:
+            return True
+    return False
+
+
 def _party_has_another_open_check(doc, tables):
     """An earlier check on these tables, or another part of this split bill, is still open."""
+    if _has_other_open_split_check(doc):
+        return True
     opened = get_datetime(doc.get("creation")) if doc.get("creation") else None
     group = doc.get("custom_split_group")
     for check in open_checks_on(tables):
@@ -1117,9 +1440,10 @@ def complete_seated_reservation_on_submit(doc, method=None):
     """POS Invoice on_submit: closing the party's last check completes its Seated reservation.
 
     Only a Dine-In sale (never a credit note) on the reservation's own branch,
-    on its table or a merged partner, and only once no earlier check on those
-    tables and no other part of this split bill is still open. A party linked
-    to another bill, or whose hold had ended before this bill was opened, is
+    on its table, a merged partner, or its split family, and only once no other
+    part of this split bill (or, for an unbound reservation, an earlier check
+    on those tables) is still open. A party linked to another active bill, or
+    an unbound one whose hold had ended before this bill was opened, is
     someone else's. As in Simphony TMS, closing the check needs no reservation
     right at all: the save is the system transition Seated -> Completed for
     that party, and the controller admits nothing else on it. The Version
@@ -1129,32 +1453,57 @@ def complete_seated_reservation_on_submit(doc, method=None):
     if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
         return
     branch = doc.get("branch")
-    tables = [doc.get("restaurant_table")] + (doc.get("custom_merged_tables") or "").split(",")
-    tables = [table.strip() for table in tables if table and table.strip()]
-    if not tables or not reservations_enabled(branch):
+    if not reservations_enabled(branch):
         return
+    tables = _invoice_tables(doc)
     try:
-        seated = frappe.db.get_all(
-            "URY Table Reservation",
-            filters={"reserved_table": ["in", tables], "branch": branch, "status": "Seated"},
-            fields=["name", "reserved_at", "pos_invoice"],
-        )
-        if not seated or _party_has_another_open_check(doc, tables):
+        family_checks = _split_family_check_names(doc)
+        if not tables and not family_checks:
+            return
+        seated_by_name = {}
+        if tables:
+            for res in frappe.db.get_all(
+                "URY Table Reservation",
+                filters={"reserved_table": ["in", tables], "branch": branch, "status": "Seated"},
+                fields=["name", "reserved_at", "pos_invoice"],
+            ):
+                seated_by_name[res.name] = res
+        if family_checks:
+            for res in frappe.db.get_all(
+                "URY Table Reservation",
+                filters={"branch": branch, "status": "Seated", "pos_invoice": ["in", sorted(family_checks)]},
+                fields=["name", "reserved_at", "pos_invoice"],
+            ):
+                seated_by_name[res.name] = res
+        seated = list(seated_by_name.values())
+        if not seated:
             return
         stay = timedelta(minutes=reservation_stay_minutes(get_branch_reservation_settings(branch)))
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")
         return
     opened = get_datetime(doc.get("creation")) if doc.get("creation") else now_datetime()
+    unbound_blocked = None
     for res in seated:
-        if res.pos_invoice and res.pos_invoice != doc.name:
-            continue  # another bill's party
-        if not res.pos_invoice and opened >= get_datetime(res.reserved_at) + stay:
-            continue  # its hold had ended before this bill was opened
+        bound = res.pos_invoice
+        if bound and _is_discarded_or_cancelled_check(bound):
+            bound = None
+        if bound:
+            if bound != doc.name and not _same_split_bill(doc, bound):
+                continue  # another bill's party
+            if _has_other_open_split_check(doc, bound_name=bound):
+                continue  # another part of this split bill is still open
+        else:
+            if unbound_blocked is None:
+                unbound_blocked = _party_has_another_open_check(doc, tables)
+            if unbound_blocked:
+                continue
+            if opened >= get_datetime(res.reserved_at) + stay:
+                continue  # its hold had ended before this bill was opened
         try:
             reservation = frappe.get_doc("URY Table Reservation", res.name)
             reservation.status = "Completed"
-            reservation.pos_invoice = doc.name
+            reservation.pos_invoice = bound or doc.name
             reservation.flags.system_transition = ("Seated", "Completed")
             reservation.save(ignore_permissions=True)
         except Exception:

@@ -280,8 +280,15 @@ doc_events = {
             "ury.ury.api.table_reservation.complete_seated_reservation_on_submit",
         ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
-        "on_cancel": "ury.ury.hooks.ury_pos_invoice.on_trash",
-        "on_trash": "ury.ury.hooks.ury_pos_invoice.on_trash",
+        "on_discard": "ury.ury.api.table_reservation.release_reservation_check_binding",
+        "on_cancel": [
+            "ury.ury.hooks.ury_pos_invoice.on_trash",
+            "ury.ury.api.table_reservation.release_reservation_check_binding",
+        ],
+        "on_trash": [
+            "ury.ury.hooks.ury_pos_invoice.on_trash",
+            "ury.ury.api.table_reservation.release_reservation_check_binding",
+        ],
     },
     "POS Profile": {"validate": "ury.ury.hooks.ury_pos_profile.validate"},
     "Branch": {"validate": "ury.ury.api.table_reservation.validate_branch_reservation_settings"},

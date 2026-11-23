@@ -62,3 +62,30 @@ it('in the free layout the table name yields to the status', () => {
   expect(truncationStyle(within(card).getByText('Confirmed')).textOverflow).not.toBe('ellipsis');
   expect(card.textContent?.match(/19:00/g)).toHaveLength(1);
 });
+
+it('truncates long guest names with an ellipsis and tooltip without collapsing the row on a 120px card', () => {
+  const longName = 'Sarah Namono With A Long Guest Name';
+  const view = render(
+    <TableReservationTimeline
+      tables={[table('Table 1')]}
+      reservations={[{ ...booking, customer_name: longName }]}
+      selectedDate={new Date(2026, 10, 23)}
+    />,
+  );
+  let card: HTMLElement | null = within(view.container).getByText(longName);
+  while (card && !card.style.width) card = card.parentElement;
+  expect(card).not.toBeNull();
+  expect(card!.style.width).toBe('120px');
+
+  const nameEl = within(card!).getByText(longName);
+  expect(truncationStyle(nameEl)).toEqual(TRUNCATES);
+  expect(nameEl).toHaveAttribute('title', longName);
+
+  // The guest-name row and time range must never wrap/collapse the guest name out of the 74px card.
+  const nameRow = nameEl.parentElement!;
+  expect(getComputedStyle(nameRow).flexShrink).toBe('0');
+  expect(getComputedStyle(nameRow).minWidth).toBe('0px');
+  const rangeEl = within(card!).getByText(/19:00 - 19:45/);
+  expect(getComputedStyle(rangeEl).whiteSpace).toBe('nowrap');
+  expect(getComputedStyle(rangeEl).flexShrink).toBe('0');
+});
