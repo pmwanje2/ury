@@ -176,6 +176,10 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
     new_hold_start = new_start - timedelta(minutes=cint(settings.get("buffer_time", 0)))
     new_end = new_start + timedelta(minutes=duration_mins)
 
+    # Serialise bookings on one table: concurrent writers wait on this row lock,
+    # so the second one reads the first one's reservation before it can insert.
+    frappe.db.get_value("URY Table", table, "name", for_update=True)
+
     query = """
         SELECT name, reserved_at, branch
         FROM `tabURY Table Reservation`
