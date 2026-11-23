@@ -36,6 +36,24 @@ describe('formatGuestSubtitle', () => {
     expect(formatGuestSubtitle('Susan', null, 'Walk In')).toBe('Susan · Walk In');
   });
 
+  it('shows the label alone when it is the customer plus a note, for a customer known only by its id', () => {
+    // An offline or cached row may carry only the customer link, which is then the name shown.
+    expect(formatGuestSubtitle('Dr. Elena Rostova (Rm 408)', undefined, 'Dr. Elena Rostova')).toBe('Dr. Elena Rostova (Rm 408)');
+    expect(formatGuestSubtitle('Acme - Board Lunch', '', 'Acme')).toBe('Acme - Board Lunch');
+    expect(formatGuestSubtitle('walk in, Seat 2', null, 'Walk In')).toBe('walk in, Seat 2');
+  });
+
+  it('never hides a customer known only by its id that the label merely starts like', () => {
+    expect(formatGuestSubtitle('Dr. Elena Rostova-Smith', undefined, 'Dr. Elena Rostova')).toBe('Dr. Elena Rostova-Smith · Dr. Elena Rostova');
+    expect(formatGuestSubtitle('Acmeco (Rm 2)', null, 'Acme')).toBe('Acmeco (Rm 2) · Acme');
+    expect(formatGuestSubtitle('Not Acme - Bob pays cash', null, 'Acme')).toBe('Not Acme - Bob pays cash · Acme');
+    expect(formatGuestSubtitle('Walk In Bob', '', 'Walk In')).toBe('Walk In Bob · Walk In');
+  });
+
+  it('keeps the customer name when the label is its id plus a note', () => {
+    expect(formatGuestSubtitle('CUST-0001 (Rm 408)', 'Dr. Elena Rostova', 'CUST-0001')).toBe('CUST-0001 (Rm 408) · Dr. Elena Rostova');
+  });
+
   it('keeps both when the label is only part of the customer name', () => {
     expect(formatGuestSubtitle('Elena Rostova', 'Dr. Elena Rostova')).toBe('Elena Rostova · Dr. Elena Rostova');
     expect(formatGuestSubtitle('Customer', 'Walk In Customer')).toBe('Customer · Walk In Customer');
