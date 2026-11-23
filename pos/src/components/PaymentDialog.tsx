@@ -60,14 +60,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
   
-  // Calculate effective percentage if only amount is provided (for invoice-level discounts)
-  const effectivePercentage = discountPercentage 
-    ? discountPercentage 
-    : (discountAmount && grandTotal + discountAmount > 0 
-        ? (discountAmount / (grandTotal + discountAmount)) * 100 
-        : 0);
-        
-  const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
+  // Only send a percentage discount the server already carries or previewed via Apply;
+  // never derive a synthetic percentage from a fixed discount_amount or send unapplied typing.
+  const initialAppliedPct = discountPercentage && discountPercentage > 0 ? discountPercentage : null;
+  const [discountValue, setDiscountValue] = useState<string>(initialAppliedPct !== null ? String(initialAppliedPct) : '');
+  const [appliedDiscountPct, setAppliedDiscountPct] = useState<number | null>(initialAppliedPct);
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
   // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
@@ -124,18 +121,18 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       setError(t('errors.discount_exceeds_max'));
       return;
     }
-    const calculatedDiscount = (baseTotal * value) / 100;
     try {
       const { message } = await call.get<{ message: { grand_total: number; rounded_total: number } }>(
         'ury.ury.doctype.ury_order.ury_order.preview_settlement_totals',
         { invoice, pos_profile: posProfile, additionalDiscount: value },
       );
       setServerTotals(message);
+      setAppliedDiscountPct(value);
+      setAppliedDiscount(Math.max(0, Math.round((baseTotal - message.grand_total) * 100) / 100));
     } catch (err) {
       setError(parseFrappeError(err, t('errors.invalid_discount')));
       return;
     }
-    setAppliedDiscount(calculatedDiscount);
     setError(null);
   };
 
@@ -162,6 +159,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
   // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
   const roomChargeModes = storePosProfile?.room_charge_modes || [];
+  const roomChargeUnconfigured = Boolean(storePosProfile?.room_charge_unconfigured) && roomChargeModes.length === 0;
+  const typedDiscount = discountValue.trim() === '' ? null : parseFloat(discountValue);
+  const hasUnappliedDiscount = discountValue.trim() !== '' && typedDiscount !== appliedDiscountPct;
   const roomChargeAmount = roomChargeModes
     .reduce((sum: number, mode: string) => sum + (parseFloat(paymentInputs[mode] || '') || 0), 0);
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
@@ -271,7 +271,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       if (printInvoice) {
         // Step 1: Save draft invoice with discount and payment modes without submitting
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-          additionalDiscount: discountValue ? parseFloat(discountValue) : null,
+          additionalDiscount: appliedDiscountPct,
           cashier,
           customer,
           invoice,
@@ -312,7 +312,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           amount: paymentsTotal, due: finalTotal, discount: appliedDiscount,
           modeOfPayment: payments.length === 1 ? payments[0]?.mode_of_payment ?? '' : '',
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-            additionalDiscount: discountValue ? parseFloat(discountValue) : null,
+            additionalDiscount: appliedDiscountPct,
             cashier,
             customer,
             invoice,
@@ -385,6 +385,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                   {t('common.apply')}
                 </Button>
               </div>
+              {hasUnappliedDiscount && (
+                <p role="status" className="text-xs text-amber-700">
+                  {t('payment.discount_not_applied')}
+                </p>
+              )}
             </div>
           )}
 
@@ -427,6 +432,15 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               </Button>)}
               {account && <p>{account.customer_name} · {account.name} <Button type="button" variant="ghost" disabled={isProcessing} onClick={() => setAccount(null)}>{t('common.cancel')}</Button></p>}
             </section>}
+            {roomChargeUnconfigured && (
+              <p
+                role="status"
+                data-testid="room-charge-setup-notice"
+                className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+              >
+                {t('payment.room_charge_not_configured')}
+              </p>
+            )}
             {roomChargeAmount > 0 && (
               <div className="space-y-2">
                 <label htmlFor="room-charge-reference" className="text-sm font-medium">

@@ -111,7 +111,9 @@
     "room_match": "Habitación {{room}} · {{guest}} · sale {{departure}}",
     "room_no_post": "La cuenta de este huésped no admite cargos a la habitación",
     "room_check_required": "Verifique la habitación antes del cargo a habitación",
-    "room_check_failed": "No se pudo verificar esta habitación"
+    "room_check_failed": "No se pudo verificar esta habitación",
+    "room_charge_not_configured": "El cargo a habitación no está configurado para esta empresa. Finanzas asigna la cuenta puente del folio de huéspedes.",
+    "discount_not_applied": "Pulsa Aplicar para actualizar el total antes de pagar."
   },
   "pos": {
     "not_opened_title": "POS no abierto",

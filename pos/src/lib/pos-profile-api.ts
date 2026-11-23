@@ -38,6 +38,8 @@ export interface PosProfileLimited {
   default_payment_mode?: string | null;
   /** Payment methods posting to the Company's Guest Ledger Clearing account (room charge). */
   room_charge_modes?: string[];
+  /** True when the site/profile expects room charge but Company.custom_guest_ledger_clearing is unmapped. */
+  room_charge_unconfigured?: boolean;
 }
 
 export interface PosProfileLimitedResponse {
@@ -128,6 +130,7 @@ export interface PosProfileCombined extends PosProfileFull {
   room_lookup_method?: string;
   default_payment_mode?: string;
   room_charge_modes?: string[];
+  room_charge_unconfigured?: boolean;
 }
 
 export interface Currency {
@@ -202,6 +205,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     room_lookup_method: limitedProfile.room_lookup_method ?? '',
     default_payment_mode: limitedProfile.default_payment_mode ?? '',
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
+    room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
   };
 
   return combinedProfile;

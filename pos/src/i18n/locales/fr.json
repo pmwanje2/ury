@@ -141,7 +141,9 @@
     "room_match": "Chambre {{room}} · {{guest}} · départ {{departure}}",
     "room_no_post": "La note de ce client est fermée aux imputations",
     "room_check_required": "Vérifiez la chambre avant une imputation",
-    "room_check_failed": "Impossible de vérifier cette chambre"
+    "room_check_failed": "Impossible de vérifier cette chambre",
+    "room_charge_not_configured": "L'imputation en chambre n'est pas configurée pour cette société. La finance associe le compte de compensation du folio client.",
+    "discount_not_applied": "Appuyez sur Appliquer pour mettre à jour le total avant de payer."
   },
   "pos": {
     "not_opened_title": "PDV non ouvert",

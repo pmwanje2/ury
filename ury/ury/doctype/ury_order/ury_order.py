@@ -849,17 +849,126 @@ def _reservation_lines(rows):
     ]
 
 
+def _prepare_consolidated_discount(destination, sources):
+    """Resolve ONE bill-level discount for the consolidated check (Simphony Add Check).
+
+    Matching percentages keep that percentage; differing discounts (such as merging a 0%
+    check with a 10%-discounted check) sum their exact discount amounts on the shared
+    apply_discount_on basis so neither an overcharge nor an unintended discount expansion
+    occurs. Conflicting apply_discount_on bases (Net Total vs Grand Total) are refused.
+    """
+    all_bills = [destination, *sources]
+    discounted = []
+    for bill in all_bills:
+        pct = flt(bill.get("additional_discount_percentage"))
+        amt = flt(bill.get("discount_amount"))
+        if pct > 0 and amt <= 0:
+            bill.calculate_taxes_and_totals()
+            amt = flt(bill.get("discount_amount"))
+        if pct > 0 or amt > 0:
+            discounted.append((bill, pct, amt))
+
+    if not discounted:
+        return None
+
+    bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _, _ in discounted}
+    if len(bases) > 1:
+        frappe.throw(
+            _("Cannot merge checks with bill discounts applied on different bases ({0}).").format(
+                ", ".join(sorted(bases))
+            )
+        )
+    basis = next(iter(bases))
+
+    all_pcts = [flt(bill.get("additional_discount_percentage")) for bill in all_bills]
+    if all(p > 0 for p in all_pcts) and len({round(p, 6) for p in all_pcts}) == 1:
+        return {"apply_discount_on": basis, "additional_discount_percentage": all_pcts[0], "discount_amount": None}
+
+    return {
+        "apply_discount_on": basis,
+        "additional_discount_percentage": 0,
+        "discount_amount": sum(amt for _, _, amt in discounted),
+    }
+
+
+def _validate_and_collect_source_tenders(destination, sources):
+    """Validate and collect source tenders that move onto the destination check.
+
+    Refuses before mutating anything if a source carries a negative tender, an external
+    payment reference, a payment mode not configured on destination's POS Profile, or a
+    conflicting room-charge reference.
+    """
+    rooms = {
+        str(bill.get("room_number")).strip()
+        for bill in [destination, *sources]
+        if bill.get("room_number") and str(bill.get("room_number")).strip()
+    }
+    if len(rooms) > 1:
+        frappe.throw(
+            _("Cannot merge checks with different room-charge references ({0}).").format(
+                ", ".join(sorted(rooms))
+            )
+        )
+
+    allowed_modes = (
+        set(
+            frappe.get_all(
+                "POS Payment Method",
+                filters={"parent": destination.pos_profile},
+                pluck="mode_of_payment",
+            )
+        )
+        if destination.get("pos_profile")
+        else set()
+    )
+
+    movable = []
+    for source in sources:
+        for row in source.get("payments") or []:
+            amt = flt(row.get("amount"))
+            mode = row.get("mode_of_payment")
+            if amt < 0:
+                frappe.throw(
+                    _("Cannot merge check {0}: negative tender ({1}) cannot be moved.").format(
+                        source.name, mode
+                    )
+                )
+            if amt == 0:
+                continue
+            if row.get("reference_no") or row.get("clearance_date"):
+                frappe.throw(
+                    _(
+                        "Cannot merge check {0}: tender {1} carries an external payment reference and cannot be moved."
+                    ).format(source.name, mode)
+                )
+            if allowed_modes and mode not in allowed_modes:
+                frappe.throw(
+                    _(
+                        "Cannot merge check {0}: tender {1} is not configured on POS Profile {2}."
+                    ).format(source.name, mode, destination.pos_profile)
+                )
+            movable.append((row, amt))
+
+    carried_room = next(iter(rooms)) if len(rooms) == 1 else None
+    return movable, carried_room
+
+
 def consolidate_checks(destination, sources):
-    """Add Check (Oracle Simphony Add/Transfer Check): move every line of the source checks
-    onto the destination check, so the guest has one POS Invoice: one tax calculation, one
-    discount, one fiscal receipt and a native return. No merge link is written.
+    """Add Check (Oracle Simphony Add/Transfer Check): move every line, bill-level discount
+    and movable tender of the source checks onto the destination check, so the guest has one
+    POS Invoice: one tax calculation, one discount set, one tender set, one fiscal receipt
+    and a native return. No merge link is written.
 
     Each line keeps its rate, line identity and attribution. The kitchen tickets and stock
     reservations follow the lines. The destination must be printed again, since its printed
     bill no longer shows what the guest owes. Each source check is discarded with an audit
-    note, and its table is freed once no open check remains on it. The caller validates the
-    checks and commits.
+    note (firing POS Invoice on_discard hooks such as release_reservation_check_binding), and
+    its table is freed once no open check remains on it. The caller validates the checks and
+    commits.
     """
+    discount_plan = _prepare_consolidated_discount(destination, sources)
+    source_tenders, carried_room = _validate_and_collect_source_tenders(destination, sources)
+
     company = destination.company or frappe.db.get_value("Branch", destination.branch, "company")
     reservations_enabled = get_branch_stock_policy(
         branch=destination.branch, company=company
@@ -873,8 +982,45 @@ def consolidate_checks(destination, sources):
                 row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True),
             )
 
+    if discount_plan is not None:
+        destination.apply_discount_on = discount_plan["apply_discount_on"]
+        destination.additional_discount_percentage = discount_plan["additional_discount_percentage"]
+        if discount_plan["discount_amount"] is not None:
+            destination.discount_amount = discount_plan["discount_amount"]
+
+    if source_tenders:
+        by_mode = {}
+        kept_rows = []
+        for row in destination.get("payments") or []:
+            if flt(row.get("amount")) > 0:
+                by_mode[row.mode_of_payment] = row
+                kept_rows.append(row)
+        destination.set("payments", kept_rows)
+        for row, amt in source_tenders:
+            mode = row.get("mode_of_payment")
+            if mode in by_mode:
+                by_mode[mode].amount = flt(by_mode[mode].amount) + amt
+            else:
+                if hasattr(row, "as_dict"):
+                    data = row.as_dict(
+                        no_default_fields=True,
+                        no_child_table_fields=True,
+                        no_private_properties=True,
+                    )
+                else:
+                    data = {}
+                data["mode_of_payment"] = mode
+                data["amount"] = amt
+                destination.append("payments", data)
+                by_mode[mode] = destination.payments[-1]
+
+    if carried_room and not destination.get("room_number"):
+        destination.room_number = carried_room
+
     destination.invoice_printed = 0
     destination.calculate_taxes_and_totals()
+    destination.set_paid_amount()
+    destination.set_outstanding_amount()
     destination.save()
 
     for source in sources:
@@ -3380,7 +3526,11 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
         invoice.additional_discount_percentage = discount_val
     else:
-        invoice.additional_discount_percentage = 0
+        if flt(invoice.get("additional_discount_percentage")):
+            invoice.additional_discount_percentage = 0
+            invoice.discount_amount = 0
+        else:
+            invoice.additional_discount_percentage = 0
         
     invoice.calculate_taxes_and_totals()
 

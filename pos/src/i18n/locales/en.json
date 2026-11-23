@@ -163,7 +163,9 @@
     "room_match": "Room {{room}} · {{guest}} · departs {{departure}}",
     "room_no_post": "This guest's bill is closed to room charges",
     "room_check_required": "Check the room before taking Room Charge",
-    "room_check_failed": "Could not check this room"
+    "room_check_failed": "Could not check this room",
+    "room_charge_not_configured": "Room charge isn't set up for this company. Finance maps the guest ledger clearing account.",
+    "discount_not_applied": "Press Apply to update the total before paying."
   },
   "pos": {
     "not_opened_title": "POS Not Opened",

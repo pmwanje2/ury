@@ -886,6 +886,11 @@ def getPosProfile():
         for payment in (pos_profiles.get("payments") or [])
     }
 
+    room_lookup_method = (pos_profiles.get("custom_room_lookup_method") or "").strip()
+    room_charge_modes, room_charge_unconfigured = _room_charge_config(
+        payment_mode_accounts, company, room_lookup_method
+    )
+
     invoice_details = {
         "pos_profile": pos_profile_name,
         "branch": branch,
@@ -919,25 +924,42 @@ def getPosProfile():
             (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),
             None,
         ),
-        "room_charge_modes": _room_charge_modes(payment_mode_accounts, company),
+        "room_charge_modes": room_charge_modes,
+        "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
-        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
+        "room_lookup_method": room_lookup_method,
         **get_default_customer_config(pos_profiles),
     }
 
     return invoice_details
 
 
+def _room_charge_config(payment_mode_accounts, company, room_lookup_method=""):
+    """Room-charge tenders and setup status from Company.custom_guest_ledger_clearing.
+
+    The hotel bridge posts exactly the payment methods whose company account equals
+    Company.custom_guest_ledger_clearing. When a site carries that field or configures a
+    room lookup method without mapping the clearing account on this Company, report
+    room_charge_unconfigured=True so the till informs staff instead of silently hiding
+    the room prompt.
+    """
+    has_clearing_field = frappe.get_meta("Company").has_field("custom_guest_ledger_clearing")
+    clearing = (
+        frappe.db.get_value("Company", company, "custom_guest_ledger_clearing")
+        if has_clearing_field
+        else None
+    )
+    if clearing:
+        return [mode for mode, account in payment_mode_accounts.items() if account == clearing], False
+    return [], bool(has_clearing_field or room_lookup_method)
+
+
 def _room_charge_modes(payment_mode_accounts, company):
     """The payment methods whose company account is the Company's Guest Ledger Clearing
     account. The hotel bridge posts exactly those to a guest folio, so the till asks for the
     room on them; a site without the hotel bridge has none."""
-    if not frappe.get_meta("Company").has_field("custom_guest_ledger_clearing"):
-        return []
-    clearing = frappe.db.get_value("Company", company, "custom_guest_ledger_clearing")
-    if not clearing:
-        return []
-    return [mode for mode, account in payment_mode_accounts.items() if account == clearing]
+    modes, _ = _room_charge_config(payment_mode_accounts, company)
+    return modes
 
 
 @frappe.whitelist()
