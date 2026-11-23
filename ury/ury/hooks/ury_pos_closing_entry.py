@@ -174,7 +174,7 @@ def _set_expected_amounts(doc):
             continue
         if len(modes) != 1:
             frappe.throw(
-                "[URY-CLOSE-MOVEMENT-NO-TILL-MODE] Map exactly one cash till payment mode "
+                "[POS-CLOSE-MOVEMENT-NO-TILL-MODE] Map exactly one cash till payment mode "
                 f"to the drawer account {account} before closing."
             )
         expected_by_mode[modes[0]] = _currency_flt(expected_by_mode.get(modes[0], 0) + amount, precision)

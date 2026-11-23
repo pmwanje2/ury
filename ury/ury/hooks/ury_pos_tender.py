@@ -42,7 +42,7 @@ def before_validate(doc, method=None):
 	if refusing:
 		frappe.throw(
 			_(
-				"[URY-TENDER-OVERTENDER] {0} cannot be over-tendered: only cash gives change. "
+				"[POS-TENDER-OVERTENDER] {0} cannot be over-tendered: only cash gives change. "
 				"Reduce it to the balance due."
 			).format(", ".join(refusing))
 		)
@@ -55,7 +55,7 @@ def sync_charged_tip(doc):
 	"""Make the bill's Tips Payable row match ``custom_charged_tip``."""
 	tip = flt(doc.get("custom_charged_tip"), doc.precision("grand_total"))
 	if tip < 0:
-		frappe.throw(_("[URY-TIP-NEGATIVE] A tip cannot be negative."))
+		frappe.throw(_("[POS-TIP-NEGATIVE] A tip cannot be negative."))
 	account = (
 		frappe.db.get_value("POS Profile", doc.pos_profile, "custom_tips_payable_account")
 		if doc.get("pos_profile")
@@ -92,7 +92,7 @@ def _check_tips_account(doc, account):
 	if not ledger or ledger.company != doc.company or ledger.root_type != "Liability" or ledger.is_group or ledger.disabled:
 		frappe.throw(
 			_(
-				"[URY-TIP-ACCOUNT] Set the POS Profile's Tips Payable Account to an enabled "
+				"[POS-TIP-ACCOUNT] Set the POS Profile's Tips Payable Account to an enabled "
 				"liability account of {0} before taking a tip."
 			).format(doc.company)
 		)

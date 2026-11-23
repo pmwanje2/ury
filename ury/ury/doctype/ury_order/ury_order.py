@@ -3212,7 +3212,7 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     tip = flt(tip)
     if tip < 0:
-        frappe.throw(_("[URY-TIP-NEGATIVE] A tip cannot be negative."))
+        frappe.throw(_("[POS-TIP-NEGATIVE] A tip cannot be negative."))
     client_order_id = _validate_client_ids(client_order_id, round_id)
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     customer_disabled = _lock_settlement_customer(customer, pos_prof)

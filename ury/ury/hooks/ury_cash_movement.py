@@ -33,16 +33,16 @@ def validate(doc, method=None):
 	kind = doc.get("custom_cash_movement_type")
 	if not doc.get("custom_pos_opening_entry"):
 		if kind:
-			frappe.throw(_("[URY-CASH-SHIFT] A till cash movement needs its POS shift."))
+			frappe.throw(_("[POS-CASH-SHIFT] A till cash movement needs its POS shift."))
 		return
 	if kind not in LEAVES_DRAWER:
-		frappe.throw(_("[URY-CASH-TYPE] Choose Pickup, Loan or Paid Out for a till cash movement."))
+		frappe.throw(_("[POS-CASH-TYPE] Choose Pickup, Loan or Paid Out for a till cash movement."))
 	profile = frappe.get_doc("POS Profile", _open_shift(doc).pos_profile)
 	drawer, counter = _movement_lines(doc, profile)
 	_check_direction(drawer, kind)
 	_check_counter(profile, kind, counter)
 	if kind == "Paid Out" and not (doc.get("custom_cash_movement_reason") or "").strip():
-		frappe.throw(_("[URY-CASH-REASON] A paid-out needs a reason."))
+		frappe.throw(_("[POS-CASH-REASON] A paid-out needs a reason."))
 	doc.voucher_type = "Cash Entry"
 
 
@@ -62,7 +62,7 @@ def before_submit(doc, method=None):
 	if not role or user == doc.owner or role not in frappe.get_roles(user):
 		frappe.throw(
 			_(
-				"[URY-CASH-SECOND-PERSON] A paid-out above {0} is submitted by a second person "
+				"[POS-CASH-SECOND-PERSON] A paid-out above {0} is submitted by a second person "
 				"holding the {1} role, not by the person who recorded it."
 			).format(threshold, role or _("Cash Movement Approver"))
 		)
@@ -105,7 +105,7 @@ def validate_closing_cash(doc, method=None):
 	if pending:
 		frappe.throw(
 			_(
-				"[URY-CLOSE-PENDING-MOVEMENT] Submit or delete the shift's pending cash movements "
+				"[POS-CLOSE-PENDING-MOVEMENT] Submit or delete the shift's pending cash movements "
 				"before closing: {0}."
 			).format(", ".join(pending))
 		)
@@ -173,7 +173,7 @@ def _open_shift(doc):
 		as_dict=True,
 	)
 	if not opening or opening.docstatus != 1 or opening.status != "Open" or opening.company != doc.company:
-		frappe.throw(_("[URY-CASH-SHIFT] Till cash moves only on an open POS shift of {0}.").format(doc.company))
+		frappe.throw(_("[POS-CASH-SHIFT] Till cash moves only on an open POS shift of {0}.").format(doc.company))
 	return opening
 
 
@@ -194,7 +194,7 @@ def _movement_lines(doc, profile):
 	if len(lines) != 2 or len(drawer_lines) != 1:
 		frappe.throw(
 			_(
-				"[URY-CASH-DRAWER] A till cash movement has two lines: the till's cash drawer "
+				"[POS-CASH-DRAWER] A till cash movement has two lines: the till's cash drawer "
 				"account ({0}) and its counter account."
 			).format(", ".join(sorted(drawers)) or _("none configured"))
 		)
@@ -208,7 +208,7 @@ def _check_direction(drawer, kind):
 	amount, other = (drawer.credit, drawer.debit) if leaves else (drawer.debit, drawer.credit)
 	if flt(amount) <= 0 or flt(other):
 		frappe.throw(
-			_("[URY-CASH-DIRECTION] A {0} {1} the till's cash drawer.").format(
+			_("[POS-CASH-DIRECTION] A {0} {1} the till's cash drawer.").format(
 				kind, _("credits") if leaves else _("debits")
 			)
 		)
@@ -219,7 +219,7 @@ def _check_counter(profile, kind, counter):
 		safe = profile.get("custom_cash_safe_account")
 		if not safe or counter.account != safe:
 			frappe.throw(
-				_("[URY-CASH-COUNTER] A {0} moves cash between the drawer and the till's Safe Account ({1}).").format(
+				_("[POS-CASH-COUNTER] A {0} moves cash between the drawer and the till's Safe Account ({1}).").format(
 					kind, safe or _("not set")
 				)
 			)
@@ -228,7 +228,7 @@ def _check_counter(profile, kind, counter):
 	if counter.account != tips and frappe.db.get_value("Account", counter.account, "root_type") != "Expense":
 		frappe.throw(
 			_(
-				"[URY-CASH-COUNTER] A paid-out goes to an expense account, or to the Tips Payable "
+				"[POS-CASH-COUNTER] A paid-out goes to an expense account, or to the Tips Payable "
 				"account for a tip payout."
 			)
 		)
@@ -260,7 +260,7 @@ def _over_short_account(doc):
 	):
 		frappe.throw(
 			_(
-				"[URY-CLOSE-OVER-SHORT-ACCOUNT] Set the POS Profile's Cash Over/Short Account to an "
+				"[POS-CLOSE-OVER-SHORT-ACCOUNT] Set the POS Profile's Cash Over/Short Account to an "
 				"enabled income or expense account of {0} before closing a till with a cash difference."
 			).format(doc.company)
 		)
@@ -273,6 +273,6 @@ def _mode_account(mode, company, required=True):
 	)
 	if not account and required:
 		frappe.throw(
-			_("[URY-CASH-DRAWER] Set {0}'s company account for {1}.").format(mode, company)
+			_("[POS-CASH-DRAWER] Set {0}'s company account for {1}.").format(mode, company)
 		)
 	return account
