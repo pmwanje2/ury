@@ -370,7 +370,9 @@ class TestSiteBrand(unittest.TestCase):
                         custom_merged_total=0, grand_total=10, items=[], outstanding_amount=0, ury_print_partner=None)
         configured = '<img src="/files/site-receipt.png" alt="Example site">'
         for suppress in (False, True):
-            html = template.render(doc=doc, frappe=MagicMock(), letter_head=configured, footer="Configured receipt footer", no_letterhead=suppress)
+            # Frappe renders print formats with `_` in the Jinja globals (frappe/utils/jinja.py).
+            html = template.render(doc=doc, frappe=MagicMock(), _=lambda text: text, letter_head=configured,
+                                   footer="Configured receipt footer", no_letterhead=suppress)
             self.assertIn("Signed outlet", html)
             self.assertIn("West branch", html)
             self.assertNotIn(configured, html)
