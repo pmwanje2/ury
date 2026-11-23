@@ -1214,12 +1214,19 @@ class TestTargetTurnTimeIsBranchConfiguration(_Timing):
             doc.update(values)
             self.api.validate_branch_reservation_settings(doc)
 
-        for cleared in (0, "", -5):
+        # Desk sends JSON null (None) when an operator clears an Int field, and Frappe
+        # otherwise stores cint(None) == 0. All non-positive/blank inputs are refused
+        # identically whenever the column exists (Simphony requires positive minutes).
+        for cleared in (None, "", "   ", 0, -5):
             with self.subTest(turn=cleared), self.assertRaisesRegex(Invalid, "target turn time"):
                 validate(custom_target_turn_time=cleared)
         validate(custom_target_turn_time=1)
-        validate(custom_target_turn_time=0, custom_enable_reservation=0)
-        validate(custom_target_turn_time=None)  # absent before migrate: read as the seed, not refused
+        for off_val in (None, "", 0, -5):
+            with self.subTest(disabled_turn=off_val):
+                validate(custom_target_turn_time=off_val, custom_enable_reservation=0)
+        # Before migrate adds the column, saving a Branch without it is not refused.
+        self.frappe.db.has_column = lambda doctype, name: name != "custom_target_turn_time"
+        validate(custom_target_turn_time=None)
 
 
 class TestMinimumReservationNoticeIsBranchConfiguration(_Timing):
@@ -1327,9 +1334,11 @@ class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
 
     def validate(self, **values):
         doc = Row(doctype="Branch", name="Branch A", custom_enable_reservation=1,
-            custom_unset_grace_policy="Refuse to Enable", custom_grace_period=0)
+            custom_unset_grace_policy="Refuse to Enable", custom_grace_period=0,
+            custom_target_turn_time=60)
         doc.update(values)
         self.api.validate_branch_reservation_settings(doc)
+        return doc
 
     def test_an_unset_grace_takes_the_seed_the_site_ships(self):
         self.seed("custom_grace_period", "20")
@@ -1346,7 +1355,7 @@ class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
         self.assertEqual(self.status("TR-1"), "No Show")
 
     def test_refuse_to_enable_stops_a_branch_without_a_grace_from_switching_on(self):
-        for unset in (None, "", 0):
+        for unset in (None, "", "   ", 0, -5):
             with self.subTest(grace=unset), self.assertRaisesRegex(Invalid, "grace period"):
                 self.validate(custom_grace_period=unset)
         self.validate(custom_grace_period=10)
@@ -1357,6 +1366,24 @@ class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
         with self.assertRaisesRegex(Invalid, "grace period"):
             self.validate(custom_unset_grace_policy=None)
 
+    def test_use_default_grace_restores_the_seed_on_save_for_cleared_zero_or_negative_grace(self):
+        for unset in (None, "", "   ", 0, -5):
+            with self.subTest(grace=unset):
+                doc = self.validate(
+                    custom_unset_grace_policy="Use Default Grace Period",
+                    custom_grace_period=unset,
+                )
+                self.assertEqual(doc.custom_grace_period, 15)
+        self.seed("custom_grace_period", "20")
+        doc = self.validate(custom_unset_grace_policy="Use Default Grace Period", custom_grace_period=None)
+        self.assertEqual(doc.custom_grace_period, 20)
+        off = self.validate(
+            custom_enable_reservation=0,
+            custom_unset_grace_policy="Use Default Grace Period",
+            custom_grace_period=0,
+        )
+        self.assertEqual(off.custom_grace_period, 0)
+
     def test_a_refusing_branch_saved_without_a_grace_is_still_never_zero(self):
         # Reached only by a write that skipped Branch validate: the booking is still held.
         self.branch(custom_unset_grace_policy="Refuse to Enable", custom_grace_period=0)
@@ -1365,6 +1392,222 @@ class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
     def test_the_policy_runs_on_every_branch_save(self):
         self.assertIn("ury.ury.api.table_reservation.validate_branch_reservation_settings",
             self.hooked("Branch", "validate"))
+
+
+class TestWalkInInBufferDoesNotBlockNonTimeEdits(_Timing):
+    """P1-3: a walk-in running into the buffer never blocks edits that keep both table and time."""
+
+    def setUp(self):
+        super().setUp()
+        self.branch(custom_target_turn_time=60, custom_buffer_time=30)
+        self.clock("12:00")
+        # Confirmed at 12:35 (buffer starts 12:05). Walk-in on T1 since 11:15 finishes at 12:15 > 12:05.
+        self.booking("TR-1", "12:35", table="T1", created="10:00", pax=2)
+        self.site.rows["URY Table"]["T1"].update(occupied=1, latest_invoice_time=at("11:15"))
+
+    def test_editing_notes_covers_or_phone_on_same_table_and_time_succeeds(self):
+        self.api.update_table_reservation(
+            "TR-1", notes="Needs high chair", no_of_pax=3, customer_phone="+256772888999"
+        )
+        row = self.site.rows["URY Table Reservation"]["TR-1"]
+        self.assertEqual((row.comments, row.no_of_pax, row.customer_phone), ("Needs high chair", 3, "+256772888999"))
+        # Capacity check still runs on same-table edits.
+        with self.assertRaisesRegex(Invalid, "capacity"):
+            self.api.update_table_reservation("TR-1", no_of_pax=5)
+
+    def test_moving_the_time_or_the_table_still_checks_table_occupancy(self):
+        with self.assertRaisesRegex(Invalid, "currently occupied"):
+            self.api.update_table_reservation("TR-1", reserved_at=f"{DAY} 12:30:00")
+        self.site.rows["URY Table"]["T2"].update(occupied=1, latest_invoice_time=at("11:15"))
+        with self.assertRaisesRegex(Invalid, "currently occupied"):
+            self.api.update_table_reservation("TR-1", table="T2")
+        # Moving to a free table T3 still succeeds.
+        self.api.update_table_reservation("TR-1", table="T3")
+        self.assertEqual(self.site.rows["URY Table Reservation"]["TR-1"].reserved_table, "T3")
+
+    def test_availability_keeps_the_edited_booking_s_table_when_time_is_unchanged(self):
+        self.site.rows["URY Table"]["T2"].update(occupied=1, latest_invoice_time=at("11:15"))
+        offered_same = [t.name for t in self.api.get_available_tables_for_reservation(
+            "Branch A", f"{DAY} 12:35:00", exclude_reservation="TR-1")]
+        self.assertIn("T1", offered_same)
+        self.assertNotIn("T2", offered_same)
+        self.assertIn("T3", offered_same)
+        # Moving the time re-applies the occupied check to T1.
+        offered_moved = [t.name for t in self.api.get_available_tables_for_reservation(
+            "Branch A", f"{DAY} 12:30:00", exclude_reservation="TR-1")]
+        self.assertNotIn("T1", offered_moved)
+
+
+class TestSeatedCheckLifecycleTransferSplitMergeAndDiscard(_Timing):
+    """P1-2 & P2-1/2/3: a Seated reservation follows its check across transfer, split, merge and discard."""
+
+    def setUp(self):
+        super().setUp()
+        self.site.roles = ["URY Cashier"]
+        self.frappe.session.user = "cashier@example.test"
+        self.till(billing_roles=["URY Cashier"])
+        self.clock("19:10")
+
+    def check(self, name, table="T1", **extra):
+        values = dict(doctype="POS Invoice", name=name, restaurant_table=table, custom_merged_tables="",
+            branch="Branch A", order_type="Dine In", is_return=0, docstatus=0, invoice_printed=0,
+            customer="CUST-1", creation=at("19:05"))
+        values.update(extra)
+        return self.site.put("POS Invoice", name, **values)
+
+    def close(self, name):
+        row = self.site.rows["POS Invoice"][name]
+        row.docstatus = 1
+        self.api.complete_seated_reservation_on_submit(Row(row))
+
+    def stored(self, name):
+        row = self.site.rows["URY Table Reservation"][name]
+        return row.status, row.reserved_table, row.pos_invoice
+
+    def test_sweep_never_completes_a_seated_party_whose_bound_check_is_still_open(self):
+        # Even if T1 was cleared and the check is now on T2 (or past hold end), an open bound check keeps Seated.
+        self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        self.check("INV-1", table="T2")
+        self.site.rows["URY Table"]["T1"].occupied = 0
+        self.site.rows["URY Table"]["T2"].occupied = 1
+        self.clock("22:00")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-1"))
+
+    def test_sweep_never_completes_a_seated_party_while_a_split_sibling_is_still_open(self):
+        self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        self.check("INV-1", table="T1", docstatus=1, custom_split_group="grp1")
+        self.check("INV-2", table="T2", docstatus=0, custom_split_group="grp1", custom_split_from="INV-1")
+        self.site.rows["URY Table"]["T1"].occupied = 0
+        self.clock("22:00")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-1"))
+
+    def test_transfer_moves_the_bound_seated_reservation_to_the_new_table(self):
+        self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        inv = self.check("INV-1", table="T1")
+        self.api.transfer_seated_reservation("T1", "T2", inv)
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T2", "INV-1"))
+        # Sweep afterwards keeps TR-S Seated while INV-1 is open on T2.
+        inv.restaurant_table = "T2"
+        self.site.rows["URY Table"]["T1"].occupied = 0
+        self.site.rows["URY Table"]["T2"].occupied = 1
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T2", "INV-1"))
+        # Closing INV-1 on T2 completes TR-S.
+        self.close("INV-1")
+        self.assertEqual(self.stored("TR-S"), ("Completed", "T2", "INV-1"))
+
+    def test_transfer_refuses_target_table_that_already_has_another_seated_party(self):
+        self.booking("TR-1", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        self.booking("TR-2", "19:00", table="T2", status="Seated", pos_invoice="INV-2")
+        inv1 = self.check("INV-1", table="T1")
+        with self.assertRaisesRegex(Invalid, "already seated"):
+            self.api.transfer_seated_reservation("T1", "T2", inv1)
+        self.assertEqual(self.stored("TR-1"), ("Seated", "T1", "INV-1"))
+
+    def test_transfer_of_an_unrelated_check_leaves_the_bound_seated_party_behind(self):
+        self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        self.check("INV-1", table="T1", invoice_printed=1)
+        inv2 = self.check("INV-2", table="T1", creation=at("19:30"))
+        self.api.transfer_seated_reservation("T1", "T2", inv2)
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-1"))
+
+    def test_transfer_handles_split_bills_and_merged_partner_reservations(self):
+        # Split child moving after bound primary settled carries the Seated reservation with it.
+        self.booking("TR-SP", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        self.check("INV-1", table="T1", docstatus=1, custom_split_group="grp1")
+        inv2 = self.check("INV-2", table="T1", docstatus=0, custom_split_group="grp1", custom_split_from="INV-1")
+        self.api.transfer_seated_reservation("T1", "T2", inv2)
+        self.assertEqual(self.stored("TR-SP"), ("Seated", "T2", "INV-1"))
+
+        # Split child moving while bound primary stays open on T1 leaves the reservation on T1.
+        self.site.rows["URY Table Reservation"].clear()
+        self.site.rows["POS Invoice"].clear()
+        self.booking("TR-SP2", "19:00", table="T1", status="Seated", pos_invoice="INV-A")
+        self.check("INV-A", table="T1", docstatus=0, custom_split_group="grp2")
+        inv_b = self.check("INV-B", table="T1", docstatus=0, custom_split_group="grp2", custom_split_from="INV-A")
+        self.api.transfer_seated_reservation("T1", "T2", inv_b)
+        self.assertEqual(self.stored("TR-SP2"), ("Seated", "T1", "INV-A"))
+
+        # Reservation originally on merged partner T1, bound to check opened on T2, unmerged then transferred to T3.
+        self.site.rows["URY Table Reservation"].clear()
+        self.site.rows["POS Invoice"].clear()
+        self.booking("TR-M", "19:00", table="T1", status="Seated", pos_invoice="INV-M")
+        inv_m = self.check("INV-M", table="T2")
+        self.api.transfer_seated_reservation("T2", "T3", inv_m)
+        self.assertEqual(self.stored("TR-M"), ("Seated", "T3", "INV-M"))
+
+    def test_a_discarded_or_cancelled_check_releases_binding_and_allows_rebinding(self):
+        # Hook wiring on POS Invoice for discard, cancel and trash.
+        for event in ("on_discard", "on_cancel", "on_trash"):
+            with self.subTest(event=event):
+                self.assertIn(
+                    "ury.ury.api.table_reservation.release_reservation_check_binding",
+                    self.hooked("POS Invoice", event),
+                )
+
+        # Hook clears pos_invoice when bound check is discarded.
+        self.site.rows["URY Table"]["T1"].occupied = 1
+        self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        inv1 = self.check("INV-1", table="T1", docstatus=2)
+        self.api.release_reservation_check_binding(inv1)
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", None))
+
+        # Even if pos_invoice still points to a docstatus=2 check in DB, rebind/prefill/submit treat it as unbound.
+        self.site.rows["URY Table Reservation"]["TR-S"].pos_invoice = "INV-1"
+        found = self.api.get_completed_reservation_for_table("T1", "Branch A")
+        self.assertEqual((found or {}).get("name"), "TR-S")
+        inv2 = self.check("INV-2", table="T1", docstatus=0)
+        self.api.bind_seated_reservation_to_check(inv2)
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-2"))
+        self.close("INV-2")
+        self.assertEqual(self.stored("TR-S"), ("Completed", "T1", "INV-2"))
+
+        # Discarding a check for a Completed reservation keeps historical pos_invoice intact.
+        self.api.release_reservation_check_binding(Row(doctype="POS Invoice", name="INV-2", branch="Branch A", docstatus=2))
+        self.assertEqual(self.stored("TR-S"), ("Completed", "T1", "INV-2"))
+
+    def test_settling_a_bound_split_bill_with_the_split_child_last_completes_the_visit(self):
+        # Probe 5B: primary INV-1 bound on insert, split into INV-2, INV-1 settles first, INV-2 settles last.
+        self.booking("TR-1", "19:00", table="T1", status="Seated")
+        inv1 = self.check("INV-1", table="T1", creation=at("19:05"))
+        self.api.bind_seated_reservation_to_check(inv1)
+        self.assertEqual(self.stored("TR-1"), ("Seated", "T1", "INV-1"))
+        inv1.custom_split_group = "grp1"
+        self.check("INV-2", table="T1", creation=at("19:50"), custom_split_group="grp1", custom_split_from="INV-1")
+        # Also open an unrelated walk-in on T1 at 19:40: it must neither take nor block the split party.
+        self.check("INV-W", table="T1", creation=at("19:40"), customer="Guest")
+
+        self.close("INV-1")
+        self.assertEqual(self.stored("TR-1"), ("Seated", "T1", "INV-1"))
+        self.close("INV-2")
+        self.assertEqual(self.stored("TR-1")[0], "Completed")
+
+    def test_settling_a_split_child_on_another_table_last_completes_the_visit(self):
+        self.booking("TR-1", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+        self.check("INV-1", table="T1", creation=at("19:05"), custom_split_group="grp1")
+        self.check("INV-2", table="T2", creation=at("19:50"), custom_split_group="grp1", custom_split_from="INV-1")
+
+        self.close("INV-1")
+        self.assertEqual(self.stored("TR-1")[0], "Seated")
+        self.close("INV-2")
+        self.assertEqual(self.stored("TR-1")[0], "Completed")
+
+    def test_a_check_opened_on_a_merged_partner_table_binds_the_seated_party(self):
+        # Probe 5D: Seated on T1, check opened on merged partner T2 binds TR-S.
+        self.booking("TR-S", "19:00", table="T1", status="Seated")
+        inv_csv = self.check("INV-M1", table="T2", custom_merged_tables="T1")
+        self.api.bind_seated_reservation_to_check(inv_csv)
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-M1"))
+
+        # Also works via live URY Table.merged_with even before custom_merged_tables is populated on the invoice.
+        self.site.rows["URY Table Reservation"]["TR-S"].pos_invoice = None
+        self.site.rows["URY Table"]["T1"].merged_with = "T2"
+        self.site.rows["URY Table"]["T2"].merged_with = "T1"
+        inv_live = self.check("INV-M2", table="T2", custom_merged_tables="")
+        self.api.bind_seated_reservation_to_check(inv_live)
+        self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-M2"))
 
 
 if __name__ == "__main__":

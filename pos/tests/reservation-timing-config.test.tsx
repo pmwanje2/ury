@@ -131,6 +131,53 @@ it('saves an edit that keeps the time, even inside the notice', async () => {
   expect(dialog.textContent).not.toMatch(/at least 480 minutes/);
 });
 
+it('keeps the booking table selected when a walk-in omits it on a non-time edit, and clears it only if the time moves', async () => {
+  // Probe 6 (P1-3): when a walk-in runs into the booking buffer, getAvailableTablesForReservation
+  // omits Table 1. Opening the edit dialog must keep Table 1 selected for notes/covers/phone edits,
+  // and clear it only if the staff changes the booking time.
+  const TABLE_2 = { ...TABLE_1, name: 'Table 2' };
+  boundary.get.mockImplementation(async (endpoint: string) => {
+    if (endpoint === `${RESERVATION}get_branch_reservation_settings`) return { message: boundary.settings };
+    if (endpoint === `${RESERVATION}get_active_reservations`) return { message: [BOOKING] };
+    if (endpoint === `${RESERVATION}get_available_tables_for_reservation`) return { message: [TABLE_2] };
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  });
+  const dialog = await openEdit();
+  const tableInput = dialog.querySelector('#edit-reservation-table') as HTMLInputElement;
+  expect(tableInput.value).toContain('Table 1');
+  const saveButton = within(dialog).getByRole('button', { name: /save changes/i });
+  expect(saveButton).not.toBeDisabled();
+
+  // Changing notes keeps Table 1 and submits it.
+  const textarea = dialog.querySelector('textarea') as HTMLTextAreaElement;
+  await act(async () => { fireEvent.change(textarea, { target: { value: 'Needs high chair' } }); });
+  await act(async () => { fireEvent.click(saveButton); });
+  await waitFor(() => expect(saved()).toBe(true));
+  expect(boundary.post).toHaveBeenCalledWith(
+    `${RESERVATION}update_table_reservation`,
+    expect.objectContaining({ reservation_name: 'TR-1', table: 'Table 1', notes: 'Needs high chair' }),
+  );
+});
+
+it('clears the booking table when the edit moves the time and the table is unavailable for the new slot', async () => {
+  const TABLE_2 = { ...TABLE_1, name: 'Table 2' };
+  boundary.get.mockImplementation(async (endpoint: string) => {
+    if (endpoint === `${RESERVATION}get_branch_reservation_settings`) return { message: boundary.settings };
+    if (endpoint === `${RESERVATION}get_active_reservations`) return { message: [BOOKING] };
+    if (endpoint === `${RESERVATION}get_available_tables_for_reservation`) return { message: [TABLE_2] };
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  });
+  const dialog = await openEdit();
+  const tableInput = dialog.querySelector('#edit-reservation-table') as HTMLInputElement;
+  expect(tableInput.value).toContain('Table 1');
+
+  await act(async () => {
+    fireEvent.change(within(dialog).getByDisplayValue('19:00'), { target: { value: '19:30' } });
+  });
+  await waitFor(() => expect(tableInput.value).toBe(''));
+  expect(within(dialog).getByRole('button', { name: /save changes/i })).toBeDisabled();
+});
+
 it('a negative notice accepts a time that many minutes back, and no further', async () => {
   boundary.settings = { ...boundary.settings, min_reservation_notice: -5 };
   const dialog = await openEdit();
