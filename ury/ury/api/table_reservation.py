@@ -1442,19 +1442,21 @@ def complete_seated_reservation_on_submit(doc, method=None):
     if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
         return
     branch = doc.get("branch")
-    tables = _invoice_tables(doc)
-    if not tables or not reservations_enabled(branch):
+    if not reservations_enabled(branch):
         return
+    tables = _invoice_tables(doc)
     try:
-        seated_by_name = {
-            res.name: res
+        family_checks = _split_family_check_names(doc)
+        if not tables and not family_checks:
+            return
+        seated_by_name = {}
+        if tables:
             for res in frappe.db.get_all(
                 "URY Table Reservation",
                 filters={"reserved_table": ["in", tables], "branch": branch, "status": "Seated"},
                 fields=["name", "reserved_at", "pos_invoice"],
-            )
-        }
-        family_checks = _split_family_check_names(doc)
+            ):
+                seated_by_name[res.name] = res
         if family_checks:
             for res in frappe.db.get_all(
                 "URY Table Reservation",
