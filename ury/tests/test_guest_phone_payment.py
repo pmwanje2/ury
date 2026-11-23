@@ -69,7 +69,7 @@ class TestGuestPhonePayment(unittest.TestCase):
 
     def test_missing_gateway_refuses_with_stable_id_without_creating_request(self):
         frappe.db.delete("Payment Gateway Account", {"name": self.gateway.name})
-        with self.assertRaisesRegex(frappe.ValidationError, "URY-PAYMENT-NOT-CONFIGURED") as raised:
+        with self.assertRaisesRegex(frappe.ValidationError, "POS-PAYMENT-NOT-CONFIGURED") as raised:
             create_payment_request(self.token)
         self.assertNotIsInstance(raised.exception, frappe.PermissionError)
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 0)
@@ -84,7 +84,7 @@ class TestGuestPhonePayment(unittest.TestCase):
             with self.assertRaises(frappe.ValidationError) as raised:
                 create_payment_request(self.token)
         message = str(raised.exception)
-        self.assertTrue(message.startswith("[URY-PAYMENT-NOT-CONFIGURED] "))
+        self.assertTrue(message.startswith("[POS-PAYMENT-NOT-CONFIGURED] "))
         self.assertIn("Please pay at the counter", message)
         # The guest copy is the base text the Arabic catalogue already translates.
         self.assertEqual(translated,
@@ -95,7 +95,7 @@ class TestGuestPhonePayment(unittest.TestCase):
         logged = log_error.call_args.kwargs
         self.assertEqual((logged["reference_doctype"], logged["reference_name"]),
             ("POS Profile", self.pos.profile.name))
-        self.assertIn("URY-PAYMENT-NOT-CONFIGURED", logged["title"])
+        self.assertIn("POS-PAYMENT-NOT-CONFIGURED", logged["title"])
         self.assertIn("Payment Gateway Account", logged["message"])
         # The refusal rolls the request back; only a deferred log survives it.
         self.assertTrue(logged["defer_insert"])
@@ -104,7 +104,7 @@ class TestGuestPhonePayment(unittest.TestCase):
         frappe.db.delete("POS Payment Method", {"parent": self.pos.profile.name,
             "mode_of_payment": "P2 Phone"})
         frappe.clear_cache(doctype="POS Profile")
-        with self.assertRaisesRegex(frappe.ValidationError, "URY-PAYMENT-NOT-CONFIGURED"):
+        with self.assertRaisesRegex(frappe.ValidationError, "POS-PAYMENT-NOT-CONFIGURED"):
             create_payment_request(self.token)
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 0)
 
@@ -343,7 +343,7 @@ class TestGuestPhonePayment(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError) as raised:
             create_payment_request(self.token)
         self.assertIn("A payment for this order is already in progress", str(raised.exception))
-        self.assertIn("URY-PAYMENT-IN-PROGRESS", str(raised.exception))
+        self.assertIn("POS-PAYMENT-IN-PROGRESS", str(raised.exception))
         self.assertNotIsInstance(raised.exception, frappe.PermissionError)
         self.assertNotIn("Another Payment Request", str(raised.exception))
         self.assertEqual(frappe.db.get_value("Payment Request", first["payment_request"], "docstatus"), 1)
@@ -364,7 +364,7 @@ class TestGuestPhonePayment(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError) as raised:
             create_payment_request(self.token)
         self.assertIn("A payment for this order is already in progress", str(raised.exception))
-        self.assertIn("URY-PAYMENT-IN-PROGRESS", str(raised.exception))
+        self.assertIn("POS-PAYMENT-IN-PROGRESS", str(raised.exception))
         self.assertEqual(frappe.db.get_value("Payment Request", cashier.name, ["docstatus", "status"]),
             (1, "Requested"))
         self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)

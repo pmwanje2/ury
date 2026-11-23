@@ -235,8 +235,9 @@ describe('translated ERP refusals', () => {
   })
 
   it.each([
-    ['Call waiter', 'request_assistance', 'URY-GUEST-ASSISTANCE-DISABLED', 'Calling a waiter is not enabled here.'],
-    ['Call waiter', 'request_assistance', 'URY-GUEST-NO-ACTIVE-ORDER', 'There is no open order at this table yet.'],
+    ['Call waiter', 'request_assistance', 'POS-GUEST-ASSISTANCE-DISABLED', 'Calling a waiter is not enabled here.'],
+    ['Call waiter', 'request_assistance', 'POS-GUEST-NO-ACTIVE-ORDER', 'There is no open order at this table yet.'],
+    ['Call waiter', 'request_assistance', 'MAX-GUEST-NO-ACTIVE-ORDER', 'There is no open order at this table yet.'],
   ])('shows a %s refusal without its id', async (label, method, id, sentence) => {
     writes.mockImplementation(async (path) => {
       if (path.endsWith(method)) throw { _server_messages: JSON.stringify([JSON.stringify({ message: `[${id}] ${sentence}` })]) }
@@ -251,7 +252,7 @@ describe('translated ERP refusals', () => {
   it('shows a Request Bill refusal without its id', async () => {
     const sentence = 'Requesting the bill is not enabled here.'
     writes.mockImplementation(async (path) => {
-      if (path.endsWith('request_bill')) throw { _server_messages: JSON.stringify([JSON.stringify({ message: `[URY-GUEST-BILL-DISABLED] ${sentence}` })]) }
+      if (path.endsWith('request_bill')) throw { _server_messages: JSON.stringify([JSON.stringify({ message: `[POS-GUEST-BILL-DISABLED] ${sentence}` })]) }
       return { message: { status: 'Requested', request: 'REQ-1' } }
     })
     await render()
@@ -260,7 +261,7 @@ describe('translated ERP refusals', () => {
     await click(container.querySelector<HTMLButtonElement>('.border-t button') ?? undefined, 'checkout')
     await click(button('Request Bill'), 'Request Bill')
     expect(container.textContent).toContain(sentence)
-    expect(container.textContent).not.toContain('URY-GUEST-BILL-DISABLED')
+    expect(container.textContent).not.toContain('POS-GUEST-BILL-DISABLED')
   })
 
   it('never renders raw validation messages from order submission', async () => {

@@ -818,7 +818,7 @@ class TestPOSOpeningOccupancy(unittest.TestCase):
     def test_unavailable_profile_cannot_disclose_occupancy(self):
         from ury.ury_pos.api import get_pos_opening_screen_data
 
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-OPENING-PROFILE-NOT-ALLOWED\]"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"\[POS-OPENING-PROFILE-NOT-ALLOWED\]"):
             get_pos_opening_screen_data(pos_profile="Forbidden POS")
         self.frappe.get_all.assert_not_called()
 
