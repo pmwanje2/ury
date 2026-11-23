@@ -66,7 +66,7 @@ const OrderStatusSidebar = ({
                   <span className="relative shrink-0">
                     <FileText className="h-4 w-4 text-gray-500" />
                     {count !== undefined && (
-                      <span className="absolute -end-3 -top-2 min-w-4 rounded-full bg-gray-800 px-1 text-center text-[10px] font-semibold leading-4 tabular-nums text-white">
+                      <span className="absolute -end-2 -top-2 min-w-4 rounded-full bg-gray-800 px-1 text-center text-[10px] font-semibold leading-4 tabular-nums text-white">
                         {count}
                       </span>
                     )}
