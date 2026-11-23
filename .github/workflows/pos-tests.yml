@@ -38,6 +38,9 @@ jobs:
         run: npm --prefix ../packages/ui test --offline -- --maxWorkers=1
       - name: Run serve tests
         run: npm --prefix ../serve test --offline -- --maxWorkers=1
+      # The print-format tests render with the Jinja2 and MarkupSafe that Frappe v16 pins.
+      - name: Install print Jinja
+        run: 'python3 -m pip install --user --break-system-packages --no-deps --only-binary=:all: --require-hashes -r ../ury/ury/print_format/print-jinja-requirements.txt'
       - name: Run site-less Python tests
         run: |
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_offline_capture_fixture
