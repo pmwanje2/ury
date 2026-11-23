@@ -38,3 +38,14 @@ it("without labels the rows still show the customer", async () => {
   const found = await rows([check("INV-A", null, 1), check("INV-B", "", 2)]);
   expect(found.every((row) => row.includes("Walk In") && !row.includes(" · Walk In"))).toBe(true);
 });
+
+it("does not repeat a customer the guest label already names", async () => {
+  const named = {
+    ...check("INV-A", "Dr. Elena Rostova (Rm 408)", 1),
+    customer: "Dr. Elena Rostova", customer_name: "Dr. Elena Rostova",
+  } as SplitGroupInvoice;
+  const [first, second] = await rows([named, check("INV-B", "David", 2)]);
+  expect(first).toContain("Dr. Elena Rostova (Rm 408)");
+  expect(first).not.toContain("(Rm 408) · Dr. Elena Rostova");
+  expect(second).toContain("David · Walk In");
+});
