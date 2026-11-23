@@ -66,6 +66,7 @@ export interface TableReservation {
   comments?: string;
   status: 'Requested' | 'Confirmed' | 'Seated' | 'Completed' | 'Cancelled' | 'No Show';
   cancel_reason?: string;
+  pos_invoice?: string;
   is_lock_window_active?: boolean;
   buffer_minutes?: number;
   grace_minutes?: number;

@@ -503,6 +503,7 @@
     "status_no_show": "No Show",
     "status_seated": "Seated",
     "seat_action": "Seat guest",
+    "unseat_action": "Unseat",
     "seat_title": "Seat Guest",
     "seat_description": "Seat the party at table {{table}} ({{time}}) and open their order.",
     "cancel_reason_label": "Cancellation Reason",

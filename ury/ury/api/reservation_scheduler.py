@@ -4,7 +4,11 @@
 import frappe
 from frappe.utils import now_datetime, get_datetime, cint
 from datetime import timedelta
-from ury.ury.api.table_reservation import get_branch_reservation_settings
+from ury.ury.api.table_reservation import (
+    end_seated_visit,
+    get_branch_reservation_settings,
+    seated_visit_has_ended,
+)
 
 
 def process_reservation_no_shows():
@@ -12,16 +16,18 @@ def process_reservation_no_shows():
     Scheduled background task and inline API processor that automatically marks
     Confirmed reservations as 'No Show' when current time exceeds reservation_time + grace_period.
     Supports branch-specific custom_grace_period and exact expiration time (>=).
+    It also ends a Seated visit that has no open check once its table was
+    cleared or its hold ran out (Completed, with no bill).
     reserved_at is a site-local naive datetime, so it is compared with the site
     clock only; a booking is never judged against another time zone.
     """
     now = now_datetime()
 
-    # Get all Confirmed reservations
+    # Get all Confirmed and Seated reservations
     confirmed_reservations = frappe.db.get_all(
         "URY Table Reservation",
-        filters={"status": "Confirmed"},
-        fields=["name", "branch", "reserved_at", "reserved_table"],
+        filters={"status": ["in", ["Confirmed", "Seated"]]},
+        fields=["name", "branch", "reserved_at", "reserved_table", "status"],
     )
 
     if not confirmed_reservations:
@@ -40,6 +46,11 @@ def process_reservation_no_shows():
 
         # A branch that turned reservations off keeps its records as they are.
         if not cint(branch_settings_cache[b].get("enable_reservation", 0)):
+            continue
+
+        if res.status == "Seated":
+            if seated_visit_has_ended(res, branch_settings_cache[b], now) and end_seated_visit(res.name):
+                updated_count += 1
             continue
 
         grace_mins = cint(branch_settings_cache[b].get("grace_period", 0))
