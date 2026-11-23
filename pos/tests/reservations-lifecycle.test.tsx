@@ -108,6 +108,7 @@ it('Seated has its own filter and badge', async () => {
 
 it('a cancellation cannot be sent without a reason and sends the one typed', async () => {
   boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true }];
   await openBook();
   const menu = [...document.querySelectorAll('button')]
     .filter(button => !button.textContent?.trim() && !button.getAttribute('aria-label'));
@@ -123,6 +124,77 @@ it('a cancellation cannot be sent without a reason and sends the one typed', asy
   await act(async () => { fireEvent.click(confirm); });
   await waitFor(() => expect(boundary.post).toHaveBeenCalledWith(`${RESERVATION}update_reservation_status`,
     expect.objectContaining({ reservation_name: 'TR-1', status: 'Cancelled', cancel_reason: 'Guest called' })));
+});
+
+const actionMenus = () => [...document.querySelectorAll('button')]
+  .filter(button => !button.textContent?.trim() && !button.getAttribute('aria-label'));
+
+it('offers Cancel on exactly the bookings the server says this user may cancel, whatever the roles', async () => {
+  // The server evaluates the native cancel_reservation permission per booking (owner and
+  // User Permission included); the POS never guesses it from role names.
+  boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: false },
+    { ...booking('TR-2', 'Table 2', 'Ada', 'Confirmed', '20:00'), can_cancel: true }];
+  await openBook();
+  const menus = actionMenus();
+  expect(menus).toHaveLength(2);
+  await act(async () => { fireEvent.click(menus[0]); });
+  expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /cancel reservation/i })).toBeNull();
+  await act(async () => { fireEvent.click(menus[1]); });
+  expect(screen.getByRole('button', { name: /cancel reservation/i })).toBeInTheDocument();
+});
+
+it('offers Mark as No Show on exactly the bookings the server says this user may mark', async () => {
+  // Simphony 32007 Mark as No Show is its own privilege, apart from 32012 Cancel Reservation
+  // Entry: the server evaluates the native mark_no_show permission per booking.
+  boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  boundary.reservations = [
+    { ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true, can_mark_no_show: false },
+    { ...booking('TR-2', 'Table 2', 'Ada', 'Confirmed', '20:00'), can_cancel: false, can_mark_no_show: true },
+  ];
+  await openBook();
+  const menus = actionMenus();
+  expect(menus).toHaveLength(2);
+  await act(async () => { fireEvent.click(menus[0]); });
+  expect(screen.getByRole('button', { name: /cancel reservation/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /mark as no show/i })).toBeNull();
+  await act(async () => { fireEvent.click(menus[1]); });
+  expect(screen.queryByRole('button', { name: /cancel reservation/i })).toBeNull();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /mark as no show/i })); });
+  await waitFor(() => expect(boundary.post).toHaveBeenCalledWith(`${RESERVATION}update_reservation_status`,
+    expect.objectContaining({ reservation_name: 'TR-2', status: 'No Show' })));
+});
+
+it('a captain the server does not let mark No Show never sees it', async () => {
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: false }];
+  await openBook();
+  await act(async () => { fireEvent.click(actionMenus()[0]); });
+  expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /mark as no show/i })).toBeNull();
+});
+
+it('a refused No Show is shown to the host', async () => {
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_mark_no_show: true }];
+  boundary.post.mockRejectedValue(new Error('Not permitted to change reservation status to No Show.'));
+  await openBook();
+  await act(async () => { fireEvent.click(actionMenus()[0]); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /mark as no show/i })); });
+  await waitFor(() => expect(showToast.error).toHaveBeenCalledWith('Not permitted to change reservation status to No Show.'));
+});
+
+it('a hotel desk the server lets cancel sees Cancel without any till role', async () => {
+  boundary.user = { name: 'desk@fixture.invalid', roles: ['Front Desk'] };
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true }];
+  await openBook();
+  await act(async () => { fireEvent.click(actionMenus()[0]); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /cancel reservation/i })); });
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByRole('textbox', { name: /cancellation reason/i }),
+    { target: { value: 'Guest called the hotel' } });
+  await act(async () => { fireEvent.click(within(dialog).getAllByRole('button', { name: /cancel reservation/i }).at(-1)!); });
+  await waitFor(() => expect(boundary.post).toHaveBeenCalledWith(`${RESERVATION}update_reservation_status`,
+    expect.objectContaining({ reservation_name: 'TR-1', status: 'Cancelled', cancel_reason: 'Guest called the hotel' })));
 });
 
 it('the timeline shows bookings per table and opens one on click', async () => {
@@ -175,6 +247,8 @@ it('a refused seat is shown to the host, who stays on the book', async () => {
 
 it('a refused cancellation is shown to the host', async () => {
   boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  // The server reports which bookings this user may cancel (merged with #140 R2).
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true }];
   boundary.post.mockRejectedValue(new Error('Not permitted to change reservation status to Cancelled.'));
   await openBook();
   const menu = [...document.querySelectorAll('button')]
@@ -192,6 +266,8 @@ it('a refused cancellation is shown to the host', async () => {
 
 it('the cancellation reason is capped at the stored field length', async () => {
   boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  // The server reports which bookings this user may cancel (merged with #140 R2).
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Confirmed'), can_cancel: true }];
   await openBook();
   const menu = [...document.querySelectorAll('button')]
     .filter(button => !button.textContent?.trim() && !button.getAttribute('aria-label'));

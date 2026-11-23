@@ -27,6 +27,31 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[2]
 DAY = "2026-11-23"
+RESERVATION = "URY Table Reservation"
+RESERVATION_META = json.loads(
+    (ROOT / "ury/doctype/ury_table_reservation/ury_table_reservation.json").read_text())
+
+# The permission model below mirrors pinned Frappe v16 (pmwanje2/frappe
+# maximus/v16.60.2 @ 88a9cee0) so a contract cannot pass here and fail on a site:
+#   rights        frappe/permissions.py:13-28 std_rights, :784-788 get_rights (+ Permission Types)
+#   role perms    frappe/permissions.py:281-337 get_role_permissions (permlevel 0, if_owner)
+#   doc perms     frappe/permissions.py:229-278 get_doc_permissions (owner, User Permission)
+#   row scope     frappe/permissions.py:350-480 has_user_permission (doctype itself, then link fields)
+#   Custom DocPerm frappe/model/meta.py:637-650 set_custom_permissions REPLACES DocPerm
+#   list scope    frappe/database/query.py:1600-1645, 1704-1752, 1826-1842 (owner OR User Permission)
+#   entry point   frappe/__init__.py:613-657 has_permission (no print_logs argument; logs only on throw)
+# Shares are not modelled: they only ever add access, so leaving them out never lets a contract pass.
+STD_RIGHTS = ("select", "read", "write", "create", "delete", "submit", "cancel", "amend", "print",
+    "email", "report", "import", "export", "share")
+# Permission Types an app ships live in <module>/permission_type/<name>/<name>.json
+# (frappe/model/sync.py:18-23 imports them before DocTypes, so DocPerm has their column).
+PERMISSION_TYPES = [json.loads(path.read_text()) for path in sorted(ROOT.glob("*/permission_type/*/*.json"))]
+RIGHTS = STD_RIGHTS + tuple(pt["perm_type"] for pt in PERMISSION_TYPES if pt.get("doc_type") == RESERVATION)
+# The DocPerm rows the DocType ships. A tenant's Custom DocPerm replaces them wholesale.
+SHIPPED_DOCPERM = [dict(perm, permlevel=perm.get("permlevel", 0), if_owner=perm.get("if_owner", 0))
+    for perm in RESERVATION_META["permissions"]]
+LINK_FIELDS = [(f["fieldname"], f["options"]) for f in RESERVATION_META["fields"]
+    if f["fieldtype"] == "Link" and not f.get("ignore_user_permissions")]
 
 
 class Invalid(Exception):
@@ -68,14 +93,22 @@ class Site:
         self.now = at("12:00")
         self.rows = {doctype: {} for doctype in (
             "Branch", "URY Room", "URY Table", "URY Table Reservation", "POS Invoice",
-            "POS Profile", "User",
+            "POS Profile", "POS Profile User", "User",
         )}
+        self.session = SimpleNamespace(user="staff@example.test")
+        self.user_roles = {}  # user -> roles (Has Role) for users a test names
+        self.session_roles = []  # roles of whoever holds the session, unless named above
+        self.user_permission_rows = {}  # user -> {doctype: allowed names} (User Permission)
         self.roles = ["System Manager"]
+        self.custom_docperm = []  # Custom DocPerm rows on URY Table Reservation; any row replaces DocPerm
+        self.strict_user_permissions = False  # System Settings.apply_strict_user_permissions
+        self.closed_till_average = None  # minutes; set when a till has closed (see _Site.till_closed)
+        self.versions = []  # what Frappe's Version log records for each tracked save
         self.errors = []
+        self.message_log = []  # frappe.local.message_log -> HTTP _server_messages
         self.sql_log = []
         self.events = []  # ordered row locks and SQL reads, for concurrency contracts
         self.fail_writes = set()
-        self.versions = []  # Version rows: track_changes records who changed a status
         # MariaDB 11.8 runs innodb_snapshot_isolation=ON: a locking read that meets a
         # row committed after this request's snapshot raises 1020 instead of reading it.
         self.committed_after_snapshot = False
@@ -85,6 +118,49 @@ class Site:
     def meta(self, doctype):
         fields = {f["fieldname"]: Row(f) for f in self.custom_fields if f.get("dt") == doctype}
         return SimpleNamespace(get_field=fields.get)
+
+    # -- users -------------------------------------------------------------------
+    @property
+    def roles(self):
+        """The session user's roles."""
+        return self.roles_of(self.session.user)
+
+    @roles.setter
+    def roles(self, value):
+        if self.session.user in self.user_roles:
+            self.user_roles[self.session.user] = list(value)
+        else:
+            self.session_roles = list(value)
+
+    @property
+    def user_permissions(self):
+        """The session user's User Permission rows: doctype -> allowed names."""
+        return self.user_permission_rows.setdefault(self.session.user, {})
+
+    def login(self, user, roles=None):
+        self.session.user = user
+        if roles is not None:
+            self.user_roles[user] = list(roles)
+
+    def roles_of(self, user):
+        if user in self.user_roles:
+            return list(self.user_roles[user])
+        return list(self.session_roles) if user == self.session.user else []
+
+    # -- Role Permission Manager ---------------------------------------------------
+    def docperms(self):
+        """Meta.set_custom_permissions: any Custom DocPerm row replaces the shipped DocPerm."""
+        return self.custom_docperm or SHIPPED_DOCPERM
+
+    def copy_shipped_docperms(self):
+        """permissions.setup_custom_perms: the first edit copies DocPerm into Custom DocPerm."""
+        if not self.custom_docperm:
+            self.custom_docperm = [dict(perm) for perm in SHIPPED_DOCPERM]
+
+    def grant(self, role, *ptypes, if_owner=0):
+        """A tenant rule added in Role Permission Manager (Custom DocPerm)."""
+        self.copy_shipped_docperms()
+        self.custom_docperm.append(dict({p: 1 for p in ptypes}, role=role, permlevel=0, if_owner=if_owner))
 
     # -- storage -----------------------------------------------------------------
     def put(self, doctype, name, /, **values):
@@ -105,7 +181,9 @@ class Site:
             value = row.get(key)
             if isinstance(condition, (list, tuple)):
                 op, operand = condition[0], condition[1]
-                if op == "in":
+                if op == "=":
+                    ok = value == operand
+                elif op == "in":
                     ok = value in operand
                 elif op == "not in":
                     ok = value not in operand
@@ -119,6 +197,8 @@ class Site:
                     ok = value != operand
                 elif op == "like":
                     ok = value is not None and operand.strip("%") in str(value)
+                elif op == "between":
+                    ok = value is not None and operand[0] <= value <= operand[1]
                 else:
                     raise AssertionError(f"unsupported filter {key}: {condition!r}")
             else:
@@ -139,19 +219,134 @@ class Site:
         return out
 
     def get_all(self, doctype, filters=None, fields=None, order_by=None, limit=None,
-            limit_page_length=None, pluck=None, **kwargs):
+            limit_page_length=None, pluck=None, or_filters=None, **kwargs):
         rows = self.select(doctype, filters)
+        if or_filters:
+            pairs = or_filters.items() if isinstance(or_filters, dict) else (
+                (f[0], f[1:] if len(f) > 2 else f[1]) for f in or_filters)
+            pairs = list(pairs)
+            rows = [row for row in rows if any(self.matches(row, {key: cond}) for key, cond in pairs)]
+        return self.shape(rows, fields, order_by, limit or limit_page_length, pluck)
+
+    def shape(self, rows, fields=None, order_by=None, limit=None, pluck=None):
+        rows = list(rows)
         if order_by:
             for clause in reversed([c.strip() for c in order_by.split(",")]):
                 field, _, direction = clause.partition(" ")
                 rows.sort(key=lambda r: (r.get(field) is None, r.get(field)),
                     reverse=direction.strip().lower() == "desc")
-        limit = limit or limit_page_length
         if limit:
             rows = rows[:limit]
         if pluck:
             return [row.get(pluck) for row in rows]
         return [self.project(row, fields or ["name"]) for row in rows]
+
+    # -- native permissions (frappe/permissions.py @ 88a9cee0) ------------------------
+    def throw(self, message, exc=Invalid):
+        """frappe.throw: appends to frappe.local.message_log (_server_messages) before raising."""
+        self.message_log.append(message)
+        raise exc(message)
+
+    def has_permission(self, doctype=None, ptype="read", doc=None, user=None, throw=False, *,
+            parent_doctype=None, debug=False, ignore_share_permissions=False):
+        """frappe.has_permission. Its signature is the pinned one: there is no print_logs."""
+        if not doctype and doc is not None:
+            doctype = doc.get("doctype")
+        user = user or self.session.user
+        allowed = self.permitted(doctype, ptype, doc, user)
+        if throw and not allowed:
+            self.throw(f"No permission for {doctype}", Refused)
+        return allowed
+
+    def permitted(self, doctype, ptype, doc, user):
+        if user == "Administrator":
+            return True
+        if doctype != RESERVATION:
+            return True  # other doctypes' DocPerm is outside these contracts
+        if isinstance(doc, str):
+            doc = self.rows[doctype][doc]  # frappe.get_lazy_doc
+        if doc is not None:
+            return bool(self.doc_permissions(doc, user).get(ptype))
+        return bool(self.role_permissions(user).get(ptype))
+
+    def role_permissions(self, user, is_owner=False):
+        """get_role_permissions: permlevel 0 rules for the user's roles, with if_owner."""
+        roles = self.roles_of(user)
+        rules = [p for p in self.docperms() if p["role"] in roles and int(p.get("permlevel") or 0) == 0]
+        has_if_owner = any(p.get("if_owner") for p in rules)
+        perms = {"if_owner": {}, "has_if_owner_enabled": has_if_owner}
+        for ptype in RIGHTS:
+            granted = any(p.get(ptype) for p in rules)
+            perms[ptype] = int(granted)
+            unconditional = any(p.get(ptype) and not p.get("if_owner") for p in rules)
+            if granted and has_if_owner and not unconditional and ptype != "create":
+                perms["if_owner"][ptype] = int(is_owner)
+                perms[ptype] = 1 if ptype in ("select", "read") else 0
+        return perms
+
+    def doc_permissions(self, doc, user):
+        """get_doc_permissions: role rules, owner rules on doc.owner, then User Permission."""
+        is_owner = (doc.get("owner") or "").lower() == user.lower()
+        perms = self.role_permissions(user, is_owner=is_owner)
+        perms = dict(perms, if_owner=dict(perms["if_owner"]), submit=0, **{"import": 0})
+        if perms["has_if_owner_enabled"]:
+            perms.update(perms["if_owner"])
+        if not self.has_user_permission(doc, user):
+            if not is_owner:
+                return {}
+            perms = dict(perms["if_owner"], create=0)
+        return perms
+
+    def has_user_permission(self, doc, user):
+        """has_user_permission: the doctype's own rows, then every link field."""
+        rows = self.user_permission_rows.get(user) or {}
+        if not rows:
+            return True
+        own = rows.get(RESERVATION)
+        if own and (not doc.get("name") or str(doc.get("name")) not in own):
+            return False
+        for fieldname, options in LINK_FIELDS:
+            value = doc.get(fieldname)
+            if not value and not self.strict_user_permissions:
+                continue
+            allowed = rows.get(options)
+            if allowed and str(value) not in allowed:
+                return False
+        return True
+
+    def get_list(self, doctype, filters=None, fields=None, user=None, **kwargs):
+        """frappe.get_list: role read, then (if_owner OR User Permission) row conditions."""
+        if "ignore_permissions" in kwargs:
+            raise AssertionError("get_list must not bypass permissions")
+        user = user or self.session.user
+        if doctype != RESERVATION or user == "Administrator":
+            return self.get_all(doctype, filters=filters, fields=fields, **kwargs)
+        perms = self.role_permissions(user)
+        if not (perms.get("read") or perms.get("select")):
+            raise Refused(f"No read permission on {doctype}")
+        names = {row.name for row in self.select(doctype) if self.listable(row, perms, user)}
+        visible = dict(filters or {})
+        visible["name"] = ["in", names]
+        if "name" in (filters or {}):
+            raise AssertionError("unsupported: a name filter on a permission-scoped list")
+        return self.get_all(doctype, filters=visible, fields=fields, **kwargs)
+
+    def listable(self, row, perms, user):
+        if perms["has_if_owner_enabled"] and perms["if_owner"] and not any(
+                perms.get(p) and p not in perms["if_owner"] for p in ("select", "read")):
+            return row.get("owner") == user  # requires_owner_constraint
+        rows = self.user_permission_rows.get(user) or {}
+        for fieldname, options in [("name", RESERVATION), *LINK_FIELDS]:
+            allowed = rows.get(options)
+            if not allowed:
+                continue
+            value = row.get(fieldname)
+            if self.strict_user_permissions:
+                if value not in allowed:
+                    return False
+            elif value and value not in allowed:
+                return False
+        return True
 
     def get_value(self, doctype, name=None, fieldname="name", as_dict=False, for_update=False, **kwargs):
         if for_update:
@@ -186,7 +381,12 @@ class Site:
         self.events.append(("sql", q))
         params = list(params) if isinstance(params, (list, tuple)) else params
         if "`tabPOS Closing Entry`" in q:
-            return []  # no till has closed yet, so table-time averages are unset
+            if self.closed_till_average is None:
+                return []  # no till has closed yet, so table-time averages are unset
+            return [Row(closing_entry="CLS-1", pos_opening_entry="OPN-1", branch=params.get("branch"),
+                period_start_date=at("08:00"), period_end_date=at("11:00"))]
+        if "AS `avg_table_time` FROM `tabPOS Invoice` inv" in q:
+            return [Row(avg_table_time=self.closed_till_average)]
         if "FROM `tabURY Table` t" in q:
             branch = params[0]
             rooms = {r.name for r in self.rows["URY Room"].values() if r.branch == branch}
@@ -258,8 +458,15 @@ class FakeDocument:
     def get_doc_before_save(self):
         return self._before
 
+    def has_permission(self, permtype="read", *, debug=False, user=None):
+        """Document.has_permission: a flagged system save skips the check."""
+        if self.flags.ignore_permissions:
+            return True
+        return self.site.has_permission(self.doctype, permtype, self, user=user)
+
     def check_permission(self, ptype="read"):
-        return True  # native DocPerm is outside these contracts
+        if not self.has_permission(ptype):
+            self.site.throw(f"No {ptype} permission on {self.doctype} {self.name}", Refused)
 
     def validate(self):
         pass
@@ -269,13 +476,18 @@ class FakeDocument:
 
     def save(self, ignore_permissions=False):
         self.flags.ignore_permissions = ignore_permissions
+        if not ignore_permissions:
+            self.check_permission("write")
         self.validate()
         self.__dict__["modified"] = self.site.now
+        self.__dict__["modified_by"] = self.site.session.user
         self.site.write(self.doctype, self.name, self.values())
         before = self._before
-        if before is not None and before.get("status") != self.status:
-            # URY Table Reservation tracks changes: the Version names the session user.
-            self.site.versions.append(Row(docname=self.name, owner=sys.modules["frappe"].session.user,
+        if before is not None and any(before.get(k) != v for k, v in self.values().items()
+                if k not in ("modified", "modified_by")):
+            # URY Table Reservation tracks changes: a Version for every save of an
+            # existing booking that changed something, naming the session user.
+            self.site.versions.append(Row(docname=self.name, owner=self.site.session.user,
                 status=(before.get("status"), self.status)))
         self.on_update()
         self.__dict__["_before"] = Row(self.values())
@@ -333,13 +545,18 @@ def _framework(site):
     fr.ValidationError = Invalid
     fr.PermissionError = Refused
     fr.QueryDeadlockError = Deadlock
-    fr.session = SimpleNamespace(user="staff@example.test")
+    fr.session = site.session
     fr.flags = SimpleNamespace()
-    fr.throw.side_effect = lambda message, exc=Invalid, *a, **k: (_ for _ in ()).throw(exc(message))
+    fr.local = SimpleNamespace(message_log=site.message_log)
+    fr.message_log = site.message_log
+    fr.throw.side_effect = lambda message, exc=Invalid, *a, **k: site.throw(message, exc)
+    fr.msgprint.side_effect = lambda message, *a, **k: site.message_log.append(message)
     fr.log_error.side_effect = lambda *a, **k: site.errors.append((a, k))
     fr.get_traceback.return_value = "traceback"
-    fr.get_roles.side_effect = lambda user=None: list(site.roles)
+    fr.get_roles.side_effect = lambda user=None: site.roles_of(user or site.session.user)
     fr.get_all.side_effect = site.get_all
+    fr.get_list.side_effect = site.get_list
+    fr.has_permission.side_effect = site.has_permission
     fr.get_meta.side_effect = site.meta
     fr.db = SimpleNamespace(
         get_value=site.get_value, get_all=site.get_all, exists=site.exists,
@@ -406,18 +623,28 @@ class _Site(unittest.TestCase):
             minimum_seating=minimum, occupied=occupied, latest_invoice_time=None, is_take_away=0)
 
     def booking(self, name, clock, table="T1", status="Confirmed", branch="Branch A", created=None,
-            guest="Grace", pax=4, modified=None, **extra):
+            guest="Grace", pax=4, modified=None, owner="staff@example.test", **extra):
         return self.site.put("URY Table Reservation", name, doctype="URY Table Reservation",
             branch=branch, reserved_table=table, customer="CUST-1", customer_name=guest,
             customer_phone="+256772123456", no_of_pax=pax, reserved_at=at(clock), status=status,
             creation=at(created) if created else self.site.now, modified=modified or self.site.now,
-            reserved_by="staff@example.test", **extra)
+            owner=owner, reserved_by=extra.pop("reserved_by", owner), **extra)
 
     def status(self, name):
         return self.site.rows["URY Table Reservation"][name].status
 
     def clock(self, value):
         self.site.now = at(value)
+
+    def till_closed(self, average, branch="Branch A"):
+        """A till closed after tables averaged `average` minutes.
+
+        The sales history then yields that average, and closing the till stored it
+        on the Branch (update_branch_avg_table_times writes both fields).
+        """
+        self.site.closed_till_average = average
+        self.site.rows["Branch"][branch].update(
+            custom_avg_table_time_last_day=average, custom_avg_table_time_last_week=average)
 
     def till(self, billing_roles=(), manager_roles=()):
         self.site.put("POS Profile", "Till A", branch="Branch A", disabled=0,
@@ -594,17 +821,353 @@ class TestSeatedLifecycle(_Site):
         self.assertEqual(field["mandatory_depends_on"], "eval:doc.status=='Cancelled'")
         self.assertEqual(meta["field_order"][meta["field_order"].index("status") + 1], "cancel_reason")
 
-    def test_a_captain_without_a_billing_role_may_seat_but_not_cancel(self):
-        self.site.roles = ["URY Captain"]
-        self.till(billing_roles=["URY Cashier"], manager_roles=["URY Manager"])
-        self.clock("18:55")
+
+class _Privileges(_Site):
+    """Bookings and save paths for the reservation privilege contracts."""
+
+    DESK = "desk@hotel.example.test"
+
+    def setUp(self):
+        super().setUp()
+        for name in ("T4", "T5", "T6"):
+            self.table(name, 4)
+        self.clock("18:00")
         self.booking("TR-1", "19:00")
         self.booking("TR-2", "21:00", table="T2")
+
+    def cancel(self, name, reason="Guest called"):
+        self.api.update_reservation_status(name, "Cancelled", cancel_reason=reason)
+
+    def refused(self, call, name):
+        before = self.status(name)
+        with self.assertRaises(Refused):
+            call()
+        self.assertEqual(self.status(name), before)
+
+    def desk_save(self, name, status, reason=None):
+        """A Desk or REST save that changes the status field directly."""
+        doc = self.get_doc(RESERVATION, name)
+        doc.status = status
+        doc.cancel_reason = reason
+        doc.save()
+
+
+class TestCancellingIsItsOwnPrivilege(_Privileges):
+    """D4: seating and cancelling are separate privileges (Paul, 2026-11-23).
+
+    Simphony Guest Management grants them as separate employee-class
+    operations: greeting and seating the arriving party (32006 Greet Wait
+    List Entry) and 32012 Cancel Reservation Entry, which hosts, concierge and
+    managers hold and waiters do not. URY ships that privilege as the native
+    Frappe v16 Permission Type cancel_reservation on URY Table Reservation:
+    captains keep write (they seat and edit) without it; the till's cashier
+    and manager roles hold it; a tenant grants it to Front Desk, Hotel Admin
+    and F&B Manager as Custom DocPerm. Completing a Seated party by hand
+    needs the same privilege; closing its bill does not (R3, see
+    TestClosingTheCheckCompletesTheVisitWithoutAReservationPrivilege).
+    """
+
+    PTYPE_FILE = ROOT / ("ury/permission_type/ury_table_reservation_cancel_reservation/"
+        "ury_table_reservation_cancel_reservation.json")
+
+    def test_the_app_ships_cancel_reservation_as_a_native_permission_type(self):
+        self.assertTrue(self.PTYPE_FILE.exists(), "URY ships no cancel_reservation Permission Type")
+        ptype = json.loads(self.PTYPE_FILE.read_text())
+        # PermissionType.autoname is scrub(doc_type) + "_" + scrub(perm_type); sync reads <name>/<name>.json.
+        self.assertEqual((ptype["doctype"], ptype["doc_type"], ptype["perm_type"], ptype["name"]),
+            ("Permission Type", RESERVATION, "cancel_reservation", self.PTYPE_FILE.stem))
+        self.assertIn("cancel_reservation", RIGHTS)
+
+    def test_the_shipped_docperm_gives_cancel_to_cashier_manager_and_system_manager_not_the_captain(self):
+        cancel = {perm["role"]: bool(perm.get("cancel_reservation")) for perm in SHIPPED_DOCPERM}
+        self.assertEqual(cancel, {"System Manager": True, "URY Manager": True, "URY Cashier": True,
+            "URY Captain": False})
+        captain = next(perm for perm in SHIPPED_DOCPERM if perm["role"] == "URY Captain")
+        self.assertEqual((captain.get("read"), captain.get("write")), (1, 1))  # still seats and edits
+
+    def test_a_captain_seats_and_edits_but_may_not_cancel_or_complete_by_hand(self):
+        self.site.roles = ["URY Captain"]
         self.api.update_reservation_status("TR-1", "Seated")
         self.assertEqual(self.status("TR-1"), "Seated")
-        with self.assertRaises(Refused):
-            self.api.update_reservation_status("TR-2", "Cancelled", cancel_reason="Guest called")
-        self.assertEqual(self.status("TR-2"), "Confirmed")
+        self.api.update_table_reservation("TR-2", no_of_pax=2)
+        self.assertEqual(self.site.rows[RESERVATION]["TR-2"].no_of_pax, 2)
+        self.refused(lambda: self.cancel("TR-2"), "TR-2")
+        self.refused(lambda: self.api.update_reservation_status("TR-1", "Completed"), "TR-1")
+        # A Desk or REST save of the status field meets the same rule.
+        self.refused(lambda: self.desk_save("TR-2", "Cancelled", "Guest called"), "TR-2")
+        self.refused(lambda: self.desk_save("TR-1", "Completed"), "TR-1")
+
+    def test_the_till_cashier_and_manager_cancel_and_complete_with_the_shipped_docperm(self):
+        for role, name in (("URY Cashier", "TR-1"), ("URY Manager", "TR-2")):
+            with self.subTest(role=role):
+                self.site.roles = [role]
+                self.cancel(name)
+                self.assertEqual(self.status(name), "Cancelled")
+        self.booking("TR-3", "17:30", table="T3", status="Seated")
+        self.site.roles = ["URY Cashier"]
+        self.api.update_reservation_status("TR-3", "Completed")
+        self.assertEqual(self.status("TR-3"), "Completed")
+
+    def test_a_hotel_desk_cancels_only_with_the_tenant_cancel_grant(self):
+        # Tenant configuration: Custom DocPerm copies the shipped rows, then adds the desks.
+        for role in ("Front Desk", "Hotel Admin", "F&B Manager"):
+            self.site.grant(role, "read", "write", "create", "cancel_reservation")
+        self.site.grant("Banquet Clerk", "read", "write", "create")
+        for role, name, table in (("Front Desk", "TR-4", "T4"), ("Hotel Admin", "TR-5", "T5"),
+                ("F&B Manager", "TR-6", "T6")):
+            with self.subTest(role=role):
+                self.site.roles = [role]
+                self.booking(name, "19:30", table=table)
+                self.api.update_table_reservation(name, no_of_pax=2)
+                self.cancel(name, reason="Guest called the hotel")
+                stored = self.site.rows[RESERVATION][name]
+                self.assertEqual((stored.no_of_pax, stored.status, stored.cancel_reason),
+                    (2, "Cancelled", "Guest called the hotel"))
+        # write alone edits and seats; it never cancels.
+        self.site.roles = ["Banquet Clerk"]
+        self.api.update_table_reservation("TR-2", no_of_pax=3)
+        self.refused(lambda: self.cancel("TR-2"), "TR-2")
+        self.site.roles = ["URY Captain"]  # the copied shipped rows still apply
+        self.refused(lambda: self.cancel("TR-1"), "TR-1")
+
+    def test_an_if_owner_cancel_grant_covers_only_the_bookings_that_desk_made(self):
+        self.site.grant("Front Desk", "read", "write", "create")
+        self.site.grant("Front Desk", "cancel_reservation", if_owner=1)
+        self.site.login(self.DESK, ["Front Desk"])
+        self.booking("TR-MINE", "19:30", table="T4", owner=self.DESK)
+        # if_owner reads the document owner, never the reserved_by field.
+        self.booking("TR-THEIRS", "20:00", table="T5", owner="other@hotel.example.test", reserved_by=self.DESK)
+        self.cancel("TR-MINE")
+        self.assertEqual(self.status("TR-MINE"), "Cancelled")
+        self.api.update_table_reservation("TR-THEIRS", no_of_pax=2)
+        self.refused(lambda: self.cancel("TR-THEIRS"), "TR-THEIRS")
+
+    def test_the_gate_decides_on_the_booking_never_on_the_role_alone(self):
+        self.site.roles = ["URY Cashier"]
+        gate = self.api.is_user_authorized_for_reservation_status_change
+        self.assertFalse(gate(doc=None))
+        self.assertTrue(gate(doc=self.get_doc(RESERVATION, "TR-1")))
+
+    def test_a_desk_scoped_to_another_branch_is_refused_even_as_a_till_billing_role(self):
+        # The old till fallback read POS Profile rows and ignored the booking's User Permission.
+        self.till(billing_roles=["Front Desk"])
+        self.site.grant("Front Desk", "read", "write", "create", "cancel_reservation")
+        self.site.login(self.DESK, ["Front Desk"])
+        self.site.user_permissions["Branch"] = {"Branch Off"}
+        self.assertFalse(self.api.is_user_authorized_for_reservation_status_change(
+            doc=self.get_doc(RESERVATION, "TR-1")))
+        self.refused(lambda: self.cancel("TR-1"), "TR-1")
+
+    def test_a_till_billing_or_manager_role_without_the_grant_does_not_cancel(self):
+        # #139's second path (the till's billing and manager roles) sat behind the write check
+        # every caller already made; the native grant is now the only path.
+        self.till(billing_roles=["Till Operator"], manager_roles=["Floor Lead"])
+        for role, name in (("Till Operator", "TR-1"), ("Floor Lead", "TR-2")):
+            with self.subTest(role=role):
+                self.site.grant(role, "read", "write")
+                self.site.roles = [role]
+                self.refused(lambda: self.cancel(name), name)
+
+    def test_a_cancellation_still_needs_a_reason(self):
+        self.site.roles = ["URY Cashier"]
+        for reason in (None, "   "):
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(Invalid, "reason"):
+                    self.api.update_reservation_status("TR-1", "Cancelled", cancel_reason=reason)
+                self.assertEqual(self.status("TR-1"), "Confirmed")
+
+    def test_the_captain_seats_and_the_cashier_s_bill_close_completes_the_party(self):
+        self.till(billing_roles=["URY Cashier"])
+        self.site.login("captain@example.test", ["URY Captain"])
+        self.api.update_reservation_status("TR-1", "Seated")
+        self.site.login("cashier@example.test", ["URY Cashier"])
+        self.api.complete_seated_reservation_on_submit(Row(doctype="POS Invoice", name="INV-1",
+            restaurant_table="T1", custom_merged_tables="", branch="Branch A", order_type="Dine In",
+            docstatus=1, is_return=0, creation=at("18:05")))
+        stored = self.site.rows[RESERVATION]["TR-1"]
+        self.assertEqual((stored.status, stored.pos_invoice), ("Completed", "INV-1"))
+
+    def test_the_reservation_list_says_who_may_cancel_each_booking(self):
+        self.site.grant("Front Desk", "read", "write", "create")
+        self.site.grant("Front Desk", "cancel_reservation", if_owner=1)
+        self.booking("TR-MINE", "19:30", table="T4", owner=self.DESK)
+        self.booking("TR-SEATED", "17:45", table="T5", status="Seated")
+
+        def listed(user, roles):
+            self.site.login(user, roles)
+            return {row.name: row.get("can_cancel") for row in self.api.get_active_reservations("Branch A")}
+
+        everyone_else = {"TR-1": False, "TR-2": False, "TR-SEATED": False}
+        self.assertEqual(listed("captain@example.test", ["URY Captain"]), dict(everyone_else, **{"TR-MINE": False}))
+        self.assertEqual(listed("cashier@example.test", ["URY Cashier"]),
+            {"TR-1": True, "TR-2": True, "TR-MINE": True, "TR-SEATED": False})
+        self.assertEqual(listed(self.DESK, ["Front Desk"]), dict(everyone_else, **{"TR-MINE": True}))
+
+
+class TestMarkingNoShowIsItsOwnPrivilege(_Privileges):
+    """R3: Simphony grants 32007 Mark as No Show apart from 32012 Cancel Reservation Entry.
+
+    URY ships it as the native Permission Type mark_no_show on URY Table
+    Reservation, with the same shipped DocPerm roles as cancel_reservation;
+    a tenant reassigns either in Role Permissions Manager. Every manual path
+    (API, REST, set_value, Desk save) needs it. The site clock's own No Show
+    after the grace period stays a system action.
+    """
+
+    NO_SHOW_FILE = ROOT / ("ury/permission_type/ury_table_reservation_mark_no_show/"
+        "ury_table_reservation_mark_no_show.json")
+
+    def setUp(self):
+        super().setUp()
+        self.clock("15:00")  # TR-1 (19:00) is four hours out, TR-2 (21:00) six
+
+    def no_show(self, name):
+        self.api.update_reservation_status(name, "No Show")
+
+    def test_the_app_ships_mark_no_show_as_a_native_permission_type(self):
+        self.assertTrue(self.NO_SHOW_FILE.exists(), "URY ships no mark_no_show Permission Type")
+        ptype = json.loads(self.NO_SHOW_FILE.read_text())
+        self.assertEqual((ptype["doctype"], ptype["doc_type"], ptype["perm_type"], ptype["name"]),
+            ("Permission Type", RESERVATION, "mark_no_show", self.NO_SHOW_FILE.stem))
+        self.assertIn("mark_no_show", RIGHTS)
+
+    def test_the_shipped_docperm_gives_mark_no_show_to_the_roles_that_hold_cancel(self):
+        no_show = {perm["role"]: bool(perm.get("mark_no_show")) for perm in SHIPPED_DOCPERM}
+        cancel = {perm["role"]: bool(perm.get("cancel_reservation")) for perm in SHIPPED_DOCPERM}
+        self.assertEqual(no_show, cancel)
+        self.assertEqual(no_show, {"System Manager": True, "URY Manager": True, "URY Cashier": True,
+            "URY Captain": False})
+
+    def test_a_captain_may_not_mark_a_future_booking_no_show_on_any_path(self):
+        # Neon R2: as a captain, update_reservation_status(TR, "No Show") four hours ahead and
+        # REST PUT {"status": "No Show"} five hours ahead both returned 200 and freed the table.
+        self.site.roles = ["URY Captain"]
+        self.refused(lambda: self.no_show("TR-1"), "TR-1")
+        # REST v1/v2 PUT, frappe.client.set_value and the Desk form all save the document.
+        self.refused(lambda: self.desk_save("TR-2", "No Show"), "TR-2")
+        doc = self.get_doc(RESERVATION, "TR-2")
+        doc.status = "No Show"
+        self.refused(lambda: doc.save(ignore_permissions=True), "TR-2")  # a flagged save is no bypass
+        self.assertEqual(self.site.versions, [])
+
+    def test_the_till_cashier_and_manager_mark_no_show_with_the_shipped_docperm(self):
+        for role, name in (("URY Cashier", "TR-1"), ("URY Manager", "TR-2")):
+            with self.subTest(role=role):
+                self.site.roles = [role]
+                self.no_show(name)
+                self.assertEqual(self.status(name), "No Show")
+
+    def test_a_tenant_grants_mark_no_show_and_cancel_apart(self):
+        self.site.grant("Front Desk", "read", "write", "create", "mark_no_show")
+        self.site.grant("Banquet Clerk", "read", "write", "create", "cancel_reservation")
+        self.site.roles = ["Front Desk"]
+        self.no_show("TR-1")
+        self.assertEqual(self.status("TR-1"), "No Show")
+        self.refused(lambda: self.cancel("TR-2"), "TR-2")
+        self.site.roles = ["Banquet Clerk"]
+        self.refused(lambda: self.no_show("TR-2"), "TR-2")
+        self.refused(lambda: self.desk_save("TR-2", "No Show"), "TR-2")
+        self.cancel("TR-2")
+        self.assertEqual(self.status("TR-2"), "Cancelled")
+
+    def test_an_if_owner_grant_marks_only_the_bookings_that_desk_made(self):
+        self.site.grant("Front Desk", "read", "write", "create")
+        self.site.grant("Front Desk", "mark_no_show", if_owner=1)
+        self.site.login(self.DESK, ["Front Desk"])
+        self.booking("TR-MINE", "19:30", table="T4", owner=self.DESK)
+        self.booking("TR-THEIRS", "20:00", table="T5", owner="other@hotel.example.test", reserved_by=self.DESK)
+        self.no_show("TR-MINE")
+        self.assertEqual(self.status("TR-MINE"), "No Show")
+        self.refused(lambda: self.no_show("TR-THEIRS"), "TR-THEIRS")
+
+    def test_the_site_clock_no_show_stays_a_system_action(self):
+        # A captain's floor read sweeps a booking past its grace: the system marks it,
+        # through a save (a Version, not the db_set fallback).
+        self.site.roles = ["URY Captain"]
+        self.clock("19:15")  # TR-1's 15 minute grace has ended
+        self.api.get_active_reservations("Branch A")
+        self.assertEqual((self.status("TR-1"), self.status("TR-2")), ("No Show", "Confirmed"))
+        self.assertEqual([v.status for v in self.site.versions if v.docname == "TR-1"],
+            [("Confirmed", "No Show")])
+
+    def test_the_system_transitions_open_no_other_status_change(self):
+        # Only the site clock's No Show and the bill close's Seated -> Completed are system moves.
+        self.site.roles = ["URY Captain"]
+        for transition, status in ((("Confirmed", "No Show"), "Cancelled"),
+                (("Seated", "Completed"), "No Show"), (("Confirmed", "Cancelled"), "Cancelled")):
+            with self.subTest(flag=transition, status=status):
+                doc = self.get_doc(RESERVATION, "TR-2")
+                doc.status = status
+                doc.cancel_reason = "Guest called"
+                doc.flags.system_transition = transition
+                self.refused(lambda: doc.save(ignore_permissions=True), "TR-2")
+
+    def test_the_reservation_list_says_who_may_mark_each_booking_no_show(self):
+        self.site.grant("Front Desk", "read", "write", "create")
+        self.site.grant("Front Desk", "mark_no_show", if_owner=1)
+        self.booking("TR-MINE", "19:30", table="T4", owner=self.DESK)
+        self.booking("TR-SEATED", "14:45", table="T5", status="Seated")
+        self.site.rows["URY Table"]["T5"].occupied = 1  # the party is still at its table
+
+        def listed(user, roles):
+            self.site.login(user, roles)
+            return {row.name: row.get("can_mark_no_show") for row in self.api.get_active_reservations("Branch A")}
+
+        everyone_else = {"TR-1": False, "TR-2": False, "TR-SEATED": False}
+        self.assertEqual(listed("captain@example.test", ["URY Captain"]), dict(everyone_else, **{"TR-MINE": False}))
+        self.assertEqual(listed("cashier@example.test", ["URY Cashier"]),
+            {"TR-1": True, "TR-2": True, "TR-MINE": True, "TR-SEATED": False})
+        self.assertEqual(listed(self.DESK, ["Front Desk"]), dict(everyone_else, **{"TR-MINE": True}))
+
+
+class TestThePermissionModelIsFrappes(_Site):
+    """The in-memory site is no more permissive than Frappe v16 (88a9cee0); see the module header."""
+
+    def test_a_custom_docperm_rule_replaces_the_shipped_docperm(self):
+        self.site.roles = ["URY Captain"]
+        # A tenant that adds only its own role, without copying the shipped rows, revokes them all.
+        self.site.custom_docperm = [dict(role="Front Desk", permlevel=0, if_owner=0, read=1, write=1)]
+        self.assertFalse(self.site.has_permission(RESERVATION, "write"))
+        self.site.custom_docperm = []
+        self.site.grant("Front Desk", "read", "write")  # copies the shipped rows first
+        self.assertTrue(self.site.has_permission(RESERVATION, "write"))
+
+    def test_the_list_applies_user_permission_and_if_owner_row_conditions(self):
+        self.booking("TR-1", "19:00")
+        self.booking("TR-9", "19:00", table="T9", branch="Branch Off")
+        def names():
+            return sorted(self.site.get_list(RESERVATION, filters={}, pluck="name"))
+
+        self.site.roles = ["URY Cashier"]
+        self.site.user_permissions["Branch"] = {"Branch A"}
+        self.assertEqual(names(), ["TR-1"])
+        self.site.custom_docperm = [dict(role="Guest Host", permlevel=0, if_owner=1, read=1)]
+        self.site.login("host@example.test", ["Guest Host"])
+        self.booking("TR-3", "19:30", table="T3", owner="host@example.test")
+        self.assertEqual(names(), ["TR-3"])
+
+    def test_if_owner_reads_the_document_owner_not_reserved_by(self):
+        self.site.grant("Front Desk", "read", "write", if_owner=1)
+        self.site.login("desk@example.test", ["Front Desk"])
+        mine = self.booking("TR-1", "19:00", owner="desk@example.test", reserved_by="other@example.test")
+        theirs = self.booking("TR-2", "19:00", table="T2", owner="other@example.test",
+            reserved_by="desk@example.test")
+        self.assertTrue(self.site.has_permission(RESERVATION, "write", doc=mine))
+        self.assertFalse(self.site.has_permission(RESERVATION, "write", doc=theirs))
+        self.assertFalse(self.site.has_permission(RESERVATION, "write"))  # without a doc there is no owner
+
+    def test_the_user_argument_is_honoured(self):
+        self.site.user_roles["cashier@example.test"] = ["URY Cashier"]
+        self.site.roles = ["Guest Viewer"]
+        self.assertFalse(self.site.has_permission(RESERVATION, "read"))
+        self.assertTrue(self.site.has_permission(RESERVATION, "read", user="cashier@example.test"))
+
+    def test_has_permission_takes_frappes_arguments_and_no_print_logs(self):
+        # frappe.has_permission (frappe/__init__.py:613-623) has no print_logs: it logs only
+        # when throw=True, so a production call that passed print_logs would raise on a site.
+        with self.assertRaises(TypeError):
+            self.frappe.has_permission(RESERVATION, "read", print_logs=False)
+        self.assertTrue(self.frappe.has_permission(RESERVATION, "read", throw=False))
 
 
 class TestTheSeatedPartyFeedsTheOrder(_Site):
@@ -622,13 +1185,12 @@ class TestTheSeatedPartyFeedsTheOrder(_Site):
         self.assertIsNone(self.api.get_completed_reservation_for_table("T1", "Branch A"))
 
 
-class TestClosingTheBillCompletesTheReservation(_Site):
-    """B8: submitting the table's POS Invoice completes the Seated reservation and links the bill."""
+class _BillClose(_Site):
+    """A cashier's till and the checks it closes."""
 
     def setUp(self):
         super().setUp()
-        # The till names its billing role, and the cashier who settles the bill
-        # closes the party's visit under that same authority.
+        # The till names its billing role; the cashier who settles the bill closes the party's visit.
         self.site.roles = ["URY Cashier"]
         self.frappe.session.user = "cashier@example.test"
         self.till(billing_roles=["URY Cashier"])
@@ -660,6 +1222,10 @@ class TestClosingTheBillCompletesTheReservation(_Site):
     def stored(self, name):
         row = self.site.rows["URY Table Reservation"][name]
         return row.status, row.pos_invoice
+
+
+class TestClosingTheBillCompletesTheReservation(_BillClose):
+    """B8: submitting the table's POS Invoice completes the Seated reservation and links the bill."""
 
     def test_the_seated_reservation_on_the_table_is_completed_with_the_bill(self):
         self.booking("TR-1", "19:00", status="Seated")
@@ -744,23 +1310,33 @@ class TestClosingTheBillCompletesTheReservation(_Site):
         self.api.complete_seated_reservation_on_submit(self.bill(opened="20:40", customer="Guest"))
         self.assertEqual(self.stored("TR-1"), ("Seated", None))
 
-    def test_the_closer_s_own_authority_decides_and_the_version_names_them(self):
-        # No bypass: a closer the till does not authorise to complete a
-        # reservation leaves the party Seated, and the payment still stands.
-        self.site.roles = ["URY Captain"]
-        self.frappe.session.user = "captain@example.test"
+    def test_a_closer_with_no_write_on_the_booking_completes_the_visit_and_the_version_names_them(self):
+        # Paul, R3 (Simphony 1:1): closing the check needs no reservation right at all,
+        # not even write. The closer still appears on the Version.
+        self.site.grant("Till Operator", "read")
+        self.site.login("operator@example.test", ["Till Operator"])
         self.booking("TR-1", "19:00", status="Seated")
-        self.api.complete_seated_reservation_on_submit(self.bill())  # never raises into the payment
-        self.assertEqual(self.stored("TR-1"), ("Seated", None))
-        self.assertTrue(self.site.errors)
-        self.assertEqual(self.site.versions, [])
-        # The till's cashier completes it, and the Version records that cashier.
-        self.site.roles = ["URY Cashier"]
-        self.frappe.session.user = "cashier@example.test"
+        self.assertFalse(self.site.has_permission(RESERVATION, "write", self.get_doc(RESERVATION, "TR-1")))
         self.api.complete_seated_reservation_on_submit(self.bill())
         self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
+        self.assertEqual(self.site.errors, [])
         self.assertEqual([(v.owner, v.status) for v in self.site.versions if v.docname == "TR-1"],
-            [("cashier@example.test", ("Seated", "Completed"))])
+            [("operator@example.test", ("Seated", "Completed"))])
+        # That closer still changes no booking by hand.
+        self.booking("TR-2", "21:30", table="T2")
+        for status in ("Seated", "Cancelled", "No Show"):
+            with self.subTest(status=status):
+                with self.assertRaises(Refused):
+                    self.api.update_reservation_status("TR-2", status, cancel_reason="Guest called")
+        self.assertEqual(self.stored("TR-2"), ("Confirmed", None))
+
+    def test_a_closer_s_user_permission_on_reservations_does_not_stop_the_completion(self):
+        # The closer submitted this Branch A check; a reservation User Permission elsewhere is no right needed here.
+        self.site.login("captain@example.test", ["URY Captain"])
+        self.site.user_permissions["Branch"] = {"Branch Off"}
+        self.booking("TR-1", "19:00", status="Seated")
+        self.api.complete_seated_reservation_on_submit(self.bill())
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
 
     def test_the_completion_runs_on_pos_invoice_submit(self):
         tree = ast.parse((ROOT / "hooks.py").read_text())
@@ -768,6 +1344,173 @@ class TestClosingTheBillCompletesTheReservation(_Site):
             if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "doc_events" for t in node.targets))
         self.assertIn("ury.ury.api.table_reservation.complete_seated_reservation_on_submit",
             doc_events["POS Invoice"]["on_submit"])
+
+
+class TestClosingTheCheckCompletesTheVisitWithoutAReservationPrivilege(_BillClose):
+    """R3: in Simphony TMS, closing the guest check completes the seated visit.
+
+    No reservation right is involved (neither 32012 Cancel Reservation Entry
+    nor 32007 Mark as No Show, nor write): the bill close is a system
+    transition that moves only Seated -> Completed, only for the party linked
+    to that check. Everything else stays under the closer's own permissions.
+    """
+
+    CAPTAIN, OTHER_CAPTAIN = "captain@example.test", "captain2@example.test"
+
+    def setUp(self):
+        super().setUp()
+        self.site.login(self.CAPTAIN, ["URY Captain"])
+        self.site.user_roles[self.OTHER_CAPTAIN] = ["URY Captain"]
+
+    def test_a_captain_seats_and_a_captain_without_either_privilege_closes_the_bill(self):
+        # Neon R2: a captain closing KVU-INV-CAP-REAL logged PermissionError and left the party Seated.
+        self.clock("19:00")
+        self.booking("TR-1", "19:00")
+        self.api.update_reservation_status("TR-1", "Seated")
+        self.assertEqual(self.status("TR-1"), "Seated")
+        self.site.login(self.OTHER_CAPTAIN)
+        for ptype in ("cancel_reservation", "mark_no_show"):
+            self.assertFalse(self.site.has_permission(RESERVATION, ptype, self.get_doc(RESERVATION, "TR-1")))
+        self.clock("20:30")
+        self.api.complete_seated_reservation_on_submit(self.bill())
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual([(v.owner, v.status) for v in self.site.versions if v.docname == "TR-1"],
+            [(self.CAPTAIN, ("Confirmed", "Seated")), (self.OTHER_CAPTAIN, ("Seated", "Completed"))])
+
+    def test_the_bill_close_moves_only_its_own_seated_party(self):
+        self.booking("TR-1", "19:00", status="Seated")
+        self.booking("TR-2", "21:30", table="T1")  # the table's next booking
+        self.booking("TR-3", "19:00", table="T2", status="Seated")  # another table's party
+        self.api.complete_seated_reservation_on_submit(self.bill())
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
+        self.assertEqual((self.stored("TR-2"), self.stored("TR-3")), (("Confirmed", None), ("Seated", None)))
+        # The closer gained nothing else: completing, cancelling or marking No Show by hand stays refused.
+        for name, status in (("TR-3", "Completed"), ("TR-2", "Cancelled"), ("TR-2", "No Show")):
+            with self.subTest(name=name, status=status):
+                with self.assertRaises(Refused):
+                    self.api.update_reservation_status(name, status, cancel_reason="Guest called")
+        self.assertEqual((self.stored("TR-2"), self.stored("TR-3")), (("Confirmed", None), ("Seated", None)))
+
+    def test_transferred_check_survives_sweep_and_completes_for_closer_without_reservation_rights(self):
+        # Hydrogen R3 P1: seat on T-102, bind check, transfer T-102 -> T-103. Even if
+        # reserved_table still points at T-102, a sweep while the bound check is open on
+        # T-103 must keep the visit Seated, and settling on T-103 as a closer with no
+        # reservation rights completes it by bound pos_invoice.
+        self.table("T-102", 4)
+        self.table("T-103", 4)
+        self.clock("19:00")
+        self.booking("TR-XFER", "19:00", table="T-102")
+        self.api.update_reservation_status("TR-XFER", "Seated")
+        inv = self.check("INV-XFER", "19:05", table="T-102")
+        self.api.bind_seated_reservation_to_check(inv)
+        self.assertEqual(self.stored("TR-XFER"), ("Seated", "INV-XFER"))
+
+        # Check moved from T-102 to T-103; T-102 is free and T-103 is occupied.
+        inv.restaurant_table = "T-103"
+        self.site.rows["URY Table"]["T-102"].occupied = 0
+        self.site.rows["URY Table"]["T-103"].occupied = 1
+
+        # Sweep during the open transferred check (as Administrator) must not complete it.
+        self.site.login("Administrator", ["System Manager"])
+        for clock in ("19:10", "22:00"):
+            with self.subTest(sweep_at=clock):
+                self.clock(clock)
+                self.scheduler.process_reservation_no_shows()
+                self.assertEqual(self.stored("TR-XFER"), ("Seated", "INV-XFER"))
+
+        # Closer with read-only access and a User Permission on another branch settles on T-103.
+        self.site.grant("Till Closer", "read")
+        self.site.login("closer@example.test", ["Till Closer"])
+        self.site.user_permissions["Branch"] = {"Branch Off"}
+        self.site.message_log.clear()
+        self.close("INV-XFER")
+        self.assertEqual(self.stored("TR-XFER"), ("Completed", "INV-XFER"))
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual(self.site.message_log, [])
+        self.assertEqual(
+            [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-XFER"],
+            [(self.CAPTAIN, ("Confirmed", "Seated")), ("closer@example.test", ("Seated", "Completed"))],
+        )
+
+    def test_immediate_settle_after_transfer_completes_for_closer_without_reservation_rights(self):
+        # Hydrogen R3 P1 immediate-settle probe: transfer T-102 -> T-103 and immediately
+        # settle on T-103 (no intervening sweep) as a closer with no reservation rights.
+        self.table("T-102", 4)
+        self.table("T-103", 4)
+        self.clock("19:00")
+        self.booking("TR-IMM", "19:00", table="T-102")
+        self.api.update_reservation_status("TR-IMM", "Seated")
+        inv_imm = self.check("INV-IMM", "19:05", table="T-102")
+        self.api.bind_seated_reservation_to_check(inv_imm)
+        inv_imm.restaurant_table = "T-103"
+        self.site.rows["URY Table"]["T-102"].occupied = 0
+        self.site.rows["URY Table"]["T-103"].occupied = 1
+        self.site.grant("Till Closer", "read")
+        self.site.login("closer@example.test", ["Till Closer"])
+        self.site.user_permissions["Branch"] = {"Branch Off"}
+        self.site.message_log.clear()
+        self.close("INV-IMM")
+        self.assertEqual(self.stored("TR-IMM"), ("Completed", "INV-IMM"))
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual(self.site.message_log, [])
+        self.assertEqual(
+            [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-IMM"],
+            [(self.CAPTAIN, ("Confirmed", "Seated")), ("closer@example.test", ("Seated", "Completed"))],
+        )
+
+    def test_table_transfer_moves_seated_party_and_closer_without_rights_completes_on_new_table(self):
+        # Hydrogen R3 P1 full transfer path: transfer_seated_reservation moves T-102 -> T-103,
+        # sweep during open check keeps Seated on T-103, and settling on T-103 completes the
+        # visit both for a read-only cross-branch closer and for a captain without privileges.
+        self.table("T-102", 4)
+        self.table("T-103", 4)
+        self.site.grant("Till Closer", "read")
+
+        for tag, closer, roles, perms in (
+            ("read_only_cross_branch", "closer@example.test", ["Till Closer"], {"Branch": {"Branch Off"}}),
+            ("captain_no_privs", self.OTHER_CAPTAIN, ["URY Captain"], None),
+        ):
+            with self.subTest(closer=tag):
+                self.site.rows["URY Table Reservation"].clear()
+                self.site.rows["POS Invoice"].clear()
+                self.site.versions.clear()
+                self.site.errors.clear()
+                self.site.message_log.clear()
+                self.site.rows["URY Table"]["T-102"].occupied = 0
+                self.site.rows["URY Table"]["T-103"].occupied = 0
+
+                self.site.login(self.CAPTAIN, ["URY Captain"])
+                self.clock("19:00")
+                self.booking("TR-X", "19:00", table="T-102")
+                self.api.update_reservation_status("TR-X", "Seated")
+                inv = self.check("INV-X", "19:05", table="T-102")
+                self.api.bind_seated_reservation_to_check(inv)
+
+                inv.restaurant_table = "T-103"
+                self.site.rows["URY Table"]["T-102"].occupied = 0
+                self.site.rows["URY Table"]["T-103"].occupied = 1
+                self.api.transfer_seated_reservation("T-102", "T-103", inv)
+                self.assertEqual(self.site.rows[RESERVATION]["TR-X"].reserved_table, "T-103")
+
+                self.site.login("Administrator", ["System Manager"])
+                self.clock("22:00")
+                self.scheduler.process_reservation_no_shows()
+                self.assertEqual(self.stored("TR-X"), ("Seated", "INV-X"))
+                self.assertEqual(self.site.rows[RESERVATION]["TR-X"].reserved_table, "T-103")
+
+                self.site.login(closer, roles)
+                if perms:
+                    self.site.user_permissions.update(perms)
+                self.close("INV-X")
+                self.assertEqual(self.stored("TR-X"), ("Completed", "INV-X"))
+                self.assertEqual(self.site.rows[RESERVATION]["TR-X"].reserved_table, "T-103")
+                self.assertEqual(self.site.errors, [])
+                self.assertEqual(self.site.message_log, [])
+                self.assertEqual(
+                    [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-X"],
+                    [(self.CAPTAIN, ("Confirmed", "Seated")), (closer, ("Seated", "Completed"))],
+                )
 
 
 class TestTheLockEndsAtGrace(_Site):
@@ -886,6 +1629,46 @@ class TestTheSeatedVisitEnds(_Site):
         self.clock("18:41")
         self.scheduler.process_reservation_no_shows()
         self.assertEqual(self.stored("TR-1"), ("Completed", None))
+
+    def test_captain_and_read_only_polls_leave_no_server_messages_when_a_seated_visit_has_expired(self):
+        # Hydrogen R3 P2: get_active_reservations runs process_reservation_no_shows -> end_seated_visit.
+        # A Captain or read-only user must not trigger frappe.throw into frappe.local.message_log
+        # (_server_messages on an HTTP 200 poll) when an expired check-less Seated booking exists.
+        self.table("T-104", 4)
+        self.clock("18:00")
+        self.booking("TR-STALE", "18:00", table="T-104", status="Seated")
+        self.site.rows["URY Table"]["T-104"].occupied = 0
+        self.clock("19:35")  # past hold end, unoccupied, no open check
+
+        self.site.grant("Till Closer", "read")
+        for label, user, roles, perms in (
+            ("captain", "captain@example.test", ["URY Captain"], None),
+            ("read_only", "closer@example.test", ["Till Closer"], None),
+            ("cross_branch_cashier", "other@example.test", ["URY Cashier"], {"Branch": {"Branch Off"}}),
+        ):
+            with self.subTest(poller=label):
+                self.site.login(user, roles)
+                if perms:
+                    self.site.user_permissions.update(perms)
+                self.site.message_log.clear()
+                self.site.errors.clear()
+                self.api.get_active_reservations("Branch A")
+                self.assertEqual(self.stored("TR-STALE"), ("Seated", None))
+                self.assertEqual(self.site.message_log, [])
+                self.assertEqual(self.site.errors, [])
+
+        # An authorized cashier on Branch A still completes the expired visit cleanly.
+        self.site.login("cashier@example.test", ["URY Cashier"])
+        self.site.message_log.clear()
+        self.site.errors.clear()
+        self.api.get_active_reservations("Branch A")
+        self.assertEqual(self.stored("TR-STALE"), ("Completed", None))
+        self.assertEqual(self.site.message_log, [])
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual(
+            [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-STALE"],
+            [("cashier@example.test", ("Seated", "Completed"))],
+        )
 
 
 class TestUnseat(_Site):

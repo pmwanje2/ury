@@ -74,6 +74,10 @@ export interface TableReservation {
   grace_minutes?: number;
   duration_minutes?: number;
   lock_start_time?: string;
+  /** The server's native cancel_reservation check on this booking for this user. */
+  can_cancel?: boolean;
+  /** The server's native mark_no_show check on this booking for this user. */
+  can_mark_no_show?: boolean;
 }
 
 export interface Table {
@@ -308,7 +312,8 @@ export async function getActiveReservations(branch?: string, date?: string): Pro
 export async function getAvailableTablesForReservation(
   branch: string,
   reservedAt: string,
-  excludeReservation?: string
+  excludeReservation?: string,
+  noOfPax?: number
 ): Promise<Table[]> {
   const { call } = await import('@ury/core');
 
@@ -318,6 +323,8 @@ export async function getAvailableTablesForReservation(
       branch,
       reserved_at: reservedAt,
       exclude_reservation: excludeReservation || undefined,
+      // Only tables the party fits (seats and minimum seating) are offered.
+      no_of_pax: noOfPax || undefined,
     }
   );
   return response.message ?? [];

@@ -484,6 +484,7 @@
     "select_table_placeholder": "اختر طاولة",
     "no_tables_for_slot": "لا توجد طاولات متاحة للتاريخ والوقت المحددين.",
     "cancel_title": "إلغاء الحجز",
+    "mark_no_show": "تسجيل عدم الحضور",
     "cancel_description": "هل أنت متأكد من أنك تريد إلغاء هذا الحجز؟",
     "keep_reservation": "الاحتفاظ بالحجز",
     "cancel_reservation": "إلغاء الحجز",

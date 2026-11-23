@@ -415,6 +415,7 @@
     "select_table_placeholder": "Selecciona una mesa",
     "no_tables_for_slot": "No hay mesas disponibles para la fecha y hora seleccionadas.",
     "cancel_title": "Cancelar reserva",
+    "mark_no_show": "Marcar como no presentado",
     "cancel_description": "¿Seguro que quieres cancelar esta reserva?",
     "keep_reservation": "Mantener reserva",
     "cancel_reservation": "Cancelar reserva",

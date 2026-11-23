@@ -66,6 +66,8 @@ const TableReservationEditDialog = ({
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customerPhone, setCustomerPhone] = useState('');
   const [noOfPax, setNoOfPax] = useState<number>(1);
+  // What the field shows; noOfPax follows it only while it holds a whole number of at least one.
+  const [paxInput, setPaxInput] = useState('1');
   const [reservationDate, setReservationDate] = useState('');
   const [reservationTime, setReservationTime] = useState('');
   const [notes, setNotes] = useState('');
@@ -87,6 +89,7 @@ const TableReservationEditDialog = ({
     });
     setCustomerPhone(reservation.customer_phone || '');
     setNoOfPax(reservation.no_of_pax || 1);
+    setPaxInput(String(reservation.no_of_pax || 1));
     setNotes(reservation.comments || '');
     setValidationError(null);
 
@@ -103,6 +106,7 @@ const TableReservationEditDialog = ({
   const timeMoved =
     Boolean(reservationDate && reservationTime) &&
     `${reservationDate} ${reservationTime}` !== bookedAt;
+  const paxChanged = noOfPax !== (reservation?.no_of_pax || 1);
 
   // Fetch available tables from backend when branch, date, time, or reservation changes
   useEffect(() => {
@@ -122,18 +126,19 @@ const TableReservationEditDialog = ({
     getAvailableTablesForReservation(
       targetBranch,
       formattedReservedAt,
-      reservation?.name
+      reservation?.name,
+      noOfPax
     )
       .then((tables) => {
         if (!isMounted) return;
         const list = tables || [];
         setAvailableTablesList(list);
 
-        // Preserve the booking's existing table on non-time edits even if a walk-in overlaps
-        // its buffer; clear it only when moving the booking time makes the table unavailable.
+        // Preserve the booking's existing table on non-time, same-party-size edits even if a walk-in
+        // overlaps its buffer; clear it when moving the booking time or party size makes it unavailable.
         setSelectedTable((prev) => {
           if (!prev) return '';
-          if (!slotTimeMoved && prev === reservation?.reserved_table) return prev;
+          if (!slotTimeMoved && !paxChanged && prev === reservation?.reserved_table) return prev;
           const isStillAvailable = list.some((t) => t.name === prev);
           return isStillAvailable ? prev : '';
         });
@@ -150,10 +155,10 @@ const TableReservationEditDialog = ({
     return () => {
       isMounted = false;
     };
-  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, reservation?.reserved_table, bookedAt]);
+  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, reservation?.reserved_table, bookedAt, noOfPax, paxChanged]);
 
   const tablesList = useMemo(() => {
-    if (!reservation?.reserved_table || timeMoved) return availableTablesList;
+    if (!reservation?.reserved_table || timeMoved || paxChanged) return availableTablesList;
     if (availableTablesList.some((t) => t.name === reservation.reserved_table)) {
       return availableTablesList;
     }
@@ -168,7 +173,7 @@ const TableReservationEditDialog = ({
       no_of_seats: 0,
     };
     return [preserved, ...availableTablesList];
-  }, [availableTablesList, availableTables, reservation, timeMoved]);
+  }, [availableTablesList, availableTables, reservation, timeMoved, paxChanged]);
 
   const handleCustomerChange = (selected: Customer | null) => {
     setCustomer(selected);
@@ -203,7 +208,7 @@ const TableReservationEditDialog = ({
       return;
     }
 
-    if (!noOfPax || noOfPax < 1) {
+    if (!(parseInt(paxInput, 10) >= 1)) {
       setValidationError(t('reservations.valid_pax'));
       return;
     }
@@ -377,8 +382,12 @@ const TableReservationEditDialog = ({
                     className="ps-10"
                     type="number"
                     min={1}
-                    value={noOfPax}
-                    onChange={(e) => setNoOfPax(Math.max(1, parseInt(e.target.value) || 1))}
+                    value={paxInput}
+                    onChange={(e) => {
+                      setPaxInput(e.target.value);
+                      const pax = parseInt(e.target.value, 10);
+                      if (pax >= 1) setNoOfPax(pax);
+                    }}
                     disabled={loading}
                   />
                 </div>
@@ -448,7 +457,7 @@ const TableReservationEditDialog = ({
 
           <Button
             onClick={handleSubmit}
-            disabled={loading || !customer || !customerPhone.trim() || !selectedTable}
+            disabled={loading || loadingTables || !customer || !customerPhone.trim() || !selectedTable}
           >
             {t('reservations.save_changes')}
           </Button>
