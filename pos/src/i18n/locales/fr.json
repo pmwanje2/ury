@@ -410,9 +410,18 @@
     "status_completed": "Terminée",
     "status_cancelled": "Annulée",
     "status_no_show": "Absence",
+    "status_seated": "Installé",
+    "seat_action": "Installer le client",
+    "unseat_action": "Retirer de la table",
+    "seat_title": "Installer le client",
+    "seat_description": "Installez le groupe à la table {{table}} ({{time}}) et ouvrez sa commande.",
+    "cancel_reason_label": "Motif d'annulation",
+    "cancel_reason_required": "Saisissez un motif pour annuler cette réservation.",
+    "timeline_table_column": "Table",
     "loading_timeline": "Chargement de la chronologie...",
     "empty_timeline_title": "Aucune réservation pour cette date",
-    "empty_timeline_hint": "Les réservations apparaîtront le long de l'axe temporel."
+    "empty_timeline_hint": "Les réservations apparaîtront le long de l'axe temporel.",
+    "min_notice": "Une réservation doit être faite au moins {{minutes}} minutes à l'avance."
   },
   "bill_split": {
     "split_bill": "Diviser l'addition",

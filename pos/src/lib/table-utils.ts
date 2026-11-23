@@ -22,28 +22,43 @@ export function formatReservationTime(reservedAt?: string | null): string {
   }
 }
 
+const MS_PER_MINUTE = 60 * 1000;
+
+/**
+ * Whether a booking time falls inside the Branch's Minimum Reservation Notice:
+ * it must start at least that many minutes from now, and a negative notice
+ * accepts a time that many minutes back. The server makes the same check.
+ */
+export function isInsideReservationNotice(selected: Date, minNoticeMinutes: number, now = Date.now()): boolean {
+  return selected.getTime() < now + minNoticeMinutes * MS_PER_MINUTE;
+}
+
 export function isReservationLockWindowActive(
   res: TableReservation | null | undefined,
   defaultBufferMinutes = 0
 ): boolean {
   if (!res || res.status !== 'Confirmed') return false;
 
+  // The server decides on the site clock; a tablet's own clock never overrules it.
+  if (typeof res.is_lock_window_active === 'boolean') return res.is_lock_window_active;
+
+  // Fallback for a row without the server flag: [reserved_at - buffer, reserved_at + grace).
   const buf = res.buffer_minutes ?? defaultBufferMinutes;
+  const grace = res.grace_minutes ?? 0;
 
   if (res.reserved_at) {
     try {
       const resDate = new Date(res.reserved_at.replace(' ', 'T'));
       if (!isNaN(resDate.getTime())) {
-        const now = new Date();
-        const lockStart = new Date(resDate.getTime() - buf * 60 * 1000);
-        return now >= lockStart;
+        const now = Date.now();
+        return now >= resDate.getTime() - buf * 60 * 1000 && now < resDate.getTime() + grace * 60 * 1000;
       }
     } catch (_e) {
       // Ignore date parsing error
     }
   }
 
-  return Boolean(res.is_lock_window_active);
+  return false;
 }
 
 export function parseMergedWith(mergedWith: string | null | undefined): string[] {

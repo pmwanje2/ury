@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Clock, Phone, Users } from 'lucide-react';
 
 import {
@@ -24,6 +24,7 @@ import {
   type Table,
   type TableReservation,
 } from '../lib/table-api';
+import { isInsideReservationNotice } from '../lib/table-utils';
 import type { Customer } from '../store/pos-store';
 import { usePOSStore } from '../store/pos-store';
 
@@ -44,13 +45,17 @@ interface TableReservationEditDialogProps {
   availableTables?: Table[];
   onOpenChange: (open: boolean) => void;
   onConfirm: (data: EditReservationFormData) => Promise<void>;
+  /** The branch's Minimum Reservation Notice; without it the server alone checks the time. */
+  minNoticeMinutes?: number | null;
 }
 
 const TableReservationEditDialog = ({
   open,
   reservation,
+  availableTables,
   onOpenChange,
   onConfirm,
+  minNoticeMinutes,
 }: TableReservationEditDialogProps) => {
   const { posProfile } = usePOSStore();
   const branch = posProfile?.branch ?? '';
@@ -94,6 +99,11 @@ const TableReservationEditDialog = ({
     }
   }, [open, reservation]);
 
+  const bookedAt = (reservation?.reserved_at || '').replace('T', ' ').slice(0, 16);
+  const timeMoved =
+    Boolean(reservationDate && reservationTime) &&
+    `${reservationDate} ${reservationTime}` !== bookedAt;
+
   // Fetch available tables from backend when branch, date, time, or reservation changes
   useEffect(() => {
     if (!open || !targetBranch || !reservationDate || !reservationTime) {
@@ -107,6 +117,7 @@ const TableReservationEditDialog = ({
     const formattedReservedAt = `${reservationDate} ${
       reservationTime.length === 5 ? reservationTime + ':00' : reservationTime
     }`;
+    const slotTimeMoved = `${reservationDate} ${reservationTime}` !== bookedAt;
 
     getAvailableTablesForReservation(
       targetBranch,
@@ -118,9 +129,11 @@ const TableReservationEditDialog = ({
         const list = tables || [];
         setAvailableTablesList(list);
 
-        // If the selected table becomes unavailable after date/time change, clear table selection
+        // Preserve the booking's existing table on non-time edits even if a walk-in overlaps
+        // its buffer; clear it only when moving the booking time makes the table unavailable.
         setSelectedTable((prev) => {
           if (!prev) return '';
+          if (!slotTimeMoved && prev === reservation?.reserved_table) return prev;
           const isStillAvailable = list.some((t) => t.name === prev);
           return isStillAvailable ? prev : '';
         });
@@ -137,9 +150,25 @@ const TableReservationEditDialog = ({
     return () => {
       isMounted = false;
     };
-  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name]);
+  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, reservation?.reserved_table, bookedAt]);
 
-  const tablesList = availableTablesList;
+  const tablesList = useMemo(() => {
+    if (!reservation?.reserved_table || timeMoved) return availableTablesList;
+    if (availableTablesList.some((t) => t.name === reservation.reserved_table)) {
+      return availableTablesList;
+    }
+    const existing = availableTables?.find((t) => t.name === reservation.reserved_table);
+    const preserved: Table = existing || {
+      name: reservation.reserved_table,
+      occupied: 0,
+      latest_invoice_time: null,
+      is_take_away: 0,
+      restaurant_room: '',
+      table_shape: 'Rectangle',
+      no_of_seats: 0,
+    };
+    return [preserved, ...availableTablesList];
+  }, [availableTablesList, availableTables, reservation, timeMoved]);
 
   const handleCustomerChange = (selected: Customer | null) => {
     setCustomer(selected);
@@ -196,9 +225,14 @@ const TableReservationEditDialog = ({
     }
 
     const selectedDt = new Date(`${reservationDate}T${reservationTime}:00`);
-    const nowMargin = new Date(Date.now() - 60000); // 1-min grace margin
-    if (!isNaN(selectedDt.getTime()) && selectedDt < nowMargin) {
-      setValidationError(t('reservations.past_datetime'));
+    // The notice applies to the booking time, as in Simphony: only when this edit moves it.
+    const bookedAt = (reservation.reserved_at || '').replace('T', ' ').slice(0, 16);
+    const timeMoved = `${reservationDate} ${reservationTime}` !== bookedAt;
+    if (timeMoved && minNoticeMinutes != null && !isNaN(selectedDt.getTime())
+        && isInsideReservationNotice(selectedDt, minNoticeMinutes)) {
+      setValidationError(minNoticeMinutes > 0
+        ? t('reservations.min_notice', { minutes: minNoticeMinutes })
+        : t('reservations.past_datetime'));
       return;
     }
 
@@ -272,11 +306,14 @@ const TableReservationEditDialog = ({
                 value={selectedTable}
                 options={tablesList.map((tbl) => ({
                   value: tbl.name,
-                  label: t('reservations.table_option_label', {
-                    name: tbl.name,
-                    room: tbl.restaurant_room,
-                    seats: tbl.no_of_seats || 0,
-                  }),
+                  label:
+                    tbl.restaurant_room || tbl.no_of_seats
+                      ? t('reservations.table_option_label', {
+                          name: tbl.name,
+                          room: tbl.restaurant_room,
+                          seats: tbl.no_of_seats || 0,
+                        })
+                      : tbl.name,
                 }))}
                 placeholder={
                   loadingTables

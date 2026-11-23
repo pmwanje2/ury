@@ -1,5 +1,5 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
-import { Clock, User, Phone, BookLock } from 'lucide-react';
+import { User, Phone, BookLock } from 'lucide-react';
 import { Badge } from '@ury/ui';
 import type { Table, TableReservation } from '../lib/table-api';
 import { t } from '../i18n';
@@ -17,6 +17,8 @@ const TOTAL_HOURS = 24; // 00:00 to 24:00
 const TIMELINE_WIDTH = TOTAL_HOURS * HOUR_WIDTH;
 const CARD_HEIGHT = 74; // Height of each reservation block
 const LANE_GAP = 10; // Gap between vertical lanes
+const TABLE_COLUMN_WIDTH = 140; // Table name column in the per-table layout
+const ROW_PADDING = 8; // Space above and below the blocks in a table row
 
 function parseReservationTime(raw?: string): { hours: number; minutes: number; totalMinutes: number; timeStr: string } {
   if (!raw) return { hours: 0, minutes: 0, totalMinutes: 0, timeStr: '00:00' };
@@ -38,6 +40,77 @@ function parseReservationTime(raw?: string): { hours: number; minutes: number; t
   return { hours: 0, minutes: 0, totalMinutes: 0, timeStr: '00:00' };
 }
 
+interface ParsedReservation {
+  reservation: TableReservation;
+  startMinutes: number;
+  durationMinutes: number;
+  endMinutes: number;
+  timeStr: string;
+  endTimeStr: string;
+}
+
+function parseReservations(reservations: TableReservation[]): ParsedReservation[] {
+  const parsed = reservations.map((res) => {
+    const timeInfo = parseReservationTime(res.reserved_at);
+    // The server's duration for the booking's branch; the timeline invents none.
+    const duration = res.duration_minutes ?? 0;
+    const endMinutes = timeInfo.totalMinutes + duration;
+    const endHours = Math.floor(endMinutes / 60) % 24;
+    const endMins = endMinutes % 60;
+    const endTimeStr = `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}`;
+
+    return {
+      reservation: res,
+      startMinutes: timeInfo.totalMinutes,
+      durationMinutes: duration,
+      endMinutes,
+      timeStr: timeInfo.timeStr,
+      endTimeStr,
+    };
+  });
+
+  // Sort by start time ascending, then longer duration first
+  parsed.sort((a, b) => {
+    if (a.startMinutes !== b.startMinutes) {
+      return a.startMinutes - b.startMinutes;
+    }
+    return b.durationMinutes - a.durationMinutes;
+  });
+  return parsed;
+}
+
+// Assign each reservation to the first lane that is free at its start time.
+function packLanes(parsed: ParsedReservation[], topOffset: number): { items: PositionedReservation[]; totalLanes: number } {
+  const laneEndTimes: number[] = [];
+  const items: PositionedReservation[] = [];
+
+  for (const item of parsed) {
+    let assignedLane = -1;
+    for (let i = 0; i < laneEndTimes.length; i++) {
+      if (laneEndTimes[i] <= item.startMinutes) {
+        assignedLane = i;
+        laneEndTimes[i] = item.endMinutes;
+        break;
+      }
+    }
+
+    if (assignedLane === -1) {
+      assignedLane = laneEndTimes.length;
+      laneEndTimes.push(item.endMinutes);
+    }
+
+    items.push({
+      ...item,
+      laneIndex: assignedLane,
+      leftPx: (item.startMinutes / 60) * HOUR_WIDTH,
+      widthPx: Math.max(120, (item.durationMinutes / 60) * HOUR_WIDTH - 6),
+      topPx: topOffset + assignedLane * (CARD_HEIGHT + LANE_GAP),
+    });
+  }
+
+  return { items, totalLanes: laneEndTimes.length };
+}
+
 interface PositionedReservation {
   reservation: TableReservation;
   startMinutes: number;
@@ -52,6 +125,7 @@ interface PositionedReservation {
 }
 
 export default function TableReservationTimeline({
+  tables,
   reservations,
   selectedDate,
   onSelectReservation,
@@ -72,67 +146,24 @@ export default function TableReservationTimeline({
   // Position reservations using interval scheduling / lane allocation
   const positionedReservations = useMemo(() => {
     if (reservations.length === 0) return { items: [] as PositionedReservation[], totalLanes: 0 };
-
-    const parsed = reservations.map((res) => {
-      const timeInfo = parseReservationTime(res.reserved_at);
-      const duration = res.duration_minutes || 60;
-      const endMinutes = timeInfo.totalMinutes + duration;
-      const endHours = Math.floor(endMinutes / 60) % 24;
-      const endMins = endMinutes % 60;
-      const endTimeStr = `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}`;
-
-      return {
-        reservation: res,
-        startMinutes: timeInfo.totalMinutes,
-        durationMinutes: duration,
-        endMinutes,
-        timeStr: timeInfo.timeStr,
-        endTimeStr,
-      };
-    });
-
-    // Sort by start time ascending, then longer duration first
-    parsed.sort((a, b) => {
-      if (a.startMinutes !== b.startMinutes) {
-        return a.startMinutes - b.startMinutes;
-      }
-      return b.durationMinutes - a.durationMinutes;
-    });
-
-    // Assign each reservation to the first available lane
-    const laneEndTimes: number[] = [];
-    const items: PositionedReservation[] = [];
-
-    for (const item of parsed) {
-      let assignedLane = -1;
-      for (let i = 0; i < laneEndTimes.length; i++) {
-        if (laneEndTimes[i] <= item.startMinutes) {
-          assignedLane = i;
-          laneEndTimes[i] = item.endMinutes;
-          break;
-        }
-      }
-
-      if (assignedLane === -1) {
-        assignedLane = laneEndTimes.length;
-        laneEndTimes.push(item.endMinutes);
-      }
-
-      const leftPx = (item.startMinutes / 60) * HOUR_WIDTH;
-      const widthPx = Math.max(120, (item.durationMinutes / 60) * HOUR_WIDTH - 6);
-      const topPx = 16 + assignedLane * (CARD_HEIGHT + LANE_GAP);
-
-      items.push({
-        ...item,
-        laneIndex: assignedLane,
-        leftPx,
-        widthPx,
-        topPx,
-      });
-    }
-
-    return { items, totalLanes: laneEndTimes.length };
+    return packLanes(parseReservations(reservations), 16);
   }, [reservations]);
+
+  // With the floor's tables: one row per table (empty tables included), each booking in its table's row.
+  const tableRows = useMemo(() => {
+    if (!tables || tables.length === 0) return null;
+    const names = tables.map((tbl) => tbl.name);
+    const known = new Set(names);
+    const extra = new Set<string>();
+    for (const res of reservations) {
+      if (res.reserved_table && !known.has(res.reserved_table)) extra.add(res.reserved_table);
+    }
+    const parsed = parseReservations(reservations);
+    return [...names, ...[...extra].sort((a, b) => a.localeCompare(b))].map((name) => {
+      const { items, totalLanes } = packLanes(parsed.filter((item) => item.reservation.reserved_table === name), ROW_PADDING);
+      return { name, items, height: ROW_PADDING * 2 + Math.max(1, totalLanes) * (CARD_HEIGHT + LANE_GAP) - LANE_GAP };
+    });
+  }, [tables, reservations]);
 
   const canvasHeight = useMemo(() => {
     return Math.max(420, 32 + (positionedReservations.totalLanes || 1) * (CARD_HEIGHT + LANE_GAP));
@@ -180,6 +211,8 @@ export default function TableReservationTimeline({
         return 'bg-emerald-50/90 border-emerald-300 text-emerald-950 hover:bg-emerald-50';
       case 'Active':
         return 'bg-amber-50/90 border-amber-300 text-amber-950 hover:bg-amber-50';
+      case 'Seated':
+        return 'bg-sky-50/90 border-sky-300 text-sky-950 hover:bg-sky-50';
       case 'Completed':
         return 'bg-blue-50/90 border-blue-300 text-blue-950 hover:bg-blue-50';
       case 'Cancelled':
@@ -206,6 +239,8 @@ export default function TableReservationTimeline({
         return 'border-orange-600 ring-2 ring-orange-500/40';
       case 'Active':
         return 'border-amber-600 ring-2 ring-amber-500/40';
+      case 'Seated':
+        return 'border-sky-600 ring-2 ring-sky-500/40';
       case 'Requested':
       default:
         return 'border-indigo-600 ring-2 ring-indigo-500/40';
@@ -220,6 +255,8 @@ export default function TableReservationTimeline({
         return <Badge variant="warning">{t('reservations.status_active')}</Badge>;
       case 'Requested':
         return <Badge variant="outline">{t('reservations.status_requested')}</Badge>;
+      case 'Seated':
+        return <Badge variant="info">{t('reservations.status_seated')}</Badge>;
       case 'Completed':
         return <Badge variant="completed">{t('reservations.status_completed')}</Badge>;
       case 'Cancelled':
@@ -232,10 +269,159 @@ export default function TableReservationTimeline({
     }
   };
 
+  const renderReservationBlock = (item: PositionedReservation) => {
+    const res = item.reservation;
+    const isHovered = hoveredId === res.name;
+    const resTable = res.reserved_table || (res as any).table || 'Table';
+    const guestName = res.customer_name || res.customer;
+    const isCancelled = res.status === 'Cancelled' || (res.status as string) === 'Canceled';
+
+    return (
+      <div
+        key={res.name}
+        onMouseEnter={() => setHoveredId(res.name)}
+        onMouseLeave={() => setHoveredId(null)}
+        onClick={onSelectReservation ? () => onSelectReservation!(res) : undefined}
+        style={{
+          left: `${item.leftPx}px`,
+          top: `${item.topPx}px`,
+          width: `${item.widthPx}px`,
+          height: `${CARD_HEIGHT}px`,
+          zIndex: isHovered ? 40 : 10,
+        }}
+        className={`absolute rounded-lg border px-2 py-1.5 flex flex-col justify-between overflow-hidden transition-all duration-150 select-none ${
+          onSelectReservation ? 'cursor-pointer' : 'cursor-default'
+        } ${isHovered
+            ? `shadow-xl scale-[1.01] ${getStatusHoverRingClass(res.status)}`
+            : 'shadow-2xs hover:shadow-md'
+          } ${getStatusColorClasses(res.status)}`}
+      >
+        {/* Top Row: the status, whole. A table's row already names the table, and the
+            last row shows the times, so a short card repeats neither; in the free
+            layout the table name yields (truncates) to the status. */}
+        <div className="shrink-0 flex items-center justify-between gap-1.5 min-w-0">
+          {!tableRows && (
+            <span
+              className={`text-[11px] font-bold px-1.5 py-0.5 rounded shadow-2xs min-w-0 truncate ${isCancelled
+                  ? 'bg-white/95 text-red-950 border border-red-200'
+                  : 'bg-white/90 text-gray-900 border border-gray-200/60'
+                }`}
+            >
+              {resTable}
+            </span>
+          )}
+
+          <div className="ml-auto shrink-0 text-[10px] scale-90 origin-right">
+            {getStatusBadge(res.status)}
+          </div>
+        </div>
+
+        {/* Middle Row: Customer Name & Guest Count */}
+        <div
+          className={`shrink-0 min-w-0 text-[11px] font-medium flex items-center gap-1 ${isCancelled ? 'text-red-950' : 'text-gray-800'
+            }`}
+        >
+          <User className="w-3 h-3 shrink-0 opacity-60" />
+          <span className="min-w-0 truncate font-semibold" title={guestName}>
+            {guestName}
+          </span>
+          {res.no_of_pax ? (
+            <span className={`text-[10px] shrink-0 ${isCancelled ? 'text-red-700/80' : 'text-gray-500'}`}>
+              ({res.no_of_pax}p)
+            </span>
+          ) : null}
+        </div>
+
+        {/* Bottom Row: Phone / Time range */}
+        <div
+          className={`shrink-0 min-w-0 flex items-center justify-between gap-1 text-[10px] ${isCancelled ? 'text-red-700/80' : 'text-gray-500'
+            }`}
+        >
+          <span className={`shrink-0 whitespace-nowrap text-[10px] ${isCancelled ? 'text-red-800' : 'text-gray-600'}`}>
+            {item.timeStr} - {item.endTimeStr}
+          </span>
+          {res.customer_phone && (
+            <span
+              className="flex items-center gap-0.5 opacity-70 min-w-0 truncate text-[10px]"
+              title={res.customer_phone}
+            >
+              <Phone className="w-2.5 h-2.5 shrink-0" />
+              <span className="min-w-0 truncate">{res.customer_phone}</span>
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-80 text-gray-500 text-sm">
         {t('reservations.loading_timeline')}
+      </div>
+    );
+  }
+
+  const hourHeaderCells = Array.from({ length: TOTAL_HOURS }).map((_, hour) => (
+    <div
+      key={hour}
+      style={{ width: `${HOUR_WIDTH}px` }}
+      className="shrink-0 border-e border-gray-200 py-2.5 px-2 text-center relative"
+    >
+      <span className="text-xs font-semibold text-gray-700">{`${String(hour).padStart(2, '0')}:00`}</span>
+      {/* 30m sub-tick */}
+      <div className="absolute top-1/2 right-1/2 w-px h-2 bg-gray-300 transform -translate-y-1/2" />
+    </div>
+  ));
+
+  if (tableRows) {
+    return (
+      <div className="flex flex-col h-full bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden select-none">
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-auto relative no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+        >
+          <div style={{ width: `${TABLE_COLUMN_WIDTH + TIMELINE_WIDTH}px` }} className="relative min-w-full" role="table">
+            {/* Header: table column + horizontal time axis */}
+            <div className="sticky top-0 z-30 flex bg-gray-50 border-b border-gray-200">
+              <div
+                className="sticky start-0 z-40 shrink-0 bg-gray-50 border-e border-gray-200 px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500"
+                style={{ width: `${TABLE_COLUMN_WIDTH}px` }}
+              >
+                {t('reservations.timeline_table_column')}
+              </div>
+              <div className="flex relative" style={{ width: `${TIMELINE_WIDTH}px` }}>
+                {hourHeaderCells}
+              </div>
+            </div>
+
+            {tableRows.map((row) => (
+              <div
+                key={row.name}
+                role="row"
+                aria-label={row.name}
+                className="flex border-b border-gray-100"
+                style={{ height: `${row.height}px` }}
+              >
+                <div
+                  role="rowheader"
+                  className="sticky start-0 z-20 shrink-0 bg-white border-e border-gray-200 px-3 flex items-center text-sm font-semibold text-gray-900 truncate"
+                  style={{ width: `${TABLE_COLUMN_WIDTH}px` }}
+                >
+                  {row.name}
+                </div>
+                <div className="relative" style={{ width: `${TIMELINE_WIDTH}px`, height: `${row.height}px` }}>
+                  <div className="absolute inset-0 flex pointer-events-none">
+                    {Array.from({ length: TOTAL_HOURS }).map((_, hour) => (
+                      <div key={hour} style={{ width: `${HOUR_WIDTH}px` }} className="shrink-0 border-e border-gray-100 h-full" />
+                    ))}
+                  </div>
+                  {row.items.map(renderReservationBlock)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -251,20 +437,7 @@ export default function TableReservationTimeline({
           {/* Header: Horizontal Time Axis (No Table Column) */}
           <div className="sticky top-0 z-30 flex bg-gray-50 border-b border-gray-200">
             <div className="flex relative" style={{ width: `${TIMELINE_WIDTH}px` }}>
-              {Array.from({ length: TOTAL_HOURS }).map((_, hour) => {
-                const hourFormatted = `${String(hour).padStart(2, '0')}:00`;
-                return (
-                  <div
-                    key={hour}
-                    style={{ width: `${HOUR_WIDTH}px` }}
-                    className="shrink-0 border-e border-gray-200 py-2.5 px-2 text-center relative"
-                  >
-                    <span className="text-xs font-semibold text-gray-700">{hourFormatted}</span>
-                    {/* 30m sub-tick */}
-                    <div className="absolute top-1/2 right-1/2 w-px h-2 bg-gray-300 transform -translate-y-1/2" />
-                  </div>
-                );
-              })}
+              {hourHeaderCells}
             </div>
           </div>
 
@@ -298,88 +471,7 @@ export default function TableReservationTimeline({
             )}
 
             {/* Positioned Reservation Blocks */}
-            {positionedReservations.items.map((item) => {
-              const res = item.reservation;
-              const isHovered = hoveredId === res.name;
-              const resTable = res.reserved_table || (res as any).table || 'Table';
-              const isCancelled = res.status === 'Cancelled' || (res.status as string) === 'Canceled';
-
-              return (
-                <div
-                  key={res.name}
-                  onMouseEnter={() => setHoveredId(res.name)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onClick={onSelectReservation ? () => onSelectReservation!(res) : undefined}
-                  style={{
-                    left: `${item.leftPx}px`,
-                    top: `${item.topPx}px`,
-                    width: `${item.widthPx}px`,
-                    height: `${CARD_HEIGHT}px`,
-                    zIndex: isHovered ? 40 : 10,
-                  }}
-                  className={`absolute rounded-lg border p-2 flex flex-col justify-between overflow-hidden transition-all duration-150 select-none ${
-                    onSelectReservation ? 'cursor-pointer' : 'cursor-default'
-                  } ${isHovered
-                      ? `shadow-xl scale-[1.01] ${getStatusHoverRingClass(res.status)}`
-                      : 'shadow-2xs hover:shadow-md'
-                    } ${getStatusColorClasses(res.status)}`}
-                >
-                  {/* Top Row: Table Name badge + Time + Compact Status */}
-                  <div className="flex items-center justify-between gap-1.5 min-w-0">
-                    <span
-                      className={`text-[11px] font-bold px-1.5 py-0.5 rounded shadow-2xs shrink-0 ${isCancelled
-                          ? 'bg-white/95 text-red-950 border border-red-200'
-                          : 'bg-white/90 text-gray-900 border border-gray-200/60'
-                        }`}
-                    >
-                      {resTable}
-                    </span>
-
-                    <span
-                      className={`text-xs font-bold truncate flex items-center gap-1 ${isCancelled ? 'text-red-900' : 'text-gray-800'
-                        }`}
-                    >
-                      <Clock className="w-3 h-3 shrink-0 opacity-60" />
-                      {item.timeStr}
-                    </span>
-
-                    <div className="shrink-0 text-[10px] scale-90 origin-right">
-                      {getStatusBadge(res.status)}
-                    </div>
-                  </div>
-
-                  {/* Middle Row: Customer Name & Guest Count */}
-                  <div
-                    className={`text-[11px] font-medium truncate flex items-center gap-1 mt-0.5 ${isCancelled ? 'text-red-950' : 'text-gray-800'
-                      }`}
-                  >
-                    <User className="w-3 h-3 shrink-0 opacity-60" />
-                    <span className="truncate font-semibold">{res.customer_name || res.customer}</span>
-                    {res.no_of_pax ? (
-                      <span className={`text-[10px] shrink-0 ${isCancelled ? 'text-red-700/80' : 'text-gray-500'}`}>
-                        ({res.no_of_pax}p)
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {/* Bottom Row: Phone / Time range */}
-                  <div
-                    className={`flex items-center justify-between text-[10px] pt-0.5 ${isCancelled ? 'text-red-700/80' : 'text-gray-500'
-                      }`}
-                  >
-                    <span className={`text-[10px] ${isCancelled ? 'text-red-800' : 'text-gray-600'}`}>
-                      {item.timeStr} - {item.endTimeStr}
-                    </span>
-                    {res.customer_phone && (
-                      <span className="flex items-center gap-0.5 opacity-70 truncate text-[10px]">
-                        <Phone className="w-2.5 h-2.5 shrink-0" />
-                        {res.customer_phone}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {positionedReservations.items.map(renderReservationBlock)}
           </div>
         </div>
       </div>

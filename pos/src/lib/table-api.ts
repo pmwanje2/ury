@@ -49,6 +49,8 @@ export interface BranchReservationSettings {
   enable_reservation: number;
   buffer_time: number;
   grace_period: number;
+  /** The Branch's Minimum Reservation Notice in minutes; a negative one accepts a time that far back. */
+  min_reservation_notice: number;
   avg_table_time_last_day: number;
   avg_table_time_last_week: number;
   calculated_duration: number;
@@ -64,7 +66,9 @@ export interface TableReservation {
   no_of_pax?: number;
   reserved_at: string;
   comments?: string;
-  status: 'Requested' | 'Confirmed' | 'Completed' | 'Cancelled' | 'No Show';
+  status: 'Requested' | 'Confirmed' | 'Seated' | 'Completed' | 'Cancelled' | 'No Show';
+  cancel_reason?: string;
+  pos_invoice?: string;
   is_lock_window_active?: boolean;
   buffer_minutes?: number;
   grace_minutes?: number;
@@ -196,7 +200,9 @@ export async function unmergeTables(table: string) {
 }
 
 
-export async function getBranchReservationSettings(branch: string): Promise<BranchReservationSettings> {
+// The Branch owns every reservation timing; without the server's settings the POS
+// reads reservations as off and keeps no timings of its own.
+export async function getBranchReservationSettings(branch: string): Promise<BranchReservationSettings | null> {
   const { call } = await import('@ury/core');
 
   const response = await call.get(
@@ -204,14 +210,7 @@ export async function getBranchReservationSettings(branch: string): Promise<Bran
     { branch }
   );
 
-  return response.message ?? {
-    enable_reservation: 0,
-    buffer_time: 30,
-    grace_period: 15,
-    avg_table_time_last_day: 0,
-    avg_table_time_last_week: 0,
-    calculated_duration: 90,
-  };
+  return response.message ?? null;
 }
 
 export async function checkTableReservation(table: string): Promise<TableReservation | null> {
@@ -275,7 +274,12 @@ export async function updateTableReservation(data: {
   return response.message;
 }
 
-export async function updateTableReservationStatus(reservationName: string, status: string, posInvoice?: string) {
+export async function updateTableReservationStatus(
+  reservationName: string,
+  status: string,
+  posInvoice?: string,
+  cancelReason?: string
+) {
   const { call } = await import('@ury/core');
 
   const response = await call.post(
@@ -284,6 +288,7 @@ export async function updateTableReservationStatus(reservationName: string, stat
       reservation_name: reservationName,
       status,
       pos_invoice: posInvoice,
+      cancel_reason: cancelReason,
     }
   );
 

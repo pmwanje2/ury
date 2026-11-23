@@ -18,6 +18,9 @@ interface Props {
     reservation: TableReservation | null;
     tableName: string;
     onClose: () => void;
+    /** Seat the arriving party at this table (opens its order). */
+    onSeat?: () => void;
+    seatLoading?: boolean;
 }
 
 const TableReservationWarningDialog = ({
@@ -25,6 +28,8 @@ const TableReservationWarningDialog = ({
     reservation,
     tableName,
     onClose,
+    onSeat,
+    seatLoading = false,
 }: Props) => {
     if (!reservation) return null;
 
@@ -138,13 +143,24 @@ const TableReservationWarningDialog = ({
                     </div>
                 </div>
 
-                <DialogFooter className="border-t bg-white px-8 py-5 shrink-0 flex justify-end">
+                <DialogFooter className="border-t bg-white px-8 py-5 shrink-0 flex justify-end gap-3">
                     <Button
+                        variant={onSeat ? 'outline' : undefined}
                         onClick={onClose}
+                        disabled={seatLoading}
                         className="w-full sm:w-auto"
                     >
                         {t('reservations.choose_another_action')}
                     </Button>
+                    {onSeat && (
+                        <Button
+                            onClick={onSeat}
+                            disabled={seatLoading}
+                            className="w-full sm:w-auto"
+                        >
+                            {t('reservations.seat_action')}
+                        </Button>
+                    )}
                 </DialogFooter>
             </DialogContent>
         </Dialog>

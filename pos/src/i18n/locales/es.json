@@ -432,9 +432,18 @@
     "status_completed": "Completada",
     "status_cancelled": "Cancelada",
     "status_no_show": "No se presentó",
+    "status_seated": "En mesa",
+    "seat_action": "Sentar al cliente",
+    "unseat_action": "Quitar de la mesa",
+    "seat_title": "Sentar al cliente",
+    "seat_description": "Sienta al grupo en la mesa {{table}} ({{time}}) y abre su pedido.",
+    "cancel_reason_label": "Motivo de cancelación",
+    "cancel_reason_required": "Introduce un motivo para cancelar esta reserva.",
+    "timeline_table_column": "Mesa",
     "loading_timeline": "Cargando línea de tiempo...",
     "empty_timeline_title": "No hay reservas para esta fecha",
-    "empty_timeline_hint": "Las reservas aparecerán a lo largo del eje de tiempo."
+    "empty_timeline_hint": "Las reservas aparecerán a lo largo del eje de tiempo.",
+    "min_notice": "Una reserva necesita al menos {{minutes}} minutos de antelación."
   },
   "bill_split": {
     "split_bill": "Dividir cuenta",
