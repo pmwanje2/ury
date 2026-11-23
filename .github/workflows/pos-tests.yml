@@ -61,3 +61,4 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_table_reservation_lifecycle
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_pos_invoice_list_fields
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_waiter_name
+          PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_escaping

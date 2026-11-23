@@ -49,6 +49,7 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
       'ury.ury.api.test_table_reservation_lifecycle',
       'ury.ury_pos.test_pos_invoice_list_fields',
       'ury.ury.print_format.test_print_format_waiter_name',
+      'ury.ury.print_format.test_print_format_escaping',
     ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',
   ]);
 });
