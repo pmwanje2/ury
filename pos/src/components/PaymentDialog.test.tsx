@@ -246,6 +246,7 @@ describe("PaymentDialog", () => {
     const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
     expect(checkbox).toBeInTheDocument();
     expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
   });
 
   it("shows print invoice checkbox checked by default even when enable_payment_without_printing is 0", () => {
@@ -274,6 +275,7 @@ describe("PaymentDialog", () => {
     const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
     expect(checkbox).toBeInTheDocument();
     expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(true);
   });
 
   it("prints invoice and completes payment when print invoice is checked", async () => {
