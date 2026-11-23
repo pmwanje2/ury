@@ -84,17 +84,19 @@ function tableAndOrderType(order: Pick<POSInvoice, 'restaurant_table' | 'custom_
 
 /**
  * Open checks per open queue, re-read whenever the visible queue changes.
- * Counts that cannot be read are simply not shown.
+ * Counts that cannot be read are simply not shown, and none are read while
+ * the queue is not this session's (enabled is false).
  */
-function useOpenCheckCounts(branch: string | null, refreshKey: string) {
+function useOpenCheckCounts(enabled: boolean, branch: string | null, refreshKey: string) {
   const [counts, setCounts] = React.useState<Partial<Record<OrderStatusType, number>>>({});
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     getOpenCheckCounts(branch)
       .then((next) => { if (active) setCounts(next); })
       .catch(() => { if (active) setCounts({}); });
     return () => { active = false; };
-  }, [branch, refreshKey]);
+  }, [enabled, branch, refreshKey]);
   return counts;
 }
 
@@ -167,7 +169,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const selectedOrder = sameOwner ? detail : null;
   const staffNames = useStaffNames([...orders.map((order) => order.waiter), selectedOrder?.waiter]);
   const openCheckCounts = useOpenCheckCounts(
-    sameOwner ? ordersBranch : null,
+    sameOwner,
+    ordersBranch,
     `${selectedStatus}|${orders.map((order) => `${order.name}:${order.invoice_printed}`).join(',')}`,
   );
   const posStore = usePOSStore();
