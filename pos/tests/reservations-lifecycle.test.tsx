@@ -133,6 +133,8 @@ it('the timeline shows bookings per table and opens one on click', async () => {
   });
   expect(document.querySelector('[role="row"][aria-label="Table 2"]')).not.toBeNull();
   await act(async () => { fireEvent.click(within(row).getByText('Grace')); });
-  await waitFor(() => expect(within(screen.getByRole('dialog')).getAllByText(/edit reservation/i).length)
-    .toBeGreaterThan(0));
+  // The booking opens in the edit dialog, titled with its table.
+  const dialog = await waitFor(() => screen.getByRole('dialog'));
+  expect(within(dialog).getByRole('button', { name: /save changes/i })).toBeInTheDocument();
+  expect(within(dialog).getByRole('heading', { name: 'Table 1' })).toBeInTheDocument();
 });
