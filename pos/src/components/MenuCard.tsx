@@ -19,6 +19,8 @@ interface MenuCardProps {
   onClick?: () => void;
   disabled?: boolean;
   availability?: ItemAvailability | null;
+  /** The count could not be re-read (offline or a failed refresh). */
+  availabilityStale?: boolean;
   availabilityActions?: AvailabilityActions;
 }
 
@@ -30,12 +32,15 @@ const MenuCard: FC<MenuCardProps> = ({
   onClick,
   disabled,
   availability,
+  availabilityStale = false,
   availabilityActions,
 }) => {
   const unavailable = isUnavailable(availability);
   const unavailableMessage = unavailable
     ? getAvailabilityMessage(availability?.reason_code)
     : null;
+  // Simphony shows "[N]?" while it cannot confirm a count; a sold-out item stays blocked.
+  const qtyLeft = (qty: number) => t(availabilityStale ? 'menu.qty_left_unconfirmed' : 'menu.qty_left', { qty });
 
   // Determine badge variant and text for availability status
   const getAvailabilityTag = (): {
@@ -56,7 +61,7 @@ const MenuCard: FC<MenuCardProps> = ({
     if (availability.available_qty != null && availability.available_qty < 5) {
       return {
         variant: 'tagWarning',
-        text: t('menu.qty_left', { qty: availability.available_qty }),
+        text: qtyLeft(availability.available_qty),
         showDot: false,
       };
     }
@@ -68,7 +73,7 @@ const MenuCard: FC<MenuCardProps> = ({
 
     return {
       variant: 'tagSuccess',
-      text: t('menu.qty_left', { qty: availability.available_qty }),
+      text: qtyLeft(availability.available_qty),
       showDot: true,
     };
   };

@@ -1,6 +1,6 @@
 import { qtyReductionMessage } from '../lib/qty-reduction-message';
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus } from 'lucide-react';
+import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus, Users, Utensils } from 'lucide-react';
 import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@ury/ui';
 import { showToast } from '@ury/ui';
@@ -23,6 +23,7 @@ import { call, getSessionUser } from '@ury/core';
 import { splitBill, cancelOrder } from '../lib/order-api';
 import {
   getOrdersTabForInvoice,
+  getOpenCheckCounts,
   getSplitGroup,
   getCombinedOrderTotals,
   isMergedBill,
@@ -48,6 +49,9 @@ import { orderTypeLabel } from '../data/order-types';
 import { useSessionOwner } from '../lib/use-session-owner';
 import BillRequestStrip from '../components/BillRequestStrip';
 import Notifications from '../components/Notifications';
+import { formatGuestSubtitle, formatStaffDisplayName } from '../lib/order-display';
+import { useStaffNames } from '../lib/use-staff-names';
+import type { OrderStatusType } from '../data/order-types';
 
 function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom_merged_tables'>) {
   if (!order.restaurant_table) return null;
@@ -55,10 +59,45 @@ function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom
 }
 
 // The check's guest label leads, so two splits on one walk-in customer
-// ("Susan · Walk In", "David · Walk In") are told apart.
-function checkName(order: Pick<POSInvoice, 'customer' | 'custom_guest_label'>) {
-  const label = order.custom_guest_label?.trim();
-  return label ? `${label} · ${order.customer}` : order.customer;
+// ("Susan · Walk In", "David · Walk In") are told apart. The customer shows by
+// name: on naming-series sites its id is "CUST-0001".
+function checkName(order: Pick<POSInvoice, 'customer' | 'customer_name' | 'custom_guest_label'>) {
+  return formatGuestSubtitle(order.custom_guest_label, order.customer_name, order.customer);
+}
+
+/** The waiter's User full name, else a name the payload carries, else one read from the id. */
+function waiterName(order: Pick<POSInvoice, 'waiter' | 'waiter_name'>, staffNames: ReadonlyMap<string, string>) {
+  return formatStaffDisplayName((order.waiter && staffNames.get(order.waiter)) || order.waiter_name, order.waiter);
+}
+
+function coversLabel(order: Pick<POSInvoice, 'no_of_pax'>) {
+  const covers = Number(order.no_of_pax);
+  return Number.isFinite(covers) && covers > 0 ? t('order.covers', { count: covers }) : null;
+}
+
+function tableAndOrderType(order: Pick<POSInvoice, 'restaurant_table' | 'custom_merged_tables' | 'order_type' | 'no_of_pax'>) {
+  const table = getOrderTableLabel(order);
+  const type = orderTypeLabel(order.order_type);
+  const covers = coversLabel(order);
+  return [table ? `${t('pos_ui.table')} ${table}` : null, type, covers].filter(Boolean).join(' · ');
+}
+
+/**
+ * Open checks per open queue, re-read whenever the visible queue changes.
+ * Counts that cannot be read are simply not shown, and none are read while
+ * the queue is not this session's (enabled is false).
+ */
+function useOpenCheckCounts(enabled: boolean, branch: string | null, refreshKey: string) {
+  const [counts, setCounts] = React.useState<Partial<Record<OrderStatusType, number>>>({});
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    getOpenCheckCounts(branch)
+      .then((next) => { if (active) setCounts(next); })
+      .catch(() => { if (active) setCounts({}); });
+    return () => { active = false; };
+  }, [enabled, branch, refreshKey]);
+  return counts;
 }
 
 function isOrderEditable(status: string) {
@@ -128,6 +167,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const sameOwner = !!owner && owner !== 'Guest' && ordersOwner === owner;
   const orders = sameOwner ? list : [];
   const selectedOrder = sameOwner ? detail : null;
+  const staffNames = useStaffNames([...orders.map((order) => order.waiter), selectedOrder?.waiter]);
+  const openCheckCounts = useOpenCheckCounts(
+    sameOwner,
+    ordersBranch,
+    `${selectedStatus}|${orders.map((order) => `${order.name}:${order.invoice_printed}`).join(',')}`,
+  );
   const posStore = usePOSStore();
   const printWarningMinutes = posStore.posProfile?.custom_invoice_warning_time ?? 0;
   const [clockNow, setClockNow] = React.useState(() => Date.now());
@@ -141,7 +186,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     const warning = getPrintWarningState(order, printWarningMinutes, clockNow);
     if (!warning.exceeded) return null;
     return (
-      <Badge variant="outline" className="border-red-500 text-red-600 bg-red-50">
+      <Badge variant="outline" className="shrink-0 border-red-500 text-red-600 bg-red-50">
         {warning.elapsedLabel}
       </Badge>
     );
@@ -536,17 +581,20 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
       {/* Left Sidebar - Order Types */}
-      <div className="flex flex-col bg-white">
+      <div className="flex min-w-0 flex-col bg-white">
       <Link className="p-3 text-blue-700 underline" to="/orders/settled">{t('orders.settled_closed')}</Link>
       <OrderStatusSidebar
         selectedStatus={selectedStatus}
         setSelectedStatus={setSelectedStatus}
+        getStatusCount={(status) => openCheckCounts[status]}
       />
       </div>
 
       {/* Middle Section - Order Cards */}
       <div className="flex min-w-0 flex-none flex-col lg:min-h-0 lg:flex-1">
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-4 bg-gray-50 p-4 xl:grid-cols-[minmax(0,1fr)_14rem] xl:grid-rows-1">
+        {/* Notifications sit beside the cards only once both fit (2xl): at
+            1280px the 14rem rail squeezed every card to ~137px. */}
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-4 bg-gray-50 p-4 2xl:grid-cols-[minmax(0,1fr)_14rem] 2xl:grid-rows-1">
           <div className="min-w-0 overflow-y-auto">
           <BillRequestStrip ordersBranch={sameOwner ? ordersBranch : null} selectOrder={selectBillRequest} />
           {error ? (
@@ -563,7 +611,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               <p className="text-gray-500">{t('orders.no_orders_found')}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+            // As many columns as fit, none narrower than 13rem, so every check
+            // number stays readable whatever the screen and the rails beside it.
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,13rem),1fr))] gap-4">
               {orders.map((order) => {
                 const splitBill = isSplitBill(order);
                 const mergedBill = isMergedBill(order);
@@ -581,41 +631,38 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 >
                   <CardContent className="p-0 flex flex-col h-full">
                     <div className="p-3 bg-gray-50 border-b">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <h3 className="font-medium text-gray-900 text-sm truncate" title={order.name}>
+                    {/* The total drops under the reference only when both do not fit. */}
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      {/* Wraps rather than an ellipsis: a touch screen has no hover tooltip. */}
+                      <h3 className="min-w-0 break-words text-sm font-semibold text-gray-900" title={order.name}>
                         {order.name}
                       </h3>
-                      <div className="flex shrink-0 items-center gap-1">
-                        {mergedBill && <LinkTag icon={GitMerge}>{t('bill_merge.merged_bill')}</LinkTag>}
-                        {splitBill && (
-                          <LinkTag icon={GitBranch}>
-                            {(order.split_total ?? 0) >= 2
-                              ? t('bill_split.split_indicator', {
-                                  index: order.split_index ?? 0,
-                                  total: order.split_total ?? 0,
-                                })
-                              : t('bill_split.split_bill')}
-                          </LinkTag>
-                        )}
-                      </div>
+                      <span className="ms-auto shrink-0 whitespace-nowrap text-sm font-semibold tabular-nums text-gray-900">
+                        {formatCurrency(cardTotal)}
+                      </span>
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-500">
-                          {getOrderTableLabel(order)
-                            ? `${t('pos_ui.table')} ${getOrderTableLabel(order)} • `
-                            : ''}{orderTypeLabel(order.order_type)}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Badge variant="outline">
-                          {t(String(order.invoice_printed) === '1' ? 'order.printed' : 'order.not_printed')}
-                        </Badge>
-                        <Badge variant={getBadgeVariant(order.status)}>
-                          {t(`order_status_types.${order.status.toLowerCase().replace(/ /g, '_')}`)}
-                        </Badge>
-                        {renderPrintWarning(order)}
-                      </div>
+                    <p className="mt-1 min-w-0 break-words text-xs text-gray-500">
+                      {tableAndOrderType(order)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="shrink-0">
+                        {t(String(order.invoice_printed) === '1' ? 'order.printed' : 'order.not_printed')}
+                      </Badge>
+                      <Badge variant={getBadgeVariant(order.status)} className="shrink-0">
+                        {t(`order_status_types.${order.status.toLowerCase().replace(/ /g, '_')}`)}
+                      </Badge>
+                      {renderPrintWarning(order)}
+                      {mergedBill && <LinkTag icon={GitMerge}>{t('bill_merge.merged_bill')}</LinkTag>}
+                      {splitBill && (
+                        <LinkTag icon={GitBranch}>
+                          {(order.split_total ?? 0) >= 2
+                            ? t('bill_split.split_indicator', {
+                                index: order.split_index ?? 0,
+                                total: order.split_total ?? 0,
+                              })
+                            : t('bill_split.split_bill')}
+                        </LinkTag>
+                      )}
                     </div>
                     {mergedBill && order.custom_merged_pos_invoice && (
                       <p className="mt-2 text-xs text-primary-700">
@@ -631,26 +678,21 @@ function OwnerOrders({ owner }: { owner: string | null }) {
 
                     {/* Content section - matches MenuCard padding and structure */}
                     <div className="flex-1 p-3 flex flex-col">
-                      <div className="">
-                        <p className="text-sm text-gray-900">{checkName(order)}</p>
-                      </div>
+                      <p className="min-w-0 break-words text-sm text-gray-900">{checkName(order)}</p>
 
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>{formatDateTime(order.posting_date, order.posting_time)}</span>
-                        {order.age_minutes !== undefined && <span>{t('order.age_minutes', { count: order.age_minutes })}</span>}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
+                        <Clock className="h-3.5 w-3.5 shrink-0" />
+                        <span className="whitespace-nowrap">{formatDateTime(order.posting_date, order.posting_time)}</span>
+                        {order.age_minutes !== undefined && <span className="whitespace-nowrap">{t('order.age_minutes', { count: order.age_minutes })}</span>}
                       </div>
-                      {order.waiter && <p className="text-xs text-gray-500">{order.waiter}</p>}
+                      {waiterName(order, staffNames) && (
+                        <p className="min-w-0 break-words text-xs text-gray-500" title={order.waiter || undefined}>
+                          {waiterName(order, staffNames)}
+                        </p>
+                      )}
                       {order.items_preview?.length ? <p className="mt-2 text-sm text-gray-700">
                         {order.items_preview.map(item => `${item.qty}× ${item.item_name}`).join(', ')}
                       </p> : null}
-
-                      {/* Total - pushed to bottom like MenuCard */}
-                      <div className="mt-auto pt-2">
-                        <span className="text-lg font-semibold text-gray-900 tabular-nums">
-                          {formatCurrency(cardTotal)}
-                        </span>
-                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -755,27 +797,27 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   </Badge>
                 </div>
               </div>
-              {((selectedOrder.split_total ?? 0) >= 2 ||
-                isSplitBill(selectedOrder) ||
-                isMergedBill(selectedOrder)) && (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {(selectedOrder.split_total ?? 0) >= 2 || isSplitBill(selectedOrder) ? (
-                    <LinkTag icon={GitBranch}>
-                      {(selectedOrder.split_total ?? 0) >= 2
-                        ? t('bill_split.split_indicator', {
-                            index: selectedOrder.split_index ?? 0,
-                            total: selectedOrder.split_total ?? 0,
-                          })
-                        : t('bill_split.split_bill')}
-                    </LinkTag>
-                  ) : null}
-                  {isMergedBill(selectedOrder) ? (
-                    <LinkTag icon={GitMerge}>
-                      {t('bill_merge.merged_bill')}
-                    </LinkTag>
-                  ) : null}
-                </div>
-              )}
+              {/* Print state, then split/merge links, on their own row so the check number keeps its line. */}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant="outline">
+                  {t(String(selectedOrder.invoice_printed) === '1' ? 'order.printed' : 'order.not_printed')}
+                </Badge>
+                {(selectedOrder.split_total ?? 0) >= 2 || isSplitBill(selectedOrder) ? (
+                  <LinkTag icon={GitBranch}>
+                    {(selectedOrder.split_total ?? 0) >= 2
+                      ? t('bill_split.split_indicator', {
+                          index: selectedOrder.split_index ?? 0,
+                          total: selectedOrder.split_total ?? 0,
+                        })
+                      : t('bill_split.split_bill')}
+                  </LinkTag>
+                ) : null}
+                {isMergedBill(selectedOrder) ? (
+                  <LinkTag icon={GitMerge}>
+                    {t('bill_merge.merged_bill')}
+                  </LinkTag>
+                ) : null}
+              </div>
             </div>
             {/* Cancel Order Dialog */}
             <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
@@ -846,27 +888,45 @@ function OwnerOrders({ owner }: { owner: string | null }) {
 
               <div className="mb-6">
                 <div className="grid grid-cols-2 gap-4">
-                  {/* First column: customer and time */}
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 text-sm">
-                      <User className="w-4 h-4 text-gray-500" />
-                      <span className="text-gray-900 font-medium">{checkName(selectedOrder)}</span>
+                  {/* First column: check name, open time and order type */}
+                  <div className="min-w-0 space-y-3">
+                    <div className="flex min-w-0 items-center gap-3 text-sm">
+                      <User className="w-4 h-4 shrink-0 text-gray-500" />
+                      <span className="min-w-0 break-words text-gray-900 font-medium">{checkName(selectedOrder)}</span>
                     </div>
                     <div className="flex items-center gap-3 text-sm">
-                      <Clock className="w-4 h-4 text-gray-500" />
+                      <Clock className="w-4 h-4 shrink-0 text-gray-500" />
                       <span className="text-gray-600">{formatDateTime(selectedOrder.posting_date, selectedOrder.posting_time)}</span>
                     </div>
-                  </div>
-                  {/* Second column: waiter and table */}
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 text-sm">
-                      <UserCheck className="w-4 h-4 text-gray-500" />
-                      <span className="text-gray-600">{selectedOrder.waiter}</span>
+                    <div className="flex min-w-0 items-center gap-3 text-sm">
+                      <Utensils className="w-4 h-4 shrink-0 text-gray-500" />
+                      <span className="min-w-0 break-words text-gray-600">{orderTypeLabel(selectedOrder.order_type)}</span>
                     </div>
+                  </div>
+                  {/* Second column: waiter, table and covers */}
+                  <div className="min-w-0 space-y-3">
+                    {waiterName(selectedOrder, staffNames) && (
+                      <div className="flex min-w-0 items-start gap-3 text-sm">
+                        <UserCheck className="mt-0.5 w-4 h-4 shrink-0 text-gray-500" />
+                        <div className="min-w-0">
+                          <p className="break-words text-gray-600">{waiterName(selectedOrder, staffNames)}</p>
+                          {/* The user id as text: a touch screen cannot hover for it. */}
+                          {selectedOrder.waiter && selectedOrder.waiter !== waiterName(selectedOrder, staffNames) && (
+                            <p className="break-all text-xs text-gray-400">{selectedOrder.waiter}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     {selectedOrder.restaurant_table && (
                       <div className="flex items-center gap-3 text-sm">
-                        <Receipt className="w-4 h-4 text-gray-500" />
+                        <Receipt className="w-4 h-4 shrink-0 text-gray-500" />
                         <span className="text-gray-600">{getOrderTableLabel(selectedOrder)}</span>
+                      </div>
+                    )}
+                    {coversLabel(selectedOrder) && (
+                      <div className="flex items-center gap-3 text-sm">
+                        <Users className="w-4 h-4 shrink-0 text-gray-500" />
+                        <span className="text-gray-600">{coversLabel(selectedOrder)}</span>
                       </div>
                     )}
                   </div>
@@ -1043,7 +1103,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           items={selectedOrderItems}
           sourceCustomer={
             selectedOrder.customer
-              ? { id: selectedOrder.customer, name: selectedOrder.customer, phone: selectedOrder.mobile_number }
+              ? { id: selectedOrder.customer, name: selectedOrder.customer_name || selectedOrder.customer, phone: selectedOrder.mobile_number }
               : null
           }
           onConfirm={handleSplitBill}

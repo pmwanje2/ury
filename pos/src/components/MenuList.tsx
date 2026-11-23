@@ -12,10 +12,12 @@ const EMPTY_AVAILABILITY: MenuAvailability = {};
 interface MenuListProps {
   onItemClick: (item: any) => void;
   availabilityMap?: MenuAvailability;
+  /** The counts in availabilityMap could not be re-read; cards mark them unconfirmed. */
+  availabilityStale?: boolean;
   itemAvailabilityActions?: (item: string) => AvailabilityActions;
 }
 
-const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPTY_AVAILABILITY, itemAvailabilityActions }) => {
+const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPTY_AVAILABILITY, availabilityStale = false, itemAvailabilityActions }) => {
   const {
     menuItems,
     menuLoading,
@@ -88,6 +90,7 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
                 onClick={() => onItemClick(item)}
                 disabled={isInteractionDisabled}
                 availability={availabilityMap[item.item]}
+                availabilityStale={availabilityStale}
                 availabilityActions={itemAvailabilityActions?.(item.item)}
               />
             ))}

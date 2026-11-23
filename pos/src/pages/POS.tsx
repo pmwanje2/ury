@@ -30,7 +30,7 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
     menuItems,
     posProfile,
   } = usePOSStore();
-  const { availabilityMap, refetchAll } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
+  const { availabilityMap, availabilityStale, refetchAll } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
   const user = useRootStore(state => state.user);
   const { canMark, canRestore } = availabilityPermissions(user?.roles);
   const branch = posProfile?.branch;
@@ -155,7 +155,8 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
           </div>
         </div>
 
-        <MenuList onItemClick={handleItemClick} availabilityMap={availabilityMap} itemAvailabilityActions={itemAvailabilityActions} />
+        <MenuList onItemClick={handleItemClick} availabilityMap={availabilityMap} availabilityStale={availabilityStale}
+          itemAvailabilityActions={itemAvailabilityActions} />
       </div>
       <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}

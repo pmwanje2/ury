@@ -16,10 +16,17 @@ export interface POSInvoice {
   restaurant_table: string | null;
   cashier: string;
   waiter: string;
+  /** the waiter's full name, when a caller has resolved it */
+  waiter_name?: string | null;
   net_total: number;
   posting_time: string;
   total_taxes_and_charges: number;
   customer: string;
+  customer_name?: string;
+  custom_guest_label?: string | null;
+  /** covers (guest count) on the check */
+  no_of_pax?: number | null;
+  creation?: string;
   status: 'Draft' | 'Unbilled' | 'Recently Paid' | 'Paid' | 'Consolidated' | 'Return';
   mobile_number: string;
   posting_date: string;

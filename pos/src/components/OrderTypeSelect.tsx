@@ -69,28 +69,32 @@ const OrderTypeSelect = ({ disabled }: OrderTypeSelectProps) => {
 
   return (
     <div>
-      <div className="flex gap-2 overflow-x-auto pb-2 -mx-2 px-2">
+      {/* Two columns fit every order type inside the cart panel (384px on
+          desktop); a single scrolling row clipped the later types off its edge. */}
+      <div className="grid grid-cols-2 gap-1.5">
         {ORDER_TYPES.map(({ value, icon: Icon }) => {
           const isDineIn = value === DINE_IN;
           const isDisabled = disabled || (isDineIn && isRestrictedFromTableOrders) || isUpdatingOrder;
-          
+          const label = orderTypeLabel(value);
+
           return (
             <Button
               key={value}
               onClick={() => handleOrderTypeSelect(value)}
               variant={selectedOrderType === value ? 'default' : 'outline'}
               className={cn(
-                'h-fit flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap bg-white border transition-colors',
+                'h-fit w-full min-w-0 justify-start gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border transition-colors',
                 selectedOrderType === value
                 ? 'text-primary-700 bg-primary-50 border-primary-600 hover:bg-primary-50'
                 : 'text-gray-700 border-border hover:bg-gray-50',
                 isDisabled && 'opacity-50 cursor-not-allowed'
               )}
               disabled={isDisabled}
-              title={isDineIn && isRestrictedFromTableOrders ? t('errors.dine_in_restricted') || 'Dine In is not available for your role' : undefined}
+              title={isDineIn && isRestrictedFromTableOrders ? t('errors.dine_in_restricted') || 'Dine In is not available for your role' : label}
             >
-              <Icon className="w-4 h-4" />
-              {orderTypeLabel(value)}
+              <Icon className="w-4 h-4 shrink-0" />
+              {/* Wraps rather than an ellipsis: a touch screen has no hover tooltip. */}
+              <span className="min-w-0 whitespace-normal break-words text-start leading-tight">{label}</span>
             </Button>
           );
         })}
