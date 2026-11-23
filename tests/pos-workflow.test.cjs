@@ -24,6 +24,9 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
     'npm --prefix .. ci --ignore-scripts --no-audit --no-fund',
     'node --test ../tests/pos-workflow.test.cjs',
     'npm test --offline -- ./tests/ --maxWorkers=1',
+    // MenuItemCard and the other shared components are also rendered by serve.
+    'npm --prefix ../packages/ui test --offline -- --maxWorkers=1',
+    'npm --prefix ../serve test --offline -- --maxWorkers=1',
     [
       'ury.tests.unit.test_offline_capture_fixture',
       'ury.ury.api.test_ury_kot_notes',
@@ -39,6 +42,8 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
       'ury.tests.unit.test_backfill_invoice_employee_attribution',
       'ury.ury.api.test_availability_tiers',
       'ury.ury.api.test_menu_availability_operations',
+      'ury.ury_pos.test_pos_invoice_list_fields',
+      'ury.ury.print_format.test_print_format_waiter_name',
     ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',
   ]);
 });
