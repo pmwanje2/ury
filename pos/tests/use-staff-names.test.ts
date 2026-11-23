@@ -59,7 +59,9 @@ describe('useStaffNames', () => {
 
   it('asks once for each id it has read', async () => {
     getUserFullNames.mockResolvedValue(new Map([[WAITER, 'Samuel Otieno']]));
-    const { result, rerender } = renderHook(({ ids }) => useStaffNames(ids), { initialProps: { ids: [WAITER] } });
+    const { result, rerender } = renderHook(({ ids }) => useStaffNames(ids), {
+      initialProps: { ids: [WAITER] as Array<string | null> },
+    });
     await settle();
     rerender({ ids: [WAITER, null] });
     await settle(120_000);
