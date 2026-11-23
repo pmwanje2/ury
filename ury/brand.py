@@ -7,6 +7,7 @@ from urllib.parse import quote_plus
 import frappe
 
 DEFAULT_SOURCE_URL = "https://github.com/pmwanje2/ury/tree/maximus/v16-integration"
+DEFAULT_MESSAGE_CODE_PREFIX = "POS"
 
 
 def get_theme():
@@ -200,3 +201,17 @@ def get_brand_context(surface="site"):
         "brand_json": json_for_script(brand),
         "brand_source_url": frappe.conf.get("ury_source_url") or DEFAULT_SOURCE_URL,
     }
+
+
+def coded_message(key, message):
+    """Show a refusal under a brand-free code; tests and logs match the stable KEY.
+
+    The ``ury_message_code_prefix`` site config sets the prefix. A value that is
+    malformed or names the engine falls back to the default.
+    """
+    prefix = (frappe.conf or {}).get("ury_message_code_prefix")
+    if not (isinstance(prefix, str) and re.fullmatch(r"[A-Z][A-Z0-9]{1,9}", prefix)) or re.search(
+        r"URY|FRAPPE|ERPNEXT|KAMRA", prefix
+    ):
+        prefix = DEFAULT_MESSAGE_CODE_PREFIX
+    return f"[{prefix}-{key}] {message}"
