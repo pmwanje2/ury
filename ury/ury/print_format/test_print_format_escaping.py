@@ -11,10 +11,10 @@ Each shipped format is rendered whole here, every text value carrying markup. Tw
 of value are printed raw on purpose and are not marked:
 
 - an item's ``description``: a Text Editor field, HTML by design (sanitised on save);
-- money, dates, times and quantities formatted by Frappe (``get_formatted``,
-  ``fmt_money``, ``formatdate``): numbers, not typed text, and Frappe's own standard
-  print macro prints formatted Currency raw too
-  (frappe/templates/print_formats/standard_macros.html).
+- numbers, dates and times: money, quantities and dates Frappe formats
+  (``get_formatted``, ``fmt_money``, ``formatdate``), as its own standard print macro
+  prints formatted Currency raw (frappe/templates/print_formats/standard_macros.html),
+  and values the server sets (the bill copy's number, timestamp and posting date).
 
 The record fixtures hold exactly the fields each template reads, so a template that
 starts printing another field fails here until that field is added and marked.
@@ -196,6 +196,15 @@ class TestRecordValuesPrintAsText(unittest.TestCase):
 		html = render("merged_pos_invoice_format", merged_bill(markup), markup)
 		self.assertIn(DESCRIPTION, html)
 		self.assertIn(("em", []), Printed(html).tags)
+
+	def test_a_tax_description_prints_tag_stripped_and_escaped(self):
+		# Guard: `striptags` decodes entities, so "&lt;b&gt;" would come out as a real <b>
+		# without the `| e` that follows it on the bill copy.
+		doc = bill_copy(plain)
+		doc.taxes[0].description = "<i>VAT</i> &lt;b&gt;18%&lt;/b&gt; & levy"
+		printed = Printed(render("ury_bill_copy", doc, plain))
+		self.assertEqual(printed.tags, Printed(render("ury_bill_copy", bill_copy(plain), plain)).tags)
+		self.assertIn("VAT <b>18%</b> & levy", printed.text)
 
 	def test_empty_optional_fields_print_nothing(self):
 		# Guard: an escaped blank field prints nothing, not "None".
