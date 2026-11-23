@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { showToast } from '@ury/ui';
 import Reservations from '../src/pages/Reservations';
 import { initI18n } from '../src/i18n';
 
@@ -64,6 +65,7 @@ beforeEach(async () => {
     throw new Error(`Unexpected endpoint: ${endpoint}`);
   });
   boundary.post.mockResolvedValue({ message: true });
+  vi.spyOn(showToast, 'error').mockImplementation(() => 'toast');
 });
 
 async function openBook() {
@@ -137,4 +139,119 @@ it('the timeline shows bookings per table and opens one on click', async () => {
   const dialog = await waitFor(() => screen.getByRole('dialog'));
   expect(within(dialog).getByRole('button', { name: /save changes/i })).toBeInTheDocument();
   expect(within(dialog).getByRole('heading', { name: 'Table 1' })).toBeInTheDocument();
+});
+
+// The book opens on Confirmed; a test about another status switches the filter first.
+async function openBookOn(status: string, guest: string) {
+  render(
+    <MemoryRouter initialEntries={['/reservations']}>
+      <Routes>
+        <Route path="/reservations" element={<Reservations />} />
+        <Route path="/register" element={<div>REGISTER</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await waitFor(() => expect(boundary.get).toHaveBeenCalledWith(
+    `${RESERVATION}get_active_reservations`, expect.anything()));
+  await showStatus(status);
+  await waitFor(() => expect(screen.getAllByText(guest).length).toBeGreaterThan(0));
+}
+
+async function showStatus(value: string) {
+  const filter = screen.getByRole('combobox', { name: /filter by status/i });
+  await act(async () => { fireEvent.change(filter, { target: { value } }); });
+}
+
+it('a refused seat is shown to the host, who stays on the book', async () => {
+  boundary.post.mockRejectedValue(new Error('Table Table 1 has an open check.'));
+  await openBook();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /seat guest/i })); });
+  const dialog = screen.getByRole('dialog');
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: /seat guest/i })); });
+  await waitFor(() => expect(showToast.error).toHaveBeenCalledWith('Table Table 1 has an open check.'));
+  expect(screen.queryByText('REGISTER')).toBeNull();
+  expect(boundary.setSelectedTable).not.toHaveBeenCalled();
+});
+
+it('a refused cancellation is shown to the host', async () => {
+  boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  boundary.post.mockRejectedValue(new Error('Not permitted to change reservation status to Cancelled.'));
+  await openBook();
+  const menu = [...document.querySelectorAll('button')]
+    .filter(button => !button.textContent?.trim() && !button.getAttribute('aria-label'));
+  await act(async () => { fireEvent.click(menu[0]); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /cancel reservation/i })); });
+  const dialog = screen.getByRole('dialog');
+  fireEvent.change(within(dialog).getByRole('textbox', { name: /cancellation reason/i }),
+    { target: { value: 'Guest called' } });
+  await act(async () => {
+    fireEvent.click(within(dialog).getAllByRole('button', { name: /cancel reservation/i }).at(-1)!);
+  });
+  await waitFor(() => expect(showToast.error).toHaveBeenCalledWith('Not permitted to change reservation status to Cancelled.'));
+});
+
+it('the cancellation reason is capped at the stored field length', async () => {
+  boundary.user = { name: 'Administrator', roles: ['System Manager'] };
+  await openBook();
+  const menu = [...document.querySelectorAll('button')]
+    .filter(button => !button.textContent?.trim() && !button.getAttribute('aria-label'));
+  await act(async () => { fireEvent.click(menu[0]); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /cancel reservation/i })); });
+  const reason = within(screen.getByRole('dialog')).getByRole('textbox', { name: /cancellation reason/i });
+  expect(reason).toHaveAttribute('maxLength', '140');
+});
+
+it('only a confirmed booking offers Seat guest', async () => {
+  boundary.reservations = [booking('TR-1', 'Table 1', 'Grace', 'Active'),
+    booking('TR-2', 'Table 2', 'Ada', 'Requested', '20:00')];
+  await openBookOn('All', 'Ada');
+  expect(screen.getByText('Grace')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /seat guest/i })).toBeNull();
+});
+
+it('a party seated by mistake is unseated back to the book', async () => {
+  boundary.reservations = [booking('TR-1', 'Table 1', 'Grace', 'Seated')];
+  await openBookOn('Seated', 'Grace');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^unseat$/i })); });
+  await waitFor(() => expect(boundary.post).toHaveBeenCalledWith(`${RESERVATION}update_reservation_status`,
+    expect.objectContaining({ reservation_name: 'TR-1', status: 'Confirmed' })));
+});
+
+it('a refused unseat is shown to the host', async () => {
+  boundary.reservations = [booking('TR-1', 'Table 1', 'Grace', 'Seated')];
+  boundary.post.mockRejectedValue(new Error('Table Table 1 has an open check; the party has ordered.'));
+  await openBookOn('Seated', 'Grace');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^unseat$/i })); });
+  await waitFor(() => expect(showToast.error).toHaveBeenCalledWith('Table Table 1 has an open check; the party has ordered.'));
+});
+
+it('a cancelled booking shows why it was cancelled', async () => {
+  boundary.reservations = [{ ...booking('TR-1', 'Table 1', 'Grace', 'Cancelled'), cancel_reason: 'Guest called' }];
+  await openBookOn('Cancelled', 'Grace');
+  expect(screen.getByText(/Guest called/)).toBeInTheDocument();
+});
+
+it('the timeline opens only editable bookings', async () => {
+  boundary.reservations = [booking('TR-1', 'Table 1', 'Grace', 'Confirmed'),
+    booking('TR-2', 'Table 2', 'Ada', 'Completed', '12:30')];
+  await openBookOn('All', 'Ada');
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /timeline view/i })); });
+  const row = await waitFor(() => {
+    const found = document.querySelector('[role="row"][aria-label="Table 2"]') as HTMLElement | null;
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  await act(async () => { fireEvent.click(within(row).getByText('Ada')); });
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('the timeline follows the table filter', async () => {
+  await openBook();
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /timeline view/i })); });
+  await waitFor(() => expect(document.querySelector('[role="row"][aria-label="Table 2"]')).not.toBeNull());
+  await act(async () => {
+    fireEvent.change(document.getElementById('table-filter')!, { target: { value: 'Table 1' } });
+  });
+  await waitFor(() => expect(document.querySelector('[role="row"][aria-label="Table 2"]')).toBeNull());
+  expect(document.querySelector('[role="row"][aria-label="Table 1"]')).not.toBeNull();
 });

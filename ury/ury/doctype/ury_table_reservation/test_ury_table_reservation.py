@@ -387,6 +387,132 @@ class TestURYTableReservation(FrappeTestCase):
 
 
 
+class TestConcurrentBookingsOnOneTable(FrappeTestCase):
+    """Two hosts book one table and slot at once, each in its own InnoDB transaction.
+
+    The second host's request has already read the site, so its REPEATABLE READ
+    snapshot predates the first booking's commit. Once it holds the table it
+    must still see that booking and refuse, cleanly. MariaDB 11.8 (the estate)
+    runs innodb_snapshot_isolation=ON, where a locking read of a row committed
+    after the snapshot raises error 1020; earlier MariaDB and
+    innodb_snapshot_isolation=OFF return the current row instead. Both are run.
+    """
+
+    setUp = TestURYTableReservation.setUp
+    tearDown = TestURYTableReservation.tearDown
+    table = "_Test Reservation Table 1"
+
+    def setUp(self):
+        TestURYTableReservation.setUp(self)
+        self.slot = (now_datetime() + timedelta(days=8)).strftime("%Y-%m-%d 19:00:00")
+        if not frappe.db.exists("URY Table", "_Test Reservation Table 2"):
+            frappe.get_doc({
+                "doctype": "URY Table", "name": "_Test Reservation Table 2",
+                "table_name": "_Test Reservation Table 2", "restaurant": "KFC",
+                "restaurant_room": "_Test Reservation Room", "branch": self.branch,
+                "no_of_seats": 4, "occupied": 0,
+            }).insert(ignore_permissions=True)
+        frappe.db.sql("DELETE FROM `tabURY Table Reservation` WHERE reserved_table = '_Test Reservation Table 2'")
+        frappe.db.commit()
+
+    def tearDown(self):
+        frappe.db.sql("DELETE FROM `tabURY Table Reservation` WHERE reserved_table = '_Test Reservation Table 2'")
+        TestURYTableReservation.tearDown(self)
+
+    def book(self, customer, reserved_at, table=None):
+        return create_table_reservation(
+            table=table or self.table, customer=customer, customer_name=customer,
+            customer_phone="9876543211", no_of_pax=2, reserved_at=reserved_at, branch=self.branch,
+        )
+
+    def race(self, second_host, snapshot_isolation):
+        """The first host holds the table with an uncommitted booking while the second one arrives."""
+        import threading
+        import time
+
+        site, sites_path = frappe.local.site, frappe.local.sites_path
+        snapshot_open = threading.Event()
+        outcome = {}
+
+        def run():
+            frappe.init(site=site, sites_path=sites_path)
+            frappe.connect()
+            try:
+                frappe.db.sql("SET SESSION innodb_snapshot_isolation = %s" % ("ON" if snapshot_isolation else "OFF"))
+                frappe.db.commit()
+                # The request reads the site first (as every reservation write does),
+                # which opens its snapshot before the first booking commits.
+                frappe.db.get_value("Branch", self.branch, "custom_enable_reservation")
+                snapshot_open.set()
+                try:
+                    outcome["saved"] = second_host()
+                except frappe.ValidationError as refused:
+                    outcome["refused"] = str(refused)
+                except Exception as error:  # a raw lock or snapshot error is a failure, not a refusal
+                    outcome["error"] = repr(error)
+                finally:
+                    frappe.db.rollback()
+            finally:
+                frappe.destroy()
+
+        frappe.db.get_value("URY Table", self.table, "name", for_update=True)
+        frappe.get_doc({
+            "doctype": "URY Table Reservation", "branch": self.branch, "reserved_table": self.table,
+            "customer": "_Test Reservation Customer", "customer_name": "Customer A",
+            "customer_phone": "9876543210", "no_of_pax": 2, "reserved_at": self.slot, "status": "Confirmed",
+        }).insert()
+        second = threading.Thread(target=run)
+        try:
+            second.start()
+            self.assertTrue(snapshot_open.wait(30), "the second host never started")
+            time.sleep(1.5)  # it reaches the table lock and waits there
+        finally:
+            frappe.db.commit()
+            second.join(90)
+        self.assertFalse(second.is_alive(), "the second host is still waiting")
+        return outcome
+
+    def assert_refused_once(self, outcome):
+        self.assertNotIn("error", outcome, outcome)
+        self.assertNotIn("saved", outcome, "the second host double-booked the table")
+        self.assertTrue(outcome.get("refused"), outcome)
+        self.assertEqual(frappe.db.count("URY Table Reservation", {
+            "reserved_table": self.table, "reserved_at": self.slot, "status": "Confirmed"}), 1)
+
+    def test_a_second_booking_is_refused_with_current_reads(self):
+        # MariaDB before 11.6.2, or innodb_snapshot_isolation=OFF.
+        outcome = self.race(lambda: self.book("_Test Customer B", self.slot), snapshot_isolation=False)
+        self.assert_refused_once(outcome)
+        self.assertIn("already has a reservation", outcome["refused"])
+
+    def test_a_second_booking_is_refused_cleanly_on_the_estate_s_mariadb(self):
+        outcome = self.race(lambda: self.book("_Test Customer B", self.slot), snapshot_isolation=True)
+        self.assert_refused_once(outcome)
+
+    def test_moving_a_booking_onto_the_slot_is_refused_on_the_estate_s_mariadb(self):
+        # An edit takes no naming-series lock, so only the overlap read can catch it.
+        later = self.slot.replace("19:00:00", "22:30:00")
+        moved = self.book("_Test Customer B", later)
+        frappe.db.commit()
+        outcome = self.race(lambda: update_table_reservation(reservation_name=moved, reserved_at=self.slot),
+            snapshot_isolation=True)
+        self.assert_refused_once(outcome)
+        self.assertEqual(str(frappe.db.get_value("URY Table Reservation", moved, "reserved_at")), later)
+
+    def test_moving_a_booking_on_another_table_at_the_same_moment_is_not_refused(self):
+        # Guard: the locking read touches only its own table's bookings, so the
+        # first host's new booking on table 1 never refuses an edit on table 2.
+        # (An insert would share the naming-series row, which is not this check.)
+        other = "_Test Reservation Table 2"
+        later = self.slot.replace("19:00:00", "22:30:00")
+        moved = self.book("_Test Customer B", later, table=other)
+        frappe.db.commit()
+        outcome = self.race(lambda: update_table_reservation(reservation_name=moved, reserved_at=self.slot),
+            snapshot_isolation=True)
+        self.assertEqual(outcome, {"saved": True})
+        self.assertEqual(str(frappe.db.get_value("URY Table Reservation", moved, "reserved_at")), self.slot)
+
+
 class TestNativeReservationBranchGuard(FrappeTestCase):
     def test_disabled_branch_refuses_native_save_before_conflict_checks(self):
         from unittest.mock import MagicMock, patch

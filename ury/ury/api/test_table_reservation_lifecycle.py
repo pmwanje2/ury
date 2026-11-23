@@ -40,6 +40,10 @@ class WriteFailed(Exception):
     """A database write that failed mid-request."""
 
 
+class Deadlock(Exception):
+    """frappe.QueryDeadlockError: MariaDB 1213, or 1020 under innodb_snapshot_isolation=ON."""
+
+
 class Row(dict):
     """frappe._dict: attribute access, missing fields read as None."""
 
@@ -70,6 +74,10 @@ class Site:
         self.sql_log = []
         self.events = []  # ordered row locks and SQL reads, for concurrency contracts
         self.fail_writes = set()
+        self.versions = []  # Version rows: track_changes records who changed a status
+        # MariaDB 11.8 runs innodb_snapshot_isolation=ON: a locking read that meets a
+        # row committed after this request's snapshot raises 1020 instead of reading it.
+        self.committed_after_snapshot = False
 
     # -- storage -----------------------------------------------------------------
     def put(self, doctype, name, /, **values):
@@ -100,6 +108,8 @@ class Site:
                     ok = value is not None and value >= operand
                 elif op == "<":
                     ok = value is not None and value < operand
+                elif op == "!=":
+                    ok = value != operand
                 elif op == "like":
                     ok = value is not None and operand.strip("%") in str(value)
                 else:
@@ -181,6 +191,8 @@ class Site:
             return [Row(name=i.name) for i in self.rows["POS Invoice"].values()
                 if i.docstatus == 0 and needle in (i.custom_merged_tables or "")][:1]
         if "FROM `tabURY Table Reservation`" in q:
+            if self.committed_after_snapshot and q.endswith("FOR UPDATE"):
+                raise Deadlock("1020 Record has changed since last read in table 'tabURY Table Reservation'")
             rows = list(self.rows["URY Table Reservation"].values())
             status_clause = re.search(r"status IN \(([^)]*)\)", q)
             if status_clause:
@@ -206,7 +218,9 @@ class Site:
             if "name != %s" in q:
                 excluded = params.pop(0)
                 rows = [r for r in rows if r.name != excluded]
-            return [Row(r) for r in rows]
+            # A SELECT returns only the columns it names.
+            columns = [c.strip() for c in re.search(r"SELECT (.*?) FROM", q).group(1).split(",")]
+            return [self.project(r, columns) for r in rows]
         raise AssertionError(f"unexpected SQL: {q}")
 
 
@@ -251,6 +265,11 @@ class FakeDocument:
         self.validate()
         self.__dict__["modified"] = self.site.now
         self.site.write(self.doctype, self.name, self.values())
+        before = self._before
+        if before is not None and before.get("status") != self.status:
+            # URY Table Reservation tracks changes: the Version names the session user.
+            self.site.versions.append(Row(docname=self.name, owner=sys.modules["frappe"].session.user,
+                status=(before.get("status"), self.status)))
         self.on_update()
         self.__dict__["_before"] = Row(self.values())
         return self
@@ -306,6 +325,7 @@ def _framework(site):
     fr._ = lambda message, *a: message
     fr.ValidationError = Invalid
     fr.PermissionError = Refused
+    fr.QueryDeadlockError = Deadlock
     fr.session = SimpleNamespace(user="staff@example.test")
     fr.flags = SimpleNamespace()
     fr.throw.side_effect = lambda message, exc=Invalid, *a, **k: (_ for _ in ()).throw(exc(message))
@@ -455,6 +475,35 @@ class TestConcurrentBookingsSerialiseOnTheTable(_Site):
         self.assertTrue(reads, "no overlap read ran")
         self.assertLess(locks[0], reads[0])
 
+    def test_the_overlap_read_is_itself_a_locking_read(self):
+        # Under REPEATABLE READ a plain SELECT after the row lock still reads the
+        # snapshot the request opened before it waited, so it misses a booking
+        # the first writer committed meanwhile. Only a locking read sees it.
+        self.booking("TR-1", "18:00")
+        self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 20:00:00")
+        events = self.site.events
+        lock = events.index(("lock", "URY Table", "T1"))
+        reads = [(i, e[1]) for i, e in enumerate(events)
+            if e[0] == "sql" and "FROM `tabURY Table Reservation`" in e[1]]
+        self.assertEqual(len(reads), 1)
+        index, query = reads[0]
+        self.assertGreater(index, lock)
+        self.assertTrue(query.rstrip().endswith("FOR UPDATE"), query)
+
+    def test_a_booking_committed_after_this_request_s_snapshot_is_a_clean_refusal(self):
+        # On the estate's MariaDB the locking read raises 1020 for that booking:
+        # the host is asked to try again, never shown a database error.
+        self.booking("TR-1", "22:00")
+        self.site.committed_after_snapshot = True
+        with self.assertRaisesRegex(Invalid, "try again"):
+            self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 19:00:00")
+
+    def test_the_booking_table_is_indexed_so_the_lock_touches_only_its_own_bookings(self):
+        # Without an index the locking read scans, and locks, every booking on the site.
+        meta = json.loads((ROOT / "ury/doctype/ury_table_reservation/ury_table_reservation.json").read_text())
+        field = next(f for f in meta["fields"] if f["fieldname"] == "reserved_table")
+        self.assertEqual(field.get("search_index"), 1)
+
 
 class TestPartySizeFitsTheTable(_Site):
     """B3: a party must fit both the seats and the table's minimum seating."""
@@ -567,14 +616,35 @@ class TestClosingTheBillCompletesTheReservation(_Site):
 
     def setUp(self):
         super().setUp()
-        # A till that does not restrict billing to named roles; whoever settles the bill closes it.
+        # The till names its billing role, and the cashier who settles the bill
+        # closes the party's visit under that same authority.
         self.site.roles = ["URY Cashier"]
-        self.till()
+        self.frappe.session.user = "cashier@example.test"
+        self.till(billing_roles=["URY Cashier"])
         self.clock("20:30")
 
-    def bill(self, table="T1", merged="", branch="Branch A"):
-        return Row(doctype="POS Invoice", name="INV-1", restaurant_table=table, custom_merged_tables=merged,
-            branch=branch, order_type="Dine In", docstatus=1)
+    def bill(self, table="T1", merged="", branch="Branch A", name="INV-1", opened="19:05", **extra):
+        values = dict(doctype="POS Invoice", name=name, restaurant_table=table, custom_merged_tables=merged,
+            branch=branch, order_type="Dine In", docstatus=1, is_return=0, customer="CUST-1",
+            creation=at(opened))
+        values.update(extra)
+        return Row(values)
+
+    def check(self, name, opened, table="T1", **extra):
+        """An open (draft) check on the table."""
+        values = dict(restaurant_table=table, custom_merged_tables="", branch="Branch A",
+            order_type="Dine In", docstatus=0, invoice_printed=0, creation=at(opened))
+        values.update(extra)
+        return self.site.put("POS Invoice", name, **values)
+
+    def close(self, name, **extra):
+        """Submit an open check: it leaves the open list and its on_submit runs."""
+        row = self.site.rows["POS Invoice"][name]
+        row.docstatus = 1
+        self.api.complete_seated_reservation_on_submit(self.bill(
+            table=row.restaurant_table, merged=row.custom_merged_tables, name=name,
+            opened=row.creation.strftime("%H:%M"), custom_split_group=row.custom_split_group,
+            custom_split_from=row.custom_split_from, **extra))
 
     def stored(self, name):
         row = self.site.rows["URY Table Reservation"][name]
@@ -604,6 +674,81 @@ class TestClosingTheBillCompletesTheReservation(_Site):
         self.api.complete_seated_reservation_on_submit(self.bill())
         self.assertEqual(self.stored("TR-1"), ("Seated", None))
         self.assertTrue(self.site.errors)
+
+    def test_a_credit_note_never_completes_the_party(self):
+        self.booking("TR-1", "19:00", status="Seated")
+        self.api.complete_seated_reservation_on_submit(self.bill(is_return=1, return_against="INV-LUNCH"))
+        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+
+    def test_only_a_dine_in_bill_of_the_party_s_own_branch_completes_it(self):
+        self.site.put("Branch", "Branch B", custom_enable_reservation=1, custom_buffer_time=30,
+            custom_grace_period=15, custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
+        self.booking("TR-1", "19:00", status="Seated")
+        for bill in (self.bill(order_type="Take Away"), self.bill(branch="Branch B")):
+            with self.subTest(bill=(bill.order_type, bill.branch)):
+                self.api.complete_seated_reservation_on_submit(bill)
+                self.assertEqual(self.stored("TR-1"), ("Seated", None))
+        self.api.complete_seated_reservation_on_submit(self.bill())
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
+
+    def test_the_first_check_of_a_split_bill_leaves_the_party_seated(self):
+        self.booking("TR-1", "19:00", status="Seated")
+        self.check("INV-1", "19:05", custom_split_group="grp1")
+        self.check("INV-2", "19:50", custom_split_group="grp1", custom_split_from="INV-1")
+        self.close("INV-1")
+        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+        self.close("INV-2")
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-2"))
+
+    def test_a_walk_in_check_on_the_released_table_neither_takes_nor_holds_the_party(self):
+        # The party's check was printed, which released the table, and a walk-in
+        # was seated there. Whichever pays first, the party is closed by its own bill.
+        for first in ("INV-W", "INV-A"):
+            with self.subTest(pays_first=first):
+                self.site.rows["URY Table Reservation"].clear()
+                self.site.rows["POS Invoice"].clear()
+                self.booking("TR-1", "19:00", status="Seated")
+                self.check("INV-A", "19:05", invoice_printed=1)
+                self.check("INV-W", "19:40", customer="Guest")
+                self.close(first)
+                if first == "INV-W":
+                    self.assertEqual(self.stored("TR-1"), ("Seated", None))
+                    self.close("INV-A")
+                self.assertEqual(self.stored("TR-1"), ("Completed", "INV-A"))
+                if first == "INV-A":
+                    self.close("INV-W")
+                    self.assertEqual(self.stored("TR-1"), ("Completed", "INV-A"))
+
+    def test_a_party_already_linked_to_another_bill_is_not_relinked(self):
+        self.booking("TR-1", "19:00", status="Seated", pos_invoice="INV-0")
+        self.api.complete_seated_reservation_on_submit(self.bill())
+        self.assertEqual(self.stored("TR-1"), ("Seated", "INV-0"))
+
+    def test_a_bill_opened_after_the_party_s_hold_ended_does_not_complete_it(self):
+        # 19:00 + a 90 minute stay: the hold ended at 20:30, so a check opened at
+        # 20:40 belongs to someone else.
+        self.booking("TR-1", "19:00", status="Seated")
+        self.clock("21:30")
+        self.api.complete_seated_reservation_on_submit(self.bill(opened="20:40", customer="Guest"))
+        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+
+    def test_the_closer_s_own_authority_decides_and_the_version_names_them(self):
+        # No bypass: a closer the till does not authorise to complete a
+        # reservation leaves the party Seated, and the payment still stands.
+        self.site.roles = ["URY Captain"]
+        self.frappe.session.user = "captain@example.test"
+        self.booking("TR-1", "19:00", status="Seated")
+        self.api.complete_seated_reservation_on_submit(self.bill())  # never raises into the payment
+        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+        self.assertTrue(self.site.errors)
+        self.assertEqual(self.site.versions, [])
+        # The till's cashier completes it, and the Version records that cashier.
+        self.site.roles = ["URY Cashier"]
+        self.frappe.session.user = "cashier@example.test"
+        self.api.complete_seated_reservation_on_submit(self.bill())
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
+        self.assertEqual([(v.owner, v.status) for v in self.site.versions if v.docname == "TR-1"],
+            [("cashier@example.test", ("Seated", "Completed"))])
 
     def test_the_completion_runs_on_pos_invoice_submit(self):
         tree = ast.parse((ROOT / "hooks.py").read_text())
@@ -636,6 +781,217 @@ class TestTheLockEndsAtGrace(_Site):
             listed = self.api.get_active_reservations("Branch A")
         self.assertEqual(sweep.call_count, 1)
         self.assertEqual([(r.name, r.status) for r in listed], [("TR-1", "No Show")])
+
+
+class TestASeatedPartyHoldsItsTable(_Site):
+    """Simphony counts a seated table as occupied: no booking may overlap it, buffer included."""
+
+    def test_an_occupied_table_refuses_a_booking_whose_buffer_starts_inside_the_stay(self):
+        # A walk-in check opened at 18:00 runs to 19:30 (90 minute stay). A 19:45
+        # booking's 30 minute buffer starts at 19:15, inside that stay.
+        self.clock("18:05")
+        self.site.rows["URY Table"]["T1"].occupied = 1
+        self.site.put("POS Invoice", "INV-W", restaurant_table="T1", docstatus=0, creation=at("18:00"))
+        with self.assertRaisesRegex(Invalid, "currently occupied"):
+            self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 19:45:00")
+        self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 20:00:00")
+        names = lambda clock: [t.name for t in self.api.get_available_tables_for_reservation(
+            "Branch A", f"{DAY} {clock}:00")]
+        self.assertEqual(names("19:45"), ["T2", "T3"])
+        self.assertEqual(names("20:00"), ["T1", "T2", "T3"])
+
+    def test_a_seated_reservation_holds_its_window_even_when_the_table_reads_free(self):
+        self.clock("18:20")
+        self.booking("TR-1", "18:00", status="Seated")
+        for clock in ("18:35", "19:45"):
+            with self.subTest(refused=clock):
+                with self.assertRaisesRegex(Invalid, "already has a reservation"):
+                    self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} {clock}:00")
+        self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 20:00:00")
+        names = lambda clock: [t.name for t in self.api.get_available_tables_for_reservation(
+            "Branch A", f"{DAY} {clock}:00")]
+        self.assertEqual(names("18:35"), ["T2", "T3"])
+        self.assertEqual(names("19:45"), ["T2", "T3"])
+        self.assertEqual(names("20:00"), ["T1", "T2", "T3"])
+
+    def test_a_party_seated_at_six_without_an_order_keeps_the_table_at_six_thirty_one(self):
+        self.clock("17:55")
+        self.booking("TR-1", "18:00")
+        self.clock("18:00")
+        self.api.update_reservation_status("TR-1", "Seated")
+        self.clock("18:31")
+        self.api.get_active_reservations("Branch A")  # the floor read runs the occupancy reset
+        self.assertEqual(self.status("TR-1"), "Seated")
+        self.assertEqual(self.site.rows["URY Table"]["T1"].occupied, 1)
+        for clock in ("18:35", "19:45"):
+            with self.subTest(refused=clock):
+                with self.assertRaises(Invalid):
+                    self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} {clock}:00")
+        offered = [t.name for t in self.api.get_available_tables_for_reservation("Branch A", f"{DAY} 18:35:00")]
+        self.assertNotIn("T1", offered)
+
+
+class TestTheSeatedVisitEnds(_Site):
+    """Clearing a table ends its seated visit; a later walk-in's bill never completes an old one."""
+
+    def seat_at_six(self):
+        self.clock("17:55")
+        self.booking("TR-1", "18:00")
+        self.clock("18:00")
+        self.api.update_reservation_status("TR-1", "Seated")
+
+    def stored(self, name):
+        row = self.site.rows["URY Table Reservation"][name]
+        return row.status, row.pos_invoice
+
+    def test_a_party_that_never_orders_is_completed_when_its_hold_ends_and_the_table_is_freed(self):
+        self.seat_at_six()
+        self.clock("19:29")
+        self.api.get_active_reservations("Branch A")
+        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+        self.clock("19:30")  # 18:00 + the 90 minute stay
+        self.api.get_active_reservations("Branch A")
+        self.assertEqual(self.stored("TR-1"), ("Completed", None))
+        self.assertEqual(self.site.rows["URY Table"]["T1"].occupied, 0)
+        # A walk-in seated on the freed table pays: the old reservation is untouched.
+        self.site.roles = ["System Manager"]
+        self.api.complete_seated_reservation_on_submit(Row(doctype="POS Invoice", name="INV-W",
+            restaurant_table="T1", custom_merged_tables="", branch="Branch A", order_type="Dine In",
+            docstatus=1, is_return=0, customer="Guest", creation=at("19:40")))
+        self.assertEqual(self.stored("TR-1"), ("Completed", None))
+
+    def test_a_cleared_table_ends_its_seated_visit_but_a_printed_check_keeps_it(self):
+        self.seat_at_six()
+        # The party's check was printed, which released the table: it is still paying.
+        self.site.put("POS Invoice", "INV-A", restaurant_table="T1", custom_merged_tables="",
+            branch="Branch A", docstatus=0, invoice_printed=1, creation=at("18:10"))
+        self.site.rows["URY Table"]["T1"].occupied = 0
+        self.clock("18:40")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+        # The check was cancelled and the table cleared: the visit is over.
+        self.site.rows["POS Invoice"]["INV-A"].docstatus = 2
+        self.clock("18:41")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.stored("TR-1"), ("Completed", None))
+
+
+class TestUnseat(_Site):
+    """Simphony's Unseat returns a party seated by mistake and frees the table, but never once it has ordered."""
+
+    def seat(self):
+        self.clock("18:55")
+        self.booking("TR-1", "19:00")
+        self.api.update_reservation_status("TR-1", "Seated")
+
+    def test_unseat_returns_the_booking_to_confirmed_and_frees_the_table(self):
+        self.site.roles = ["URY Captain"]  # whoever may seat a party may unseat it
+        self.till(billing_roles=["URY Cashier"], manager_roles=["URY Manager"])
+        self.seat()
+        self.clock("18:58")
+        self.api.update_reservation_status("TR-1", "Confirmed")
+        self.assertEqual(self.status("TR-1"), "Confirmed")
+        table = self.site.rows["URY Table"]["T1"]
+        self.assertEqual((table.occupied, table.latest_invoice_time), (0, None))
+
+    def test_unseat_is_refused_once_the_party_has_an_open_check(self):
+        self.seat()
+        self.site.put("POS Invoice", "INV-1", restaurant_table="T1", custom_merged_tables="",
+            branch="Branch A", docstatus=0, invoice_printed=0, creation=at("18:57"))
+        with self.assertRaisesRegex(Invalid, "open check"):
+            self.api.update_reservation_status("TR-1", "Confirmed")
+        self.assertEqual(self.status("TR-1"), "Seated")
+        self.assertEqual(self.site.rows["URY Table"]["T1"].occupied, 1)
+
+
+class TestSeatingNeedsAFreeTable(_Site):
+    """A party is seated only at a table with no open check and no other seated party."""
+
+    def test_seating_is_refused_on_a_table_with_an_open_check(self):
+        self.clock("18:50")
+        self.booking("TR-1", "19:00")
+        for name, values in (("INV-W", dict(restaurant_table="T1", custom_merged_tables="")),
+                ("INV-M", dict(restaurant_table="T2", custom_merged_tables="T3,T1"))):
+            with self.subTest(check=name):
+                self.site.rows["POS Invoice"].clear()
+                self.site.put("POS Invoice", name, branch="Branch A", docstatus=0, invoice_printed=0,
+                    creation=at("18:30"), **values)
+                with self.assertRaisesRegex(Invalid, "open check"):
+                    self.api.update_reservation_status("TR-1", "Seated")
+                self.assertEqual(self.status("TR-1"), "Confirmed")
+
+    def test_seating_is_refused_while_another_party_is_seated_there(self):
+        self.booking("TR-A", "18:00", status="Seated")
+        self.booking("TR-B", "21:00")
+        self.clock("19:00")
+        with self.assertRaisesRegex(Invalid, "already seated"):
+            self.api.update_reservation_status("TR-B", "Seated")
+        self.assertEqual(self.status("TR-B"), "Confirmed")
+
+
+class TestCompletionAndCancellationNeedAuthority(_Site):
+    """No save path, however it is called, completes or cancels without the user's own authority."""
+
+    def test_a_system_flagged_save_cannot_cancel_for_a_captain(self):
+        self.site.roles = ["URY Captain"]
+        self.till(billing_roles=["URY Cashier"], manager_roles=["URY Manager"])
+        self.booking("TR-1", "21:00")
+        doc = self.get_doc("URY Table Reservation", "TR-1")
+        doc.status = "Cancelled"
+        doc.cancel_reason = "Guest called"
+        with self.assertRaises(Refused):
+            doc.save(ignore_permissions=True)
+        self.assertEqual(self.status("TR-1"), "Confirmed")
+
+
+class TestTheFloorListReleasesAtGrace(_Site):
+    """The server's lock flag ends at grace even when the no-show sweep has not run."""
+
+    def test_an_unswept_booking_is_not_locked_after_its_grace_ends(self):
+        self.booking("TR-1", "19:00", table="T3")
+        with patch.object(self.scheduler, "process_reservation_no_shows"):
+            self.clock("18:40")
+            self.assertIs(self.api.get_active_reservations("Branch A")[0]["is_lock_window_active"], True)
+            self.clock("19:15")
+            listed = self.api.get_active_reservations("Branch A")
+        self.assertEqual(listed[0].status, "Confirmed")
+        self.assertIs(listed[0]["is_lock_window_active"], False)
+
+    def test_the_floor_list_carries_the_cancel_reason_and_the_bill(self):
+        self.clock("17:00")
+        self.booking("TR-C", "19:00", status="Cancelled", cancel_reason="Guest called")
+        self.booking("TR-D", "18:00", table="T2", status="Completed", pos_invoice="INV-9")
+        listed = {r.name: r for r in self.api.get_active_reservations("Branch A")}
+        self.assertEqual(listed["TR-C"].get("cancel_reason"), "Guest called")
+        self.assertEqual(listed["TR-D"].get("pos_invoice"), "INV-9")
+
+
+class TestAnUnsetGraceIsNeverZero(_Site):
+    """A blank or zero grace period falls back to the shipped Branch default, never No Show at the booked minute."""
+
+    def shipped_default(self, fieldname):
+        fields = json.loads((ROOT / "fixtures/custom_field.json").read_text())
+        return int(next(f for f in fields if f.get("dt") == "Branch" and f["fieldname"] == fieldname)["default"])
+
+    def test_a_blank_or_zero_grace_uses_the_shipped_default(self):
+        default = self.shipped_default("custom_grace_period")
+        self.assertEqual(default, 15)
+        for unset in (None, "", 0):
+            with self.subTest(grace=unset):
+                self.site.rows["Branch"]["Branch A"].custom_grace_period = unset
+                self.assertEqual(self.api.get_branch_reservation_settings("Branch A")["grace_period"], default)
+
+    def test_a_booking_on_a_branch_with_no_grace_is_held_until_the_shipped_grace_ends(self):
+        self.site.rows["Branch"]["Branch A"].custom_grace_period = 0
+        self.booking("TR-1", "19:00", created="18:00")
+        for clock in ("19:00", "19:14"):
+            with self.subTest(clock=clock):
+                self.clock(clock)
+                self.scheduler.process_reservation_no_shows()
+                self.assertEqual(self.status("TR-1"), "Confirmed")
+        self.clock("19:15")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.status("TR-1"), "No Show")
 
 
 if __name__ == "__main__":
