@@ -61,4 +61,5 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_waiter_name
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_escaping
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_fiscal_receipt
+          PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_order.test_merged_bill_submit_efris
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_assistant_vendor_name

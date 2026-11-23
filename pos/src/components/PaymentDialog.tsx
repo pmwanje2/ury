@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Percent, Coins, Printer } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, parseFrappeError } from '@ury/core';
@@ -7,8 +7,10 @@ import { call } from '@ury/core';
 import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
 import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
+import { canCaptureOffline } from '../offline/outbox';
 import { useRootStore } from '../store/root-store';
 import { printOrder } from '../lib/print';
+import { queuePendingFiscalReprint, resolveEfrisPrintWaitSeconds, waitForEfrisFdn } from '../lib/efris-print';
 import { resolvePrintFormat, type POSInvoice } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 
@@ -56,8 +58,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1
   );
+  const submittingRef = useRef(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [printInvoice, setPrintInvoice] = useState(enablePaymentWithoutPrinting);
+  const [printInvoice, setPrintInvoice] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
   
@@ -237,6 +240,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   };
 
   const handlePayment = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsProcessing(true);
     setError(null);
     try {
@@ -245,11 +250,16 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       if (!enablePaymentWithoutPrinting && !wasAlreadyPrinted) {
         setError(t('errors.please_print_first'));
         showToast.error(t('errors.please_print_first'));
-        setIsProcessing(false);
         return;
       }
 
-      if (printInvoice) {
+      const offlineCapable = canCaptureOffline(
+        storePosProfile ?? { name: posProfile },
+        user ?? { name: 'Guest', roles: [] }
+      );
+      const trimmedRoomNumber = roomChargeAmount > 0 ? roomNumber.trim() : undefined;
+
+      if (printInvoice && !offlineCapable) {
         // Step 1: Save the draft invoice with discount and payment modes
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
           additionalDiscount: discountValue ? parseFloat(discountValue) : null,
@@ -270,27 +280,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         await call.post('ury.ury.doctype.ury_order.ury_order.submit_order_invoice', {
           invoice,
         });
-
-        // Step 3: Print the receipt. The payment stands if the printer fails.
-        if (storePosProfile) {
-          try {
-            await printOrder({
-              orderId: invoice,
-              posProfile: storePosProfile,
-              printFormat: resolvePrintFormat(order || {}, storePosProfile.print_format),
-            });
-          } catch (printErr: any) {
-            console.error('Print failed:', printErr);
-            const reason = printErr?.message || parseFrappeError(printErr) || 'Unknown error';
-            showToast.error(t('payment.receipt_print_failed', { reason }));
-          }
-        }
       } else {
         const settlement = await submitSettlementOfflineAware({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
           amount: paymentsTotal, due: finalTotal, discount: appliedDiscount,
           modeOfPayment: payments.length === 1 ? payments[0]?.mode_of_payment ?? '' : '',
+          roomNumber: trimmedRoomNumber,
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
             additionalDiscount: discountValue ? parseFloat(discountValue) : null,
             cashier,
@@ -312,6 +308,36 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           return;
         }
       }
+
+      // Step 3: Wait boundedly for the EFRIS FDN (Simphony host timeout default 30s),
+      // print the fiscal receipt, and on timeout queue an automatic COPY #n reprint.
+      if (printInvoice && storePosProfile) {
+        const efrisOutcome = await waitForEfrisFdn({
+          invoice,
+          partnerInvoice: order?.custom_merged_pos_invoice ?? null,
+          timeoutSeconds: resolveEfrisPrintWaitSeconds(storePosProfile.efris_print_wait_seconds),
+        });
+        try {
+          await printOrder({
+            orderId: invoice,
+            posProfile: storePosProfile,
+            printFormat: resolvePrintFormat(order || {}, storePosProfile.print_format),
+            skipStatusUpdate: true,
+          });
+        } catch (printErr: unknown) {
+          console.error('Print failed:', printErr);
+          const reason = (printErr instanceof Error ? printErr.message : '') || parseFrappeError(printErr) || 'Unknown error';
+          showToast.error(t('payment.receipt_print_failed', { reason }));
+        }
+        if (efrisOutcome.outcome === 'timed_out') {
+          await queuePendingFiscalReprint({
+            invoice,
+            partnerInvoice: order?.custom_merged_pos_invoice ?? null,
+            posProfile: storePosProfile,
+          });
+        }
+      }
+
       showToast.success(t('payment.success', { amount: formatCurrency(paymentsTotal) }));
       onClose();
       clearSelectedOrder();
@@ -320,6 +346,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       console.error('Payment failed:', err);
       setError(parseFrappeError(err, t('errors.payment_failed')));
     } finally {
+      submittingRef.current = false;
       setIsProcessing(false);
     }
   };
@@ -517,25 +544,23 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             </div>
           </div>
 
-          {/* Print Invoice Checkbox */}
-          {enablePaymentWithoutPrinting && (
-            <div className="mb-4 flex items-center gap-2">
-              <input
-                id="print-invoice-checkbox"
-                type="checkbox"
-                checked={printInvoice}
-                onChange={(e) => setPrintInvoice(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-              />
-              <label
-                htmlFor="print-invoice-checkbox"
-                className="text-sm font-medium text-gray-700 cursor-pointer select-none flex items-center gap-1.5"
-              >
-                <Printer className="w-4 h-4 text-gray-500" />
-                {t('payment.print_invoice')}
-              </label>
-            </div>
-          )}
+          {/* Print Receipt Checkbox (always shown; defaults on so fiscal receipts are never silently dropped) */}
+          <div className="mb-4 flex items-center gap-2">
+            <input
+              id="print-invoice-checkbox"
+              type="checkbox"
+              checked={printInvoice}
+              onChange={(e) => setPrintInvoice(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+            />
+            <label
+              htmlFor="print-invoice-checkbox"
+              className="text-sm font-medium text-gray-700 cursor-pointer select-none flex items-center gap-1.5"
+            >
+              <Printer className="w-4 h-4 text-gray-500" />
+              {t('payment.print_invoice')}
+            </label>
+          </div>
 
           {/* Payment Button */}
           <Button

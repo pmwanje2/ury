@@ -375,6 +375,7 @@ scheduler_events = {
 			"ury.ury.api.reservation_scheduler.process_reservation_no_shows",
 			"ury.ury.printing.print_job_poller.poll_active_print_jobs",
 			"ury.ury.printing.file_store.prune_expired_jobs",
+			"ury.ury_pos.api.process_pending_fiscal_reprints",
 		],
 		"*/5 * * * *":[
 			"ury.ury.services.food_cost_alerts.notify_high_food_cost"
@@ -727,6 +728,7 @@ fixtures = [
                     "POS Profile-custom_floor_device_epoch",
                     "User-custom_floor_pin_hash",
                     "POS Profile-custom_room_lookup_method",
+                    "POS Profile-custom_efris_print_wait_seconds",
                     "POS Profile-buying_price_list",
                     "POS Profile-high_margin",
                     "POS Profile-low_margin",

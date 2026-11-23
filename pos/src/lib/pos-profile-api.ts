@@ -34,6 +34,8 @@ export interface PosProfileLimited {
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
   room_lookup_method?: string;
+  /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
+  efris_print_wait_seconds?: number;
 }
 
 export interface PosProfileLimitedResponse {
@@ -93,6 +95,7 @@ export interface PosProfileFull {
   custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
+  efris_print_wait_seconds?: number;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -122,6 +125,7 @@ export interface PosProfileCombined extends PosProfileFull {
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
+  efris_print_wait_seconds?: number;
 }
 
 export interface Currency {
@@ -194,6 +198,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',
+    efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 30,
   };
 
   return combinedProfile;

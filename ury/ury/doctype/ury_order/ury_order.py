@@ -3360,6 +3360,8 @@ def _check_held_before_settlement(invoice, preserve_resolved=False):
 
 def _submit_and_release_tables(invoice, profile, customer_disabled, target=None):
     credit_partner = None
+    if target:
+        invoice.flags.ignore_payment_sync = True
     if _enforce_on_account(invoice, profile, customer_disabled, target) and target:
         if (target.customer, target.company, target.pos_profile, target.docstatus) != (
             invoice.customer, invoice.company, invoice.pos_profile, 0
@@ -3418,6 +3420,8 @@ def submit_order_invoice(invoice):
     if (doc.customer, doc.pos_profile) != (customer, profile_name):
         frappe.throw(_('The order changed; reopen settlement.'))
     target = frappe.get_doc('POS Invoice', doc.custom_merged_pos_invoice, for_update=True) if doc.custom_merged_pos_invoice else None
+    if target:
+        doc.flags.ignore_payment_sync = True
     _submit_and_release_tables(doc, profile, customer_disabled, target)
     return {"name": doc.name, "status": "Submitted"}
         

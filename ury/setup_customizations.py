@@ -460,6 +460,15 @@ def get_custom_fields():
 				"non_negative": 1,
 				"description": "Kitchen and bar screens show tickets created within this many hours (1-24). Empty or 0 uses 3.",
 				"insert_after": "custom_kot_warning_time",
+			},
+			{
+				"fieldname": "custom_efris_print_wait_seconds",
+				"fieldtype": "Int",
+				"label": "Fiscal Receipt Wait Timeout (Seconds)",
+				"default": "30",
+				"non_negative": 1,
+				"description": "Seconds the till waits for the EFRIS FDN before printing a pending receipt and queueing an automatic COPY reprint (Simphony host timeout default 30; 0 prints immediately; max 180).",
+				"insert_after": "custom_disable_print_status_tracking",
 			}
 		],
   
