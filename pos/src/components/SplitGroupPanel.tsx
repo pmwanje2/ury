@@ -4,6 +4,7 @@ import { cn } from '@ury/ui';
 import { formatCurrency } from '@ury/core';
 import { getSplitGroup, type SplitGroupInvoice } from '../lib/invoice-api';
 import { t } from '../i18n';
+import { formatGuestSubtitle } from '../lib/order-display';
 import { Spinner } from '@ury/ui';
 import { Button } from '@ury/ui';
 
@@ -118,6 +119,7 @@ const SplitGroupPanel = ({ invoiceName, onOpenInvoice, onPrintInvoice, printingI
         {invoices.map((invoice) => {
           const isCurrent = invoice.name === invoiceName;
           const isPaid = invoice.docstatus === 1;
+          const checkName = formatGuestSubtitle(invoice.custom_guest_label, invoice.customer_name || invoice.customer);
 
           return (
             <div
@@ -165,13 +167,7 @@ const SplitGroupPanel = ({ invoiceName, onOpenInvoice, onPrintInvoice, printingI
                       total: invoice.split_total,
                     })}
                   </span>
-                  {(invoice.custom_guest_label || invoice.customer_name || invoice.customer) && (
-                    <span className="truncate">
-                      {[invoice.custom_guest_label, invoice.customer_name || invoice.customer]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
-                  )}
+                  {checkName && <span className="truncate">{checkName}</span>}
                 </div>
               </div>
               <span className="ms-3 shrink-0 font-semibold text-gray-900 tabular-nums">

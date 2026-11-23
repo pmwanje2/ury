@@ -48,6 +48,7 @@ import { orderTypeLabel } from '../data/order-types';
 import { useSessionOwner } from '../lib/use-session-owner';
 import BillRequestStrip from '../components/BillRequestStrip';
 import Notifications from '../components/Notifications';
+import { formatGuestSubtitle, formatStaffDisplayName } from '../lib/order-display';
 
 function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom_merged_tables'>) {
   if (!order.restaurant_table) return null;
@@ -57,8 +58,17 @@ function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom
 // The check's guest label leads, so two splits on one walk-in customer
 // ("Susan · Walk In", "David · Walk In") are told apart.
 function checkName(order: Pick<POSInvoice, 'customer' | 'custom_guest_label'>) {
-  const label = order.custom_guest_label?.trim();
-  return label ? `${label} · ${order.customer}` : order.customer;
+  return formatGuestSubtitle(order.custom_guest_label, order.customer);
+}
+
+function waiterName(order: Pick<POSInvoice, 'waiter' | 'waiter_name'>) {
+  return formatStaffDisplayName(order.waiter_name, order.waiter);
+}
+
+function tableAndOrderType(order: Pick<POSInvoice, 'restaurant_table' | 'custom_merged_tables' | 'order_type'>) {
+  const table = getOrderTableLabel(order);
+  const type = orderTypeLabel(order.order_type);
+  return table ? `${t('pos_ui.table')} ${table} · ${type}` : type;
 }
 
 function isOrderEditable(status: string) {
@@ -141,7 +151,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     const warning = getPrintWarningState(order, printWarningMinutes, clockNow);
     if (!warning.exceeded) return null;
     return (
-      <Badge variant="outline" className="border-red-500 text-red-600 bg-red-50">
+      <Badge variant="outline" className="shrink-0 border-red-500 text-red-600 bg-red-50">
         {warning.elapsedLabel}
       </Badge>
     );
@@ -536,7 +546,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3 lg:flex-row lg:overflow-hidden lg:[&>div:first-child]:w-48">
       {/* Left Sidebar - Order Types */}
-      <div className="flex flex-col bg-white">
+      <div className="flex min-w-0 flex-col bg-white">
       <Link className="p-3 text-blue-700 underline" to="/orders/settled">{t('orders.settled_closed')}</Link>
       <OrderStatusSidebar
         selectedStatus={selectedStatus}
@@ -581,41 +591,36 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 >
                   <CardContent className="p-0 flex flex-col h-full">
                     <div className="p-3 bg-gray-50 border-b">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <h3 className="font-medium text-gray-900 text-sm truncate" title={order.name}>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <h3 className="min-w-0 truncate text-sm font-semibold text-gray-900" title={order.name}>
                         {order.name}
                       </h3>
-                      <div className="flex shrink-0 items-center gap-1">
-                        {mergedBill && <LinkTag icon={GitMerge}>{t('bill_merge.merged_bill')}</LinkTag>}
-                        {splitBill && (
-                          <LinkTag icon={GitBranch}>
-                            {(order.split_total ?? 0) >= 2
-                              ? t('bill_split.split_indicator', {
-                                  index: order.split_index ?? 0,
-                                  total: order.split_total ?? 0,
-                                })
-                              : t('bill_split.split_bill')}
-                          </LinkTag>
-                        )}
-                      </div>
+                      <span className="shrink-0 whitespace-nowrap text-sm font-semibold tabular-nums text-gray-900">
+                        {formatCurrency(cardTotal)}
+                      </span>
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-500">
-                          {getOrderTableLabel(order)
-                            ? `${t('pos_ui.table')} ${getOrderTableLabel(order)} • `
-                            : ''}{orderTypeLabel(order.order_type)}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <Badge variant="outline">
-                          {t(String(order.invoice_printed) === '1' ? 'order.printed' : 'order.not_printed')}
-                        </Badge>
-                        <Badge variant={getBadgeVariant(order.status)}>
-                          {t(`order_status_types.${order.status.toLowerCase().replace(/ /g, '_')}`)}
-                        </Badge>
-                        {renderPrintWarning(order)}
-                      </div>
+                    <p className="mt-1 min-w-0 truncate text-xs text-gray-500" title={tableAndOrderType(order)}>
+                      {tableAndOrderType(order)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="shrink-0">
+                        {t(String(order.invoice_printed) === '1' ? 'order.printed' : 'order.not_printed')}
+                      </Badge>
+                      <Badge variant={getBadgeVariant(order.status)} className="shrink-0">
+                        {t(`order_status_types.${order.status.toLowerCase().replace(/ /g, '_')}`)}
+                      </Badge>
+                      {renderPrintWarning(order)}
+                      {mergedBill && <LinkTag icon={GitMerge}>{t('bill_merge.merged_bill')}</LinkTag>}
+                      {splitBill && (
+                        <LinkTag icon={GitBranch}>
+                          {(order.split_total ?? 0) >= 2
+                            ? t('bill_split.split_indicator', {
+                                index: order.split_index ?? 0,
+                                total: order.split_total ?? 0,
+                              })
+                            : t('bill_split.split_bill')}
+                        </LinkTag>
+                      )}
                     </div>
                     {mergedBill && order.custom_merged_pos_invoice && (
                       <p className="mt-2 text-xs text-primary-700">
@@ -640,17 +645,14 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         <span>{formatDateTime(order.posting_date, order.posting_time)}</span>
                         {order.age_minutes !== undefined && <span>{t('order.age_minutes', { count: order.age_minutes })}</span>}
                       </div>
-                      {order.waiter && <p className="text-xs text-gray-500">{order.waiter}</p>}
+                      {order.waiter && (
+                        <p className="min-w-0 truncate text-xs text-gray-500" title={order.waiter}>
+                          {waiterName(order)}
+                        </p>
+                      )}
                       {order.items_preview?.length ? <p className="mt-2 text-sm text-gray-700">
                         {order.items_preview.map(item => `${item.qty}× ${item.item_name}`).join(', ')}
                       </p> : null}
-
-                      {/* Total - pushed to bottom like MenuCard */}
-                      <div className="mt-auto pt-2">
-                        <span className="text-lg font-semibold text-gray-900 tabular-nums">
-                          {formatCurrency(cardTotal)}
-                        </span>
-                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -847,10 +849,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               <div className="mb-6">
                 <div className="grid grid-cols-2 gap-4">
                   {/* First column: customer and time */}
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 text-sm">
-                      <User className="w-4 h-4 text-gray-500" />
-                      <span className="text-gray-900 font-medium">{checkName(selectedOrder)}</span>
+                  <div className="min-w-0 space-y-3">
+                    <div className="flex min-w-0 items-center gap-3 text-sm">
+                      <User className="w-4 h-4 shrink-0 text-gray-500" />
+                      <span className="min-w-0 break-words text-gray-900 font-medium">{checkName(selectedOrder)}</span>
                     </div>
                     <div className="flex items-center gap-3 text-sm">
                       <Clock className="w-4 h-4 text-gray-500" />
@@ -858,10 +860,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     </div>
                   </div>
                   {/* Second column: waiter and table */}
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 text-sm">
-                      <UserCheck className="w-4 h-4 text-gray-500" />
-                      <span className="text-gray-600">{selectedOrder.waiter}</span>
+                  <div className="min-w-0 space-y-3">
+                    <div className="flex min-w-0 items-center gap-3 text-sm">
+                      <UserCheck className="w-4 h-4 shrink-0 text-gray-500" />
+                      <span className="min-w-0 truncate text-gray-600" title={selectedOrder.waiter}>
+                        {waiterName(selectedOrder)}
+                      </span>
                     </div>
                     {selectedOrder.restaurant_table && (
                       <div className="flex items-center gap-3 text-sm">

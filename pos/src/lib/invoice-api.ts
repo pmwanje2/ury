@@ -14,7 +14,10 @@ export interface POSInvoice {
   grand_total: number;
   restaurant_table: string | null;
   cashier: string;
+  /** the waiter's User id, usually an email address */
   waiter: string;
+  /** the waiter's full name, when the server resolves it; not read from POS Invoice */
+  waiter_name?: string | null;
   net_total: number;
   posting_time: string;
   total_taxes_and_charges: number;
