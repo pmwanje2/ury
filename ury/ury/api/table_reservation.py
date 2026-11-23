@@ -19,9 +19,18 @@ from ury.ury.report.average_table_time.average_table_time import (
 )
 
 
-# The shipped Branch default for custom_grace_period (fixtures/custom_field.json).
-# A blank or zero grace falls back to it, so it never means No Show at the booked minute.
-DEFAULT_GRACE_PERIOD_MINUTES = 15
+# Reservation timing is Branch configuration (fixtures/custom_field.json), next to
+# custom_buffer_time and custom_grace_period: settings key -> Branch field.
+RESERVATION_TIMING_FIELDS = {
+    "grace_period": "custom_grace_period",
+    "unset_grace_policy": "custom_unset_grace_policy",
+    "min_reservation_notice": "custom_min_reservation_notice",
+    "target_turn_time": "custom_target_turn_time",
+    "min_avg_table_time": "custom_min_avg_table_time",
+    "seated_lookup_hours": "custom_seated_lookup_hours",
+}
+# custom_unset_grace_policy's option that stops a branch without a grace period switching reservations on.
+REFUSE_TO_ENABLE = "Refuse to Enable"
 
 ANOTHER_BOOKING_SAVED = "Another reservation for table {0} was saved at the same moment. Check the reservations and try again."
 
@@ -64,14 +73,100 @@ def reservations_enabled(branch):
     A branch that has not enabled them sees no reservation reads or writes on
     its till, order, floor and closing paths.
 
-    Before migrate adds the Branch column (new code already served), the
-    branch reads as disabled instead of failing POS Invoice validate.
+    Before migrate adds the Branch columns (new code already served), the
+    branch reads as disabled instead of failing POS Invoice validate, or
+    booking without its timing settings.
     """
     if not branch:
         return False
-    if not frappe.db.has_column("Branch", "custom_enable_reservation"):
-        return False
+    for column in ("custom_enable_reservation", *RESERVATION_TIMING_FIELDS.values()):
+        if not frappe.db.has_column("Branch", column):
+            return False
     return cint(frappe.db.get_value("Branch", branch, "custom_enable_reservation") or 0) == 1
+
+
+def seeded_setting(fieldname):
+    """The default a Branch reservation setting ships with: its Custom Field's own default."""
+    field = frappe.get_meta("Branch").get_field(fieldname)
+    return field.default if field else None
+
+
+def _is_unset(value):
+    return value is None or str(value).strip() == ""
+
+
+def _timing_setting(values, key):
+    """A Branch timing setting from a Branch row; a blank one takes its seeded default."""
+    fieldname = RESERVATION_TIMING_FIELDS[key]
+    value = values.get(fieldname)
+    return seeded_setting(fieldname) if _is_unset(value) else value
+
+
+def branch_timing_setting(branch, key):
+    """Read one Branch timing setting on its own, for paths that need nothing else."""
+    fieldname = RESERVATION_TIMING_FIELDS[key]
+    return _timing_setting({fieldname: frappe.db.get_value("Branch", branch, fieldname)}, key)
+
+
+def _grace_is_unset(grace):
+    return _is_unset(grace) or cint(grace) <= 0
+
+
+def _reservation_settings(branch_doc, branch=None):
+    """Reservation settings from a Branch row (an empty one without a branch).
+
+    A blank or zero grace takes the grace field's seed, so it never means No
+    Show at the booked minute. Under "Refuse to Enable" such a branch cannot
+    be saved with reservations on; a row that skipped that save still reads
+    the seed.
+    """
+    buffer_time_raw = branch_doc.get("custom_buffer_time")
+    if buffer_time_raw is None or str(buffer_time_raw).strip() == "":
+        buffer_time = 0
+    else:
+        buffer_time = max(0, cint(buffer_time_raw))
+
+    grace_period = branch_doc.get("custom_grace_period")
+    if _grace_is_unset(grace_period):
+        grace_period = seeded_setting("custom_grace_period")
+    grace_period = max(0, cint(grace_period))
+
+    target_turn_time = max(0, cint(_timing_setting(branch_doc, "target_turn_time")))
+    min_avg_table_time = max(0, cint(_timing_setting(branch_doc, "min_avg_table_time")))
+    calc_duration = get_branch_reservation_duration(
+        branch, target_turn_time=target_turn_time, min_avg_table_time=min_avg_table_time)
+
+    if branch:
+        # A settings read never writes the Branch; the averages are
+        # refreshed when a till closes on a branch with reservations enabled.
+        last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
+        last_week_avg = get_branch_last_week_avg_time(branch, update_branch=False)
+    else:
+        last_day_avg = last_week_avg = 0
+
+    return {
+        "enable_reservation": cint(branch_doc.get("custom_enable_reservation") or 0),
+        "buffer_time": buffer_time,
+        "grace_period": grace_period,
+        "unset_grace_policy": _timing_setting(branch_doc, "unset_grace_policy"),
+        "min_reservation_notice": cint(_timing_setting(branch_doc, "min_reservation_notice")),
+        "target_turn_time": target_turn_time,
+        "min_avg_table_time": min_avg_table_time,
+        "seated_lookup_hours": max(0, cint(_timing_setting(branch_doc, "seated_lookup_hours"))),
+        "avg_table_time_last_day": round(flt(last_day_avg), 2),
+        "avg_table_time_last_week": round(flt(last_week_avg), 2),
+        "calculated_duration": cint(calc_duration),
+    }
+
+
+def validate_branch_reservation_settings(doc, method=None):
+    """Branch validate: under "Refuse to Enable", a branch with no grace period cannot switch reservations on."""
+    if not cint(doc.get("custom_enable_reservation") or 0):
+        return
+    if _timing_setting(doc, "unset_grace_policy") != REFUSE_TO_ENABLE:
+        return
+    if _grace_is_unset(doc.get("custom_grace_period")):
+        frappe.throw(_("Set a grace period before switching reservations on for this branch."))
 
 
 def ensure_reservations_enabled(branch):
@@ -90,16 +185,11 @@ def reservations_enabled_for_table(table):
 def get_branch_reservation_settings(branch):
     """
     Returns reservation configuration and metrics for the specified branch.
+    Without a branch, or when the read fails, reservations are off and each
+    timing is its seeded default.
     """
     if not branch:
-        return {
-            "enable_reservation": 0,
-            "buffer_time": 0,
-            "grace_period": 0,
-            "avg_table_time_last_day": 0.0,
-            "avg_table_time_last_week": 0.0,
-            "calculated_duration": 60,
-        }
+        return _reservation_settings({})
 
     try:
         branch_doc = frappe.db.get_value(
@@ -108,53 +198,16 @@ def get_branch_reservation_settings(branch):
             [
                 "custom_enable_reservation",
                 "custom_buffer_time",
-                "custom_grace_period",
+                *RESERVATION_TIMING_FIELDS.values(),
                 "custom_avg_table_time_last_day",
                 "custom_avg_table_time_last_week",
             ],
             as_dict=True,
         ) or {}
-
-        enable_reservation = cint(branch_doc.get("custom_enable_reservation") or 0)
-
-        buffer_time_raw = branch_doc.get("custom_buffer_time")
-        if buffer_time_raw is None or str(buffer_time_raw).strip() == "":
-            buffer_time = 0
-        else:
-            buffer_time = max(0, cint(buffer_time_raw))
-
-        grace_period_raw = branch_doc.get("custom_grace_period")
-        if grace_period_raw is None or str(grace_period_raw).strip() == "":
-            grace_period = 0
-        else:
-            grace_period = max(0, cint(grace_period_raw))
-        if grace_period <= 0:
-            grace_period = DEFAULT_GRACE_PERIOD_MINUTES
-
-        # A settings read never writes the Branch; the averages are
-        # refreshed when a till closes on a branch with reservations enabled.
-        last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
-        last_week_avg = get_branch_last_week_avg_time(branch, update_branch=False)
-        calc_duration = get_branch_reservation_duration(branch)
-
-        return {
-            "enable_reservation": enable_reservation,
-            "buffer_time": buffer_time,
-            "grace_period": grace_period,
-            "avg_table_time_last_day": round(flt(last_day_avg), 2),
-            "avg_table_time_last_week": round(flt(last_week_avg), 2),
-            "calculated_duration": cint(calc_duration),
-        }
+        return _reservation_settings(branch_doc, branch)
     except Exception as e:
         frappe.log_error(f"Error in get_branch_reservation_settings: {str(e)}", "Reservation Settings Error")
-        return {
-            "enable_reservation": 0,
-            "buffer_time": 0,
-            "grace_period": 0,
-            "avg_table_time_last_day": 0.0,
-            "avg_table_time_last_week": 0.0,
-            "calculated_duration": 60,
-        }
+        return _reservation_settings({})
 
 
 def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None):
@@ -177,13 +230,8 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
         branch = frappe.db.get_value("URY Table", table, "branch")
 
     settings = get_branch_reservation_settings(branch)
-    duration_val = settings.get("avg_table_time_last_day")
-    if not duration_val or flt(duration_val) < 15:
-        duration_val = settings.get("calculated_duration", 60)
-    duration_mins = flt(duration_val)
-
-    new_hold_start = new_start - timedelta(minutes=cint(settings.get("buffer_time", 0)))
-    new_end = new_start + timedelta(minutes=duration_mins)
+    new_hold_start = new_start - timedelta(minutes=settings["buffer_time"])
+    new_end = new_start + timedelta(minutes=reservation_stay_minutes(settings))
 
     # Serialise bookings on one table: concurrent writers wait on this row lock.
     frappe.db.get_value("URY Table", table, "name", for_update=True)
@@ -216,13 +264,8 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
         ex_start = parse_to_datetime(ex.reserved_at, current_now)
         ex_branch = ex.branch or branch
         ex_settings = get_branch_reservation_settings(ex_branch)
-        ex_duration_val = ex_settings.get("avg_table_time_last_day")
-        if not ex_duration_val or flt(ex_duration_val) < 15:
-            ex_duration_val = ex_settings.get("calculated_duration", 90)
-        ex_duration = flt(ex_duration_val)
-
-        ex_hold_start = ex_start - timedelta(minutes=cint(ex_settings.get("buffer_time", 0)))
-        ex_end = ex_start + timedelta(minutes=ex_duration)
+        ex_hold_start = ex_start - timedelta(minutes=ex_settings["buffer_time"])
+        ex_end = ex_start + timedelta(minutes=reservation_stay_minutes(ex_settings))
 
         # Conflict occurs if the two holds, buffer included, overlap
         if ex_hold_start < new_end and new_hold_start < ex_end:
@@ -272,9 +315,14 @@ def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_
 
     current_now = now_datetime()
     res_start = parse_to_datetime(reserved_at, current_now)
+    settings = get_branch_reservation_settings(branch)
 
-    # Allow 1-minute grace margin for frontend-backend network latency
-    if res_start < (current_now - timedelta(minutes=1)):
+    # The Branch's Minimum Reservation Notice. Its seed, -1, accepts a time one
+    # minute back, for clock and network delay between the POS and the server.
+    notice = settings["min_reservation_notice"]
+    if res_start < current_now + timedelta(minutes=notice):
+        if notice > 0:
+            frappe.throw(_("A reservation needs at least {0} minutes' notice.").format(notice))
         frappe.throw(_("Reservation date and time cannot be in the past."))
 
     # 3. Buffer-Time & Table Occupancy Validation
@@ -289,10 +337,9 @@ def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_
         occupied_start_raw = active_inv_creation or table_data.get("latest_invoice_time") or current_now
         occupied_start_dt = parse_to_datetime(occupied_start_raw, current_now)
 
-        expected_duration = get_branch_reservation_duration(branch)
-        expected_finish = occupied_start_dt + timedelta(minutes=expected_duration)
+        expected_finish = occupied_start_dt + timedelta(minutes=settings["calculated_duration"])
         # The new booking holds the table from its buffer start, not its time.
-        buffer_mins = cint(get_branch_reservation_settings(branch).get("buffer_time", 0))
+        buffer_mins = settings["buffer_time"]
         res_hold_start = res_start - timedelta(minutes=buffer_mins)
 
         if expected_finish > res_hold_start:
@@ -323,9 +370,9 @@ def check_table_reservation(table):
     try:
         branch = frappe.db.get_value("URY Table", table, "branch")
         settings = get_branch_reservation_settings(branch)
-        buffer_mins = cint(settings.get("buffer_time", 0))
-        grace_mins = cint(settings.get("grace_period", 0))
-        duration_mins = cint(settings.get("calculated_duration", 60))
+        buffer_mins = settings["buffer_time"]
+        grace_mins = settings["grace_period"]
+        duration_mins = settings["calculated_duration"]
 
         now = now_datetime()
 
@@ -403,18 +450,21 @@ def get_completed_reservation_for_table(table, branch=None):
     if not table:
         return None
     try:
-        if not reservations_enabled(branch or frappe.db.get_value("URY Table", table, "branch")):
+        table_branch = branch or frappe.db.get_value("URY Table", table, "branch")
+        if not reservations_enabled(table_branch):
             return None
         # Check current table state - MUST be currently occupied
         is_occupied = frappe.db.get_value("URY Table", table, "occupied")
         if not is_occupied or cint(is_occupied) != 1:
             return None
 
+        # The Branch's Seated Party Lookup: how long ago the party may have been seated.
+        lookup_hours = max(0, cint(branch_timing_setting(table_branch, "seated_lookup_hours")))
         now = now_datetime()
         filters = {
             "reserved_table": table,
             "status": "Seated",
-            "modified": [">", add_to_date(now, hours=-12)],
+            "modified": [">", add_to_date(now, hours=-lookup_hours)],
         }
         if branch:
             filters["branch"] = branch
@@ -655,11 +705,15 @@ def update_reservation_status(reservation_name, status, pos_invoice=None, cancel
 
 
 def reservation_stay_minutes(settings):
-    """How long a booking holds its table after its time: [reserved_at - buffer, reserved_at + stay)."""
-    stay = settings.get("avg_table_time_last_day")
-    if not stay or flt(stay) < 15:
-        stay = settings.get("calculated_duration", 90)
-    return flt(stay)
+    """How long a booking holds its table after its time: [reserved_at - buffer, reserved_at + stay).
+
+    The last day's average table time, unless it is below the Branch's minimum;
+    then the branch's calculated duration (an average, or its target turn time).
+    """
+    stay = flt(settings.get("avg_table_time_last_day"))
+    if not stay or stay < settings["min_avg_table_time"]:
+        return flt(settings["calculated_duration"])
+    return stay
 
 
 def open_checks_on(tables):
@@ -854,9 +908,9 @@ def get_active_reservations(branch=None, date=None):
                 branch_settings_cache[b] = get_branch_reservation_settings(b)
 
             b_settings = branch_settings_cache[b]
-            buf = cint(b_settings.get("buffer_time", 0))
-            grace = cint(b_settings.get("grace_period", 0))
-            duration = cint(b_settings.get("calculated_duration", 60))
+            buf = b_settings["buffer_time"]
+            grace = b_settings["grace_period"]
+            duration = b_settings["calculated_duration"]
 
             res_time = get_datetime(res.reserved_at)
             lock_start = res_time - timedelta(minutes=buf)
@@ -923,14 +977,10 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
 
         # 2. Get Branch reservation settings for duration calculation
         settings = get_branch_reservation_settings(branch)
-        duration_val = settings.get("avg_table_time_last_day")
-        if not duration_val or flt(duration_val) < 15:
-            duration_val = settings.get("calculated_duration", 60)
-        duration_mins = flt(duration_val)
-        res_hold_start = res_start - timedelta(minutes=cint(settings.get("buffer_time", 0)))
-        res_end = res_start + timedelta(minutes=duration_mins)
+        res_hold_start = res_start - timedelta(minutes=settings["buffer_time"])
+        res_end = res_start + timedelta(minutes=reservation_stay_minutes(settings))
 
-        expected_duration = get_branch_reservation_duration(branch)
+        expected_duration = settings["calculated_duration"]
 
         # 3. Check current occupancy conflicts
         occupied_tables = {t.name: t for t in tables if cint(t.get("occupied") or 0) == 1}
@@ -980,14 +1030,8 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
             if ex_branch not in branch_settings_cache:
                 branch_settings_cache[ex_branch] = get_branch_reservation_settings(ex_branch)
             ex_settings = branch_settings_cache[ex_branch]
-
-            ex_dur_val = ex_settings.get("avg_table_time_last_day")
-            if not ex_dur_val or flt(ex_dur_val) < 15:
-                ex_dur_val = ex_settings.get("calculated_duration", 90)
-            ex_dur = flt(ex_dur_val)
-
-            ex_hold_start = ex_start - timedelta(minutes=cint(ex_settings.get("buffer_time", 0)))
-            ex_end = ex_start + timedelta(minutes=ex_dur)
+            ex_hold_start = ex_start - timedelta(minutes=ex_settings["buffer_time"])
+            ex_end = ex_start + timedelta(minutes=reservation_stay_minutes(ex_settings))
 
             # Overlap check: [ex_start - buffer, ex_end) overlaps [res_start - buffer, res_end)
             if ex_hold_start < res_end and res_hold_start < ex_end:

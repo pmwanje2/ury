@@ -52,7 +52,8 @@ interface ParsedReservation {
 function parseReservations(reservations: TableReservation[]): ParsedReservation[] {
   const parsed = reservations.map((res) => {
     const timeInfo = parseReservationTime(res.reserved_at);
-    const duration = res.duration_minutes || 60;
+    // The server's duration for the booking's branch; the timeline invents none.
+    const duration = res.duration_minutes ?? 0;
     const endMinutes = timeInfo.totalMinutes + duration;
     const endHours = Math.floor(endMinutes / 60) % 24;
     const endMins = endMinutes % 60;

@@ -22,6 +22,17 @@ export function formatReservationTime(reservedAt?: string | null): string {
   }
 }
 
+const MS_PER_MINUTE = 60 * 1000;
+
+/**
+ * Whether a booking time falls inside the Branch's Minimum Reservation Notice:
+ * it must start at least that many minutes from now, and a negative notice
+ * accepts a time that many minutes back. The server makes the same check.
+ */
+export function isInsideReservationNotice(selected: Date, minNoticeMinutes: number, now = Date.now()): boolean {
+  return selected.getTime() < now + minNoticeMinutes * MS_PER_MINUTE;
+}
+
 export function isReservationLockWindowActive(
   res: TableReservation | null | undefined,
   defaultBufferMinutes = 0

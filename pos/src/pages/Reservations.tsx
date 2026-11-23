@@ -111,12 +111,17 @@ export default function Reservations() {
     return Boolean(capabilities?.canAccessOtherCaptainsTables);
   }, [user, posProfile]);
 
+  // The branch's Minimum Reservation Notice, for the edit dialog's own check.
+  const [minNoticeMinutes, setMinNoticeMinutes] = useState<number | null>(null);
+
   useEffect(() => {
     if (!branch) return;
     getBranchReservationSettings(branch).then((settings) => {
-      if (settings && Number(settings.enable_reservation) !== 1) {
+      if (!settings || Number(settings.enable_reservation) !== 1) {
         navigate('/tables', { replace: true });
+        return;
       }
+      setMinNoticeMinutes(settings.min_reservation_notice ?? null);
     }).catch(() => {
       // ignore
     });
@@ -752,6 +757,7 @@ export default function Reservations() {
         reservation={editReservation}
         onOpenChange={setIsEditDialogOpen}
         onConfirm={handleConfirmEdit}
+        minNoticeMinutes={minNoticeMinutes}
       />
 
       {/* Seat Guest Dialog */}
