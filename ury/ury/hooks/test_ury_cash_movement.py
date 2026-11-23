@@ -141,6 +141,19 @@ class TestTillCashMovements(FrappeTestCase):
 		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-SHIFT"):
 			movement(till, "Pickup", 100)
 
+	def test_closing_waits_for_a_pending_movement(self):
+		till = till_fx.make_till("_Test Till Pending Movement")
+		movement(till, "Paid Out", 600, reason="Gas refill", submit=False)
+		with self.assertRaisesRegex(frappe.ValidationError, "URY-CLOSE-PENDING-MOVEMENT"):
+			till_fx.close_till(till, counted=400)
+
+	def test_movement_cannot_be_cancelled_after_its_shift_closed(self):
+		till = till_fx.make_till("_Test Till Cancel After Close")
+		pickup = movement(till, "Pickup", 100)
+		till_fx.close_till(till, counted=900)
+		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-SHIFT"):
+			frappe.get_doc("Journal Entry", pickup.name).cancel()
+
 
 class TestCashOverShort(FrappeTestCase):
 	@classmethod
@@ -177,6 +190,17 @@ class TestCashOverShort(FrappeTestCase):
 		till_fx.bill(till, 100, [(till_fx.CASH, 100)])
 		closing = till_fx.close_till(till, counted=1100)
 		self.assertEqual(over_short_entries(closing), [])
+
+	def test_cancelling_the_closing_cancels_its_over_short_journal(self):
+		till = till_fx.make_till("_Test Till Cancel Closing")
+		till_fx.bill(till, 100, [(till_fx.CASH, 100)])
+		closing = till_fx.close_till(till, counted=1080)
+		entries = over_short_entries(closing)
+		self.assertEqual(len(entries), 1)
+
+		frappe.get_doc("POS Closing Entry", closing.name).cancel()
+
+		self.assertEqual(frappe.db.get_value("Journal Entry", entries[0], "docstatus"), 2)
 
 	def test_cash_difference_needs_an_over_short_account(self):
 		till = till_fx.make_till("_Test Till No Over Short", custom_cash_over_short_account=None)
