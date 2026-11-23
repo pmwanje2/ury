@@ -336,6 +336,8 @@ class TestURYTableReservation(FrappeTestCase):
             reserved_at=res_time,
             branch=self.branch,
         )
+        update_reservation_status(res_id, "Seated")
+        self.assertEqual(frappe.db.get_value("URY Table Reservation", res_id, "status"), "Seated")
         update_reservation_status(res_id, "Completed")
         doc = frappe.get_doc("URY Table Reservation", res_id)
         self.assertEqual(doc.status, "Completed")
@@ -352,7 +354,7 @@ class TestURYTableReservation(FrappeTestCase):
             branch=self.branch,
         )
         # Cancel reservation
-        update_reservation_status(res1_id, "Cancelled")
+        update_reservation_status(res1_id, "Cancelled", cancel_reason="Guest called")
         doc1 = frappe.get_doc("URY Table Reservation", res1_id)
         self.assertEqual(doc1.status, "Cancelled")
 
@@ -379,7 +381,7 @@ class TestURYTableReservation(FrappeTestCase):
             reserved_at=res_time,
             branch=self.branch,
         )
-        update_reservation_status(res_id, "Cancelled")
+        update_reservation_status(res_id, "Cancelled", cancel_reason="Guest called")
         with self.assertRaises(frappe.ValidationError):
             update_reservation_status(res_id, "Completed")
 
