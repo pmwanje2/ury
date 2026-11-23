@@ -410,6 +410,7 @@
     "status_no_show": "Absence",
     "status_seated": "Installé",
     "seat_action": "Installer le client",
+    "unseat_action": "Retirer de la table",
     "seat_title": "Installer le client",
     "seat_description": "Installez le groupe à la table {{table}} ({{time}}) et ouvrez sa commande.",
     "cancel_reason_label": "Motif d'annulation",

@@ -501,6 +501,7 @@
     "status_no_show": "لم يحضر",
     "status_seated": "تم الإجلاس",
     "seat_action": "إجلاس الضيف",
+    "unseat_action": "إلغاء الإجلاس",
     "seat_title": "إجلاس الضيف",
     "seat_description": "أجلس المجموعة على الطاولة {{table}} ({{time}}) وافتح طلبها.",
     "cancel_reason_label": "سبب الإلغاء",

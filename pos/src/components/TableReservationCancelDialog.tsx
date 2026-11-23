@@ -160,6 +160,7 @@ const TableReservationCancelDialog = ({
                             onChange={(event) => setReason(event.target.value)}
                             disabled={loading}
                             rows={3}
+                            maxLength={140}
                         />
                         {!trimmedReason && (
                             <p className="text-xs text-gray-500">{t('reservations.cancel_reason_required')}</p>

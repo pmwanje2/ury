@@ -432,6 +432,7 @@
     "status_no_show": "No se presentó",
     "status_seated": "En mesa",
     "seat_action": "Sentar al cliente",
+    "unseat_action": "Quitar de la mesa",
     "seat_title": "Sentar al cliente",
     "seat_description": "Sienta al grupo en la mesa {{table}} ({{time}}) y abre su pedido.",
     "cancel_reason_label": "Motivo de cancelación",
