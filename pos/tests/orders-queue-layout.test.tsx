@@ -25,6 +25,8 @@ const state = vi.hoisted(() => ({
   users: {} as Record<string, string>,
   usersRefused: false,
   counts: null as { outstanding: number; unbilled: number } | null,
+  /** The session whose queue the store holds */
+  ordersOwner: 'cashier@example.com',
 }));
 
 function freshOrder(): Order {
@@ -42,7 +44,7 @@ function freshOrder(): Order {
 
 vi.mock('../src/store/root-store', () => ({
   useRootStore: () => ({
-    ordersOwner: 'cashier@example.com', ordersBranch: 'Branch A',
+    ordersOwner: state.ordersOwner, ordersBranch: 'Branch A',
     orders: state.orders ?? [state.order], selectedOrder: state.order, selectedOrderItems: [],
     user: { name: 'cashier@example.com', roles: ['URY Cashier'] },
     selectedOrderTaxes: [], selectedStatus: state.selectedStatus,
@@ -85,6 +87,7 @@ beforeEach(async () => {
   state.users = {};
   state.usersRefused = false;
   state.counts = null;
+  state.ordersOwner = 'cashier@example.com';
   document.cookie = 'user_id=cashier%40example.com';
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ message: [] }) }));
   vi.spyOn(call, 'get').mockImplementation(async (method, args?: any) => {
@@ -474,6 +477,18 @@ describe('U-5 order status sidebar', () => {
     for (const closed of ['Recently Paid', 'Paid', 'Consolidated', 'Return']) {
       const found = pill(closed);
       if (found) expect(found.textContent).not.toMatch(/\d/);
+    }
+  });
+
+  it('reads no counts while the queue still belongs to another session', async () => {
+    state.counts = { outstanding: 7, unbilled: 3 };
+    state.ordersOwner = 'previous.cashier@example.com';
+    await renderOrders();
+    const methods = vi.mocked(call.get).mock.calls.map(([method]) => method);
+    expect(methods).not.toContain('frappe.client.get_count');
+    expect(methods).not.toContain('ury.ury_pos.api.getBranch');
+    for (const pill of Array.from(container.querySelector('nav')!.querySelectorAll('button'))) {
+      expect(pill.textContent).not.toMatch(/\d/);
     }
   });
 
