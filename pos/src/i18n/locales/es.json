@@ -103,6 +103,7 @@
     "processing": "Procesando...",
     "short_by": "Faltan {{amount}}",
     "change_due": "Cambio: {{amount}}",
+    "tip": "Propina",
     "success": "Pago exitoso: se recibieron {{amount}}",
     "room_folio": "Habitación / Folio",
     "room_posting": "Cargo a habitación",

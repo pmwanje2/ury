@@ -57,6 +57,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1
   );
   const [isProcessing, setIsProcessing] = useState(false);
+  const [tipInput, setTipInput] = useState('');
   const [printInvoice, setPrintInvoice] = useState(enablePaymentWithoutPrinting);
   const [error, setError] = useState<string | null>(null);
   const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
@@ -137,6 +138,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // If discount is applied, round up; else, round normally
   const finalTotal = appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal);
+  // A charged or cash tip is owed to the server: the tenders cover it, it is
+  // never change, and the server books it to the till's Tips Payable account.
+  const tipAmount = parseFloat(tipInput) || 0;
+  const tipInvalid = tipAmount < 0;
+  const amountDue = finalTotal + Math.max(0, tipAmount);
+  // Sent only when there is a tip, so an untipped settlement is unchanged.
+  const tipFields = tipAmount > 0 ? { tip: tipAmount } : {};
 
   // Calculate split payment total
   const payments = paymentModes
@@ -151,7 +159,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
     || (!!roomCheck?.ok && roomCheck.room === roomNumber.trim());
   const roomFields = roomChargeAmount > 0 ? { room_number: roomNumber } : {};
-  const shortfall = finalTotal - paymentsTotal;
+  const shortfall = amountDue - paymentsTotal;
   const isShort = shortfall > 0.005;
   // A named (non-default) customer on a profile with allow_partial_payment
   // may settle short; the balance stays owed on the invoice. Profile, order-type
@@ -169,7 +177,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
   // Both rules hold: a Room Charge waits for a verified room, and only a named
   // account may settle short.
-  const paymentDisabled = isProcessing || !roomVerified
+  const paymentDisabled = isProcessing || !roomVerified || tipInvalid
     || ((payments.length === 0 || isShort) && !canPayOnAccount);
   const settlementPayments = payments.length === 0 && canPayOnAccount
     ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
@@ -261,6 +269,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           pos_profile: posProfile,
           table,
           submit_invoice: 0,
+          ...tipFields,
           ...roomFields,
         });
 
@@ -290,7 +299,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         const settlement = await submitSettlementOfflineAware({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
-          amount: paymentsTotal, due: finalTotal, discount: appliedDiscount,
+          amount: paymentsTotal, due: amountDue, discount: appliedDiscount, tip: tipAmount,
           modeOfPayment: payments.length === 1 ? payments[0]?.mode_of_payment ?? '' : '',
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
             additionalDiscount: discountValue ? parseFloat(discountValue) : null,
@@ -302,6 +311,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             pos_profile: posProfile,
             table,
             submit_invoice: 1,
+            ...tipFields,
             ...roomFields,
             ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId }),
           }),
@@ -394,6 +404,20 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 );
               })}
             </div>
+            <div className="flex items-center gap-3">
+              <label htmlFor="payment-tip" className="w-24 font-medium">{t('payment.tip')}</label>
+              <Input
+                id="payment-tip"
+                type="text"
+                inputMode="decimal"
+                value={tipInput}
+                onChange={e => setTipInput(e.target.value)}
+                placeholder={t('payment.amount_placeholder')}
+                className="flex-1"
+                size="sm"
+                disabled={isProcessing}
+              />
+            </div>
             {canSelectCredit && <section>
               <label htmlFor="credit-account-search">{t('payment.charge_account')}</label>
               <Input type="search" id="credit-account-search" value={query} disabled={isProcessing}
@@ -448,11 +472,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             <div className="flex justify-between mt-2 text-sm">
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
-                {formatCurrency(paymentsTotal)} / {formatCurrency(finalTotal)}
-                {paymentsTotal > finalTotal && (
+                {formatCurrency(paymentsTotal)} / {formatCurrency(amountDue)}
+                {paymentsTotal > amountDue && (
                   <span className="text-yellow-700 font-semibold">
                     <Coins className="inline w-4 h-4 ms-1 text-yellow-500" />
-                    <span className="text-yellow-500 font-bold ms-1">{formatCurrency(paymentsTotal - finalTotal)}</span>
+                    <span className="text-yellow-500 font-bold ms-1">{formatCurrency(paymentsTotal - amountDue)}</span>
                   </span>
                 )}
               </span>
@@ -462,9 +486,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatCurrency(shortfall) })}
               </p>
             )}
-            {paymentsTotal > finalTotal && (
+            {paymentsTotal > amountDue && (
               <p className="text-yellow-700 text-sm font-medium">
-                {t('payment.change_due', { amount: formatCurrency(paymentsTotal - finalTotal) })}
+                {t('payment.change_due', { amount: formatCurrency(paymentsTotal - amountDue) })}
               </p>
             )}
           </div>
@@ -545,7 +569,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             variant={paymentDisabled ? "secondary" : "default"}
             className="w-full"
           >
-            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(paymentsTotal > 0 ? paymentsTotal : finalTotal) })}
+            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(paymentsTotal > 0 ? paymentsTotal : amountDue) })}
           </Button>
         </div>
       </DialogContent>

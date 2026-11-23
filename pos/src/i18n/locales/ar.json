@@ -153,6 +153,7 @@
     "processing": "جاري المعالجة...",
     "short_by": "ناقص {{amount}}",
     "change_due": "الباقي: {{amount}}",
+    "tip": "إكرامية",
     "success": "تم الدفع بنجاح: تم استلام {{amount}}",
     "print_invoice": "طباعة الفاتورة",
     "payment_not_processed": "لم تتم معالجة الدفع.",

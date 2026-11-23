@@ -131,6 +131,7 @@
     "processing": "Traitement...",
     "short_by": "Manque {{amount}}",
     "change_due": "Monnaie à rendre : {{amount}}",
+    "tip": "Pourboire",
     "success": "Paiement réussi : {{amount}} reçu",
     "print_invoice": "Imprimer la facture",
     "payment_not_processed": "Le paiement n'a pas été traité.",

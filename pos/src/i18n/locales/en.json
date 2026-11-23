@@ -153,6 +153,7 @@
     "processing": "Processing...",
     "short_by": "Short by {{amount}}",
     "change_due": "Change due: {{amount}}",
+    "tip": "Tip",
     "success": "Payment successful: {{amount}} received",
     "print_invoice": "Print Invoice",
     "payment_not_processed": "Payment was not processed.",
