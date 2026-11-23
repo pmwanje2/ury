@@ -386,11 +386,15 @@ def get_branch_reservation_duration(branch, default_duration=90):
     # Read-only: the Branch averages are written only by
     # update_branch_avg_table_times at till close.
     last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
-    if last_day_avg and last_day_avg >= 15: # minimum sensible table time
+    if last_day_avg and last_day_avg >= 15:
         return int(round(last_day_avg))
+    return reservation_duration_from(
+        last_day_avg, get_branch_last_week_avg_time(branch, update_branch=False), default_duration)
 
-    last_week_avg = get_branch_last_week_avg_time(branch, update_branch=False)
-    if last_week_avg and last_week_avg >= 15:
-        return int(round(last_week_avg))
 
+def reservation_duration_from(last_day_avg, last_week_avg, default_duration=90):
+    """The reservation stay from a branch's last-day and last-week table-time averages."""
+    for avg in (flt(last_day_avg), flt(last_week_avg)):
+        if avg >= 15:  # minimum sensible table time
+            return int(round(avg))
     return default_duration

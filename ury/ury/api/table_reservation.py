@@ -546,50 +546,21 @@ def update_table_reservation(
     return True
 
 
-def is_user_authorized_for_reservation_status_change(branch=None, user=None, doc=None):
+def is_user_authorized_for_reservation_status_change(doc=None, user=None):
     """
-    Checks whether the user may make a privileged reservation status change
-    (Completed or Cancelled).
-    Native write permission on URY Table Reservation authorises it (DocPerm and,
-    given the doc, User Permission row scope). A till's Cashier
-    (role_allowed_for_billing) or Restaurant Manager (transfer_role_permissions)
-    roles, Administrator and System Manager remain additional allowed paths.
+    Whether the user may cancel this booking, or complete it by hand.
+
+    Seating and cancelling are separate privileges, as Simphony keeps Cancel
+    Reservation Entry (32012) apart from greeting and seating a party: hosts,
+    concierge and managers hold it, waiters do not. URY ships it as the native
+    Permission Type cancel_reservation on URY Table Reservation, checked on the
+    booking itself so DocPerm, Custom DocPerm, if_owner and User Permission all
+    apply. Closing the bill completes a Seated party as a system save and never
+    reaches this check.
     """
-    user = user or frappe.session.user
-    if not user:
+    if doc is None:
         return False
-
-    user_roles = set(frappe.get_roles(user))
-    if user == "Administrator" or "System Manager" in user_roles:
-        return True
-
-    if frappe.has_permission("URY Table Reservation", "write", doc=doc, user=user):
-        return True
-
-    # Find matching POS Profile(s) for the branch or user
-    profiles = []
-    if branch:
-        profiles = frappe.db.get_all("POS Profile", filters={"branch": branch, "disabled": 0}, fields=["name"])
-
-    if not profiles:
-        user_profiles = frappe.db.get_all("POS Profile User", filters={"user": user}, fields=["parent as name"])
-        if user_profiles:
-            profiles = user_profiles
-
-    if not profiles:
-        profiles = frappe.db.get_all("POS Profile", filters={"disabled": 0}, fields=["name"], limit=5)
-
-    for p in profiles:
-        try:
-            profile_doc = frappe.get_doc("POS Profile", p.name)
-            billing_roles = {row.role for row in (profile_doc.role_allowed_for_billing or [])}
-            manager_roles = {row.role for row in (profile_doc.transfer_role_permissions or [])}
-            if (user_roles & billing_roles) or (user_roles & manager_roles):
-                return True
-        except Exception:
-            continue
-
-    return False
+    return frappe.has_permission("URY Table Reservation", "cancel_reservation", doc=doc, user=user)
 
 
 @frappe.whitelist()
@@ -607,7 +578,7 @@ def update_reservation_status(reservation_name, status, pos_invoice=None, cancel
 
     # Validate role permissions for critical status changes
     if status in ("Completed", "Cancelled"):
-        if not is_user_authorized_for_reservation_status_change(branch=doc.branch, doc=doc):
+        if not is_user_authorized_for_reservation_status_change(doc=doc):
             frappe.throw(
                 _("Not permitted to change reservation status to {0}.").format(status),
                 frappe.PermissionError,
@@ -799,6 +770,9 @@ def get_active_reservations(branch=None, date=None):
             res["grace_minutes"] = grace
             res["duration_minutes"] = duration
             res["lock_start_time"] = lock_start.strftime("%Y-%m-%d %H:%M:%S")
+            # The POS offers Cancel from this, evaluated natively on each booking.
+            res["can_cancel"] = res.get("status") in ("Requested", "Confirmed", "Active") and bool(
+                is_user_authorized_for_reservation_status_change(doc=res.name))
 
             result.append(res)
 

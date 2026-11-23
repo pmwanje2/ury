@@ -23,9 +23,7 @@ import {
 } from '@ury/ui';
 import { useNavigate } from 'react-router-dom';
 import { usePOSStore } from '../store/pos-store';
-import { useRootStore } from '../store/root-store';
 import { t } from '../i18n';
-import { derivePOSCapabilities } from '@ury/core';
 import {
   getActiveReservations,
   getBranchReservationSettings,
@@ -94,17 +92,7 @@ function formatDisplayDate(d: Date): string {
 export default function Reservations() {
   const navigate = useNavigate();
   const { posProfile, searchQuery, setSelectedTable, setSelectedOrderType } = usePOSStore();
-  const user = useRootStore((state) => state.user);
   const branch = posProfile?.branch ?? '';
-
-  const isManagerOrCashier = useMemo(() => {
-    if (!user) return false;
-    if (user.name === 'Administrator' || user.roles?.includes('System Manager')) {
-      return true;
-    }
-    const capabilities = derivePOSCapabilities(user, posProfile);
-    return Boolean(capabilities?.canAccessOtherCaptainsTables);
-  }, [user, posProfile]);
 
   useEffect(() => {
     if (!branch) return;
@@ -269,7 +257,7 @@ export default function Reservations() {
 
   const handleConfirmCancel = async (reason: string) => {
     if (!cancelReservation) return;
-    if (!isManagerOrCashier) {
+    if (!cancelReservation.can_cancel) {
       showToast.error(t('reservations.not_authorized_cancel'));
       return;
     }
@@ -628,7 +616,7 @@ export default function Reservations() {
                                   <span>{t('reservations.edit_action')}</span>
                                 </button>
 
-                                {isManagerOrCashier && (
+                                {res.can_cancel && (
                                   <button
                                     type="button"
                                     onClick={() => handleOpenCancel(res)}

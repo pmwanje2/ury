@@ -61,6 +61,8 @@ const TableReservationEditDialog = ({
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customerPhone, setCustomerPhone] = useState('');
   const [noOfPax, setNoOfPax] = useState<number>(1);
+  // What the field shows; noOfPax follows it only while it holds a whole number of at least one.
+  const [paxInput, setPaxInput] = useState('1');
   const [reservationDate, setReservationDate] = useState('');
   const [reservationTime, setReservationTime] = useState('');
   const [notes, setNotes] = useState('');
@@ -82,6 +84,7 @@ const TableReservationEditDialog = ({
     });
     setCustomerPhone(reservation.customer_phone || '');
     setNoOfPax(reservation.no_of_pax || 1);
+    setPaxInput(String(reservation.no_of_pax || 1));
     setNotes(reservation.comments || '');
     setValidationError(null);
 
@@ -175,7 +178,7 @@ const TableReservationEditDialog = ({
       return;
     }
 
-    if (!noOfPax || noOfPax < 1) {
+    if (!(parseInt(paxInput, 10) >= 1)) {
       setValidationError(t('reservations.valid_pax'));
       return;
     }
@@ -341,8 +344,12 @@ const TableReservationEditDialog = ({
                     className="ps-10"
                     type="number"
                     min={1}
-                    value={noOfPax}
-                    onChange={(e) => setNoOfPax(Math.max(1, parseInt(e.target.value) || 1))}
+                    value={paxInput}
+                    onChange={(e) => {
+                      setPaxInput(e.target.value);
+                      const pax = parseInt(e.target.value, 10);
+                      if (pax >= 1) setNoOfPax(pax);
+                    }}
                     disabled={loading}
                   />
                 </div>
@@ -412,7 +419,7 @@ const TableReservationEditDialog = ({
 
           <Button
             onClick={handleSubmit}
-            disabled={loading || !customer || !customerPhone.trim() || !selectedTable}
+            disabled={loading || loadingTables || !customer || !customerPhone.trim() || !selectedTable}
           >
             {t('reservations.save_changes')}
           </Button>

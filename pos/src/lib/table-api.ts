@@ -71,6 +71,8 @@ export interface TableReservation {
   grace_minutes?: number;
   duration_minutes?: number;
   lock_start_time?: string;
+  /** The server's native cancel_reservation check on this booking for this user. */
+  can_cancel?: boolean;
 }
 
 export interface Table {

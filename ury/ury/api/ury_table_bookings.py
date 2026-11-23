@@ -3,10 +3,12 @@
 from datetime import timedelta
 
 import frappe
-from frappe.utils import get_datetime, now_datetime
+from frappe.utils import cint, get_datetime, now_datetime
 
 from ury.ury.api.table_reservation import reservations_enabled
-from ury.ury.report.average_table_time.average_table_time import get_branch_reservation_duration
+from ury.ury.report.average_table_time.average_table_time import reservation_duration_from
+
+CONFIRMED, SEATED = "Confirmed", "Seated"
 
 
 @frappe.whitelist(methods=["GET"])
@@ -17,15 +19,25 @@ def get_upcoming_bookings(branch):
 		return {}
 
 	now = now_datetime()  # Frappe's site-local clock, not UTC or the client clock.
-	window = timedelta(minutes=float(get_branch_reservation_duration(branch)))
+	# The averages a till close stored on the Branch: a floor poll never re-reads closed tills.
+	settings = frappe.db.get_value("Branch", branch, [
+		"custom_buffer_time", "custom_grace_period",
+		"custom_avg_table_time_last_day", "custom_avg_table_time_last_week",
+	], as_dict=True) or {}
+	stay = timedelta(minutes=reservation_duration_from(
+		settings.get("custom_avg_table_time_last_day"), settings.get("custom_avg_table_time_last_week")))
+	buffer = timedelta(minutes=max(0, cint(settings.get("custom_buffer_time"))))
+	grace = timedelta(minutes=max(0, cint(settings.get("custom_grace_period"))))
 
 	try:
 		rows = frappe.get_list(
 			"URY Table Reservation",
-			filters={
-				"branch": branch,
-				"status": ["in", ["Confirmed", "Seated"]],
-				"reserved_at": ["between", [now - window, now + window]],
+			filters={"branch": branch, "status": ["in", [CONFIRMED, SEATED]]},
+			# A Seated party is at its table whatever its booking time. A Confirmed booking
+			# shows within the stay either side of now, and always while it locks its table.
+			or_filters={
+				"status": SEATED,
+				"reserved_at": ["between", [now - max(stay, grace), now + max(stay, buffer)]],
 			},
 			fields=["reserved_table", "reserved_at", "no_of_pax", "customer_name", "status"],
 			order_by="reserved_at asc, name asc",
@@ -34,14 +46,16 @@ def get_upcoming_bookings(branch):
 	except frappe.PermissionError:
 		return {}
 
+	# One badge per table: a booking locking its table, else the Seated party, else the nearest.
 	result = {}
-	distances = {}
+	ranks = {}
 	for row in rows:
 		table = row["reserved_table"]
 		scheduled = get_datetime(row["reserved_at"])
-		distance = abs(scheduled - now)
-		if table not in distances or distance < distances[table]:
-			distances[table] = distance
+		locking = row["status"] == CONFIRMED and scheduled - buffer <= now < scheduled + grace
+		rank = (0 if locking else 1 if row["status"] == SEATED else 2, abs(scheduled - now))
+		if table not in ranks or rank < ranks[table]:
+			ranks[table] = rank
 			result[table] = {
 				"scheduled_time": scheduled.isoformat(sep=" ", timespec="seconds"),
 				"party_size": row.get("no_of_pax"),
