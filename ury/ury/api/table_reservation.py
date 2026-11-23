@@ -1121,11 +1121,10 @@ def complete_seated_reservation_on_submit(doc, method=None):
     tables and no other part of this split bill is still open. A party linked
     to another bill, or whose hold had ended before this bill was opened, is
     someone else's. As in Simphony TMS, closing the check needs no reservation
-    privilege: the save is the system transition Seated -> Completed, and
-    nothing else. It still runs under the closer's own write permission and
-    User Permission, so the Version names the closer, and a closer without
-    them leaves the party Seated. It never blocks the payment: a refusal or
-    failure is logged, not raised.
+    right at all: the save is the system transition Seated -> Completed for
+    that party, and the controller admits nothing else on it. The Version
+    still names the closer. It never blocks the payment: a refusal or failure
+    is logged, not raised.
     """
     if cint(doc.get("is_return")) or (doc.get("order_type") or "Dine In") != "Dine In":
         return
@@ -1157,6 +1156,6 @@ def complete_seated_reservation_on_submit(doc, method=None):
             reservation.status = "Completed"
             reservation.pos_invoice = doc.name
             reservation.flags.system_transition = ("Seated", "Completed")
-            reservation.save()
+            reservation.save(ignore_permissions=True)
         except Exception:
             frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")
