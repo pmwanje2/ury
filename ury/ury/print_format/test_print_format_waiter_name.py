@@ -69,6 +69,16 @@ class TestWaiterNameOnPrints(unittest.TestCase):
 				with self.subTest(print_format=name, expression=expression):
 					self.assertEqual(render(expression, None), "")
 
+	def test_the_new_templates_reach_sites_that_already_have_them(self):
+		# The merged bill is a standard format: migrate reloads it only when its modified moves forward.
+		self.assertGreater(json.loads((HERE / "merged_pos_invoice_format" / "merged_pos_invoice_format.json").read_text())["modified"],
+			"2026-11-21 00:00:00.000000")
+		# The waiter slip is not a standard format: only a re-suffixed patch line reloads it.
+		lines = [line.strip() for line in (HERE.parents[1] / "patches.txt").read_text().splitlines()]
+		rerun = [line for line in lines if line.startswith("ury.patches.v2_0.fix_waiter_order_slip_print_format #")]
+		self.assertEqual(len(rerun), 1)
+		self.assertGreater(rerun[0].split("#", 1)[1].strip()[:10], "2026-11-21")
+
 
 if __name__ == "__main__":
 	unittest.main()

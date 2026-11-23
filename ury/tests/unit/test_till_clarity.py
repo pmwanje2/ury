@@ -391,7 +391,9 @@ class TestGuestLabelOnPrints(unittest.TestCase):
         env.globals["_"] = lambda text: text
         env.globals["frappe"] = frappe._dict(utils=frappe._dict(
             fmt_money=lambda value, **kwargs: str(value), formatdate=str,
-        ))
+        # Frappe's print Jinja exposes get_fullname (frappe/utils/safe_exec.py):
+        # the User's full name, or the id when there is no such User.
+        ), get_fullname=lambda user=None: {"samuel.otieno@example.test": "Samuel Otieno"}.get(user, user))
         return env
 
     def test_label_markup_is_escaped_under_autoescape_off(self):
@@ -421,6 +423,21 @@ class TestGuestLabelOnPrints(unittest.TestCase):
             with self.subTest(folder=folder):
                 rendered = env.from_string(_print_format(folder)["html"]).render(doc=doc)
                 self.assertNotIn("Guest", rendered)
+
+    def test_both_formats_print_the_waiters_full_name_not_their_login(self):
+        env = self._env()
+        doc = MagicMock()
+        doc.waiter = "samuel.otieno@example.test"
+        doc.custom_guest_label = None
+        doc.custom_merged_pos_invoice = None
+        doc.items = []
+        doc.kot_items = []
+        doc.get_formatted.side_effect = lambda field, *args, **kwargs: field
+        for folder in self.FORMATS:
+            with self.subTest(folder=folder):
+                rendered = env.from_string(_print_format(folder)["html"]).render(doc=doc)
+                self.assertIn("Samuel Otieno", rendered)
+                self.assertNotIn("samuel.otieno@example.test", rendered)
 
     def test_standard_merged_bill_is_reloaded_on_migrate(self):
         # a standard Print Format reloads only when its modified moves forward
