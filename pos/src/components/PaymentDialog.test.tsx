@@ -321,7 +321,7 @@ describe("PaymentDialog", () => {
     });
   });
 
-  it("does not complete payment if print fails when print invoice is checked", async () => {
+  it("records the payment before the receipt print, so a print failure cannot undo it", async () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
@@ -357,10 +357,10 @@ describe("PaymentDialog", () => {
       );
       // print was called
       expect(printOrder).toHaveBeenCalled();
-      // submit_order_invoice was NOT called!
-      expect(call.post).not.toHaveBeenCalledWith(
+      // the invoice was already submitted (fiscal receipts print after settlement)
+      expect(call.post).toHaveBeenCalledWith(
         "ury.ury.doctype.ury_order.ury_order.submit_order_invoice",
-        expect.anything()
+        { invoice: "INV001" }
       );
     });
   });

@@ -72,6 +72,7 @@ def merged_bill(text):
 	)
 	return Doc(
 		name=text("doc.name"), status=text("doc.status"), custom_guest_label=text("doc.custom_guest_label"),
+		docstatus=1, is_return=0, room_number=text("doc.room_number"),
 		customer=text("doc.customer"), customer_name=text("doc.customer_name"),
 		mobile_number=text("doc.mobile_number"), order_type=text("doc.order_type"), waiter=WAITER,
 		restaurant=text("doc.restaurant"), branch=text("doc.branch"), no_of_pax=text("doc.no_of_pax"),
@@ -120,7 +121,7 @@ def waiter_slip(text):
 # Each format, its record, and the text values it prints (tax descriptions print tag-stripped).
 FORMATS = {
 	"merged_pos_invoice_format": (merged_bill, (
-		"doc.name", "doc.status", "doc.custom_guest_label", "doc.customer_name", "doc.mobile_number",
+		"doc.name", "doc.room_number", "doc.custom_guest_label", "doc.customer_name", "doc.mobile_number",
 		"doc.order_type", "waiter.full_name", "doc.restaurant", "doc.branch", "doc.no_of_pax", "doc.cashier",
 		"item.item_code", "item.item_name", "item.stock_uom", "item.uom", "doc.custom_merged_pos_invoice",
 		"merged.item_name", "doc.mode_of_payment", "doc.customer", "doc.currency",
