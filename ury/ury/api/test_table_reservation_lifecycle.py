@@ -1474,6 +1474,20 @@ class TestSeatedCheckLifecycleTransferSplitMergeAndDiscard(_Timing):
         self.scheduler.process_reservation_no_shows()
         self.assertEqual(self.stored("TR-S"), ("Seated", "T1", "INV-1"))
 
+    def test_bill_close_completes_seated_party_by_bound_pos_invoice_even_when_table_differs(self):
+        # Coordinator (a): settling a bound check completes its Seated reservation by pos_invoice
+        # even if reserved_table still points to the old table (or the check carries no table).
+        for close_table in ("T2", ""):
+            with self.subTest(close_table=close_table):
+                self.site.rows["URY Table Reservation"].clear()
+                self.site.rows["POS Invoice"].clear()
+                self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
+                self.booking("TR-U", "19:00", table="T1", status="Seated")  # unbound: must not be matched
+                self.check("INV-1", table=close_table)
+                self.close("INV-1")
+                self.assertEqual(self.stored("TR-S"), ("Completed", "T1", "INV-1"))
+                self.assertEqual(self.stored("TR-U"), ("Seated", "T1", None))
+
     def test_sweep_never_completes_a_seated_party_while_a_split_sibling_is_still_open(self):
         self.booking("TR-S", "19:00", table="T1", status="Seated", pos_invoice="INV-1")
         self.check("INV-1", table="T1", docstatus=1, custom_split_group="grp1")

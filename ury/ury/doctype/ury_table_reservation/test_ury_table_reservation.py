@@ -925,6 +925,27 @@ class TestSeatedReservationCheckIntegration(FrappeTestCase):
         self.settle_check(inv.name)
         self.assertEqual(frappe.db.get_value("URY Table Reservation", res_id, "status"), "Completed")
 
+    def test_bill_close_and_sweep_find_seated_party_by_bound_pos_invoice_when_table_differs(self):
+        # Coordinator (a)+(b): even if reserved_table still points to the old table while the bound check
+        # moved to Table 2, the sweep keeps it Seated while open and bill-close completes it by pos_invoice.
+        res_id = self.seat_party("_Test Reservation Table 1")
+        inv = self.open_check("_Test Reservation Table 1")
+        self.assertEqual(frappe.db.get_value("URY Table Reservation", res_id, "pos_invoice"), inv.name)
+
+        # Simulate check moved to Table 2 with Table 1 cleared while reserved_table stayed on Table 1.
+        frappe.db.set_value("POS Invoice", inv.name, "restaurant_table", "_Test Reservation Table 2")
+        frappe.db.set_value("URY Table", "_Test Reservation Table 1", {"occupied": 0, "latest_invoice_time": None})
+        frappe.db.set_value("URY Table", "_Test Reservation Table 2", {"occupied": 1, "latest_invoice_time": inv.creation})
+        frappe.db.commit()
+
+        # (b) Sweep must keep the reservation Seated while its bound check is still open on Table 2.
+        process_reservation_no_shows()
+        self.assertEqual(frappe.db.get_value("URY Table Reservation", res_id, "status"), "Seated")
+
+        # (a) Settling the bound check on Table 2 must complete the reservation by pos_invoice.
+        self.settle_check(inv.name)
+        self.assertEqual(frappe.db.get_value("URY Table Reservation", res_id, "status"), "Completed")
+
     def test_split_bill_completes_seated_visit_when_split_child_settles_last(self):
         from ury.ury.doctype.ury_order.ury_order import split_bill
 
