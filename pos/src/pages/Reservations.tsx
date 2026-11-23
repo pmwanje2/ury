@@ -44,6 +44,7 @@ import TableReservationCancelDialog from '../components/TableReservationCancelDi
 import TableReservationCompleteDialog from '../components/TableReservationCompleteDialog';
 import TableReservationTimeline from '../components/TableReservationTimeline';
 import { DatePicker } from '../components/DatePicker';
+import { DINE_IN } from '../data/order-types';
 
 function formatDateToYYYYMMDD(d: Date): string {
   const year = d.getFullYear();
@@ -92,7 +93,7 @@ function formatDisplayDate(d: Date): string {
 
 export default function Reservations() {
   const navigate = useNavigate();
-  const { posProfile, searchQuery } = usePOSStore();
+  const { posProfile, searchQuery, setSelectedTable, setSelectedOrderType } = usePOSStore();
   const user = useRootStore((state) => state.user);
   const branch = posProfile?.branch ?? '';
 
@@ -138,9 +139,9 @@ export default function Reservations() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState<boolean>(false);
   const [cancelReservation, setCancelReservation] = useState<TableReservation | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState<boolean>(false);
-  const [completeReservation, setCompleteReservation] = useState<TableReservation | null>(null);
-  const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState<boolean>(false);
-  const [completeLoading, setCompleteLoading] = useState<boolean>(false);
+  const [seatReservation, setSeatReservation] = useState<TableReservation | null>(null);
+  const [isSeatDialogOpen, setIsSeatDialogOpen] = useState<boolean>(false);
+  const [seatLoading, setSeatLoading] = useState<boolean>(false);
   const [cancelLoading, setCancelLoading] = useState<boolean>(false);
 
   // Status filter state (Confirmed by default)
@@ -241,9 +242,9 @@ export default function Reservations() {
     setMenuOpenId(null);
   };
 
-  const handleOpenComplete = (res: TableReservation) => {
-    setCompleteReservation(res);
-    setIsCompleteDialogOpen(true);
+  const handleOpenSeat = (res: TableReservation) => {
+    setSeatReservation(res);
+    setIsSeatDialogOpen(true);
     setMenuOpenId(null);
   };
 
@@ -266,7 +267,7 @@ export default function Reservations() {
     }
   };
 
-  const handleConfirmCancel = async () => {
+  const handleConfirmCancel = async (reason: string) => {
     if (!cancelReservation) return;
     if (!isManagerOrCashier) {
       showToast.error(t('reservations.not_authorized_cancel'));
@@ -274,7 +275,7 @@ export default function Reservations() {
     }
     setCancelLoading(true);
     try {
-      await updateTableReservationStatus(cancelReservation.name, 'Cancelled');
+      await updateTableReservationStatus(cancelReservation.name, 'Cancelled', undefined, reason);
       await fetchReservationsData(selectedDate);
       setIsCancelDialogOpen(false);
       setCancelReservation(null);
@@ -286,23 +287,24 @@ export default function Reservations() {
     }
   };
 
-  const handleConfirmComplete = async () => {
-    if (!completeReservation) return;
-    if (!isManagerOrCashier) {
-      showToast.error(t('reservations.not_authorized_complete'));
-      return;
-    }
-    setCompleteLoading(true);
+  // Seating the party opens its table order; the bill closing completes the reservation.
+  const handleConfirmSeat = async () => {
+    if (!seatReservation) return;
+    setSeatLoading(true);
     try {
-      await updateTableReservationStatus(completeReservation.name, 'Completed');
-      await fetchReservationsData(selectedDate);
-      setIsCompleteDialogOpen(false);
-      setCompleteReservation(null);
+      await updateTableReservationStatus(seatReservation.name, 'Seated');
+      const table = seatReservation.reserved_table;
+      const room = availableTables.find((tbl) => tbl.name === table)?.restaurant_room ?? null;
+      setIsSeatDialogOpen(false);
+      setSeatReservation(null);
+      setSelectedOrderType(DINE_IN);
+      setSelectedTable(table, room);
+      navigate('/register');
     } catch (err) {
-      console.error('Failed to confirm customer arrival:', err);
+      console.error('Failed to seat the reservation:', err);
       throw err;
     } finally {
-      setCompleteLoading(false);
+      setSeatLoading(false);
     }
   };
 
@@ -372,6 +374,8 @@ export default function Reservations() {
         return <Badge variant="warning">{t('reservations.status_active')}</Badge>;
       case 'Requested':
         return <Badge variant="outline">{t('reservations.status_requested')}</Badge>;
+      case 'Seated':
+        return <Badge variant="info">{t('reservations.status_seated')}</Badge>;
       case 'Completed':
         return <Badge variant="completed">{t('reservations.status_completed')}</Badge>;
       case 'Cancelled':
@@ -500,6 +504,7 @@ export default function Reservations() {
             {[
               { value: 'All', label: t('reservations.filter_all') },
               { value: 'Confirmed', label: t('reservations.status_confirmed') },
+              { value: 'Seated', label: t('reservations.status_seated') },
               { value: 'Completed', label: t('reservations.status_completed') },
               { value: 'Cancelled', label: t('reservations.status_cancelled') },
               { value: 'No Show', label: t('reservations.status_no_show') },
@@ -551,8 +556,10 @@ export default function Reservations() {
       >
         {viewMode === 'timeline' ? (
           <TableReservationTimeline
+            tables={filteredTablesForFilter}
             reservations={filteredReservations}
             selectedDate={selectedDate}
+            onSelectReservation={handleOpenEdit}
             loading={loading}
           />
         ) : loading ? (
@@ -621,17 +628,6 @@ export default function Reservations() {
                                   <span>{t('reservations.edit_action')}</span>
                                 </button>
 
-                                {isManagerOrCashier && ['Confirmed', 'Active'].includes(res.status) && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenComplete(res)}
-                                    className="w-full text-start px-4 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50 flex items-center gap-2"
-                                  >
-                                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                                    <span>{t('reservations.complete_title')}</span>
-                                  </button>
-                                )}
-
                                 {isManagerOrCashier && (
                                   <button
                                     type="button"
@@ -688,6 +684,18 @@ export default function Reservations() {
                         </p>
                       )}
                     </div>
+
+                    {/* Primary host action: seat the arriving party (opens its table order) */}
+                    {['Confirmed', 'Active'].includes(res.status) && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenSeat(res)}
+                        className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 transition-colors"
+                      >
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        <span>{t('reservations.seat_action')}</span>
+                      </button>
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -704,16 +712,16 @@ export default function Reservations() {
         onConfirm={handleConfirmEdit}
       />
 
-      {/* Customer Arrival Confirmation Dialog */}
+      {/* Seat Guest Dialog */}
       <TableReservationCompleteDialog
-        open={isCompleteDialogOpen}
-        reservation={completeReservation}
+        open={isSeatDialogOpen}
+        reservation={seatReservation}
         onClose={() => {
-          setIsCompleteDialogOpen(false);
-          setCompleteReservation(null);
+          setIsSeatDialogOpen(false);
+          setSeatReservation(null);
         }}
-        onConfirm={handleConfirmComplete}
-        loading={completeLoading}
+        onConfirm={handleConfirmSeat}
+        loading={seatLoading}
       />
 
       {/* Cancel Dialog */}

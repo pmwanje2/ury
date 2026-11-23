@@ -28,22 +28,26 @@ export function isReservationLockWindowActive(
 ): boolean {
   if (!res || res.status !== 'Confirmed') return false;
 
+  // The server decides on the site clock; a tablet's own clock never overrules it.
+  if (typeof res.is_lock_window_active === 'boolean') return res.is_lock_window_active;
+
+  // Fallback for a row without the server flag: [reserved_at - buffer, reserved_at + grace).
   const buf = res.buffer_minutes ?? defaultBufferMinutes;
+  const grace = res.grace_minutes ?? 0;
 
   if (res.reserved_at) {
     try {
       const resDate = new Date(res.reserved_at.replace(' ', 'T'));
       if (!isNaN(resDate.getTime())) {
-        const now = new Date();
-        const lockStart = new Date(resDate.getTime() - buf * 60 * 1000);
-        return now >= lockStart;
+        const now = Date.now();
+        return now >= resDate.getTime() - buf * 60 * 1000 && now < resDate.getTime() + grace * 60 * 1000;
       }
     } catch (_e) {
       // Ignore date parsing error
     }
   }
 
-  return Boolean(res.is_lock_window_active);
+  return false;
 }
 
 export function parseMergedWith(mergedWith: string | null | undefined): string[] {

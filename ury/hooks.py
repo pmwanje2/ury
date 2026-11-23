@@ -273,6 +273,7 @@ doc_events = {
         "on_submit": [
             "ury.ury.hooks.ury_pos_invoice.on_submit",
             "ury.ury.api.ury_feature_flags.maybe_wire_fulfilment_on_submit",
+            "ury.ury.api.table_reservation.complete_seated_reservation_on_submit",
         ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
         "on_cancel": "ury.ury.hooks.ury_pos_invoice.on_trash",

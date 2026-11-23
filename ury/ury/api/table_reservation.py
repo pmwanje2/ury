@@ -155,7 +155,8 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
       - Start Time: T_start
       - Expected Duration: D (from Average Table Time calculation)
       - Buffer Time: B (from Branch settings)
-      - Protection window overlap
+      - Protection window overlap: each booking holds its table over
+        [T_start - B, T_start + D), and two holds on one table may not overlap.
     """
     if not table or not reserved_at:
         return
@@ -172,6 +173,7 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
         duration_val = settings.get("calculated_duration", 60)
     duration_mins = flt(duration_val)
 
+    new_hold_start = new_start - timedelta(minutes=cint(settings.get("buffer_time", 0)))
     new_end = new_start + timedelta(minutes=duration_mins)
 
     query = """
@@ -197,10 +199,11 @@ def validate_reservation_conflicts(table, branch, reserved_at, exclude_name=None
             ex_duration_val = ex_settings.get("calculated_duration", 90)
         ex_duration = flt(ex_duration_val)
 
+        ex_hold_start = ex_start - timedelta(minutes=cint(ex_settings.get("buffer_time", 0)))
         ex_end = ex_start + timedelta(minutes=ex_duration)
 
-        # Conflict occurs if the two reservation intervals overlap without buffer time
-        if ex_start < new_end and new_start < ex_end:
+        # Conflict occurs if the two holds, buffer included, overlap
+        if ex_hold_start < new_end and new_hold_start < ex_end:
             frappe.throw(
                 _("Table {0} already has a reservation during the selected time. Please select a different reservation time.").format(table)
             )
@@ -221,7 +224,7 @@ def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_
     table_data = frappe.db.get_value(
         "URY Table",
         table,
-        ["name", "no_of_seats", "occupied", "latest_invoice_time", "branch", "restaurant_room"],
+        ["name", "no_of_seats", "minimum_seating", "occupied", "latest_invoice_time", "branch", "restaurant_room"],
         as_dict=True,
     )
     if not table_data:
@@ -237,6 +240,9 @@ def validate_reservation_rules(table, branch, reserved_at, no_of_pax=1, exclude_
     pax = cint(no_of_pax or 1)
     if table_seats > 0 and pax > table_seats:
         frappe.throw(_("Number of persons cannot exceed the table capacity of {0}.").format(table_seats))
+    minimum_seats = cint(table_data.get("minimum_seating") or 0)
+    if minimum_seats > 0 and pax < minimum_seats:
+        frappe.throw(_("Number of persons must be at least the table minimum of {0}.").format(minimum_seats))
 
     # 2. Past Datetime Validation
     if not reserved_at:
@@ -290,9 +296,6 @@ def check_table_reservation(table):
         return None
 
     try:
-        from ury.ury.api.reservation_scheduler import process_reservation_no_shows
-        process_reservation_no_shows()
-
         branch = frappe.db.get_value("URY Table", table, "branch")
         settings = get_branch_reservation_settings(branch)
         buffer_mins = cint(settings.get("buffer_time", 0))
@@ -327,13 +330,14 @@ def check_table_reservation(table):
             return None
 
         # Priority 1: Check if any reservation is currently in its active lock window:
-        # [reserved_at - buffer_time] through reservation time and until terminal state
+        # [reserved_at - buffer_time, reserved_at + grace_period). After the grace
+        # end an unclaimed table is released, before the scheduler marks No Show.
         for res in reservations:
             res_time = get_datetime(res.reserved_at)
             lock_start = res_time - timedelta(minutes=buffer_mins)
             grace_end = res_time + timedelta(minutes=grace_mins)
 
-            if now >= lock_start:
+            if lock_start <= now < grace_end:
                 res["is_lock_window_active"] = True
                 res["buffer_minutes"] = buffer_mins
                 res["grace_minutes"] = grace_mins
@@ -365,9 +369,11 @@ def check_table_reservation(table):
 @frappe.whitelist()
 def get_completed_reservation_for_table(table, branch=None):
     """
-    Returns the recent completed reservation for a table ONLY IF the table is currently
+    Returns the recent Seated reservation for a table ONLY IF the table is currently
     Occupied (occupied = 1) and no submitted invoice exists yet for that reservation.
     If the table is Available (occupied = 0), returns None.
+    The name is kept from upstream (ury-erp/ury#358), where arrival was "Completed";
+    ury_order imports it under this name.
     """
     if not table:
         return None
@@ -382,7 +388,7 @@ def get_completed_reservation_for_table(table, branch=None):
         now = now_datetime()
         filters = {
             "reserved_table": table,
-            "status": "Completed",
+            "status": "Seated",
             "modified": [">", add_to_date(now, hours=-12)],
         }
         if branch:
@@ -578,9 +584,10 @@ def is_user_authorized_for_reservation_status_change(branch=None, user=None):
 
 
 @frappe.whitelist()
-def update_reservation_status(reservation_name, status, pos_invoice=None):
+def update_reservation_status(reservation_name, status, pos_invoice=None, cancel_reason=None):
     """
-    Updates the status of a reservation (Completed, Cancelled, No Show) with validation.
+    Updates the status of a reservation (Seated, Completed, Cancelled, No Show) with validation.
+    Seated is open to anyone with write permission: whoever greets the party seats it.
     """
     if not reservation_name:
         frappe.throw(_("Reservation ID is required."))
@@ -609,16 +616,8 @@ def update_reservation_status(reservation_name, status, pos_invoice=None):
     doc.status = status
     if pos_invoice:
         doc.pos_invoice = pos_invoice
-
-    if status == "Completed" and doc.reserved_table:
-        frappe.db.set_value(
-            "URY Table",
-            doc.reserved_table,
-            {
-                "occupied": 1,
-                "latest_invoice_time": now_datetime(),
-            },
-        )
+    if cancel_reason:
+        doc.cancel_reason = cancel_reason
 
     doc.save()
     frappe.db.commit()
@@ -631,7 +630,7 @@ def sync_branch_table_occupancy(branch=None):
     A table should be `occupied = 1` ONLY IF:
       1. An active draft POS Invoice (docstatus = 0) exists for the table, OR
       2. An active lock-window reservation exists for the table, OR
-      3. A guest arrival confirmation (status = 'Completed') occurred recently within the active dining window without an order created yet.
+      3. A party was Seated recently within the active dining window without an order created yet.
     Otherwise, if no active draft invoice and no active reservation lock exists, reset occupied = 0.
     """
     try:
@@ -683,12 +682,12 @@ def sync_branch_table_occupancy(branch=None):
             if active_res and active_res.get("is_lock_window_active") and active_res.get("status") in ("Confirmed", "Active"):
                 continue
 
-            # 3. Check for recent guest arrival (Completed status within last 30 minutes without invoice created yet)
+            # 3. Check for a recently Seated party (within the last 30 minutes, no invoice created yet)
             completed_res = frappe.db.get_all(
                 "URY Table Reservation",
                 filters={
                     "reserved_table": table_name,
-                    "status": "Completed",
+                    "status": "Seated",
                     "modified": [">", add_to_date(now, minutes=-30)]
                 },
                 limit=1
@@ -800,16 +799,24 @@ def get_active_reservations(branch=None, date=None):
         return []
 
 
+def _party_fits(table, pax):
+    seats = cint(table.get("no_of_seats") or 0)
+    minimum = cint(table.get("minimum_seating") or 0)
+    return (seats <= 0 or pax <= seats) and (minimum <= 0 or pax >= minimum)
+
+
 @frappe.whitelist()
-def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_reservation=None):
+def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_reservation=None, no_of_pax=None):
     """
     Returns the list of tables in the branch that are available for the requested reservation date/time.
     Filters out:
     1. Tables that are currently occupied where expected finish time exceeds the reservation time.
-    2. Tables with another Confirmed/Active/Requested reservation overlapping the reservation window.
+    2. Tables with another Confirmed/Active/Requested reservation whose hold (buffer included)
+       overlaps the requested hold.
+    3. When no_of_pax is given, tables the party does not fit (seats or minimum seating).
     (Excludes exclude_reservation so editing a reservation does not conflict with itself).
     """
-    if not branch or not reserved_at:
+    if not branch or not reserved_at or not reservations_enabled(branch):
         return []
 
     try:
@@ -841,6 +848,7 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
         if not duration_val or flt(duration_val) < 15:
             duration_val = settings.get("calculated_duration", 60)
         duration_mins = flt(duration_val)
+        res_hold_start = res_start - timedelta(minutes=cint(settings.get("buffer_time", 0)))
         res_end = res_start + timedelta(minutes=duration_mins)
 
         expected_duration = get_branch_reservation_duration(branch)
@@ -899,19 +907,53 @@ def get_available_tables_for_reservation(branch=None, reserved_at=None, exclude_
                 ex_dur_val = ex_settings.get("calculated_duration", 90)
             ex_dur = flt(ex_dur_val)
 
+            ex_hold_start = ex_start - timedelta(minutes=cint(ex_settings.get("buffer_time", 0)))
             ex_end = ex_start + timedelta(minutes=ex_dur)
 
-            # Overlap check: [ex_start, ex_end] overlaps [res_start, res_end]
-            if ex_start < res_end and res_start < ex_end:
+            # Overlap check: [ex_start - buffer, ex_end) overlaps [res_start - buffer, res_end)
+            if ex_hold_start < res_end and res_hold_start < ex_end:
                 reservation_conflicts.add(ex_table)
 
         # 5. Filter available tables
+        pax = cint(no_of_pax or 0)
         available_tables = [
             t for t in tables
             if t.name not in occupied_conflicts and t.name not in reservation_conflicts
+            and (not pax or _party_fits(t, pax))
         ]
 
         return available_tables
     except Exception as e:
         frappe.log_error(f"Error in get_available_tables_for_reservation: {str(e)}", "Reservation Availability Error")
         return []
+
+
+def complete_seated_reservation_on_submit(doc, method=None):
+    """POS Invoice on_submit: closing the table's bill completes its Seated reservation.
+
+    Covers the bill's table and every merged partner, links the reservation to
+    the bill, and never blocks the payment: a failure is logged, not raised.
+    """
+    tables = [doc.get("restaurant_table")] + (doc.get("custom_merged_tables") or "").split(",")
+    tables = [table.strip() for table in tables if table and table.strip()]
+    if not tables:
+        return
+    try:
+        seated = frappe.db.get_all(
+            "URY Table Reservation",
+            filters={"reserved_table": ["in", tables], "status": "Seated"},
+            fields=["name", "branch"],
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")
+        return
+    for res in seated:
+        if not reservations_enabled(res.branch):
+            continue
+        try:
+            reservation = frappe.get_doc("URY Table Reservation", res.name)
+            reservation.status = "Completed"
+            reservation.pos_invoice = doc.name
+            reservation.save(ignore_permissions=True)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Reservation completion on bill close")

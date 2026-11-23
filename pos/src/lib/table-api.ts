@@ -64,7 +64,8 @@ export interface TableReservation {
   no_of_pax?: number;
   reserved_at: string;
   comments?: string;
-  status: 'Requested' | 'Confirmed' | 'Completed' | 'Cancelled' | 'No Show';
+  status: 'Requested' | 'Confirmed' | 'Seated' | 'Completed' | 'Cancelled' | 'No Show';
+  cancel_reason?: string;
   is_lock_window_active?: boolean;
   buffer_minutes?: number;
   grace_minutes?: number;
@@ -275,7 +276,12 @@ export async function updateTableReservation(data: {
   return response.message;
 }
 
-export async function updateTableReservationStatus(reservationName: string, status: string, posInvoice?: string) {
+export async function updateTableReservationStatus(
+  reservationName: string,
+  status: string,
+  posInvoice?: string,
+  cancelReason?: string
+) {
   const { call } = await import('@ury/core');
 
   const response = await call.post(
@@ -284,6 +290,7 @@ export async function updateTableReservationStatus(reservationName: string, stat
       reservation_name: reservationName,
       status,
       pos_invoice: posInvoice,
+      cancel_reason: cancelReason,
     }
   );
 

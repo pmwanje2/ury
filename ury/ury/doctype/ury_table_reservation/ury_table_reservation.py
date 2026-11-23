@@ -59,6 +59,8 @@ class URYTableReservation(Document):
             frappe.throw(_("Please select a table."))
         if not self.reserved_at:
             frappe.throw(_("Please select a reservation time."))
+        if self.status == "Cancelled" and not (self.cancel_reason or "").strip():
+            frappe.throw(_("Please enter a cancellation reason."))
 
     def validate_table_branch(self):
         if self.reserved_table:
@@ -92,13 +94,15 @@ class URYTableReservation(Document):
         allowed_transitions = {
             "Requested": ["Confirmed", "Cancelled"],
             "Active": ["Completed", "Cancelled", "No Show"],
-            "Confirmed": ["Completed", "Cancelled", "No Show"],
+            "Confirmed": ["Seated", "Cancelled", "No Show"],
+            "Seated": ["Completed"],
             "Completed": [],
             "Cancelled": [],
             "No Show": [],
         }
 
-        if new_status in ("Completed", "Cancelled") and old_status != new_status:
+        # A system save (bill close completing a Seated party) is not a manual status change.
+        if new_status in ("Completed", "Cancelled") and not self.flags.ignore_permissions:
             from ury.ury.api.table_reservation import is_user_authorized_for_reservation_status_change
             if not is_user_authorized_for_reservation_status_change(branch=self.branch):
                 frappe.throw(
@@ -114,7 +118,7 @@ class URYTableReservation(Document):
     def on_update(self):
         old_doc = self.get_doc_before_save()
         old_status = old_doc.status if old_doc else None
-        if self.status == "Completed" and old_status != "Completed" and self.reserved_table:
+        if self.status == "Seated" and old_status != "Seated" and self.reserved_table:
             frappe.db.set_value(
                 "URY Table",
                 self.reserved_table,

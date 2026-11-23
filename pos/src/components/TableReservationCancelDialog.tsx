@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
     Dialog,
     DialogContent,
@@ -9,6 +10,7 @@ import {
 
 import { Button } from "@ury/ui";
 import { Badge } from "@ury/ui";
+import { Textarea } from "@ury/ui";
 import { CalendarClock, Phone, User, Users } from "lucide-react";
 import type { TableReservation } from '../lib/table-api';
 import { t } from '../i18n';
@@ -17,7 +19,8 @@ interface Props {
     open: boolean;
     reservation: TableReservation | null;
     tableName: string;
-    onConfirm: () => void;
+    /** Called with the cancellation reason, which is required. */
+    onConfirm: (reason: string) => void;
     onClose: () => void;
     loading?: boolean;
 }
@@ -30,7 +33,14 @@ const TableReservationCancelDialog = ({
     onClose,
     loading = false,
 }: Props) => {
+    const [reason, setReason] = useState('');
+    useEffect(() => {
+        if (open) setReason('');
+    }, [open, reservation?.name]);
+
     if (!reservation) return null;
+
+    const trimmedReason = reason.trim();
 
     const formattedTime = reservation.reserved_at ? reservation.reserved_at.replace('T', ' ') : '-';
 
@@ -139,6 +149,22 @@ const TableReservationCancelDialog = ({
                         </div>
 
                     </div>
+
+                    <div className="space-y-2">
+                        <label htmlFor="reservation-cancel-reason" className="text-sm font-medium text-gray-900">
+                            {t('reservations.cancel_reason_label')} <span className="text-red-500">*</span>
+                        </label>
+                        <Textarea
+                            id="reservation-cancel-reason"
+                            value={reason}
+                            onChange={(event) => setReason(event.target.value)}
+                            disabled={loading}
+                            rows={3}
+                        />
+                        {!trimmedReason && (
+                            <p className="text-xs text-gray-500">{t('reservations.cancel_reason_required')}</p>
+                        )}
+                    </div>
                 </div>
                 <DialogFooter className="border-t bg-white px-8 py-5 shrink-0">
                     <Button
@@ -151,8 +177,8 @@ const TableReservationCancelDialog = ({
 
                     <Button
                         variant="destructive"
-                        onClick={onConfirm}
-                        disabled={loading}
+                        onClick={() => onConfirm(trimmedReason)}
+                        disabled={loading || !trimmedReason}
                     >
                         {t('reservations.cancel_reservation')}
                     </Button>
