@@ -1181,8 +1181,7 @@ class _BillClose(_Site):
 
     def setUp(self):
         super().setUp()
-        # The till names its billing role, and the cashier who settles the bill
-        # closes the party's visit under that same authority.
+        # The till names its billing role; the cashier who settles the bill closes the party's visit.
         self.site.roles = ["URY Cashier"]
         self.frappe.session.user = "cashier@example.test"
         self.till(billing_roles=["URY Cashier"])
@@ -1302,30 +1301,33 @@ class TestClosingTheBillCompletesTheReservation(_BillClose):
         self.api.complete_seated_reservation_on_submit(self.bill(opened="20:40", customer="Guest"))
         self.assertEqual(self.stored("TR-1"), ("Seated", None))
 
-    def test_the_closer_s_own_write_authority_decides_and_the_version_names_them(self):
-        # R3: closing the check completes the visit with no reservation privilege (Simphony
-        # TMS), but the save is still the closer's own: a closer with no write on the
-        # booking leaves the party Seated, and the payment still stands.
+    def test_a_closer_with_no_write_on_the_booking_completes_the_visit_and_the_version_names_them(self):
+        # Paul, R3 (Simphony 1:1): closing the check needs no reservation right at all,
+        # not even write. The closer still appears on the Version.
         self.site.grant("Till Operator", "read")
         self.site.login("operator@example.test", ["Till Operator"])
         self.booking("TR-1", "19:00", status="Seated")
-        self.api.complete_seated_reservation_on_submit(self.bill())  # never raises into the payment
-        self.assertEqual(self.stored("TR-1"), ("Seated", None))
-        self.assertTrue(self.site.errors)
-        self.assertEqual(self.site.versions, [])
-        # A captain, with write but neither reservation privilege, completes it; the Version names them.
-        self.site.login("captain@example.test", ["URY Captain"])
+        self.assertFalse(self.site.has_permission(RESERVATION, "write", self.get_doc(RESERVATION, "TR-1")))
         self.api.complete_seated_reservation_on_submit(self.bill())
         self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
+        self.assertEqual(self.site.errors, [])
         self.assertEqual([(v.owner, v.status) for v in self.site.versions if v.docname == "TR-1"],
-            [("captain@example.test", ("Seated", "Completed"))])
+            [("operator@example.test", ("Seated", "Completed"))])
+        # That closer still changes no booking by hand.
+        self.booking("TR-2", "21:30", table="T2")
+        for status in ("Seated", "Cancelled", "No Show"):
+            with self.subTest(status=status):
+                with self.assertRaises(Refused):
+                    self.api.update_reservation_status("TR-2", status, cancel_reason="Guest called")
+        self.assertEqual(self.stored("TR-2"), ("Confirmed", None))
 
-    def test_a_closer_s_user_permission_still_scopes_the_completion(self):
+    def test_a_closer_s_user_permission_on_reservations_does_not_stop_the_completion(self):
+        # The closer submitted this Branch A check; a reservation User Permission elsewhere is no right needed here.
         self.site.login("captain@example.test", ["URY Captain"])
         self.site.user_permissions["Branch"] = {"Branch Off"}
         self.booking("TR-1", "19:00", status="Seated")
         self.api.complete_seated_reservation_on_submit(self.bill())
-        self.assertEqual(self.stored("TR-1"), ("Seated", None))
+        self.assertEqual(self.stored("TR-1"), ("Completed", "INV-1"))
 
     def test_the_completion_runs_on_pos_invoice_submit(self):
         tree = ast.parse((ROOT / "hooks.py").read_text())
@@ -1338,10 +1340,10 @@ class TestClosingTheBillCompletesTheReservation(_BillClose):
 class TestClosingTheCheckCompletesTheVisitWithoutAReservationPrivilege(_BillClose):
     """R3: in Simphony TMS, closing the guest check completes the seated visit.
 
-    No reservation privilege is involved (neither 32012 Cancel Reservation
-    Entry nor 32007 Mark as No Show): the bill close is a system transition
-    that moves only Seated -> Completed, only for the booking linked to that
-    check. Everything else stays under the closer's own permissions.
+    No reservation right is involved (neither 32012 Cancel Reservation Entry
+    nor 32007 Mark as No Show, nor write): the bill close is a system
+    transition that moves only Seated -> Completed, only for the party linked
+    to that check. Everything else stays under the closer's own permissions.
     """
 
     CAPTAIN, OTHER_CAPTAIN = "captain@example.test", "captain2@example.test"
