@@ -42,7 +42,7 @@ function setProfile(extra: Record<string, unknown> = {}) {
   store.state = {
     paymentModes: ["Room Charge"],
     fetchPaymentModes: vi.fn(),
-    posProfile: { name: "Till A", enable_discount: 0, enable_payment_without_printing: 0, ...extra },
+    posProfile: { name: "Till A", enable_discount: 0, enable_payment_without_printing: 0, room_charge_modes: ["Room Charge"], ...extra },
   };
 }
 
