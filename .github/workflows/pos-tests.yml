@@ -12,7 +12,7 @@ permissions:
 jobs:
   pos:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: pos
@@ -33,6 +33,11 @@ jobs:
         run: node --test ../tests/pos-workflow.test.cjs
       - name: Run hermetic POS tests
         run: npm test --offline -- ./tests/ --maxWorkers=1
+      # MenuItemCard and the other shared components are also rendered by serve.
+      - name: Run shared UI component tests
+        run: npm --prefix ../packages/ui test --offline -- --maxWorkers=1
+      - name: Run serve tests
+        run: npm --prefix ../serve test --offline -- --maxWorkers=1
       - name: Run site-less Python tests
         run: |
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_offline_capture_fixture
@@ -49,3 +54,5 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_backfill_invoice_employee_attribution
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_availability_tiers
           PYTHONPATH=.. python3 -m unittest ury.ury.api.test_menu_availability_operations
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_pos_invoice_list_fields
+          PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_waiter_name

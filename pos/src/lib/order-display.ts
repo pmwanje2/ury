@@ -1,38 +1,44 @@
-const WORD_CHAR = /[\p{L}\p{N}]/u;
-
-/** True when `needle` appears in `haystack` as whole words (both already case-folded). */
-function containsWords(haystack: string, needle: string): boolean {
-  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
-    const before = haystack[at - 1];
-    const after = haystack[at + needle.length];
-    const startsClean = !before || !WORD_CHAR.test(before) || !WORD_CHAR.test(needle[0]);
-    const endsClean = !after || !WORD_CHAR.test(after) || !WORD_CHAR.test(needle[needle.length - 1]);
-    if (startsClean && endsClean) return true;
-  }
-  return false;
+/** Locale-independent comparison form: NFC, single spaces, Unicode lower case. */
+function fold(value: string): string {
+  return value.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+/** What may follow a customer name inside a label that names it: "(Rm 408)", ", Rm 4", " - Board". */
+const NOTE_AFTER_NAME = /^(?:\s*[([{,:;]|\s+[-\u2013\u2014|/\u00b7]\s)/;
+
 /**
- * The check's name: its guest label first, then its customer, so two splits on
- * one walk-in customer ("Susan · Walk In", "David · Walk In") are told apart.
- * When one side already names the other ("Dr. Elena Rostova (Rm 408)" and
- * "Dr. Elena Rostova") only the fuller one is shown.
+ * The check's name: its guest label (Simphony's check name), then the billed
+ * customer, so two splits on one customer ("Susan · Walk In", "David · Walk
+ * In") are told apart. The customer shows by name; its id only when it has no
+ * name. The customer is left out only when the label is that same customer:
+ * its name or id, or its name followed by a bracketed or separated note
+ * ("Dr. Elena Rostova (Rm 408)"). A label that merely contains or sits inside
+ * the customer name never hides it.
  */
-export function formatGuestSubtitle(guestLabel?: string | null, customerName?: string | null): string {
+export function formatGuestSubtitle(
+  guestLabel?: string | null,
+  customerName?: string | null,
+  customerId?: string | null,
+): string {
   const label = guestLabel?.trim() ?? '';
-  const customer = customerName?.trim() ?? '';
+  const name = customerName?.trim() ?? '';
+  const id = customerId?.trim() ?? '';
+  const customer = name || id;
   if (!label || !customer) return label || customer;
-  const foldedLabel = label.toLocaleLowerCase();
-  const foldedCustomer = customer.toLocaleLowerCase();
-  if (containsWords(foldedLabel, foldedCustomer)) return label;
-  if (containsWords(foldedCustomer, foldedLabel)) return customer;
+  const foldedLabel = fold(label);
+  if (foldedLabel === fold(customer) || (id && foldedLabel === fold(id))) return customer;
+  if (name) {
+    const foldedName = fold(name);
+    if (foldedLabel.startsWith(foldedName) && NOTE_AFTER_NAME.test(foldedLabel.slice(foldedName.length))) return label;
+  }
   return `${label} · ${customer}`;
 }
 
 /**
- * A staff member's display name. A full name from the payload wins; a bare
- * email user id ("samuel.otieno@domain.example") becomes "Samuel Otieno".
- * Callers keep the raw user id in a tooltip for auditability.
+ * A staff member's display name. The User record's full name wins (see
+ * useStaffNames); only when it cannot be read is a name guessed from the
+ * email user id ("samuel.otieno@domain.example" becomes "Samuel Otieno"),
+ * so callers also show the raw user id where the full detail is shown.
  */
 export function formatStaffDisplayName(fullName?: string | null, userId?: string | null): string {
   const name = fullName?.trim() ?? '';

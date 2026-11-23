@@ -93,7 +93,8 @@ const OrderTypeSelect = ({ disabled }: OrderTypeSelectProps) => {
               title={isDineIn && isRestrictedFromTableOrders ? t('errors.dine_in_restricted') || 'Dine In is not available for your role' : label}
             >
               <Icon className="w-4 h-4 shrink-0" />
-              <span className="min-w-0 truncate">{label}</span>
+              {/* Wraps rather than an ellipsis: a touch screen has no hover tooltip. */}
+              <span className="min-w-0 whitespace-normal break-words text-start leading-tight">{label}</span>
             </Button>
           );
         })}

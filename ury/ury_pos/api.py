@@ -379,6 +379,7 @@ def get_split_group(invoice):
         "customer",
         "customer_name",
         "custom_guest_label",
+        "no_of_pax",
         "status",
         "docstatus",
         "posting_date",
@@ -564,7 +565,7 @@ def getPosInvoice(status, limit, limit_start):
             SELECT 
                 name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number, 
+                total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
@@ -587,7 +588,7 @@ def getPosInvoice(status, limit, limit_start):
             SELECT 
                 name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number, 
+                total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
@@ -609,7 +610,7 @@ def getPosInvoice(status, limit, limit_start):
             SELECT 
                 name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number,
+                total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
@@ -629,7 +630,7 @@ def getPosInvoice(status, limit, limit_start):
             SELECT 
                 name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number,
+                total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
@@ -683,11 +684,15 @@ def searchPosInvoice(query,status):
         or_filters=[
             ["name", "like", f"%{query}%"],
             ["customer", "like", f"%{query}%"],
+            ["customer_name", "like", f"%{query}%"],
             ["mobile_number", "like", f"%{query}%"],
         ],
         fields=[
             "name",
             "customer",
+            "customer_name",
+            "no_of_pax",
+            "creation",
             "grand_total",
             "posting_date",
             "posting_time",

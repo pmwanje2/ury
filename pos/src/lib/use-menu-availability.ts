@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMenuAvailability, isUnavailable, type ItemAvailability, type MenuAvailability } from './availability-api';
 import { getRealtimeSocket } from './realtime';
+import { useOnline } from '../offline/use-online';
 
 export type AvailabilityTier = 0 | 1 | 2;
 
@@ -62,6 +63,8 @@ export function useMenuAvailability(
   const codesKey = JSON.stringify([...new Set(items.map(({ item }) => item).filter(Boolean))].sort());
   const scope = JSON.stringify([branch, company, codesKey]);
   const [snapshot, setSnapshot] = useState<{ scope: string; items: MenuAvailability }>();
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const online = useOnline();
   const refreshRef = useRef<() => Promise<void>>(async () => {});
   const refetchAll = useCallback(() => refreshRef.current(), []);
 
@@ -74,8 +77,9 @@ export function useMenuAvailability(
     const refresh = () => {
       if (inFlight) return inFlight;
       inFlight = getMenuAvailability(branch, company, codes)
-        .then((items) => { if (active) setSnapshot({ scope, items }); })
-        .catch(() => { /* Unknown on first load; keep the last successful refresh. */ })
+        .then((items) => { if (active) { setSnapshot({ scope, items }); setRefreshFailed(false); } })
+        // Unknown on first load; otherwise keep the last successful refresh, marked unconfirmed.
+        .catch(() => { if (active) setRefreshFailed(true); })
         .finally(() => { inFlight = undefined; });
       return inFlight;
     };
@@ -116,5 +120,11 @@ export function useMenuAvailability(
     };
   }, [branch, company, codesKey, scope]);
 
-  return { availabilityMap: snapshot?.scope === scope ? snapshot.items : EMPTY_AVAILABILITY, refetchAll };
+  const current = snapshot?.scope === scope;
+  return {
+    availabilityMap: current ? snapshot.items : EMPTY_AVAILABILITY,
+    /** The shown counts could not be re-read (offline or a failed refresh): Simphony's "[N]?". */
+    availabilityStale: current && (refreshFailed || !online),
+    refetchAll,
+  };
 }

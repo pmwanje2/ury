@@ -62,6 +62,8 @@ export function MenuItemCard({
   const isDisabled = Boolean(disabled || unavailableMessage)
   const showImage = Boolean(imageUrl) && !imageFailed
   const showQtyControls = typeof quantity === 'number' && quantity > 0
+  // Cards that can show the stepper keep room for it under their content.
+  const hasStepper = Boolean(onIncrement || onDecrement)
   const canIncrement = Boolean(onIncrement) && !isDisabled && !incrementDisabled
   const canDecrement = Boolean(onDecrement) && !isDisabled && !decrementDisabled
 
@@ -143,7 +145,8 @@ export function MenuItemCard({
       aria-label={onConfigure ? `${name}. Options available` : name}
       aria-keyshortcuts={onConfigure ? 'Shift+Enter' : undefined}
       className={cn(
-        'relative flex h-60 cursor-pointer flex-col overflow-hidden rounded-lg bg-white shadow-sm transition-shadow hover:shadow-md',
+        // min-h, not h: a wrapped stock chip grows the card instead of running under the stepper.
+        'relative flex min-h-60 cursor-pointer flex-col overflow-hidden rounded-lg bg-white shadow-sm transition-shadow hover:shadow-md',
         isDisabled && 'pointer-events-none cursor-not-allowed opacity-50',
         className
       )}
@@ -222,7 +225,7 @@ export function MenuItemCard({
             </Badge>
           ) : null}
         </div>
-        <div className="mt-auto h-11" aria-hidden />
+        {hasStepper ? <div className="mt-auto h-11 shrink-0" aria-hidden /> : null}
       </div>
       {showQtyControls && (
         <div

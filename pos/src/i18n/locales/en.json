@@ -72,6 +72,7 @@
     "available_chip": "Available",
     "unavailable": "Unavailable",
     "qty_left": "{{qty}} left",
+    "qty_left_unconfirmed": "{{qty}} left?",
     "availability": {
       "default": "Currently unavailable",
       "not_today": "Not available today",
@@ -106,6 +107,7 @@
   "order": {
     "select_to_view": "Select an order to view details",
     "items_title": "Order Items",
+    "covers": "Covers: {{count}}",
     "taxes_charges": "Taxes & Charges",
     "cancel_order": "Cancel order",
     "enter_cancel_reason": "Enter cancel reason",

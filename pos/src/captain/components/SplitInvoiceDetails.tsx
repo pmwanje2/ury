@@ -21,7 +21,7 @@ export default function SplitInvoiceDetails({ invoice, loadedItems, onClose }: {
     <DialogContent onClose={onClose}>
       <DialogHeader>
         <DialogTitle>{invoice.name}</DialogTitle>
-        <DialogDescription>{formatGuestSubtitle(invoice.custom_guest_label, invoice.customer_name || invoice.customer)}</DialogDescription>
+        <DialogDescription>{formatGuestSubtitle(invoice.custom_guest_label, invoice.customer_name, invoice.customer)}</DialogDescription>
       </DialogHeader>
       {failed ? <p role="alert">{t('orders.failed_to_load_details')}</p> : !items ? <p role="status">{t('common.loading')}</p> :
         <ul className="max-h-72 overflow-y-auto">{items.filter(item => !item.is_disposable && item.qty > 0).map(item => <li key={item.name}>{item.qty} × {item.item_name}</li>)}</ul>}

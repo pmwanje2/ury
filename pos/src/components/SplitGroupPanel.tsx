@@ -119,7 +119,7 @@ const SplitGroupPanel = ({ invoiceName, onOpenInvoice, onPrintInvoice, printingI
         {invoices.map((invoice) => {
           const isCurrent = invoice.name === invoiceName;
           const isPaid = invoice.docstatus === 1;
-          const checkName = formatGuestSubtitle(invoice.custom_guest_label, invoice.customer_name || invoice.customer);
+          const checkName = formatGuestSubtitle(invoice.custom_guest_label, invoice.customer_name, invoice.customer);
 
           return (
             <div
