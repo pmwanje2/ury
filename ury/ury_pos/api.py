@@ -877,6 +877,15 @@ def getPosProfile():
         else:
             print_type = "socket"
 
+    payment_mode_accounts = {
+        payment.mode_of_payment: frappe.db.get_value(
+            "Mode of Payment Account",
+            {"parent": payment.mode_of_payment, "company": company},
+            "default_account",
+        )
+        for payment in (pos_profiles.get("payments") or [])
+    }
+
     invoice_details = {
         "pos_profile": pos_profile_name,
         "branch": branch,
@@ -904,20 +913,31 @@ def getPosProfile():
         "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
-        "payment_mode_accounts": {
-            payment.mode_of_payment: frappe.db.get_value(
-                "Mode of Payment Account",
-                {"parent": payment.mode_of_payment, "company": company},
-                "default_account",
-            )
-            for payment in (pos_profiles.get("payments") or [])
-        },
+        "payment_mode_accounts": payment_mode_accounts,
+        # the till's tenders come from configuration, never literals
+        "default_payment_mode": next(
+            (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),
+            None,
+        ),
+        "room_charge_modes": _room_charge_modes(payment_mode_accounts, company),
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),
     }
 
     return invoice_details
+
+
+def _room_charge_modes(payment_mode_accounts, company):
+    """The payment methods whose company account is the Company's Guest Ledger Clearing
+    account. The hotel bridge posts exactly those to a guest folio, so the till asks for the
+    room on them; a site without the hotel bridge has none."""
+    if not frappe.get_meta("Company").has_field("custom_guest_ledger_clearing"):
+        return []
+    clearing = frappe.db.get_value("Company", company, "custom_guest_ledger_clearing")
+    if not clearing:
+        return []
+    return [mode for mode, account in payment_mode_accounts.items() if account == clearing]
 
 
 @frappe.whitelist()
@@ -2353,108 +2373,76 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
     }
 
 
+def _merge_sources(secondary_invoice):
+    """One check name, or a JSON list of check names, in the order given."""
+    if isinstance(secondary_invoice, str) and secondary_invoice.strip().startswith("["):
+        secondary_invoice = json.loads(secondary_invoice)
+    names = [secondary_invoice] if isinstance(secondary_invoice, str) else list(secondary_invoice or [])
+    return list(dict.fromkeys(name for name in names if name))
+
+
 @frappe.whitelist()
 
 def merge_bills(primary_invoice, secondary_invoice):
+    """Add Check (Oracle Simphony Add/Transfer Check): move every line of the selected open
+    check(s) onto the primary check, which stays the guest's one POS Invoice.
+
+    `secondary_invoice` is one check name or a JSON list of names. The checks must be drafts of
+    one branch and one order type that the caller may write.
+    """
 
     try:
 
-        if primary_invoice == secondary_invoice:
+        secondaries = _merge_sources(secondary_invoice)
+
+        if not secondaries or primary_invoice in secondaries:
             frappe.throw("Cannot merge an invoice with itself.")
 
         primary_doc = frappe.get_doc("POS Invoice", primary_invoice)
-        secondary_doc = frappe.get_doc("POS Invoice", secondary_invoice)
+        secondary_docs = [frappe.get_doc("POS Invoice", name) for name in secondaries]
 
-        # Authorization: caller must have write permission on both invoices
+        # Authorization: caller must have write permission on every invoice
         if not frappe.has_permission("POS Invoice", "write", doc=primary_doc):
             frappe.throw(
                 "You do not have permission to merge this bill.",
                 frappe.PermissionError,
             )
 
-        if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
-            frappe.throw(
-                "You do not have permission to merge the selected bill.",
-                frappe.PermissionError,
-            )
+        for secondary_doc in secondary_docs:
 
-          # Prevent cross-branch merging
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw(
-                "Cannot merge bills from different branches.",
-                frappe.PermissionError,
-            )
-
-        # Validation
-        if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
-            frappe.throw("Both invoices must be in Draft state to merge.")
-
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw("Cannot merge bills from different branches.")
-
-        if primary_doc.custom_merged_pos_invoice:
-            frappe.throw("This bill already includes a merged bill.")
-
-        if secondary_doc.custom_merged_pos_invoice:
-            frappe.throw("The selected bill already includes another bill.")
-
-        if not secondary_doc.items:
-            frappe.throw("The selected bill has no items to merge.")
-
-
-        def update_merge_details(target_invoice,source_invoice,):
-
-            doc = frappe.get_doc("POS Invoice",target_invoice,)
-
-            # clear old rows
-            doc.set("custom_merged_pos_invoice_details",[],)
-
-            # only linked invoice items
-            for item in source_invoice.items:
-
-                doc.append(
-                    "custom_merged_pos_invoice_details",
-                    {
-                        "item_code": item.item_code,
-                        "item_name": item.item_name,
-                        "qty": item.qty,
-                        "rate": item.rate,
-                        "amount": item.amount,
-                    },
+            if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
+                frappe.throw(
+                    "You do not have permission to merge the selected bill.",
+                    frappe.PermissionError,
                 )
 
-            doc.custom_merged_total = source_invoice.rounded_total
+            # Prevent cross-branch merging
+            if primary_doc.branch != secondary_doc.branch:
+                frappe.throw(
+                    "Cannot merge bills from different branches.",
+                    frappe.PermissionError,
+                )
 
-            doc.flags.ignore_version = True
+            # Validation
+            if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
+                frappe.throw("Both invoices must be in Draft state to merge.")
 
-            doc.save(
-                ignore_version=True,
-            )
+            # Bills linked before Add Check consolidated lines settle as their pair.
+            if primary_doc.custom_merged_pos_invoice:
+                frappe.throw("This bill already includes a merged bill.")
 
+            if secondary_doc.custom_merged_pos_invoice:
+                frappe.throw("The selected bill already includes another bill.")
 
-        # Update merge references directly
-        frappe.db.set_value(
-            "POS Invoice",
-            primary_doc.name,
-            "custom_merged_pos_invoice",
-            secondary_doc.name,
-            update_modified=False,
-        )
+            if not secondary_doc.items:
+                frappe.throw("The selected bill has no items to merge.")
 
-        frappe.db.set_value(
-            "POS Invoice",
-            secondary_doc.name,
-            "custom_merged_pos_invoice",
-            primary_doc.name,
-            update_modified=False,
-        )
+            if primary_doc.order_type != secondary_doc.order_type:
+                frappe.throw(_("Only bills of the same order type can be merged."))
 
+        from ury.ury.doctype.ury_order.ury_order import consolidate_checks
 
-        # Build detail table
-        update_merge_details(primary_doc.name,secondary_doc,)
-
-        update_merge_details(secondary_doc.name,primary_doc,)
-
+        consolidate_checks(primary_doc, secondary_docs)
 
         frappe.db.commit()
 

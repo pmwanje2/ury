@@ -398,14 +398,15 @@ export interface MergeBillsResponse {
 //   };
 // }
 export function getCombinedOrderTotals(
-  order: Pick<POSInvoice, 'rounded_total' | 'custom_merged_total'>
+  order: Pick<POSInvoice, 'grand_total' | 'rounded_total' | 'custom_merged_total'>
 ) {
-  const roundedTotal =
-    (order.rounded_total ?? 0) + Math.round(order.custom_merged_total ?? 0);
+  // The server's totals: its rounded total, or its grand total where the profile does not
+  // round. A legacy linked bill adds its partner's server total as it is.
+  const merged = order.custom_merged_total ?? 0;
 
   return {
-    grandTotal: roundedTotal,
-    roundedTotal,
+    grandTotal: (order.grand_total ?? 0) + merged,
+    roundedTotal: (order.rounded_total || order.grand_total || 0) + merged,
   };
 }
 

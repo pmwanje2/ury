@@ -4,7 +4,6 @@ import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { call } from '@ury/core';
-import { DEFAULT_PAYMENT_MODE } from '../data/order-types';
 import { t } from '../i18n';
 import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
 import { useRootStore } from '../store/root-store';
@@ -71,6 +70,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [discountValue, setDiscountValue] = useState<string>(effectivePercentage > 0 ? String(effectivePercentage) : '');
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
+  // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
+  const [serverTotals, setServerTotals] = useState<{ grand_total: number; rounded_total: number } | null>(null);
   const canSelectCredit = storePosProfile?.name === posProfile && storePosProfile.allow_partial_payment === 1
     && !!user?.roles?.some(role => role === 'URY Cashier' || role === 'URY Manager');
   const [query, setQuery] = useState('');
@@ -124,6 +125,16 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       return;
     }
     const calculatedDiscount = (baseTotal * value) / 100;
+    try {
+      const { message } = await call.get<{ message: { grand_total: number; rounded_total: number } }>(
+        'ury.ury.doctype.ury_order.ury_order.preview_settlement_totals',
+        { invoice, pos_profile: posProfile, additionalDiscount: value },
+      );
+      setServerTotals(message);
+    } catch (err) {
+      setError(parseFrappeError(err, t('errors.invalid_discount')));
+      return;
+    }
     setAppliedDiscount(calculatedDiscount);
     setError(null);
   };
@@ -135,8 +146,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
   const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
-  // If discount is applied, round up; else, round normally
-  const finalTotal = appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal);
+  // The server's total: its rounded total, or its grand total where the profile does not round.
+  const finalTotal = serverTotals
+    ? (serverTotals.rounded_total || serverTotals.grand_total)
+    : (roundedTotal || grandTotal);
 
   // Calculate split payment total
   const payments = paymentModes
@@ -147,7 +160,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     })
     .filter(Boolean);
   const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
-  const roomChargeAmount = parseFloat(paymentInputs['Room Charge'] || '');
+  // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
+  const roomChargeModes = storePosProfile?.room_charge_modes || [];
+  const roomChargeAmount = roomChargeModes
+    .reduce((sum: number, mode: string) => sum + (parseFloat(paymentInputs[mode] || '') || 0), 0);
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
     || (!!roomCheck?.ok && roomCheck.room === roomNumber.trim());
   const roomFields = roomChargeAmount > 0 ? { room_number: roomNumber } : {};
@@ -203,18 +219,21 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const roundedFinalAdjustment = Math.round(finalAdjustment * 100) / 100;
   const showFinalAdjustment = Math.abs(roundedFinalAdjustment) > 0.001;
 
+  // The POS Profile payment row marked Default is prefilled with the total.
+  const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
+
   useEffect(()=>{
-    const defaultPaymentModePresent=paymentModes.find((mode)=>mode===DEFAULT_PAYMENT_MODE)
+    const defaultPaymentModePresent=paymentModes.find((mode)=>mode===defaultPaymentMode)
     //only one payment mode should be present, then autofill the final amount, if not do not fill
     const otherPaymentModesNotEntered=Object.keys(paymentInputs).length<=1;
-    if(finalTotal && paymentModes && DEFAULT_PAYMENT_MODE && defaultPaymentModePresent && otherPaymentModesNotEntered){
+    if(finalTotal && paymentModes && defaultPaymentMode && defaultPaymentModePresent && otherPaymentModesNotEntered){
       //check if default payment mode is present in paymentModes
       setPaymentInputs((prev)=>({ 
         ...prev,
-        [DEFAULT_PAYMENT_MODE]:String(finalTotal) 
+        [defaultPaymentMode]:String(finalTotal) 
       }))
     }
-  },[finalTotal,paymentModes])
+  },[finalTotal,paymentModes,defaultPaymentMode])
 
   // Helper to calculate remaining balance
   const getRemainingBalance = (currentId: string) => {

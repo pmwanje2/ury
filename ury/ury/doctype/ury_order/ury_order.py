@@ -837,6 +837,76 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
 
 
 
+def _reservation_lines(rows):
+    return [
+        {
+            "reservation_line_key": row.get("reservation_line_key") or row.name,
+            "item_code": row.item_code,
+            "item_name": row.item_name,
+            "qty": row.qty,
+        }
+        for row in rows
+    ]
+
+
+def consolidate_checks(destination, sources):
+    """Add Check (Oracle Simphony Add/Transfer Check): move every line of the source checks
+    onto the destination check, so the guest has one POS Invoice: one tax calculation, one
+    discount, one fiscal receipt and a native return. No merge link is written.
+
+    Each line keeps its rate, line identity and attribution. The kitchen tickets and stock
+    reservations follow the lines. The destination must be printed again, since its printed
+    bill no longer shows what the guest owes. Each source check is discarded with an audit
+    note, and its table is freed once no open check remains on it. The caller validates the
+    checks and commits.
+    """
+    company = destination.company or frappe.db.get_value("Branch", destination.branch, "company")
+    reservations_enabled = get_branch_stock_policy(
+        branch=destination.branch, company=company
+    ).reservation_control_enabled
+    destination_before = _reservation_lines(destination.items)
+
+    for source in sources:
+        for row in source.items:
+            destination.append(
+                "items",
+                row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True),
+            )
+
+    destination.invoice_printed = 0
+    destination.calculate_taxes_and_totals()
+    destination.save()
+
+    for source in sources:
+        for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
+            frappe.db.set_value("URY KOT", ticket, "invoice", destination.name, update_modified=False)
+        if reservations_enabled:
+            reconcile_order_reservations(
+                order_ref=source.name,
+                previous_items=_reservation_lines(source.items),
+                accepted_items=[],
+                branch=destination.branch,
+                company=company,
+                actor=frappe.session.user,
+            )
+        source.discard()
+        source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
+
+    if reservations_enabled:
+        reconcile_order_reservations(
+            order_ref=destination.name,
+            previous_items=destination_before,
+            accepted_items=_reservation_lines(destination.items),
+            branch=destination.branch,
+            company=company,
+            actor=frappe.session.user,
+        )
+
+    for source in sources:
+        if source.restaurant_table and source.restaurant_table != destination.restaurant_table:
+            _free_tables_if_no_open_invoices(source.restaurant_table, source.custom_merged_tables)
+
+
 def _resolve_pos_invoice_naming_series(restaurant):
     """Resolve the POS Invoice naming series for `restaurant`.
 
@@ -3205,6 +3275,31 @@ def _enforce_on_account(invoice, profile, customer_disabled, target=None):
     return True
 
 
+@frappe.whitelist()
+def preview_settlement_totals(invoice, pos_profile, additionalDiscount=None):
+    """The totals make_invoice charges for this check at this discount, computed by the native
+    controller (currency precision, smallest currency fraction, system rounding, the profile's
+    rounded-total setting), so the till never rounds money itself. Nothing is saved."""
+    discount = _validate_additional_discount(additionalDiscount, pos_profile)
+    bill = frappe.get_doc("POS Invoice", invoice)
+    bill.check_permission("read")
+    _enforce_order_access(bill)
+    if bill.pos_profile and bill.pos_profile != pos_profile:
+        frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
+
+    bills = [bill]
+    if bill.custom_merged_pos_invoice:
+        bills.append(frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice))
+
+    totals = {"grand_total": 0, "rounded_total": 0}
+    for row in bills:
+        row.additional_discount_percentage = discount
+        row.calculate_taxes_and_totals()
+        totals["grand_total"] += flt(row.grand_total)
+        totals["rounded_total"] += flt(row.rounded_total)
+    return totals
+
+
 # Method for URY POS
 @frappe.whitelist()
 def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None):
@@ -3280,6 +3375,9 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     if invoice.custom_merged_pos_invoice:
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
         target.cashier = frappe.session.user
+        # One guest bill, one discount: a bill linked before Add Check consolidated lines
+        # takes the bill's discount on both halves.
+        target.additional_discount_percentage = invoice.additional_discount_percentage
         target.calculate_taxes_and_totals()
         
         doc_req = invoice.rounded_total or invoice.grand_total
