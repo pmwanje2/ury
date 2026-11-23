@@ -69,6 +69,12 @@ def before_submit(doc, method=None):
 	doc.custom_cash_movement_approver = user
 
 
+def before_cancel(doc, method=None):
+	"""Journal Entry before_cancel: a movement counted by a closed shift stays."""
+	if doc.get("custom_pos_opening_entry"):
+		_open_shift(doc)
+
+
 def till_cash_movements(opening_entry):
 	"""Submitted movements of a POS shift: net debit per account (company currency)."""
 	entry = frappe.qb.DocType("Journal Entry")
@@ -88,8 +94,21 @@ def till_cash_movements(opening_entry):
 	return {row.account: flt(row.amount) for row in rows}
 
 
-def validate_over_short_account(doc, method=None):
-	"""POS Closing Entry before_submit: a cash difference needs an Over/Short account."""
+def validate_closing_cash(doc, method=None):
+	"""POS Closing Entry before_submit: every movement of the shift is decided,
+	and a cash difference has an Over/Short account."""
+	pending = frappe.get_all(
+		"Journal Entry",
+		filters={"custom_pos_opening_entry": doc.pos_opening_entry, "docstatus": 0},
+		pluck="name",
+	)
+	if pending:
+		frappe.throw(
+			_(
+				"[URY-CLOSE-PENDING-MOVEMENT] Submit or delete the shift's pending cash movements "
+				"before closing: {0}."
+			).format(", ".join(pending))
+		)
 	if _cash_differences(doc):
 		_over_short_account(doc)
 
@@ -134,6 +153,16 @@ def post_cash_over_short(doc, method=None):
 		entry.flags.ignore_permissions = True
 		entry.insert()
 		entry.submit()
+
+
+def cancel_cash_over_short(doc, method=None):
+	"""POS Closing Entry on_cancel: the closing's Over/Short journals go with it."""
+	for name in frappe.get_all(
+		"Journal Entry", filters={"custom_pos_closing_entry": doc.name, "docstatus": 1}, pluck="name"
+	):
+		entry = frappe.get_doc("Journal Entry", name)
+		entry.flags.ignore_permissions = True
+		entry.cancel()
 
 
 def _open_shift(doc):

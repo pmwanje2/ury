@@ -344,6 +344,7 @@ doc_events = {
         ],
         "on_cancel": [
             "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
+            "ury.ury.hooks.ury_cash_movement.cancel_cash_over_short",
         ],
         },
     "Quality Review": {
@@ -354,6 +355,7 @@ doc_events = {
     "Journal Entry": {
         "validate": "ury.ury.hooks.ury_cash_movement.validate",
         "before_submit": "ury.ury.hooks.ury_cash_movement.before_submit",
+        "before_cancel": "ury.ury.hooks.ury_cash_movement.before_cancel",
     },
     "URY Menu Course": {
 		"validate": "ury.ury.api.ury_menu_course_validation.validate_priority",

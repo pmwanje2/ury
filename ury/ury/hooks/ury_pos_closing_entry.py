@@ -3,7 +3,7 @@ from frappe.utils import flt, get_datetime
 from frappe import _
 from datetime import datetime
 
-from ury.ury.hooks.ury_cash_movement import till_cash_movements, validate_over_short_account
+from ury.ury.hooks.ury_cash_movement import till_cash_movements, validate_closing_cash
 from ury.ury_pos.api import (
 	_goal_submitted_since,
 	_phase_dependent_rows,
@@ -22,8 +22,9 @@ def before_validate(doc, method):
 
 
 def before_submit(doc, method):
-    # Either invoice mode: a cash difference needs the till's Over/Short account.
-    validate_over_short_account(doc)
+    # Either invoice mode: the shift's cash movements are decided and a cash
+    # difference has the till's Over/Short account.
+    validate_closing_cash(doc)
     if not _is_pos_invoice_mode():
         return
 
