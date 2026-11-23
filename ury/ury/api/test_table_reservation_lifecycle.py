@@ -323,7 +323,7 @@ class Site:
                 perms.get(p) and p not in perms["if_owner"] for p in ("select", "read")):
             return row.get("owner") == user  # requires_owner_constraint
         rows = self.user_permission_rows.get(user) or {}
-        for fieldname, options in [("name", RESERVATION)] + LINK_FIELDS:
+        for fieldname, options in [("name", RESERVATION), *LINK_FIELDS]:
             allowed = rows.get(options)
             if not allowed:
                 continue
@@ -996,7 +996,9 @@ class TestThePermissionModelIsFrappes(_Site):
     def test_the_list_applies_user_permission_and_if_owner_row_conditions(self):
         self.booking("TR-1", "19:00")
         self.booking("TR-9", "19:00", table="T9", branch="Branch Off")
-        names = lambda: sorted(self.site.get_list(RESERVATION, filters={}, pluck="name"))
+        def names():
+            return sorted(self.site.get_list(RESERVATION, filters={}, pluck="name"))
+
         self.site.roles = ["URY Cashier"]
         self.site.user_permissions["Branch"] = {"Branch A"}
         self.assertEqual(names(), ["TR-1"])
