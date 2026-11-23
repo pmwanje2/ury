@@ -105,6 +105,7 @@ class Site:
         self.closed_till_average = None  # minutes; set when a till has closed (see _Site.till_closed)
         self.versions = []  # what Frappe's Version log records for each tracked save
         self.errors = []
+        self.message_log = []  # frappe.local.message_log -> HTTP _server_messages
         self.sql_log = []
         self.events = []  # ordered row locks and SQL reads, for concurrency contracts
         self.fail_writes = set()
@@ -241,6 +242,11 @@ class Site:
         return [self.project(row, fields or ["name"]) for row in rows]
 
     # -- native permissions (frappe/permissions.py @ 88a9cee0) ------------------------
+    def throw(self, message, exc=Invalid):
+        """frappe.throw: appends to frappe.local.message_log (_server_messages) before raising."""
+        self.message_log.append(message)
+        raise exc(message)
+
     def has_permission(self, doctype=None, ptype="read", doc=None, user=None, throw=False, *,
             parent_doctype=None, debug=False, ignore_share_permissions=False):
         """frappe.has_permission. Its signature is the pinned one: there is no print_logs."""
@@ -249,7 +255,7 @@ class Site:
         user = user or self.session.user
         allowed = self.permitted(doctype, ptype, doc, user)
         if throw and not allowed:
-            raise Refused(f"No permission for {doctype}")
+            self.throw(f"No permission for {doctype}", Refused)
         return allowed
 
     def permitted(self, doctype, ptype, doc, user):
@@ -460,7 +466,7 @@ class FakeDocument:
 
     def check_permission(self, ptype="read"):
         if not self.has_permission(ptype):
-            raise Refused(f"No {ptype} permission on {self.doctype} {self.name}")
+            self.site.throw(f"No {ptype} permission on {self.doctype} {self.name}", Refused)
 
     def validate(self):
         pass
@@ -541,7 +547,10 @@ def _framework(site):
     fr.QueryDeadlockError = Deadlock
     fr.session = site.session
     fr.flags = SimpleNamespace()
-    fr.throw.side_effect = lambda message, exc=Invalid, *a, **k: (_ for _ in ()).throw(exc(message))
+    fr.local = SimpleNamespace(message_log=site.message_log)
+    fr.message_log = site.message_log
+    fr.throw.side_effect = lambda message, exc=Invalid, *a, **k: site.throw(message, exc)
+    fr.msgprint.side_effect = lambda message, *a, **k: site.message_log.append(message)
     fr.log_error.side_effect = lambda *a, **k: site.errors.append((a, k))
     fr.get_traceback.return_value = "traceback"
     fr.get_roles.side_effect = lambda user=None: site.roles_of(user or site.session.user)
@@ -1383,6 +1392,126 @@ class TestClosingTheCheckCompletesTheVisitWithoutAReservationPrivilege(_BillClos
                     self.api.update_reservation_status(name, status, cancel_reason="Guest called")
         self.assertEqual((self.stored("TR-2"), self.stored("TR-3")), (("Confirmed", None), ("Seated", None)))
 
+    def test_transferred_check_survives_sweep_and_completes_for_closer_without_reservation_rights(self):
+        # Hydrogen R3 P1: seat on T-102, bind check, transfer T-102 -> T-103. Even if
+        # reserved_table still points at T-102, a sweep while the bound check is open on
+        # T-103 must keep the visit Seated, and settling on T-103 as a closer with no
+        # reservation rights completes it by bound pos_invoice.
+        self.table("T-102", 4)
+        self.table("T-103", 4)
+        self.clock("19:00")
+        self.booking("TR-XFER", "19:00", table="T-102")
+        self.api.update_reservation_status("TR-XFER", "Seated")
+        inv = self.check("INV-XFER", "19:05", table="T-102")
+        self.api.bind_seated_reservation_to_check(inv)
+        self.assertEqual(self.stored("TR-XFER"), ("Seated", "INV-XFER"))
+
+        # Check moved from T-102 to T-103; T-102 is free and T-103 is occupied.
+        inv.restaurant_table = "T-103"
+        self.site.rows["URY Table"]["T-102"].occupied = 0
+        self.site.rows["URY Table"]["T-103"].occupied = 1
+
+        # Sweep during the open transferred check (as Administrator) must not complete it.
+        self.site.login("Administrator", ["System Manager"])
+        for clock in ("19:10", "22:00"):
+            with self.subTest(sweep_at=clock):
+                self.clock(clock)
+                self.scheduler.process_reservation_no_shows()
+                self.assertEqual(self.stored("TR-XFER"), ("Seated", "INV-XFER"))
+
+        # Closer with read-only access and a User Permission on another branch settles on T-103.
+        self.site.grant("Till Closer", "read")
+        self.site.login("closer@example.test", ["Till Closer"])
+        self.site.user_permissions["Branch"] = {"Branch Off"}
+        self.site.message_log.clear()
+        self.close("INV-XFER")
+        self.assertEqual(self.stored("TR-XFER"), ("Completed", "INV-XFER"))
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual(self.site.message_log, [])
+        self.assertEqual(
+            [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-XFER"],
+            [(self.CAPTAIN, ("Confirmed", "Seated")), ("closer@example.test", ("Seated", "Completed"))],
+        )
+
+    def test_immediate_settle_after_transfer_completes_for_closer_without_reservation_rights(self):
+        # Hydrogen R3 P1 immediate-settle probe: transfer T-102 -> T-103 and immediately
+        # settle on T-103 (no intervening sweep) as a closer with no reservation rights.
+        self.table("T-102", 4)
+        self.table("T-103", 4)
+        self.clock("19:00")
+        self.booking("TR-IMM", "19:00", table="T-102")
+        self.api.update_reservation_status("TR-IMM", "Seated")
+        inv_imm = self.check("INV-IMM", "19:05", table="T-102")
+        self.api.bind_seated_reservation_to_check(inv_imm)
+        inv_imm.restaurant_table = "T-103"
+        self.site.rows["URY Table"]["T-102"].occupied = 0
+        self.site.rows["URY Table"]["T-103"].occupied = 1
+        self.site.grant("Till Closer", "read")
+        self.site.login("closer@example.test", ["Till Closer"])
+        self.site.user_permissions["Branch"] = {"Branch Off"}
+        self.site.message_log.clear()
+        self.close("INV-IMM")
+        self.assertEqual(self.stored("TR-IMM"), ("Completed", "INV-IMM"))
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual(self.site.message_log, [])
+        self.assertEqual(
+            [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-IMM"],
+            [(self.CAPTAIN, ("Confirmed", "Seated")), ("closer@example.test", ("Seated", "Completed"))],
+        )
+
+    def test_table_transfer_moves_seated_party_and_closer_without_rights_completes_on_new_table(self):
+        # Hydrogen R3 P1 full transfer path: transfer_seated_reservation moves T-102 -> T-103,
+        # sweep during open check keeps Seated on T-103, and settling on T-103 completes the
+        # visit both for a read-only cross-branch closer and for a captain without privileges.
+        self.table("T-102", 4)
+        self.table("T-103", 4)
+        self.site.grant("Till Closer", "read")
+
+        for tag, closer, roles, perms in (
+            ("read_only_cross_branch", "closer@example.test", ["Till Closer"], {"Branch": {"Branch Off"}}),
+            ("captain_no_privs", self.OTHER_CAPTAIN, ["URY Captain"], None),
+        ):
+            with self.subTest(closer=tag):
+                self.site.rows["URY Table Reservation"].clear()
+                self.site.rows["POS Invoice"].clear()
+                self.site.versions.clear()
+                self.site.errors.clear()
+                self.site.message_log.clear()
+                self.site.rows["URY Table"]["T-102"].occupied = 0
+                self.site.rows["URY Table"]["T-103"].occupied = 0
+
+                self.site.login(self.CAPTAIN, ["URY Captain"])
+                self.clock("19:00")
+                self.booking("TR-X", "19:00", table="T-102")
+                self.api.update_reservation_status("TR-X", "Seated")
+                inv = self.check("INV-X", "19:05", table="T-102")
+                self.api.bind_seated_reservation_to_check(inv)
+
+                inv.restaurant_table = "T-103"
+                self.site.rows["URY Table"]["T-102"].occupied = 0
+                self.site.rows["URY Table"]["T-103"].occupied = 1
+                self.api.transfer_seated_reservation("T-102", "T-103", inv)
+                self.assertEqual(self.site.rows[RESERVATION]["TR-X"].reserved_table, "T-103")
+
+                self.site.login("Administrator", ["System Manager"])
+                self.clock("22:00")
+                self.scheduler.process_reservation_no_shows()
+                self.assertEqual(self.stored("TR-X"), ("Seated", "INV-X"))
+                self.assertEqual(self.site.rows[RESERVATION]["TR-X"].reserved_table, "T-103")
+
+                self.site.login(closer, roles)
+                if perms:
+                    self.site.user_permissions.update(perms)
+                self.close("INV-X")
+                self.assertEqual(self.stored("TR-X"), ("Completed", "INV-X"))
+                self.assertEqual(self.site.rows[RESERVATION]["TR-X"].reserved_table, "T-103")
+                self.assertEqual(self.site.errors, [])
+                self.assertEqual(self.site.message_log, [])
+                self.assertEqual(
+                    [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-X"],
+                    [(self.CAPTAIN, ("Confirmed", "Seated")), (closer, ("Seated", "Completed"))],
+                )
+
 
 class TestTheLockEndsAtGrace(_Site):
     """B9: a booking blocks walk-ins from its buffer until its grace end; the lock check is a pure read."""
@@ -1500,6 +1629,46 @@ class TestTheSeatedVisitEnds(_Site):
         self.clock("18:41")
         self.scheduler.process_reservation_no_shows()
         self.assertEqual(self.stored("TR-1"), ("Completed", None))
+
+    def test_captain_and_read_only_polls_leave_no_server_messages_when_a_seated_visit_has_expired(self):
+        # Hydrogen R3 P2: get_active_reservations runs process_reservation_no_shows -> end_seated_visit.
+        # A Captain or read-only user must not trigger frappe.throw into frappe.local.message_log
+        # (_server_messages on an HTTP 200 poll) when an expired check-less Seated booking exists.
+        self.table("T-104", 4)
+        self.clock("18:00")
+        self.booking("TR-STALE", "18:00", table="T-104", status="Seated")
+        self.site.rows["URY Table"]["T-104"].occupied = 0
+        self.clock("19:35")  # past hold end, unoccupied, no open check
+
+        self.site.grant("Till Closer", "read")
+        for label, user, roles, perms in (
+            ("captain", "captain@example.test", ["URY Captain"], None),
+            ("read_only", "closer@example.test", ["Till Closer"], None),
+            ("cross_branch_cashier", "other@example.test", ["URY Cashier"], {"Branch": {"Branch Off"}}),
+        ):
+            with self.subTest(poller=label):
+                self.site.login(user, roles)
+                if perms:
+                    self.site.user_permissions.update(perms)
+                self.site.message_log.clear()
+                self.site.errors.clear()
+                self.api.get_active_reservations("Branch A")
+                self.assertEqual(self.stored("TR-STALE"), ("Seated", None))
+                self.assertEqual(self.site.message_log, [])
+                self.assertEqual(self.site.errors, [])
+
+        # An authorized cashier on Branch A still completes the expired visit cleanly.
+        self.site.login("cashier@example.test", ["URY Cashier"])
+        self.site.message_log.clear()
+        self.site.errors.clear()
+        self.api.get_active_reservations("Branch A")
+        self.assertEqual(self.stored("TR-STALE"), ("Completed", None))
+        self.assertEqual(self.site.message_log, [])
+        self.assertEqual(self.site.errors, [])
+        self.assertEqual(
+            [(v.owner, v.status) for v in self.site.versions if v.docname == "TR-STALE"],
+            [("cashier@example.test", ("Seated", "Completed"))],
+        )
 
 
 class TestUnseat(_Site):

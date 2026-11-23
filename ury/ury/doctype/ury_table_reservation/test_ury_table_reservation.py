@@ -431,6 +431,78 @@ class TestURYTableReservation(FrappeTestCase):
         with self.assertRaises(frappe.ValidationError):
             update_reservation_status(res_id, "Completed")
 
+    def test_captain_and_read_only_polls_leave_no_server_messages_when_seated_visit_has_expired(self):
+        # Hydrogen R3 P2: end_seated_visit must pre-check permissions without calling frappe.throw,
+        # so Captain and read-only get_active_reservations polls return cleanly with empty message_log.
+        from ury.ury.api.table_reservation import get_active_reservations
+
+        def ensure_user(email, first_name, roles):
+            if not frappe.db.exists("User", email):
+                user = frappe.get_doc({
+                    "doctype": "User",
+                    "email": email,
+                    "first_name": first_name,
+                    "enabled": 1,
+                    "send_welcome_email": 0,
+                    "user_type": "System User",
+                    "roles": [{"role": r} for r in roles],
+                })
+                user.insert(ignore_permissions=True)
+            else:
+                user = frappe.get_doc("User", email)
+                existing = {r.role for r in user.roles}
+                if existing != set(roles):
+                    user.roles = []
+                    for r in roles:
+                        user.append("roles", {"role": r})
+                    user.save(ignore_permissions=True)
+
+        captain_email = "_test_res_captain@example.com"
+        readonly_email = "_test_res_readonly@example.com"
+        ensure_user(captain_email, "Test Res Captain", ["URY Captain"])
+        ensure_user(readonly_email, "Test Res Readonly", ["Desk User"])
+
+        past_time = (now_datetime() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+        frappe.db.set_value("URY Table", "_Test Reservation Table 1", {"occupied": 0, "latest_invoice_time": None})
+        doc = frappe.get_doc({
+            "doctype": "URY Table Reservation",
+            "branch": self.branch,
+            "reserved_table": "_Test Reservation Table 1",
+            "customer": "_Test Reservation Customer",
+            "customer_name": "Expired Seated Guest",
+            "customer_phone": "9876543210",
+            "no_of_pax": 2,
+            "reserved_at": past_time,
+            "status": "Seated",
+        })
+        doc.flags.ignore_validate = True
+        doc.insert(ignore_permissions=True, ignore_links=True)
+        frappe.db.commit()
+
+        self.addCleanup(frappe.set_user, "Administrator")
+        try:
+            for user_email in (captain_email, readonly_email):
+                with self.subTest(user=user_email):
+                    frappe.set_user(user_email)
+                    frappe.local.message_log = []
+                    get_active_reservations(self.branch)
+                    self.assertEqual(frappe.local.message_log, [])
+                    self.assertEqual(
+                        frappe.db.get_value("URY Table Reservation", doc.name, "status"),
+                        "Seated",
+                    )
+
+            frappe.set_user("Administrator")
+            frappe.local.message_log = []
+            get_active_reservations(self.branch)
+            self.assertEqual(frappe.local.message_log, [])
+            self.assertEqual(
+                frappe.db.get_value("URY Table Reservation", doc.name, "status"),
+                "Completed",
+            )
+        finally:
+            frappe.set_user("Administrator")
+
 
 
 class TestConcurrentBookingsOnOneTable(FrappeTestCase):
