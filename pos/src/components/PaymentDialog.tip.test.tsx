@@ -17,13 +17,13 @@ function show() {
   useRootStore.setState({ user: { name: 'user', roles: ['URY Cashier'] } });
   usePOSStore.setState({
     paymentModes: ['Cash'], fetchPaymentModes: async () => {},
-    posProfile: { name: 'Till', customer: 'Walk-in', allow_partial_payment: 0, order_type_customer_map: {}, default_customer: null } as any,
+    posProfile: { name: 'Till', customer: 'Walk-in', allow_partial_payment: 0, order_type_customer_map: {}, default_customer: null } as unknown as ReturnType<typeof usePOSStore.getState>['posProfile'],
   });
   render(<PaymentDialog customer="Walk-in" grandTotal={100} roundedTotal={100} order={{ invoice_printed: 1 }} invoice="B1"
     posProfile="Till" table={null} cashier="user" owner="user" onClose={vi.fn()} fetchOrders={async () => {}} clearSelectedOrder={vi.fn()} />);
 }
 
-const settlement = (post: ReturnType<typeof vi.spyOn>) =>
+const settlement = (post: { mock: { calls: unknown[][] } }) =>
   post.mock.calls.find(([method]) => String(method).endsWith('make_invoice'))?.[1] as Record<string, unknown> | undefined;
 
 it('adds the tip to the amount due and sends it with the settlement', async () => {
