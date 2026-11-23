@@ -1006,17 +1006,17 @@ class TestAnUnsetGraceIsNeverZero(_Site):
         self.assertEqual(self.status("TR-1"), "No Show")
 
 
-# R3: every reservation timing is a per-Branch setting, seeded by the Custom Field fixture.
-# Simphony configures these per property or revenue centre (TMS Parameters, Reservation Periods).
+# R3/R4: every reservation timing is a per-Branch setting, seeded by the Custom Field fixture.
+# Simphony configures these per property or revenue centre (TMS Parameters, Reservation Periods),
+# and has no setting for a seated-party lookback or a measured-average minimum (R4 drops both).
 TIMING_SEEDS = {
     "custom_grace_period": "15",  # Auto Abandon Wait List Delay; Simphony documents no default
     "custom_unset_grace_policy": "Use Default Grace Period",  # today's behaviour
     "custom_min_reservation_notice": "-1",  # Minimum Reservation Notice; no Simphony default, today's 1 minute back
     "custom_target_turn_time": "60",  # Target Turn Time: Simphony's documented default
-    "custom_min_avg_table_time": "15",  # no Simphony equivalent; today's value
-    "custom_seated_lookup_hours": "12",  # no Simphony equivalent; today's value
 }
 TIMING_COLUMNS = [field for field in TIMING_SEEDS if field != "custom_grace_period"]
+DROPPED_SETTINGS = ("custom_min_avg_table_time", "custom_seated_lookup_hours")
 
 
 class _Timing(_Site):
@@ -1038,8 +1038,18 @@ class _Timing(_Site):
         stack = contextlib.ExitStack()
         for module in (self.api, self.average):
             for name in ("get_branch_last_day_avg_time", "get_branch_last_week_avg_time"):
-                stack.enter_context(patch.object(module, name, return_value=minutes))
+                if hasattr(module, name):
+                    stack.enter_context(patch.object(module, name, return_value=minutes))
         return stack
+
+    def doc_events(self):
+        tree = ast.parse((ROOT / "hooks.py").read_text())
+        return next(ast.literal_eval(node.value) for node in tree.body
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "doc_events" for t in node.targets))
+
+    def hooked(self, doctype, event):
+        hooks = self.doc_events().get(doctype, {}).get(event, [])
+        return [hooks] if isinstance(hooks, str) else hooks
 
 
 class TestReservationTimingShipsOnTheBranch(_Timing):
@@ -1054,11 +1064,21 @@ class TestReservationTimingShipsOnTheBranch(_Timing):
         self.assertEqual(fields["custom_unset_grace_policy"]["fieldtype"], "Select")
         self.assertEqual(fields["custom_unset_grace_policy"]["options"].split("\n"),
             ["Use Default Grace Period", "Refuse to Enable"])
-        for name in ("custom_target_turn_time", "custom_min_avg_table_time", "custom_seated_lookup_hours"):
-            self.assertEqual((fields[name]["fieldtype"], fields[name]["non_negative"]), ("Int", 1), name)
+        self.assertEqual((fields["custom_target_turn_time"]["fieldtype"],
+            fields["custom_target_turn_time"]["non_negative"]), ("Int", 1))
         # A negative notice accepts a time that far back, so this one field may go below zero.
         self.assertEqual((fields["custom_min_reservation_notice"]["fieldtype"],
             fields["custom_min_reservation_notice"]["non_negative"]), ("Int", 0))
+
+    def test_settings_simphony_does_not_have_are_gone(self):
+        # Simphony binds a seated party to its table and check (no lookback window), and its
+        # Target Turn Time governs the hold (no measured-average minimum).
+        fields = self.branch_fields()
+        self.assertEqual([name for name in DROPPED_SETTINGS if name in fields], [])
+        hooks_source = (ROOT / "hooks.py").read_text()
+        self.assertEqual([name for name in DROPPED_SETTINGS if f"Branch-{name}" in hooks_source], [])
+        settings = self.settings()
+        self.assertEqual([key for key in ("min_avg_table_time", "seated_lookup_hours") if key in settings], [])
 
     def test_the_settings_sit_beside_buffer_and_grace(self):
         fields = self.branch_fields()
@@ -1081,9 +1101,33 @@ class TestReservationTimingShipsOnTheBranch(_Timing):
         self.frappe.db.has_column = lambda doctype, name: True
         self.assertTrue(self.api.reservations_enabled("Branch A"))
 
+    def test_before_migrate_the_settings_read_is_off_and_silent(self):
+        # A missing column means "disabled": no query error, and no Error Log row per read.
+        read = self.site.get_value
+
+        def get_value(doctype, name=None, fieldname="name", *args, **kwargs):
+            names = fieldname if isinstance(fieldname, (list, tuple)) else [fieldname]
+            if doctype == "Branch" and "custom_target_turn_time" in names:
+                raise WriteFailed("(1054, \"Unknown column 'custom_target_turn_time' in 'field list'\")")
+            return read(doctype, name, fieldname, *args, **kwargs)
+
+        self.frappe.db.get_value = get_value
+        self.frappe.db.has_column = lambda doctype, name: name != "custom_target_turn_time"
+        self.assertEqual(self.settings()["enable_reservation"], 0)
+        self.assertEqual(self.site.errors, [])
+
+    def test_the_arabic_catalogue_keeps_its_header_first(self):
+        catalogue = (ROOT / "translations/ar.csv").read_text(encoding="utf-8")
+        self.assertEqual(catalogue.splitlines()[0], "source,target,context")
+        for source in ("Target Turn Time (Minutes)", "Minimum Reservation Notice (Minutes)",
+                "Set a target turn time of at least one minute before switching reservations on for this branch."):
+            self.assertIn(f"\n{source},", catalogue)
+        for gone in ("Seated Party Lookup (Hours)", "Minimum Average Table Time (Minutes)"):
+            self.assertNotIn(gone, catalogue)
+
 
 class TestTargetTurnTimeIsBranchConfiguration(_Timing):
-    """Simphony Target Turn Time: how long a booking holds its table when no measured average qualifies."""
+    """Simphony Target Turn Time: how long a booking holds its table. It alone sets the hold."""
 
     def test_the_turn_time_sets_each_booking_s_hold(self):
         self.branch(custom_target_turn_time=45)
@@ -1121,40 +1165,65 @@ class TestTargetTurnTimeIsBranchConfiguration(_Timing):
         self.scheduler.process_reservation_no_shows()
         self.assertEqual(self.status("TR-1"), "Completed")
 
-    def test_an_unset_turn_time_takes_the_seeded_one(self):
-        self.branch(custom_target_turn_time=None)
-        self.assertEqual(self.settings()["calculated_duration"], 60)
+    def test_an_unset_or_cleared_turn_time_takes_the_seeded_one(self):
+        # Clearing an Int field in Desk saves 0: a 0-minute stay is meaningless, so it reads as unset.
+        for unset in (None, "", 0, -5):
+            with self.subTest(turn=unset):
+                self.branch(custom_target_turn_time=unset)
+                self.assertEqual(self.settings()["calculated_duration"], 60)
+                self.assertEqual(self.api.reservation_stay_minutes(self.settings()), 60)
         self.seed("custom_target_turn_time", "75")
         self.assertEqual(self.settings()["calculated_duration"], 75)
         self.assertEqual(self.settings(None)["calculated_duration"], 75)
 
+    def test_a_cleared_turn_time_never_lets_two_bookings_share_a_minute(self):
+        self.branch(custom_target_turn_time=0, custom_buffer_time=0)
+        self.booking("TR-1", "19:00")
+        with self.assertRaisesRegex(Invalid, "already has a reservation"):
+            self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 19:00:00")
 
-class TestMinimumAverageTableTimeIsBranchConfiguration(_Timing):
-    """A measured average below the Branch minimum is ignored, and the target turn time is used."""
+    def test_a_cleared_turn_time_never_ends_a_seated_visit_at_once(self):
+        self.branch(custom_target_turn_time=0)
+        self.site.rows["URY Table"]["T1"].occupied = 1
+        self.booking("TR-1", "19:00", status="Seated")
+        self.clock("19:00")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.status("TR-1"), "Seated")
 
-    def test_an_average_below_the_branch_minimum_falls_back_to_the_turn_time(self):
-        self.branch(custom_min_avg_table_time=20)
+    def test_a_measured_average_never_overrides_the_turn_time(self):
+        # Simphony keeps Average Dining Time in reporting; the hold follows the Target Turn Time.
+        for minutes in (20, 200):
+            with self.subTest(average=minutes), self.measured(minutes):
+                settings = self.settings()
+                self.assertEqual(settings["calculated_duration"], 90)
+                self.assertEqual(self.api.reservation_stay_minutes(settings), 90)
+                self.assertEqual(settings["avg_table_time_last_day"], minutes)  # still reported
         with self.measured(20):
-            self.assertEqual(self.settings()["calculated_duration"], 20)
-            self.assertEqual(self.api.reservation_stay_minutes(self.settings()), 20)
-        with self.measured(19):
-            self.assertEqual(self.settings()["calculated_duration"], 90)
-            self.assertEqual(self.api.reservation_stay_minutes(self.settings()), 90)
-            # So an 18:00 booking holds T1 until 19:30, inside a 19:45 booking's buffer.
-            self.booking("TR-1", "18:00")
+            self.booking("TR-1", "18:00")  # holds T1 until 19:30, inside a 19:45 booking's buffer
             with self.assertRaisesRegex(Invalid, "already has a reservation"):
                 self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 19:45:00")
+            self.site.rows["URY Table"]["T2"].update(occupied=1, latest_invoice_time=at("12:00"))
+            with self.assertRaisesRegex(Invalid, "currently occupied"):  # free at 13:30, not 12:20
+                self.api.validate_reservation_rules("T2", "Branch A", f"{DAY} 13:59:00")
 
-    def test_the_seeded_minimum_is_fifteen_minutes(self):
-        self.branch(custom_min_avg_table_time=None)
-        with self.measured(15):
-            self.assertEqual(self.settings()["calculated_duration"], 15)
-        with self.measured(14):
-            self.assertEqual(self.settings()["calculated_duration"], 90)
+    def test_branch_save_refuses_a_cleared_turn_time_on_a_branch_taking_bookings(self):
+        def validate(**values):
+            doc = Row(doctype="Branch", name="Branch A", custom_enable_reservation=1,
+                custom_unset_grace_policy="Use Default Grace Period", custom_grace_period=15,
+                custom_target_turn_time=60)
+            doc.update(values)
+            self.api.validate_branch_reservation_settings(doc)
+
+        for cleared in (0, "", -5):
+            with self.subTest(turn=cleared), self.assertRaisesRegex(Invalid, "target turn time"):
+                validate(custom_target_turn_time=cleared)
+        validate(custom_target_turn_time=1)
+        validate(custom_target_turn_time=0, custom_enable_reservation=0)
+        validate(custom_target_turn_time=None)  # absent before migrate: read as the seed, not refused
 
 
 class TestMinimumReservationNoticeIsBranchConfiguration(_Timing):
-    """Simphony Minimum Reservation Notice. The seed, -1, keeps today's one minute for clock and network delay."""
+    """Simphony Minimum Reservation Notice applies to the booking time: when it is made or moved."""
 
     def test_a_booking_inside_the_notice_is_refused(self):
         self.branch(custom_min_reservation_notice=30)
@@ -1175,31 +1244,80 @@ class TestMinimumReservationNoticeIsBranchConfiguration(_Timing):
         with self.assertRaisesRegex(Invalid, "in the past"):
             self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 11:54:59")
 
+    def test_an_edit_that_keeps_the_time_is_not_held_to_the_notice(self):
+        # Booked at 11:00 for 12:15; by 12:00 it is inside a 30 minute notice, and the guest calls.
+        self.branch(custom_min_reservation_notice=30)
+        self.booking("TR-1", "12:15", created="11:00", pax=2)
+        self.api.update_table_reservation("TR-1", notes="Needs a high chair")
+        self.api.update_table_reservation("TR-1", no_of_pax=3, customer_phone="+256700000001")
+        self.api.update_table_reservation("TR-1", table="T2")
+        row = self.site.rows["URY Table Reservation"]["TR-1"]
+        self.assertEqual((row.comments, row.no_of_pax, row.reserved_table), ("Needs a high chair", 3, "T2"))
 
-class TestSeatedLookupIsBranchConfiguration(_Timing):
-    """An order on an occupied table takes its guest from a party seated there within the Branch's lookup."""
+    def test_a_party_already_due_can_still_be_edited(self):
+        # 11:50, inside its grace at 12:00: the seeded notice no longer refuses it as "in the past".
+        self.booking("TR-1", "11:50", created="09:00")
+        self.api.update_table_reservation("TR-1", notes="Running ten minutes late")
+        self.assertEqual(self.site.rows["URY Table Reservation"]["TR-1"].comments, "Running ten minutes late")
+
+    def test_moving_the_time_is_held_to_the_notice(self):
+        self.branch(custom_min_reservation_notice=30)
+        self.booking("TR-1", "15:00", created="09:00")
+        with self.assertRaisesRegex(Invalid, "30 minutes"):
+            self.api.update_table_reservation("TR-1", reserved_at=f"{DAY} 12:20:00")
+        self.assertEqual(self.site.rows["URY Table Reservation"]["TR-1"].reserved_at, at("15:00"))
+        self.api.update_table_reservation("TR-1", reserved_at=f"{DAY} 12:45:00")
+        self.assertEqual(str(self.site.rows["URY Table Reservation"]["TR-1"].reserved_at)[:16], f"{DAY} 12:45")
+
+
+class TestTheSeatedPartyIsBoundToItsTableAndCheck(_Timing):
+    """Simphony seats a party into a guest check on its table; no lookback window decides the party."""
 
     def setUp(self):
         super().setUp()
         self.site.rows["URY Table"]["T1"].occupied = 1
 
-    def found(self, branch="Branch A"):
-        return (self.api.get_completed_reservation_for_table("T1", branch) or {}).get("name")
+    def check(self, name, table="T1", **values):
+        return Row(doctype="POS Invoice", name=name, restaurant_table=table, branch="Branch A",
+            order_type="Dine In", is_return=0, docstatus=0, **values)
 
-    def test_the_lookup_bounds_how_long_ago_the_party_was_seated(self):
-        self.booking("TR-S", "09:00", status="Seated", modified=at("09:30"))
-        self.branch(custom_seated_lookup_hours=2)
-        self.assertIsNone(self.found())
-        self.assertIsNone(self.found(branch=None))  # the table's own branch
-        self.branch(custom_seated_lookup_hours=3)
-        self.assertEqual(self.found(), "TR-S")
+    def found(self, pos_invoice=None, branch="Branch A"):
+        return (self.api.get_completed_reservation_for_table("T1", branch, pos_invoice=pos_invoice) or {}).get("name")
 
-    def test_an_unset_lookup_takes_the_seeded_one(self):
+    def test_the_table_s_seated_party_is_found_however_long_ago_it_was_seated(self):
         self.booking("TR-S", "00:30", status="Seated", modified=at("00:30"))
-        self.branch(custom_seated_lookup_hours=None)
-        self.assertEqual(self.found(), "TR-S")  # 11.5 hours, inside the seeded 12
-        self.seed("custom_seated_lookup_hours", "11")
-        self.assertIsNone(self.found())
+        self.clock("23:30")
+        self.assertEqual(self.found(), "TR-S")
+        self.assertEqual(self.found(branch=None), "TR-S")  # the table's own branch
+
+    def test_the_check_opened_for_the_party_is_bound_to_it(self):
+        self.booking("TR-S", "19:00", status="Seated")
+        self.booking("TR-2", "21:00", table="T2")  # another table's booking stays unbound
+        self.api.bind_seated_reservation_to_check(self.check("INV-1"))
+        self.assertEqual(self.site.rows["URY Table Reservation"]["TR-S"].pos_invoice, "INV-1")
+        self.assertIsNone(self.site.rows["URY Table Reservation"]["TR-2"].pos_invoice)
+        # A second check on the table never takes over the bound party.
+        self.api.bind_seated_reservation_to_check(self.check("INV-2"))
+        self.assertEqual(self.site.rows["URY Table Reservation"]["TR-S"].pos_invoice, "INV-1")
+
+    def test_only_a_dine_in_sale_on_a_branch_taking_bookings_binds(self):
+        self.booking("TR-S", "19:00", status="Seated")
+        for name, values in (("INV-R", dict(is_return=1)), ("INV-T", dict(order_type="Take Away")),
+                ("INV-O", dict(branch="Branch Off"))):
+            with self.subTest(check=name):
+                self.api.bind_seated_reservation_to_check(self.check(name, **values))
+                self.assertIsNone(self.site.rows["URY Table Reservation"]["TR-S"].pos_invoice)
+
+    def test_a_bound_party_prefills_only_its_own_check(self):
+        self.booking("TR-S", "19:00", status="Seated", pos_invoice="INV-1")
+        self.site.put("POS Invoice", "INV-1", docstatus=0)
+        self.assertEqual(self.found(pos_invoice="INV-1"), "TR-S")
+        self.assertIsNone(self.found(pos_invoice="INV-2"))
+        self.assertIsNone(self.found())  # a new check on the table is someone else's
+
+    def test_the_check_binding_runs_when_a_check_is_created(self):
+        self.assertIn("ury.ury.api.table_reservation.bind_seated_reservation_to_check",
+            self.hooked("POS Invoice", "after_insert"))
 
 
 class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
@@ -1243,12 +1361,8 @@ class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
         self.assertEqual(self.settings()["grace_period"], 15)
 
     def test_the_policy_runs_on_every_branch_save(self):
-        tree = ast.parse((ROOT / "hooks.py").read_text())
-        doc_events = next(ast.literal_eval(node.value) for node in tree.body
-            if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "doc_events" for t in node.targets))
-        validate = doc_events.get("Branch", {}).get("validate", [])
         self.assertIn("ury.ury.api.table_reservation.validate_branch_reservation_settings",
-            [validate] if isinstance(validate, str) else validate)
+            self.hooked("Branch", "validate"))
 
 
 if __name__ == "__main__":

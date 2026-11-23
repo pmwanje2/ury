@@ -33,7 +33,7 @@ class TestCustomFieldFixtureHasOneRowPerField(unittest.TestCase):
 		names = {row["name"] for row in rows}
 		for field in ("custom_reservation_settings_section", "custom_enable_reservation", "custom_buffer_time",
 				"custom_grace_period", "custom_unset_grace_policy", "custom_min_reservation_notice",
-				"custom_target_turn_time", "custom_min_avg_table_time", "custom_seated_lookup_hours",
+				"custom_target_turn_time",
 				"custom_avg_table_time_last_day", "custom_avg_table_time_last_week"):
 			self.assertIn(f"Branch-{field}", names)
 

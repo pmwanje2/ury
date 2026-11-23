@@ -84,7 +84,8 @@ it("the floor's reserve dialog refuses a time inside the branch's notice and boo
       </Routes>
     </MemoryRouter>,
   );
-  const actions = await waitFor(() => screen.getByRole('button', { name: /table actions/i }));
+  // The floor loads its tables through dynamic imports, which can take over a second under load.
+  const actions = await waitFor(() => screen.getByRole('button', { name: /table actions/i }), { timeout: 5000 });
   await act(async () => { fireEvent.click(actions); });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^reserve$/i })); });
   const dialog = await waitFor(() => screen.getByRole('dialog'));

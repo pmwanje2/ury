@@ -13,9 +13,6 @@ from ury.ury.api.table_reservation import (
     get_branch_reservation_settings,
 )
 from ury.ury.api.reservation_scheduler import process_reservation_no_shows
-from ury.ury.report.average_table_time.average_table_time import (
-    get_branch_reservation_duration,
-)
 
 
 class TestURYTableReservation(FrappeTestCase):
@@ -272,6 +269,33 @@ class TestURYTableReservation(FrappeTestCase):
                 reserved_at=soon,
                 branch=self.branch,
             )
+
+    def test_an_edit_inside_the_notice_that_keeps_the_time_is_saved(self):
+        # Simphony's Minimum Reservation Notice applies to the booking time, not to notes or covers.
+        frappe.db.set_value("URY Table", "_Test Reservation Table 1", {"occupied": 0, "latest_invoice_time": None})
+        booked_for = (now_datetime() + timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:00")
+        res_id = create_table_reservation(
+            table="_Test Reservation Table 1",
+            customer="_Test Reservation Customer",
+            customer_name="Customer Calls Ahead",
+            customer_phone="9876543210",
+            no_of_pax=2,
+            reserved_at=booked_for,
+            branch=self.branch,
+        )
+        frappe.db.set_value("Branch", self.branch, "custom_min_reservation_notice", 90)
+
+        def restore_seeded_notice():
+            frappe.db.set_value("Branch", self.branch, "custom_min_reservation_notice", -1)
+            frappe.db.commit()
+
+        self.addCleanup(restore_seeded_notice)
+        update_table_reservation(reservation_name=res_id, notes="Needs a high chair", no_of_pax=3)
+        doc = frappe.get_doc("URY Table Reservation", res_id)
+        self.assertEqual((doc.comments, doc.no_of_pax), ("Needs a high chair", 3))
+        moved = (now_datetime() + timedelta(minutes=70)).strftime("%Y-%m-%d %H:%M:00")
+        with self.assertRaisesRegex(frappe.ValidationError, "at least 90 minutes' notice"):
+            update_table_reservation(reservation_name=res_id, reserved_at=moved)
 
     def test_past_datetime_validation(self):
         # Booking in the past should fail.
@@ -549,14 +573,12 @@ class TestNativeReservationBranchGuard(FrappeTestCase):
         doc.validate_conflicts.assert_not_called()
 
 
-# R3: each reservation timing is a Branch setting seeded by the Custom Field fixture.
+# R3/R4: each reservation timing is a Branch setting seeded by the Custom Field fixture.
 TIMING_SEEDS = {
     "custom_grace_period": "15",
     "custom_unset_grace_policy": "Use Default Grace Period",
     "custom_min_reservation_notice": "-1",
     "custom_target_turn_time": "60",
-    "custom_min_avg_table_time": "15",
-    "custom_seated_lookup_hours": "12",
 }
 
 
@@ -602,3 +624,22 @@ class TestBranchReservationTimingOnTheSite(FrappeTestCase):
         saved.custom_grace_period = 0
         with self.assertRaisesRegex(frappe.ValidationError, "grace period"):
             saved.save(ignore_permissions=True)
+
+    def test_branch_save_refuses_a_cleared_turn_time_on_a_branch_taking_bookings(self):
+        # Clearing the Int field in Desk saves 0, which would hold a table for no time at all.
+        name = "_Test R4 Turn Time"
+
+        def branch(turn):
+            return frappe.get_doc({
+                "doctype": "Branch",
+                "branch": name,
+                "user": [{"doctype": "URY User", "user": "Administrator"}],
+                "custom_enable_reservation": 1,
+                "custom_target_turn_time": turn,
+            })
+
+        with self.assertRaisesRegex(frappe.ValidationError, "target turn time"):
+            branch(0).insert(ignore_permissions=True)
+        self.assertFalse(frappe.db.exists("Branch", name))
+        branch(45).insert(ignore_permissions=True)
+        self.addCleanup(frappe.delete_doc, "Branch", name, force=1, ignore_permissions=True)
