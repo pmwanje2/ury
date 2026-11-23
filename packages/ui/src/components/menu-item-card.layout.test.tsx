@@ -40,8 +40,9 @@ describe('MenuItemCard height', () => {
     render(<MenuItemCard name="Artisanal Sourdough Garlic Bread" priceLabel="₹ 14,000" course="Starters"
       availabilityTag={longChip} quantity={2} onIncrement={vi.fn()} onDecrement={vi.fn()} />)
     const style = getComputedStyle(card())
-    expect(style.minHeight).toBe('15rem')
-    expect(style.height).not.toBe('15rem')
+    // jsdom resolves the rem length to px: 15rem is the 240px the card used to be fixed at.
+    expect(style.minHeight).toBe('240px')
+    expect(style.height).toBe('auto')
   })
 
   it('keeps a stepper zone under the content that the content cannot shrink', () => {
