@@ -111,7 +111,8 @@ const TableReservationEditDialog = ({
     getAvailableTablesForReservation(
       targetBranch,
       formattedReservedAt,
-      reservation?.name
+      reservation?.name,
+      noOfPax
     )
       .then((tables) => {
         if (!isMounted) return;
@@ -137,7 +138,7 @@ const TableReservationEditDialog = ({
     return () => {
       isMounted = false;
     };
-  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name]);
+  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, noOfPax]);
 
   const tablesList = availableTablesList;
 

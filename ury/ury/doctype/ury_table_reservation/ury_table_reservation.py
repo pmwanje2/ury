@@ -104,7 +104,7 @@ class URYTableReservation(Document):
         # A system save (bill close completing a Seated party) is not a manual status change.
         if new_status in ("Completed", "Cancelled") and not self.flags.ignore_permissions:
             from ury.ury.api.table_reservation import is_user_authorized_for_reservation_status_change
-            if not is_user_authorized_for_reservation_status_change(branch=self.branch):
+            if not is_user_authorized_for_reservation_status_change(branch=self.branch, doc=self):
                 frappe.throw(
                     _("Not permitted to change reservation status to {0}.").format(new_status),
                     frappe.PermissionError,

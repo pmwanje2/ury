@@ -310,7 +310,8 @@ export async function getActiveReservations(branch?: string, date?: string): Pro
 export async function getAvailableTablesForReservation(
   branch: string,
   reservedAt: string,
-  excludeReservation?: string
+  excludeReservation?: string,
+  noOfPax?: number
 ): Promise<Table[]> {
   const { call } = await import('@ury/core');
 
@@ -320,6 +321,8 @@ export async function getAvailableTablesForReservation(
       branch,
       reserved_at: reservedAt,
       exclude_reservation: excludeReservation || undefined,
+      // Only tables the party fits (seats and minimum seating) are offered.
+      no_of_pax: noOfPax || undefined,
     }
   );
   return response.message ?? [];

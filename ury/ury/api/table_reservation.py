@@ -546,12 +546,14 @@ def update_table_reservation(
     return True
 
 
-def is_user_authorized_for_reservation_status_change(branch=None, user=None):
+def is_user_authorized_for_reservation_status_change(branch=None, user=None, doc=None):
     """
-    Checks whether the user is authorized to perform privileged reservation status changes
-    (such as transitioning to Completed or Cancelled).
-    Only Cashier (role_allowed_for_billing) or Restaurant Manager (transfer_role_permissions),
-    or Administrator / System Manager are permitted. Order Takers are denied.
+    Checks whether the user may make a privileged reservation status change
+    (Completed or Cancelled).
+    Native write permission on URY Table Reservation authorises it (DocPerm and,
+    given the doc, User Permission row scope). A till's Cashier
+    (role_allowed_for_billing) or Restaurant Manager (transfer_role_permissions)
+    roles, Administrator and System Manager remain additional allowed paths.
     """
     user = user or frappe.session.user
     if not user:
@@ -559,6 +561,9 @@ def is_user_authorized_for_reservation_status_change(branch=None, user=None):
 
     user_roles = set(frappe.get_roles(user))
     if user == "Administrator" or "System Manager" in user_roles:
+        return True
+
+    if frappe.has_permission("URY Table Reservation", "write", doc=doc, user=user):
         return True
 
     # Find matching POS Profile(s) for the branch or user
@@ -602,7 +607,7 @@ def update_reservation_status(reservation_name, status, pos_invoice=None, cancel
 
     # Validate role permissions for critical status changes
     if status in ("Completed", "Cancelled"):
-        if not is_user_authorized_for_reservation_status_change(branch=doc.branch):
+        if not is_user_authorized_for_reservation_status_change(branch=doc.branch, doc=doc):
             frappe.throw(
                 _("Not permitted to change reservation status to {0}.").format(status),
                 frappe.PermissionError,
