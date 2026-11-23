@@ -250,7 +250,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       }
 
       if (printInvoice) {
-        // Step 1: Save draft invoice with discount and payment modes without submitting
+        // Step 1: Save the draft invoice with discount and payment modes
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
           additionalDiscount: discountValue ? parseFloat(discountValue) : null,
           cashier,
@@ -264,7 +264,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           ...roomFields,
         });
 
-        // Step 2: Print invoice with discount and payment modes included
+        // Step 2: Submit to settle. Submission fiscalises the invoice (EFRIS),
+        // so the customer receipt prints only after it (Simphony: the guest
+        // check is pro forma; the receipt prints at tender).
+        await call.post('ury.ury.doctype.ury_order.ury_order.submit_order_invoice', {
+          invoice,
+        });
+
+        // Step 3: Print the receipt. The payment stands if the printer fails.
         if (storePosProfile) {
           try {
             await printOrder({
@@ -275,17 +282,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           } catch (printErr: any) {
             console.error('Print failed:', printErr);
             const reason = printErr?.message || parseFrappeError(printErr) || 'Unknown error';
-            setError(`${t('errors.print_failed', { reason })} ${t('payment.payment_not_processed')}`);
-            showToast.error(`${t('errors.print_failed', { reason })} ${t('payment.payment_not_processed')}`);
-            setIsProcessing(false);
-            return;
+            showToast.error(t('payment.receipt_print_failed', { reason }));
           }
         }
-
-        // Step 3: Print succeeded! Submit the invoice to finalize payment
-        await call.post('ury.ury.doctype.ury_order.ury_order.submit_order_invoice', {
-          invoice,
-        });
       } else {
         const settlement = await submitSettlementOfflineAware({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },

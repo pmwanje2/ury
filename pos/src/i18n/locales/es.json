@@ -111,6 +111,7 @@
     "room_match": "Habitación {{room}} · {{guest}} · sale {{departure}}",
     "room_no_post": "La cuenta de este huésped no admite cargos a la habitación",
     "room_check_required": "Verifique la habitación antes del cargo a habitación",
+    "receipt_print_failed": "Pago registrado, pero el recibo no se imprimió: {{reason}}. Reimprímalo desde Pedidos.",
     "room_check_failed": "No se pudo verificar esta habitación"
   },
   "pos": {

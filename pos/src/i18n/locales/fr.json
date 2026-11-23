@@ -141,6 +141,7 @@
     "room_match": "Chambre {{room}} · {{guest}} · départ {{departure}}",
     "room_no_post": "La note de ce client est fermée aux imputations",
     "room_check_required": "Vérifiez la chambre avant une imputation",
+    "receipt_print_failed": "Paiement enregistré, mais le reçu ne s'est pas imprimé : {{reason}}. Réimprimez-le depuis Commandes.",
     "room_check_failed": "Impossible de vérifier cette chambre"
   },
   "pos": {

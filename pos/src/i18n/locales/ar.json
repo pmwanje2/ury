@@ -163,6 +163,7 @@
     "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
     "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
     "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
+    "receipt_print_failed": "تم تسجيل الدفع، لكن الإيصال لم يُطبع: {{reason}}. أعد طباعته من الطلبات.",
     "room_check_failed": "تعذر التحقق من هذه الغرفة"
   },
   "pos": {

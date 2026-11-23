@@ -4,7 +4,7 @@ import { useChatWidgetRef, useAiEnabled } from './ChatWidget';
 import { t } from '../../i18n';
 
 /**
- * Top-bar "Ask HUF" input (PLAN.md item 6), matching the mockup's `.ask`
+ * Top-bar "Ask about tonight" input (PLAN.md item 6), matching the mockup's `.ask`
  * bar concept — a text-looking entry point that actually just opens the
  * floating `ChatWidget` pre-focused rather than being its own input surface,
  * plus the global ⌘K / Ctrl+K shortcut. Reads the single app-shell
@@ -36,9 +36,6 @@ export default function AskBar() {
       onClick={() => chatRef.current?.openAndFocus()}
       className="flex w-full max-w-md items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-start text-sm text-muted-foreground hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span className="rounded border border-chat-accent/30 bg-chat-accent/6 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-chat-accent">
-        HUF
-      </span>
       <span className="flex flex-1 items-center gap-1.5 truncate">
         <Sparkles className="h-3.5 w-3.5 shrink-0" />
         {t('ai.ask_about_tonight')}
