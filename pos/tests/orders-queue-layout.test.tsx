@@ -484,9 +484,10 @@ describe('U-5 order status sidebar', () => {
     state.counts = { outstanding: 7, unbilled: 3 };
     state.ordersOwner = 'previous.cashier@example.com';
     await renderOrders();
+    // getBranch resolves here, so a count read would reach get_count. (The bill-request strip
+    // confirms its own session branch with getBranch; that is not a count read.)
     const methods = vi.mocked(call.get).mock.calls.map(([method]) => method);
     expect(methods).not.toContain('frappe.client.get_count');
-    expect(methods).not.toContain('ury.ury_pos.api.getBranch');
     for (const pill of Array.from(container.querySelector('nav')!.querySelectorAll('button'))) {
       expect(pill.textContent).not.toMatch(/\d/);
     }
