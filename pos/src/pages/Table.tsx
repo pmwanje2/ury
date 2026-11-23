@@ -822,6 +822,7 @@ const TableView = () => {
           if (!open) setReservationTable(null);
         }}
         onConfirm={handleReserveConfirm}
+        minNoticeMinutes={branchSettings?.min_reservation_notice}
       />
 
       <TableReservationWarningDialog

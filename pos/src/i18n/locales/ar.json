@@ -509,7 +509,8 @@
     "timeline_table_column": "الطاولة",
     "loading_timeline": "جارٍ تحميل الجدول الزمني...",
     "empty_timeline_title": "لا توجد حجوزات لهذا التاريخ",
-    "empty_timeline_hint": "ستظهر الحجوزات على طول المحور الزمني."
+    "empty_timeline_hint": "ستظهر الحجوزات على طول المحور الزمني.",
+    "min_notice": "يجب أن يكون الحجز قبل موعده بـ {{minutes}} دقيقة على الأقل."
   },
   "bill_split": {
     "split_bill": "تقسيم الفاتورة",

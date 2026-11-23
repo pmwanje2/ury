@@ -372,29 +372,33 @@ def update_branch_avg_table_times(branch):
     return last_day_val, last_week_val
 
 
-def get_branch_reservation_duration(branch, default_duration=90):
+def get_branch_reservation_duration(branch, *, target_turn_time, min_avg_table_time):
     """
     Centralized authority to determine the expected reservation duration (in minutes) for a branch.
+    Both limits are the Branch's own settings (custom_target_turn_time, custom_min_avg_table_time).
     Selection logic:
-    1. Try Last Day Average Table Time (Branch.custom_avg_table_time_last_day).
-    2. If not available/0, try Last Week Average Table Time (Branch.custom_avg_table_time_last_week).
-    3. If not available/0, fall back to default_duration (default: 90 minutes).
+    1. Try Last Day Average Table Time, if it is at least min_avg_table_time.
+    2. Else try Last Week Average Table Time, if it is at least min_avg_table_time.
+    3. Else fall back to the Branch's target turn time.
     """
     if not branch:
-        return default_duration
+        return target_turn_time
 
     # Read-only: the Branch averages are written only by
     # update_branch_avg_table_times at till close.
-    last_day_avg = get_branch_last_day_avg_time(branch, update_branch=False)
-    if last_day_avg and last_day_avg >= 15:
-        return int(round(last_day_avg))
     return reservation_duration_from(
-        last_day_avg, get_branch_last_week_avg_time(branch, update_branch=False), default_duration)
+        get_branch_last_day_avg_time(branch, update_branch=False),
+        get_branch_last_week_avg_time(branch, update_branch=False),
+        target_turn_time=target_turn_time, min_avg_table_time=min_avg_table_time)
 
 
-def reservation_duration_from(last_day_avg, last_week_avg, default_duration=90):
-    """The reservation stay from a branch's last-day and last-week table-time averages."""
+def reservation_duration_from(last_day_avg, last_week_avg, *, target_turn_time, min_avg_table_time):
+    """The reservation stay from a branch's last-day and last-week table-time averages.
+
+    An average counts only at or above the Branch's min_avg_table_time; with
+    neither, the stay is the Branch's target turn time.
+    """
     for avg in (flt(last_day_avg), flt(last_week_avg)):
-        if avg >= 15:  # minimum sensible table time
+        if avg and avg >= min_avg_table_time:
             return int(round(avg))
-    return default_duration
+    return target_turn_time

@@ -13,6 +13,7 @@ which arguments a call received.
 """
 
 import ast
+import contextlib
 import importlib.util
 import json
 import re
@@ -110,6 +111,12 @@ class Site:
         # MariaDB 11.8 runs innodb_snapshot_isolation=ON: a locking read that meets a
         # row committed after this request's snapshot raises 1020 instead of reading it.
         self.committed_after_snapshot = False
+        # The shipped Custom Field fixture: frappe.get_meta reads each field's default from it.
+        self.custom_fields = json.loads((ROOT / "fixtures/custom_field.json").read_text())
+
+    def meta(self, doctype):
+        fields = {f["fieldname"]: Row(f) for f in self.custom_fields if f.get("dt") == doctype}
+        return SimpleNamespace(get_field=fields.get)
 
     # -- users -------------------------------------------------------------------
     @property
@@ -541,6 +548,7 @@ def _framework(site):
     fr.get_all.side_effect = site.get_all
     fr.get_list.side_effect = site.get_list
     fr.has_permission.side_effect = site.has_permission
+    fr.get_meta.side_effect = site.meta
     fr.db = SimpleNamespace(
         get_value=site.get_value, get_all=site.get_all, exists=site.exists,
         set_value=site.set_value, sql=site.sql, has_column=lambda doctype, column: True,
@@ -572,11 +580,14 @@ class _Site(unittest.TestCase):
             "ury/doctype/ury_table_reservation/ury_table_reservation.py")
         self.frappe.get_doc.side_effect = self.get_doc
 
-        # Branch A takes bookings: 30 minute buffer, 15 minute grace, no till closed yet (90 minute stay).
+        # Branch A takes bookings: 30 minute buffer, 15 minute grace, a 90 minute target turn
+        # time and no till closed yet (so a 90 minute stay). Other timings take their seeds.
         self.site.put("Branch", "Branch A", custom_enable_reservation=1, custom_buffer_time=30,
-            custom_grace_period=15, custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
+            custom_grace_period=15, custom_target_turn_time=90,
+            custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
         self.site.put("Branch", "Branch Off", custom_enable_reservation=0, custom_buffer_time=30,
-            custom_grace_period=15, custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
+            custom_grace_period=15, custom_target_turn_time=90,
+            custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
         self.site.put("URY Room", "Dining", branch="Branch A")
         self.site.put("URY Room", "Terrace", branch="Branch Off")
         for name, seats in (("T1", 4), ("T2", 4), ("T3", 4)):
@@ -1117,7 +1128,8 @@ class TestClosingTheBillCompletesTheReservation(_Site):
 
     def test_only_a_dine_in_bill_of_the_party_s_own_branch_completes_it(self):
         self.site.put("Branch", "Branch B", custom_enable_reservation=1, custom_buffer_time=30,
-            custom_grace_period=15, custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
+            custom_grace_period=15, custom_target_turn_time=90,
+            custom_avg_table_time_last_day=0, custom_avg_table_time_last_week=0)
         self.booking("TR-1", "19:00", status="Seated")
         for bill in (self.bill(order_type="Take Away"), self.bill(branch="Branch B")):
             with self.subTest(bill=(bill.order_type, bill.branch)):
@@ -1427,6 +1439,251 @@ class TestAnUnsetGraceIsNeverZero(_Site):
         self.clock("19:15")
         self.scheduler.process_reservation_no_shows()
         self.assertEqual(self.status("TR-1"), "No Show")
+
+
+# R3: every reservation timing is a per-Branch setting, seeded by the Custom Field fixture.
+# Simphony configures these per property or revenue centre (TMS Parameters, Reservation Periods).
+TIMING_SEEDS = {
+    "custom_grace_period": "15",  # Auto Abandon Wait List Delay; Simphony documents no default
+    "custom_unset_grace_policy": "Use Default Grace Period",  # today's behaviour
+    "custom_min_reservation_notice": "-1",  # Minimum Reservation Notice; no Simphony default, today's 1 minute back
+    "custom_target_turn_time": "60",  # Target Turn Time: Simphony's documented default
+    "custom_min_avg_table_time": "15",  # no Simphony equivalent; today's value
+    "custom_seated_lookup_hours": "12",  # no Simphony equivalent; today's value
+}
+TIMING_COLUMNS = [field for field in TIMING_SEEDS if field != "custom_grace_period"]
+
+
+class _Timing(_Site):
+    def branch(self, **values):
+        self.site.rows["Branch"]["Branch A"].update(values)
+
+    def seed(self, fieldname, value):
+        """Customize Form: the site changes the default its Branch field ships with."""
+        field = next((f for f in self.site.custom_fields
+            if f.get("dt") == "Branch" and f["fieldname"] == fieldname), None)
+        self.assertIsNotNone(field, f"Branch has no {fieldname} setting")
+        field["default"] = value
+
+    def settings(self, branch="Branch A"):
+        return self.api.get_branch_reservation_settings(branch)
+
+    def measured(self, minutes):
+        """Both table-time averages, as the till closings would have measured them."""
+        stack = contextlib.ExitStack()
+        for module in (self.api, self.average):
+            for name in ("get_branch_last_day_avg_time", "get_branch_last_week_avg_time"):
+                stack.enter_context(patch.object(module, name, return_value=minutes))
+        return stack
+
+
+class TestReservationTimingShipsOnTheBranch(_Timing):
+    """Each timing is a Branch Custom Field beside buffer and grace, with its seed."""
+
+    def branch_fields(self):
+        return {f["fieldname"]: f for f in self.site.custom_fields if f.get("dt") == "Branch"}
+
+    def test_each_timing_setting_ships_with_its_seed(self):
+        fields = self.branch_fields()
+        self.assertEqual({name: (fields.get(name) or {}).get("default") for name in TIMING_SEEDS}, TIMING_SEEDS)
+        self.assertEqual(fields["custom_unset_grace_policy"]["fieldtype"], "Select")
+        self.assertEqual(fields["custom_unset_grace_policy"]["options"].split("\n"),
+            ["Use Default Grace Period", "Refuse to Enable"])
+        for name in ("custom_target_turn_time", "custom_min_avg_table_time", "custom_seated_lookup_hours"):
+            self.assertEqual((fields[name]["fieldtype"], fields[name]["non_negative"]), ("Int", 1), name)
+        # A negative notice accepts a time that far back, so this one field may go below zero.
+        self.assertEqual((fields["custom_min_reservation_notice"]["fieldtype"],
+            fields["custom_min_reservation_notice"]["non_negative"]), ("Int", 0))
+
+    def test_the_settings_sit_beside_buffer_and_grace(self):
+        fields = self.branch_fields()
+        followers = {f["insert_after"]: name for name, f in fields.items()}
+        chain, after = [], "custom_reservation_settings_section"
+        while after in followers:
+            after = followers[after]
+            chain.append(after)
+        self.assertEqual(chain, ["custom_enable_reservation", "custom_buffer_time", "custom_grace_period",
+            *TIMING_COLUMNS, "custom_avg_table_time_last_day", "custom_avg_table_time_last_week"])
+        for name in TIMING_COLUMNS:
+            self.assertEqual(fields[name]["depends_on"], "eval:doc.custom_enable_reservation == 1", name)
+            self.assertEqual(fields[name]["module"], "URY", name)
+
+    def test_a_branch_reads_as_disabled_until_migrate_adds_every_timing_column(self):
+        for column in TIMING_COLUMNS:
+            with self.subTest(missing=column):
+                self.frappe.db.has_column = lambda doctype, name, missing=column: name != missing
+                self.assertFalse(self.api.reservations_enabled("Branch A"))
+        self.frappe.db.has_column = lambda doctype, name: True
+        self.assertTrue(self.api.reservations_enabled("Branch A"))
+
+
+class TestTargetTurnTimeIsBranchConfiguration(_Timing):
+    """Simphony Target Turn Time: how long a booking holds its table when no measured average qualifies."""
+
+    def test_the_turn_time_sets_each_booking_s_hold(self):
+        self.branch(custom_target_turn_time=45)
+        self.assertEqual(self.settings()["calculated_duration"], 45)
+        self.booking("TR-1", "18:00")
+        # 18:00 holds T1 until 18:45, where a 19:15 booking's 30 minute buffer starts.
+        with self.assertRaisesRegex(Invalid, "already has a reservation"):
+            self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 19:14:00")
+        self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 19:15:00")
+        offered = lambda clock: [t.name for t in self.api.get_available_tables_for_reservation(
+            "Branch A", f"{DAY} {clock}:00")]
+        self.assertEqual(offered("19:14"), ["T2", "T3"])
+        self.assertEqual(offered("19:15"), ["T1", "T2", "T3"])
+        with patch.object(self.scheduler, "process_reservation_no_shows"):
+            self.assertEqual(self.api.get_active_reservations("Branch A")[0]["duration_minutes"], 45)
+
+    def test_an_occupied_table_is_expected_free_after_the_turn_time(self):
+        self.branch(custom_target_turn_time=45)
+        self.site.rows["URY Table"]["T1"].update(occupied=1, latest_invoice_time=at("12:00"))
+        # Free at 12:45, so a 13:15 booking (its buffer starts 12:45) fits and 13:14 does not.
+        with self.assertRaisesRegex(Invalid, "currently occupied"):
+            self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 13:14:00")
+        self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 13:15:00")
+        self.assertIn("T1", [t.name for t in self.api.get_available_tables_for_reservation(
+            "Branch A", f"{DAY} 13:15:00")])
+
+    def test_a_seated_party_s_hold_runs_out_after_the_turn_time(self):
+        self.branch(custom_target_turn_time=45)
+        self.site.rows["URY Table"]["T1"].occupied = 1
+        self.booking("TR-1", "19:00", status="Seated")
+        self.clock("19:44")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.status("TR-1"), "Seated")
+        self.clock("19:45")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.status("TR-1"), "Completed")
+
+    def test_an_unset_turn_time_takes_the_seeded_one(self):
+        self.branch(custom_target_turn_time=None)
+        self.assertEqual(self.settings()["calculated_duration"], 60)
+        self.seed("custom_target_turn_time", "75")
+        self.assertEqual(self.settings()["calculated_duration"], 75)
+        self.assertEqual(self.settings(None)["calculated_duration"], 75)
+
+
+class TestMinimumAverageTableTimeIsBranchConfiguration(_Timing):
+    """A measured average below the Branch minimum is ignored, and the target turn time is used."""
+
+    def test_an_average_below_the_branch_minimum_falls_back_to_the_turn_time(self):
+        self.branch(custom_min_avg_table_time=20)
+        with self.measured(20):
+            self.assertEqual(self.settings()["calculated_duration"], 20)
+            self.assertEqual(self.api.reservation_stay_minutes(self.settings()), 20)
+        with self.measured(19):
+            self.assertEqual(self.settings()["calculated_duration"], 90)
+            self.assertEqual(self.api.reservation_stay_minutes(self.settings()), 90)
+            # So an 18:00 booking holds T1 until 19:30, inside a 19:45 booking's buffer.
+            self.booking("TR-1", "18:00")
+            with self.assertRaisesRegex(Invalid, "already has a reservation"):
+                self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 19:45:00")
+
+    def test_the_seeded_minimum_is_fifteen_minutes(self):
+        self.branch(custom_min_avg_table_time=None)
+        with self.measured(15):
+            self.assertEqual(self.settings()["calculated_duration"], 15)
+        with self.measured(14):
+            self.assertEqual(self.settings()["calculated_duration"], 90)
+
+
+class TestMinimumReservationNoticeIsBranchConfiguration(_Timing):
+    """Simphony Minimum Reservation Notice. The seed, -1, keeps today's one minute for clock and network delay."""
+
+    def test_a_booking_inside_the_notice_is_refused(self):
+        self.branch(custom_min_reservation_notice=30)
+        self.assertEqual(self.settings()["min_reservation_notice"], 30)
+        with self.assertRaisesRegex(Invalid, "30 minutes"):
+            self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 12:29:00")
+        self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 12:30:00")
+
+    def test_the_seeded_notice_accepts_a_minute_back_and_no_more(self):
+        self.assertEqual(self.settings()["min_reservation_notice"], -1)
+        self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 11:59:00")
+        with self.assertRaisesRegex(Invalid, "in the past"):
+            self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 11:58:59")
+
+    def test_a_branch_can_accept_a_longer_delay(self):
+        self.branch(custom_min_reservation_notice=-5)
+        self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 11:55:00")
+        with self.assertRaisesRegex(Invalid, "in the past"):
+            self.api.validate_reservation_rules("T1", "Branch A", f"{DAY} 11:54:59")
+
+
+class TestSeatedLookupIsBranchConfiguration(_Timing):
+    """An order on an occupied table takes its guest from a party seated there within the Branch's lookup."""
+
+    def setUp(self):
+        super().setUp()
+        self.site.rows["URY Table"]["T1"].occupied = 1
+
+    def found(self, branch="Branch A"):
+        return (self.api.get_completed_reservation_for_table("T1", branch) or {}).get("name")
+
+    def test_the_lookup_bounds_how_long_ago_the_party_was_seated(self):
+        self.booking("TR-S", "09:00", status="Seated", modified=at("09:30"))
+        self.branch(custom_seated_lookup_hours=2)
+        self.assertIsNone(self.found())
+        self.assertIsNone(self.found(branch=None))  # the table's own branch
+        self.branch(custom_seated_lookup_hours=3)
+        self.assertEqual(self.found(), "TR-S")
+
+    def test_an_unset_lookup_takes_the_seeded_one(self):
+        self.booking("TR-S", "00:30", status="Seated", modified=at("00:30"))
+        self.branch(custom_seated_lookup_hours=None)
+        self.assertEqual(self.found(), "TR-S")  # 11.5 hours, inside the seeded 12
+        self.seed("custom_seated_lookup_hours", "11")
+        self.assertIsNone(self.found())
+
+
+class TestUnsetGracePolicyIsBranchConfiguration(_Timing):
+    """A blank or zero grace takes the seeded grace, or, under "Refuse to Enable", stops the branch switching on."""
+
+    def validate(self, **values):
+        doc = Row(doctype="Branch", name="Branch A", custom_enable_reservation=1,
+            custom_unset_grace_policy="Refuse to Enable", custom_grace_period=0)
+        doc.update(values)
+        self.api.validate_branch_reservation_settings(doc)
+
+    def test_an_unset_grace_takes_the_seed_the_site_ships(self):
+        self.seed("custom_grace_period", "20")
+        for unset in (None, "", 0):
+            with self.subTest(grace=unset):
+                self.branch(custom_grace_period=unset)
+                self.assertEqual(self.settings()["grace_period"], 20)
+        self.booking("TR-1", "19:00", created="18:00")
+        self.clock("19:19")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.status("TR-1"), "Confirmed")
+        self.clock("19:20")
+        self.scheduler.process_reservation_no_shows()
+        self.assertEqual(self.status("TR-1"), "No Show")
+
+    def test_refuse_to_enable_stops_a_branch_without_a_grace_from_switching_on(self):
+        for unset in (None, "", 0):
+            with self.subTest(grace=unset), self.assertRaisesRegex(Invalid, "grace period"):
+                self.validate(custom_grace_period=unset)
+        self.validate(custom_grace_period=10)
+        self.validate(custom_enable_reservation=0)
+        self.validate(custom_unset_grace_policy="Use Default Grace Period")
+        self.validate(custom_unset_grace_policy=None)  # an unset policy takes the seeded one
+        self.seed("custom_unset_grace_policy", "Refuse to Enable")
+        with self.assertRaisesRegex(Invalid, "grace period"):
+            self.validate(custom_unset_grace_policy=None)
+
+    def test_a_refusing_branch_saved_without_a_grace_is_still_never_zero(self):
+        # Reached only by a write that skipped Branch validate: the booking is still held.
+        self.branch(custom_unset_grace_policy="Refuse to Enable", custom_grace_period=0)
+        self.assertEqual(self.settings()["grace_period"], 15)
+
+    def test_the_policy_runs_on_every_branch_save(self):
+        tree = ast.parse((ROOT / "hooks.py").read_text())
+        doc_events = next(ast.literal_eval(node.value) for node in tree.body
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "doc_events" for t in node.targets))
+        validate = doc_events.get("Branch", {}).get("validate", [])
+        self.assertIn("ury.ury.api.table_reservation.validate_branch_reservation_settings",
+            [validate] if isinstance(validate, str) else validate)
 
 
 if __name__ == "__main__":

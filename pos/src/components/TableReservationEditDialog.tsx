@@ -24,6 +24,7 @@ import {
   type Table,
   type TableReservation,
 } from '../lib/table-api';
+import { isInsideReservationNotice } from '../lib/table-utils';
 import type { Customer } from '../store/pos-store';
 import { usePOSStore } from '../store/pos-store';
 
@@ -44,6 +45,8 @@ interface TableReservationEditDialogProps {
   availableTables?: Table[];
   onOpenChange: (open: boolean) => void;
   onConfirm: (data: EditReservationFormData) => Promise<void>;
+  /** The branch's Minimum Reservation Notice; without it the server alone checks the time. */
+  minNoticeMinutes?: number | null;
 }
 
 const TableReservationEditDialog = ({
@@ -51,6 +54,7 @@ const TableReservationEditDialog = ({
   reservation,
   onOpenChange,
   onConfirm,
+  minNoticeMinutes,
 }: TableReservationEditDialogProps) => {
   const { posProfile } = usePOSStore();
   const branch = posProfile?.branch ?? '';
@@ -200,9 +204,11 @@ const TableReservationEditDialog = ({
     }
 
     const selectedDt = new Date(`${reservationDate}T${reservationTime}:00`);
-    const nowMargin = new Date(Date.now() - 60000); // 1-min grace margin
-    if (!isNaN(selectedDt.getTime()) && selectedDt < nowMargin) {
-      setValidationError(t('reservations.past_datetime'));
+    if (minNoticeMinutes != null && !isNaN(selectedDt.getTime())
+        && isInsideReservationNotice(selectedDt, minNoticeMinutes)) {
+      setValidationError(minNoticeMinutes > 0
+        ? t('reservations.min_notice', { minutes: minNoticeMinutes })
+        : t('reservations.past_datetime'));
       return;
     }
 

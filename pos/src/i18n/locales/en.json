@@ -511,7 +511,8 @@
     "timeline_table_column": "Table",
     "loading_timeline": "Loading timeline view...",
     "empty_timeline_title": "No Reservations for this Date",
-    "empty_timeline_hint": "Reservations will appear along the time axis."
+    "empty_timeline_hint": "Reservations will appear along the time axis.",
+    "min_notice": "A reservation needs at least {{minutes}} minutes' notice."
   },
   "bill_split": {
     "split_bill": "Split bill",

@@ -5,7 +5,7 @@ from datetime import timedelta
 import frappe
 from frappe.utils import cint, get_datetime, now_datetime
 
-from ury.ury.api.table_reservation import reservations_enabled
+from ury.ury.api.table_reservation import _timing_setting, reservations_enabled
 from ury.ury.report.average_table_time.average_table_time import reservation_duration_from
 
 CONFIRMED, SEATED = "Confirmed", "Seated"
@@ -22,10 +22,13 @@ def get_upcoming_bookings(branch):
 	# The averages a till close stored on the Branch: a floor poll never re-reads closed tills.
 	settings = frappe.db.get_value("Branch", branch, [
 		"custom_buffer_time", "custom_grace_period",
+		"custom_target_turn_time", "custom_min_avg_table_time",
 		"custom_avg_table_time_last_day", "custom_avg_table_time_last_week",
 	], as_dict=True) or {}
 	stay = timedelta(minutes=reservation_duration_from(
-		settings.get("custom_avg_table_time_last_day"), settings.get("custom_avg_table_time_last_week")))
+		settings.get("custom_avg_table_time_last_day"), settings.get("custom_avg_table_time_last_week"),
+		target_turn_time=max(0, cint(_timing_setting(settings, "target_turn_time"))),
+		min_avg_table_time=max(0, cint(_timing_setting(settings, "min_avg_table_time")))))
 	buffer = timedelta(minutes=max(0, cint(settings.get("custom_buffer_time"))))
 	grace = timedelta(minutes=max(0, cint(settings.get("custom_grace_period"))))
 
