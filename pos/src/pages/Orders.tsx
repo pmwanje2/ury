@@ -591,11 +591,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 >
                   <CardContent className="p-0 flex flex-col h-full">
                     <div className="p-3 bg-gray-50 border-b">
-                    <div className="flex items-baseline justify-between gap-3">
+                    {/* The total drops under the reference only when both do not fit. */}
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
                       <h3 className="min-w-0 truncate text-sm font-semibold text-gray-900" title={order.name}>
                         {order.name}
                       </h3>
-                      <span className="shrink-0 whitespace-nowrap text-sm font-semibold tabular-nums text-gray-900">
+                      <span className="ms-auto shrink-0 whitespace-nowrap text-sm font-semibold tabular-nums text-gray-900">
                         {formatCurrency(cardTotal)}
                       </span>
                     </div>
