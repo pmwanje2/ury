@@ -9,6 +9,7 @@
  * must therefore settle (make_invoice, then submit_order_invoice) and only then print.
  * A printer failure after settlement leaves the payment recorded and asks for a reprint.
  */
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import PaymentDialog from "./PaymentDialog";
@@ -28,17 +29,21 @@ vi.mock("../lib/print", () => ({
 
 vi.mock("@ury/core", () => ({
   formatCurrency: (amount: number) => `UGX ${amount.toFixed(2)}`,
-  parseFrappeError: vi.fn((err: any, fallback?: string) => err?.message || fallback),
+  parseFrappeError: vi.fn((err: unknown, fallback?: string) =>
+    err && typeof err === "object" && "message" in err && typeof err.message === "string"
+      ? err.message
+      : fallback
+  ),
   call: {
     post: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 
 vi.mock("@ury/ui", () => ({
-  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
-  Input: ({ ...props }: any) => <input {...props} />,
-  Dialog: ({ children, open }: any) => (open ? <div>{children}</div> : null),
-  DialogContent: ({ children }: any) => <div data-testid="dialog-content">{children}</div>,
+  Button: ({ children, ...props }: ComponentPropsWithoutRef<"button">) => <button {...props}>{children}</button>,
+  Input: (props: ComponentPropsWithoutRef<"input">) => <input {...props} />,
+  Dialog: ({ children, open }: { children?: ReactNode; open?: boolean }) => (open ? <div>{children}</div> : null),
+  DialogContent: ({ children }: { children?: ReactNode }) => <div data-testid="dialog-content">{children}</div>,
   showToast: {
     success: vi.fn(),
     error: vi.fn(),
@@ -46,7 +51,7 @@ vi.mock("@ury/ui", () => ({
 }));
 
 vi.mock("../i18n", () => ({
-  t: (key: string, params?: any) => (params ? `${key}: ${JSON.stringify(params)}` : key),
+  t: (key: string, params?: Record<string, unknown>) => (params ? `${key}: ${JSON.stringify(params)}` : key),
 }));
 
 const MAKE = "ury.ury.doctype.ury_order.ury_order.make_invoice";
@@ -80,7 +85,7 @@ function callOrder(method: string) {
 describe("PaymentDialog fiscal receipt order", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(call.post).mockResolvedValue({ ok: true } as any);
+    vi.mocked(call.post).mockResolvedValue({ ok: true });
     vi.mocked(printOrder).mockResolvedValue("qz");
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
@@ -106,7 +111,7 @@ describe("PaymentDialog fiscal receipt order", () => {
   it("prints nothing when the settlement is refused", async () => {
     vi.mocked(call.post).mockImplementation(async (method: string) => {
       if (method === SUBMIT) throw new Error("Customer is on hold");
-      return { ok: true } as any;
+      return { ok: true };
     });
     const props = renderDialog();
 
