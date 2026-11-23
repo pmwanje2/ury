@@ -101,6 +101,6 @@ class TestSettlementTip(unittest.TestCase):
 		self.assertEqual(self.events[:2], [("tip", 0), "totals"])
 
 	def test_negative_tip_is_refused_before_any_write(self):
-		with self.assertRaisesRegex(ValueError, "URY-TIP-NEGATIVE"):
+		with self.assertRaisesRegex(ValueError, r"\[POS-TIP-NEGATIVE\]"):
 			self.settle(tip=-5)
 		self.assertNotIn("save", self.events)

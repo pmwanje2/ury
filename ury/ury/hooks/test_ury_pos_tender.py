@@ -43,7 +43,7 @@ class TestNonCashOvertender(FrappeTestCase):
 		self.assertEqual(field.options.split("\n"), ["Refuse", "Post to Charged Tip"])
 
 	def test_card_overtender_is_refused(self):
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-TENDER-OVERTENDER"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TENDER-OVERTENDER\]"):
 			till_fx.bill(self.till, 100, [(till_fx.CARD, 120)])
 
 	def test_cash_overtender_still_gives_change(self):
@@ -56,7 +56,7 @@ class TestNonCashOvertender(FrappeTestCase):
 		self.assertEqual(invoice.change_amount, 10)
 
 		# 135 tendered on a 120 bill with only 5 in cash: 10 of the excess is card.
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-TENDER-OVERTENDER"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TENDER-OVERTENDER\]"):
 			till_fx.bill(self.till, 120, [(till_fx.CASH, 5), (till_fx.CARD, 130)])
 
 	def test_card_overtender_posts_to_charged_tip_when_the_tender_allows(self):
@@ -74,7 +74,7 @@ class TestNonCashOvertender(FrappeTestCase):
 
 	def test_mixed_non_cash_overtender_needs_every_non_cash_tender_to_allow_tips(self):
 		till_fx.set_overtender_rule(till_fx.CARD, "Post to Charged Tip")
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-TENDER-OVERTENDER"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TENDER-OVERTENDER\]"):
 			till_fx.bill(self.till, 100, [(till_fx.CARD, 70), (till_fx.WIRE, 50)])
 
 		till_fx.set_overtender_rule(till_fx.WIRE, "Post to Charged Tip")
@@ -118,16 +118,16 @@ class TestChargedTip(FrappeTestCase):
 		self.assertEqual(invoice.grand_total, 120)
 
 	def test_negative_tip_is_refused(self):
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-TIP-NEGATIVE"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TIP-NEGATIVE\]"):
 			till_fx.bill(self.till, 100, [(till_fx.CASH, 100)], tip=-5)
 
 	def test_tip_needs_a_tips_payable_liability_account(self):
 		bare = till_fx.make_till("_Test Till No Tips Account", custom_tips_payable_account=None)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-TIP-ACCOUNT"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TIP-ACCOUNT\]"):
 			till_fx.bill(bare, 100, [(till_fx.CASH, 120)], tip=20)
 
 		revenue = till_fx.make_till("_Test Till Revenue Tips", custom_tips_payable_account=till_fx.INCOME_ACCOUNT)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-TIP-ACCOUNT"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TIP-ACCOUNT\]"):
 			till_fx.bill(revenue, 100, [(till_fx.CASH, 120)], tip=20)
 
 	def test_tip_reaches_the_gl_as_tips_payable_on_consolidation(self):

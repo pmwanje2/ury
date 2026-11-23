@@ -102,16 +102,16 @@ class TestTillCashMovements(FrappeTestCase):
 
 	def test_paid_out_needs_a_reason(self):
 		till = till_fx.make_till("_Test Till Paid Out Reason")
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-REASON"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-REASON\]"):
 			movement(till, "Paid Out", 50, reason="  ")
 
 	def test_paid_out_above_threshold_needs_a_second_person(self):
 		till = till_fx.make_till("_Test Till Paid Out Approval")
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-SECOND-PERSON"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SECOND-PERSON\]"):
 			movement(till, "Paid Out", 600, reason="Gas refill")
 
 		draft = movement(till, "Paid Out", 600, reason="Gas refill", submit=False)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-SECOND-PERSON"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SECOND-PERSON\]"):
 			submit_as(draft, till_fx.WAITER)
 		approved = submit_as(draft, till_fx.MANAGER)
 		self.assertEqual(approved.docstatus, 1)
@@ -122,9 +122,9 @@ class TestTillCashMovements(FrappeTestCase):
 
 	def test_movement_counter_account_is_the_configured_one(self):
 		till = till_fx.make_till("_Test Till Counter Account")
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-COUNTER"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-COUNTER\]"):
 			movement(till, "Pickup", 100, counter=till_fx.PAID_OUT_ACCOUNT)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-COUNTER"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-COUNTER\]"):
 			movement(till, "Paid Out", 100, counter=till_fx.CARD_ACCOUNT, reason="Bank")
 
 		tip_payout = movement(till, "Paid Out", 40, counter=till_fx.TIPS_ACCOUNT, reason="Tip payout")
@@ -132,26 +132,26 @@ class TestTillCashMovements(FrappeTestCase):
 
 	def test_movement_must_move_the_till_drawer(self):
 		till = till_fx.make_till("_Test Till Drawer Line")
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-DRAWER"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-DRAWER\]"):
 			movement(till, "Pickup", 100, drawer=till_fx.CARD_ACCOUNT)
 
 	def test_movement_needs_an_open_shift(self):
 		till = till_fx.make_till("_Test Till Closed Shift")
 		till_fx.close_till(till, counted=1000)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-SHIFT"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SHIFT\]"):
 			movement(till, "Pickup", 100)
 
 	def test_closing_waits_for_a_pending_movement(self):
 		till = till_fx.make_till("_Test Till Pending Movement")
 		movement(till, "Paid Out", 600, reason="Gas refill", submit=False)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CLOSE-PENDING-MOVEMENT"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CLOSE-PENDING-MOVEMENT\]"):
 			till_fx.close_till(till, counted=400)
 
 	def test_movement_cannot_be_cancelled_after_its_shift_closed(self):
 		till = till_fx.make_till("_Test Till Cancel After Close")
 		pickup = movement(till, "Pickup", 100)
 		till_fx.close_till(till, counted=900)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CASH-SHIFT"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SHIFT\]"):
 			frappe.get_doc("Journal Entry", pickup.name).cancel()
 
 
@@ -204,5 +204,5 @@ class TestCashOverShort(FrappeTestCase):
 
 	def test_cash_difference_needs_an_over_short_account(self):
 		till = till_fx.make_till("_Test Till No Over Short", custom_cash_over_short_account=None)
-		with self.assertRaisesRegex(frappe.ValidationError, "URY-CLOSE-OVER-SHORT-ACCOUNT"):
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CLOSE-OVER-SHORT-ACCOUNT\]"):
 			till_fx.close_till(till, counted=990)
