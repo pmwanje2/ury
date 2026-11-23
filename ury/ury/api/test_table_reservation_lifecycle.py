@@ -68,6 +68,7 @@ class Site:
         self.roles = ["System Manager"]
         self.errors = []
         self.sql_log = []
+        self.events = []  # ordered row locks and SQL reads, for concurrency contracts
         self.fail_writes = set()
 
     # -- storage -----------------------------------------------------------------
@@ -135,7 +136,9 @@ class Site:
             return [row.get(pluck) for row in rows]
         return [self.project(row, fields or ["name"]) for row in rows]
 
-    def get_value(self, doctype, name=None, fieldname="name", as_dict=False, **kwargs):
+    def get_value(self, doctype, name=None, fieldname="name", as_dict=False, for_update=False, **kwargs):
+        if for_update:
+            self.events.append(("lock", doctype, name))
         if isinstance(name, dict):
             found = self.select(doctype, name)
             row = found[0] if found else None
@@ -163,6 +166,7 @@ class Site:
     def sql(self, query, params=(), as_dict=False, **kwargs):
         q = " ".join(query.split())
         self.sql_log.append(q)
+        self.events.append(("sql", q))
         params = list(params) if isinstance(params, (list, tuple)) else params
         if "`tabPOS Closing Entry`" in q:
             return []  # no till has closed yet, so table-time averages are unset
@@ -433,6 +437,20 @@ class TestBufferKeepsTheTableClear(_Site):
             "Branch A", f"{DAY} {clock}:00")]
         self.assertEqual(names("19:45"), ["T2", "T3"])
         self.assertEqual(names("20:00"), ["T1", "T2", "T3"])
+
+
+class TestConcurrentBookingsSerialiseOnTheTable(_Site):
+    """Two hosts (or a host and an agent) booking one table at once must not both pass the overlap check."""
+
+    def test_the_table_row_is_locked_before_its_bookings_are_read(self):
+        self.booking("TR-1", "18:00")
+        self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} 20:00:00")
+        events = self.site.events
+        locks = [i for i, e in enumerate(events) if e == ("lock", "URY Table", "T1")]
+        reads = [i for i, e in enumerate(events) if e[0] == "sql" and "FROM `tabURY Table Reservation`" in e[1]]
+        self.assertTrue(locks, "the URY Table row is never locked FOR UPDATE")
+        self.assertTrue(reads, "no overlap read ran")
+        self.assertLess(locks[0], reads[0])
 
 
 class TestPartySizeFitsTheTable(_Site):
