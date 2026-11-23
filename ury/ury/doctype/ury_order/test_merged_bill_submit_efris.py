@@ -126,10 +126,14 @@ def _load_modules():
 		"ury.ury.utils.stock_count_gate": MagicMock(),
 		"ury.ury_pos.default_customer": MagicMock(get_default_customer_config=lambda _p: {}),
 	}
-	with patch.dict(sys.modules, stubs):
-		from ury.ury.doctype.ury_order import ury_order
-		from ury.ury.hooks import ury_pos_invoice
-		from ury.ury_pos import api
+	for name, mod in stubs.items():
+		sys.modules.setdefault(name, mod)
+	import ury.ury.api as _ury_api_pkg
+	if not hasattr(_ury_api_pkg, "ury_print"):
+		_ury_api_pkg.ury_print = sys.modules["ury.ury.api.ury_print"]
+	from ury.ury.doctype.ury_order import ury_order
+	from ury.ury.hooks import ury_pos_invoice
+	from ury.ury_pos import api
 	return ury_order, ury_pos_invoice, api
 
 
