@@ -11,9 +11,9 @@ const NOTE_AFTER_NAME = /^(?:\s*[([{,:;]|\s+[-\u2013\u2014|/\u00b7]\s)/;
  * customer, so two splits on one customer ("Susan · Walk In", "David · Walk
  * In") are told apart. The customer shows by name; its id only when it has no
  * name. The customer is left out only when the label is that same customer:
- * its name or id, or its name followed by a bracketed or separated note
- * ("Dr. Elena Rostova (Rm 408)"). A label that merely contains or sits inside
- * the customer name never hides it.
+ * its name or id, or the customer as shown (its name, else its id) followed
+ * by a bracketed or separated note ("Dr. Elena Rostova (Rm 408)"). A label
+ * that merely contains or sits inside the customer never hides it.
  */
 export function formatGuestSubtitle(
   guestLabel?: string | null,
@@ -26,11 +26,9 @@ export function formatGuestSubtitle(
   const customer = name || id;
   if (!label || !customer) return label || customer;
   const foldedLabel = fold(label);
-  if (foldedLabel === fold(customer) || (id && foldedLabel === fold(id))) return customer;
-  if (name) {
-    const foldedName = fold(name);
-    if (foldedLabel.startsWith(foldedName) && NOTE_AFTER_NAME.test(foldedLabel.slice(foldedName.length))) return label;
-  }
+  const foldedCustomer = fold(customer);
+  if (foldedLabel === foldedCustomer || (id && foldedLabel === fold(id))) return customer;
+  if (foldedLabel.startsWith(foldedCustomer) && NOTE_AFTER_NAME.test(foldedLabel.slice(foldedCustomer.length))) return label;
   return `${label} · ${customer}`;
 }
 
