@@ -151,5 +151,6 @@ it("shows each booking for the server's duration and invents none", () => {
       selectedDate={new Date(2026, 10, 23)} />,
   );
   expect(view.container.textContent).toMatch(/19:00 - 19:00/);
-  expect(view.container.textContent).not.toMatch(/20:00/);
+  // The hour axis prints 20:00 anyway; the booking's own span must not.
+  expect(view.container.textContent).not.toMatch(/19:00 - 20:00/);
 });
