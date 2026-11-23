@@ -432,6 +432,10 @@ class TestGuestLabelOnPrints(unittest.TestCase):
         doc.custom_merged_pos_invoice = None
         doc.items = []
         doc.kot_items = []
+        # The merged bill compares these, which a bare MagicMock cannot do.
+        doc.payments = []
+        doc.outstanding_amount = 0
+        doc.ury_print_partner = None
         doc.get_formatted.side_effect = lambda field, *args, **kwargs: field
         for folder in self.FORMATS:
             with self.subTest(folder=folder):
