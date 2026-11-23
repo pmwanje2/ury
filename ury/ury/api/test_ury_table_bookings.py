@@ -134,6 +134,14 @@ class TestCaptainGridReadsTableReservations(_Site):
         self.booking("TR-2", "19:10", table="T2")
         self.assertEqual(set(self.read()), {"T2"})
 
+    def test_a_quiet_last_till_falls_back_to_the_last_week_average(self):
+        # The last till averaged 10 minutes (below the 15 minute floor), the last week 45.
+        self.site.rows["Branch"]["Branch A"].update(
+            custom_avg_table_time_last_day=10, custom_avg_table_time_last_week=45)
+        self.booking("TR-1", "20:00")  # 90 minutes out: beyond a 45 minute stay, its lock not begun
+        self.booking("TR-2", "19:10", table="T2")
+        self.assertEqual(set(self.read()), {"T2"})
+
     def test_the_grid_reads_the_till_average_stored_at_close_not_the_sales_history(self):
         self.till_closed(60)
         self.booking("TR-1", "19:00")
