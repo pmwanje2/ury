@@ -423,7 +423,8 @@ class TestBufferKeepsTheTableClear(_Site):
 
     def test_a_new_booking_keeps_the_buffer_on_both_sides_of_an_existing_one(self):
         self.booking("TR-1", "18:00")
-        for clock in ("19:45", "16:45"):
+        # 19:45 starts its own buffer inside the 18:00 stay; 16:15 ends (17:45) inside the 18:00 buffer.
+        for clock in ("19:45", "16:45", "16:15"):
             with self.subTest(refused=clock):
                 with self.assertRaisesRegex(Invalid, "already has a reservation"):
                     self.api.validate_reservation_conflicts("T1", "Branch A", f"{DAY} {clock}:00")
@@ -436,7 +437,9 @@ class TestBufferKeepsTheTableClear(_Site):
         names = lambda clock: [t.name for t in self.api.get_available_tables_for_reservation(
             "Branch A", f"{DAY} {clock}:00")]
         self.assertEqual(names("19:45"), ["T2", "T3"])
+        self.assertEqual(names("16:15"), ["T2", "T3"])
         self.assertEqual(names("20:00"), ["T1", "T2", "T3"])
+        self.assertEqual(names("16:00"), ["T1", "T2", "T3"])
 
 
 class TestConcurrentBookingsSerialiseOnTheTable(_Site):
