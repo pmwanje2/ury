@@ -19,6 +19,7 @@ import { DatePicker } from './DatePicker';
 import { t } from '../i18n';
 
 import { type Table, extractErrorMessage } from '../lib/table-api';
+import { isInsideReservationNotice } from '../lib/table-utils';
 import type { Customer } from '../store/pos-store';
 
 export interface ReservationFormData {
@@ -35,6 +36,8 @@ interface TableReservationDialogProps {
   table: Table | null;
   onOpenChange: (open: boolean) => void;
   onConfirm: (data: ReservationFormData) => Promise<void>;
+  /** The branch's Minimum Reservation Notice; without it the server alone checks the time. */
+  minNoticeMinutes?: number | null;
 }
 
 const TableReservationDialog = ({
@@ -42,6 +45,7 @@ const TableReservationDialog = ({
   table,
   onOpenChange,
   onConfirm,
+  minNoticeMinutes,
 }: TableReservationDialogProps) => {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customerPhone, setCustomerPhone] = useState('');
@@ -120,9 +124,11 @@ const TableReservationDialog = ({
     }
 
     const selectedDt = new Date(`${reservationDate}T${reservationTime}:00`);
-    const nowMargin = new Date(Date.now() - 60000); // 1-min grace margin
-    if (!isNaN(selectedDt.getTime()) && selectedDt < nowMargin) {
-      setValidationError(t('reservations.past_datetime'));
+    if (minNoticeMinutes != null && !isNaN(selectedDt.getTime())
+        && isInsideReservationNotice(selectedDt, minNoticeMinutes)) {
+      setValidationError(minNoticeMinutes > 0
+        ? t('reservations.min_notice', { minutes: minNoticeMinutes })
+        : t('reservations.past_datetime'));
       return;
     }
 

@@ -14,6 +14,7 @@
   "no_of_pax",
   "reserved_at",
   "status",
+  "cancel_reason",
   "pos_invoice",
   "reserved_by",
   "pos_opening_entry",
@@ -39,7 +40,8 @@
    "in_standard_filter": 1,
    "label": "Table",
    "options": "URY Table",
-   "reqd": 1
+   "reqd": 1,
+   "search_index": 1
   },
   {
    "fieldname": "customer",
@@ -89,8 +91,15 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Requested\nConfirmed\nCompleted\nCancelled\nNo Show",
+   "options": "Requested\nConfirmed\nSeated\nCompleted\nCancelled\nNo Show",
    "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.status=='Cancelled'",
+   "fieldname": "cancel_reason",
+   "fieldtype": "Data",
+   "label": "Cancellation Reason",
+   "mandatory_depends_on": "eval:doc.status=='Cancelled'"
   },
   {
    "fieldname": "pos_invoice",
@@ -125,7 +134,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-09-03 10:00:00.000000",
+ "modified": "2026-11-23 21:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Table Reservation",
@@ -133,10 +142,12 @@
  "owner": "Administrator",
  "permissions": [
   {
+   "cancel_reservation": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
    "export": 1,
+   "mark_no_show": 1,
    "print": 1,
    "read": 1,
    "report": 1,
@@ -145,10 +156,12 @@
    "write": 1
   },
   {
+   "cancel_reservation": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
    "export": 1,
+   "mark_no_show": 1,
    "print": 1,
    "read": 1,
    "report": 1,
@@ -166,8 +179,10 @@
    "write": 1
   },
   {
+   "cancel_reservation": 1,
    "create": 1,
    "email": 1,
+   "mark_no_show": 1,
    "print": 1,
    "read": 1,
    "report": 1,
