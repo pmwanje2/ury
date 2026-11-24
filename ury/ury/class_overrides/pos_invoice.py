@@ -70,9 +70,10 @@ class CustomPOSInvoice(POSInvoice):
 		from ury.ury.hooks.ury_pos_tender import calculate_taxes_and_totals_excluding_tip
 		from ury.ury_pos.pricing_actions import calculate_taxes_and_totals_for_service_charge
 
+		base_calculate = super().calculate_taxes_and_totals
 		return calculate_taxes_and_totals_for_service_charge(
 			self,
-			lambda: calculate_taxes_and_totals_excluding_tip(self, super().calculate_taxes_and_totals),
+			lambda: calculate_taxes_and_totals_excluding_tip(self, base_calculate),
 		)
 
 	def before_print(self, settings=None):
