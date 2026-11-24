@@ -466,6 +466,8 @@ class DiscountBase(unittest.TestCase):
         self.approval_limits = {}  # company -> dict(max_document_discount_percent, discount_limits_by_role, discount_approver_role)
         self.has_approval_limit_doctype = True
         self.has_discount_reason_doctype = True
+        self.has_privilege_rule_doctype = False
+        self.privilege_rules = []  # list[Row] matching B2a POS Privilege Rule schema
         self.reasons = {
             "Corporate rate": Row(name="Corporate rate", code="Corporate rate", description="Corporate rate", applies_to="POS", requires_supervisor=0, requires_note=0, sort_order=10, disabled=0),
             "Complaint": Row(name="Complaint", code="Complaint", description="Guest complaint", applies_to="Both", requires_supervisor=0, requires_note=0, sort_order=20, disabled=0),
@@ -542,6 +544,8 @@ class DiscountBase(unittest.TestCase):
                 return self.has_approval_limit_doctype
             if name == "Discount Reason":
                 return self.has_discount_reason_doctype
+            if name == "POS Privilege Rule":
+                return self.has_privilege_rule_doctype
             return True
         if doctype == "Discount Reason":
             return name in self.reasons
@@ -659,6 +663,14 @@ class DiscountBase(unittest.TestCase):
             if "coupon_code_based" in filters:
                 rows = [r for r in rows if int(r.get("coupon_code_based") or 0) == int(filters["coupon_code_based"])]
             return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "POS Privilege Rule":
+            rows = list(self.privilege_rules)
+            for k, v in filters.items():
+                if isinstance(v, (list, tuple)) and v[0] == "in":
+                    rows = [r for r in rows if r.get(k) in v[1]]
+                else:
+                    rows = [r for r in rows if r.get(k) == v]
+            return [r.get(pluck) for r in rows] if pluck else rows
         if doctype == "POS Invoice":
             out = []
             for (dt, _), doc in self.docs.items():
@@ -695,13 +707,13 @@ class DiscountBase(unittest.TestCase):
             self.enterContext(patch.object(self.order, helper, return_value=None))
         self.enterContext(patch.object(self.order, "get_order_invoice", return_value=check))
 
-    def _issue_override_token(self, check, claim, approver="manager@example.com", percent=None, amount=None):
+    def _issue_override_token(self, check, claim, approver="manager@example.com", percent=None, amount=None, privilege="discount"):
         """Mint a real single-use approval token through the override contract's public authorise()."""
         self.assertIsNotNone(self.discount, "ury.ury_pos.discount module does not exist yet")
         override_mod = self.discount._get_override_module()
         res = override_mod.authorise(
             pos_profile=self.profile.name,
-            privilege="discount",
+            privilege=privilege,
             approver=approver,
             pin="4321",
             reference_doctype="POS Invoice",
@@ -826,6 +838,7 @@ class TestLimitsAndGovernance(DiscountBase):
         )
         self.assertTrue(preview["needs_approval"])
         self.assertTrue(preview["is_comp"])
+        self.assertEqual(preview.get("privilege"), "complimentary")
 
         with self.assertRaises((Refused, NotPermitted)) as ctx:
             self.order.apply_check_discount(
@@ -836,9 +849,24 @@ class TestLimitsAndGovernance(DiscountBase):
             )
         self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
 
-        # A second person (another manager) CAN authorise it
+        # A second person (another manager) CAN authorise it — MUST use privilege="complimentary", NOT "discount"
         self.roles_by_user["gm@example.com"] = ["URY Manager"]
-        token = self._issue_override_token(check, preview["claim"], approver="gm@example.com", percent=100)
+        wrong_priv_token = self._issue_override_token(
+            check, preview["claim"], approver="gm@example.com", percent=100, privilege="discount"
+        )
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.apply_check_discount(
+                invoice="CHK-COMP",
+                pos_profile="Lakeside Till",
+                discount_percent=100,
+                discount_reason="Complaint",
+                approval=wrong_priv_token,
+            )
+        self.assertIn("POS-AUTH-CHANGED", str(ctx.exception))
+
+        token = self._issue_override_token(
+            check, preview["claim"], approver="gm@example.com", percent=100, privilege="complimentary"
+        )
         applied = self.order.apply_check_discount(
             invoice="CHK-COMP",
             pos_profile="Lakeside Till",
@@ -1464,6 +1492,151 @@ class TestSplitMergeAndOptions(DiscountBase):
         self.assertEqual(opts["presets"][0]["discount_reason"], "Corporate rate")
         self.assertTrue(opts["allow_discount_change"])
         self.assertEqual(opts["limit_percent"], 10.0)
+
+
+class TestAmendment1PrivilegesAndRuleMin(DiscountBase):
+    """Amendment 1 compliance:
+    - privilege codes: discount, discount_remove, complimentary
+    - min(Approval Limit, POS Privilege Rule) wins; narrower pos_profile rule overrides company-wide
+    - No rule for a role when rules exist = 0% alone
+    - Server gate at the mutation itself enforces the same rule for REST, Desk, offline replay, old clients
+    """
+
+    def test_min_of_approval_limit_and_pos_privilege_rule_wins_with_narrower_profile(self):
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 25\nURY Captain: 15",
+            discount_approver_role="URY Manager",
+        )
+        self.privilege_rules = [
+            # Company-wide rules: Cashier max 50% (Approval Limit 5% wins!), Manager max 0 (defers to Approval Limit 25%)
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=50),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=0),
+            # Narrower profile rule tightens Manager on Lakeside Till to 10% -> min(25, 10) = 10%
+            Row(company="Lakeside Hotel", pos_profile="Lakeside Till", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=10),
+        ]
+        # Cashier: min(Approval Limit 5, rule 50) = 5%
+        self.assertEqual(self.discount.user_discount_limit("cashier@example.com", "Lakeside Hotel", "Lakeside Till"), 5.0)
+        # Manager: min(Approval Limit 25, narrow profile rule 10) = 10%
+        self.assertEqual(self.discount.user_discount_limit("manager@example.com", "Lakeside Hotel", "Lakeside Till"), 10.0)
+        # Waiter (URY Captain): has Approval Limit 15% but NO POS Privilege Rule -> 0% alone!
+        self.assertEqual(self.discount.user_discount_limit("waiter@example.com", "Lakeside Hotel", "Lakeside Till"), 0.0)
+
+        # Narrower profile rule with may_perform=0 drops Cashier to 0% even though Approval Limit says 5%
+        self.privilege_rules.append(
+            Row(company="Lakeside Hotel", pos_profile="Lakeside Till", privilege="discount", role="URY Cashier", may_perform=0, may_authorise=0, max_percent=50)
+        )
+        self.assertEqual(self.discount.user_discount_limit("cashier@example.com", "Lakeside Hotel", "Lakeside Till"), 0.0)
+
+        # REST save (validate_pos_discount) MUST enforce the exact same min(Approval Limit, POS Privilege Rule)!
+        self.frappe.session.user = "manager@example.com"
+        check = self._register_check(
+            FakePOSInvoice(
+                "CHK-AM1-REST",
+                items=[_item("r1", "FISH", 1, 100000)],
+                pos_profile="Lakeside Till",
+            )
+        )
+        check.additional_discount_percentage = 15  # <= Approval Limit 25%, but > narrow profile rule 10%!
+        check.custom_discount_reason = "Complaint"
+        check.calculate_taxes_and_totals()
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.hook.validate_pos_discount(check)
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+
+    def test_discount_remove_privilege_enforced_with_rules_and_on_printed_check(self):
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 20\nURY Manager: 80",
+            discount_approver_role="URY Manager",
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=20),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=80),
+            # Only URY Manager may perform or authorise discount_remove
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount_remove", role="URY Manager", may_perform=1, may_authorise=1, max_percent=0),
+        ]
+        check = self._register_check(FakePOSInvoice("CHK-AM1-REM", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        # Cashier applies 10% within limit
+        self.order.apply_check_discount(
+            invoice="CHK-AM1-REM",
+            pos_profile="Lakeside Till",
+            discount_percent=10,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(check.additional_discount_percentage, 10)
+
+        opts_cashier = self.order.list_discount_options(pos_profile="Lakeside Till")
+        self.assertFalse(opts_cashier.get("can_remove_discount"))
+
+        # Cashier cannot remove without discount_remove manager approval
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.remove_check_discount(invoice="CHK-AM1-REM", pos_profile="Lakeside Till")
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+        self.assertEqual(check.additional_discount_percentage, 10)
+
+        # Manager token for discount_remove succeeds
+        remove_claim = self.discount.canonical_remove_claim(check, row=None)
+        token = self._issue_override_token(
+            check, remove_claim, approver="manager@example.com", privilege="discount_remove"
+        )
+        res = self.order.remove_check_discount(
+            invoice="CHK-AM1-REM", pos_profile="Lakeside Till", approval=token
+        )
+        self.assertEqual(res["after_total"], 50000)
+        self.assertEqual(check.additional_discount_percentage, 0)
+
+        # Without POS Privilege Rule installed: printed check removal still requires discount_remove approval for Cashier
+        self.has_privilege_rule_doctype = False
+        self.privilege_rules = []
+        self.order.apply_check_discount(
+            invoice="CHK-AM1-REM",
+            pos_profile="Lakeside Till",
+            discount_percent=10,
+            discount_reason="Complaint",
+        )
+        check.invoice_printed = 1
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.remove_check_discount(invoice="CHK-AM1-REM", pos_profile="Lakeside Till")
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+
+        printed_claim = self.discount.canonical_remove_claim(check, row=None)
+        token2 = self._issue_override_token(
+            check, printed_claim, approver="manager@example.com", privilege="discount_remove"
+        )
+        res2 = self.order.remove_check_discount(
+            invoice="CHK-AM1-REM", pos_profile="Lakeside Till", approval=token2
+        )
+        self.assertEqual(res2["after_total"], 50000)
+
+    def test_preview_reports_privilege_discount_vs_complimentary(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5",
+            discount_approver_role="URY Manager",
+        )
+        check = self._register_check(FakePOSInvoice("CHK-AM1-PRIV", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        p20 = self.order.preview_settlement_totals(
+            invoice="CHK-AM1-PRIV",
+            pos_profile="Lakeside Till",
+            discount_percent=20,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(p20.get("privilege"), "discount")
+
+        p100 = self.order.preview_settlement_totals(
+            invoice="CHK-AM1-PRIV",
+            pos_profile="Lakeside Till",
+            discount_percent=100,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(p100.get("privilege"), "complimentary")
 
 
 if __name__ == "__main__":

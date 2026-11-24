@@ -31,8 +31,8 @@ from frappe.tests.utils import FrappeTestCase
 
 from ury.ury.api.ury_stock_policy import StockPolicy
 from ury.ury.doctype.ury_order.test_ury_order import _FakeInvoice, _FakeRow
+from ury.ury.doctype.ury_order import ury_order as ury_order_module
 from ury.ury.doctype.ury_order.ury_order import (
-    _validate_additional_discount,
     make_invoice,
     submit_order_invoice,
     merge_free_tables,
@@ -42,6 +42,7 @@ from ury.ury.doctype.ury_order.ury_order import (
     split_bill,
     unmerge_tables,
 )
+from ury.ury_pos.discount import parse_discount_request
 
 MODULE = "ury.ury.doctype.ury_order.ury_order"
 
@@ -604,70 +605,31 @@ class TestPosOpeningCheck(FrappeTestCase):
         mock_get_doc.assert_called_once_with("POS Opening Entry", "POS-OPE-0001")
 
 
-class TestValidateAdditionalDiscount(unittest.TestCase):
-    """`_validate_additional_discount` is `make_invoice`'s authoritative
-    server-side discount gate; it runs before any invoice state is mutated."""
+class TestDiscountContractReplacesLegacyGate(unittest.TestCase):
+    """Legacy `_validate_additional_discount` / `DISCOUNT_ALLOWED_ROLES` / `MAX_DISCOUNT_PERCENTAGE`
+    are deleted in favour of `ury.ury_pos.discount` (B2b)."""
 
-    def test_no_discount_values_normalize_to_zero(self):
-        for value in (None, "", 0, "0", -5):
-            with self.subTest(value=value):
-                self.assertEqual(_validate_additional_discount(value, "Test Profile"), 0)
+    def test_legacy_discount_gate_symbols_are_deleted(self):
+        self.assertFalse(hasattr(ury_order_module, "DISCOUNT_ALLOWED_ROLES"))
+        self.assertFalse(hasattr(ury_order_module, "MAX_DISCOUNT_PERCENTAGE"))
+        self.assertFalse(hasattr(ury_order_module, "_validate_additional_discount"))
 
-    def test_a_non_numeric_discount_falls_through_to_no_discount(self):
-        """The function has an explicit `except (TypeError, ValueError)` ->
-        throw branch for a garbage discount, but it is unreachable: `flt()`
-        swallows the conversion error itself and returns 0.0, so "ten percent"
-        lands on the `discount <= 0` early return instead of the throw.
+    def test_no_discount_values_leave_has_any_arg_false(self):
+        spec = parse_discount_request()
+        self.assertFalse(spec["has_any_arg"])
+        self.assertIsNone(spec["percent"])
+        self.assertIsNone(spec["amount"])
 
-        Asserting the real behaviour rather than the intended one, because the
-        real behaviour is the *fail-safe* of the two -- an unparseable discount
-        is dropped, never applied -- so tightening it to a throw would be a
-        behaviour change for the POS client, not a bug fix, and belongs in its
-        own change rather than being smuggled in with a test."""
-        self.assertEqual(_validate_additional_discount("ten percent", "Test Profile"), 0)
+    def test_invalid_negative_and_over_100_percent_inputs_raise(self):
+        for bad in ("ten percent", -5, 150, float("nan"), float("inf")):
+            with self.subTest(bad=bad):
+                with self.assertRaises(frappe.ValidationError):
+                    parse_discount_request(discount_percent=bad)
 
-    def test_a_none_pos_profile_is_never_loaded_for_a_zero_discount(self):
-        """The profile lookup sits behind the `discount <= 0` early return, so
-        the no-discount path must not hit the DB at all."""
-        with patch(f"{MODULE}.frappe.get_doc") as mock_get_doc:
-            self.assertEqual(_validate_additional_discount(0, None), 0)
-        mock_get_doc.assert_not_called()
-
-    def test_a_discount_is_rejected_when_the_profile_does_not_enable_discounts(self):
-        profile = MagicMock()
-        profile.custom_enable_discount = 0
-        with patch(f"{MODULE}.frappe.get_doc", return_value=profile):
-            with self.assertRaises(frappe.PermissionError):
-                _validate_additional_discount(10, "Test Profile")
-
-    def test_a_discount_above_the_ceiling_is_rejected(self):
-        profile = MagicMock()
-        profile.custom_enable_discount = 1
-        with patch(f"{MODULE}.frappe.get_doc", return_value=profile):
-            with self.assertRaises(frappe.ValidationError) as ctx:
-                _validate_additional_discount(150, "Test Profile")
-        self.assertIn("exceeds the maximum", str(ctx.exception))
-
-    def test_a_discount_is_rejected_for_a_role_not_on_the_allow_list(self):
-        profile = MagicMock()
-        profile.custom_enable_discount = 1
-        with ExitStack() as stack:
-            stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=profile))
-            stack.enter_context(
-                patch(f"{MODULE}.frappe.get_roles", return_value=["URY Waiter"])
-            )
-            with self.assertRaises(frappe.PermissionError):
-                _validate_additional_discount(10, "Test Profile")
-
-    def test_an_authorized_role_gets_the_sanitized_percentage_back(self):
-        profile = MagicMock()
-        profile.custom_enable_discount = 1
-        with ExitStack() as stack:
-            stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=profile))
-            stack.enter_context(
-                patch(f"{MODULE}.frappe.get_roles", return_value=["URY Cashier"])
-            )
-            self.assertEqual(_validate_additional_discount("12.5", "Test Profile"), 12.5)
+    def test_legacy_additionalDiscount_maps_into_governed_percent(self):
+        spec = parse_discount_request(additionalDiscount="12.5")
+        self.assertTrue(spec["has_any_arg"])
+        self.assertEqual(spec["percent"], 12.5)
 
 
 class TestMakeInvoice(FrappeTestCase):

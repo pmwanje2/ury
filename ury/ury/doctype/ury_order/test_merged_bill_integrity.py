@@ -316,13 +316,15 @@ class TestLegacyLinkedSettlement(Loaded):
         super().setUp()
         self.profile = Row(name="Lakeside Till", company="Lakeside Hotel", currency="UGX", customer="Walk-in",
                            custom_enable_discount=1, allow_discount_change=1)
+        self.frappe._dict = Row
         self.frappe.get_cached_doc.return_value = self.profile
         self.frappe.get_value.return_value = "Dine In"
         self.frappe.db.get_value.side_effect = self._db_get_value
-        self.frappe.db.exists.side_effect = lambda dt, name=None: True
+        self.frappe.db.exists.side_effect = lambda dt, name=None: name != "POS Privilege Rule"
         self.frappe.get_meta.return_value = SimpleNamespace(has_field=lambda f: f in (
             "custom_discount_reason", "custom_discount_note", "custom_discount_approver",
             "custom_discount_approved_percent", "ury_discount_meta", "allow_discount_change",
+            "max_document_discount_percent", "discount_limits_by_role", "discount_approver_role",
         ))
         self.frappe.get_roles.return_value = ["URY Cashier"]
         self.frappe.session = SimpleNamespace(user="cashier")
@@ -732,7 +734,6 @@ class TestSettlementPreservesExistingTenders(Loaded):
             "_enforce_on_account",
         ):
             self.enterContext(patch.object(self.order, helper, return_value=None))
-        self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=0))
 
     def _settle(self, check, payments, submit_invoice=0, room_number=None):
         with patch.object(self.order, "get_order_invoice", return_value=check):
