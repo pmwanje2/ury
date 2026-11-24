@@ -14,7 +14,15 @@ import { usePOSStore } from '../src/store/pos-store';
 import { useRootStore } from '../src/store/root-store';
 
 let root: Root; let container: HTMLDivElement;
-const profile = { name: 'Till A', ury_offline_capture: 1, role_allowed_for_billing: [{ role: 'Cashier' }] };
+const profile = {
+  name: 'Till A',
+  ury_offline_capture: 1,
+  role_allowed_for_billing: [{ role: 'Cashier' }],
+  offline_payment_modes: [
+    { mode_of_payment: 'Cash', type: 'Cash', allow_offline: true, requires_reference: false },
+    { mode_of_payment: 'Mobile Money', type: 'Bank', allow_offline: true, requires_reference: true },
+  ],
+};
 const user = { name: 'cashier@example.com', roles: ['Cashier'] };
 const waitForUI = (assertion: () => void) => vi.waitFor(async () => {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); assertion();

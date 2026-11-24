@@ -1,6 +1,7 @@
 import { t } from '../i18n';
 import { call } from '@ury/core';
 import type { AvailabilityChange } from '@ury/core/availability';
+import { assertOfflineActionAllowed } from '../offline/cashier';
 
 /**
  * Thin, read-only adapter over V3-44's `get_item_availability` whitelisted
@@ -69,8 +70,26 @@ export interface ItemAvailability {
 
 export type MenuAvailability = Record<string, ItemAvailability>;
 
-export async function setItemAvailability(branch: string, itemCode: string, change: AvailabilityChange) {
-  await call.post('ury.ury.api.ury_availability.set_item_availability', { branch, item_code: itemCode, ...change });
+export async function setItemAvailability(
+  branch: string,
+  itemCode: string,
+  change: AvailabilityChange,
+  auth?: { approvalToken?: string; reason?: string; reasonNote?: string; posProfile?: string },
+) {
+  const isRestoreOrManage =
+    change.status !== 'Sold Out' || change.count !== undefined || change.reset_policy !== undefined;
+  if (isRestoreOrManage) {
+    await assertOfflineActionAllowed('item availability restore');
+  }
+  await call.post('ury.ury.api.ury_availability.set_item_availability', {
+    branch,
+    item_code: itemCode,
+    ...change,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
+    ...(auth?.posProfile ? { pos_profile: auth.posProfile } : {}),
+  });
 }
 
 export interface AvailabilityOverride {

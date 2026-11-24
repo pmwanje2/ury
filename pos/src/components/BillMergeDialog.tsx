@@ -20,11 +20,14 @@ import {
   mergeBills,
   type MergeBillCandidate,
 } from '../lib/invoice-api';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 interface BillMergeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   invoiceName: string;
+  posProfile?: string;
   currency?: string;
   onConfirm: (secondaryInvoice: string) => Promise<void>;
 }
@@ -35,6 +38,7 @@ const BillMergeDialog = ({
   open,
   onOpenChange,
   invoiceName,
+  posProfile = '',
   currency,
   onConfirm,
 }: BillMergeDialogProps) => {
@@ -46,6 +50,10 @@ const BillMergeDialog = ({
   const [selected, setSelected] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingMergeApproval, setPendingMergeApproval] = useState<{
+    secondary: string;
+    claim: Record<string, unknown>;
+  } | null>(null);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -160,17 +168,33 @@ const BillMergeDialog = ({
     onOpenChange(next);
   };
 
-  const handleConfirm = async () => {
-    if (!selected) return;
+  const handleConfirm = async (approval?: ManagerApprovalResult) => {
+    const targetSecondary = pendingMergeApproval?.secondary ?? selected;
+    if (!targetSecondary) return;
     setIsSubmitting(true);
     setError(null);
     try {
-      await mergeBills(invoiceName, selected);
+      await mergeBills(
+        invoiceName,
+        targetSecondary,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
       showToast.success(t('bill_merge.merge_success', { invoice: invoiceName }));
-      await onConfirm(selected);
+      await onConfirm(targetSecondary);
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('bill_merge.merge_failed'));
+      if (!approval?.token && isAuthRequiredError(err)) {
+        setPendingMergeApproval({
+          secondary: targetSecondary,
+          claim: {
+            action: 'merge_bills',
+            primary_invoice: invoiceName,
+            secondary_invoices: [targetSecondary],
+          },
+        });
+        return;
+      }
+      setError(overrideErrorMessage(err, 'bill_merge.merge_failed'));
     } finally {
       setIsSubmitting(false);
     }
@@ -252,6 +276,7 @@ const BillMergeDialog = ({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         variant="large"
@@ -287,7 +312,7 @@ const BillMergeDialog = ({
             {t('common.cancel')}
           </Button>
           <Button
-            onClick={handleConfirm}
+            onClick={() => void handleConfirm()}
             disabled={isSubmitting || !selected || initialLoading}
           >
             {isSubmitting ? t('common.loading') : t('bill_merge.merge_confirm')}
@@ -295,6 +320,26 @@ const BillMergeDialog = ({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {pendingMergeApproval && (
+      <ManagerApproval
+        open
+        posProfile={posProfile}
+        privilege="merge_checks"
+        title={t('privileged_actions.merge_checks')}
+        summaryLines={[
+          `${t('privileged_actions.check_ref')}: ${invoiceName} ← ${pendingMergeApproval.secondary}`,
+        ]}
+        reference={{ doctype: 'POS Invoice', name: invoiceName }}
+        claim={pendingMergeApproval.claim}
+        onApproved={(res) => {
+          setPendingMergeApproval(null);
+          void handleConfirm(res);
+        }}
+        onCancel={() => setPendingMergeApproval(null)}
+      />
+    )}
+    </>
   );
 };
 

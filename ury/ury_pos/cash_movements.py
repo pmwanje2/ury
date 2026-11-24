@@ -211,7 +211,7 @@ def _serialize_movement(entry, profile, can_approve_role):
 		amount = flt(entry.get("total_debit"))
 	drawer_change = -amount if leaves else amount
 	tips_account = profile.get("custom_tips_payable_account")
-	target_kind = "safe" if kind in ("Pickup", "Loan") else "expense"
+	target_kind = "safe" if kind in ("Pickup", "Loan") else ("paid_in" if kind == "Paid In" else "expense")
 	if kind == "Paid Out" and tips_account:
 		account_names = [a.account if hasattr(a, "account") else a.get("account") for a in account_rows]
 		if tips_account in account_names:
@@ -228,6 +228,7 @@ def _serialize_movement(entry, profile, can_approve_role):
 		"amount": amount,
 		"drawer_change": drawer_change,
 		"reason": entry.get("custom_cash_movement_reason") or "",
+		"reference": entry.get("custom_cash_movement_reference") or "",
 		"target_kind": target_kind,
 		"tip_server": tip_server,
 		"tip_server_name": _user_full_name(tip_server),
@@ -254,6 +255,7 @@ def get_till_cash_state(pos_profile):
 	can_approve = _can_approve_for_profile(profile)
 	safe = profile.get("custom_cash_safe_account")
 	paid_out = profile.get("custom_paid_out_account")
+	paid_in = profile.get("custom_paid_in_account")
 	tips = profile.get("custom_tips_payable_account")
 
 	paid_out_targets = []
@@ -275,6 +277,7 @@ def get_till_cash_state(pos_profile):
 				"custom_cash_movement_type",
 				"total_debit",
 				"custom_cash_movement_reason",
+				"custom_cash_movement_reference",
 				"custom_tip_server",
 				"docstatus",
 				"owner",
@@ -300,12 +303,15 @@ def get_till_cash_state(pos_profile):
 		"opening_entry": opening.name if opening else None,
 		"opening_user": opening.user if opening else None,
 		"paid_out_threshold": paid_out_threshold(profile),
+		"paid_in_threshold": flt(profile.get("custom_paid_in_approval_threshold")),
+		"cash_pull_threshold": flt(profile.get("custom_cash_pull_threshold")),
 		"can_approve": can_approve,
 		"current_user": frappe.session.user,
 		"available_types": {
 			"Pickup": bool(safe),
 			"Loan": bool(safe),
 			"Paid Out": bool(paid_out or tips),
+			"Paid In": bool(paid_in),
 		},
 		"paid_out_targets": paid_out_targets,
 		"servers": _till_servers(profile),
@@ -324,8 +330,17 @@ def record_till_cash_movement(
 	paid_out_target="expense",
 	pos_opening_entry=None,
 	tip_server=None,
+	reference=None,
+	approval_token=None,
 ):
-	"""Create (and submit if within threshold) a native Cash Entry Journal Entry under app authority."""
+	"""Create (and submit if within threshold or Manager PIN approved) a native Cash Entry Journal Entry.
+
+	Delegates ALL movement types (Pickup, Loan, Paid Out, Paid In) through
+	``till_controls._record_cash_movement_impl`` so currency decimal precision (0/2/3dp),
+	drawer collision checks, privilege/PIN gates (including ``cash_loan``), Paid-Out
+	Data threshold semantics (None vs 0), ``tip_server`` attribution, and multi-currency
+	FX rules are enforced identically across every entry point.
+	"""
 	profile = frappe.get_doc("POS Profile", pos_profile)
 	_check_profile_access(profile)
 
@@ -334,69 +349,28 @@ def record_till_cash_movement(
 			coded_message("CASH-DISABLED", _("Till cash movements are not enabled on this POS Profile."))
 		)
 
-	movement_type = (movement_type or "").strip()
-	if movement_type not in LEAVES_DRAWER:
-		frappe.throw(coded_message("CASH-TYPE", _("Choose Pickup, Loan or Paid Out for a till cash movement.")))
+	from ury.ury_pos.till_controls import _record_cash_movement_impl
 
-	precision = frappe.get_precision("Journal Entry Account", "debit_in_account_currency") or 2
-	amount_val = flt(amount, precision)
-	if amount_val <= 0:
-		frappe.throw(coded_message("CASH-AMOUNT", _("Amount must be greater than zero.")))
-
-	opening = _resolve_open_shift(profile, pos_opening_entry=pos_opening_entry, required=True)
-	drawer = _single_cash_drawer(profile)
-	counter = _counter_account(profile, movement_type, paid_out_target)
-	leaves = LEAVES_DRAWER[movement_type]
-	clean_reason = (reason or "").strip() or None
-	clean_server = (
-		(tip_server or "").strip() or None
-		if movement_type == "Paid Out" and (paid_out_target or "expense").strip().lower() == "tips"
-		else None
+	entry, resolved_profile = _record_cash_movement_impl(
+		pos_profile=pos_profile,
+		movement_type=movement_type,
+		amount=amount,
+		reason=reason,
+		reference=reference,
+		paid_out_target=paid_out_target,
+		pos_opening_entry=pos_opening_entry,
+		approval_token=approval_token,
+		tip_server=tip_server,
+		allow_pending_draft=not bool(approval_token),
+		return_entry=True,
 	)
-
-	posting_date = frappe.utils.nowdate()
-	company_currency = frappe.get_cached_value("Company", profile.company, "default_currency") or profile.currency
-	multi_currency, accounts = build_movement_je_accounts(
-		drawer=drawer,
-		counter=counter,
-		drawer_leaves=leaves,
-		profile_amount=amount_val,
-		profile_currency=profile.currency or company_currency,
-		company_currency=company_currency,
-		posting_date=posting_date,
-		cost_center=profile.cost_center,
-	)
-
-	entry = frappe.get_doc(
-		{
-			"doctype": "Journal Entry",
-			"voucher_type": "Cash Entry",
-			"company": profile.company,
-			"posting_date": posting_date,
-			"multi_currency": multi_currency,
-			"custom_pos_opening_entry": opening.name,
-			"custom_cash_movement_type": movement_type,
-			"custom_cash_movement_reason": clean_reason,
-			"custom_tip_server": clean_server,
-			"user_remark": clean_reason or _("{0} on shift {1}").format(movement_type, opening.name),
-			"accounts": accounts,
-		}
-	)
-	entry.flags.ignore_permissions = True
-	entry.insert()
-
-	threshold = paid_out_threshold(profile)
-	needs_second_person = movement_type == "Paid Out" and threshold is not None and amount_val > threshold
-	if not needs_second_person:
-		entry.flags.ignore_permissions = True
-		entry.submit()
-
-	return _serialize_movement(entry, profile, _can_approve_for_profile(profile))
+	return _serialize_movement(entry, resolved_profile, _can_approve_for_profile(resolved_profile))
 
 
 @frappe.whitelist()
-def approve_till_cash_movement(journal_entry):
-	"""Approve and submit a pending Paid Out as a second authorized person under app authority."""
+def approve_till_cash_movement(journal_entry, approval_token=None, approval_reason=None):
+	"""Approve and submit a pending Paid Out / Paid In — either as a signed-in manager or
+	in place with a Manager PIN token while the cashier stays signed in."""
 	if not frappe.db.exists("Journal Entry", journal_entry):
 		frappe.throw(coded_message("CASH-NOT-FOUND", _("Cash movement not found.")))
 	entry = frappe.get_doc("Journal Entry", journal_entry)
@@ -413,7 +387,36 @@ def approve_till_cash_movement(journal_entry):
 	if cint(entry.docstatus) != 0:
 		frappe.throw(coded_message("CASH-NOT-DRAFT", _("Only pending cash movements can be approved.")))
 
-	# before_submit enforces second-person SoD against frappe.session.user and stamps approver.
+	if approval_token:
+		from ury.ury_pos.till_controls import _require_till_privilege
+
+		claim = {
+			"action": "approve_cash_movement",
+			"journal_entry": entry.name,
+			"movement_type": entry.get("custom_cash_movement_type") or "",
+			"amount": flt(entry.total_debit),
+			"pos_opening_entry": entry.custom_pos_opening_entry,
+		}
+		clean_reason = (approval_reason or entry.get("custom_cash_movement_reason") or "").strip()
+		if clean_reason:
+			claim["reason"] = clean_reason
+		approval = _require_till_privilege(
+			profile,
+			"paid_out",
+			entry.name,
+			claim,
+			token=approval_token,
+			amount=flt(entry.total_debit),
+			fallback_privilege="cash_movement",
+			require_second_person=True,
+			excluded_approvers={frappe.session.user, entry.owner},
+		)
+		entry.flags.cash_movement_approval = {
+			"approver": approval.approver,
+			"token_consumed": True,
+		}
+
+	# before_submit enforces second-person SoD and stamps approver.
 	entry.flags.ignore_permissions = True
 	entry.submit()
 	return _serialize_movement(entry, profile, _can_approve_for_profile(profile))

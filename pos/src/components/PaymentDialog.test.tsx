@@ -608,6 +608,70 @@ describe("PaymentDialog", () => {
     expect(summaryRow).toHaveTextContent("Complaint");
     expect(summaryRow).toHaveTextContent("5000");
   });
+
+  it("G23: dispatches pos:payment-settled with tendered modes and drawer profile settings on settlement success", async () => {
+    mockUsePOSStore.mockReturnValue({
+      paymentModes: ["R1 Register Notes", "Card"],
+      fetchPaymentModes: vi.fn(),
+      posProfile: {
+        name: "R1 Till A",
+        pos_profile: "R1 Till A",
+        default_payment_mode: "R1 Register Notes",
+        enable_discount: 1,
+        enable_payment_without_printing: 1,
+        print_format: "Standard",
+        custom_drawer_pin: 5,
+        custom_drawer_kick_hex: "1b700119fa",
+        custom_auto_kick_on_cash_tender: 1,
+        drawer_opening_modes: ["R1 Register Notes"],
+      },
+    });
+
+    const settledEvents: CustomEvent[] = [];
+    const listener = (ev: Event) => settledEvents.push(ev as CustomEvent);
+    window.addEventListener("pos:payment-settled", listener);
+
+    try {
+      render(
+        <PaymentDialog
+          onClose={vi.fn()}
+          grandTotal={1000}
+          roundedTotal={1000}
+          invoice="INV-G23-1"
+          customer="CUST001"
+          posProfile="R1 Till A"
+          table={null}
+          cashier="user1"
+          owner="user1"
+          fetchOrders={vi.fn().mockResolvedValue(undefined)}
+          clearSelectedOrder={vi.fn()}
+          order={{ invoice_printed: 1 }}
+        />
+      );
+
+      const checkbox = screen.getByRole("checkbox");
+      fireEvent.click(checkbox);
+
+      const payButton = screen.getByRole("button", { name: /payment.pay_button/ });
+      fireEvent.click(payButton);
+
+      await waitFor(() => {
+        expect(settledEvents).toHaveLength(1);
+      });
+      expect(settledEvents[0].detail).toMatchObject({
+        invoice: "INV-G23-1",
+        posProfile: "R1 Till A",
+        modes: ["R1 Register Notes"],
+        payments: [{ mode_of_payment: "R1 Register Notes", amount: 1000 }],
+        pin: 5,
+        hex: "1b700119fa",
+        autoKickEnabled: 1,
+        drawerModes: ["R1 Register Notes"],
+      });
+    } finally {
+      window.removeEventListener("pos:payment-settled", listener);
+    }
+  });
 });
 
 

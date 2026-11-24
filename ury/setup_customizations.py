@@ -7,6 +7,10 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def after_install():
     create_custom_fields(get_custom_fields())
+    from ury.ury_pos.kds_device_fields import ensure_kds_device_custom_fields
+    ensure_kds_device_custom_fields()
+    from ury.ury_pos.privileged_fields import ensure_privileged_action_custom_fields
+    ensure_privileged_action_custom_fields()
     add_roles_to_administrator()
     hide_setup_sidebar_options()
     setup_pos_invoice_print_fields()
@@ -114,7 +118,7 @@ def get_custom_fields():
 					"fieldtype": "Select",
 					"default": "Dine In",
 					"label": "Order Type",
-					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
 				},
@@ -279,6 +283,40 @@ def get_custom_fields():
 					"no_copy": 1,
 				},
 				{
+					"fieldname": "custom_room_charge_stay",
+					"fieldtype": "Data",
+					"label": "Room Charge Stay",
+					"description": "Verified stay identifier bound to a room-charge settlement.",
+					"insert_after": "custom_comments",
+					"read_only": 1,
+					"no_copy": 1,
+					"print_hide": 1,
+					"translatable": 0,
+				},
+				{
+					"fieldname": "custom_override_approver",
+					"fieldtype": "Link",
+					"options": "User",
+					"label": "Override Approver",
+					"description": "Manager who authorised an over-limit, No Post, or offline floor override on this check.",
+					"insert_after": "custom_room_charge_stay",
+					"read_only": 1,
+					"no_copy": 1,
+					"print_hide": 1,
+				},
+				{
+					"fieldname": "custom_override_reason",
+					"fieldtype": "Data",
+					"length": 200,
+					"label": "Override Reason",
+					"description": "Recorded reason for the manager override on this check.",
+					"insert_after": "custom_override_approver",
+					"read_only": 1,
+					"no_copy": 1,
+					"print_hide": 1,
+					"translatable": 0,
+				},
+				{
 					"fieldname": "ury_discount_meta",
 					"fieldtype": "Small Text",
 					"label": "POS Discount Metadata",
@@ -313,7 +351,7 @@ def get_custom_fields():
 					"options": "URY Restaurant",
 					"fetch_from": "customer.mobile_number",
 					"label": "Order Type",
-					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
 				},
@@ -544,6 +582,15 @@ def get_custom_fields():
 				"default": "Auto Split Check",
 				"insert_after": "custom_offline_peer_relay_url",
 			},
+			{
+				"fieldname": "custom_offline_tender_limit",
+				"fieldtype": "Currency",
+				"label": "Offline Tender Limit",
+				"default": "0",
+				"non_negative": 1,
+				"description": "Maximum total amount accepted offline on this till without online manager PIN approval (0 means no floor cap).",
+				"insert_after": "ury_offline_capture",
+			},
 		],
   
 		"POS Opening Entry": [
@@ -640,6 +687,22 @@ def get_custom_fields():
 		],
 
 		"Mode of Payment": [
+			{
+				"fieldname": "custom_allow_offline",
+				"fieldtype": "Check",
+				"label": "Allow Offline Capture",
+				"default": "0",
+				"description": "Permit this payment method during offline till capture (Room Charge and Phone push are never permitted offline).",
+				"insert_after": "enabled",
+			},
+			{
+				"fieldname": "custom_offline_requires_reference",
+				"fieldtype": "Check",
+				"label": "Require Reference Offline",
+				"default": "0",
+				"description": "Require the cashier to type a payment reference (e.g. transaction code) when settling offline with this payment method.",
+				"insert_after": "custom_allow_offline",
+			},
 			{
 				"fieldname": "custom_reference_mode",
 				"fieldtype": "Select",

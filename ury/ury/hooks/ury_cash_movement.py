@@ -32,7 +32,7 @@ from frappe.utils import cint, flt
 from ury.brand import coded_message
 
 # Whether each movement takes cash out of the drawer (True) or brings it in.
-LEAVES_DRAWER = {"Pickup": True, "Loan": False, "Paid Out": True}
+LEAVES_DRAWER = {"Pickup": True, "Loan": False, "Paid Out": True, "Paid In": False}
 
 
 def paid_out_threshold(profile):
@@ -150,13 +150,15 @@ def validate(doc, method=None):
 			frappe.throw(coded_message("CASH-SHIFT", _("A till cash movement needs its POS shift.")))
 		return
 	if kind not in LEAVES_DRAWER:
-		frappe.throw(coded_message("CASH-TYPE", _("Choose Pickup, Loan or Paid Out for a till cash movement.")))
+		frappe.throw(
+			coded_message("CASH-TYPE", _("Choose Pickup, Loan, Paid Out or Paid In for a till cash movement."))
+		)
 	profile = frappe.get_doc("POS Profile", _open_shift(doc).pos_profile)
 	drawer, counter = _movement_lines(doc, profile)
 	_check_direction(drawer, kind)
 	_check_counter(profile, kind, counter)
-	if kind == "Paid Out" and not (doc.get("custom_cash_movement_reason") or "").strip():
-		frappe.throw(coded_message("CASH-REASON", _("A paid-out needs a reason.")))
+	if kind in ("Paid Out", "Paid In") and not (doc.get("custom_cash_movement_reason") or "").strip():
+		frappe.throw(coded_message("CASH-REASON", _("A {0} needs a reason.").format(kind.lower())))
 	tips = profile.get("custom_tips_payable_account")
 	if not (kind == "Paid Out" and tips and counter.account == tips):
 		doc.custom_tip_server = None
@@ -166,28 +168,46 @@ def validate(doc, method=None):
 
 
 def before_submit(doc, method=None):
-	"""Journal Entry before_submit: a paid-out above the till's threshold is
-	submitted by a second person who holds the approver role."""
+	"""Journal Entry before_submit: a paid-out or paid-in above the till's threshold is
+	approved by a second authorized person — either in place via Manager PIN
+	(server-only ``doc.flags.cash_movement_approval``) or via second-person Desk submit."""
 	if not doc.get("custom_pos_opening_entry"):
 		return
-	if doc.get("custom_cash_movement_type") != "Paid Out":
+	kind = doc.get("custom_cash_movement_type")
+	if kind not in ("Paid Out", "Paid In"):
 		doc.custom_cash_movement_approver = None
 		return
 	profile = frappe.get_doc(
 		"POS Profile", frappe.db.get_value("POS Opening Entry", doc.custom_pos_opening_entry, "pos_profile")
 	)
-	threshold = paid_out_threshold(profile)
-	if threshold is None:
-		doc.custom_cash_movement_approver = None
-		return
+	if kind == "Paid Out":
+		threshold = paid_out_threshold(profile)
+		if threshold is None:
+			doc.custom_cash_movement_approver = None
+			return
+	else:
+		threshold = flt(profile.get("custom_paid_in_approval_threshold"))
 	company_currency = frappe.get_cached_value("Company", doc.company, "default_currency") or profile.currency
 	drawer, _counter = _movement_lines(doc, profile)
 	movement_amount = line_amount_in_profile_currency(
-		drawer, True, profile.currency, company_currency, doc.posting_date
+		drawer, LEAVES_DRAWER[kind], profile.currency, company_currency, doc.posting_date
 	)
 	if flt(movement_amount) <= threshold:
 		doc.custom_cash_movement_approver = None
 		return
+
+	# In-place Manager PIN approval: only set server-side after override.consume()
+	pin_approval = getattr(getattr(doc, "flags", None), "cash_movement_approval", None)
+	if isinstance(pin_approval, dict) and pin_approval.get("token_consumed") and pin_approval.get("approver"):
+		approver = str(pin_approval["approver"]).strip()
+		if approver.casefold() in {(doc.get("owner") or "").casefold(), (frappe.session.user or "").casefold()}:
+			frappe.throw(
+				coded_message("AUTH-SELF", _("You cannot approve your own cash movement. Ask another manager.")),
+				frappe.PermissionError,
+			)
+		doc.custom_cash_movement_approver = approver
+		return
+
 	role = profile.get("custom_cash_movement_approver_role")
 	user = frappe.session.user
 	if not role or user == doc.owner or role not in frappe.get_roles(user):
@@ -195,9 +215,9 @@ def before_submit(doc, method=None):
 			coded_message(
 				"CASH-SECOND-PERSON",
 				_(
-					"A paid-out above {0} must be approved and submitted by a second authorized person, "
+					"A {0} above {1} must be approved and submitted by a second authorized person, "
 					"not by the person who recorded it."
-				).format(threshold),
+				).format(kind.lower(), threshold),
 			)
 		)
 	doc.custom_cash_movement_approver = user
@@ -209,14 +229,14 @@ def before_cancel(doc, method=None):
 		_open_shift(doc)
 
 
-def till_cash_movements(opening_entry):
+def till_cash_movements(opening_entry, currency=None):
 	"""Submitted movements of a POS shift: net debit per cash drawer account in POS Profile currency."""
 	opening = frappe.db.get_value(
 		"POS Opening Entry", opening_entry, ["pos_profile", "company"], as_dict=True
 	)
 	profile = frappe.get_doc("POS Profile", opening.pos_profile) if opening and opening.pos_profile else None
 	drawers = _drawer_accounts(profile, opening.company) if profile else set()
-	profile_currency = profile.currency if profile else None
+	profile_currency = currency or (profile.currency if profile else None)
 	company_currency = (
 		frappe.get_cached_value("Company", opening.company, "default_currency")
 		if opening and opening.company
@@ -453,6 +473,26 @@ def _check_counter(profile, kind, counter):
 					_("A {0} moves cash between the drawer and the till's Safe Account ({1}).").format(
 						kind, safe or _("not set")
 					),
+				)
+			)
+		return
+	if kind == "Paid In":
+		paid_in = profile.get("custom_paid_in_account")
+		if paid_in:
+			if counter.account != paid_in:
+				frappe.throw(
+					coded_message(
+						"CASH-COUNTER",
+						_("A paid-in uses the till's Paid In Account ({0}).").format(paid_in),
+					)
+				)
+			return
+		root_type = frappe.db.get_value("Account", counter.account, "root_type")
+		if root_type not in ("Income", "Liability"):
+			frappe.throw(
+				coded_message(
+					"CASH-COUNTER",
+					_("Set the POS Profile's Paid In Account to an income or liability account before recording a paid-in."),
 				)
 			)
 		return

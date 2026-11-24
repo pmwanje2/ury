@@ -698,27 +698,29 @@ def is_user_authorized_to_set_status(doc, status):
 
 
 @frappe.whitelist()
-def update_reservation_status(reservation_name, status, pos_invoice=None, cancel_reason=None):
+def update_reservation_status(
+    reservation_name,
+    status,
+    pos_invoice=None,
+    cancel_reason=None,
+    reason_note=None,
+    approval_token=None,
+    pos_profile=None,
+):
     """
     Updates the status of a reservation (Seated, Completed, Cancelled, No Show) with validation.
     Seated is open to anyone with write permission: whoever greets the party seats it.
+    Cancelled and No Show support `reservation_cancel` privilege / Manager PIN in place + reason.
     """
     if not reservation_name:
         frappe.throw(_("Reservation ID is required."))
 
     doc = frappe.get_doc("URY Table Reservation", reservation_name)
     doc.check_permission("write")
-    ensure_reservations_enabled(doc.branch or frappe.db.get_value("URY Table", doc.reserved_table, "branch"))
+    branch = doc.branch or frappe.db.get_value("URY Table", doc.reserved_table, "branch")
+    ensure_reservations_enabled(branch)
 
-    # Completing, cancelling and No Show each need their own privilege on this booking.
-    if status in ("Completed", "Cancelled", "No Show"):
-        if not is_user_authorized_to_set_status(doc, status):
-            frappe.throw(
-                _("Not permitted to change reservation status to {0}.").format(status),
-                frappe.PermissionError,
-            )
-
-    # Validate status transitions
+    # Validate status transitions before consuming any approval token
     if status == "Completed":
         if doc.status in ("Cancelled", "No Show"):
             frappe.throw(_("Cannot mark a {0} reservation as Completed.").format(doc.status))
@@ -727,11 +729,72 @@ def update_reservation_status(reservation_name, status, pos_invoice=None, cancel
         if doc.status == "Completed":
             frappe.throw(_("Cannot cancel a reservation that is already Completed."))
 
+    approver = None
+    validated_reason = cancel_reason
+    if status in ("Cancelled", "No Show"):
+        from ury.ury_pos.privileged_auth import (
+            _is_valid_str,
+            _table_exists,
+            assert_not_offline_replay,
+            authorize_or_perform,
+            is_company_policy_active,
+            mark_verified_approval,
+        )
+
+        assert_not_offline_replay()
+        native_allowed = is_user_authorized_to_set_status(doc, status)
+        company = None
+        resolved_profile = pos_profile
+        if _table_exists("POS Privilege Rule") or _table_exists("POS Reason") or approval_token:
+            raw_co = frappe.db.get_value("Branch", branch, "company") if branch else None
+            company = raw_co if _is_valid_str(raw_co) else None
+            if not resolved_profile and branch:
+                raw_prof = frappe.db.get_value("POS Profile", {"branch": branch, "disabled": 0}, "name")
+                resolved_profile = raw_prof if _is_valid_str(raw_prof) else None
+
+        policy_active = is_company_policy_active(company)
+        enforce_reason = bool(policy_active or approval_token or (status == "Cancelled" and _table_exists("POS Reason")))
+
+        if policy_active or approval_token or not native_allowed or _table_exists("POS Authorisation Log"):
+            auth = authorize_or_perform(
+                privilege="reservation_cancel",
+                pos_profile=resolved_profile,
+                company=company,
+                skip_profile_company_lookup=True,
+                reference_doctype="URY Table Reservation",
+                reference_name=reservation_name,
+                claim={
+                    "action": "reservation_cancel",
+                    "reservation": reservation_name,
+                    "target_status": status,
+                },
+                token=approval_token,
+                reason=cancel_reason,
+                reason_note=reason_note,
+                require_reason=enforce_reason,
+                allow_fallback_predicate=native_allowed,
+                deny_message=_("Not permitted to change reservation status to {0}.").format(status),
+            )
+            approver = auth.get("approver")
+            if auth.get("reason"):
+                note = auth.get("reason_note") or ""
+                validated_reason = f"{auth['reason']}: {note}" if note else auth["reason"]
+            if auth.get("via_pin") or policy_active:
+                mark_verified_approval(doc, "reservation_cancel", approver=approver)
+    elif status == "Completed":
+        if not is_user_authorized_to_set_status(doc, status):
+            frappe.throw(
+                _("Not permitted to change reservation status to {0}.").format(status),
+                frappe.PermissionError,
+            )
+
     doc.status = status
     if pos_invoice:
         doc.pos_invoice = pos_invoice
-    if cancel_reason:
-        doc.cancel_reason = cancel_reason
+    if validated_reason:
+        doc.cancel_reason = validated_reason
+    if approver and status in ("Cancelled", "No Show"):
+        doc.custom_cancel_approver = approver
 
     doc.save()
     frappe.db.commit()

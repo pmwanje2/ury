@@ -20,6 +20,7 @@ import { homePath } from './lib/home-route';
 import { useRootStore } from './store/root-store';
 import { usePOSStore } from './store/pos-store';
 import { useEffect, useRef, useState } from 'react';
+import { installDrawerKickListener } from './lib/drawer-kick';
 import { getActiveLanguage, getActiveDirection } from './i18n';
 import { ActiveReportProvider } from './components/chat/ActiveReportContext';
 import ChatWidget, {
@@ -79,6 +80,27 @@ function App() {
   useEffect(() => {
     initializeApp();
   }, [initializeApp]);
+
+  useEffect(() => {
+    return installDrawerKickListener({
+      getProfile: () => {
+        const state = usePOSStore.getState();
+        const profile = state.posProfile;
+        if (!profile) return null;
+        return {
+          pos_profile: profile.pos_profile || profile.name,
+          name: profile.name,
+          print_type: profile.print_type,
+          qz_host: profile.qz_host,
+          printer: profile.printer,
+          custom_drawer_pin: profile.custom_drawer_pin,
+          custom_drawer_kick_hex: profile.custom_drawer_kick_hex,
+          custom_auto_kick_on_cash_tender: profile.custom_auto_kick_on_cash_tender,
+          drawer_opening_modes: profile.drawer_opening_modes,
+        };
+      },
+    });
+  }, []);
 
   useEffect(() => {
     const lang = getActiveLanguage();

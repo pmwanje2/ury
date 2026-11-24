@@ -2,6 +2,18 @@ import { loadQz } from './qz-runtime';
 import axios from 'axios';
 import { KEYUTIL, KJUR, stob64, hextorstr } from 'jsrsasign';
 
+export const ESC_POS_DRAWER_KICK_PIN_2 = '1b700019fa';
+export const ESC_POS_DRAWER_KICK_PIN_5 = '1b700119fa';
+
+export type DrawerPin = 2 | 5;
+export type QzPrinterTarget = string | { host: string; port: number };
+
+export interface KickDrawerQzResult {
+  status: 'Sent';
+  hex: string;
+  printer: QzPrinterTarget;
+}
+
 let injectedSignKey: string | null = null;
 
 export function initPrinting(opts: { signKey: string }) {
@@ -15,6 +27,45 @@ function ensureSignKey(): string {
     );
   }
   return injectedSignKey;
+}
+
+function configureQzSignature(qz: any, signKey: string): void {
+  qz.security.setSignatureAlgorithm('SHA512');
+  qz.security.setSignaturePromise((toSign: string) => (resolve: (sig: string) => void, reject: (err?: string) => void) => {
+    try {
+      const pk = KEYUTIL.getKey(signKey);
+      const sig = new KJUR.crypto.Signature({ alg: 'SHA512withRSA' });
+      sig.init(pk);
+      sig.updateString(toSign);
+      const hex = sig.sign();
+      resolve(stob64(hextorstr(hex)));
+    } catch (err) {
+      reject(String(err));
+    }
+  });
+}
+
+export function resolveDrawerKickHex(opts?: {
+  pin?: DrawerPin | number | string | null;
+  hex?: string | null;
+}): string {
+  const rawHex = opts?.hex;
+  if (rawHex !== undefined && rawHex !== null && String(rawHex).trim() !== '') {
+    let cleaned = String(rawHex).trim().replace(/[\s:,-]+/g, '').toLowerCase();
+    if (cleaned.startsWith('0x')) {
+      cleaned = cleaned.slice(2);
+    }
+    if (!cleaned || cleaned.length % 2 !== 0 || cleaned.length > 64 || !/^[0-9a-f]+$/.test(cleaned)) {
+      throw new Error('Drawer kick hex command must be an even-length hexadecimal string (2-64 chars).');
+    }
+    return cleaned;
+  }
+
+  const rawPin = opts?.pin;
+  const pin = rawPin === undefined || rawPin === null || String(rawPin).trim() === '' ? 2 : Number(rawPin);
+  if (pin === 2) return ESC_POS_DRAWER_KICK_PIN_2;
+  if (pin === 5) return ESC_POS_DRAWER_KICK_PIN_5;
+  throw new Error(`Unsupported cash drawer pin "${String(rawPin)}". Use Pin 2 or Pin 5.`);
 }
 
 export async function loadQzPrinter(host: string): Promise<void> {
@@ -38,19 +89,7 @@ export async function printWithQz(host: string, htmlToPrint: string): Promise<vo
   const signKey = ensureSignKey();
   const qz = await loadQz();
 
-  qz.security.setSignatureAlgorithm('SHA512');
-  qz.security.setSignaturePromise((toSign: string) => (resolve: (sig: string) => void, reject: (err?: string) => void) => {
-    try {
-      const pk = KEYUTIL.getKey(signKey);
-      const sig = new KJUR.crypto.Signature({ alg: 'SHA512withRSA' });
-      sig.init(pk);
-      sig.updateString(toSign);
-      const hex = sig.sign();
-      resolve(stob64(hextorstr(hex)));
-    } catch (err) {
-      reject(String(err));
-    }
-  });
+  configureQzSignature(qz, signKey);
 
   const printing = async () => {
     const printer = await qz.printers.getDefault();
@@ -65,4 +104,31 @@ export async function printWithQz(host: string, htmlToPrint: string): Promise<vo
     await loadQzPrinter(host);
     await printing();
   }
+}
+
+export async function kickDrawerQz(
+  host: string,
+  printerName?: QzPrinterTarget | null,
+  hexCommand?: string | null,
+  pin?: DrawerPin,
+): Promise<KickDrawerQzResult> {
+  const hex = resolveDrawerKickHex({ hex: hexCommand, pin });
+  const qz = await loadQz();
+
+  if (injectedSignKey) {
+    configureQzSignature(qz, injectedSignKey);
+  }
+
+  const sendPulse = async (): Promise<KickDrawerQzResult> => {
+    const target: QzPrinterTarget = printerName || (await qz.printers.getDefault());
+    const config = qz.configs.create(target);
+    await qz.print(config, [{ type: 'raw', format: 'command', flavor: 'hex', data: hex }]);
+    return { status: 'Sent', hex, printer: target };
+  };
+
+  if (qz.websocket.isActive()) {
+    return sendPulse();
+  }
+  await loadQzPrinter(host);
+  return sendPulse();
 }

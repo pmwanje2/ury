@@ -1,0 +1,358 @@
+"""Floor privileged POS actions (Scope f — Simphony & SAP parity).
+
+Covers:
+- Cross-outlet / RVC check transfer (`transfer_check_outlet`, Simphony Opt 46)
+- Pick up another server's check (`pickup_other_check`, Simphony Opt 18, waiter stays sticky)
+- Server-authoritative open bill print counting & reprint PIN gate (`authorize_and_count_bill_print`)
+- Occupied-table detection across both table flags and open draft checks (`assert_table_free_for_transfer`)
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import frappe
+from frappe import _
+from frappe.utils import cint, flt
+
+from ury.brand import coded_message
+from ury.ury_pos.privileged_auth import (
+    DEFAULT_MANAGER_ROLES,
+    _is_valid_str,
+    _table_exists,
+    assert_not_efris_fiscalised,
+    assert_not_offline_replay,
+    authorize_or_perform,
+)
+
+
+def is_table_occupied_for_transfer(table_name: str, *, exclude_invoice: str | None = None) -> bool:
+    """True when `table_name` is flagged occupied OR has any open draft POS Invoice."""
+    if not table_name:
+        return False
+    occupied = frappe.db.get_value("URY Table", table_name, "occupied")
+    if cint(occupied) == 1:
+        return True
+    filters: dict[str, Any] = {"restaurant_table": table_name, "docstatus": 0}
+    if exclude_invoice:
+        filters["name"] = ["!=", exclude_invoice]
+    if frappe.db.exists("POS Invoice", filters):
+        return True
+    return False
+
+
+def assert_table_free_for_transfer(table_doc_or_name, *, exclude_invoice: str | None = None) -> None:
+    """Refuse transfer onto an occupied table with `[TRANSFER-TABLE-OCCUPIED]`."""
+    table_name = (
+        table_doc_or_name
+        if isinstance(table_doc_or_name, str)
+        else getattr(table_doc_or_name, "name", None)
+    )
+    if not table_name:
+        return
+    occupied_flag = (
+        cint(getattr(table_doc_or_name, "occupied", 0))
+        if not isinstance(table_doc_or_name, str)
+        else cint(frappe.db.get_value("URY Table", table_name, "occupied"))
+    )
+    if occupied_flag == 1 or is_table_occupied_for_transfer(table_name, exclude_invoice=exclude_invoice):
+        frappe.throw(
+            coded_message(
+                "TRANSFER-TABLE-OCCUPIED",
+                _("Table {0} is already occupied.").format(table_name),
+            ),
+            frappe.ValidationError,
+        )
+
+
+def authorize_and_count_bill_print(
+    invoice_name: str,
+    *,
+    approval_token: str | None = None,
+    reason: str | None = None,
+    reason_note: str | None = None,
+    pos_profile: str | None = None,
+) -> dict[str, Any]:
+    """Enforce DB-locked print count vs `custom_max_free_bill_prints` and return print metadata.
+
+    Locks the `POS Invoice` row (`FOR UPDATE`) so concurrent prints across devices
+    never double-spend free prints. Prints up to `custom_max_free_bill_prints`
+    (default 1) are free; subsequent prints require `reprint_bill` privilege / PIN + reason
+    and carry `COPY #N` watermark metadata.
+    """
+    assert_not_offline_replay()
+
+    if not _table_exists("POS Invoice"):
+        return {
+            "print_number": 1,
+            "is_reprint": False,
+            "copy_number": None,
+            "reprint_label": "",
+            "approver": None,
+            "reason": "",
+        }
+
+    row = frappe.db.get_value(
+        "POS Invoice",
+        invoice_name,
+        ["pos_profile", "company", "invoice_printed", "custom_bill_print_count", "docstatus"],
+        as_dict=True,
+        for_update=True,
+    )
+    if not row:
+        return {
+            "print_number": 1,
+            "is_reprint": False,
+            "copy_number": None,
+            "reprint_label": "",
+            "approver": None,
+            "reason": "",
+        }
+
+    resolved_profile = pos_profile or row.get("pos_profile")
+    company = row.get("company") if _is_valid_str(row.get("company")) else None
+
+    raw_max_free = (
+        frappe.db.get_value("POS Profile", resolved_profile, "custom_max_free_bill_prints")
+        if _is_valid_str(resolved_profile)
+        else None
+    )
+    max_free = 1 if raw_max_free is None else max(0, cint(raw_max_free))
+
+    prior_count = max(
+        cint(row.get("custom_bill_print_count")),
+        1 if cint(row.get("invoice_printed")) == 1 else 0,
+    )
+    next_print_number = prior_count + 1
+    is_reprint = prior_count > 0
+
+    approver = None
+    validated_reason = ""
+    if prior_count >= max_free:
+        auth = authorize_or_perform(
+            privilege="reprint_bill",
+            pos_profile=resolved_profile,
+            company=company,
+            reference_doctype="POS Invoice",
+            reference_name=invoice_name,
+            claim={
+                "action": "reprint_open_bill",
+                "invoice": invoice_name,
+                "print_number": next_print_number,
+            },
+            token=approval_token,
+            reason=reason,
+            reason_note=reason_note,
+            require_reason=True,
+            fallback_roles=DEFAULT_MANAGER_ROLES,
+        )
+        approver = auth.get("approver")
+        validated_reason = auth.get("reason") or ""
+
+    frappe.db.set_value(
+        "POS Invoice",
+        invoice_name,
+        "custom_bill_print_count",
+        next_print_number,
+        update_modified=False,
+    )
+
+    reprint_label = f"COPY #{next_print_number} / REPRINT" if is_reprint else ""
+    return {
+        "print_number": next_print_number,
+        "is_reprint": is_reprint,
+        "copy_number": next_print_number if is_reprint else None,
+        "reprint_label": reprint_label,
+        "approver": approver,
+        "reason": validated_reason,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def transfer_check_outlet(
+    invoice: str,
+    target_pos_profile: str,
+    target_table: str | None = None,
+    approval_token: str | None = None,
+    reason: str | None = None,
+    reason_note: str | None = None,
+) -> dict[str, Any]:
+    """Transfer an open check to another outlet / POS Profile (Simphony Opt 46)."""
+    assert_not_offline_replay()
+    if not invoice or not target_pos_profile:
+        frappe.throw(_("Invoice and target POS Profile are required."), frappe.ValidationError)
+
+    inv = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    if not frappe.has_permission("POS Invoice", "write", doc=inv):
+        frappe.throw(_("Not permitted to transfer this check."), frappe.PermissionError)
+    if cint(inv.docstatus) != 0:
+        frappe.throw(_("Only open draft checks can be transferred between outlets."), frappe.ValidationError)
+    assert_not_efris_fiscalised(inv)
+
+    source_profile_name = inv.pos_profile
+    if not source_profile_name:
+        frappe.throw(_("Check has no POS Profile."), frappe.ValidationError)
+    if source_profile_name == target_pos_profile and not target_table:
+        frappe.throw(_("Select a different outlet POS Profile."), frappe.ValidationError)
+
+    source_profile = frappe.get_doc("POS Profile", source_profile_name)
+    target_profile = frappe.get_doc("POS Profile", target_pos_profile)
+    if cint(target_profile.get("disabled")) == 1:
+        frappe.throw(_("Target POS Profile is disabled."), frappe.ValidationError)
+    if source_profile.company != target_profile.company:
+        frappe.throw(_("Cannot transfer a check to a POS Profile in another company."), frappe.PermissionError)
+
+    old_table_name = inv.get("restaurant_table")
+    tables_to_lock = sorted({t for t in (old_table_name, target_table) if t})
+    locked_tables: dict[str, Any] = {}
+    for t_name in tables_to_lock:
+        locked_tables[t_name] = frappe.get_doc("URY Table", t_name, for_update=True)
+
+    target_table_doc = locked_tables.get(target_table) if target_table else None
+    if target_table_doc is not None:
+        if target_profile.get("branch") and target_table_doc.get("branch") != target_profile.get("branch"):
+            frappe.throw(_("Target table does not belong to the target outlet branch."), frappe.ValidationError)
+        # Check occupied BEFORE consuming any manager PIN token
+        assert_table_free_for_transfer(target_table_doc, exclude_invoice=inv.name)
+
+    from ury.ury.doctype.ury_order.ury_order import _has_role
+
+    transfer_roles = {row.role for row in (source_profile.get("transfer_role_permissions") or []) if getattr(row, "role", None)}
+    fallback_allowed = _has_role(frappe.get_roles(), source_profile.get("transfer_role_permissions")) or bool(
+        set(frappe.get_roles()) & (DEFAULT_MANAGER_ROLES | transfer_roles)
+    )
+
+    auth = authorize_or_perform(
+        privilege="transfer_check",
+        pos_profile=source_profile_name,
+        company=source_profile.company,
+        reference_doctype="POS Invoice",
+        reference_name=inv.name,
+        claim={
+            "action": "transfer_check_outlet",
+            "invoice": inv.name,
+            "from_profile": source_profile_name,
+            "to_profile": target_pos_profile,
+            "to_table": target_table or "",
+        },
+        token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+        allow_fallback_predicate=fallback_allowed,
+    )
+
+    inv.pos_profile = target_pos_profile
+    if target_profile.get("branch"):
+        inv.branch = target_profile.branch
+    if target_profile.get("restaurant"):
+        inv.restaurant = target_profile.restaurant
+
+    if target_table_doc is not None:
+        inv.restaurant_table = target_table_doc.name
+        inv.custom_restaurant_room = target_table_doc.get("restaurant_room")
+        frappe.db.set_value(
+            "URY Table",
+            target_table_doc.name,
+            {"occupied": 1, "latest_invoice_time": inv.get("creation")},
+        )
+    elif old_table_name:
+        inv.restaurant_table = None
+        inv.custom_restaurant_room = None
+
+    if old_table_name and old_table_name != target_table:
+        other_open = frappe.db.exists(
+            "POS Invoice",
+            {"restaurant_table": old_table_name, "docstatus": 0, "name": ["!=", inv.name]},
+        )
+        if not other_open:
+            frappe.db.set_value(
+                "URY Table",
+                old_table_name,
+                {"occupied": 0, "latest_invoice_time": None},
+            )
+
+    from ury.ury_pos.pricing_actions import sync_service_charge
+
+    sync_service_charge(inv, target_profile)
+    if callable(getattr(inv, "calculate_taxes_and_totals", None)):
+        inv.calculate_taxes_and_totals()
+    inv.flags.ury_privileged_action_verified = True
+    try:
+        inv.save()
+    finally:
+        inv.flags.ury_privileged_action_verified = False
+
+    if target_table_doc is not None:
+        from ury.ury.doctype.ury_order.ury_order import change_table_in_kot
+
+        change_table_in_kot(inv.name, target_table_doc.name, inv.branch)
+
+    return {
+        "invoice": inv.name,
+        "pos_profile": inv.pos_profile,
+        "branch": inv.branch,
+        "restaurant_table": inv.get("restaurant_table"),
+        "approver": auth["approver"],
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def pickup_other_check(
+    invoice: str,
+    approval_token: str | None = None,
+    reason: str | None = None,
+    reason_note: str | None = None,
+) -> dict[str, Any]:
+    """Pick up another server's open check (Simphony Opt 18) while keeping `waiter` sticky."""
+    assert_not_offline_replay()
+    if not invoice:
+        frappe.throw(_("Invoice is required."), frappe.ValidationError)
+
+    inv = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    if not frappe.has_permission("POS Invoice", "read", doc=inv):
+        frappe.throw(_("Not permitted to access this check."), frappe.PermissionError)
+    if cint(inv.docstatus) != 0:
+        frappe.throw(_("Only open draft checks can be picked up."), frappe.ValidationError)
+
+    user = frappe.session.user
+    owner_waiter = inv.get("waiter") or ""
+    if owner_waiter and owner_waiter == user:
+        return {
+            "invoice": inv.as_dict(),
+            "owner_waiter": owner_waiter,
+            "picked_up_by": user,
+            "approver": user,
+        }
+
+    pos_profile_name = inv.get("pos_profile")
+    company = inv.get("company") if _is_valid_str(inv.get("company")) else None
+
+    from ury.ury.doctype.ury_order.ury_order import _order_ownership_flags
+
+    flags = _order_ownership_flags(inv, pos_profile_name)
+    is_super_user = user == "Administrator" or "System Manager" in frappe.get_roles()
+    fallback_allowed = bool(is_super_user or flags["has_elevated_access"] or flags["is_billing_user"])
+
+    auth = authorize_or_perform(
+        privilege="pickup_other_check",
+        pos_profile=pos_profile_name,
+        company=company,
+        reference_doctype="POS Invoice",
+        reference_name=inv.name,
+        claim={
+            "action": "pickup_other_check",
+            "invoice": inv.name,
+            "owner_waiter": owner_waiter,
+        },
+        token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+        allow_fallback_predicate=fallback_allowed,
+    )
+
+    return {
+        "invoice": inv.as_dict(),
+        "owner_waiter": owner_waiter,
+        "picked_up_by": user,
+        "approver": auth["approver"],
+    }

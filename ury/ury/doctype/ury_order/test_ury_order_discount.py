@@ -2543,6 +2543,8 @@ class TestHydrogenR2Regressions(DiscountBase):
         self.privilege_rules = [
             Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
             Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="split_check", role="URY Cashier", may_perform=1, may_authorise=0),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="split_check", role="URY Manager", may_perform=1, may_authorise=1),
         ]
 
         cases = [
@@ -2758,6 +2760,8 @@ class TestHydrogenR2Regressions(DiscountBase):
         self.privilege_rules = [
             Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
             Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="split_check", role="URY Cashier", may_perform=1, may_authorise=0),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="split_check", role="URY Manager", may_perform=1, may_authorise=1),
         ]
         self.enterContext(patch.object(self.order, "_enforce_order_access"))
         self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))

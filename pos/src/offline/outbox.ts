@@ -1,21 +1,49 @@
-import { resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
+import { currencyFractionDigits, resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
 import { v4 as uuid } from 'uuid';
 import { t } from '../i18n';
 import { isGatewayUnreachableStatus } from './gateway';
 import { forgetOpenTableCheck, readOpenTableCheck, rememberOpenTableCheck, type OpenTableCheck } from './open-table-checks';
 
+export function offlineTolerance(currency?: string | null): number {
+  const digits = currency ? currencyFractionDigits(currency) : 2;
+  return 0.5 * Math.pow(10, -digits);
+}
+
+export interface OfflinePaymentModeConfig {
+  mode_of_payment: string;
+  type?: string;
+  allow_offline: boolean;
+  requires_reference: boolean;
+}
+
 export interface OfflineProfile extends DefaultCustomerConfig {
   name: string;
+  currency?: string;
   ury_offline_capture?: unknown;
   role_allowed_for_billing?: Array<{ role: string }>;
   role_restricted_for_table_order?: Array<{ role: string }>;
   custom_offline_peer_relay_url?: string | null;
   custom_offline_collision_policy?: string | null;
   branch?: string | null;
+  offline_tender_limit?: number;
+  offline_payment_modes?: OfflinePaymentModeConfig[];
+  room_charge_modes?: string[];
   print_type?: string;
   qz_host?: string | null;
   print_format?: string | null;
   efris_print_wait_seconds?: number;
+}
+
+export function resolveOfflineModeConfig(
+  profile: OfflineProfile | null | undefined,
+  modeOfPayment: string,
+): OfflinePaymentModeConfig | null {
+  if (!profile || !modeOfPayment) return null;
+  if (profile.room_charge_modes?.includes(modeOfPayment)) return null;
+  if (!Array.isArray(profile.offline_payment_modes)) return null;
+  const match = profile.offline_payment_modes.find((row) => row.mode_of_payment === modeOfPayment);
+  if (!match || !match.allow_offline || match.type === 'Phone') return null;
+  return match;
 }
 export interface OfflineUser { name: string; roles: string[] }
 export interface OfflineRound {
@@ -37,7 +65,7 @@ export interface OfflineOrder {
   mode_of_payment?: string; order_type: string; table?: string; room?: string; comments?: string | null;
 }
 export interface OfflineSettlement {
-  kind: 'cash' | 'mobile-money';
+  kind: 'cash' | 'mobile-money' | 'offline';
   mode_of_payment: string;
   amount: number;
   reference?: string;
@@ -45,12 +73,14 @@ export interface OfflineSettlement {
   room_number?: string;
   custom_tender_currency?: string;
   custom_tender_amount?: number;
+  needs_online_approval?: boolean;
 }
 export interface OfflineEntry {
   sequence?: number; owner: string; profile: string; client_order_id: string; outage_id: string;
   order: OfflineOrder; rounds: OfflineRound[]; settlement?: OfflineSettlement; bill_printed?: boolean;
   state: 'pending' | 'review'; reason?: string; next_round: number;
   phase: 'order' | 'print' | 'settle'; server_invoice?: string;
+  needs_approval?: boolean; offline_approval?: string; offline_reason?: string;
 }
 export type OfflinePrint = (entry: OfflineEntry, kind: 'kot' | 'bill') => boolean | Promise<boolean>;
 export type OfflineSettledHook = (settled: { invoice: string; entry: OfflineEntry }) => void | Promise<void>;
@@ -147,6 +177,7 @@ class LinkDown extends Error {}
 class NotReady extends Error {}
 class Refused extends Error {}
 class OrderPermission extends Refused {}
+class ApprovalRequired extends Refused {}
 
 // The table's open check until it is settled, including one that has already
 // replayed some rounds. It keeps its client id across outages.
@@ -305,10 +336,29 @@ export class OfflineOutbox {
       return this.storeRound(entry, round);
     });
   }
+  private validateSettlementTender(tender: OfflineSettlement): void {
+    if (!['cash', 'mobile-money', 'offline'].includes(tender.kind)) {
+      throw new Error('Offline settlement accepts configured offline payment methods only.');
+    }
+    if (Array.isArray(this.options.profile.offline_payment_modes)) {
+      const cfg = resolveOfflineModeConfig(this.options.profile, tender.mode_of_payment);
+      if (!cfg) {
+        throw new Error(t('offline.tender_not_allowed', { mode: tender.mode_of_payment }));
+      }
+      if (cfg.requires_reference && !tender.reference?.trim()) {
+        throw new Error(t('offline.reference_required', { mode: tender.mode_of_payment }));
+      }
+    } else if (tender.kind === 'mobile-money' && !tender.reference?.trim()) {
+      throw new Error('Type the manual mobile-money reference.');
+    }
+    const limit = Number(this.options.profile.offline_tender_limit || 0);
+    if (limit > 0 && tender.amount > limit + offlineTolerance(this.options.profile.currency) && !tender.needs_online_approval) {
+      throw new Error(t('offline.over_limit_error', { limit }));
+    }
+  }
   async settle(clientId: string, tender: OfflineSettlement): Promise<OfflineEntry> {
     this.allowedSettle();
-    if (!['cash', 'mobile-money'].includes(tender.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
-    if (tender.kind === 'mobile-money' && !tender.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
+    this.validateSettlementTender(tender);
     return exclusive(async () => {
       this.assertSessionAllowed();
       const entry = (await this.list()).find((row) => row.client_order_id === clientId);
@@ -317,7 +367,7 @@ export class OfflineOutbox {
       if (!Number.isFinite(tender.amount) || tender.amount < entry.rounds[entry.rounds.length - 1].expected_total) throw new Error('Tender must cover the provisional bill total.');
       entry.settlement = { ...tender, reference: tender.reference?.trim() };
       forgetOpenTableCheck(this.options.user.name, entry.order.table);
-      if (tender.reference) entry.order.comments = [entry.order.comments, `Manual mobile-money reference: ${tender.reference.trim()}`].filter(Boolean).join('\n');
+      if (tender.reference) entry.order.comments = [entry.order.comments, `Offline payment reference (${tender.mode_of_payment}): ${tender.reference.trim()}`].filter(Boolean).join('\n');
       await save(entry);
       entry.bill_printed = await this.tryPrint(entry, 'bill'); await save(entry);
       return entry;
@@ -329,8 +379,7 @@ export class OfflineOutbox {
     cashier?: string; owner?: string; orderType?: string; settlement: OfflineSettlement;
   }): Promise<OfflineEntry> {
     this.allowedSettle();
-    if (!['cash', 'mobile-money'].includes(input.settlement.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
-    if (input.settlement.kind === 'mobile-money' && !input.settlement.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
+    this.validateSettlementTender(input.settlement);
     if (!Number.isFinite(input.settlement.amount) || input.settlement.amount < 0) throw new Error('Offline total must be a finite nonnegative amount.');
     return exclusive(async () => {
       this.assertSessionAllowed();
@@ -379,6 +428,13 @@ export class OfflineOutbox {
     if (response.status >= 500 || response.status === 429) throw new NotReady('Server is not yet available');
     let body: { message?: unknown; exc_type?: string; exception?: string; _server_messages?: string };
     try { body = await response.json(); } catch { throw new NotReady('Server did not return JSON'); }
+    const detailMsg = body._server_messages || body.exception || '';
+    if (
+      payload &&
+      (detailMsg.includes('POS-AUTH-REQUIRED') || detailMsg.includes('POS-OFFLINE-OVER-LIMIT'))
+    ) {
+      throw new ApprovalRequired(detailMsg || body.exc_type || 'POS-AUTH-REQUIRED');
+    }
     if (payload && response.status === 403 && body.exc_type === 'PermissionError') throw new OrderPermission(body.exc_type);
     if (response.status === 401 || response.status === 403 || body.exc_type === 'CSRFTokenError') throw new NotReady('Server session is not ready');
     if (!response.ok || body.exc_type || body.exception) throw new Refused(body._server_messages || body.exception || body.exc_type || `HTTP ${response.status}`);
@@ -437,7 +493,10 @@ export class OfflineOutbox {
             const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
               customer: entry.order.customer, cashier: entry.order.cashier, owner: entry.order.owner, table: entry.order.table || null,
               pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
-              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [paymentRow],
+              round_id: entry.rounds[entry.rounds.length - 1].round_id,
+              payments: [paymentRow],
+              offline_replay: 1,
+              ...(entry.offline_approval ? { offline_approval: entry.offline_approval, offline_reason: entry.offline_reason || '' } : {}),
               ...(entry.settlement.room_number ? { room_number: entry.settlement.room_number } : {}),
             });
             // v16 make_invoice answers {name, status}; a settled retry answers the same.
@@ -459,7 +518,14 @@ export class OfflineOutbox {
               sessionStorage.setItem(this.sessionBlockKey, '1');
               await this.verifyCashier();
             }
-            entry.state = 'review'; entry.reason = error.message; await save(entry);
+            entry.state = 'review';
+            entry.reason = error.message;
+            entry.offline_approval = undefined;
+            entry.offline_reason = undefined;
+            if (error instanceof ApprovalRequired) {
+              entry.needs_approval = true;
+            }
+            await save(entry);
           }
         }
         if ((await this.list()).length === 0) {
@@ -468,5 +534,20 @@ export class OfflineOutbox {
       } catch (error) { this.replayFailure(error); }
     }).finally(() => { this.replaying = false; this.replayPromise = undefined; changed(); });
     return this.replayPromise;
+  }
+
+  async approveAndReplay(clientId: string, token: string, reason: string): Promise<void> {
+    if (!token || !token.trim()) throw new Error('Manager approval token is required.');
+    await exclusive(async () => {
+      const entry = (await this.list()).find((row) => row.client_order_id === clientId);
+      if (!entry) throw new Error('Offline order was not found.');
+      entry.offline_approval = token.trim();
+      entry.offline_reason = (reason || '').trim();
+      entry.state = 'pending';
+      entry.needs_approval = false;
+      entry.reason = undefined;
+      await save(entry);
+    });
+    await this.replay();
   }
 }
