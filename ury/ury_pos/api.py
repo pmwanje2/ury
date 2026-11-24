@@ -1013,6 +1013,13 @@ def getPosProfileFull(pos_profile):
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
+        "allow_rate_change": 1 if profile.get("allow_rate_change") else 0,
+        "custom_max_free_bill_prints": cint(profile.get("custom_max_free_bill_prints")) if profile.get("custom_max_free_bill_prints") is not None else 1,
+        "custom_max_free_closed_copies": cint(profile.get("custom_max_free_closed_copies") or 0),
+        "custom_service_charge_rate": flt(profile.get("custom_service_charge_rate") or 0),
+        "custom_service_charge_account": profile.get("custom_service_charge_account") or "",
+        "custom_tax_exempt_category": profile.get("custom_tax_exempt_category") or "",
+        "custom_tips_payable_account": profile.get("custom_tips_payable_account") or "",
         # one configured void reason per line; None on sites without the field
         "custom_void_reasons": profile.get("custom_void_reasons"),
         **get_default_customer_config(profile),

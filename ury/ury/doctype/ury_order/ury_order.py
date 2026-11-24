@@ -1387,15 +1387,19 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
         )
 
         if not item_price:
-            frappe.throw(
-                coded_message(
-                    "PRICE-NOT-VALID",
-                    _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
-                ),
-                frappe.ValidationError,
-            )
+            zero_ok = cint(frappe.db.get_value("Item", item_code, "custom_allow_zero_price")) == 1
+            if zero_ok:
+                item_price = frappe._dict(price_list_rate=0.0)
+            else:
+                frappe.throw(
+                    coded_message(
+                        "PRICE-NOT-VALID",
+                        _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
+                    ),
+                    frappe.ValidationError,
+                )
 
-        else:
+        if item_price:
             if not item_name or item_name == item_code:
                 item_name = frappe.db.get_value("Item", item_code, "item_name") or item_name or item_code
             department_warehouse = _department_warehouse_for_item(item_code, branch, company)
@@ -2174,11 +2178,13 @@ def _order_customer(invoice, profile, order_type, customer):
 
 
 def _validate_customer_change(invoice, customer):
-    """Allow replacing the customer on an open order, except for Aggregators.
+    """Allow replacing the customer on an open order, except for Aggregators or tax-exempt checks.
 
     A walk-in or provisional customer is routinely replaced with the real one
     before payment, and the server accepts that. An Aggregators order's customer
     is the aggregator itself and drives its price list, so it must not change.
+    A tax-exempt check's customer is bound to the exemption certificate and must
+    not change until the exemption is cleared and re-authorised.
     """
     if not getattr(invoice, "name", None):
         return
@@ -2186,6 +2192,18 @@ def _validate_customer_change(invoice, customer):
     current = getattr(invoice, "customer", None)
     if current and current != customer and getattr(invoice, "order_type", None) == "Aggregators":
         frappe.throw(_("The customer of an Aggregators order cannot be changed."))
+    if (
+        cint(invoice.get("custom_tax_exempt")) == 1
+        and (invoice.get("custom_tax_exempt_customer") or current)
+        and customer != (invoice.get("custom_tax_exempt_customer") or current)
+    ):
+        frappe.throw(
+            coded_message(
+                "TAX-EXEMPT-CUSTOMER-CHANGED",
+                _("Cannot change customer on a tax-exempt check. Clear the tax exemption and re-authorise for the new customer."),
+            ),
+            frappe.ValidationError,
+        )
 
 
 def _previous_line_snapshot(invoice_items):
@@ -2912,10 +2930,46 @@ def sync_order(
     if not append:
         invoice.items = []
     for source, item_dict in zip(items, priced_items, strict=True):
+        old_row = previous_rows.get(source.get("name")) if source.get("name") else None
         if source.get("name"):
             item_dict["name"] = source["name"]
+        # Preserve server-authorised price overrides, open items, and line comps across normal edits.
+        if old_row and (
+            cint(old_row.get("custom_price_overridden")) == 1
+            or cint(old_row.get("custom_is_open_item")) == 1
+            or cint(old_row.get("custom_is_complimentary")) == 1
+        ):
+            for preserved_field in (
+                "rate",
+                "price_list_rate",
+                "base_price_list_rate",
+                "discount_percentage",
+                "discount_amount",
+                "ignore_pricing_rule",
+                "custom_original_price_list_rate",
+                "custom_price_overridden",
+                "custom_price_override_reason",
+                "custom_price_override_approver",
+                "custom_is_open_item",
+                "custom_open_item_reference",
+                "custom_is_complimentary",
+                "custom_comp_type",
+                "custom_comp_reason",
+                "custom_comp_approver",
+                "item_tax_template",
+                "item_tax_rate",
+                "custom_efris_tax_category",
+            ):
+                if old_row.get(preserved_field) is not None:
+                    item_dict[preserved_field] = old_row.get(preserved_field)
+            if old_row.get("custom_is_open_item") and old_row.get("item_name"):
+                item_dict["item_name"] = old_row.get("item_name")
         item_dict["ury_held"] = cint(source.get("ury_held"))
         invoice.append("items", item_dict)
+
+    if flt(posprofile.get("custom_service_charge_rate")) > 0 and posprofile.get("custom_service_charge_account"):
+        from ury.ury_pos.pricing_actions import sync_service_charge
+        sync_service_charge(invoice, posprofile)
 
     if expected_total is not None:
         # Compare the server-priced, tax-inclusive total without reapplying profile defaults.
@@ -3450,6 +3504,7 @@ def _validate_additional_discount(additional_discount, pos_profile):
 
 def _set_settlement_customer(invoice, customer):
     if invoice.customer != customer:
+        _validate_customer_change(invoice, customer)
         invoice.customer = customer
         # Re-resolve party-specific fields through the native controller.
         invoice.customer_name = invoice.debit_to = invoice.party_account_currency = None
@@ -3928,6 +3983,14 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
     # POS Invoice.room_number; set before payments so its hooks can read it.
     incoming_room = str(room_number).strip() if room_number is not None else ""
+    if incoming_room and cint(invoice.get("custom_is_complimentary")) == 1:
+        frappe.throw(
+            coded_message(
+                "COMP-ROOM-CHARGE-FORBIDDEN",
+                _("A complimentary check cannot carry a room charge."),
+            ),
+            frappe.ValidationError,
+        )
     if incoming_room and frappe.get_meta("POS Invoice").has_field("room_number"):
         existing_room = (invoice.get("room_number") or "").strip()
         if existing_received_tenders and existing_room and existing_room != incoming_room:

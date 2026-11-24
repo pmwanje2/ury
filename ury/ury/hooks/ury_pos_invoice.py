@@ -19,6 +19,8 @@ def validate(doc, method):
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)
+    from ury.ury_pos.pricing_actions import validate_privileged_pricing_mutations
+    validate_privileged_pricing_mutations(doc, method)
 
 
 def before_submit(doc, method):
