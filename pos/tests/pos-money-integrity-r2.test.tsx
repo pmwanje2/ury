@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call, db, ownedSessionKey } from '@ury/core';
 import { initI18n } from '../src/i18n';
@@ -15,6 +15,8 @@ import PaymentDialog from '../src/components/PaymentDialog';
 import MergedBillPanel from '../src/components/MergedBillPanel';
 import SplitGroupPanel from '../src/components/SplitGroupPanel';
 import BillMergeDialog from '../src/components/BillMergeDialog';
+import POSOpeningScreen from '../src/components/POSOpeningScreen';
+import CaptainOrder from '../src/captain/pages/CaptainOrder';
 import Footer from '../src/components/Footer';
 import Header from '../src/components/Header';
 import { PrinterWatchProvider } from '../src/components/PrinterWatch';
@@ -776,5 +778,205 @@ describe('POS-PR-2 R2 hermetic checks', () => {
 
     walk(srcRoot);
     expect(offenders).toEqual([]);
+  });
+
+  it('CaptainOrder passes tillCurrency to BillSplitDialog so UGX checks never show USD', async () => {
+    vi.stubGlobal('frappe', { boot: { sysdefaults: { currency: 'USD' } } });
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury.doctype.ury_order.ury_order.get_table_order_context') {
+        return {
+          message: {
+            table: { name: 'K-101', restaurant_room: 'Main', is_take_away: 0 },
+            order: {
+              name: 'KBG-00016',
+              customer: 'Walk-in Guest',
+              customer_name: 'Walk-in Guest',
+              mobile_number: '',
+              custom_split_group: null,
+            },
+            assignment: null,
+            permissions: {
+              view: true,
+              modify: true,
+              reduce_items: true,
+              remove_items: true,
+              reprint_kot: false,
+              transfer_table: false,
+              transfer_captain: false,
+              print_bill: false,
+              split_bill: true,
+            },
+          },
+        };
+      }
+      if (method === 'ury.ury_pos.api.getRestaurantMenu') {
+        return { message: { items: [], modified_time: '', name: 'Menu' } };
+      }
+      return { message: {} };
+    });
+
+    usePOSStore.setState({
+      currency: 'USD',
+      posProfile: makeProfile({ name: 'Kampala UGX Till', currency: 'UGX', branch: 'Kampala Branch' }),
+      selectedOrderType: 'Dine In',
+      orderId: 'KBG-00016',
+      isUpdatingOrder: true,
+      orderLoading: true,
+      activeOrders: [
+        {
+          id: 'TILAPIA',
+          uniqueId: 'row-1',
+          invoiceItemName: 'row-1',
+          name: 'Grilled Tilapia',
+          price: 25000,
+          quantity: 1,
+          item: 'TILAPIA',
+        },
+        {
+          id: 'SODA',
+          uniqueId: 'row-2',
+          invoiceItemName: 'row-2',
+          name: 'Passion Juice',
+          price: 5000,
+          quantity: 1,
+          item: 'SODA',
+        },
+      ],
+      setSelectedTable: vi.fn(() => {
+        Promise.resolve().then(() => usePOSStore.setState({ orderLoading: false }));
+      }),
+      loadTableOrder: vi.fn(async () => {}),
+      clearTableOrder: vi.fn(),
+      isOrderInteractionDisabled: () => false,
+    });
+
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/order/K-101']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Routes>
+            <Route path="/order/:table" element={<CaptainOrder />} />
+          </Routes>
+        </MemoryRouter>,
+      ),
+    );
+
+    const actionsBtn = container.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    expect(actionsBtn).toBeTruthy();
+    await act(async () => actionsBtn!.click());
+
+    const splitBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      /Split bill/i.test(b.textContent || ''),
+    );
+    expect(splitBtn).toBeTruthy();
+    await act(async () => splitBtn!.click());
+
+    const dialogText = document.body.textContent || '';
+    expect(dialogText).toContain('UGX 25,000');
+    expect(dialogText).toContain('UGX 5,000');
+    expect(dialogText).toContain('UGX 30,000');
+    expect(dialogText).toContain('UGX 0');
+    expect(dialogText).not.toContain('USD 25,000');
+    expect(dialogText).not.toContain('USD 5,000');
+    expect(dialogText).not.toContain('USD 30,000');
+    expect(dialogText).not.toContain('USD 0');
+  });
+
+  it('guard: every BillSplitDialog, BillMergeDialog, SplitGroupPanel, and MergedBillPanel JSX call passes currency', () => {
+    const srcRoot = path.resolve(__dirname, '../src');
+    const offenders: string[] = [];
+    const targets = new Set(['BillSplitDialog', 'BillMergeDialog', 'SplitGroupPanel', 'MergedBillPanel']);
+
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === '__tests__') continue;
+          walk(full);
+          continue;
+        }
+        if (!/\.tsx$/.test(entry.name) || /\.(test|spec)\.tsx$/.test(entry.name)) continue;
+
+        const source = fs.readFileSync(full, 'utf8');
+        const re = /<(BillSplitDialog|BillMergeDialog|SplitGroupPanel|MergedBillPanel)\b/g;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(source)) !== null) {
+          if (!targets.has(match[1])) continue;
+          // Scan JSX opening tag attributes respecting nested braces and quotes.
+          let i = match.index + match[0].length;
+          let braceDepth = 0;
+          let inSingle = false;
+          let inDouble = false;
+          while (i < source.length) {
+            const ch = source[i];
+            if (inSingle) {
+              if (ch === '\\') { i += 2; continue; }
+              if (ch === "'") inSingle = false;
+            } else if (inDouble) {
+              if (ch === '\\') { i += 2; continue; }
+              if (ch === '"') inDouble = false;
+            } else if (ch === "'") {
+              inSingle = true;
+            } else if (ch === '"') {
+              inDouble = true;
+            } else if (ch === '{') {
+              braceDepth += 1;
+            } else if (ch === '}') {
+              braceDepth = Math.max(0, braceDepth - 1);
+            } else if (ch === '>' && braceDepth === 0) {
+              break;
+            }
+            i += 1;
+          }
+          const tagText = source.slice(match.index, i + 1);
+          if (!/\bcurrency\s*=/.test(tagText)) {
+            const line = source.slice(0, match.index).split('\n').length;
+            const rel = path.relative(path.resolve(__dirname, '..'), full);
+            offenders.push(`${rel}:${line} <${match[1]}>`);
+          }
+        }
+      }
+    };
+
+    walk(srcRoot);
+    expect(offenders).toEqual([]);
+  });
+
+  it('POSOpeningScreen formats UGX 0 and enables Open POS Session on a USD-default multi-company site', async () => {
+    vi.stubGlobal('frappe', { boot: { sysdefaults: { currency: 'USD' } } });
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.api.get_pos_opening_screen_data') {
+        return {
+          message: {
+            user: 'cashier_ugx@example.com',
+            user_full_name: 'Kampala Cashier',
+            company: 'Kampala Grill',
+            company_currency: 'UGX',
+            currency_symbol: 'USh',
+            allowed_profiles: [{ name: 'Kampala UGX Till', label: 'Kampala UGX Till' }],
+            selected_profile: 'Kampala UGX Till',
+            branch: 'Kampala Branch',
+            restaurant: 'Kampala Grill',
+            payment_modes: [{ mode_of_payment: 'Cash', opening_amount: 0 }],
+            daily_close_pending: false,
+            multi_cashier: { enabled: false, main_cashier_configured: false, main_cashier_open: false },
+            permissions: { create: true, submit: true },
+            open_entries: [],
+            occupied_entry: null,
+          },
+        };
+      }
+      return { message: {} };
+    });
+
+    await act(async () => root.render(<POSOpeningScreen />));
+    const text = container.textContent || '';
+    expect(text).toContain('Kampala Grill');
+    expect(text).toContain('Kampala UGX Till');
+    expect(text).toContain('UGX 0');
+    expect(text).not.toContain('USD 0');
+
+    const openBtn = button(/Open POS Session/i);
+    expect(openBtn).toBeTruthy();
+    expect(openBtn.disabled).toBe(false);
   });
 });

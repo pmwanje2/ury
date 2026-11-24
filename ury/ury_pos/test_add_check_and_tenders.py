@@ -445,5 +445,144 @@ class TestGetPosInvoiceItemsPayments(Loaded):
         self.assertEqual(payments, [])
 
 
+class TestPOSOpeningMultiCompanyCurrency(Loaded):
+    """R7 P1-2: get_pos_opening_screen_data must derive company, company_currency, currency_symbol,
+    and allowed_profiles from the cashier's branch POS Profile on multi-company sites even when
+    User Default Company is unset or points at another company (e.g. site-default USD company)."""
+
+    def setUp(self):
+        super().setUp()
+        self.frappe.session = SimpleNamespace(user="cashier_ugx@example.com")
+        self.frappe.has_permission.return_value = True
+        self.user_default_company = None
+        self.global_defaults = {}
+        self.frappe.defaults.get_user_default.side_effect = lambda key: (
+            self.user_default_company if key == "Company" else None
+        )
+        self.frappe.db.get_default.side_effect = lambda key: self.global_defaults.get(key)
+
+        self.ugx_profile = Profile(
+            name="Kampala UGX Till",
+            company="Kampala Grill",
+            branch="Kampala Branch",
+            restaurant="Kampala Grill",
+            warehouse="Stores - KG",
+            currency="UGX",
+            custom_enable_multiple_cashier=0,
+            custom_daily_pos_close=0,
+            applicable_for_users=[Row(user="cashier_ugx@example.com", custom_main_cashier=0)],
+            payments=[Row(mode_of_payment="Cash")],
+        )
+        self.usd_profile = Profile(
+            name="Lakeside USD Till",
+            company="Lakeside Hospitality",
+            branch="Lakeside Branch",
+            restaurant="Lakeside Grill",
+            warehouse="Stores - LH",
+            currency="USD",
+            custom_enable_multiple_cashier=0,
+            custom_daily_pos_close=0,
+            applicable_for_users=[Row(user="cashier_usd@example.com", custom_main_cashier=0)],
+            payments=[Row(mode_of_payment="Cash")],
+        )
+        self.companies = {
+            "Kampala Grill": Profile(name="Kampala Grill", default_currency="UGX"),
+            "Lakeside Hospitality": Profile(name="Lakeside Hospitality", default_currency="USD"),
+        }
+        self.currency_symbols = {"UGX": "USh", "USD": "$"}
+
+        def get_doc(doctype, name, *args, **kwargs):
+            if doctype == "POS Profile":
+                return {"Kampala UGX Till": self.ugx_profile, "Lakeside USD Till": self.usd_profile}[name]
+            if doctype == "Company":
+                return self.companies[name]
+            raise KeyError((doctype, name))
+
+        def get_all(doctype, filters=None, fields=None, **kwargs):
+            f = filters or {}
+            if doctype == "POS Profile":
+                return [
+                    {"name": p.name}
+                    for p in (self.ugx_profile, self.usd_profile)
+                    if p.company == f.get("company")
+                ]
+            if doctype == "POS Profile User":
+                parents = set(f["parent"][1]) if isinstance(f.get("parent"), list) else set()
+                rows = []
+                for p in (self.ugx_profile, self.usd_profile):
+                    if p.name in parents:
+                        for u in p.applicable_for_users:
+                            rows.append({"parent": p.name, "user": u.user})
+                return rows
+            return []
+
+        self.frappe.get_doc.side_effect = get_doc
+        self.frappe.get_all.side_effect = get_all
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            self.currency_symbols.get(name)
+            if dt == "Currency" and field == "symbol"
+            else ("Kampala Cashier" if dt == "User" and field == "full_name" else None)
+        )
+        self.enterContext(patch.object(
+            self.api,
+            "getPosProfile",
+            return_value={
+                "pos_profile": "Kampala UGX Till",
+                "branch": "Kampala Branch",
+                "company": "Kampala Grill",
+                "currency": "UGX",
+                "restaurant": "Kampala Grill",
+                "warehouse": "Stores - KG",
+                "cashier": "cashier_ugx@example.com",
+                "multiple_cashier": 0,
+                "custom_daily_pos_close": 0,
+            },
+        ))
+        self.enterContext(patch.object(self.api, "validate_pos_close", return_value="Success"))
+
+    def test_derives_company_currency_and_allowed_profiles_when_defaults_are_unset(self):
+        self.user_default_company = None
+        self.global_defaults = {}
+        data = self.api.get_pos_opening_screen_data()
+        self.assertEqual(data["company"], "Kampala Grill")
+        self.assertEqual(data["company_currency"], "UGX")
+        self.assertEqual(data["currency_symbol"], "USh")
+        self.assertEqual(data["selected_profile"], "Kampala UGX Till")
+        self.assertEqual(
+            data["allowed_profiles"],
+            [{"name": "Kampala UGX Till", "label": "Kampala UGX Till"}],
+        )
+
+    def test_prefers_branch_profile_company_and_ugx_over_site_default_usd_company(self):
+        self.user_default_company = "Lakeside Hospitality"
+        self.global_defaults = {"Company": "Lakeside Hospitality", "company": "Lakeside Hospitality"}
+        data = self.api.get_pos_opening_screen_data()
+        self.assertEqual(data["company"], "Kampala Grill")
+        self.assertEqual(data["company_currency"], "UGX")
+        self.assertEqual(data["currency_symbol"], "USh")
+        self.assertEqual(data["selected_profile"], "Kampala UGX Till")
+        self.assertEqual(
+            data["allowed_profiles"],
+            [{"name": "Kampala UGX Till", "label": "Kampala UGX Till"}],
+        )
+
+    def test_explicit_profile_retry_allowed_for_branch_company_and_refuses_forbidden_profile(self):
+        self.user_default_company = "Lakeside Hospitality"
+        data = self.api.get_pos_opening_screen_data(pos_profile="Kampala UGX Till")
+        self.assertEqual(data["company"], "Kampala Grill")
+        self.assertEqual(data["company_currency"], "UGX")
+        self.assertEqual(data["selected_profile"], "Kampala UGX Till")
+        with self.assertRaisesRegex(NotPermitted, r"OPENING-PROFILE-NOT-ALLOWED"):
+            self.api.get_pos_opening_screen_data(pos_profile="Lakeside USD Till")
+
+    def test_uses_selected_profile_currency_when_different_from_company_default(self):
+        self.companies["Kampala Grill"].default_currency = "USD"
+        self.ugx_profile.currency = "UGX"
+        data = self.api.get_pos_opening_screen_data()
+        self.assertEqual(data["company"], "Kampala Grill")
+        self.assertEqual(data["company_currency"], "UGX")
+        self.assertEqual(data["currency_symbol"], "USh")
+
+
 if __name__ == "__main__":
     unittest.main()

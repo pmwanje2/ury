@@ -206,7 +206,9 @@ class Check:
         setattr(self, key, value)
 
     def append(self, key, row):
-        getattr(self, key).append(Row(row))
+        entry = Row(row)
+        getattr(self, key).append(entry)
+        return entry
 
     def save(self, **kwargs):
         self.saved += 1
@@ -823,6 +825,196 @@ class TestOfflinePosUtilsMultiCompanyFiscalYear(unittest.TestCase):
             self.assertTrue(callable(ensure_fn), "_ensure_company_fiscal_year missing from offline_pos_utils.py")
             ensure_fn("URY", date(2026, 11, 24))
         self.assertEqual(saved, [("2026", ["Lakeside Hospitality", "URY"])])
+
+
+class TestSelfOrderingSiteLessAndGatewayPin(unittest.TestCase):
+    """R7 P0-1 & P0-2: self_ordering must import cleanly under minimal site-less frappe.utils
+    stubs (no nowdate attribute) and must block opening a second gateway after a Paid Phone PR."""
+
+    def _load_self_ordering(self, *, include_nowdate=False):
+        from datetime import datetime
+
+        framework = MagicMock()
+        framework.ValidationError = Refused
+        framework.PermissionError = PermissionError
+        framework.DoesNotExistError = DoesNotExist
+        framework.QueryDeadlockError = RuntimeError
+        framework.QueryTimeoutError = TimeoutError
+        framework._ = lambda msg, *a, **k: msg
+        framework.whitelist = lambda *a, **k: (lambda fn: fn)
+        framework.session = SimpleNamespace(user="Guest")
+        framework.set_user.side_effect = lambda u: setattr(framework.session, "user", u)
+        framework.flags = SimpleNamespace()
+        framework.throw.side_effect = lambda msg, exc=Refused, **kw: (_ for _ in ()).throw(exc(msg))
+
+        utils = _stub(
+            "frappe.utils",
+            add_to_date=MagicMock(),
+            cint=lambda v: int(v or 0),
+            flt=lambda v, precision=None: round(float(v or 0), precision) if precision is not None else float(v or 0),
+            now_datetime=lambda: datetime(2026, 11, 24, 10, 30, 0),
+            getdate=lambda v=None: v,
+        )
+        if include_nowdate:
+            utils.nowdate = lambda: "2026-11-25"
+        framework.utils = utils
+
+        rate_limiter = _stub("frappe.rate_limiter", rate_limit=lambda **kw: (lambda fn: fn))
+        pos_api = _stub("ury.ury_pos.api", resolve_restaurant_menu=MagicMock())
+        ury_order = _stub(
+            "ury.ury.doctype.ury_order.ury_order",
+            _resolve_or_create_pos_invoice=MagicMock(),
+            _ensure_invoice_reservation_ref=MagicMock(),
+            _kitchen_snapshot=MagicMock(),
+            get_menu_name=MagicMock(),
+            get_restaurant_and_menu_name=MagicMock(),
+            invoice_pricing_date=MagicMock(),
+            price_items_for_invoice=MagicMock(),
+        )
+        item_price = _stub("ury.ury.api.item_price", item_price_release_states=MagicMock(), price_valid_on=MagicMock())
+        avail = _stub(
+            "ury.ury.api.ury_availability",
+            _batch_availability=MagicMock(),
+            _catalog_gate=MagicMock(),
+            apply_count_delta=MagicMock(),
+        )
+        kot = _stub("ury.ury.api.ury_kot_generate", _execute_kot=MagicMock())
+        res_svc = _stub("ury.ury.api.ury_order_reservation_service", reconcile_order_reservations=MagicMock())
+        stock_policy = _stub("ury.ury.api.ury_stock_policy", get_branch_stock_policy=MagicMock())
+
+        modules = {
+            "frappe": framework,
+            "frappe.utils": utils,
+            "frappe.rate_limiter": rate_limiter,
+            "ury.ury_pos.api": pos_api,
+            "ury.ury.doctype.ury_order.ury_order": ury_order,
+            "ury.ury.api.item_price": item_price,
+            "ury.ury.api.ury_availability": avail,
+            "ury.ury.api.ury_kot_generate": kot,
+            "ury.ury.api.ury_order_reservation_service": res_svc,
+            "ury.ury.api.ury_stock_policy": stock_policy,
+        }
+        self.enterContext(patch.dict(sys.modules, modules))
+        spec = importlib.util.spec_from_file_location("ury.ury.api.self_ordering", APP / "api" / "self_ordering.py")
+        mod = importlib.util.module_from_spec(spec)
+        self.enterContext(patch.dict(sys.modules, {"ury.ury.api.self_ordering": mod}))
+        spec.loader.exec_module(mod)
+        return framework, mod
+
+    def test_self_ordering_imports_without_nowdate_on_frappe_utils_and_sets_unapplied_pe_dates(self):
+        """R7 P0-1: site-less frappe.utils test stubs without nowdate must still import self_ordering
+        cleanly, and _record_unapplied_late_phone_receipt must populate posting_date & reference_date."""
+        for include_nowdate, expected_date in ((False, "2026-11-24"), (True, "2026-11-25")):
+            with self.subTest(include_nowdate=include_nowdate):
+                framework, mod = self._load_self_ordering(include_nowdate=include_nowdate)
+                framework.db.exists.return_value = False
+                framework.db.get_value.return_value = "UGX"
+                framework.get_all.return_value = []
+                created_pe = Row(name="PE-LATE-1", insert=MagicMock(), submit=MagicMock())
+                created_notes = []
+
+                def new_doc(dt):
+                    if dt == "Payment Entry":
+                        return created_pe
+                    note = Row(insert=MagicMock())
+                    created_notes.append((dt, note))
+                    return note
+
+                framework.new_doc.side_effect = new_doc
+                pr = Row(
+                    name="PR-LATE-1",
+                    company="Kampala Grill",
+                    currency="UGX",
+                    mode_of_payment="Online Mobile Money",
+                    payment_account="MoMo - KG",
+                    party="Walk-in",
+                    party_name="Walk-in",
+                )
+                inv = Row(
+                    name="KBG-00010",
+                    company="Kampala Grill",
+                    currency="UGX",
+                    debit_to="Debtors - KG",
+                    customer="Walk-in",
+                    customer_name="Walk-in",
+                )
+                pe_name = mod._record_unapplied_late_phone_receipt(pr, inv, 19100.0, "already settled")
+                self.assertEqual(pe_name, "PE-LATE-1")
+                self.assertEqual(created_pe.posting_date, expected_date)
+                self.assertEqual(created_pe.reference_date, expected_date)
+
+    def test_paid_phone_request_blocks_second_gateway_after_default_changes_siteless(self):
+        """R7 P0-2: once a check has a Paid Phone Payment Request on gateway A, changing the
+        company/profile default gateway to gateway B after order growth must NOT open a second PR."""
+        framework, mod = self._load_self_ordering(include_nowdate=True)
+        session = SimpleNamespace(name="SESS-1", invoice="POS-INV-1", ordering_profile="Prof-1")
+        profile = SimpleNamespace(
+            enable_customer_payment=1, enable_payment_link=0, pos_profile="Till A"
+        )
+        invoice = Check(
+            name="POS-INV-1",
+            docstatus=0,
+            company="URY",
+            currency="USD",
+            grand_total=200.0,
+            rounded_total=200.0,
+            outstanding_amount=0.0,
+            payments=[
+                Row(
+                    mode_of_payment="P2 Phone",
+                    account="P2 Test - URY",
+                    type="Phone",
+                    amount=100.0,
+                    reference_no="PR-PAID-1",
+                    custom_tender_received=1,
+                )
+            ],
+        )
+        invoice.precision = lambda field: 2
+        framework.get_doc.side_effect = lambda dt, name=None, **kw: (
+            profile if dt == "URY Self Ordering Profile" else invoice
+        )
+        framework.db.get_value.return_value = None
+        paid_pr = Row(
+            name="PR-PAID-1",
+            currency="USD",
+            grand_total=100.0,
+            outstanding_amount=0.0,
+            status="Paid",
+            payment_gateway_account="P2 Test - URY",
+            mode_of_payment="P2 Phone",
+        )
+        framework.get_all.side_effect = lambda dt, filters=None, **kw: (
+            [paid_pr]
+            if dt == "Payment Request"
+            and isinstance((filters or {}).get("status"), list)
+            and filters["status"][0] == "in"
+            else []
+        )
+        make_pr = MagicMock(side_effect=AssertionError("must not open second gateway Payment Request"))
+        pr_mod = _stub("erpnext.accounts.doctype.payment_request.payment_request", make_payment_request=make_pr)
+        self.enterContext(patch.dict(sys.modules, {
+            "erpnext.accounts.doctype.payment_request.payment_request": pr_mod,
+        }))
+        self.enterContext(patch.object(mod, "_resolve_session", return_value=session))
+        self.enterContext(patch.object(mod, "_limit_guest_session"))
+        self.enterContext(patch.object(
+            mod,
+            "_phone_gateway",
+            return_value=(
+                Row(name="P2 Preferred - URY", payment_account="P2 Preferred Acc - URY"),
+                "P2 Preferred",
+                "P2 Preferred Acc - URY",
+            ),
+        ))
+
+        res = mod.create_payment_request("session-token")
+        make_pr.assert_not_called()
+        self.assertEqual(
+            (res["payment_request"], res["status"], res["payment_url"]),
+            ("PR-PAID-1", "Paid", None),
+        )
+        self.assertEqual((res["paid_amount"], res["remaining_amount"]), (100.0, 100.0))
 
 
 if __name__ == "__main__":

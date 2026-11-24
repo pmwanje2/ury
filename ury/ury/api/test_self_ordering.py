@@ -1915,6 +1915,73 @@ class TestCreatePaymentRequest(unittest.TestCase):
         self.assertEqual(invoice.payments[1].reference_no, "PR-PAID-1")
         self.assertEqual(invoice.payments[1].custom_tender_received, 1)
 
+    @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
+    @patch(f"{MOD}.frappe.get_all")
+    @patch(f"{MOD}.frappe.db.get_value")
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._phone_gateway")
+    @patch(f"{MOD}._resolve_session")
+    @patch(f"{MOD}.frappe.set_user")
+    def test_create_payment_request_blocks_second_gateway_after_default_changes(
+        self,
+        mock_set_user,
+        mock_resolve_session,
+        mock_phone_gateway,
+        mock_get_doc,
+        mock_db_get_value,
+        mock_get_all,
+        mock_make_pr,
+    ):
+        """R7 P0-2: if a Paid Phone PR exists on gateway A and the default gateway changes to B
+        before the grown check requests payment again, keep the check blocked on gateway A."""
+        session = MagicMock(name="SESS-GW", invoice="POS-INV-GW", ordering_profile="Profile A")
+        session.name = "SESS-GW"
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock(enable_customer_payment=1, enable_payment_link=0, pos_profile="Till A")
+        mock_phone_gateway.return_value = (
+            frappe._dict(name="P2 Preferred - URY", payment_account="P2 Preferred - URY"),
+            "P2 Preferred",
+            "P2 Preferred - URY",
+        )
+
+        invoice = MagicMock(docstatus=0, name="POS-INV-GW", company="URY", currency="USD", payments=[])
+        invoice.get.side_effect = lambda key, default=None: {
+            "grand_total": 200.0,
+            "rounded_total": 200.0,
+            "outstanding_amount": 0.0,
+        }.get(key, default)
+        invoice.precision.return_value = 2
+        mock_get_doc.side_effect = lambda dt, name=None, **kw: (
+            profile if dt == "URY Self Ordering Profile" else invoice
+        )
+        mock_db_get_value.return_value = None
+
+        paid_pr = frappe._dict(
+            name="PR-PAID-OLD",
+            currency="USD",
+            grand_total=100.0,
+            outstanding_amount=0.0,
+            status="Paid",
+            payment_gateway_account="P2 Test - URY",
+            mode_of_payment="P2 Phone",
+        )
+        mock_get_all.side_effect = lambda doctype, filters=None, **kw: (
+            [paid_pr]
+            if doctype == "Payment Request"
+            and isinstance((filters or {}).get("status"), list)
+            and filters["status"][0] == "in"
+            else []
+        )
+
+        res = create_payment_request("session-token")
+        mock_make_pr.assert_not_called()
+        self.assertEqual(
+            (res["payment_request"], res["status"], res["payment_url"]),
+            ("PR-PAID-OLD", "Paid", None),
+        )
+        self.assertEqual((res["paid_amount"], res["remaining_amount"]), (100.0, 100.0))
+
 
 class TestSharePaymentLink(unittest.TestCase):
     def tearDown(self):
