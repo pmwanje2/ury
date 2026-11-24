@@ -2516,6 +2516,8 @@ def sync_order(
     captured_at=None,
     offline_printed=0,
     expected_total=None,
+    approval_token=None,
+    void_reason=None,
 ):
     # None keeps the order's label; any string, blank included, replaces it
     clear_guest_label = guest_label is not None and not str(guest_label).strip()
@@ -2747,30 +2749,89 @@ def sync_order(
 
     # Authorize before changing headers, payments or lines. Reducing a sent
     # dish+note quantity emits a kitchen cancellation even if the dish total
-    # stays unchanged. Match the KOT identity and existing remove_items flag;
-    # additions and append-only rounds do not remove the sent baseline.
-    if not append and past_item and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+    # stays unchanged. Unsent held items (`ury_held=1`) are always freely
+    # editable/removable even when `remove_items=0` (Amendment 1 + R2 P1 #9).
+    if not append and past_item:
         requested_qty_by_item = {}
-        for item in items:
-            code = item.get("item")
-            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
+        for item in _kitchen_snapshot(items):
+            code = item["item_code"]
+            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item["qty"])
         previous_qty_by_item = {}
-        for item in past_item:
+        for item in _kitchen_snapshot(past_item):
             code = item["item_code"]
             previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
+
         def sent_quantities(rows):
             totals = defaultdict(float)
             for row in _kitchen_snapshot(rows):
-                totals[row["item_code"], row["comments"], row.get("reservation_line_key")] += row["qty"]
+                totals[(row["item_code"], row["comments"], row.get("reservation_line_key") or "")] += row["qty"]
             return totals
 
         sent_before, sent_after = sent_quantities(past_item), sent_quantities(items)
-        if (any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items())
-                or any(sent_after.get(key, 0) < qty for key, qty in sent_before.items())):
-            frappe.throw(
-                _("You are not permitted to reduce or remove items from this order."),
-                frappe.PermissionError,
-            )
+        rate_by_key = {}
+        rate_by_item = {}
+        for inv_row in invoice.items or []:
+            if cint(inv_row.get("ury_held")):
+                continue
+            r_val = flt(inv_row.get("rate") or 0)
+            if inv_row.get("reservation_line_key"):
+                rate_by_key[inv_row.get("reservation_line_key")] = r_val
+            if inv_row.get("item_code") and inv_row.get("item_code") not in rate_by_item:
+                rate_by_item[inv_row.get("item_code")] = r_val
+
+        void_lines = []
+        voided_amount = 0.0
+        for key in sorted(sent_before.keys()):
+            before_qty = flt(sent_before[key])
+            after_qty = flt(sent_after.get(key, 0.0))
+            if after_qty < before_qty:
+                code, _note, line_key = key
+                delta_qty = before_qty - after_qty
+                unit_rate = rate_by_key.get(line_key, rate_by_item.get(code, 0.0))
+                voided_amount += unit_rate * delta_qty
+                void_lines.append({
+                    "item_code": code,
+                    "reservation_line_key": line_key,
+                    "from_qty": before_qty,
+                    "to_qty": after_qty,
+                    "delta": delta_qty,
+                })
+        voided_amount = round(voided_amount, 4)
+
+        any_total_reduced = any(
+            requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items()
+        )
+        if void_lines or any_total_reduced:
+            from ury.ury_pos import override
+
+            if void_lines:
+                claim = {
+                    "action": "sync_order_void_sent_item",
+                    "lines": void_lines,
+                    "amount": voided_amount,
+                    "reason": (void_reason or "").strip(),
+                }
+                if approval_token:
+                    approval = override.consume(
+                        approval_token, "void_sent_item", pos_profile, invoice.name, claim
+                    )
+                    override.mark_verified_approval(invoice, "void_sent_item", approval)
+                elif override.may_perform(
+                    frappe.session.user, pos_profile, "void_sent_item", amount=voided_amount
+                ):
+                    override._validate_reason(pos_profile, "void_sent_item", claim)
+                    override.mark_verified_approval(invoice, "void_sent_item")
+                else:
+                    frappe.throw(
+                        _("You are not permitted to reduce or remove items from this order without manager approval.")
+                        + " [POS-AUTH-REQUIRED]",
+                        frappe.PermissionError,
+                    )
+            elif not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+                frappe.throw(
+                    _("You are not permitted to reduce or remove items from this order."),
+                    frappe.PermissionError,
+                )
 
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
@@ -2948,21 +3009,29 @@ def sync_order(
     except Exception as e:
         frappe.throw(f"Error while updating order: {e}")   
 
-    try:
-        kot_execute(
-            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), invoice.custom_comments,
-            offline_printed=offline_printed,
-        )
-    except Exception as e:
-        # KOT creation/routing failing is not a side detail to swallow: a
-        # customer must never be charged for an item the kitchen never
-        # receives. Log for diagnostics, then re-raise so the whole request
-        # (including the invoice.save() above) rolls back and the caller
-        # sees a real failure instead of a silently accepted order.
-        # See sa-post-373-review-fixes Blocker 2.
-        error_msg = f"KOT Creation Failed: {str(e)}"
-        frappe.log_error(error_msg, "KOT Error")
-        frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
+    current_kitchen = _kitchen_snapshot(items)
+    previous_kitchen = [] if append else _kitchen_snapshot(past_item)
+    held_only_edit = (
+        not append
+        and current_kitchen == previous_kitchen
+        and (any(cint(row.get("ury_held")) for row in past_item) or any(cint(row.get("ury_held")) for row in items))
+    )
+    if not held_only_edit:
+        try:
+            kot_execute(
+                invoice.name, customer, table, current_kitchen, previous_kitchen, invoice.custom_comments,
+                offline_printed=offline_printed,
+            )
+        except Exception as e:
+            # KOT creation/routing failing is not a side detail to swallow: a
+            # customer must never be charged for an item the kitchen never
+            # receives. Log for diagnostics, then re-raise so the whole request
+            # (including the invoice.save() above) rolls back and the caller
+            # sees a real failure instead of a silently accepted order.
+            # See sa-post-373-review-fixes Blocker 2.
+            error_msg = f"KOT Creation Failed: {str(e)}"
+            frappe.log_error(error_msg, "KOT Error")
+            frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
 
     # table status
     if invoice.invoice_printed == 0:
