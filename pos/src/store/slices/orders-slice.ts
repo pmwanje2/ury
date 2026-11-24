@@ -8,6 +8,7 @@ import { searchPosInvoice } from '../../lib/invoice-api';
 
 export interface POSInvoice {
   branch?: string;
+  currency?: string;
   ury_client_order_id?: string | null;
   name: string;
   invoice_printed: number;
