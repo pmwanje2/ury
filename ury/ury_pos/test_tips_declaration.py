@@ -506,6 +506,18 @@ class TestTipsDeclaration(unittest.TestCase):
         self.assertIn("TIPS-PAYROLL-ALREADY-CREATED", str(ctx.exception))
         self.assertEqual(len(store.additional_salaries), 1)
 
+    def test_child_doctype_ignores_personal_user_permissions(self):
+        import json
+        from pathlib import Path
+
+        dt_path = Path(__file__).resolve().parents[1] / "ury" / "doctype" / "pos_tip_declaration" / "pos_tip_declaration.json"
+        spec = json.loads(dt_path.read_text(encoding="utf-8"))
+        fields = {f["fieldname"]: f for f in spec["fields"]}
+        self.assertEqual(fields["user"].get("ignore_user_permissions"), 1)
+        self.assertEqual(fields["employee"].get("ignore_user_permissions"), 1)
+        # Never link directly to HRMS Additional Salary so non-HRMS sites stay valid
+        self.assertEqual(fields["custom_additional_salary_ref"].get("fieldtype"), "Data")
+
 
 if __name__ == "__main__":
     unittest.main()

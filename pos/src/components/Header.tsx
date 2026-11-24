@@ -12,6 +12,8 @@ import {
   Lock,
   Wallet,
   KeyRound,
+  Calendar,
+  FileText,
 } from 'lucide-react';
 import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
@@ -26,6 +28,9 @@ import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
 import TillCashDialog from './TillCashDialog';
 import ApprovalPinDialog from './ApprovalPinDialog';
+import OutletSwitcher from './OutletSwitcher';
+import TimeclockButton from './TimeclockButton';
+import ShiftReportDialog from './ShiftReportDialog';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'Maximus POS', logo: '/assets/ury/Images/maximus-mark.svg' });
@@ -43,9 +48,12 @@ const Header = () => {
   const [showPairTablet, setShowPairTablet] = useState(false);
   const [showTillCash, setShowTillCash] = useState(false);
   const [showApprovalPin, setShowApprovalPin] = useState(false);
+  const [showShiftReport, setShowShiftReport] = useState(false);
   const [canManagePins, setCanManagePins] = useState(false);
   const posProfileName = posProfile?.name;
   const cashMovementsEnabled = Number(posProfile?.enable_cash_movements) === 1;
+  const activeBusinessDate = posProfile?.active_business_date || null;
+  const shiftReportAvailable = Boolean(posProfile?.shift_report_available);
 
   // Floor tablet setup follows native POS Profile write permission; fail closed.
   useEffect(() => {
@@ -178,7 +186,45 @@ const Header = () => {
         )}
 
         {/* Right side actions */}
-        <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
+          {/* G43: Session-scoped multi-outlet switcher (hidden when <=1 outlet) */}
+          <OutletSwitcher disabled={outbox.offline || outbox.replaying} />
+
+          {/* G44: Operational Business Date badge (hidden when siteops#8609 absent) */}
+          {activeBusinessDate && (
+            shiftReportAvailable ? (
+              <button
+                type="button"
+                data-testid="business-date-badge"
+                onClick={() => setShowShiftReport(true)}
+                disabled={outbox.offline || outbox.replaying}
+                title={t('header.business_date_badge', { date: activeBusinessDate })}
+                aria-label={t('header.business_date_badge', { date: activeBusinessDate })}
+                className="inline-flex items-center gap-1 h-7 px-2 rounded-md border border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100 text-xs font-medium shrink-0"
+              >
+                <Calendar className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden md:inline">{t('header.business_date_badge', { date: activeBusinessDate })}</span>
+                <span className="md:hidden">{activeBusinessDate}</span>
+              </button>
+            ) : (
+              <span
+                data-testid="business-date-badge"
+                title={t('header.business_date_badge', { date: activeBusinessDate })}
+                className="inline-flex items-center gap-1 h-7 px-2 rounded-md border border-border bg-gray-50 text-gray-700 text-xs font-medium shrink-0"
+              >
+                <Calendar className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden md:inline">{t('header.business_date_badge', { date: activeBusinessDate })}</span>
+                <span className="md:hidden">{activeBusinessDate}</span>
+              </span>
+            )
+          )}
+
+          {/* G36: POS employee clock-in/out pill (hidden when HR attendance absent) */}
+          <TimeclockButton
+            posProfile={posProfileName}
+            disabled={outbox.offline || outbox.replaying}
+          />
+
           {cashMovementsEnabled && (
             <Button
               type="button"
@@ -216,6 +262,17 @@ const Header = () => {
                   <p className="text-sm text-gray-500">{user?.name || ''}</p>
                 </div>
                 <div className="py-2">
+                  {shiftReportAvailable && (
+                    <Button
+                      variant="ghost"
+                      className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                      disabled={outbox.offline || outbox.replaying}
+                      onClick={() => { setShowUserMenu(false); setShowShiftReport(true); }}
+                    >
+                      <FileText className="w-4 h-4 me-3" />
+                      {t('header.shift_report')}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
@@ -287,6 +344,14 @@ const Header = () => {
     </header>
     {cashMovementsEnabled && posProfileName && (
       <TillCashDialog open={showTillCash} onOpenChange={setShowTillCash} />
+    )}
+    {shiftReportAvailable && posProfileName && (
+      <ShiftReportDialog
+        open={showShiftReport}
+        onOpenChange={setShowShiftReport}
+        posProfile={posProfileName}
+        posOpeningEntry={posProfile?.active_opening_entry}
+      />
     )}
     <ApprovalPinDialog
       open={showApprovalPin}

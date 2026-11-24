@@ -26,6 +26,10 @@ def before_submit(doc, method):
     # Either invoice mode: the shift's cash movements are decided and a cash
     # difference has the till's Over/Short account.
     validate_closing_cash(doc)
+    # G38: validate server tip declarations (zero impact on cash drawer variance).
+    from ury.ury_pos.tips_declaration import validate_tip_declarations
+
+    validate_tip_declarations(doc)
     if not _is_pos_invoice_mode():
         return
 

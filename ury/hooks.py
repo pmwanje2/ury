@@ -848,6 +848,12 @@ fixtures = [
                     "Sales Invoice Payment-custom_tender_received",
                     "POS Profile-custom_override_max_attempts",
                     "POS Profile-custom_override_lock_minutes",
+                    "POS Profile-custom_require_clock_in_to_order",
+                    "POS Profile-custom_block_clock_out_with_open_work",
+                    "POS Profile-custom_require_tip_declaration",
+                    "POS Profile-custom_tips_salary_component",
+                    "POS Closing Entry-custom_tip_declarations_section",
+                    "POS Closing Entry-custom_tip_declarations",
                 },
             ]
         ],

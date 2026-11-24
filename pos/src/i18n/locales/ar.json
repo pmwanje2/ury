@@ -65,7 +65,9 @@
     "pair_tablet": "إقران هذا الجهاز اللوحي",
     "staff_pins": "أرقام PIN للموظفين",
     "till_cash": "نقد الصندوق",
-    "my_approval_pin": "رقم PIN للموافقة الخاص بي"
+    "my_approval_pin": "رقم PIN للموافقة الخاص بي",
+    "business_date_badge": "تاريخ العمل: {{date}}",
+    "shift_report": "تقرير الوردية X / Z"
   },
   "menu": {
     "manage_availability": "إدارة التوفر",
@@ -294,7 +296,18 @@
     "over_short_reason_label": "سبب الزيادة أو العجز النقدي",
     "over_short_reason_placeholder": "اشرح فرق النقد قبل الإغلاق",
     "over_short_reason_required": "أدخل سبباً لفرق النقد الذي يتجاوز {{tolerance}}.",
-    "on_account": "على الحساب"
+    "on_account": "على الحساب",
+    "tips_section_title": "إقرار الإكراميات (الإكراميات النقدية المباشرة)",
+    "tips_section_note": "تُسجَّل الإكراميات النقدية المباشرة للرواتب والتقارير فقط ولا تغيّر النقد المتوقع في الصندوق.",
+    "tip_server": "النادل",
+    "tip_charged": "إكراميات البطاقة",
+    "tip_paid_from_till": "المدفوع من الصندوق",
+    "tip_net_payable": "الصافي المستحق",
+    "tip_declared_cash": "الإكراميات النقدية المصرَّح بها",
+    "tip_remarks": "ملاحظات",
+    "tip_remarks_placeholder": "ملاحظة اختيارية",
+    "declared_cash_tips_for": "الإكراميات النقدية المصرَّح بها لـ {{name}}",
+    "tip_declaration_required": "أدخل الإكراميات النقدية المصرَّح بها (أدخل 0 إذا لم توجد) لكل نادل قبل إغلاق الوردية."
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -1152,5 +1165,48 @@
     "cleared": "تم مسح رقم PIN للموافقة لـ {{name}}.",
     "clear_failed": "تعذر مسح رقم PIN للموافقة هذا.",
     "error_wrong_password": "كلمة المرور الحالية غير مطابقة. تبقى جلسة الصندوق الخاصة بك نشطة."
+  },
+  "timeclock": {
+    "clock_in": "تسجيل الدخول",
+    "clock_out_pill": "دخول {{time}} · تسجيل الخروج",
+    "clock_in_title": "تسجيل بدء الدوام",
+    "clock_out_title": "تسجيل انتهاء الدوام",
+    "clock_in_description": "سجّل وقت بدء ورديتك.",
+    "clock_out_description": "سجّل وقت انتهاء ورديتك.",
+    "staff_label": "الموظف",
+    "shift_label": "الوردية",
+    "clocked_in_since": "مسجّل الدخول منذ",
+    "no_employee_notice": "لا يوجد ملف موظف نشط مرتبط بحسابك لهذه الشركة.",
+    "open_work_warning": "لا يزال لديك عمل مفتوح في نقطة البيع هذه.",
+    "open_checks_count": "{{count}} فاتورة مفتوحة",
+    "open_shift_active": "وردية الصندوق لا تزال مفتوحة",
+    "confirm_clock_in": "تأكيد تسجيل الدخول",
+    "confirm_clock_out": "تأكيد تسجيل الخروج",
+    "saving": "جارٍ الحفظ...",
+    "clocked_in_toast": "تم تسجيل الدخول بنجاح.",
+    "clocked_out_toast": "تم تسجيل الخروج بنجاح.",
+    "punch_failed": "تعذر تسجيل وقت الدوام."
+  },
+  "outlets": {
+    "select_outlet_title": "اختر نقطة البيع",
+    "select_outlet_description": "اختر نقطة البيع التي تريد العمل عليها في هذه الجلسة.",
+    "open_shift_badge": "وردية مفتوحة",
+    "discard_cart_title": "إلغاء السلة الحالية؟",
+    "discard_cart_description": "التبديل إلى {{outlet}} سيمسح {{count}} عنصرًا في السلة الحالية.",
+    "discard_cart_warning": "لديك {{count}} عنصرًا غير مرسل في السلة. التبديل إلى {{outlet}} سيؤدي إلى مسحها.",
+    "discard_and_switch": "مسح والتبديل",
+    "switching": "جارٍ التبديل...",
+    "switch_failed": "تعذر تبديل نقطة البيع."
+  },
+  "shift_report": {
+    "x_report_title": "تقرير X (منتصف الوردية)",
+    "z_report_title": "تقرير Z (إغلاق الوردية)",
+    "description": "ملخص للقراءة فقط للوردية النشطة وتاريخ العمل.",
+    "loading": "جارٍ تحميل تقرير الوردية...",
+    "load_failed": "تعذر تحميل تقرير الوردية.",
+    "unavailable": "تقارير الوردية X/Z غير مفعَّلة على هذا الموقع.",
+    "no_open_shift": "لم يتم العثور على وردية مفتوحة نشطة لنقطة البيع هذه.",
+    "no_rows": "لا توجد معاملات مسجلة لهذه الوردية بعد.",
+    "print": "طباعة التقرير"
   }
 }

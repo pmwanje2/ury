@@ -1,6 +1,7 @@
 import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
+import type { AvailableOutlet } from './outlet-api';
 
 export interface PaymentModeMeta {
   type: string;
@@ -56,6 +57,20 @@ export interface PosProfileLimited {
   room_charge_unconfigured?: boolean;
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
   efris_print_wait_seconds?: number;
+  /** G36: optional clock-in enforcement flags. */
+  require_clock_in_to_order?: number;
+  block_clock_out_with_open_work?: number;
+  /** G38: optional shift-close tip declaration enforcement flag. */
+  require_tip_declaration?: number;
+  /** G43: multi-outlet bootstrap selection state. */
+  requires_outlet_selection?: boolean;
+  available_outlets?: AvailableOutlet[];
+  available_outlets_count?: number;
+  /** G44: active shift business date & Shift X/Z report availability. */
+  active_opening_entry?: string | null;
+  active_business_date?: string | null;
+  shift_report_available?: boolean;
+  shift_z_print_format_available?: boolean;
 }
 
 export interface PosProfileLimitedResponse {
@@ -118,6 +133,13 @@ export interface PosProfileFull {
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   efris_print_wait_seconds?: number;
+  require_clock_in_to_order?: number;
+  block_clock_out_with_open_work?: number;
+  require_tip_declaration?: number;
+  active_opening_entry?: string | null;
+  active_business_date?: string | null;
+  shift_report_available?: boolean;
+  shift_z_print_format_available?: boolean;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -157,6 +179,14 @@ export interface PosProfileCombined extends PosProfileFull {
   room_charge_modes?: string[];
   room_charge_unconfigured?: boolean;
   efris_print_wait_seconds?: number;
+  require_clock_in_to_order?: number;
+  block_clock_out_with_open_work?: number;
+  require_tip_declaration?: number;
+  available_outlets_count?: number;
+  active_opening_entry?: string | null;
+  active_business_date?: string | null;
+  shift_report_available?: boolean;
+  shift_z_print_format_available?: boolean;
 }
 
 export interface Currency {
@@ -240,9 +270,93 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
     efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    require_clock_in_to_order: Number(limitedProfile.require_clock_in_to_order ?? fullProfile.require_clock_in_to_order ?? 0),
+    block_clock_out_with_open_work: Number(limitedProfile.block_clock_out_with_open_work ?? fullProfile.block_clock_out_with_open_work ?? 1),
+    require_tip_declaration: Number(limitedProfile.require_tip_declaration ?? fullProfile.require_tip_declaration ?? 0),
+    available_outlets_count: limitedProfile.available_outlets_count,
+    active_opening_entry: limitedProfile.active_opening_entry ?? fullProfile.active_opening_entry ?? null,
+    active_business_date: limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
+    shift_report_available: Boolean(limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false),
+    shift_z_print_format_available: Boolean(limitedProfile.shift_z_print_format_available ?? fullProfile.shift_z_print_format_available ?? false),
   };
 
   return combinedProfile;
+}
+
+export interface PosProfileBootstrapResult {
+  requiresOutletSelection: boolean;
+  availableOutlets: AvailableOutlet[];
+  profile: PosProfileCombined | null;
+}
+
+export async function getPosProfileOrSelection(): Promise<PosProfileBootstrapResult> {
+  const limitedProfile = await getPosProfileLimitedFields();
+  if (limitedProfile?.requires_outlet_selection) {
+    return {
+      requiresOutletSelection: true,
+      availableOutlets: limitedProfile.available_outlets ?? [],
+      profile: null,
+    };
+  }
+  const fullProfile = await getPosProfileFull(limitedProfile.pos_profile);
+  const enablePaymentWithoutPrinting = Number(
+    limitedProfile.enable_payment_without_printing ??
+      (limitedProfile as any).custom_enable_payment_without_printing ??
+      fullProfile.enable_payment_without_printing ??
+      fullProfile.custom_enable_payment_without_printing ??
+      0,
+  );
+  const profile: PosProfileCombined = {
+    ...fullProfile,
+    currency: fullProfile.currency || limitedProfile.currency || '',
+    country: fullProfile.country || limitedProfile.country || '',
+    owner: limitedProfile.owner,
+    waiter: limitedProfile.waiter,
+    cashier: limitedProfile.cashier,
+    print_format: limitedProfile.print_format,
+    letter_head: limitedProfile.letter_head ?? fullProfile.letter_head ?? null,
+    qz_print: limitedProfile.qz_print,
+    qz_host: limitedProfile.qz_host,
+    printer: limitedProfile.printer,
+    print_type: limitedProfile.print_type,
+    tableAttention: limitedProfile.tableAttention,
+    paid_limit: limitedProfile.paid_limit,
+    disable_rounded_total: limitedProfile.disable_rounded_total,
+    enable_discount: limitedProfile.enable_discount,
+    allow_discount_change: Number(fullProfile.allow_discount_change ?? limitedProfile.allow_discount_change ?? 0),
+    multiple_cashier: limitedProfile.multiple_cashier,
+    edit_order_type: limitedProfile.edit_order_type,
+    custom_invoice_warning_time: limitedProfile.custom_invoice_warning_time ?? 0,
+    enable_payment_without_printing: enablePaymentWithoutPrinting,
+    custom_enable_payment_without_printing: enablePaymentWithoutPrinting,
+    custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
+    custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
+    payment_mode_accounts: limitedProfile.payment_mode_accounts,
+    payment_mode_meta: limitedProfile.payment_mode_meta,
+    enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
+    require_over_short_reason: Number(limitedProfile.require_over_short_reason ?? 0),
+    over_short_reason_tolerance: Number(limitedProfile.over_short_reason_tolerance ?? 0),
+    floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
+    floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
+    room_lookup_method: limitedProfile.room_lookup_method ?? '',
+    default_payment_mode: limitedProfile.default_payment_mode ?? '',
+    room_charge_modes: limitedProfile.room_charge_modes ?? [],
+    room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
+    efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    require_clock_in_to_order: Number(limitedProfile.require_clock_in_to_order ?? fullProfile.require_clock_in_to_order ?? 0),
+    block_clock_out_with_open_work: Number(limitedProfile.block_clock_out_with_open_work ?? fullProfile.block_clock_out_with_open_work ?? 1),
+    require_tip_declaration: Number(limitedProfile.require_tip_declaration ?? fullProfile.require_tip_declaration ?? 0),
+    available_outlets_count: limitedProfile.available_outlets_count,
+    active_opening_entry: limitedProfile.active_opening_entry ?? fullProfile.active_opening_entry ?? null,
+    active_business_date: limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
+    shift_report_available: Boolean(limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false),
+    shift_z_print_format_available: Boolean(limitedProfile.shift_z_print_format_available ?? fullProfile.shift_z_print_format_available ?? false),
+  };
+  return {
+    requiresOutletSelection: false,
+    availableOutlets: [],
+    profile,
+  };
 }
 
 export async function getCurrencyInfo(currencyCode: string): Promise<Currency> {

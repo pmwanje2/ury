@@ -104,7 +104,9 @@
     "pair_tablet": "Pair this tablet",
     "staff_pins": "Staff PINs",
     "till_cash": "Till Cash",
-    "my_approval_pin": "My approval PIN"
+    "my_approval_pin": "My approval PIN",
+    "business_date_badge": "Business Date: {{date}}",
+    "shift_report": "Shift X / Z Report"
   },
   "menu": {
     "manage_availability": "Manage availability",
@@ -287,7 +289,18 @@
     "pending_cash_movements": "{{count}} pending till cash movement(s) must be approved or discarded before closing.",
     "over_short_reason_label": "Cash Over/Short Reason",
     "over_short_reason_placeholder": "Explain the cash variance before closing",
-    "over_short_reason_required": "Enter a reason for the cash over/short variance above {{tolerance}}."
+    "over_short_reason_required": "Enter a reason for the cash over/short variance above {{tolerance}}.",
+    "tips_section_title": "Tips Declaration (Direct Cash Tips)",
+    "tips_section_note": "Direct cash tips are recorded for payroll and compliance reporting only and do not change expected drawer cash.",
+    "tip_server": "Server",
+    "tip_charged": "Charged Tips",
+    "tip_paid_from_till": "Paid from Till",
+    "tip_net_payable": "Net Payable",
+    "tip_declared_cash": "Declared Cash Tips",
+    "tip_remarks": "Remarks",
+    "tip_remarks_placeholder": "Optional note",
+    "declared_cash_tips_for": "Declared cash tips for {{name}}",
+    "tip_declaration_required": "Enter declared cash tips (use 0 if none) for every server before closing."
   },
   "checklist": {
     "title_opening": "Opening Checklist",
@@ -1145,5 +1158,48 @@
     "cleared": "Cleared approval PIN for {{name}}.",
     "clear_failed": "Could not clear this approval PIN.",
     "error_wrong_password": "Your current password did not match. Your till session is still active."
+  },
+  "timeclock": {
+    "clock_in": "Clock In",
+    "clock_out_pill": "In {{time}} · Clock Out",
+    "clock_in_title": "Clock In",
+    "clock_out_title": "Clock Out",
+    "clock_in_description": "Record your shift start time.",
+    "clock_out_description": "Record your shift end time.",
+    "staff_label": "Staff Member",
+    "shift_label": "Shift",
+    "clocked_in_since": "Clocked in since",
+    "no_employee_notice": "No active employee profile is linked to your account for this company.",
+    "open_work_warning": "You still have open work on this outlet.",
+    "open_checks_count": "{{count}} open check(s)",
+    "open_shift_active": "Open till shift active",
+    "confirm_clock_in": "Clock In Now",
+    "confirm_clock_out": "Clock Out Now",
+    "saving": "Saving...",
+    "clocked_in_toast": "Clocked in successfully.",
+    "clocked_out_toast": "Clocked out successfully.",
+    "punch_failed": "Could not record timeclock entry."
+  },
+  "outlets": {
+    "select_outlet_title": "Select Outlet",
+    "select_outlet_description": "Choose the outlet you want to operate in this session.",
+    "open_shift_badge": "Open shift",
+    "discard_cart_title": "Discard current cart?",
+    "discard_cart_description": "Switching to {{outlet}} will clear {{count}} item(s) currently in your cart.",
+    "discard_cart_warning": "You have {{count}} unsent item(s) in your cart. Switching to {{outlet}} will clear them.",
+    "discard_and_switch": "Discard & Switch",
+    "switching": "Switching...",
+    "switch_failed": "Could not switch outlet."
+  },
+  "shift_report": {
+    "x_report_title": "Shift X Report (Mid-Shift)",
+    "z_report_title": "Shift Z Report",
+    "description": "Read-only summary for the active shift and business date.",
+    "loading": "Loading shift report...",
+    "load_failed": "Could not load shift report.",
+    "unavailable": "Shift X/Z reporting is not configured on this site.",
+    "no_open_shift": "No active open shift was found for this outlet.",
+    "no_rows": "No transactions recorded for this shift yet.",
+    "print": "Print Report"
   }
 }

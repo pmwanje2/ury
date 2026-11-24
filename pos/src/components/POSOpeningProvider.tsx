@@ -16,6 +16,7 @@ import POSOpeningDialog from './POSOpeningDialog';
 import POSOpeningScreen from './POSOpeningScreen';
 import ChecklistGateDialog from './ChecklistGateDialog';
 import POSClosingDialog from './POSClosingDialog';
+import { OutletPickerDialog } from './OutletSwitcher';
 import { t } from '../i18n';
 
 export const GATED_ROUTES = ['/register', '/tables', '/orders'];
@@ -92,7 +93,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   // telling them to contact a manager.
   const [showClosingDialog, setShowClosingDialog] = useState(false);
 
-  const { posProfile, showVoluntaryClosing, setShowVoluntaryClosing } = usePOSStore();
+  const { posProfile, requiresOutletSelection, showVoluntaryClosing, setShowVoluntaryClosing } = usePOSStore();
   const { user } = useRootStore();
   const location = useLocation();
   const settled = isSettledRoute(location.pathname);
@@ -287,6 +288,16 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   }, [posProfile, checkPOSStatus, settled]);
 
   if (settled) return <>{children}</>;
+
+  if (requiresOutletSelection && !posProfile) {
+    return (
+      <OutletPickerDialog
+        open={true}
+        mandatory={true}
+        onOpenChange={() => {}}
+      />
+    );
+  }
 
   if (isLoading) {
     return (

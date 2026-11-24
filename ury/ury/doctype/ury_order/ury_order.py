@@ -2936,6 +2936,11 @@ def sync_order(
     round_digest = _round_digest(items) if round_id is not None else None
     user_role = frappe.get_roles()
     posprofile = frappe.get_doc("POS Profile", pos_profile)
+    # G36: optional clock-in gate when configured on the POS Profile and HR attendance is active.
+    if cint(posprofile.get("custom_require_clock_in_to_order")) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(posprofile, user=frappe.session.user)
     client_invoice = _client_order_invoice(client_order_id, invoice, table)
 
     billing_user = any(
@@ -4552,6 +4557,20 @@ def make_invoice(
         complimentary=complimentary,
     )
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
+    # G36: optional clock-in gate before settling a check.
+    if cint(pos_prof.get("custom_require_clock_in_to_order")) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(pos_prof, user=frappe.session.user)
+    # G43: prevent cross-till cashier settlement while the operator holds an open shift on another outlet.
+    try:
+        from ury.ury_pos import outlet_context
+
+        outlet_context.assert_no_conflicting_open_till(pos_profile, user=frappe.session.user)
+    except frappe.ValidationError:
+        raise
+    except Exception:
+        pass
     customer_disabled = _lock_settlement_customer(customer, pos_prof)
     existing_invoice = _client_order_invoice(client_order_id, invoice, table)
     if existing_invoice:

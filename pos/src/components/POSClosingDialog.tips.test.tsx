@@ -159,8 +159,12 @@ describe('POSClosingDialog Tips Declaration (G38)', () => {
     fireEvent.change(tipInput, { target: { value: '45000' } });
 
     // Expected cash stays 100,000 and variance stays 0 (NOT 145,000 or -45,000!)
-    expect(screen.getByText('UGX 100000')).toBeInTheDocument();
-    expect(screen.getByText('UGX 0')).toBeInTheDocument();
+    const cashRow = screen.getByText('Cash').closest('tr');
+    expect(cashRow).not.toBeNull();
+    expect(cashRow?.textContent).toContain('UGX 100000');
+    expect(cashRow?.textContent).toContain('UGX 0');
+    expect(cashRow?.textContent).not.toContain('UGX 145000');
+    expect(cashRow?.textContent).not.toContain('UGX -45000');
 
     fireEvent.click(screen.getByRole('button', { name: 'pos_closing.submit' }));
     fireEvent.click(await screen.findByRole('button', { name: 'pos_closing.confirm_submit' }));

@@ -4,7 +4,8 @@ import { ownedSessionKey, getSessionUser, isLinkDown, storage, siteCurrencyCode,
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
 import { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
-import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
+import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile, getPosProfileOrSelection } from '../lib/pos-profile-api';
+import { getAvailableOutlets, setActiveOutlet, type AvailableOutlet } from '../lib/outlet-api';
 import { getMenuCourses } from '../lib/menu-course-api';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
@@ -192,6 +193,8 @@ interface POSState {
     ury_held?: number;
   }>;
   posProfile: PosProfileCombined | null;
+  availableOutlets: AvailableOutlet[];
+  requiresOutletSelection: boolean;
   customerGroups: string[];
   territories: string[];
   tableOrder: TableOrder | null;
@@ -232,6 +235,8 @@ interface POSStore extends POSState {
   processPayment: (paymentMode: string, amount: number) => Promise<void>;
   updateOrderStatus: (orderId: string, status: Order['status']) => Promise<void>;
   fetchPosProfile: () => Promise<void>;
+  fetchAvailableOutlets: () => Promise<void>;
+  switchOutlet: (posProfileName: string) => Promise<void>;
   fetchCustomerGroups: () => Promise<void>;
   fetchTerritories: () => Promise<void>;
   fetchCurrencySymbol: () => Promise<void>;
@@ -305,6 +310,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   paymentModes: ['Cash'],
   orders: [],
   posProfile: null,
+  availableOutlets: [],
+  requiresOutletSelection: false,
   customerGroups: [],
   territories: [],
   selectedAggregator: null,
@@ -327,14 +334,21 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       set({ isInitializing: true, error: null });
       
       await bindOfflineUser(getSessionUser());
-      const [profileResult, menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
-        get().fetchPosProfile(),
+      await get().fetchPosProfile();
+      void get().fetchAvailableOutlets();
+
+      if (get().requiresOutletSelection) {
+        set({ isInitializing: false, error: null });
+        return;
+      }
+
+      const [menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
         get().fetchMenuItems(),
         get().fetchCategories(),
         get().fetchPaymentModes()
       ]);
 
-      if (profileResult.status === 'rejected' || 
+      if (!get().posProfile ||
           menuResult.status === 'rejected' || 
           categoriesResult.status === 'rejected' ||
           paymentModesResult.status === 'rejected') {
@@ -351,6 +365,70 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         error: 'Failed to initialize app. Please refresh the page.',
         isInitializing: false 
       });
+    }
+  },
+
+  fetchAvailableOutlets: async () => {
+    try {
+      const owner = getSessionUser();
+      const outlets = await getAvailableOutlets();
+      if (owner !== getSessionUser()) return;
+      if (outlets.length > 0) {
+        set({ availableOutlets: outlets });
+      }
+    } catch (error) {
+      console.error('Error fetching available outlets:', error);
+    }
+  },
+
+  switchOutlet: async (posProfileName: string) => {
+    const owner = getSessionUser();
+    await setActiveOutlet(posProfileName);
+    if (owner !== getSessionUser()) return;
+
+    // Clear outlet-scoped browser caches so every panel reloads for the new outlet.
+    const profileKey = ownedSessionKey('posProfile');
+    if (profileKey) sessionStorage.removeItem(profileKey);
+    const paymentKey = ownedSessionKey('payment_modes');
+    if (paymentKey) sessionStorage.removeItem(paymentKey);
+    sessionStorage.removeItem('menuCategories');
+    storage.removeItem('currencySymbol');
+
+    set({
+      requiresOutletSelection: false,
+      activeOrders: [],
+      selectedTable: null,
+      selectedRoom: null,
+      selectedAggregator: null,
+      tableOrder: null,
+      isUpdatingOrder: false,
+      editCustomer: null,
+      orderId: null,
+      originalSentItems: [],
+      orderComment: '',
+      guestLabel: '',
+      noOfPax: 1,
+      lastModifiedTime: null,
+      menuItems: [],
+      categories: [],
+      selectedCategory: '',
+      currencySymbol: null,
+      error: null,
+    });
+
+    await get().fetchPosProfile();
+    await Promise.allSettled([
+      get().fetchAvailableOutlets(),
+      get().fetchMenuItems(),
+      get().fetchCategories(),
+      get().fetchPaymentModes(),
+      get().fetchCurrencySymbol(),
+    ]);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('pos:outlet-switched', { detail: { posProfile: posProfileName } }),
+      );
     }
   },
 
@@ -382,8 +460,24 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       if (!get().posProfile) {
         set({ profileLoading: true, error: null });
       }
-      const combinedProfile = await getCombinedPosProfile();
+      const bootstrap = typeof getPosProfileOrSelection === 'function'
+        ? await getPosProfileOrSelection()
+        : { requiresOutletSelection: false, availableOutlets: [], profile: await getCombinedPosProfile() };
       if (owner !== getSessionUser()) return;
+
+      if (bootstrap.requiresOutletSelection || !bootstrap.profile) {
+        if (key) sessionStorage.removeItem(key);
+        set({
+          posProfile: null,
+          requiresOutletSelection: true,
+          availableOutlets: bootstrap.availableOutlets,
+          profileLoading: false,
+          error: null,
+        });
+        return;
+      }
+
+      const combinedProfile = bootstrap.profile;
       // The loaded till's ury_offline_capture decides the /pos worker; off unregisters it.
       try {
         await syncOfflineCapture(combinedProfile as { ury_offline_capture?: unknown }, getSessionUser());
@@ -395,6 +489,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       if (key) sessionStorage.setItem(key, JSON.stringify(combinedProfile));
       set({
         posProfile: combinedProfile,
+        requiresOutletSelection: false,
         profileLoading: false,
         currency: combinedProfile.currency || siteCurrencyCode() || 'INR'
       });
