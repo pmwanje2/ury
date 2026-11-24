@@ -23,6 +23,7 @@ from ury.ury_pos.discount import (
     list_discount_options as _list_discount_options_impl,
     parse_discount_request,
     _restore_doc_discount_state,
+    _set_row_field,
     _snapshot_doc_discount_state,
 )
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
@@ -3712,10 +3713,10 @@ def remove_check_discount(invoice, pos_profile, row=None, approval=None):
         target_row = next((r for r in (bill.get("items") or []) if str(r.get("name")) == str(row)), None)
         if not target_row:
             frappe.throw(_("Line item {0} is not on this check.").format(row), frappe.ValidationError)
-        target_row["discount_percentage"] = 0
-        target_row["discount_amount"] = 0
+        _set_row_field(target_row, "discount_percentage", 0)
+        _set_row_field(target_row, "discount_amount", 0)
         if target_row.get("price_list_rate") is not None:
-            target_row["rate"] = target_row["price_list_rate"]
+            _set_row_field(target_row, "rate", target_row.get("price_list_rate"))
         bill.calculate_taxes_and_totals()
         has_remaining = bool(
             flt(bill.get("discount_amount")) > 0

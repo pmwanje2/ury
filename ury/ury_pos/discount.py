@@ -765,6 +765,15 @@ def _snapshot_doc_discount_state(doc):
     }
 
 
+def _set_row_field(row, key, value):
+    if callable(getattr(row, "set", None)):
+        row.set(key, value)
+    elif isinstance(row, dict):
+        row[key] = value
+    else:
+        setattr(row, key, value)
+
+
 def _restore_doc_discount_state(doc, snap):
     for k in (
         "additional_discount_percentage", "discount_amount", "apply_discount_on",
@@ -773,7 +782,7 @@ def _restore_doc_discount_state(doc, snap):
         doc.set(k, snap[k])
     for row, item_snap in zip(doc.get("items") or [], snap["items"]):
         for k, v in item_snap.items():
-            row[k] = v
+            _set_row_field(row, k, v)
 
 
 def apply_discount_to_invoice(
@@ -804,10 +813,10 @@ def apply_discount_to_invoice(
             invoice.coupon_code = None
         for row in invoice.get("items") or []:
             if not _is_auto_pricing_rule_row(row):
-                row["discount_percentage"] = 0
-                row["discount_amount"] = 0
+                _set_row_field(row, "discount_percentage", 0)
+                _set_row_field(row, "discount_amount", 0)
                 if row.get("price_list_rate") is not None:
-                    row["rate"] = row["price_list_rate"]
+                    _set_row_field(row, "rate", row.get("price_list_rate"))
         invoice.calculate_taxes_and_totals()
         if linked_partner is not None:
             linked_partner.additional_discount_percentage = 0
@@ -910,16 +919,16 @@ def apply_discount_to_invoice(
             if rname in spec_by_row:
                 e = spec_by_row[rname]
                 if e["percent"]:
-                    row["discount_percentage"] = flt(e["percent"])
-                    row["discount_amount"] = 0
+                    _set_row_field(row, "discount_percentage", flt(e["percent"]))
+                    _set_row_field(row, "discount_amount", 0)
                 elif e["amount"]:
-                    row["discount_percentage"] = 0
-                    row["discount_amount"] = flt(e["amount"], prec)
+                    _set_row_field(row, "discount_percentage", 0)
+                    _set_row_field(row, "discount_amount", flt(e["amount"], prec))
                 else:
-                    row["discount_percentage"] = 0
-                    row["discount_amount"] = 0
+                    _set_row_field(row, "discount_percentage", 0)
+                    _set_row_field(row, "discount_amount", 0)
                     if row.get("price_list_rate") is not None:
-                        row["rate"] = row["price_list_rate"]
+                        _set_row_field(row, "rate", row.get("price_list_rate"))
 
     # First measure total after line discounts and BEFORE header discount
     invoice.additional_discount_percentage = 0
