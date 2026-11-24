@@ -77,5 +77,20 @@
   "Call waiter": "استدعاء النادل",
   "Bill": "الفاتورة",
   "Guest": "النزيل",
-  "Guest: {0}": "النزيل: {0}"
+  "Guest: {0}": "النزيل: {0}",
+  "All-Day": "ملخص اليوم",
+  "All-Day ({0})": "ملخص اليوم ({0})",
+  "Expo Station": "محطة التجميع والتسليم",
+  "Expo Bump": "تسليم الطلب بالكامل",
+  "Bumping…": "جارٍ التسليم…",
+  "All stations ready": "جميع المحطات جاهزة",
+  "Waiting on stations": "بانتظار المحطات",
+  "RUSH": "عاجل",
+  "VIP": "كبار الشخصيات",
+  "Backup printer": "طابعة احتياطية",
+  "Backup printer host": "عنوان الطابعة الاحتياطية",
+  "Backup printer port": "منفذ الطابعة الاحتياطية",
+  "None": "لا يوجد",
+  "Recall is available for {0} minutes after serving.": "يمكن استرجاع التذكرة خلال {0} دقيقة بعد التقديم.",
+  "Could not bump order {0}. Please try again.": "تعذّر تسليم الطلب {0}. حاول مرة أخرى."
 }
