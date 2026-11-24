@@ -1176,7 +1176,12 @@ def create_payment_request(session):
             pr.cancel()
 
         phone_payment = next(
-            (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
+            (
+                payment
+                for payment in invoice.payments
+                if payment.mode_of_payment == mode_of_payment
+                and cint(payment.get("custom_tender_received")) != 1
+            ),
             None,
         )
         if not phone_payment:
@@ -1221,23 +1226,40 @@ def _payment_request_response(pr, payment_url, paid_amount, remaining_amount):
     }
 
 
+def _is_inward_phone_pos_payment_request(doc):
+    return (
+        doc.get("reference_doctype") == "POS Invoice"
+        and bool(doc.get("reference_name"))
+        and doc.get("payment_channel") == "Phone"
+        and doc.get("payment_request_type") == "Inward"
+    )
+
+
+def _is_really_paid_phone_payment_request(doc):
+    return (
+        cint(doc.get("docstatus")) == 1
+        and doc.get("status") in ("Paid", "Partially Paid")
+        and (flt(doc.get("grand_total")) - flt(doc.get("outstanding_amount"))) > 0
+    )
+
+
 def mark_phone_payment_received(doc, method=None, status=None):
     """Mark a draft POS Invoice's Phone payment row as received when its Payment Request
-    reaches Paid via a confirmed gateway callback (on_payment_authorized)."""
-    if (
-        doc.get("reference_doctype") != "POS Invoice"
-        or not doc.get("reference_name")
-        or doc.get("payment_channel") != "Phone"
-        or doc.get("payment_request_type") != "Inward"
-        or cint(doc.get("docstatus")) != 1
-        or doc.get("status") not in ("Paid", "Partially Paid")
-    ):
+    reaches Paid/Partially Paid via a confirmed gateway callback (on_payment_authorized).
+    If the gateway reports failure/cancellation on a non-paid request, clear any stale flag."""
+    if not _is_inward_phone_pos_payment_request(doc):
+        return
+
+    if not _is_really_paid_phone_payment_request(doc):
+        if (
+            cint(doc.get("docstatus")) == 2
+            or doc.get("status") in ("Cancelled", "Failed", "Expired", "Refunded")
+            or status in ("Cancelled", "Failed", "Expired", "Refunded")
+        ):
+            clear_phone_payment_received(doc, method)
         return
 
     paid_amount = flt(doc.get("grand_total")) - flt(doc.get("outstanding_amount"))
-    if paid_amount <= 0:
-        return
-
     mode_of_payment = doc.get("mode_of_payment")
     if not mode_of_payment:
         return
@@ -1286,6 +1308,61 @@ def mark_phone_payment_received(doc, method=None, status=None):
             invoice.save(ignore_permissions=True)
         finally:
             frappe.flags.ury_server_tender_received = prev_flag
+
+
+def clear_phone_payment_received(doc, method=None):
+    """Clear custom_tender_received on a draft POS Invoice when its linked Phone Payment
+    Request is cancelled, failed, expired, or refunded. Never clears a request that is
+    genuinely Paid or Partially Paid."""
+    if not _is_inward_phone_pos_payment_request(doc):
+        return
+    if _is_really_paid_phone_payment_request(doc):
+        return
+
+    with _elevated():
+        invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
+        if cint(invoice.docstatus) != 0:
+            return
+
+        changed = False
+        for row in invoice.payments or []:
+            if (row.get("reference_no") or "").strip() != doc.name:
+                continue
+            if cint(row.get("custom_tender_received")) == 1 or flt(row.get("amount")) > 0:
+                row.custom_tender_received = 0
+                row.amount = 0
+                row.reference_no = ""
+                changed = True
+
+        if not changed:
+            return
+
+        if callable(getattr(invoice, "set_paid_amount", None)):
+            invoice.set_paid_amount()
+        if callable(getattr(invoice, "set_outstanding_amount", None)):
+            invoice.set_outstanding_amount()
+
+        prev_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        frappe.flags.ury_server_tender_received = True
+        try:
+            invoice.save(ignore_permissions=True)
+        finally:
+            frappe.flags.ury_server_tender_received = prev_flag
+
+
+def sync_phone_payment_received(doc, method=None):
+    """Keep draft POS Invoice Phone payment state in sync on Payment Request updates after submit."""
+    if not _is_inward_phone_pos_payment_request(doc):
+        return
+    if _is_really_paid_phone_payment_request(doc):
+        mark_phone_payment_received(doc, method)
+    elif cint(doc.get("docstatus")) == 2 or doc.get("status") in (
+        "Cancelled",
+        "Failed",
+        "Expired",
+        "Refunded",
+    ):
+        clear_phone_payment_received(doc, method)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

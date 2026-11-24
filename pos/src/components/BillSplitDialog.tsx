@@ -10,7 +10,7 @@ import {
 } from '@ury/ui';
 import { Button } from '@ury/ui';
 import { cn } from '@ury/ui';
-import { formatCurrency } from '@ury/core';
+import { formatCurrency, parseFrappeError } from '@ury/core';
 import { t } from '../i18n';
 import { CustomerPicker } from './CustomerPicker';
 import type { Customer } from '../store/pos-store';
@@ -28,6 +28,7 @@ interface BillSplitDialogProps {
   onOpenChange: (open: boolean) => void;
   invoiceName: string;
   items: BillSplitItem[];
+  currency?: string;
   sourceCustomer?: Customer | null;
   onConfirm: (payload: {
     itemsToMove: Array<{ name: string; qty: number }>;
@@ -42,6 +43,7 @@ const BillSplitDialog = ({
   onOpenChange,
   invoiceName,
   items,
+  currency,
   sourceCustomer,
   onConfirm,
 }: BillSplitDialogProps) => {
@@ -139,7 +141,7 @@ const BillSplitDialog = ({
       resetState();
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('bill_split.split_failed'));
+      setError(parseFrappeError(err, t('bill_split.split_failed')));
     } finally {
       setIsSubmitting(false);
     }
@@ -203,7 +205,7 @@ const BillSplitDialog = ({
                         </p>
                       </div>
                       <span className="text-sm font-semibold text-gray-900">
-                        {formatCurrency(item.amount)}
+                        {formatCurrency(item.amount, currency)}
                       </span>
                     </div>
 
@@ -293,11 +295,11 @@ const BillSplitDialog = ({
         <div className="mx-6 mb-2 grid grid-cols-2 gap-3 rounded-lg bg-gray-50 p-4 text-sm">
           <div>
             <p className="text-gray-500">{t('bill_split.stays_on_bill')}</p>
-            <p className="font-semibold text-gray-900">{formatCurrency(totals.staying)}</p>
+            <p className="font-semibold text-gray-900">{formatCurrency(totals.staying, currency)}</p>
           </div>
           <div>
             <p className="text-gray-500">{t('bill_split.moves_to_new_bill')}</p>
-            <p className="font-semibold text-primary">{formatCurrency(totals.moving)}</p>
+            <p className="font-semibold text-primary">{formatCurrency(totals.moving, currency)}</p>
           </div>
         </div>
 
