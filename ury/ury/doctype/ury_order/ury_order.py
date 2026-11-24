@@ -783,6 +783,16 @@ def split_bill(
         frappe.throw(_("Only draft invoices can be split."))
     assert_not_efris_fiscalised(source)
 
+    split_profile_name = source.get("pos_profile")
+    if _is_valid_str(split_profile_name):
+        raw_clock_in_req = frappe.db.get_value(
+            "POS Profile", split_profile_name, "custom_require_clock_in_to_order"
+        )
+        if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+            from ury.ury_pos import timeclock
+
+            timeclock.enforce_clock_in_for_profile_name(split_profile_name, user=frappe.session.user)
+
     move_map = {
         row["name"]: float(row["qty"])
         for row in items_to_move
@@ -3978,6 +3988,12 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
         )
 
     pos_profile_doc = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
+
+    raw_clock_in_req = pos_profile_doc.get("custom_require_clock_in_to_order")
+    if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(pos_profile_doc, user=frappe.session.user)
 
     merge_members, _table_map = _get_merge_cluster(table)
     if len(merge_members) > 1:

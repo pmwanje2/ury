@@ -357,11 +357,91 @@ def validate_tip_declarations(doc, method=None) -> None:
             )
 
 
+def _is_deadlock_or_lock_error(exc: Exception) -> bool:
+    cls_name = exc.__class__.__name__
+    if cls_name in ("QueryDeadlockError", "QueryTimeoutError", "TimestampMismatchError"):
+        return True
+    qde = getattr(frappe, "QueryDeadlockError", None)
+    if isinstance(qde, type) and issubclass(qde, BaseException) and isinstance(exc, qde):
+        return True
+    msg = str(exc).lower()
+    return "deadlock" in msg or "lock wait timeout" in msg
+
+
+def _lock_closing_entry_for_payroll(pos_closing_entry: str) -> None:
+    """Acquire an InnoDB row lock on POS Closing Entry so concurrent bridge calls serialize cleanly."""
+    try:
+        frappe.db.get_value(
+            "POS Closing Entry",
+            pos_closing_entry,
+            ["name", "docstatus"],
+            as_dict=True,
+            for_update=True,
+        )
+    except TypeError:
+        try:
+            frappe.db.sql(
+                "SELECT name FROM `tabPOS Closing Entry` WHERE name = %s FOR UPDATE",
+                (pos_closing_entry,),
+            )
+        except Exception:
+            pass
+
+
+def _locked_committed_refs_and_salaries(pos_closing_entry: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Read latest committed tip-declaration refs & Additional Salary rows via FOR UPDATE.
+
+    Under MariaDB REPEATABLE READ, a plain SELECT after waiting on a row lock would still see
+    the pre-lock MVCC snapshot; locking reads bypass the stale snapshot and observe rows
+    committed by the winning concurrent worker.
+    """
+    row_refs: dict[str, str] = {}
+    emp_salaries: dict[str, str] = {}
+    try:
+        td_rows = frappe.db.sql(
+            """
+            SELECT name, custom_additional_salary_ref
+            FROM `tabPOS Tip Declaration`
+            WHERE parent = %s
+            FOR UPDATE
+            """,
+            (pos_closing_entry,),
+            as_dict=True,
+        )
+        if isinstance(td_rows, (list, tuple)):
+            for r in td_rows:
+                if isinstance(r, dict) and r.get("name") and (r.get("custom_additional_salary_ref") or "").strip():
+                    row_refs[str(r["name"])] = str(r["custom_additional_salary_ref"]).strip()
+    except Exception:
+        pass
+    try:
+        sal_rows = frappe.db.sql(
+            """
+            SELECT name, employee
+            FROM `tabAdditional Salary`
+            WHERE ref_doctype = 'POS Closing Entry'
+              AND ref_docname = %s
+              AND docstatus < 2
+            FOR UPDATE
+            """,
+            (pos_closing_entry,),
+            as_dict=True,
+        )
+        if isinstance(sal_rows, (list, tuple)):
+            for r in sal_rows:
+                if isinstance(r, dict) and r.get("name") and r.get("employee"):
+                    emp_salaries[str(r["employee"])] = str(r["name"])
+    except Exception:
+        pass
+    return row_refs, emp_salaries
+
+
 @frappe.whitelist(methods=["POST"])
 def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str | None = None) -> dict[str, Any]:
     """Create 1 idempotent Draft `Additional Salary` per server with `net_tips_payable > 0`.
 
-    Restricted strictly to `HR Manager` or `Accounts Manager` (never cashiers/waiters).
+    Restricted strictly to `HR Manager` or `Accounts Manager` (never cashiers/waiters) and
+    fail-closed on `frappe.has_permission("Additional Salary", "create")`.
     """
     user = getattr(getattr(frappe, "session", None), "user", None)
     user_roles = set(frappe.get_roles(user) or [])
@@ -389,7 +469,25 @@ def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str
             frappe.PermissionError,
         )
 
-    closing = frappe.get_doc("POS Closing Entry", pos_closing_entry)
+    # Serialize concurrent payroll-bridge clicks upfront on POS Closing Entry
+    try:
+        _lock_closing_entry_for_payroll(pos_closing_entry)
+    except Exception as exc:
+        if _is_deadlock_or_lock_error(exc):
+            frappe.throw(
+                coded_message(
+                    "TIPS-PAYROLL-ALREADY-CREATED",
+                    _("Payroll tip entries have already been created for this shift close."),
+                ),
+                frappe.ValidationError,
+            )
+        raise
+
+    try:
+        closing = frappe.get_doc("POS Closing Entry", pos_closing_entry, for_update=True)
+    except TypeError:
+        closing = frappe.get_doc("POS Closing Entry", pos_closing_entry)
+
     if not frappe.has_permission("POS Closing Entry", "read", doc=closing):
         frappe.throw(
             coded_message("TIPS-PAYROLL-FORBIDDEN", _("Not permitted to read this shift close.")),
@@ -427,6 +525,8 @@ def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str
         or ""
     )
 
+    committed_row_refs, committed_emp_salaries = _locked_committed_refs_and_salaries(closing.name)
+
     rows = list(closing.get("custom_tip_declarations") or [])
     created: list[dict[str, Any]] = []
     already_created: list[str] = []
@@ -447,12 +547,14 @@ def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str
 
         eligible_count += 1
 
-        existing_ref = (row.get("custom_additional_salary_ref") or "").strip()
+        existing_ref = committed_row_refs.get(str(row.get("name") or "")) or (
+            row.get("custom_additional_salary_ref") or ""
+        ).strip()
         if existing_ref:
             already_created.append(existing_ref)
             continue
 
-        existing_in_db = frappe.db.exists(
+        existing_in_db = committed_emp_salaries.get(employee) or frappe.db.exists(
             "Additional Salary",
             {
                 "ref_doctype": "POS Closing Entry",
@@ -486,14 +588,25 @@ def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str
                 "overwrite_salary_structure_amount": 0,
             }
         )
-        add_sal.insert(ignore_permissions=False)
-        frappe.db.set_value(
-            "POS Tip Declaration",
-            row.name,
-            "custom_additional_salary_ref",
-            add_sal.name,
-            update_modified=False,
-        )
+        try:
+            add_sal.insert(ignore_permissions=False)
+            frappe.db.set_value(
+                "POS Tip Declaration",
+                row.name,
+                "custom_additional_salary_ref",
+                add_sal.name,
+                update_modified=False,
+            )
+        except Exception as exc:
+            if _is_deadlock_or_lock_error(exc):
+                frappe.throw(
+                    coded_message(
+                        "TIPS-PAYROLL-ALREADY-CREATED",
+                        _("Payroll tip entries have already been created for this shift close."),
+                    ),
+                    frappe.ValidationError,
+                )
+            raise
         created.append(
             {
                 "name": add_sal.name,

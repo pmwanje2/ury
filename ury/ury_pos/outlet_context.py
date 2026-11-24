@@ -150,15 +150,97 @@ def _opening_entry_has_business_date() -> bool:
         return False
 
 
-def _shift_report_installed() -> bool:
+def _has_perm_safe(doctype: str, ptype: str, doc=None, user: str | None = None) -> bool:
     try:
-        if frappe.db.exists("Report", "Day Close Summary"):
-            return True
-        if frappe.db.exists("Server Script", {"api_method": "pos_day_close.shift_z_summary", "disabled": 0}):
-            return True
+        if user:
+            try:
+                return bool(frappe.has_permission(doctype, ptype, doc=doc, user=user))
+            except TypeError:
+                pass
+        if doc is not None:
+            return bool(frappe.has_permission(doctype, ptype, doc))
+        return bool(frappe.has_permission(doctype, ptype))
     except Exception:
         return False
-    return False
+
+
+def _user_has_report_role(report_name: str, user: str | None = None) -> bool:
+    resolved_user = user or getattr(getattr(frappe, "session", None), "user", None)
+    if resolved_user == "Administrator":
+        return True
+    try:
+        user_roles = set(frappe.get_roles(resolved_user) or [])
+    except Exception:
+        return False
+
+    allowed_roles: list[str] = []
+    try:
+        from frappe.core.doctype.report.report import get_custom_allowed_roles
+
+        custom_roles = get_custom_allowed_roles("report", report_name)
+        if isinstance(custom_roles, (list, tuple, set)) and custom_roles:
+            allowed_roles = [str(r) for r in custom_roles if r]
+    except Exception:
+        allowed_roles = []
+
+    if not allowed_roles:
+        try:
+            custom_role_name = frappe.db.get_value("Custom Role", {"report": report_name}, "name")
+            if custom_role_name:
+                rows = frappe.get_all(
+                    "Has Role",
+                    filters={"parent": custom_role_name, "parenttype": "Custom Role"},
+                    fields=["role"],
+                    limit_page_length=0,
+                )
+                if isinstance(rows, (list, tuple)):
+                    allowed_roles = [r.get("role") for r in rows if isinstance(r, dict) and r.get("role")]
+        except Exception:
+            pass
+
+    if not allowed_roles:
+        try:
+            rows = frappe.get_all(
+                "Has Role",
+                filters={"parent": report_name},
+                fields=["role"],
+                limit_page_length=0,
+            )
+            if isinstance(rows, (list, tuple)):
+                allowed_roles = [r.get("role") for r in rows if isinstance(r, dict) and r.get("role")]
+        except Exception:
+            pass
+
+    if not allowed_roles:
+        try:
+            report_doc = frappe.get_doc("Report", report_name)
+            if cint(getattr(report_doc, "disabled", 0)):
+                return False
+            if callable(getattr(report_doc, "is_permitted", None)):
+                return bool(report_doc.is_permitted())
+        except Exception:
+            return True
+        return True
+
+    return bool(user_roles & set(allowed_roles))
+
+
+def _shift_report_installed(user: str | None = None) -> bool:
+    try:
+        if not frappe.db.exists("Report", "Day Close Summary"):
+            return False
+        if cint(frappe.db.get_value("Report", "Day Close Summary", "disabled")):
+            return False
+        if not _has_perm_safe("Report", "read", doc="Day Close Summary", user=user):
+            return False
+        ref_doctype = frappe.db.get_value("Report", "Day Close Summary", "ref_doctype") or "POS Invoice"
+        if not _has_perm_safe(str(ref_doctype), "report", user=user):
+            return False
+        if not _user_has_report_role("Day Close Summary", user=user):
+            return False
+        return True
+    except Exception:
+        return False
 
 
 def _shift_z_print_format_installed() -> bool:
@@ -478,7 +560,7 @@ def get_business_date_and_report_meta(pos_profile: str, user: str | None = None)
     return {
         "active_opening_entry": active_shift.get("name") if active_shift else None,
         "active_business_date": business_date,
-        "shift_report_available": _shift_report_installed(),
+        "shift_report_available": _shift_report_installed(user=user),
         "shift_z_print_format_available": _shift_z_print_format_installed(),
     }
 
@@ -546,7 +628,7 @@ def get_shift_x_report(pos_profile: str | None = None, pos_opening_entry: str | 
         else None
     )
 
-    if not _shift_report_installed():
+    if not _shift_report_installed(user=frappe.session.user):
         return {
             "available": False,
             "pos_profile": profile_name,

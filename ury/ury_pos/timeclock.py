@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import frappe
@@ -19,6 +20,18 @@ from frappe.utils import cint, get_datetime, now_datetime
 
 from ury.brand import coded_message
 from ury.ury_pos import outlet_context
+
+
+def _permission_error_types() -> tuple[type[BaseException], ...]:
+    types: list[type[BaseException]] = []
+    exc = getattr(frappe, "PermissionError", None)
+    if isinstance(exc, type) and issubclass(exc, BaseException):
+        types.append(exc)
+    real_frappe = sys.modules.get("frappe")
+    real_exc = getattr(real_frappe, "PermissionError", None) if real_frappe is not None else None
+    if isinstance(real_exc, type) and issubclass(real_exc, BaseException) and real_exc not in types:
+        types.append(real_exc)
+    return tuple(types)
 
 POS_SELF_CHECKIN_ROLES = frozenset({
     "Employee",
@@ -76,7 +89,7 @@ def _latest_checkin(employee: str) -> dict[str, Any] | None:
         "Employee Checkin",
         filters={"employee": employee},
         fields=["name", "log_type", "time", "shift", "device_id"],
-        order_by="time desc, creation desc",
+        order_by="time desc, creation desc, name desc",
         limit=1,
     )
     if isinstance(rows, (list, tuple)) and rows:
@@ -120,16 +133,42 @@ def is_user_clocked_in(
 
 
 def _open_work_for_user(user: str, profile) -> tuple[list[str], list[str]]:
-    branch = profile.get("branch") if profile else None
     company = profile.get("company") if profile else None
 
-    inv_filters: dict[str, Any] = {"docstatus": 0, "waiter": user}
-    if branch:
-        inv_filters["branch"] = branch
+    # Check open draft checks across ALL active outlets/branches of the company
+    # where the user is the waiter, document owner, or cashier (aligns with open_shifts).
+    inv_filters: dict[str, Any] = {"docstatus": 0}
     if company:
         inv_filters["company"] = company
-    open_checks = frappe.get_all("POS Invoice", filters=inv_filters, pluck="name", limit=20)
-    open_check_names = list(open_checks) if isinstance(open_checks, (list, tuple)) else []
+    or_filters = [
+        ["POS Invoice", "waiter", "=", user],
+        ["POS Invoice", "owner", "=", user],
+        ["POS Invoice", "cashier", "=", user],
+    ]
+    try:
+        open_checks = frappe.get_all(
+            "POS Invoice",
+            filters=inv_filters,
+            or_filters=or_filters,
+            pluck="name",
+            limit=20,
+        )
+        open_check_names = list(open_checks) if isinstance(open_checks, (list, tuple)) else []
+    except TypeError:
+        # Fallback for minimal site-less stubs whose get_all() omits or_filters
+        seen: list[str] = []
+        for field in ("waiter", "owner", "cashier"):
+            rows = frappe.get_all(
+                "POS Invoice",
+                filters={**inv_filters, field: user},
+                pluck="name",
+                limit=20,
+            )
+            if isinstance(rows, (list, tuple)):
+                for name in rows:
+                    if name not in seen:
+                        seen.append(name)
+        open_check_names = seen[:20]
 
     shift_filters: dict[str, Any] = {"docstatus": 1, "status": "Open", "user": user}
     if company:
@@ -149,7 +188,9 @@ def _block_open_work_enabled(profile) -> bool:
     return cint(raw) == 1
 
 
-def _build_status_payload(user: str, profile) -> dict[str, Any]:
+def _build_status_payload(
+    user: str, profile, latest_checkin: dict[str, Any] | None = None
+) -> dict[str, Any]:
     company = profile.get("company") if profile else None
     emp = _resolve_active_employee(user, company=company)
     block_open_work = _block_open_work_enabled(profile)
@@ -177,7 +218,7 @@ def _build_status_payload(user: str, profile) -> dict[str, Any]:
             "pos_profile": profile_name,
         }
 
-    latest = _latest_checkin(emp["name"])
+    latest = latest_checkin if latest_checkin is not None else _latest_checkin(emp["name"])
     last_type = str(latest.get("log_type") or "").upper() if latest else None
     is_in = last_type == "IN"
     last_time = latest.get("time") if latest else None
@@ -209,6 +250,27 @@ def _build_status_payload(user: str, profile) -> dict[str, Any]:
         "require_clock_in_to_order": require_clock_in,
         "pos_profile": profile_name,
     }
+
+
+def enforce_clock_in_for_profile_name(pos_profile_name: str | None, user: str | None = None) -> None:
+    """Resolve POS Profile by name and enforce `custom_require_clock_in_to_order` when HRMS is active."""
+    if not isinstance(pos_profile_name, str) or not pos_profile_name.strip():
+        return
+    if not is_hrms_timeclock_available():
+        return
+    profile_name = pos_profile_name.strip()
+    profile = frappe.db.get_value(
+        "POS Profile",
+        profile_name,
+        ["name", "company", "custom_require_clock_in_to_order"],
+        as_dict=True,
+    )
+    if not isinstance(profile, dict):
+        try:
+            profile = frappe.get_doc("POS Profile", profile_name)
+        except Exception:
+            profile = None
+    enforce_clock_in_for_profile(profile, user=user)
 
 
 def enforce_clock_in_for_profile(profile, user: str | None = None) -> None:
@@ -332,7 +394,7 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
 
     try:
         checkin.insert(ignore_permissions=False)
-    except frappe.PermissionError:
+    except _permission_error_types():
         user_roles = set(frappe.get_roles(user) or [])
         if emp.get("user_id") == user and bool(POS_SELF_CHECKIN_ROLES & user_roles):
             checkin.insert(ignore_permissions=True)
@@ -345,12 +407,23 @@ def punch_timeclock(action: str, pos_profile: str) -> dict[str, Any]:
         except Exception:
             pass
 
-    status = _build_status_payload(user, profile)
+    recorded_time = checkin.get("time") or punch_time
+    status = _build_status_payload(
+        user,
+        profile,
+        latest_checkin={
+            "name": checkin.name,
+            "log_type": normalized_action,
+            "time": recorded_time,
+            "shift": checkin.get("shift"),
+            "device_id": f"POS:{profile.name}",
+        },
+    )
     status.update(
         {
             "checkin": checkin.name,
             "log_type": normalized_action,
-            "time": str(checkin.get("time") or punch_time),
+            "time": str(recorded_time),
             "device_id": f"POS:{profile.name}",
         }
     )

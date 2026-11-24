@@ -58,7 +58,7 @@ page_js = {"point-of-sale": ["public/js/pos_extend.js"]}
 
 # include js in doctype views
 doctype_js = {
-    "POS Closing Entry": "ury/public/js/pos_closing_entry.js",
+    "POS Closing Entry": "public/js/pos_closing_entry.js",
     "Production Plan": [
         "public/js/production_plan_cancel_guard.js",
         "public/js/production_plan_prepare.js",

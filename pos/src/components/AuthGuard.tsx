@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { useRootStore } from '../store/root-store';
 import { Button } from '@ury/ui';
 import { Spinner } from '@ury/ui';
@@ -14,6 +14,10 @@ import {
   useFloorIdle,
 } from '../lib/floor-session';
 
+const LazyOutletPickerDialog = React.lazy(() =>
+  import('./OutletSwitcher').then((mod) => ({ default: mod.OutletPickerDialog })),
+);
+
 interface Props {
   children: React.ReactNode;
 }
@@ -26,6 +30,8 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
     error: authError,
     fetchPosProfile,
     posProfile,
+    requiresOutletSelection = false,
+    availableOutlets = [],
     isLoading: configLoading,
     error: configError,
     hasAccess,
@@ -57,6 +63,16 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
       fetchPosProfile();
     }
   }, [user, fetchPosProfile]);
+
+  // Keep root-store profile synced when an already-loaded session switches outlets in Header
+  useEffect(() => {
+    if (!user || !posProfile) return;
+    const handleOutletSwitched = () => {
+      void fetchPosProfile(true);
+    };
+    window.addEventListener('pos:outlet-switched', handleOutletSwitched);
+    return () => window.removeEventListener('pos:outlet-switched', handleOutletSwitched);
+  }, [user, posProfile, fetchPosProfile]);
 
   useEffect(() => {
     if (!coldBoot || isColdBootSigningOut) return;
@@ -92,6 +108,28 @@ const AuthGuard: React.FC<Props> = ({ children }) => {
   if (!user) {
     // The checkAuth function will handle the redirect to login
     return null;
+  }
+
+  if (requiresOutletSelection && !posProfile) {
+    return (
+      <Suspense
+        fallback={
+          <div className="min-h-screen">
+            <Spinner message={t('common.loading')} />
+          </div>
+        }
+      >
+        <LazyOutletPickerDialog
+          open={true}
+          mandatory={true}
+          outlets={availableOutlets}
+          onOpenChange={() => {}}
+          onSwitched={async () => {
+            await fetchPosProfile(true);
+          }}
+        />
+      </Suspense>
+    );
   }
 
   if (!posProfile) {

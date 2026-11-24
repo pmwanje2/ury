@@ -135,6 +135,13 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 
 	order_type = pos_invoice.get("order_type")
 	pos_profile = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
+
+	raw_clock_in_req = pos_profile.get("custom_require_clock_in_to_order")
+	if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+		from ury.ury_pos import timeclock
+
+		timeclock.enforce_clock_in_for_profile(pos_profile, user=actor)
+
 	allowed_order_types = _allowed_order_types(pos_profile)
 
 	if order_type not in allowed_order_types:

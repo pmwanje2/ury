@@ -18,15 +18,20 @@ interface OutletPickerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mandatory?: boolean;
+  outlets?: AvailableOutlet[];
+  onSwitched?: (posProfileName: string) => void | Promise<void>;
 }
 
 export const OutletPickerDialog = ({
   open,
   onOpenChange,
   mandatory = false,
+  outlets,
+  onSwitched,
 }: OutletPickerDialogProps) => {
   const posProfile = usePOSStore((state) => state.posProfile);
-  const availableOutlets = usePOSStore((state) => state.availableOutlets) ?? [];
+  const storeOutlets = usePOSStore((state) => state.availableOutlets) ?? [];
+  const availableOutlets = outlets && outlets.length > 0 ? outlets : storeOutlets;
   const activeOrders = usePOSStore((state) => state.activeOrders) ?? [];
   const switchOutlet = usePOSStore((state) => state.switchOutlet);
 
@@ -39,6 +44,7 @@ export const OutletPickerDialog = ({
     setError(null);
     try {
       await switchOutlet(target.pos_profile);
+      await onSwitched?.(target.pos_profile);
       setPendingTarget(null);
       onOpenChange(false);
     } catch (err) {

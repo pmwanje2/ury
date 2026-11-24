@@ -266,24 +266,41 @@ export async function getPosProfileFull(posProfileName: string): Promise<PosProf
   return res.message;
 }
 
-export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
-  // Get limited fields first
-  const limitedProfile = await getPosProfileLimitedFields();
-  console.log('limitedProfile', limitedProfile);
-  
-  // Get full profile using the pos_profile name from limited profile
-  const fullProfile = await getPosProfileFull(limitedProfile.pos_profile);
+export class OutletSelectionRequiredError extends Error {
+  readonly requiresOutletSelection = true as const;
+  readonly availableOutlets: AvailableOutlet[];
 
+  constructor(availableOutlets: AvailableOutlet[]) {
+    super('Outlet selection required');
+    this.name = 'OutletSelectionRequiredError';
+    this.availableOutlets = availableOutlets;
+  }
+}
+
+export function isOutletSelectionRequiredError(
+  error: unknown,
+): error is OutletSelectionRequiredError {
+  return (
+    error instanceof OutletSelectionRequiredError ||
+    (Boolean(error) &&
+      typeof error === 'object' &&
+      (error as { requiresOutletSelection?: unknown }).requiresOutletSelection === true)
+  );
+}
+
+function combinePosProfiles(
+  limitedProfile: PosProfileLimited,
+  fullProfile: PosProfileFull,
+): PosProfileCombined {
   const enablePaymentWithoutPrinting = Number(
     limitedProfile.enable_payment_without_printing ??
-    (limitedProfile as any).custom_enable_payment_without_printing ??
-    fullProfile.enable_payment_without_printing ??
-    fullProfile.custom_enable_payment_without_printing ??
-    0
+      (limitedProfile as any).custom_enable_payment_without_printing ??
+      fullProfile.enable_payment_without_printing ??
+      fullProfile.custom_enable_payment_without_printing ??
+      0,
   );
-  
-  // Merge both profiles
-  const combinedProfile: PosProfileCombined = {
+
+  return {
     ...fullProfile,
     pos_profile: limitedProfile.pos_profile || fullProfile.name,
     currency: fullProfile.currency || limitedProfile.currency || '',
@@ -301,13 +318,16 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     paid_limit: limitedProfile.paid_limit,
     disable_rounded_total: limitedProfile.disable_rounded_total,
     enable_discount: limitedProfile.enable_discount,
-    allow_discount_change: Number(fullProfile.allow_discount_change ?? limitedProfile.allow_discount_change ?? 0),
+    allow_discount_change: Number(
+      fullProfile.allow_discount_change ?? limitedProfile.allow_discount_change ?? 0,
+    ),
     multiple_cashier: limitedProfile.multiple_cashier,
     edit_order_type: limitedProfile.edit_order_type,
     custom_invoice_warning_time: limitedProfile.custom_invoice_warning_time ?? 0,
     enable_payment_without_printing: enablePaymentWithoutPrinting,
     custom_enable_payment_without_printing: enablePaymentWithoutPrinting,
-    custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
+    custom_disable_print_status_tracking:
+      limitedProfile.custom_disable_print_status_tracking ?? 0,
     custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
     payment_mode_meta: limitedProfile.payment_mode_meta,
@@ -326,28 +346,60 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     default_payment_mode: limitedProfile.default_payment_mode ?? '',
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
-    offline_tender_limit: Number(limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0),
-    offline_payment_modes: limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
-    efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
-    require_clock_in_to_order: Number(limitedProfile.require_clock_in_to_order ?? fullProfile.require_clock_in_to_order ?? 0),
-    block_clock_out_with_open_work: Number(limitedProfile.block_clock_out_with_open_work ?? fullProfile.block_clock_out_with_open_work ?? 1),
-    require_tip_declaration: Number(limitedProfile.require_tip_declaration ?? fullProfile.require_tip_declaration ?? 0),
+    offline_tender_limit: Number(
+      limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0,
+    ),
+    offline_payment_modes:
+      limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
+    efris_print_wait_seconds:
+      limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    require_clock_in_to_order: Number(
+      limitedProfile.require_clock_in_to_order ?? fullProfile.require_clock_in_to_order ?? 0,
+    ),
+    block_clock_out_with_open_work: Number(
+      limitedProfile.block_clock_out_with_open_work ??
+        fullProfile.block_clock_out_with_open_work ??
+        1,
+    ),
+    require_tip_declaration: Number(
+      limitedProfile.require_tip_declaration ?? fullProfile.require_tip_declaration ?? 0,
+    ),
     available_outlets_count: limitedProfile.available_outlets_count,
-    active_opening_entry: limitedProfile.active_opening_entry ?? fullProfile.active_opening_entry ?? null,
-    active_business_date: limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
-    shift_report_available: Boolean(limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false),
-    shift_z_print_format_available: Boolean(limitedProfile.shift_z_print_format_available ?? fullProfile.shift_z_print_format_available ?? false),
+    active_opening_entry:
+      limitedProfile.active_opening_entry ?? fullProfile.active_opening_entry ?? null,
+    active_business_date:
+      limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
+    shift_report_available: Boolean(
+      limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false,
+    ),
+    shift_z_print_format_available: Boolean(
+      limitedProfile.shift_z_print_format_available ??
+        fullProfile.shift_z_print_format_available ??
+        false,
+    ),
     custom_drawer_pin: limitedProfile.custom_drawer_pin ?? fullProfile.custom_drawer_pin ?? 2,
-    custom_drawer_kick_hex: limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
+    custom_drawer_kick_hex:
+      limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
     custom_auto_kick_on_cash_tender: Number(
       limitedProfile.custom_auto_kick_on_cash_tender ??
-      fullProfile.custom_auto_kick_on_cash_tender ??
-      1
+        fullProfile.custom_auto_kick_on_cash_tender ??
+        1,
     ),
-    drawer_opening_modes: limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
+    drawer_opening_modes:
+      limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
   };
+}
 
-  return combinedProfile;
+export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
+  // Get limited fields first
+  const limitedProfile = await getPosProfileLimitedFields();
+  if (limitedProfile?.requires_outlet_selection || !limitedProfile?.pos_profile) {
+    throw new OutletSelectionRequiredError(limitedProfile?.available_outlets ?? []);
+  }
+
+  // Get full profile using the pos_profile name from limited profile
+  const fullProfile = await getPosProfileFull(limitedProfile.pos_profile);
+  return combinePosProfiles(limitedProfile, fullProfile);
 }
 
 export interface PosProfileBootstrapResult {
@@ -358,88 +410,18 @@ export interface PosProfileBootstrapResult {
 
 export async function getPosProfileOrSelection(): Promise<PosProfileBootstrapResult> {
   const limitedProfile = await getPosProfileLimitedFields();
-  if (limitedProfile?.requires_outlet_selection) {
+  if (limitedProfile?.requires_outlet_selection || !limitedProfile?.pos_profile) {
     return {
       requiresOutletSelection: true,
-      availableOutlets: limitedProfile.available_outlets ?? [],
+      availableOutlets: limitedProfile?.available_outlets ?? [],
       profile: null,
     };
   }
   const fullProfile = await getPosProfileFull(limitedProfile.pos_profile);
-  const enablePaymentWithoutPrinting = Number(
-    limitedProfile.enable_payment_without_printing ??
-      (limitedProfile as any).custom_enable_payment_without_printing ??
-      fullProfile.enable_payment_without_printing ??
-      fullProfile.custom_enable_payment_without_printing ??
-      0,
-  );
-  const profile: PosProfileCombined = {
-    ...fullProfile,
-    pos_profile: limitedProfile.pos_profile || fullProfile.name,
-    currency: fullProfile.currency || limitedProfile.currency || '',
-    country: fullProfile.country || limitedProfile.country || '',
-    owner: limitedProfile.owner,
-    waiter: limitedProfile.waiter,
-    cashier: limitedProfile.cashier,
-    print_format: limitedProfile.print_format,
-    letter_head: limitedProfile.letter_head ?? fullProfile.letter_head ?? null,
-    qz_print: limitedProfile.qz_print,
-    qz_host: limitedProfile.qz_host,
-    printer: limitedProfile.printer,
-    print_type: limitedProfile.print_type,
-    tableAttention: limitedProfile.tableAttention,
-    paid_limit: limitedProfile.paid_limit,
-    disable_rounded_total: limitedProfile.disable_rounded_total,
-    enable_discount: limitedProfile.enable_discount,
-    allow_discount_change: Number(fullProfile.allow_discount_change ?? limitedProfile.allow_discount_change ?? 0),
-    multiple_cashier: limitedProfile.multiple_cashier,
-    edit_order_type: limitedProfile.edit_order_type,
-    custom_invoice_warning_time: limitedProfile.custom_invoice_warning_time ?? 0,
-    enable_payment_without_printing: enablePaymentWithoutPrinting,
-    custom_enable_payment_without_printing: enablePaymentWithoutPrinting,
-    custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
-    custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
-    payment_mode_accounts: limitedProfile.payment_mode_accounts,
-    payment_mode_meta: limitedProfile.payment_mode_meta,
-    enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
-    require_over_short_reason: Number(limitedProfile.require_over_short_reason ?? 0),
-    over_short_reason_tolerance: Number(limitedProfile.over_short_reason_tolerance ?? 0),
-    over_short_tolerance: limitedProfile.over_short_tolerance,
-    cash_pull_threshold: limitedProfile.cash_pull_threshold,
-    paid_out_approval_threshold: limitedProfile.paid_out_approval_threshold,
-    paid_in_approval_threshold: limitedProfile.paid_in_approval_threshold,
-    paid_in_enabled: limitedProfile.paid_in_enabled,
-    cash_drawer_id: limitedProfile.cash_drawer_id,
-    floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
-    floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
-    room_lookup_method: limitedProfile.room_lookup_method ?? '',
-    default_payment_mode: limitedProfile.default_payment_mode ?? '',
-    room_charge_modes: limitedProfile.room_charge_modes ?? [],
-    room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
-    offline_tender_limit: Number(limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0),
-    offline_payment_modes: limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
-    efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
-    require_clock_in_to_order: Number(limitedProfile.require_clock_in_to_order ?? fullProfile.require_clock_in_to_order ?? 0),
-    block_clock_out_with_open_work: Number(limitedProfile.block_clock_out_with_open_work ?? fullProfile.block_clock_out_with_open_work ?? 1),
-    require_tip_declaration: Number(limitedProfile.require_tip_declaration ?? fullProfile.require_tip_declaration ?? 0),
-    available_outlets_count: limitedProfile.available_outlets_count,
-    active_opening_entry: limitedProfile.active_opening_entry ?? fullProfile.active_opening_entry ?? null,
-    active_business_date: limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
-    shift_report_available: Boolean(limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false),
-    shift_z_print_format_available: Boolean(limitedProfile.shift_z_print_format_available ?? fullProfile.shift_z_print_format_available ?? false),
-    custom_drawer_pin: limitedProfile.custom_drawer_pin ?? fullProfile.custom_drawer_pin ?? 2,
-    custom_drawer_kick_hex: limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
-    custom_auto_kick_on_cash_tender: Number(
-      limitedProfile.custom_auto_kick_on_cash_tender ??
-      fullProfile.custom_auto_kick_on_cash_tender ??
-      1
-    ),
-    drawer_opening_modes: limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
-  };
   return {
     requiresOutletSelection: false,
     availableOutlets: [],
-    profile,
+    profile: combinePosProfiles(limitedProfile, fullProfile),
   };
 }
 

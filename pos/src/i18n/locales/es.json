@@ -1118,6 +1118,7 @@
     "unavailable": "Los informes de turno X/Z no están configurados en este sitio.",
     "no_open_shift": "No se encontró ningún turno abierto para este punto de venta.",
     "no_rows": "Aún no hay transacciones registradas para este turno.",
-    "print": "Imprimir informe"
+    "print": "Imprimir informe",
+    "scroll_hint": "Desplácese horizontalmente para ver todas las columnas"
   }
 }

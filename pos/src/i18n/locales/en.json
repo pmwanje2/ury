@@ -1332,8 +1332,8 @@
     "open_work_warning": "You still have open work on this outlet.",
     "open_checks_count": "{{count}} open check(s)",
     "open_shift_active": "Open till shift active",
-    "confirm_clock_in": "Clock In Now",
-    "confirm_clock_out": "Clock Out Now",
+    "confirm_clock_in": "Confirm Clock In",
+    "confirm_clock_out": "Confirm Clock Out",
     "saving": "Saving...",
     "clocked_in_toast": "Clocked in successfully.",
     "clocked_out_toast": "Clocked out successfully.",
@@ -1359,6 +1359,7 @@
     "unavailable": "Shift X/Z reporting is not configured on this site.",
     "no_open_shift": "No active open shift was found for this outlet.",
     "no_rows": "No transactions recorded for this shift yet.",
-    "print": "Print Report"
+    "print": "Print Report",
+    "scroll_hint": "Scroll horizontally to view all columns"
   }
 }

@@ -790,6 +790,19 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     setBlindVarianceMessage(null);
 
     try {
+      const tipDeclarationsPayload =
+        tipRows.length > 0
+          ? tipRows.map((row) => ({
+              user: row.user,
+              employee: row.employee || undefined,
+              currency: row.currency || tillCurrency,
+              charged_tips_collected: row.charged_tips_collected,
+              tips_paid_from_till: row.tips_paid_from_till,
+              net_tips_payable: row.net_tips_payable,
+              declared_cash_tips: row.declared_cash_tips,
+              remarks: row.remarks || '',
+            }))
+          : undefined;
       await closeTillWithControls({
         pos_profile: posProfile.name,
         pos_opening_entry: openingEntry.name,
@@ -799,6 +812,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         close_other_approval_token: tokens?.closeOtherToken ?? closeOtherToken ?? undefined,
         close_other_reason: tokens?.closeOtherReasonOverride ?? closeOtherReason ?? undefined,
         period_end_date: formatDateTime(periodEndDate),
+        tip_declarations: tipDeclarationsPayload,
       });
       setPendingCloseDoc(null);
       setCloseOtherToken(null);
@@ -1062,6 +1076,19 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           approval_token: result.token,
           over_short_reason: overShortReason.trim() || undefined,
           period_end_date: formatDateTime(periodEndDate),
+          tip_declarations:
+            tipRows.length > 0
+              ? tipRows.map((row) => ({
+                  user: row.user,
+                  employee: row.employee || undefined,
+                  currency: row.currency || tillCurrency,
+                  charged_tips_collected: row.charged_tips_collected,
+                  tips_paid_from_till: row.tips_paid_from_till,
+                  net_tips_payable: row.net_tips_payable,
+                  declared_cash_tips: row.declared_cash_tips,
+                  remarks: row.remarks || '',
+                }))
+              : undefined,
         });
         setShowForceClose(false);
         await onClosingSubmitted?.();
@@ -1184,14 +1211,17 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         variant="xlarge"
         size="4xl"
         onClose={() => handleOpenChange(false)}
-        className="max-h-[90vh] overflow-y-auto"
+        className="flex max-h-[90vh] flex-col overflow-hidden"
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>{t('pos_closing.title')}</DialogTitle>
           <DialogDescription>{t('pos_closing.description')}</DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 pb-4">
+        <div
+          data-testid="pos-closing-scroll-body"
+          className="flex-1 min-h-0 overflow-y-auto px-6 pb-4"
+        >
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Spinner message={t('pos_closing.loading')} />
@@ -1352,7 +1382,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                             <td className="py-2 px-3">
                               <Input
                                 type="text"
-                                aria-label={`${t('pos_closing.tip_remarks')} (${row.full_name})`}
+                                aria-label={`${t('pos_closing.tip_remarks')} (${row.user})`}
                                 value={row.remarks}
                                 onChange={(e) => handleTipRemarksChange(row.user, e.target.value)}
                                 placeholder={t('pos_closing.tip_remarks_placeholder')}
@@ -1550,10 +1580,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         </div>
 
         {submitError && (
-          <p className="px-6 pb-2 text-sm font-medium text-red-600 break-words">{submitError}</p>
+          <p className="shrink-0 px-6 pb-2 text-sm font-medium text-red-600 break-words">{submitError}</p>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border bg-card px-4 py-3 sm:px-6 sm:py-4 flex-wrap">
           <TillLogout />
           {!isSubCashier && openingEntry && (
             <Button

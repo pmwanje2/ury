@@ -100,7 +100,8 @@ def profile_offline_payment_modes(profile, room_charge_modes: list[str] | None =
         if not mode or mode in seen:
             continue
         seen.add(mode)
-        info = f.db.get_value("Mode of Payment", mode, fields, as_dict=True) or {}
+        raw_info = f.db.get_value("Mode of Payment", mode, fields, as_dict=True)
+        info = raw_info if isinstance(raw_info, dict) else {}
         mop_type = info.get("type") or ""
         if mode in rc_set or mop_type == "Phone":
             allow_offline = False

@@ -20,6 +20,7 @@ import { t } from '../i18n';
 interface TimeclockButtonProps {
   posProfile?: string | null;
   disabled?: boolean;
+  onStatusChange?: (status: TimeclockStatus) => void;
 }
 
 function formatClockTime(timestamp?: string | null): string {
@@ -41,7 +42,7 @@ function formatElapsed(minutes?: number): string {
   return `${hrs}h ${String(mins).padStart(2, '0')}m`;
 }
 
-const TimeclockButton = ({ posProfile, disabled = false }: TimeclockButtonProps) => {
+const TimeclockButton = ({ posProfile, disabled = false, onStatusChange }: TimeclockButtonProps) => {
   const [status, setStatus] = useState<TimeclockStatus | null>(null);
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -97,6 +98,7 @@ const TimeclockButton = ({ posProfile, disabled = false }: TimeclockButtonProps)
     try {
       const updated = await punchTimeclock(action, posProfile);
       setStatus(updated);
+      onStatusChange?.(updated);
       showToast.success(
         action === 'IN' ? t('timeclock.clocked_in_toast') : t('timeclock.clocked_out_toast'),
       );

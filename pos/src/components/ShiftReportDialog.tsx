@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Printer, RefreshCw } from 'lucide-react';
+import { ArrowLeftRight, Printer, RefreshCw } from 'lucide-react';
 import {
   Badge,
   Button,
@@ -70,9 +70,9 @@ const ShiftReportDialog = ({
         variant="xlarge"
         size="4xl"
         onClose={() => onOpenChange(false)}
-        className="max-h-[90vh] overflow-y-auto"
+        className="flex max-h-[90vh] flex-col overflow-hidden"
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             {report?.report_type === 'Z'
               ? t('shift_report.z_report_title')
@@ -81,7 +81,10 @@ const ShiftReportDialog = ({
           <DialogDescription>{t('shift_report.description')}</DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 pb-4 space-y-4">
+        <div
+          data-testid="shift-report-scroll-body"
+          className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-4"
+        >
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {report?.pos_profile && (
               <Badge variant="secondary" size="sm">
@@ -135,40 +138,54 @@ const ShiftReportDialog = ({
               )}
 
               {columns.length > 0 && rows.length > 0 ? (
-                <div className="w-full overflow-x-auto rounded-lg border border-border">
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b border-border bg-gray-50">
-                        {columns.map((col) => (
-                          <th
-                            key={col.fieldname}
-                            className="py-2.5 px-3 text-start font-semibold text-gray-800 whitespace-nowrap"
-                          >
-                            {col.label || col.fieldname}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row, rowIdx) => (
-                        <tr key={rowIdx} className="border-b border-border last:border-b-0">
-                          {columns.map((col, colIdx) => {
-                            const val = Array.isArray(row)
-                              ? row[colIdx]
-                              : (row as Record<string, unknown>)[col.fieldname];
-                            return (
-                              <td
-                                key={col.fieldname}
-                                className="py-2 px-3 text-gray-700 whitespace-nowrap"
-                              >
-                                {renderCell(val, col.fieldtype)}
-                              </td>
-                            );
-                          })}
+                <div className="space-y-1.5">
+                  {columns.length > 4 && (
+                    <p
+                      data-testid="shift-report-scroll-hint"
+                      className="flex items-center justify-end gap-1.5 text-xs text-gray-500"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
+                      <span>{t('shift_report.scroll_hint')}</span>
+                    </p>
+                  )}
+                  <div
+                    data-testid="shift-report-table-scroll"
+                    className="w-full overflow-x-auto rounded-lg border border-border"
+                  >
+                    <table className="min-w-max w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-gray-50">
+                          {columns.map((col) => (
+                            <th
+                              key={col.fieldname}
+                              className="py-2.5 px-3.5 text-start font-semibold text-gray-800 whitespace-nowrap"
+                            >
+                              {col.label || col.fieldname}
+                            </th>
+                          ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {rows.map((row, rowIdx) => (
+                          <tr key={rowIdx} className="border-b border-border last:border-b-0">
+                            {columns.map((col, colIdx) => {
+                              const val = Array.isArray(row)
+                                ? row[colIdx]
+                                : (row as Record<string, unknown>)[col.fieldname];
+                              return (
+                                <td
+                                  key={col.fieldname}
+                                  className="py-2 px-3.5 text-gray-700 whitespace-nowrap"
+                                >
+                                  {renderCell(val, col.fieldtype)}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : (
                 <p className="py-4 text-center text-sm text-gray-500">
@@ -179,7 +196,7 @@ const ShiftReportDialog = ({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border bg-card px-4 py-3 sm:px-6 sm:py-4 flex-wrap">
           <Button
             type="button"
             variant="outline"

@@ -1166,6 +1166,7 @@
     "unavailable": "Les rapports de poste X/Z ne sont pas configurés sur ce site.",
     "no_open_shift": "Aucun poste ouvert trouvé pour ce point de vente.",
     "no_rows": "Aucune transaction enregistrée pour ce poste.",
-    "print": "Imprimer le rapport"
+    "print": "Imprimer le rapport",
+    "scroll_hint": "Faites défiler horizontalement pour voir toutes les colonnes"
   }
 }
