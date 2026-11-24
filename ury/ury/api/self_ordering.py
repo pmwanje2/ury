@@ -36,7 +36,7 @@ import frappe
 from ury.brand import coded_message
 from frappe import _
 from frappe.rate_limiter import rate_limit
-from frappe.utils import add_to_date, cint, flt, now_datetime, nowdate
+from frappe.utils import add_to_date, cint, flt, now_datetime
 
 from ury.ury_pos.api import resolve_restaurant_menu
 from ury.ury.doctype.ury_order.ury_order import (
@@ -1114,7 +1114,15 @@ def create_payment_request(session):
                 "currency": invoice.currency,
                 "status": ["in", _LIVE_PHONE_PAID_STATUSES],
             },
-            fields=["name", "currency", "grand_total", "outstanding_amount", "status"],
+            fields=[
+                "name",
+                "currency",
+                "grand_total",
+                "outstanding_amount",
+                "status",
+                "payment_gateway_account",
+                "mode_of_payment",
+            ],
             order_by="creation desc",
         )
         paid_amount = flt(sum(max(0.0, flt(p.grand_total) - flt(p.outstanding_amount)) for p in paid_requests))
@@ -1123,8 +1131,19 @@ def create_payment_request(session):
             p.status == "Partially Paid" and flt(p.outstanding_amount) > 0 for p in paid_requests
         )
         requested_by_paid = flt(sum(flt(p.grand_total) for p in paid_requests))
+        # Once a check has a confirmed Phone payment on a gateway, changing the
+        # company/profile default gateway must never open a second gateway request.
+        different_gateway = any(
+            (
+                p.get("payment_gateway_account")
+                and p.get("payment_gateway_account") != gateway_account.name
+            )
+            or (p.get("mode_of_payment") and p.get("mode_of_payment") != mode_of_payment)
+            for p in paid_requests
+        )
         if paid_requests and (
             remaining_amount <= 0
+            or different_gateway
             or (partially_paid_open and flt(outstanding_amount) <= requested_by_paid)
         ):
             return {
@@ -1339,6 +1358,14 @@ def _alert_managers_late_phone_refund(doc, invoice, pe_name, paid_amount, reason
             note.insert(ignore_permissions=True)
 
 
+def _posting_date():
+    """Return today's date string without requiring `nowdate` at module import time."""
+    nowdate_fn = getattr(getattr(frappe, "utils", None), "nowdate", None)
+    if callable(nowdate_fn):
+        return nowdate_fn()
+    return now_datetime().date().isoformat()
+
+
 def _record_unapplied_late_phone_receipt(doc, invoice, paid_amount, reason):
     """Record a late confirmed phone payment as an idempotent unapplied Payment Entry
     (advance receipt with empty references) and raise a manager refund alert, without
@@ -1367,9 +1394,10 @@ def _record_unapplied_late_phone_receipt(doc, invoice, paid_amount, reason):
         or invoice.get("currency")
     )
 
+    posting_date = _posting_date()
     pe = frappe.new_doc("Payment Entry")
     pe.payment_type = "Receive"
-    pe.posting_date = nowdate()
+    pe.posting_date = posting_date
     pe.company = company
     pe.mode_of_payment = doc.get("mode_of_payment")
     pe.party_type = "Customer"
@@ -1384,7 +1412,7 @@ def _record_unapplied_late_phone_receipt(doc, invoice, paid_amount, reason):
     pe.source_exchange_rate = 1
     pe.target_exchange_rate = 1
     pe.reference_no = doc.name
-    pe.reference_date = nowdate()
+    pe.reference_date = posting_date
     if doc.get("cost_center") or invoice.get("cost_center"):
         pe.cost_center = doc.get("cost_center") or invoice.get("cost_center")
     if doc.get("project") or invoice.get("project"):

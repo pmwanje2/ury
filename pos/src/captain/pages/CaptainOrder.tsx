@@ -929,6 +929,7 @@ export default function CaptainOrder() {
         onOpenChange={setIsSplitBillOpen}
         invoiceName={invoiceId ?? ''}
         items={splitItems}
+        currency={tillCurrency}
         sourceCustomer={
           context?.order?.customer
             ? {
