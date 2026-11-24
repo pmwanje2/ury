@@ -14,7 +14,6 @@ import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../
 import { getPosFxRates, type PaymentModeConfig, type PosFxRateInfo } from '../lib/payment-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
-import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { isAuthRequiredError } from '../lib/override-api';
 
 const MAX_REF_PATTERN_LENGTH = 128;
@@ -26,11 +25,188 @@ function stepForCurrency(code?: string | null): string {
   return '0.01';
 }
 
+interface PatternGroupFrame {
+  hasQuantifier: boolean;
+  hasAlternation: boolean;
+  isLookaround: boolean;
+  prevUnbounded: boolean;
+  lastWasQuantifier: boolean;
+}
+
+/**
+ * Linear-time client ReDoS guard mirroring the server AST validator in `ury/ury_pos/fx.py`.
+ * Rejects backreferences, nested quantifiers, alternation inside repeated groups (including
+ * arbitrarily nested groups such as `^(a|(b|c))+$`), lookarounds inside repeats, and
+ * adjacent unbounded repeats while respecting escapes and `[...]` character classes.
+ */
+function isSafeReferencePattern(raw: string): boolean {
+  if (raw.length > MAX_REF_PATTERN_LENGTH) return false;
+
+  const stack: PatternGroupFrame[] = [
+    {
+      hasQuantifier: false,
+      hasAlternation: false,
+      isLookaround: false,
+      prevUnbounded: false,
+      lastWasQuantifier: false,
+    },
+  ];
+  let inCharClass = false;
+
+  const readQuantifierAt = (
+    idx: number,
+  ): { nextIdx: number; isMulti: boolean; isUnbounded: boolean } | null => {
+    const ch = raw[idx];
+    if (ch === '+' || ch === '*') {
+      const next = raw[idx + 1] === '?' ? idx + 2 : idx + 1;
+      return { nextIdx: next, isMulti: true, isUnbounded: true };
+    }
+    if (ch === '?') {
+      const next = raw[idx + 1] === '?' ? idx + 2 : idx + 1;
+      return { nextIdx: next, isMulti: false, isUnbounded: false };
+    }
+    if (ch === '{') {
+      const m = /^\{(\d+)(?:,(\d*))?\}(\?)?/.exec(raw.slice(idx));
+      if (m) {
+        const min = Number(m[1]);
+        const hasComma = m[0].includes(',');
+        const maxStr = m[2];
+        const isUnbounded = hasComma && (!maxStr || maxStr.length === 0);
+        const max = isUnbounded ? Infinity : hasComma ? Number(maxStr) : min;
+        return {
+          nextIdx: idx + m[0].length,
+          isMulti: isUnbounded || max > 1,
+          isUnbounded,
+        };
+      }
+    }
+    return null;
+  };
+
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    const top = stack[stack.length - 1];
+
+    if (ch === '\\') {
+      if (i + 1 >= raw.length) return false;
+      const escaped = raw[i + 1];
+      if (!inCharClass && escaped >= '1' && escaped <= '9') {
+        return false; // Backreference
+      }
+      if (!inCharClass) {
+        top.prevUnbounded = false;
+        top.lastWasQuantifier = false;
+      }
+      i += 2;
+      continue;
+    }
+
+    if (inCharClass) {
+      if (ch === ']') {
+        inCharClass = false;
+        top.prevUnbounded = false;
+        top.lastWasQuantifier = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === '[') {
+      inCharClass = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '(') {
+      let isLookaround = false;
+      let advance = 1;
+      if (raw[i + 1] === '?') {
+        if (raw[i + 2] === '=' || raw[i + 2] === '!') {
+          isLookaround = true;
+          advance = 3;
+        } else if (raw[i + 2] === '<' && (raw[i + 3] === '=' || raw[i + 3] === '!')) {
+          isLookaround = true;
+          advance = 4;
+        } else if (raw[i + 2] === ':') {
+          advance = 3;
+        }
+      }
+      stack.push({
+        hasQuantifier: false,
+        hasAlternation: false,
+        isLookaround,
+        prevUnbounded: false,
+        lastWasQuantifier: false,
+      });
+      i += advance;
+      continue;
+    }
+
+    if (ch === '|') {
+      top.hasAlternation = true;
+      top.prevUnbounded = false;
+      top.lastWasQuantifier = false;
+      i += 1;
+      continue;
+    }
+
+    if (ch === ')') {
+      if (stack.length <= 1) return false;
+      const popped = stack.pop()!;
+      const parent = stack[stack.length - 1];
+      const q = readQuantifierAt(i + 1);
+      if (q) {
+        if (q.isMulti && (popped.hasQuantifier || popped.hasAlternation || popped.isLookaround)) {
+          return false;
+        }
+        if (parent.prevUnbounded && q.isUnbounded) {
+          return false;
+        }
+        // Reject stacked quantifiers directly after a quantified group (e.g. (a)+*)
+        if (readQuantifierAt(q.nextIdx)) {
+          return false;
+        }
+        parent.hasQuantifier = true;
+        if (popped.hasAlternation) parent.hasAlternation = true;
+        if (popped.isLookaround) parent.isLookaround = true;
+        parent.prevUnbounded = q.isUnbounded;
+        parent.lastWasQuantifier = true;
+        i = q.nextIdx;
+        continue;
+      }
+      if (popped.hasQuantifier) parent.hasQuantifier = true;
+      if (popped.hasAlternation) parent.hasAlternation = true;
+      if (popped.isLookaround) parent.isLookaround = true;
+      parent.prevUnbounded = popped.prevUnbounded;
+      parent.lastWasQuantifier = false;
+      i += 1;
+      continue;
+    }
+
+    const q = readQuantifierAt(i);
+    if (q) {
+      if (top.lastWasQuantifier) return false;
+      if (top.prevUnbounded && q.isUnbounded) return false;
+      top.hasQuantifier = true;
+      top.prevUnbounded = q.isUnbounded;
+      top.lastWasQuantifier = true;
+      i = q.nextIdx;
+      continue;
+    }
+
+    top.prevUnbounded = false;
+    top.lastWasQuantifier = false;
+    i += 1;
+  }
+
+  return !inCharClass && stack.length === 1;
+}
+
 function matchesReferencePattern(value: string, pattern?: string | null): boolean {
   const raw = (pattern || '').trim();
   if (!raw) return true;
-  if (raw.length > MAX_REF_PATTERN_LENGTH) return false;
-  if (/\([^)]*[+*?|][^)]*\)[+*?{]|[+*?]\s*[+*?]|\\[1-9]/.test(raw)) return false;
+  if (!isSafeReferencePattern(raw)) return false;
   try {
     const anchored = raw.startsWith('^') && raw.endsWith('$') ? raw : `^(?:${raw})$`;
     return new RegExp(anchored).test(value);

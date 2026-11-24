@@ -914,9 +914,22 @@ def validate_invoice_fx_payments(doc, pos_profile=None) -> None:
             )
 
         fx_prec = currency_precision(tender_curr)
+        split_prec = max(fx_prec, 4)
         # Allow up to 4dp proportional split on merged bills while validating conversion math.
-        expected_base = flt(flt(fx_amt, max(fx_prec, 4)) * rate, base_prec)
-        if abs(flt(amt) - expected_base) > amount_tol:
+        # On high-rate currencies (e.g. KWD @ 12,345 UGX), a 4dp half-step quantization is
+        # 0.5 * 10^-4 * rate (~0.62 UGX), which can shift the rounded integer base by 1 minor unit.
+        expected_base = flt(flt(fx_amt, split_prec) * rate, base_prec)
+        is_split_row = (
+            bool(doc.get("custom_merged_pos_invoice"))
+            or bool(getattr(frappe.flags, "in_bill_merge_sync", False))
+            or abs(flt(fx_amt, split_prec) - flt(fx_amt, fx_prec)) > 1e-9
+        )
+        effective_tol = (
+            max(amount_tol, 0.5 * (10 ** -split_prec) * rate + amount_tol)
+            if is_split_row
+            else amount_tol
+        )
+        if abs(flt(amt) - expected_base) > effective_tol:
             frappe.throw(
                 coded_message(
                     "FX-AMOUNT-MISMATCH",

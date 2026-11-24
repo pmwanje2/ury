@@ -5611,6 +5611,11 @@ def make_invoice(
             target_req = target.rounded_total or target.grand_total
             alloc_rows = payments
 
+        alloc_base_prec = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
+        if not isinstance(alloc_base_prec, int) or isinstance(alloc_base_prec, bool):
+            alloc_base_prec = 2
+        fx_alloc_prec = 4
+
         for d in alloc_rows:
             amt = float(d["amount"])
             mode = d["mode_of_payment"]
@@ -5628,37 +5633,80 @@ def make_invoice(
             }
             orig_total = amt if amt > 0 else 1.0
             orig_fx = flt(d.get("custom_tender_amount"))
-            
+            rem_fx = flt(orig_fx, fx_alloc_prec) if orig_fx > 0 else 0.0
+            primary_row = None
+
             if doc_req > 0:
                 give = min(amt, doc_req)
                 row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
                 if orig_fx > 0:
-                    row_payload["custom_tender_amount"] = flt(orig_fx * (give / orig_total), 4)
-                invoice.append("payments", row_payload)
-                amt -= give
-                doc_req -= give
-                
+                    give_fx = (
+                        flt(rem_fx, fx_alloc_prec)
+                        if abs(amt - give) <= 1e-9
+                        else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
+                    )
+                    row_payload["custom_tender_amount"] = give_fx
+                    rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
+                primary_row = invoice.append("payments", row_payload)
+                amt = flt(amt - give, alloc_base_prec)
+                doc_req = flt(doc_req - give, alloc_base_prec)
+
             if target_req > 0 and amt > 0:
                 give = min(amt, target_req)
                 row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
                 if orig_fx > 0:
-                    row_payload["custom_tender_amount"] = flt(orig_fx * (give / orig_total), 4)
+                    give_fx = (
+                        flt(rem_fx, fx_alloc_prec)
+                        if abs(amt - give) <= 1e-9
+                        else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
+                    )
+                    row_payload["custom_tender_amount"] = give_fx
+                    rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
                 target.append("payments", row_payload)
-                amt -= give
-                target_req -= give
+                amt = flt(amt - give, alloc_base_prec)
+                target_req = flt(target_req - give, alloc_base_prec)
 
             if amt > 0:
                 # Preserve any remaining over-tender on the primary bill so
                 # ury_pos_tender.before_validate applies the tender's over-tender
-                # rule (Refuse / Post to Charged Tip) or cash change.
-                existing = next(
-                    (row for row in reversed(invoice.payments) if row.mode_of_payment == mode),
-                    None,
-                )
-                if existing:
-                    existing.amount = flt(existing.amount) + amt
+                # rule (Refuse / Post to Charged Tip) or cash change, keeping FX
+                # fields and converted base-amount math exact across both branches.
+                existing = primary_row
+                if existing is None:
+                    d_curr = extra_fields.get("custom_tender_currency")
+                    d_rate = flt(extra_fields.get("custom_exchange_rate"), 9) if extra_fields.get("custom_exchange_rate") else None
+                    existing = next(
+                        (
+                            row
+                            for row in reversed(invoice.payments)
+                            if row.mode_of_payment == mode
+                            and (
+                                orig_fx <= 0
+                                or (
+                                    row.get("custom_tender_currency") == d_curr
+                                    and (d_rate is None or abs(flt(row.get("custom_exchange_rate"), 9) - d_rate) <= 1e-6)
+                                )
+                            )
+                        ),
+                        None,
+                    )
+                if existing is not None:
+                    existing.amount = flt(flt(existing.amount) + amt, alloc_base_prec)
+                    if orig_fx > 0:
+                        existing.custom_tender_amount = flt(
+                            flt(existing.get("custom_tender_amount")) + rem_fx,
+                            fx_alloc_prec,
+                        )
+                        for k, v in extra_fields.items():
+                            if not existing.get(k):
+                                setattr(existing, k, v)
+                        rem_fx = 0.0
                 else:
-                    invoice.append("payments", dict(mode_of_payment=mode, amount=amt))
+                    row_payload = dict(mode_of_payment=mode, amount=amt, **extra_fields)
+                    if orig_fx > 0:
+                        row_payload["custom_tender_amount"] = flt(rem_fx, fx_alloc_prec)
+                        rem_fx = 0.0
+                    invoice.append("payments", row_payload)
                 
         if not target.payments and payments:
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))

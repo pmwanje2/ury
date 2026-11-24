@@ -226,6 +226,7 @@ def _set_expected_amounts(doc):
             from ury.ury_pos.fx import currency_precision, resolve_pos_exchange_rate
 
             fx_prec = currency_precision(tender_curr)
+            base_prec = currency_precision(home_currency) if home_currency else precision
             expected_fx = _currency_flt(fx_expected_by_mode.get(mode, 0), fx_prec)
             has_client_fx = (
                 client_row is not None
@@ -235,8 +236,11 @@ def _set_expected_amounts(doc):
             closing_fx = _currency_flt(client_row.get("custom_closing_foreign_amount"), fx_prec) if has_client_fx else 0
             foreign_diff = _currency_flt(closing_fx - expected_fx, fx_prec)
             if expected_fx > 0 and expected_amount > 0:
-                shift_rate = flt(expected_amount / expected_fx, 9)
-                closing_amount = _currency_flt(closing_fx * shift_rate, precision)
+                if abs(foreign_diff) <= 1e-9:
+                    closing_amount = expected_amount
+                else:
+                    shift_rate = flt(expected_amount / expected_fx, 9)
+                    closing_amount = _currency_flt(closing_fx * shift_rate, base_prec)
             elif closing_fx > 0:
                 try:
                     rate_info = resolve_pos_exchange_rate(
@@ -245,9 +249,9 @@ def _set_expected_amounts(doc):
                         posting_date=doc.get("posting_date"),
                         company=doc.get("company"),
                     )
-                    closing_amount = _currency_flt(closing_fx * rate_info["rate"], precision)
+                    closing_amount = _currency_flt(closing_fx * rate_info["rate"], base_prec)
                 except Exception:
-                    closing_amount = _currency_flt(client_row.closing_amount, precision) if client_row else 0
+                    closing_amount = _currency_flt(client_row.closing_amount, base_prec) if client_row else 0
             else:
                 closing_amount = 0
             values = {
@@ -258,7 +262,7 @@ def _set_expected_amounts(doc):
                     _currency_flt(client_row.custom_closing_amount, precision) if client_row else 0
                 ),
                 "closing_amount": closing_amount,
-                "difference": _currency_flt(closing_amount - expected_amount, precision),
+                "difference": _currency_flt(closing_amount - expected_amount, base_prec),
                 "custom_tender_currency": tender_curr,
                 "custom_expected_foreign_amount": expected_fx,
                 "custom_closing_foreign_amount": closing_fx,

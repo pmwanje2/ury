@@ -166,7 +166,11 @@ export const useCaptainContext = (): UseCaptainContextResult => {
           ? (useRootStore as any).getState()?.user?.name ?? null
           : null;
       const cached = !isAuthOrPermissionError(err)
-        ? readCachedCaptainContext(expectedUser) ?? (offline ? readCachedCaptainContext(null) : null)
+        ? expectedUser
+          ? readCachedCaptainContext(expectedUser)
+          : offline
+            ? readCachedCaptainContext(null)
+            : null
         : null;
       if (cached && (offline || !isAuthOrPermissionError(err))) {
         setContext(cached);

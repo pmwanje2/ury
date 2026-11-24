@@ -181,7 +181,7 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                   data-label={t('pos_closing.opening')}
                   className="flex items-center justify-between gap-2 py-1.5 text-end text-gray-700 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
                 >
-                  {formatCurrency(row.opening_amount, currency)}
+                  {formatCurrency(row.opening_amount, fxCurrency || currency)}
                 </td>
                 {!blindCashCount && (
                 <td
