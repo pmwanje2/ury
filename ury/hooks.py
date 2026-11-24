@@ -298,6 +298,7 @@ doc_events = {
         ],
     },
     "POS Profile": {"validate": "ury.ury.hooks.ury_pos_profile.validate"},
+    "Mode of Payment": {"validate": "ury.ury.hooks.ury_pos_tender.validate_mode_of_payment_halo"},
     "Branch": {"validate": "ury.ury.api.table_reservation.validate_branch_reservation_settings"},
     "Sales Invoice": {
         "validate": "ury.ury.hooks.ury_sales_invoice.validate",

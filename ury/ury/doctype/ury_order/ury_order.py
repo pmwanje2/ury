@@ -3934,7 +3934,7 @@ def _reconcile_settlement_payments(invoice, incoming_payments):
 
 # Method for URY POS
 @frappe.whitelist()
-def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None, tip=None, tip_server=None):
+def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None, tip=None, tip_server=None, halo_approval_token=None):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     tip = flt(tip)
     if tip < 0:
@@ -4131,6 +4131,12 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:
             _record_round(invoice, round_id)
+    # Consume optional Manager PIN token for Over-HALO tenders before invoice.save() triggers before_validate
+    if halo_approval_token:
+        from ury.ury_pos.till_controls import apply_halo_approval_token
+
+        apply_halo_approval_token(invoice, halo_approval_token)
+
     # invoice.owner = owner
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     if existing_received_tenders:

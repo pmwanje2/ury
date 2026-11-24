@@ -1799,3 +1799,76 @@ def validate_offline_settlement_shift(
 				)
 			)
 
+
+def over_halo_tenders_for_invoice(doc) -> list[dict[str, Any]]:
+	"""Return sorted list of ``{mode_of_payment, amount, halo}`` for tenders exceeding Mode of Payment HALO.
+
+	Sums multiple rows of the same ``mode_of_payment`` so splitting a single mistyped tender
+	across duplicate rows cannot evade HALO.
+	"""
+	if doc.get("is_return"):
+		return []
+	currency = doc.get("currency")
+	if not currency and doc.get("pos_profile"):
+		currency = frappe.db.get_value("POS Profile", doc.pos_profile, "currency")
+	precision = currency_precision(currency)
+
+	totals_by_mode: dict[str, float] = {}
+	for row in doc.get("payments") or []:
+		mode = (row.get("mode_of_payment") or "").strip()
+		if not mode:
+			continue
+		amt = flt(row.get("amount"))
+		if amt <= 0:
+			continue
+		totals_by_mode[mode] = flt(totals_by_mode.get(mode, 0.0) + amt, precision)
+
+	exceeded = []
+	for mode in sorted(totals_by_mode):
+		total_amt = totals_by_mode[mode]
+		halo = flt(frappe.db.get_value("Mode of Payment", mode, "custom_halo_max_amount"), precision)
+		if halo > 0 and total_amt > halo + 1e-9:
+			clean_amt = int(total_amt) if precision == 0 else total_amt
+			clean_halo = int(halo) if precision == 0 else halo
+			exceeded.append({"mode_of_payment": mode, "amount": clean_amt, "halo": clean_halo})
+	return exceeded
+
+
+def apply_halo_approval_token(doc, approval_token: str | None):
+	"""Consume a single-use `over_halo_tender` Manager PIN token and stamp server-only
+	``doc.flags.over_halo_approval`` so ``ury_pos_tender.before_validate`` permits the tenders."""
+	if not approval_token:
+		return None
+	exceeded = over_halo_tenders_for_invoice(doc)
+	if not exceeded:
+		return None
+	pos_profile = doc.get("pos_profile")
+	if not pos_profile or not frappe.db.exists("POS Profile", pos_profile):
+		frappe.throw(coded_message("AUTH-REQUIRED", _("A valid POS Profile is required for HALO approval.")), frappe.PermissionError)
+	profile = frappe.get_doc("POS Profile", pos_profile)
+	claim_tenders = [{"mode_of_payment": r["mode_of_payment"], "amount": r["amount"]} for r in exceeded]
+	claim = {
+		"action": "over_halo_tender",
+		"invoice": doc.get("name") or "",
+		"pos_profile": profile.name,
+		"tenders": claim_tenders,
+	}
+	approval = _require_till_privilege(
+		profile,
+		"over_halo_tender",
+		doc.get("name") or "",
+		claim,
+		token=approval_token,
+		amount=max(r["amount"] for r in exceeded),
+		allow_cashier_default=False,
+	)
+	if not hasattr(doc, "flags") or doc.flags is None:
+		doc.flags = frappe._dict()
+	doc.flags.over_halo_approval = {
+		"approver": approval.approver,
+		"token_consumed": True,
+		"tenders": {r["mode_of_payment"]: r["amount"] for r in exceeded},
+	}
+	return approval
+
+

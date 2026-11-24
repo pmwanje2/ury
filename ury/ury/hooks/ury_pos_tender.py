@@ -30,6 +30,99 @@ from ury.brand import coded_message
 OVERTENDER_TO_TIP = "Post to Charged Tip"
 
 
+def validate_mode_of_payment_halo(doc, method=None):
+	"""Mode of Payment validate: High Amount Lockout (HALO) ceiling cannot be negative."""
+	if flt(doc.get("custom_halo_max_amount")) < 0:
+		frappe.throw(
+			coded_message(
+				"TENDER-HALO-INVALID",
+				_("High Amount Lockout (HALO) on {0} cannot be negative.").format(doc.get("name") or _("Mode of Payment")),
+			)
+		)
+
+
+def _enforce_tender_sanity_and_halo(doc):
+	"""Enforce non-negative tenders, currency decimal precision, and per-tender HALO ceiling
+	at the mutation itself (so POS UI, Desk, REST, and offline replay meet the same rule)."""
+	from ury.ury_pos.till_controls import (
+		_may_perform_till_privilege,
+		currency_precision,
+		over_halo_tenders_for_invoice,
+	)
+
+	currency = doc.get("currency")
+	if not currency and doc.get("pos_profile"):
+		currency = frappe.db.get_value("POS Profile", doc.pos_profile, "currency")
+	precision = currency_precision(currency)
+
+	for row in doc.get("payments") or []:
+		raw_amt = row.get("amount")
+		if raw_amt is None or raw_amt == "":
+			continue
+		amt = flt(raw_amt)
+		if amt < 0:
+			frappe.throw(
+				coded_message(
+					"TENDER-NEGATIVE",
+					_("Negative payment amount for {0} is not allowed.").format(row.get("mode_of_payment") or _("tender")),
+				)
+			)
+		if amt > 0 and precision == 0 and abs(amt - flt(amt, 0)) > 1e-6:
+			frappe.throw(
+				coded_message(
+					"CASH-PRECISION",
+					_("{0} tender amounts must be whole numbers without decimals.").format(currency or _("Currency")),
+				)
+			)
+
+	exceeded = over_halo_tenders_for_invoice(doc)
+	if not exceeded:
+		return
+
+	flags = getattr(doc, "flags", None)
+	halo_approval = getattr(flags, "over_halo_approval", None)
+	if isinstance(halo_approval, dict) and halo_approval.get("token_consumed") and halo_approval.get("approver"):
+		approver = str(halo_approval["approver"]).strip()
+		approved_tenders = halo_approval.get("tenders") or {}
+		if approver.casefold() == (frappe.session.user or "").casefold():
+			frappe.throw(
+				coded_message("AUTH-SELF", _("You cannot approve your own over-limit tender. Ask another manager.")),
+				frappe.PermissionError,
+			)
+		all_covered = all(
+			r["mode_of_payment"] in approved_tenders
+			and abs(flt(approved_tenders[r["mode_of_payment"]], precision) - flt(r["amount"], precision)) <= 1e-6
+			for r in exceeded
+		)
+		if all_covered:
+			doc.custom_halo_approver = approver
+			return
+
+	pos_profile = doc.get("pos_profile")
+	if pos_profile and frappe.db.exists("POS Profile", pos_profile):
+		profile = frappe.get_doc("POS Profile", pos_profile)
+		if _may_perform_till_privilege(
+			frappe.session.user,
+			profile,
+			"over_halo_tender",
+			amount=max(r["amount"] for r in exceeded),
+			allow_cashier_default=False,
+		):
+			return
+
+	first = exceeded[0]
+	frappe.throw(
+		coded_message(
+			"TENDER-HALO",
+			_(
+				"{0} tender of {1} exceeds the High Amount Lockout limit ({2}). "
+				"Check for a mistyped amount or ask a manager to approve with their PIN."
+			).format(first["mode_of_payment"], first["amount"], first["halo"]),
+		),
+		frappe.PermissionError,
+	)
+
+
 def before_validate(doc, method=None):
 	"""Runs before the native POS Invoice validate computes paid and change
 	amounts, so the native change can only ever come from cash received."""
@@ -37,6 +130,7 @@ def before_validate(doc, method=None):
 		_sync_return_tip(doc)
 		doc.calculate_taxes_and_totals()
 		return
+	_enforce_tender_sanity_and_halo(doc)
 	sync_charged_tip(doc)
 	doc.calculate_taxes_and_totals()
 	over, non_cash_modes = _non_cash_overtender(doc)
