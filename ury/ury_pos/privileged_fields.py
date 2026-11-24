@@ -496,7 +496,7 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
                 "options": "\nService Charge\nService Charge Tax\nCharged Tip",
                 "label": "POS Charge Kind",
                 "hidden": 1,
-                "no_copy": 1,
+                "no_copy": 0,
                 "print_hide": 1,
                 "insert_after": "charge_type",
             },
