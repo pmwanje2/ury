@@ -20,6 +20,8 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Select,
+  SelectItem,
   Spinner,
   showToast,
 } from '@ury/ui';
@@ -108,6 +110,7 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
   const [reason, setReason] = useState('');
   const [reference, setReference] = useState('');
   const [paidOutTarget, setPaidOutTarget] = useState<'expense' | 'tips'>('expense');
+  const [tipServer, setTipServer] = useState('');
 
   const [showExceptionForm, setShowExceptionForm] = useState(false);
   const [exceptionReason, setExceptionReason] = useState('');
@@ -124,10 +127,14 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
     setLoading(true);
     setError(null);
     try {
-      const [next, status] = await Promise.all([
-        getTillCashState(posProfileName),
-        getTillDrawerStatus(posProfileName),
-      ]);
+      const next = await getTillCashState(posProfileName);
+      const pullThreshold = Number(
+        next.cash_pull_threshold ?? posProfile?.cash_pull_threshold ?? 0,
+      );
+      const status =
+        next.opening_entry && pullThreshold > 0
+          ? await getTillDrawerStatus(posProfileName)
+          : null;
       setState(next);
       setDrawerStatus(status);
       if (
@@ -182,14 +189,15 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
   const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
   const isPaidOut = activeTab === 'Paid Out';
   const isPaidIn = activeTab === 'Paid In';
-  const paidOutThreshold = Number(
-    state?.paid_out_threshold ?? drawerStatus?.paid_out_threshold ?? posProfile?.paid_out_approval_threshold ?? 0,
-  );
+  const paidOutThreshold: number | null =
+    state !== null
+      ? state.paid_out_threshold
+      : (drawerStatus?.paid_out_threshold ?? posProfile?.paid_out_approval_threshold ?? null);
   const paidInThreshold = Number(
     state?.paid_in_threshold ?? drawerStatus?.paid_in_threshold ?? posProfile?.paid_in_approval_threshold ?? 0,
   );
   const needsSecondPerson =
-    isPaidOut && amountValid && state !== null && parsedAmount > paidOutThreshold;
+    isPaidOut && amountValid && paidOutThreshold !== null && parsedAmount > paidOutThreshold;
   const paidInAboveThreshold =
     isPaidIn && amountValid && state !== null && parsedAmount > paidInThreshold;
   const requiresInPlacePin =
@@ -247,13 +255,19 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
           amount: parsedAmount,
           reason: effectiveReason || undefined,
           reference: reference.trim() || undefined,
-          ...(isPaidOut ? { paid_out_target: paidOutTarget } : {}),
+          ...(isPaidOut
+            ? {
+                paid_out_target: paidOutTarget,
+                ...(paidOutTarget === 'tips' && tipServer ? { tip_server: tipServer } : {}),
+              }
+            : {}),
           pos_opening_entry: state.opening_entry,
           approval_token: approvalToken,
         });
         setAmountInput('');
         setReason('');
         setReference('');
+        setTipServer('');
         if (created.docstatus === 0) {
           showToast.success(t('till_cash.saved_pending'));
         } else {
@@ -264,12 +278,19 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
           pos_profile: posProfileName,
           movement_type: movementType,
           amount: parsedAmount,
-          ...(isPaidOut ? { reason: effectiveReason, paid_out_target: paidOutTarget } : {}),
+          ...(isPaidOut
+            ? {
+                reason: effectiveReason,
+                paid_out_target: paidOutTarget,
+                ...(paidOutTarget === 'tips' && tipServer ? { tip_server: tipServer } : {}),
+              }
+            : {}),
           ...(reference.trim() ? { reference: reference.trim() } : {}),
         });
         setAmountInput('');
         setReason('');
         setReference('');
+        setTipServer('');
         if (created.docstatus === 0) {
           showToast.success(t('till_cash.saved_pending'));
         } else {
@@ -791,6 +812,27 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
                     </div>
                   )}
 
+                  {isPaidOut && paidOutTarget === 'tips' && (
+                    <div className="space-y-1.5">
+                      <label htmlFor="till-cash-tip-server" className="text-sm font-medium text-gray-800">
+                        {t('till_cash.tip_server')}
+                      </label>
+                      <Select
+                        id="till-cash-tip-server"
+                        value={tipServer}
+                        onChange={(e) => setTipServer(e.target.value)}
+                        disabled={submitting}
+                      >
+                        <SelectItem value="">{t('till_cash.tip_server_placeholder')}</SelectItem>
+                        {(state.servers || []).map((srv) => (
+                          <SelectItem key={srv.user} value={srv.user}>
+                            {srv.full_name ? `${srv.full_name} (${srv.user})` : srv.user}
+                          </SelectItem>
+                        ))}
+                      </Select>
+                    </div>
+                  )}
+
                   {needsReasonField && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1.5">
@@ -822,11 +864,13 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
                     </div>
                   )}
 
-                  {needsSecondPerson && (
+                  {needsSecondPerson && paidOutThreshold !== null && (
                     <p className="text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                      {t('till_cash.requires_second_person', {
-                        threshold: formatCurrency(paidOutThreshold, state.currency),
-                      })}
+                      {paidOutThreshold === 0
+                        ? t('till_cash.requires_second_person_all')
+                        : t('till_cash.requires_second_person', {
+                            threshold: formatCurrency(paidOutThreshold, state.currency),
+                          })}
                     </p>
                   )}
 
@@ -1122,6 +1166,12 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
                             {row.reason && <p className="text-gray-700">{row.reason}</p>}
                             <p className="text-xs text-gray-500">
                               {t('till_cash.recorded_by')}: {row.owner_name || row.owner}
+                              {row.tip_server && (
+                                <>
+                                  {' '}
+                                  · {t('till_cash.tip_server')}: {row.tip_server_name || row.tip_server}
+                                </>
+                              )}
                               {row.approver && (
                                 <>
                                   {' '}

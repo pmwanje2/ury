@@ -1,28 +1,145 @@
-"""Till cash management: pickup, loan, paid-out, paid-in and the closing Over/Short.
+"""Till cash management: pickup, loan, paid-out and the closing Over/Short.
 
 Oracle Simphony Cash Management moves cash in and out of a till during the
 shift: a Pickup (safe drop) takes drawer cash to the safe, a Loan brings float
-from the safe, a Paid-Out pays an expense (or tip payout) from the drawer, and
-a Paid-In brings miscellaneous cash into the drawer — each with a reason and,
-above the till's limit, manager approval in place (PIN) or second-person Desk
-submit. At close the counted-against-expected variance posts to a Cash
-Over/Short account.
+from the safe, and a Paid-Out pays an expense, or a tip payout (optionally
+attributed to a server via ``custom_tip_server``), from the drawer with a
+reason and, above the tender's HALO, a second person. At close the
+counted-against-expected variance posts to a Cash Over/Short account, with an
+optional configurable reason above tolerance.
 
 Every movement is a native Journal Entry (``Cash Entry``) linked to its POS
 Opening Entry, with exactly two lines: the till's cash drawer account (the
-company account of a Cash-type till tender) and its counter account. Closing
-adds each submitted movement's drawer line to that tender's expected cash.
-The Over/Short entry is a native Journal Entry the closing posts on submit.
+company account of a Cash-type till tender) and its counter account. For
+foreign-currency tills (POS Profile currency != Company currency), movements
+and closing Over/Short entries enable ``multi_currency`` with the posting
+date's exchange rate so drawer movements and closing expected/counted/variance
+stay in POS Profile currency while GL postings balance in Company currency.
+
+Accounts, the paid-out threshold, the approver role and the Over/Short reason
+rule are POS Profile settings: ``custom_cash_safe_account``,
+``custom_paid_out_account``, ``custom_tips_payable_account``,
+``custom_cash_over_short_account``, ``custom_paid_out_approval_threshold``
+(``0`` = every paid-out needs a second person; blank = no limit),
+``custom_cash_movement_approver_role``, ``custom_require_over_short_reason``
+and ``custom_over_short_reason_tolerance``.
 """
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from ury.brand import coded_message
 
 # Whether each movement takes cash out of the drawer (True) or brings it in.
 LEAVES_DRAWER = {"Pickup": True, "Loan": False, "Paid Out": True, "Paid In": False}
+
+
+def paid_out_threshold(profile):
+	"""Return the paid-out second-person threshold in POS Profile currency, or None for no limit.
+
+	``0`` (the default) means every paid-out needs a second person; blank (``None``
+	or whitespace-only string) means no limit.
+	"""
+	raw = profile.get("custom_paid_out_approval_threshold")
+	if raw is None or (isinstance(raw, str) and not raw.strip()):
+		return None
+	return flt(raw)
+
+
+def account_currency(account, company_currency):
+	return frappe.db.get_value("Account", account, "account_currency") or company_currency
+
+
+def resolve_exchange_rate(from_currency, to_currency, posting_date=None):
+	if not from_currency or not to_currency or from_currency == to_currency:
+		return 1.0
+	from erpnext.setup.utils import get_exchange_rate
+
+	rate = flt(get_exchange_rate(from_currency, to_currency, posting_date or frappe.utils.nowdate()))
+	if rate <= 0:
+		frappe.throw(
+			coded_message(
+				"CASH-EXCHANGE-RATE",
+				_("Set a Currency Exchange rate from {0} to {1} before posting a foreign-currency till entry.").format(
+					from_currency, to_currency
+				),
+			)
+		)
+	return rate
+
+
+def build_movement_je_accounts(
+	drawer,
+	counter,
+	drawer_leaves,
+	profile_amount,
+	profile_currency,
+	company_currency,
+	posting_date,
+	cost_center,
+):
+	"""Build balanced 2-line Journal Entry accounts for a single- or multi-currency till."""
+	company_precision = frappe.get_precision("Journal Entry Account", "debit") or 2
+	acct_precision = frappe.get_precision("Journal Entry Account", "debit_in_account_currency") or 2
+	profile_to_company = resolve_exchange_rate(profile_currency, company_currency, posting_date)
+	company_amount = flt(flt(profile_amount) * profile_to_company, company_precision)
+
+	rows = []
+	for acct, is_debit in ((drawer, not drawer_leaves), (counter, drawer_leaves)):
+		curr = account_currency(acct, company_currency)
+		if curr == profile_currency:
+			acct_amount = flt(profile_amount, acct_precision)
+			rate = (
+				1.0
+				if curr == company_currency
+				else (flt(company_amount / acct_amount, 9) if acct_amount else profile_to_company)
+			)
+		elif curr == company_currency:
+			acct_amount = company_amount
+			rate = 1.0
+		else:
+			fx = resolve_exchange_rate(curr, company_currency, posting_date)
+			acct_amount = flt(company_amount / fx, acct_precision)
+			rate = flt(company_amount / acct_amount, 9) if acct_amount else fx
+
+		rows.append(
+			{
+				"account": acct,
+				"account_currency": curr,
+				"exchange_rate": rate,
+				"debit_in_account_currency": acct_amount if is_debit else 0,
+				"credit_in_account_currency": 0 if is_debit else acct_amount,
+				"debit": company_amount if is_debit else 0,
+				"credit": 0 if is_debit else company_amount,
+				"cost_center": cost_center,
+			}
+		)
+
+	multi_currency = 1 if any(row["account_currency"] != company_currency for row in rows) else 0
+	return multi_currency, rows
+
+
+def line_amount_in_profile_currency(line, leaves, profile_currency, company_currency, posting_date=None):
+	"""Read the positive movement amount from a drawer line in POS Profile currency."""
+	acct_curr = line.get("account_currency") if isinstance(line, dict) else getattr(line, "account_currency", None)
+	if not profile_currency or not acct_curr or acct_curr == profile_currency:
+		raw_acct = (
+			(line.get("credit_in_account_currency") if isinstance(line, dict) else getattr(line, "credit_in_account_currency", 0))
+			if leaves
+			else (line.get("debit_in_account_currency") if isinstance(line, dict) else getattr(line, "debit_in_account_currency", 0))
+		)
+		if flt(raw_acct):
+			return flt(raw_acct)
+	raw_base = (
+		(line.get("credit") if isinstance(line, dict) else getattr(line, "credit", 0))
+		if leaves
+		else (line.get("debit") if isinstance(line, dict) else getattr(line, "debit", 0))
+	)
+	if profile_currency and company_currency and profile_currency != company_currency:
+		rate = resolve_exchange_rate(profile_currency, company_currency, posting_date)
+		return flt(flt(raw_base) / rate)
+	return flt(raw_base)
 
 
 def validate(doc, method=None):
@@ -42,24 +159,12 @@ def validate(doc, method=None):
 	_check_counter(profile, kind, counter)
 	if kind in ("Paid Out", "Paid In") and not (doc.get("custom_cash_movement_reason") or "").strip():
 		frappe.throw(coded_message("CASH-REASON", _("A {0} needs a reason.").format(kind.lower())))
+	tips = profile.get("custom_tips_payable_account")
+	if not (kind == "Paid Out" and tips and counter.account == tips):
+		doc.custom_tip_server = None
 	if doc.docstatus == 0:
 		doc.custom_cash_movement_approver = None
 	doc.voucher_type = "Cash Entry"
-
-
-def _movement_amount_in_profile_currency(doc, profile):
-	"""Compare thresholds against the movement amount in the till's currency."""
-	drawers = _drawer_accounts(profile, doc.company)
-	for line in doc.get("accounts") or []:
-		if line.get("account") in drawers:
-			leaves = LEAVES_DRAWER.get(doc.get("custom_cash_movement_type"), True)
-			acct_val = flt(line.get("credit_in_account_currency") if leaves else line.get("debit_in_account_currency"))
-			if acct_val > 0:
-				return acct_val
-			base_val = flt(line.get("credit") if leaves else line.get("debit"))
-			if base_val > 0:
-				return base_val
-	return flt(doc.get("total_debit"))
 
 
 def before_submit(doc, method=None):
@@ -75,12 +180,19 @@ def before_submit(doc, method=None):
 	profile = frappe.get_doc(
 		"POS Profile", frappe.db.get_value("POS Opening Entry", doc.custom_pos_opening_entry, "pos_profile")
 	)
-	threshold_field = (
-		"custom_paid_out_approval_threshold" if kind == "Paid Out" else "custom_paid_in_approval_threshold"
+	if kind == "Paid Out":
+		threshold = paid_out_threshold(profile)
+		if threshold is None:
+			doc.custom_cash_movement_approver = None
+			return
+	else:
+		threshold = flt(profile.get("custom_paid_in_approval_threshold"))
+	company_currency = frappe.get_cached_value("Company", doc.company, "default_currency") or profile.currency
+	drawer, _counter = _movement_lines(doc, profile)
+	movement_amount = line_amount_in_profile_currency(
+		drawer, LEAVES_DRAWER[kind], profile.currency, company_currency, doc.posting_date
 	)
-	threshold = flt(profile.get(threshold_field))
-	movement_amount = _movement_amount_in_profile_currency(doc, profile)
-	if movement_amount <= threshold:
+	if flt(movement_amount) <= threshold:
 		doc.custom_cash_movement_approver = None
 		return
 
@@ -103,7 +215,7 @@ def before_submit(doc, method=None):
 			coded_message(
 				"CASH-SECOND-PERSON",
 				_(
-					"A {0} above {1} must be approved by a second authorized person, "
+					"A {0} above {1} must be approved and submitted by a second authorized person, "
 					"not by the person who recorded it."
 				).format(kind.lower(), threshold),
 			)
@@ -118,9 +230,20 @@ def before_cancel(doc, method=None):
 
 
 def till_cash_movements(opening_entry, currency=None):
-	"""Submitted movements of a POS shift: net debit per account (account currency when it
-	matches ``currency``, else company currency)."""
-	from frappe.query_builder.functions import Sum
+	"""Submitted movements of a POS shift: net debit per cash drawer account in POS Profile currency."""
+	opening = frappe.db.get_value(
+		"POS Opening Entry", opening_entry, ["pos_profile", "company"], as_dict=True
+	)
+	profile = frappe.get_doc("POS Profile", opening.pos_profile) if opening and opening.pos_profile else None
+	drawers = _drawer_accounts(profile, opening.company) if profile else set()
+	profile_currency = currency or (profile.currency if profile else None)
+	company_currency = (
+		frappe.get_cached_value("Company", opening.company, "default_currency")
+		if opening and opening.company
+		else None
+	)
+	precision = frappe.get_precision("POS Closing Entry Detail", "expected_amount") or 2
+
 	entry = frappe.qb.DocType("Journal Entry")
 	line = frappe.qb.DocType("Journal Entry Account")
 	rows = (
@@ -130,27 +253,39 @@ def till_cash_movements(opening_entry, currency=None):
 		.select(
 			line.account,
 			line.account_currency,
-			Sum(line.debit - line.credit).as_("base_amount"),
-			Sum(line.debit_in_account_currency - line.credit_in_account_currency).as_("acct_amount"),
+			line.debit_in_account_currency,
+			line.credit_in_account_currency,
+			line.debit,
+			line.credit,
+			entry.posting_date,
 		)
 		.where(
 			(entry.custom_pos_opening_entry == opening_entry)
 			& (entry.docstatus == 1)
 			& (line.parenttype == "Journal Entry")
 		)
-		.groupby(line.account, line.account_currency)
 	).run(as_dict=True)
+
 	totals = {}
 	for row in rows:
-		use_acct = bool(currency and row.get("account_currency") and row.get("account_currency") == currency)
-		amount = flt(row.acct_amount if use_acct else row.base_amount)
-		totals[row.account] = flt(totals.get(row.account, 0) + amount)
+		if drawers and row.account not in drawers:
+			continue
+		if not profile_currency or not row.account_currency or row.account_currency == profile_currency:
+			if row.account_currency:
+				delta = flt(row.debit_in_account_currency) - flt(row.credit_in_account_currency)
+			else:
+				delta = flt(row.debit) - flt(row.credit)
+		else:
+			rate = resolve_exchange_rate(profile_currency, company_currency, row.posting_date)
+			delta = (flt(row.debit) - flt(row.credit)) / rate
+		totals[row.account] = flt(totals.get(row.account, 0) + delta, precision)
 	return totals
 
 
 def validate_closing_cash(doc, method=None):
 	"""POS Closing Entry before_submit: every movement of the shift is decided,
-	and a cash difference has an Over/Short account."""
+	a cash difference has an Over/Short account, and a variance above tolerance
+	has a reason when required by the POS Profile."""
 	pending = frappe.get_all(
 		"Journal Entry",
 		filters={"custom_pos_opening_entry": doc.pos_opening_entry, "docstatus": 0},
@@ -166,72 +301,66 @@ def validate_closing_cash(doc, method=None):
 				).format(", ".join(pending)),
 			)
 		)
-	if _cash_differences(doc):
+	differences = _cash_differences(doc)
+	if differences:
 		_over_short_account(doc)
+		require_reason, tolerance = frappe.db.get_value(
+			"POS Profile",
+			doc.pos_profile,
+			["custom_require_over_short_reason", "custom_over_short_reason_tolerance"],
+		) or (0, 0)
+		if cint(require_reason):
+			precision = frappe.get_precision("POS Closing Entry Detail", "difference") or 2
+			tol = flt(tolerance, precision)
+			exceeds = any(flt(abs(diff), precision) > tol for _mode, diff in differences)
+			if exceeds and not (doc.get("custom_over_short_reason") or "").strip():
+				frappe.throw(
+					coded_message(
+						"CLOSE-OVER-SHORT-REASON",
+						_("Enter a reason for the cash over/short variance above {0} before closing.").format(tol),
+					)
+				)
 
 
 def post_cash_over_short(doc, method=None):
 	"""POS Closing Entry on_submit: post each cash tender's counted-against-expected
-	difference to the till's Cash Over/Short account."""
+	difference to the till's Cash Over/Short account (multi-currency when needed)."""
 	differences = _cash_differences(doc)
 	if not differences:
 		return
 	account = _over_short_account(doc)
-	cost_center = frappe.db.get_value("POS Profile", doc.pos_profile, "cost_center")
-	company_currency = frappe.db.get_value("Company", doc.company, "default_currency")
-	over_short_currency = frappe.db.get_value("Account", account, "account_currency") or company_currency
+	cost_center, profile_currency = frappe.db.get_value(
+		"POS Profile", doc.pos_profile, ["cost_center", "currency"]
+	) or (None, None)
+	company_currency = frappe.get_cached_value("Company", doc.company, "default_currency") or profile_currency
+	profile_currency = profile_currency or company_currency
+	reason = (doc.get("custom_over_short_reason") or "").strip()
+
 	for mode, difference in differences:
 		drawer = _mode_account(mode, doc.company)
-		drawer_currency = frappe.db.get_value("Account", drawer, "account_currency") or company_currency
 		short = difference < 0
-		amount = abs(difference)
-		is_multi_currency = bool(
-			company_currency
-			and (drawer_currency != company_currency or over_short_currency != company_currency)
+		multi_currency, accounts = build_movement_je_accounts(
+			drawer=drawer,
+			counter=account,
+			drawer_leaves=short,
+			profile_amount=abs(difference),
+			profile_currency=profile_currency,
+			company_currency=company_currency,
+			posting_date=doc.posting_date,
+			cost_center=cost_center,
 		)
-		exchange_rate = 1.0
-		if is_multi_currency and drawer_currency != company_currency:
-			from erpnext.setup.utils import get_exchange_rate
-
-			exchange_rate = flt(get_exchange_rate(drawer_currency, company_currency, doc.posting_date)) or 1.0
-		base_amount = flt(amount * exchange_rate)
+		remark = _("Till {0} over/short at closing {1}").format(mode, doc.name)
+		if reason:
+			remark = f"{remark}: {reason}"
 		entry = frappe.new_doc("Journal Entry")
 		entry.voucher_type = "Cash Entry"
 		entry.company = doc.company
 		entry.posting_date = doc.posting_date
-		if is_multi_currency:
-			entry.multi_currency = 1
+		entry.multi_currency = multi_currency
 		entry.custom_pos_closing_entry = doc.name
-		reason = (doc.get("custom_over_short_reason") or "").strip()
-		entry.user_remark = (
-			_("Till {0} over/short at closing {1}: {2}").format(mode, doc.name, reason)
-			if reason
-			else _("Till {0} over/short at closing {1}").format(mode, doc.name)
-		)
-		over_short_amt = base_amount if over_short_currency == company_currency else amount
-		over_short_rate = 1.0 if over_short_currency == company_currency else exchange_rate
-		entry.append(
-			"accounts",
-			{
-				"account": account,
-				"account_currency": over_short_currency,
-				"exchange_rate": over_short_rate,
-				"debit_in_account_currency": over_short_amt if short else 0,
-				"credit_in_account_currency": 0 if short else over_short_amt,
-				"cost_center": cost_center,
-			},
-		)
-		entry.append(
-			"accounts",
-			{
-				"account": drawer,
-				"account_currency": drawer_currency,
-				"exchange_rate": exchange_rate if drawer_currency != company_currency else 1.0,
-				"debit_in_account_currency": 0 if short else amount,
-				"credit_in_account_currency": amount if short else 0,
-				"cost_center": cost_center,
-			},
-		)
+		entry.user_remark = remark
+		for row in accounts:
+			entry.append("accounts", row)
 		# A system posting of the closing, like its consolidated invoice.
 		entry.flags.ignore_permissions = True
 		entry.insert()
@@ -293,7 +422,9 @@ def _movement_lines(doc, profile):
 
 def _check_direction(drawer, kind):
 	leaves = LEAVES_DRAWER[kind]
-	amount, other = (drawer.credit, drawer.debit) if leaves else (drawer.debit, drawer.credit)
+	credit_val = flt(drawer.credit) or flt(drawer.credit_in_account_currency)
+	debit_val = flt(drawer.debit) or flt(drawer.debit_in_account_currency)
+	amount, other = (credit_val, debit_val) if leaves else (debit_val, credit_val)
 	if flt(amount) <= 0 or flt(other):
 		frappe.throw(
 			coded_message(

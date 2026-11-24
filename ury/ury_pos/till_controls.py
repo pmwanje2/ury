@@ -42,6 +42,8 @@ from ury.ury.hooks.ury_cash_movement import (
 	LEAVES_DRAWER,
 	_drawer_accounts,
 	_mode_account,
+	build_movement_je_accounts,
+	paid_out_threshold,
 	till_cash_movements,
 )
 from ury.ury_pos.api import getBranch
@@ -542,6 +544,7 @@ def record_cash_movement(
 	paid_out_target: str = "expense",
 	pos_opening_entry: str | None = None,
 	approval_token: str | None = None,
+	tip_server: str | None = None,
 ) -> dict[str, Any]:
 	"""Record & post a native Cash Entry Journal Entry (Pickup, Loan, Paid Out, Paid In)
 	with in-place Manager PIN approval above limits — never requiring a trip to Desk."""
@@ -588,13 +591,22 @@ def record_cash_movement(
 	}
 
 	approval = None
-	if movement_type in ("Paid Out", "Paid In"):
-		threshold_field = (
-			"custom_paid_out_approval_threshold"
-			if movement_type == "Paid Out"
-			else "custom_paid_in_approval_threshold"
-		)
-		threshold = flt(profile.get(threshold_field))
+	if movement_type == "Paid Out":
+		threshold = paid_out_threshold(profile)
+		if threshold is not None and amount_val > threshold:
+			# Above the till limit: strictly requires a second person (Manager PIN in place)
+			approval = _require_till_privilege(
+				profile,
+				"paid_out",
+				opening.name,
+				claim,
+				token=approval_token,
+				amount=amount_val,
+				fallback_privilege="cash_movement",
+				require_second_person=True,
+			)
+	elif movement_type == "Paid In":
+		threshold = flt(profile.get("custom_paid_in_approval_threshold"))
 		if amount_val > threshold:
 			# Above the till limit: strictly requires a second person (Manager PIN in place)
 			approval = _require_till_privilege(
@@ -636,17 +648,22 @@ def record_cash_movement(
 
 	posting_date = nowdate()
 	company_currency = frappe.db.get_value("Company", profile.company, "default_currency") or currency
-	drawer_currency = _account_currency(drawer, company_currency)
-	counter_currency = _account_currency(counter, company_currency)
-	is_multi_currency = bool(drawer_currency != company_currency or counter_currency != company_currency)
+	multi_currency, je_accounts = build_movement_je_accounts(
+		drawer=drawer,
+		counter=counter,
+		drawer_leaves=leaves,
+		profile_amount=amount_val,
+		profile_currency=currency or company_currency,
+		company_currency=company_currency,
+		posting_date=posting_date,
+		cost_center=profile.get("cost_center"),
+	)
 
-	drawer_rate = _resolve_exchange_rate(drawer_currency, company_currency, posting_date)
-	counter_rate = _resolve_exchange_rate(counter_currency, company_currency, posting_date)
-
-	drawer_acct_amt = amount_val
-	base_amt = flt(drawer_acct_amt * drawer_rate)
-	counter_acct_amt = amount_val if counter_currency == drawer_currency else flt(base_amt / counter_rate)
-
+	clean_server = (
+		(tip_server or "").strip() or None
+		if movement_type == "Paid Out" and clean_target == "tips"
+		else None
+	)
 	remark_parts = [clean_reason or _("{0} on shift {1}").format(movement_type, opening.name)]
 	if clean_ref:
 		remark_parts.append(f"Ref: {clean_ref}")
@@ -659,35 +676,12 @@ def record_cash_movement(
 	entry.custom_cash_movement_type = movement_type
 	entry.custom_cash_movement_reason = clean_reason or None
 	entry.custom_cash_movement_reference = clean_ref or None
+	entry.custom_tip_server = clean_server
 	entry.user_remark = " · ".join(remark_parts)
-	if is_multi_currency:
+	if multi_currency:
 		entry.multi_currency = 1
-	entry.append(
-		"accounts",
-		{
-			"account": drawer,
-			"account_currency": drawer_currency,
-			"exchange_rate": drawer_rate,
-			"debit_in_account_currency": 0 if leaves else drawer_acct_amt,
-			"credit_in_account_currency": drawer_acct_amt if leaves else 0,
-			"debit": 0 if leaves else base_amt,
-			"credit": base_amt if leaves else 0,
-			"cost_center": profile.get("cost_center"),
-		},
-	)
-	entry.append(
-		"accounts",
-		{
-			"account": counter,
-			"account_currency": counter_currency,
-			"exchange_rate": counter_rate,
-			"debit_in_account_currency": counter_acct_amt if leaves else 0,
-			"credit_in_account_currency": 0 if leaves else counter_acct_amt,
-			"debit": base_amt if leaves else 0,
-			"credit": 0 if leaves else base_amt,
-			"cost_center": profile.get("cost_center"),
-		},
-	)
+	for row in je_accounts:
+		entry.append("accounts", row)
 	entry.flags.ignore_permissions = True
 	if approval:
 		entry.flags.cash_movement_approval = {
@@ -708,6 +702,8 @@ def record_cash_movement(
 		"drawer_change": drawer_change,
 		"reason": clean_reason,
 		"reference": clean_ref,
+		"tip_server": clean_server or "",
+		"tip_server_name": _user_full_name(clean_server),
 		"docstatus": cint(entry.docstatus),
 		"status": "Submitted" if cint(entry.docstatus) == 1 else "Pending Approval",
 		"owner": entry.owner,
@@ -740,7 +736,7 @@ def get_till_drawer_status(pos_profile: str, pos_opening_entry: str | None = Non
 			"threshold_exception_count": 0,
 			"no_sale_count": 0,
 			"over_short_tolerance": flt(profile.get("custom_over_short_tolerance")),
-			"paid_out_threshold": flt(profile.get("custom_paid_out_approval_threshold")),
+			"paid_out_threshold": paid_out_threshold(profile),
 			"paid_in_threshold": flt(profile.get("custom_paid_in_approval_threshold")),
 		}
 
@@ -771,7 +767,7 @@ def get_till_drawer_status(pos_profile: str, pos_opening_entry: str | None = Non
 		"threshold_exception_count": cint(exc_count),
 		"no_sale_count": cint(no_sale_count),
 		"over_short_tolerance": flt(profile.get("custom_over_short_tolerance")),
-		"paid_out_threshold": flt(profile.get("custom_paid_out_approval_threshold")),
+		"paid_out_threshold": paid_out_threshold(profile),
 		"paid_in_threshold": flt(profile.get("custom_paid_in_approval_threshold")),
 	}
 

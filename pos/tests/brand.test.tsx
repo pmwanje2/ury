@@ -12,9 +12,10 @@ it('names the configured site during POS startup', () => {
   } finally { vi.unstubAllGlobals(); }
 });
 
-it('offers the classic POS on small displays without a vendor name', () => {
+it('offers Desk on small displays without a vendor name', () => {
   render(<ScreenSizeDialog />);
-  expect(screen.getByText(/classic POS/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /open desk/i })).toBeInTheDocument();
+  expect(screen.queryByText(/ury|frappe|erpnext/i)).toBeNull();
 });
 
 it('uses the contrast-selected text colour on branded accent buttons', () => {

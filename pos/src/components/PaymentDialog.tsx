@@ -42,7 +42,7 @@ function roundToCurrency(amount: number, code?: string | null): number {
 type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number' | 'custom_charged_tip'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'custom_charged_tip' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
   existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
@@ -180,7 +180,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       if (isClearToZero) {
         setDiscountValue('');
       }
-      setAppliedDiscount(Math.max(0, roundToCurrency(baseTotal - message.grand_total, currencyCode)));
+      setAppliedDiscount(Math.max(0, roundToCurrency(baseTotal - Math.max(0, message.grand_total - existingTip), currencyCode)));
     } catch (err) {
       setError(parseFrappeError(err, t('errors.invalid_discount')));
       return;
@@ -195,9 +195,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
   const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
-  // The server's total: its rounded total, or its grand total where the profile does not round.
+  // The server's pre-tip total: its rounded total, or its grand total where the profile does not round.
+  const preTipServerGrand = serverTotals ? Math.max(0, serverTotals.grand_total - existingTip) : 0;
+  const preTipServerRounded = serverTotals?.rounded_total
+    ? Math.max(0, serverTotals.rounded_total - existingTip)
+    : 0;
   const finalTotal = serverTotals
-    ? (serverTotals.rounded_total || serverTotals.grand_total)
+    ? (preTipServerRounded || preTipServerGrand)
     : (preTipRoundedTotal || preTipGrandTotal);
   // A charged or cash tip is owed to the server: the tenders cover it, it is
   // never change, and the server books it to the till's Tips Payable account.
@@ -233,8 +237,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     const metaType = modeMeta[mode]?.type;
     return metaType ? metaType === 'Cash' : /^cash$/i.test(mode);
   };
-  const excess = rawTotalTendered - amountDue;
-  const hasExcess = excess > 0.005;
+  const rawExcess = rawTotalTendered - amountDue;
+  const hasExcess = rawExcess > 0.005;
   const cashTendered = combinedPayments.reduce(
     (sum, p) => (isCashMode(p.mode_of_payment) ? sum + p.amount : sum),
     0,
@@ -242,10 +246,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const nonCashModes = combinedPayments
     .filter((p) => !isCashMode(p.mode_of_payment))
     .map((p) => p.mode_of_payment);
-  const nonCashExcess = hasExcess ? Math.max(0, roundToCurrency(excess - cashTendered, currencyCode)) : 0;
+  const nonCashExcess = hasExcess ? roundToCurrency(Math.max(0, rawExcess - cashTendered), currencyCode) : 0;
   const cashChangeDue =
     hasExcess && nonCashExcess <= 0.005
-      ? Math.max(0, roundToCurrency(Math.min(excess, cashTendered), currencyCode))
+      ? roundToCurrency(Math.max(0, Math.min(rawExcess, cashTendered)), currencyCode)
       : 0;
   const nonCashAllowsTip =
     nonCashExcess > 0.005 &&
@@ -290,7 +294,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const rawShortfall = amountDue - rawTotalTendered;
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
   const isShort = rawShortfall > 0.005;
-  const changeDue = Math.max(0, roundToCurrency(rawTotalTendered - amountDue, currencyCode));
   // A named (non-default) customer on a profile with allow_partial_payment
   // may settle short; the balance stays owed on the invoice. Profile, order-type
   // and profile-level default customers are not named accounts; a profile that
@@ -701,7 +704,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
                 {formatMoney(newPaymentsTotal)} / {formatMoney(balanceDue)}
-                {cashChangeDue > 0.005 && (
+                {cashChangeDue > 0 && (
                   <span className="text-yellow-700 font-semibold">
                     <Coins className="inline w-4 h-4 ms-1 text-yellow-500" />
                     <span className="text-yellow-500 font-bold ms-1">{formatMoney(cashChangeDue)}</span>
@@ -714,7 +717,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatMoney(shortfall) })}
               </p>
             )}
-            {cashChangeDue > 0.005 && (
+            {cashChangeDue > 0 && (
               <p className="text-yellow-700 text-sm font-medium">
                 {t('payment.change_due', { amount: formatMoney(cashChangeDue) })}
               </p>

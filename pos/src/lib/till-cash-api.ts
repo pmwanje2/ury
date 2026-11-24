@@ -7,6 +7,11 @@ export interface TillCashPaidOutTarget {
   label: string;
 }
 
+export interface TillCashServerOption {
+  user: string;
+  full_name: string;
+}
+
 export interface TillCashMovementRow {
   name: string;
   movement_type: CashMovementType;
@@ -15,6 +20,8 @@ export interface TillCashMovementRow {
   reason: string;
   reference?: string;
   target_kind: 'safe' | 'expense' | 'tips' | 'paid_in';
+  tip_server?: string;
+  tip_server_name?: string;
   status: 'Submitted' | 'Pending Approval';
   docstatus: number;
   owner: string;
@@ -33,13 +40,14 @@ export interface TillCashState {
   currency: string;
   opening_entry: string | null;
   opening_user: string | null;
-  paid_out_threshold: number;
+  paid_out_threshold: number | null;
   paid_in_threshold?: number;
   cash_pull_threshold?: number;
   can_approve: boolean;
   current_user: string;
   available_types: Partial<Record<CashMovementType, boolean>>;
   paid_out_targets: TillCashPaidOutTarget[];
+  servers?: TillCashServerOption[];
   movements: TillCashMovementRow[];
   net_drawer_movement: number;
   pending_count: number;
@@ -65,6 +73,7 @@ export async function recordTillCashMovement(payload: {
   reason?: string;
   reference?: string;
   paid_out_target?: 'expense' | 'tips';
+  tip_server?: string;
   approval_token?: string;
 }): Promise<TillCashMovementRow> {
   const body: Record<string, unknown> = {
@@ -81,6 +90,9 @@ export async function recordTillCashMovement(payload: {
   if (payload.paid_out_target !== undefined) {
     body.paid_out_target = payload.paid_out_target;
   }
+  if (payload.tip_server) {
+    body.tip_server = payload.tip_server;
+  }
   if (payload.approval_token) {
     body.approval_token = payload.approval_token;
   }
@@ -91,10 +103,21 @@ export async function recordTillCashMovement(payload: {
   return response.message;
 }
 
-export async function approveTillCashMovement(journalEntry: string): Promise<TillCashMovementRow> {
+export async function approveTillCashMovement(
+  journalEntry: string,
+  approvalToken?: string,
+  approvalReason?: string,
+): Promise<TillCashMovementRow> {
+  const body: Record<string, unknown> = { journal_entry: journalEntry };
+  if (approvalToken) {
+    body.approval_token = approvalToken;
+  }
+  if (approvalReason) {
+    body.approval_reason = approvalReason;
+  }
   const response = await call.post<{ message: TillCashMovementRow }>(
     'ury.ury_pos.cash_movements.approve_till_cash_movement',
-    { journal_entry: journalEntry },
+    body,
   );
   return response.message;
 }

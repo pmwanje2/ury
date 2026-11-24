@@ -152,7 +152,7 @@ it('never shows Change due on non-cash over-tender for Refuse or Post to Charged
 });
 
 it('computes bill discount on pre-tip subtotal and autofills amount due including tip', async () => {
-  vi.spyOn(call, 'get').mockResolvedValueOnce({ message: { grand_total: 90, rounded_total: 90 } });
+  vi.spyOn(call, 'get').mockResolvedValue({ message: { grand_total: 110, rounded_total: 110 } });
   show({ enableDiscount: 1, grandTotal: 120, roundedTotal: 120, chargedTip: 20 });
   const tipField = screen.getByRole('textbox', { name: /^tip$/i }) as HTMLInputElement;
   expect(tipField.value).toBe('20');

@@ -42,9 +42,11 @@ export interface PosProfileLimited {
   payment_mode_meta?: Record<string, PaymentModeMeta>;
   /** POS Profile toggle for cashier touchscreen Pickup / Loan / Paid Out. */
   enable_cash_movements?: number;
+  require_over_short_reason?: number;
+  over_short_reason_tolerance?: number;
   over_short_tolerance?: number;
   cash_pull_threshold?: number;
-  paid_out_approval_threshold?: number;
+  paid_out_approval_threshold?: number | null;
   paid_in_approval_threshold?: number;
   paid_in_enabled?: boolean;
   cash_drawer_id?: string;
@@ -150,9 +152,11 @@ export interface PosProfileCombined extends PosProfileFull {
   payment_mode_accounts?: Record<string, string | null>;
   payment_mode_meta?: Record<string, PaymentModeMeta>;
   enable_cash_movements?: number;
+  require_over_short_reason?: number;
+  over_short_reason_tolerance?: number;
   over_short_tolerance?: number;
   cash_pull_threshold?: number;
-  paid_out_approval_threshold?: number;
+  paid_out_approval_threshold?: number | null;
   paid_in_approval_threshold?: number;
   paid_in_enabled?: boolean;
   cash_drawer_id?: string;
@@ -236,6 +240,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
     payment_mode_meta: limitedProfile.payment_mode_meta,
     enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
+    require_over_short_reason: Number(limitedProfile.require_over_short_reason ?? 0),
+    over_short_reason_tolerance: Number(limitedProfile.over_short_reason_tolerance ?? 0),
     over_short_tolerance: limitedProfile.over_short_tolerance,
     cash_pull_threshold: limitedProfile.cash_pull_threshold,
     paid_out_approval_threshold: limitedProfile.paid_out_approval_threshold,

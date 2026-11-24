@@ -17,6 +17,11 @@ const { mockPosProfile, mockUser, mockPaymentModes } = vi.hoisted(() => ({
     owner: 'cashier@example.com',
     multiple_cashier: 0,
     custom_blind_cash_count: 0,
+    require_over_short_reason: 0,
+    over_short_reason_tolerance: 0,
+    payment_mode_meta: {
+      'Maximus Cash': { type: 'Cash', overtender_rule: 'Refuse' },
+    } as Record<string, { type: string; overtender_rule: string }>,
   },
   mockUser: { name: 'cashier@example.com', full_name: 'Shift Cashier' },
   mockPaymentModes: ['Maximus Cash'],
@@ -72,6 +77,8 @@ describe('POSClosingDialog cash movements expected & difference', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPosProfile.custom_blind_cash_count = 0;
+    mockPosProfile.require_over_short_reason = 0;
+    mockPosProfile.over_short_reason_tolerance = 0;
     getOpenPosOpeningEntriesMock.mockResolvedValue([
       {
         name: 'POS-OPE-2026-00015',
@@ -153,5 +160,35 @@ describe('POSClosingDialog cash movements expected & difference', () => {
 
     render(<POSClosingDialog open onOpenChange={vi.fn()} />);
     expect(await screen.findByText(/pos_closing\.pending_cash_movements/)).toBeInTheDocument();
+  });
+
+  it('requires an Over/Short reason only when cash variance exceeds configured tolerance', async () => {
+    mockPosProfile.require_over_short_reason = 1;
+    mockPosProfile.over_short_reason_tolerance = 500;
+
+    render(<POSClosingDialog open onOpenChange={vi.fn()} />);
+    expect(await screen.findByText('Sh 42800')).toBeInTheDocument();
+
+    const closingInput = screen.getByRole('spinbutton');
+    // Within tolerance (|-300| <= 500): no reason input required, Close POS enabled.
+    fireEvent.change(closingInput, { target: { value: '42500' } });
+    expect(screen.queryByLabelText(/pos_closing\.over_short_reason_label/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'pos_closing.submit' })).not.toBeDisabled();
+
+    // Exceeds tolerance (|-2800| > 500): reason input appears and blocks submit until filled.
+    fireEvent.change(closingInput, { target: { value: '40000' } });
+    const reasonInput = screen.getByLabelText(/pos_closing\.over_short_reason_label/i);
+    expect(reasonInput).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'pos_closing.submit' })).toBeDisabled();
+
+    fireEvent.change(reasonInput, { target: { value: 'Dropped note behind counter' } });
+    expect(screen.getByRole('button', { name: 'pos_closing.submit' })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'pos_closing.submit' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'pos_closing.confirm_submit' }));
+
+    await waitFor(() => expect(createPosClosingEntryMock).toHaveBeenCalled());
+    const payload = createPosClosingEntryMock.mock.calls[0][0];
+    expect(payload.custom_over_short_reason).toBe('Dropped note behind counter');
   });
 });

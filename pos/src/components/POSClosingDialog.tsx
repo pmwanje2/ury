@@ -469,6 +469,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setRows(visible);
       setHiddenRows(hidden);
       setTouchedModes(new Set());
+      setOverShortReason('');
     },
     [posProfile, user, blindCashCount, paymentModes],
   );
@@ -542,6 +543,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPendingCloseApproval(null);
       setBlindVarianceMessage(null);
       setShowForceClose(false);
+      setOverShortReason('');
     }
     onOpenChange(next);
   };
@@ -596,11 +598,37 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const useControlledClose =
     !isSubCashier && (effectiveTolerance !== null || blindCashCount || isClosingOther);
 
+  const requireOverShortReason = Number(posProfile?.require_over_short_reason ?? 0) === 1;
+  const overShortTolerance = Number(posProfile?.over_short_reason_tolerance ?? 0) || 0;
+  const needsOverShortReason = useMemo(() => {
+    if (!requireOverShortReason || blindCashCount || maskAmounts || rows.length === 0) {
+      return false;
+    }
+    const meta = posProfile?.payment_mode_meta;
+    const hasMeta = Boolean(meta && Object.keys(meta).length > 0);
+    const cashRows = hasMeta
+      ? rows.filter((row) => meta?.[row.mode_of_payment]?.type === 'Cash')
+      : rows;
+    return cashRows.some(
+      (row) => Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001,
+    );
+  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance]);
+
   // Closing may be submitted with blank or zero amount fields. Blank inputs
   // count as 0; rows that had activity but a zero close only show a warning.
   const validation = useMemo(() => {
     if (rows.length === 0) {
       return { isValid: false, blockingMessage: null as string | null, warningMessage: null as string | null };
+    }
+
+    if (needsOverShortReason && !overShortReason.trim()) {
+      return {
+        isValid: false,
+        blockingMessage: t('pos_closing.over_short_reason_required', {
+          tolerance: formatCurrency(overShortTolerance, posProfile?.currency),
+        }),
+        warningMessage: null as string | null,
+      };
     }
 
     const zeroRowsWithActivity = rows.filter(
@@ -615,7 +643,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       zeroRowsWithActivity.length > 0 ? t('pos_closing.validation_zero_row_warning') : null;
 
     return { isValid: true, blockingMessage: null as string | null, warningMessage };
-  }, [rows, touchedModes, blindCashCount]);
+  }, [rows, touchedModes, blindCashCount, needsOverShortReason, overShortReason, overShortTolerance, posProfile?.currency]);
 
   const openCloseApproval = async (
     kind: 'close_other_till' | 'over_short_close' | 'force_close',
@@ -643,7 +671,11 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     }
     if (cashVarianceInfo.exceeds) {
       if (!overShortReason.trim()) {
-        setSubmitError(t('pos_closing.over_short_reason_required'));
+        setSubmitError(
+          t('pos_closing.over_short_reason_required', {
+            tolerance: formatCurrency(effectiveTolerance ?? 0, tillCurrency),
+          }),
+        );
         return;
       }
       void openCloseApproval('over_short_close');
@@ -811,6 +843,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             grand_total: totals.grandTotal,
             net_total: totals.netTotal,
             total_quantity: totals.totalQty,
+            ...(overShortReason.trim() ? { custom_over_short_reason: overShortReason.trim() } : {}),
           });
           docName = doc.name;
         }
@@ -890,7 +923,11 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         setCloseOtherToken(result.token);
         setCloseOtherReason(result.reason || null);
         if (!overShortReason.trim()) {
-          setSubmitError(t('pos_closing.over_short_reason_required'));
+          setSubmitError(
+            t('pos_closing.over_short_reason_required', {
+              tolerance: formatCurrency(effectiveTolerance ?? 0, tillCurrency),
+            }),
+          );
           return;
         }
         await openCloseApproval('over_short_close');
@@ -1144,6 +1181,21 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                 </p>
               )}
 
+              {hasRows && needsOverShortReason && !cashVarianceInfo.exceeds && (
+                <div className="mt-4 space-y-1.5">
+                  <label htmlFor="pos-closing-over-short-reason" className="text-sm font-medium text-gray-800">
+                    {t('pos_closing.over_short_reason_label')}
+                  </label>
+                  <Input
+                    id="pos-closing-over-short-reason"
+                    type="text"
+                    value={overShortReason}
+                    onChange={(e) => setOverShortReason(e.target.value)}
+                    placeholder={t('pos_closing.over_short_reason_placeholder')}
+                    disabled={isSubmitting}
+                  />
+                </div>
+              )}
               {hasRows && pendingCashMovements > 0 && (
                 <p className="mt-3 text-sm font-medium text-amber-700">
                   {t('pos_closing.pending_cash_movements', { count: pendingCashMovements })}

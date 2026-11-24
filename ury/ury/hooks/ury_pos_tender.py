@@ -30,13 +30,20 @@ from ury.brand import coded_message
 OVERTENDER_TO_TIP = "Post to Charged Tip"
 
 
+def _grand_total_precision(doc):
+	precision_fn = getattr(doc, "precision", None)
+	return precision_fn("grand_total") if callable(precision_fn) else None
+
+
 def validate_mode_of_payment_halo(doc, method=None):
 	"""Mode of Payment validate: High Amount Lockout (HALO) ceiling cannot be negative."""
 	if flt(doc.get("custom_halo_max_amount")) < 0:
 		frappe.throw(
 			coded_message(
 				"TENDER-HALO-INVALID",
-				_("High Amount Lockout (HALO) on {0} cannot be negative.").format(doc.get("name") or _("Mode of Payment")),
+				_("High Amount Lockout (HALO) on {0} cannot be negative.").format(
+					doc.get("name") or _("Mode of Payment")
+				),
 			)
 		)
 
@@ -64,14 +71,20 @@ def _enforce_tender_sanity_and_halo(doc):
 			frappe.throw(
 				coded_message(
 					"TENDER-NEGATIVE",
-					_("Negative payment amount for {0} is not allowed.").format(row.get("mode_of_payment") or _("tender")),
+					_("Negative payment amount for {0} is not allowed.").format(
+						row.get("mode_of_payment") or _("tender")
+					),
 				)
 			)
 		if amt > 0 and abs(amt - flt(amt, precision)) > 1e-6:
 			if precision == 0:
-				msg = _("{0} tender amounts must be whole numbers without decimals.").format(currency or _("Currency"))
+				msg = _("{0} tender amounts must be whole numbers without decimals.").format(
+					currency or _("Currency")
+				)
 			else:
-				msg = _("{0} tender amounts allow at most {1} decimal places.").format(currency or _("Currency"), precision)
+				msg = _("{0} tender amounts allow at most {1} decimal places.").format(
+					currency or _("Currency"), precision
+				)
 			frappe.throw(coded_message("CASH-PRECISION", msg))
 
 	exceeded = over_halo_tenders_for_invoice(doc)
@@ -165,6 +178,9 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 	if getattr(doc, "_ury_tip_discount_guard", False):
 		return calculate_fn()
 
+	if doc.get("is_return") and doc.is_new() and doc.get("custom_charged_tip") is None:
+		_adopt_return_tip_if_unset(doc)
+
 	account = _tips_account(doc)
 	has_discount = bool(flt(doc.get("additional_discount_percentage")) or flt(doc.get("discount_amount")))
 	if not account or not has_discount:
@@ -177,7 +193,7 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 
 	kept = [row for row in taxes if row.account_head != account]
 	saved_pct = doc.get("additional_discount_percentage")
-	precision = doc.precision("grand_total")
+	precision = _grand_total_precision(doc)
 	reattached = False
 	doc._ury_tip_discount_guard = True
 	try:
@@ -214,11 +230,6 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 		doc._ury_tip_discount_guard = False
 
 
-def _grand_total_precision(doc):
-	precision_fn = getattr(doc, "precision", None)
-	return precision_fn("grand_total") if callable(precision_fn) else None
-
-
 def sync_charged_tip(doc):
 	"""Make the bill's Tips Payable row match ``custom_charged_tip``."""
 	tip = flt(doc.get("custom_charged_tip"), _grand_total_precision(doc))
@@ -237,29 +248,51 @@ def sync_charged_tip(doc):
 	_append_tip_row(doc, account, tip)
 
 
+def _adopt_return_tip_if_unset(doc):
+	"""Populate custom_charged_tip from a newly mapped sales return's copied Tips Payable row.
+
+	Only runs while ``custom_charged_tip`` is still ``None`` (unset by ``no_copy=1`` during
+	``make_sales_return``). Once set — including explicitly zeroed to ``0`` for a partial return —
+	the caller's value is authoritative and never overwritten.
+	"""
+	account = _tips_account(doc)
+	if not account:
+		return
+	existing = [row for row in doc.get("taxes") or [] if row.account_head == account]
+	if not existing:
+		return
+	precision = _grand_total_precision(doc)
+	existing_total = flt(sum(flt(row.tax_amount) for row in existing), precision)
+	if existing_total < 0:
+		doc.custom_charged_tip = existing_total
+		doc.custom_tip_server = _resolve_return_tip_server(doc)
+
+
 def _sync_return_tip(doc):
-	"""Keep the tip reversal visible on sales returns without copying tips on normal duplicates."""
-	precision = doc.precision("grand_total")
+	"""Keep the tip reversal visible on sales returns, and honour explicit zeroing on partial returns."""
+	precision = _grand_total_precision(doc)
+	if doc.is_new() and doc.get("custom_charged_tip") is None:
+		_adopt_return_tip_if_unset(doc)
 	tip = flt(doc.get("custom_charged_tip"), precision)
 	if tip > 0:
 		frappe.throw(coded_message("TIP-NEGATIVE", _("A sales return tip cannot be positive.")))
 	account = _tips_account(doc)
 	if not account:
 		return
-	existing = [row for row in doc.get("taxes") or [] if row.account_head == account]
-	if tip == 0 and existing:
-		existing_total = flt(sum(flt(row.tax_amount) for row in existing), precision)
-		if existing_total < 0:
-			doc.custom_charged_tip = existing_total
-			doc.custom_tip_server = _resolve_return_tip_server(doc)
-	elif tip < 0:
-		_check_tips_account(doc, account)
-		kept = [row for row in doc.get("taxes") or [] if row.account_head != account]
+	kept = [row for row in doc.get("taxes") or [] if row.account_head != account]
+	if tip == 0:
 		doc.set("taxes", kept)
 		for position, row in enumerate(kept, start=1):
 			row.idx = position
-		_append_tip_row(doc, account, tip)
-		doc.custom_tip_server = _resolve_return_tip_server(doc)
+		doc.custom_charged_tip = 0
+		doc.custom_tip_server = None
+		return
+	_check_tips_account(doc, account)
+	doc.set("taxes", kept)
+	for position, row in enumerate(kept, start=1):
+		row.idx = position
+	_append_tip_row(doc, account, tip)
+	doc.custom_tip_server = _resolve_return_tip_server(doc)
 
 
 def _resolve_return_tip_server(doc):
@@ -312,7 +345,7 @@ def _check_tips_account(doc, account):
 
 def _non_cash_overtender(doc):
 	"""The part of the over-payment that cash received cannot return as change."""
-	precision = doc.precision("grand_total")
+	precision = _grand_total_precision(doc)
 	bill = flt(doc.get("rounded_total")) or flt(doc.get("grand_total"))
 	paid = cash = 0
 	non_cash_modes = []

@@ -79,7 +79,7 @@ export interface TillDrawerStatus {
   threshold_exception_count: number;
   no_sale_count: number;
   over_short_tolerance: number;
-  paid_out_threshold: number;
+  paid_out_threshold: number | null;
   paid_in_threshold: number;
 }
 
@@ -175,6 +175,7 @@ export async function recordCashMovementWithControl(payload: {
   reason?: string;
   reference?: string;
   paid_out_target?: 'expense' | 'tips';
+  tip_server?: string;
   pos_opening_entry?: string;
   approval_token?: string;
 }): Promise<{ name: string; docstatus: number; status: string; approver?: string | null }> {
@@ -186,6 +187,7 @@ export async function recordCashMovementWithControl(payload: {
   if (payload.reason !== undefined) body.reason = payload.reason;
   if (payload.reference !== undefined) body.reference = payload.reference;
   if (payload.paid_out_target !== undefined) body.paid_out_target = payload.paid_out_target;
+  if (payload.tip_server) body.tip_server = payload.tip_server;
   if (payload.pos_opening_entry) body.pos_opening_entry = payload.pos_opening_entry;
   if (payload.approval_token) body.approval_token = payload.approval_token;
   const res = await call.post<{

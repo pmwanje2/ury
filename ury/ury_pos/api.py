@@ -949,9 +949,19 @@ def getPosProfile():
             for payment in (pos_profiles.get("payments") or [])
         },
         "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
+        "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
+        "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
         "over_short_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_tolerance")),
         "cash_pull_threshold": frappe.utils.flt(pos_profiles.get("custom_cash_pull_threshold")),
-        "paid_out_approval_threshold": frappe.utils.flt(pos_profiles.get("custom_paid_out_approval_threshold")),
+        "paid_out_approval_threshold": (
+            None
+            if pos_profiles.get("custom_paid_out_approval_threshold") is None
+            or (
+                isinstance(pos_profiles.get("custom_paid_out_approval_threshold"), str)
+                and not pos_profiles.get("custom_paid_out_approval_threshold").strip()
+            )
+            else frappe.utils.flt(pos_profiles.get("custom_paid_out_approval_threshold"))
+        ),
         "paid_in_approval_threshold": frappe.utils.flt(pos_profiles.get("custom_paid_in_approval_threshold")),
         "paid_in_enabled": bool(pos_profiles.get("custom_paid_in_account")),
         "cash_drawer_id": (pos_profiles.get("custom_cash_drawer_id") or "").strip(),
@@ -1051,6 +1061,8 @@ def getPosProfileFull(pos_profile):
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # one configured void reason per line; None on sites without the field
         "custom_void_reasons": profile.get("custom_void_reasons"),
+        "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
+        "over_short_reason_tolerance": frappe.utils.flt(profile.get("custom_over_short_reason_tolerance")),
         "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
         **get_default_customer_config(profile),
     }

@@ -922,8 +922,10 @@ class TestPaidOutAndPaidInWithPin(LoadedSlice1):
                 approval_token="tok-self",
             )
 
-    def test_adversarial_till_with_no_limit_set_fails_closed_for_cashier(self):
-        self.store.profiles["Main Till"]["custom_paid_out_approval_threshold"] = None
+    def test_adversarial_till_with_zero_and_blank_paid_out_thresholds(self):
+        # Per #145 R3 Data field semantics: "0" (default) fails closed for every paid-out;
+        # explicitly blank/None means no paid-out approval limit. Paid-in stays fail-closed on None/0.
+        self.store.profiles["Main Till"]["custom_paid_out_approval_threshold"] = "0"
         self.store.profiles["Main Till"]["custom_paid_in_approval_threshold"] = None
         self.store.current_user = "cashier@example.com"
         with self.assertRaisesRegex(PermissionDenied, r"POS-AUTH-REQUIRED"):
@@ -940,6 +942,14 @@ class TestPaidOutAndPaidInWithPin(LoadedSlice1):
                 amount=1000,
                 reason="Found change",
             )
+        self.store.profiles["Main Till"]["custom_paid_out_approval_threshold"] = ""
+        res = self.tc.record_cash_movement(
+            pos_profile="Main Till",
+            movement_type="Paid Out",
+            amount=1000,
+            reason="Matches",
+        )
+        self.assertEqual(res["docstatus"], 1)
 
     def test_adversarial_negative_zero_and_non_finite_amounts_refused(self):
         self.store.current_user = "cashier@example.com"
