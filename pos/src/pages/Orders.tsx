@@ -1,6 +1,6 @@
 import { qtyReductionMessage } from '../lib/qty-reduction-message';
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus, Users, Utensils } from 'lucide-react';
+import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge, Minus, Users, Utensils, Percent } from 'lucide-react';
 import { Badge, Button, Card, CardContent, Select, SelectItem } from '@ury/ui';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@ury/ui';
 import { showToast } from '@ury/ui';
@@ -13,6 +13,7 @@ import { usePOSStore } from '../store/pos-store';
 import SettledBills from './SettledBills';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import PaymentDialog from '../components/PaymentDialog';
+import DiscountPanel from '../components/DiscountPanel';
 import BillSplitDialog from '../components/BillSplitDialog';
 import BillMergeDialog from '../components/BillMergeDialog';
 import OrderActionsMenu from '../components/OrderActionsMenu';
@@ -153,6 +154,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     selectedOrder: detail,
     selectedOrderItems,
     selectedOrderTaxes,
+    selectedOrderDiscounts,
     selectedOrderLoading,
     selectedOrderError,
     fetchOrders,
@@ -201,6 +203,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const [cancelLoading, setCancelLoading] = React.useState(false);
   const [editLoading, setEditLoading] = React.useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = React.useState(false);
+  const [showDiscountPanel, setShowDiscountPanel] = React.useState(false);
   const [showSplitDialog, setShowSplitDialog] = React.useState(false);
   const [showMergeDialog, setShowMergeDialog] = React.useState(false);
   const [orderActionsMenuOpen, setOrderActionsMenuOpen] = React.useState(false);
@@ -951,46 +954,119 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                       item.qty > 0;
                     const isReducingThisItem = reducingItemKey === item.name;
 
+                    const lineDiscountInfo = selectedOrderDiscounts?.line_discounts?.find(
+                      (ld) => ld.row === item.name,
+                    );
+                    const lineDiscountTotal =
+                      lineDiscountInfo?.line_discount_total ??
+                      (item.price_list_rate > item.rate
+                        ? Math.max(0, (item.price_list_rate - item.rate) * item.qty)
+                        : 0);
+
                     return (
-                      <div key={index} className="flex justify-between items-start gap-3 py-2 border-b border-gray-100">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="break-words text-sm font-medium text-gray-900">{item.item_name}</p>
-                            {discountPercentage !== null && (
-                              <Badge className="shrink-0 bg-red-50 text-red-700 border-red-200 hover:bg-red-50 text-xs">
-                                -{discountPercentage}%
-                              </Badge>
-                            )}
+                      <div key={index} className="py-2 border-b border-gray-100">
+                        <div className="flex justify-between items-start gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="break-words text-sm font-medium text-gray-900">{item.item_name}</p>
+                              {discountPercentage !== null && (
+                                <Badge className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50 text-xs">
+                                  -{discountPercentage}%
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              {canReduceQty && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleReduceItemQty(item)}
+                                  disabled={isReducingThisItem}
+                                  aria-label={`Reduce quantity of ${item.item_name}`}
+                                  className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {isReducingThisItem ? (
+                                    <Spinner className="w-3 h-3" hideMessage message="" />
+                                  ) : (
+                                    <Minus className="w-3 h-3" />
+                                  )}
+                                </button>
+                              )}
+                              <p className="text-xs text-gray-500">{t('orders.qty_label', { qty: item.qty })}</p>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {canReduceQty && (
-                              <button
-                                type="button"
-                                onClick={() => handleReduceItemQty(item)}
-                                disabled={isReducingThisItem}
-                                aria-label={`Reduce quantity of ${item.item_name}`}
-                                className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {isReducingThisItem ? (
-                                  <Spinner className="w-3 h-3" hideMessage message="" />
-                                ) : (
-                                  <Minus className="w-3 h-3" />
-                                )}
-                              </button>
-                            )}
-                            <p className="text-xs text-gray-500">{t('orders.qty_label', { qty: item.qty })}</p>
+                          <div className="shrink-0 text-end tabular-nums">
+                            <p className="text-sm font-semibold text-gray-900">
+                              {formatCurrency(item.amount)}
+                            </p>
                           </div>
                         </div>
-                        <div className="shrink-0 text-end tabular-nums">
-                          <p className="text-sm font-semibold text-gray-900">
-                            {formatCurrency(item.amount)}
-                          </p>
-                        </div>
+                        {lineDiscountTotal > 0 && (
+                          <div
+                            data-testid="line-discount-row"
+                            className="mt-1 ps-3 flex items-center justify-between gap-2 text-xs text-emerald-700"
+                          >
+                            <span className="truncate">
+                              {t('payment.discount')}
+                              {lineDiscountInfo?.discount_percentage
+                                ? ` ${lineDiscountInfo.discount_percentage}%`
+                                : discountPercentage !== null
+                                  ? ` ${discountPercentage}%`
+                                  : ''}
+                              {lineDiscountInfo?.reason ? ` · ${lineDiscountInfo.reason}` : ''}
+                            </span>
+                            <span className="shrink-0 font-medium tabular-nums">
+                              −{formatCurrency(lineDiscountTotal)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
+
+              {/* Check-level Discount Line (shown before Taxes & Charges with reason) */}
+              {((selectedOrder.discount_amount ?? 0) > 0 ||
+                (selectedOrder.additional_discount_percentage ?? 0) > 0 ||
+                (selectedOrderDiscounts?.discount_amount ?? 0) > 0) && (
+                <div className="mb-6" data-testid="check-discount-row">
+                  <div className="flex items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-emerald-900">
+                        {t('payment.discount')}
+                        {(selectedOrderDiscounts?.additional_discount_percentage || selectedOrder.additional_discount_percentage || 0) > 0
+                          ? ` (${selectedOrderDiscounts?.additional_discount_percentage || selectedOrder.additional_discount_percentage}%)`
+                          : ''}
+                        {(selectedOrderDiscounts?.coupon_code || selectedOrder.coupon_code)
+                          ? ` · ${selectedOrderDiscounts?.coupon_code || selectedOrder.coupon_code}`
+                          : ''}
+                      </p>
+                      {(selectedOrderDiscounts?.reason_description || selectedOrderDiscounts?.reason) && (
+                        <p className="text-xs text-emerald-700">
+                          {selectedOrderDiscounts.reason_description || selectedOrderDiscounts.reason}
+                          {selectedOrderDiscounts.note ? ` — ${selectedOrderDiscounts.note}` : ''}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-sm font-bold text-emerald-900 tabular-nums">
+                        −{formatCurrency(selectedOrderDiscounts?.discount_amount || selectedOrder.discount_amount || 0)}
+                      </span>
+                      {isOrderEditable(selectedOrder.status) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                          onClick={() => setShowDiscountPanel(true)}
+                        >
+                          {t('discount.edit_or_remove')}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Taxes */}
               {selectedOrderTaxes.length > 0 && (
@@ -1024,6 +1100,19 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   {t(selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled'
                     ? 'order.print_bill' : 'order.print_receipt')}
                 </Button>
+                {/* Open-Check Discount Key (Simphony/SAP: sits on the open check, not in PaymentDialog) */}
+                {isOrderEditable(selectedOrder.status) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    data-testid="open-check-discount-btn"
+                    className="min-h-11 shrink-0 gap-1.5"
+                    onClick={() => setShowDiscountPanel(true)}
+                  >
+                    <Percent className="w-4 h-4" />
+                    {t('discount.key_label')}
+                  </Button>
+                )}
                 {isOrderEditable(selectedOrder.status) && canSplitBill && (
                   <Button
                     variant="outline"
@@ -1083,8 +1172,36 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           owner={posStore.posProfile?.cashier || ''}
           fetchOrders={fetchOrders}
           clearSelectedOrder={clearSelectedOrder}
-          discountPercentage={selectedOrder.additional_discount_percentage}
-          discountAmount={selectedOrder.discount_amount}
+          discountPercentage={selectedOrderDiscounts?.additional_discount_percentage ?? selectedOrder.additional_discount_percentage}
+          discountAmount={selectedOrderDiscounts?.discount_amount ?? selectedOrder.discount_amount}
+          discountReason={selectedOrderDiscounts?.reason_description || selectedOrderDiscounts?.reason || null}
+          discountNote={selectedOrderDiscounts?.note || null}
+          couponCode={selectedOrderDiscounts?.coupon_code || selectedOrder.coupon_code || null}
+        />
+      )}
+      {showDiscountPanel && selectedOrder && (
+        <DiscountPanel
+          open={showDiscountPanel}
+          invoice={selectedOrder.name}
+          posProfile={posStore.posProfile?.name || ''}
+          items={selectedOrderItems}
+          currency={posStore.posProfile?.currency || posStore.currency}
+          existingDiscounts={selectedOrderDiscounts}
+          onClose={() => setShowDiscountPanel(false)}
+          onApplied={async (summary) => {
+            const updatedOrder: POSInvoice = {
+              ...selectedOrder,
+              grand_total: summary.grand_total,
+              rounded_total: summary.rounded_total,
+              net_total: summary.net_total,
+              total_taxes_and_charges: summary.tax_total,
+              discount_amount: summary.header_discount_amount,
+              additional_discount_percentage: summary.effective_percent > 0 && !summary.header_discount_amount ? summary.effective_percent : (summary.claim?.percent ?? 0),
+              coupon_code: summary.coupon_code,
+            };
+            await fetchOrders();
+            await selectOrder(updatedOrder);
+          }}
         />
       )}
       {selectedOrder && (

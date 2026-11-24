@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Percent, Coins, Printer } from 'lucide-react';
+import { X, Coins, Printer } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
@@ -55,6 +55,9 @@ interface PaymentDialogProps {
   clearSelectedOrder: () => void;
   discountPercentage?: number;
   discountAmount?: number;
+  discountReason?: string | null;
+  discountNote?: string | null;
+  couponCode?: string | null;
 }
 
 const PaymentDialog: React.FC<PaymentDialogProps> = ({
@@ -73,7 +76,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   fetchOrders,
   clearSelectedOrder,
   discountPercentage,
-  discountAmount
+  discountAmount,
+  discountReason,
+  discountNote,
+  couponCode,
 }) => {
   const user = useRootStore((state) => state.user);
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
@@ -87,17 +93,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [printInvoice, setPrintInvoice] = useState(enablePaymentWithoutPrinting);
   const [error, setError] = useState<string | null>(null);
-  const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
-  
-  // Only send a percentage discount the server already carries or previewed via Apply;
-  // never derive a synthetic percentage from a fixed discount_amount or send unapplied typing.
-  const initialAppliedPct = discountPercentage && discountPercentage > 0 ? discountPercentage : null;
-  const [discountValue, setDiscountValue] = useState<string>(initialAppliedPct !== null ? String(initialAppliedPct) : '');
-  const [appliedDiscountPct, setAppliedDiscountPct] = useState<number | null>(initialAppliedPct);
-  const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
+  const appliedDiscount = discountAmount || 0;
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
-  // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
-  const [serverTotals, setServerTotals] = useState<{ grand_total: number; rounded_total: number } | null>(null);
   const receivedPayments = (existingPayments ?? order?.payments ?? []).filter(
     (row) => Number(row?.amount) > 0 && row?.custom_tender_received !== 0 && row?.custom_tender_received !== false,
   );
@@ -142,53 +139,12 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
 
-  const handleApplyDiscount = async () => {
-    try {
-      await assertOfflineActionAllowed('discount');
-    } catch (error) {
-      setError(error instanceof Error ? error.message : t('errors.invalid_discount'));
-      return;
-    }
-    const trimmed = discountValue.trim();
-    const isClearToZero = appliedDiscountPct !== null && (trimmed === '' || parseFloat(trimmed) === 0);
-    const value = isClearToZero ? 0 : parseFloat(trimmed);
-    if (!isClearToZero && (isNaN(value) || value <= 0)) {
-      setError(t('errors.invalid_discount'));
-      return;
-    }
-    if (value > 100) {
-      setError(t('errors.discount_exceeds_max'));
-      return;
-    }
-    try {
-      const { message } = await call.get<{ message: { grand_total: number; rounded_total: number } }>(
-        'ury.ury.doctype.ury_order.ury_order.preview_settlement_totals',
-        { invoice, pos_profile: posProfile, additionalDiscount: value },
-      );
-      setServerTotals(message);
-      setAppliedDiscountPct(isClearToZero ? null : value);
-      if (isClearToZero) {
-        setDiscountValue('');
-      }
-      setAppliedDiscount(Math.max(0, roundToCurrency(baseTotal - message.grand_total, currencyCode)));
-    } catch (err) {
-      setError(parseFrappeError(err, t('errors.invalid_discount')));
-      return;
-    }
-    setError(null);
-  };
-
-  // Order summary logic
+  // Order summary logic (discounts are applied on the open check, read-only here)
   const subtotal = baseTotal;
-  const adjustment = roundedTotal - grandTotal;
-  const roundedAdjustment = roundToCurrency(adjustment, currencyCode);
-  const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
   const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // The server's total: its rounded total, or its grand total where the profile does not round.
-  const finalTotal = serverTotals
-    ? (serverTotals.rounded_total || serverTotals.grand_total)
-    : (roundedTotal || grandTotal);
+  const finalTotal = roundedTotal || grandTotal;
   const balanceDue = Math.max(0, roundToCurrency(finalTotal - receivedTotal, currencyCode));
 
   // Calculate split payment total for new tenders taken now
@@ -215,12 +171,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
   const roomChargeModes = storePosProfile?.room_charge_modes || [];
   const roomChargeUnconfigured = Boolean(storePosProfile?.room_charge_unconfigured) && roomChargeModes.length === 0;
-  const trimmedDiscount = discountValue.trim();
-  const typedDiscount = trimmedDiscount === '' ? null : parseFloat(trimmedDiscount);
-  const hasUnappliedDiscount =
-    appliedDiscountPct !== null
-      ? typedDiscount === null || typedDiscount !== appliedDiscountPct
-      : trimmedDiscount !== '';
   const roomChargeAmount = roomChargeModes
     .reduce((sum: number, mode: string) => sum + (parseFloat(paymentInputs[mode] || '') || 0), 0);
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
@@ -336,9 +286,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       }
 
       if (printInvoice) {
-        // Step 1: Save draft invoice with discount and payment modes without submitting
+        // Step 1: Save draft invoice with payment modes without submitting (saved check discount is preserved server-side)
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-          additionalDiscount: appliedDiscountPct,
           cashier,
           customer,
           invoice,
@@ -379,7 +328,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           amount: totalTendered, due: finalTotal, discount: appliedDiscount,
           modeOfPayment: receivedPayments.length === 0 && newPayments.length === 1 ? newPayments[0]?.mode_of_payment ?? '' : '',
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-            additionalDiscount: appliedDiscountPct,
             cashier,
             customer,
             invoice,
@@ -427,38 +375,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               <X className="w-5 h-5" />
             </Button>
           </div>
-
-          {/* Discount Section (conditional) */}
-          {storePosProfile?.enable_discount === 1 && (
-            <div className="space-y-4 mb-6">
-              <h3 className="text-lg font-semibold flex items-center gap-2">
-                <Percent className="w-5 h-5" />
-                {t('payment.apply_discount')}
-              </h3>
-              <div className="flex gap-2">
-                <Input
-                  type="number"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(e.target.value)}
-                  placeholder={t('payment.discount_placeholder')}
-                  size="sm"
-                  className="flex-1"
-                />
-                <Button
-                  onClick={handleApplyDiscount}
-                  variant="default"
-                  size="sm"
-                >
-                  {t('common.apply')}
-                </Button>
-              </div>
-              {hasUnappliedDiscount && (
-                <p role="status" className="text-xs text-amber-700">
-                  {t('payment.discount_not_applied')}
-                </p>
-              )}
-            </div>
-          )}
 
           {/* Payment Methods Section - Split Payment */}
           <div className="space-y-4 mb-6">
@@ -628,11 +544,26 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 <span className="text-gray-600">{t('payment.subtotal')}</span>
                 <span>{formatMoney(subtotal)}</span>
               </div>
-              {/* Discount */}
-              {appliedDiscount > 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>{t('payment.discount')}</span>
-                  <span>-{formatMoney(appliedDiscount)}</span>
+              {/* Discount (read-only display of discount applied on the open check) */}
+              {(appliedDiscount > 0 || (discountPercentage ?? 0) > 0) && (
+                <div
+                  data-testid="payment-discount-summary"
+                  className="flex justify-between items-start gap-2 text-emerald-700"
+                >
+                  <div className="min-w-0">
+                    <span className="font-medium">
+                      {t('payment.discount')}
+                      {(discountPercentage ?? 0) > 0 ? ` (${discountPercentage}%)` : ''}
+                      {couponCode ? ` · ${couponCode}` : ''}
+                    </span>
+                    {discountReason && (
+                      <p className="text-xs text-emerald-600">
+                        {discountReason}
+                        {discountNote ? ` — ${discountNote}` : ''}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 font-semibold tabular-nums">-{formatMoney(appliedDiscount)}</span>
                 </div>
               )}
               {/* Adjustment (if any) */}
