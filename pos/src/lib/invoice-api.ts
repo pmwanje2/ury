@@ -18,8 +18,11 @@ import type { Filter } from 'frappe-js-sdk/lib/db/types';
 export interface POSInvoice {
   ury_client_order_id?: string | null;
   name: string;
+  pos_profile?: string | null;
   currency?: string;
   conversion_rate?: number | null;
+  efris_irn?: string | null;
+  efris_status?: string | null;
   invoice_printed: number;
   custom_printing_time?: string | null;
   grand_total: number;
@@ -143,7 +146,7 @@ interface GetPOSInvoiceItemsResponse {
 }
 
 export const outstandingFields = [
-  'docstatus', 'name', 'currency', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
+  'docstatus', 'name', 'pos_profile', 'currency', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
   'custom_merged_tables', 'cashier', 'waiter', 'net_total', 'posting_time', 'total_taxes_and_charges',
   'customer', 'customer_name', 'status', 'mobile_number', 'posting_date', 'rounded_total', 'order_type',
   'custom_split_group', 'custom_split_from', 'custom_guest_label', 'custom_merged_pos_invoice',
@@ -334,7 +337,10 @@ export function getOrdersTabForInvoice(
 export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInvoice {
   return {
     name: inv.name,
+    pos_profile: inv.pos_profile,
     currency: inv.currency,
+    efris_irn: inv.efris_irn,
+    efris_status: inv.efris_status,
     ury_client_order_id: inv.ury_client_order_id,
     invoice_printed: inv.invoice_printed,
     custom_printing_time: inv.custom_printing_time ?? null,

@@ -518,6 +518,7 @@ def process_items_for_cancel_kot(
     cancel_kot_naming_series,
     kot_type,
     invoiceItems,
+    void_reason_code=None,
 ):
 
     kot_items = create_order_items(items)
@@ -556,6 +557,7 @@ def process_items_for_cancel_kot(
             cancel_kot_naming_series,
             invoiceItems,
             production_unit,
+            void_reason_code=void_reason_code,
         )
         created_kot_names.append(kot_name)
 
@@ -574,6 +576,7 @@ def create_cancel_kot_doc(
     cancel_kot_naming_series,
     invoiceItems,
     production,
+    void_reason_code=None,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number  
@@ -636,6 +639,12 @@ def create_cancel_kot_doc(
             "order_no":order_number
         }
     )
+    if void_reason_code:
+        try:
+            if frappe.get_meta("URY KOT").has_field("custom_void_reason_code"):
+                kot_cancel_doc.custom_void_reason_code = void_reason_code
+        except Exception:
+            pass
 
     if restaurant_table:
         room = frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
@@ -724,13 +733,16 @@ def kot_execute(
     previous_items=[],
     comments=None,
     offline_printed=0,
+    cancel_reason=None,
+    void_reason_code=None,
 ):
     return _execute_kot(invoice_id, customer, restaurant_table, current_items, previous_items,
-                        comments, offline_printed, desk=True)
+                        comments, offline_printed, desk=True, cancel_reason=cancel_reason,
+                        void_reason_code=void_reason_code)
 
 
 def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None, previous_items=None,
-                 comments=None, offline_printed=0, *, desk=False):
+                 comments=None, offline_printed=0, *, desk=False, cancel_reason=None, void_reason_code=None):
     from frappe import _
 
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
@@ -828,6 +840,8 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
 
     removed_item = []
     for key, prev in previous_lines.items():
+        if flt(prev["qty"]) <= 0:
+            continue
         if key in current_lines and current_lines[key]["comments"] == prev["comments"]:
             continue
         item = dict(prev)
@@ -865,22 +879,26 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
             )
         )
     if total_cancel_items:
-        created_kot_names.extend(
-            process_items_for_cancel_kot(
-                invoice_id,
-                customer,
-                restaurant_table,
-                total_cancel_items,
-                comments,
-                pos_profile_id,
-                cancel_kot_naming_series,
-                "Partially cancelled",
-                list(previous_lines.values()),
-            )
+        created_cancel_kots = process_items_for_cancel_kot(
+            invoice_id,
+            customer,
+            restaurant_table,
+            total_cancel_items,
+            cancel_reason or comments,
+            pos_profile_id,
+            cancel_kot_naming_series,
+            "Partially cancelled",
+            list(previous_lines.values()),
+            void_reason_code=void_reason_code,
         )
+        created_kot_names.extend(created_cancel_kots)
+    else:
+        created_cancel_kots = []
 
     if created_kot_names and cint(offline_printed) != 1:
         print_combined_waiter_order_slip(invoice_id, created_kot_names, restaurant_table)
+
+    return created_cancel_kots
 
 
 # Compare two arrays and return the items that are different

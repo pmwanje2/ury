@@ -68,6 +68,10 @@ def before_submit(doc, method):
     from ury.ury.api.ury_modifiers import validate_invoice_modifiers_before_submit
 
     validate_invoice_modifiers_before_submit(doc, method)
+    if int(doc.get("is_return") or 0) == 1:
+        from ury.ury_pos.void_return_reopen import validate_pos_return_doc
+
+        validate_pos_return_doc(doc, on_submit_check=True)
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
     validate_confirmed_phone_payments(doc, method)
@@ -126,7 +130,7 @@ def apply_disposable_items(doc, method=None):
     Runs once per submit; skips re-adding if disposable lines already exist
     (e.g. on a resubmit of a doc that already went through this).
     """
-    if not doc.get("items"):
+    if not doc.get("items") or int(doc.get("is_return") or 0) == 1:
         return
 
     if any(item.get("is_disposable") for item in doc.items):
@@ -390,9 +394,15 @@ def validate_invoice(doc, method):
     if getattr(frappe.flags, "ury_bill_split", False):
         return
     if doc.is_new():
+        # Genuine brand-new return checks still run the dedicated return mutation guard
+        # (over-return, consolidation, unreferenced-return privilege, table/printed cleanup).
+        if int(doc.get("is_return") or 0) == 1:
+            from ury.ury_pos.void_return_reopen import validate_pos_return_doc
+
+            validate_pos_return_doc(doc)
         return
 
-    # Mutation-level `void_sent_item` gate (Amendment 1 #7 + R2 P0 #4 / P1 #5):
+    # Mutation-level `void_sent_item` / `reduce_sent_qty` gate (Amendment 1 #7 + R2 P0 #4 / P1 #5):
     # Always compare whole-document against the committed DB record so direct REST PUT,
     # Desk, or ORM saves cannot bypass by flipping `is_return`, changing `company`/
     # `pos_profile`/`branch`, flipping `ury_held` 0->1, or swapping `item_code` on a
@@ -401,13 +411,21 @@ def validate_invoice(doc, method):
     if frappe.db.exists("POS Invoice", doc.name):
         before_doc = frappe.get_doc("POS Invoice", doc.name)
     else:
-        before_doc = doc.get_doc_before_save()
+        get_before = getattr(doc, "get_doc_before_save", None)
+        before_doc = get_before() if callable(get_before) else None
 
-    # Only skip genuine return invoices that were ALREADY returns in DB;
-    # flipping `is_return` from 0 -> 1 on a live sent check is NOT exempt!
+    # Only route genuine return invoices that were ALREADY returns in DB (or have no prior
+    # non-return DB row) through the return mutation guard; flipping `is_return` from 0 -> 1
+    # on a live sent check is header tampering and is NOT exempt!
     if before_doc is not None and int(before_doc.get("is_return") or 0) == 1:
+        from ury.ury_pos.void_return_reopen import validate_pos_return_doc
+
+        validate_pos_return_doc(doc)
         return
     if before_doc is None and int(doc.get("is_return") or 0) == 1:
+        from ury.ury_pos.void_return_reopen import validate_pos_return_doc
+
+        validate_pos_return_doc(doc)
         return
 
     if (
@@ -452,8 +470,10 @@ def validate_invoice(doc, method):
                     or (orig_branch and (doc.get("branch") or "") != orig_branch)
                 )
 
+                has_full_void = False
                 if header_tampered:
                     sent_reduced = True
+                    has_full_void = True
                     voided_amount = total_orig_sent_amount
                 else:
                     curr_sent = {}
@@ -473,6 +493,8 @@ def validate_invoice(doc, method):
                         if new_qty < info["qty"] - 1e-9:
                             sent_reduced = True
                             voided_amount += info["rate"] * (info["qty"] - new_qty)
+                            if new_qty <= 0:
+                                has_full_void = True
 
                     code_voided_amount = 0.0
                     for code, old_total in orig_by_code.items():
@@ -480,19 +502,36 @@ def validate_invoice(doc, method):
                         if curr_total < old_total - 1e-9:
                             sent_reduced = True
                             code_voided_amount += orig_max_rate_by_code.get(code, 0.0) * (old_total - curr_total)
+                            if curr_total <= 0:
+                                has_full_void = True
                     voided_amount = max(voided_amount, code_voided_amount)
 
                 if sent_reduced:
-                    if not override.has_verified_approval(doc, "void_sent_item") and not override.may_perform(
-                        frappe.session.user, orig_pos_profile, "void_sent_item", amount=round(voided_amount, 4)
-                    ):
+                    rounded_amt = round(voided_amount, 4)
+                    has_verified_fn = getattr(override, "has_verified_approval", None)
+                    has_verified = bool(
+                        callable(has_verified_fn)
+                        and (
+                            has_verified_fn(doc, "void_sent_item")
+                            or (not has_full_void and has_verified_fn(doc, "reduce_sent_qty"))
+                        )
+                    )
+                    may_act = override.may_perform(
+                        frappe.session.user, orig_pos_profile, "void_sent_item", amount=rounded_amt
+                    ) or (
+                        not has_full_void
+                        and override.may_perform(
+                            frappe.session.user, orig_pos_profile, "reduce_sent_qty", amount=rounded_amt
+                        )
+                    )
+                    if not has_verified and not may_act:
                         frappe.throw(
                             frappe._("Removing or reducing a sent item requires manager approval.")
                             + " [POS-AUTH-REQUIRED]",
                             frappe.PermissionError,
                         )
 
-    if getattr(frappe.flags, "ury_qty_reduction", False):
+    if getattr(frappe.flags, "ury_qty_reduction", False) or getattr(frappe.flags, "ury_authorized_void", False):
         return
     # A new document has no printed copy to compare against, and a return refunds a paid
     # check; neither is an edit of a printed bill.
@@ -541,6 +580,34 @@ def validate_invoice(doc, method):
             frappe.throw(
                 ("Cannot modify items after invoice is printed.\n{0}")
                 .format("\n".join(error_msg))
+            )
+
+
+def before_cancel(doc, method=None):
+    """Refuse direct cancellation of closed / fiscalised POS checks (use Return instead)."""
+    from ury.ury_pos.void_return_reopen import (
+        CODE_VOID_CLOSED_USE_RETURN,
+        CODE_VOID_FISCALISED_USE_RETURN,
+        is_fiscalised_invoice,
+    )
+
+    if is_fiscalised_invoice(doc):
+        frappe.throw(
+            frappe._(
+                "This check was fiscalised and cannot be cancelled directly. Process a return / credit note instead."
+            )
+            + f" [{CODE_VOID_FISCALISED_USE_RETURN}]",
+            frappe.ValidationError,
+        )
+
+    if int(doc.get("docstatus") or 0) == 1 and not getattr(frappe.flags, "ury_allow_pos_cancel", False):
+        if getattr(getattr(frappe, "session", None), "user", None) != "Administrator":
+            frappe.throw(
+                frappe._(
+                    "Closed checks cannot be cancelled directly. Process a return instead."
+                )
+                + f" [{CODE_VOID_CLOSED_USE_RETURN}]",
+                frappe.ValidationError,
             )
 
 

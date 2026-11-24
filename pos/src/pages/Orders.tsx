@@ -42,8 +42,12 @@ import {
   isOrderTypeNotAllowedError,
   isLastItemCannotBeRemovedError,
 } from '../lib/order-api';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, listReasons, overrideErrorMessage, type OverrideReason } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
+import VoidItemDialog from '../components/VoidItemDialog';
+import ReturnCheckDialog from '../components/ReturnCheckDialog';
+import ReopenAdjustCheckDialog from '../components/ReopenAdjustCheckDialog';
+import { formatMoneyAmount } from '../lib/void-return-api';
 import { parseFrappeError } from '@ury/core';
 import { formatMergedTableLabel } from '../lib/table-utils';
 import { t } from '../i18n';
@@ -240,6 +244,16 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     amount: number;
     claim: Record<string, unknown>;
   } | null>(null);
+  const [pendingCancelApproval, setPendingCancelApproval] = React.useState<{
+    order: POSInvoice;
+    reason: string;
+    note: string;
+    isWaste: number;
+    claim: Record<string, unknown>;
+  } | null>(null);
+  const [voidDialogItem, setVoidDialogItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
+  const [showReturnDialog, setShowReturnDialog] = React.useState(false);
+  const [showReopenDialog, setShowReopenDialog] = React.useState(false);
   const [priceOverrideItem, setPriceOverrideItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
   const [openItemDialogOpen, setOpenItemDialogOpen] = React.useState(false);
   const openMenuItems = React.useMemo(
@@ -399,13 +413,79 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     setCancelDialogOpen(true);
   }
 
-  async function handleCancelOrder() {
-    if (!selectedOrder) return;
-    const reason = voidReasonToSubmit();
+  function normalizeCancelReasonForClaim(
+    rawReason: string,
+    rawNote: string,
+    posReasons: OverrideReason[],
+  ): { code: string; note: string; isWaste: number } {
+    let candidate = rawReason.trim();
+    let cleanNote = rawNote.trim();
+    const isWasteFromText = (code: string, desc: string) => {
+      const codeUp = code.trim().toUpperCase();
+      const descLow = desc.trim().toLowerCase();
+      return codeUp.startsWith('WASTE') || descLow.includes('(waste)') || descLow.startsWith('waste') ? 1 : 0;
+    };
+
+    if (posReasons.length > 0) {
+      if (candidate.startsWith('Other: ') && !cleanNote) {
+        const otherRow = posReasons.find((r) => String(r.code || '').toUpperCase() === 'OTHER');
+        if (otherRow) {
+          cleanNote = candidate.slice('Other: '.length).trim();
+          candidate = otherRow.code;
+        }
+      }
+      let matched = posReasons.find((r) => candidate === r.code || candidate === r.description) ?? null;
+      if (!matched) {
+        const candLow = candidate.toLowerCase();
+        const prefixMatches = posReasons.filter((r) =>
+          String(r.description || '').toLowerCase().startsWith(candLow + ' /'),
+        );
+        if (prefixMatches.length === 1) {
+          matched = prefixMatches[0];
+        }
+      }
+      if (!matched) {
+        const otherRow = posReasons.find((r) => String(r.code || '').toUpperCase() === 'OTHER');
+        if (otherRow && candidate.length >= MIN_VOID_NOTE_LENGTH) {
+          matched = otherRow;
+          cleanNote = cleanNote || candidate;
+        }
+      }
+      if (matched) {
+        const code = String(matched.code);
+        const desc = String(matched.description || code);
+        return { code, note: cleanNote, isWaste: isWasteFromText(code, desc) };
+      }
+    }
+
+    return { code: candidate, note: cleanNote, isWaste: isWasteFromText(candidate, candidate) };
+  }
+
+  async function handleCancelOrder(approval?: {
+    token: string;
+    targetOrder?: POSInvoice;
+    reason?: string;
+    note?: string;
+    isWaste?: number;
+  }) {
+    const order = approval?.targetOrder ?? selectedOrder;
+    if (!order) return;
+    const reason = approval?.reason ?? voidReasonToSubmit();
     if (!reason) return;
     setCancelLoading(true);
     try {
-      await cancelOrder(selectedOrder.name, reason);
+      if (approval?.token) {
+        const payload: Record<string, unknown> = {
+          invoice_id: order.name,
+          reason,
+          approval_token: approval.token,
+        };
+        if (approval.note) payload.note = approval.note;
+        if (approval.isWaste) payload.is_waste = 1;
+        await call.post('ury.ury.doctype.ury_order.ury_order.cancel_order', payload);
+      } else {
+        await cancelOrder(order.name, reason);
+      }
       showToast.success(t('success.order_cancelled'));
       setCancelDialogOpen(false);
       setCancelReason('');
@@ -414,10 +494,41 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       clearSelectedOrder();
       fetchOrders();
     } catch (err) {
-      showToast.error(parseFrappeError(err, t('errors.failed_cancel_order')));
+      const parsedMessage = parseFrappeError(err) || (err instanceof Error ? err.message : null);
+      if (!approval?.token && isAuthRequiredError(parsedMessage || err)) {
+        const activeReasons = await listReasons('cancel_check').catch(() => [] as OverrideReason[]);
+        const normalized = normalizeCancelReasonForClaim(reason, '', activeReasons);
+        setPendingCancelApproval({
+          order,
+          reason: normalized.code,
+          note: normalized.note,
+          isWaste: normalized.isWaste,
+          claim: {
+            invoice: order.name,
+            reason: normalized.code,
+            note: normalized.note,
+            is_waste: normalized.isWaste,
+          },
+        });
+      } else {
+        showToast.error(parseFrappeError(err, t('errors.failed_cancel_order')));
+      }
     } finally {
       setCancelLoading(false);
     }
+  }
+
+  async function handleCancelApprovalGranted(result: ManagerApprovalResult) {
+    const pending = pendingCancelApproval;
+    setPendingCancelApproval(null);
+    if (!pending) return;
+    await handleCancelOrder({
+      token: result.token,
+      targetOrder: pending.order,
+      reason: pending.reason,
+      note: pending.note,
+      isWaste: pending.isWaste,
+    });
   }
 
   async function handleEditOrder() {
@@ -454,8 +565,11 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       if (order.no_of_pax != null && Number(order.no_of_pax) > 0) {
         posStore.setNoOfPax(Number(order.no_of_pax));
       }
-      // Fill cart (preserving modifier & Product Bundle combo linkage/overrides)
-      const items = (order.items || []).map((item: any) => ({
+      // Fill cart (skip zeroed void lines and auto-generated disposable rows,
+      // while preserving modifier & Product Bundle combo linkage/overrides)
+      const items = (order.items || [])
+        .filter((item: any) => Number(item.qty || 0) > 0 && !item.is_disposable)
+        .map((item: any) => ({
         id: item.item_code,
         name: item.item_name,
         price: item.rate,
@@ -1120,7 +1234,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   <Button variant="outline" onClick={() => setCancelDialogOpen(false)} disabled={cancelLoading}>
                     {t('common.cancel')}
                   </Button>
-                  <Button variant="danger" onClick={handleCancelOrder} disabled={cancelLoading}>
+                  <Button variant="danger" onClick={() => void handleCancelOrder()} disabled={cancelLoading}>
                     {cancelLoading ? t('common.cancelling') : t('common.confirm_cancel')}
                   </Button>
                 </DialogFooter>
@@ -1241,19 +1355,30 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
                               {canReduceQty && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleReduceItemQty(item)}
-                                  disabled={isReducingThisItem}
-                                  aria-label={t('orders.reduce_item_qty', { item: item.item_name })}
-                                  className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                  {isReducingThisItem ? (
-                                    <Spinner className="w-3 h-3" hideMessage message="" />
-                                  ) : (
-                                    <Minus className="w-3 h-3" />
-                                  )}
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReduceItemQty(item)}
+                                    disabled={isReducingThisItem}
+                                    aria-label={t('orders.reduce_item_qty', { item: item.item_name })}
+                                    className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    {isReducingThisItem ? (
+                                      <Spinner className="w-3 h-3" hideMessage message="" />
+                                    ) : (
+                                      <Minus className="w-3 h-3" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setVoidDialogItem(item)}
+                                    disabled={isReducingThisItem}
+                                    aria-label={`${t('void_return.confirm_void')} ${item.item_name}`}
+                                    className="text-xs font-medium text-red-700 hover:underline px-1.5 py-0.5 rounded border border-red-200 bg-red-50 disabled:opacity-50"
+                                  >
+                                    {t('void_return.confirm_void')}
+                                  </button>
+                                </>
                               )}
                               <p className="text-xs text-gray-500">{t('orders.qty_label', { qty: item.qty })}</p>
                             </div>
@@ -1502,6 +1627,27 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     {t('order.settle_bill')}
                   </Button>
                 )}
+                {(selectedOrder.status === 'Paid' || selectedOrder.status === 'Recently Paid') &&
+                  !isMergedBill(selectedOrder) && (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11 shrink-0"
+                        onClick={() => setShowReturnDialog(true)}
+                      >
+                        {t('void_return.return_refund_action')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11 shrink-0"
+                        onClick={() => setShowReopenDialog(true)}
+                      >
+                        {t('void_return.reopen_adjust_action')}
+                      </Button>
+                    </>
+                  )}
                 {/* Total */}
                 <span className="ms-auto text-2xl font-bold text-gray-900 whitespace-nowrap tabular-nums">
                   {isMergedBill(selectedOrder) ? (
@@ -1604,7 +1750,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       {pendingVoidApproval && (
         <ManagerApproval
           open
-          posProfile={posStore.posProfile?.name || ''}
+          posProfile={pendingVoidApproval.order.pos_profile || posStore.posProfile?.name || ''}
           privilege="void_sent_item"
           title={t('manager_approval.void_sent_item_title')}
           summaryLines={[
@@ -1626,6 +1772,112 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           amount={pendingVoidApproval.amount}
           onApproved={(res) => void handleVoidApprovalGranted(res)}
           onCancel={() => setPendingVoidApproval(null)}
+        />
+      )}
+      {pendingCancelApproval && (
+        <ManagerApproval
+          open
+          posProfile={pendingCancelApproval.order.pos_profile || posStore.posProfile?.name || ''}
+          privilege="cancel_check"
+          title={t('order.cancel_order')}
+          summaryLines={[
+            `${pendingCancelApproval.order.name} · ${formatCurrency(
+              pendingCancelApproval.order.grand_total,
+              pendingCancelApproval.order.currency || profileCurrency,
+            )}`,
+            `${t('void_return.reason_label')}: ${pendingCancelApproval.reason}${pendingCancelApproval.note ? ` — ${pendingCancelApproval.note}` : ''}`,
+          ]}
+          reference={{ doctype: 'POS Invoice', name: pendingCancelApproval.order.name }}
+          claim={pendingCancelApproval.claim}
+          amount={pendingCancelApproval.order.grand_total}
+          requireReason={false}
+          onApproved={(res) => void handleCancelApprovalGranted(res)}
+          onCancel={() => setPendingCancelApproval(null)}
+        />
+      )}
+      {selectedOrder && voidDialogItem && (
+        <VoidItemDialog
+          open
+          posProfile={selectedOrder.pos_profile || posStore.posProfile?.name || ''}
+          invoiceId={selectedOrder.name}
+          currency={selectedOrderCurrency || profileCurrency}
+          item={voidDialogItem}
+          onCompleted={(result) => {
+            setVoidDialogItem(null);
+            showToast.success(qtyReductionMessage(voidDialogItem.item_name, result.new_qty, result.cancel_kot_names));
+            void selectOrder(selectedOrder);
+          }}
+          onClose={() => setVoidDialogItem(null)}
+        />
+      )}
+      {selectedOrder && showReturnDialog && (
+        <ReturnCheckDialog
+          open={showReturnDialog}
+          invoiceId={selectedOrder.name}
+          onCompleted={async (res) => {
+            setShowReturnDialog(false);
+            showToast.success(
+              t('void_return.return_success', {
+                return_invoice: res.return_invoice,
+                amount: formatMoneyAmount(res.refund_total, res.currency),
+              }),
+            );
+            if (posStore.posProfile && res.return_invoice) {
+              try {
+                await printOrder({
+                  orderId: res.return_invoice,
+                  posProfile: posStore.posProfile,
+                  printFormat: resolvePrintFormat({}, posStore.posProfile.print_format),
+                  skipStatusUpdate: true,
+                });
+              } catch (err: any) {
+                showToast.error(
+                  t('payment.receipt_print_failed', { reason: err?.message || String(err) }),
+                );
+              }
+            }
+            fetchOrders();
+          }}
+          onClose={() => setShowReturnDialog(false)}
+        />
+      )}
+      {selectedOrder && showReopenDialog && (
+        <ReopenAdjustCheckDialog
+          open={showReopenDialog}
+          bill={{
+            name: selectedOrder.name,
+            pos_profile: selectedOrder.pos_profile || posStore.posProfile?.name || '',
+            currency: selectedOrderCurrency || profileCurrency,
+            grand_total: selectedOrder.grand_total,
+            rounded_total: selectedOrder.rounded_total,
+            efris_irn: selectedOrder.efris_irn ?? null,
+            efris_status: selectedOrder.efris_status ?? null,
+            items: selectedOrderItems.map((it) => ({
+              item_name: it.item_name,
+              qty: it.qty,
+              amount: it.amount,
+            })),
+            payments: (selectedOrder.payments || []).map((p) => ({
+              mode_of_payment: p.mode_of_payment,
+              amount: p.amount,
+            })),
+          }}
+          availableModes={posStore.paymentModes}
+          onCompleted={(res) => {
+            setShowReopenDialog(false);
+            const target =
+              res.action === 'adjust_closed_check'
+                ? res.replacement_invoice
+                : res.reopened_invoice;
+            showToast.success(
+              t('void_return.reopen_success', {
+                replacement: target,
+                reversal: res.reversal_return,
+              }),
+            );
+            fetchOrders();
+          }}
+          onClose={() => setShowReopenDialog(false)}
         />
       )}
       {selectedOrder && priceOverrideItem && (
