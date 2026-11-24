@@ -19,6 +19,9 @@
   </head>
   <body>
     <div id="root"></div>
+    <footer class="py-2 text-center text-xs text-muted-foreground">
+      {{ (brand.name if brand and brand.name else 'Maximus Serve') | e }} · AGPL-3.0 · <a href="{{ brand_source_url | e }}" class="underline">Source</a>
+    </footer>
     <script>
       window.csrf_token = "{{ csrf_token }}";
       if (!window.frappe) window.frappe = {};

@@ -1550,7 +1550,7 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     if pos_profile:
         if pos_profile not in {profile["name"] for profile in allowed_profiles}:
             frappe.throw(
-                _("[URY-OPENING-PROFILE-NOT-ALLOWED] Not permitted to use this POS Profile."),
+                coded_message("OPENING-PROFILE-NOT-ALLOWED", _("Not permitted to use this POS Profile.")),
                 frappe.PermissionError,
             )
         pos_profile_name = pos_profile

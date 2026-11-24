@@ -56,7 +56,7 @@
 	const sanitizeLabel = (label) => {
 		if (typeof label !== "string") return "Maximus";
 		const cleaned = label.replace(/[^\w\s()&-]/g, "").trim();
-		if (/\b(?:ury|frappe|erpnext|kamra)\b/i.test(cleaned)) return "Maximus";
+		if (/\b(?:ury|frappe|erpnext|kamra|huf|tridz|heykoala)\b/i.test(cleaned)) return "Maximus";
 		return cleaned.slice(0, 32) || "Maximus";
 	};
 
