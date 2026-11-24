@@ -295,6 +295,15 @@ def resolve_pos_reason(
             if candidate == row.get("code") or candidate == row.get("description"):
                 matched = row
                 break
+        if matched is None:
+            cand_low = candidate.lower()
+            prefix_matches = [
+                row
+                for row in reasons
+                if str(row.get("description") or "").lower().startswith(cand_low + " /")
+            ]
+            if len(prefix_matches) == 1:
+                matched = prefix_matches[0]
 
         if matched is None:
             _refuse(CODE_REASON_INVALID, "Choose an active configured reason.", fr.ValidationError)
@@ -385,6 +394,109 @@ def write_authorisation_log(
     doc.insert(ignore_permissions=True)
 
 
+def is_override_policy_active(company: str | None) -> bool:
+    """True when `ury.ury_pos.override` is present and active rules exist for `company`."""
+    if not isinstance(company, str) or not company.strip():
+        return False
+    ov = _override_module()
+    if ov is None:
+        return False
+    fr = _f()
+    try:
+        if fr.db.table_exists("POS Privilege Rule") is not True:
+            return False
+    except Exception:
+        return False
+    return bool(ov.is_policy_active(company))
+
+
+def can_perform_pos_privilege(
+    user: str | None,
+    pos_profile: str | None,
+    privilege: str,
+    *,
+    percent: float | None = None,
+    amount: float | None = None,
+    privilege_group: int = 0,
+    fallback_privileges: tuple[str, ...] = (),
+) -> bool:
+    """True if `user` can perform `privilege` alone under active rules or legacy manager fallback."""
+    fr = _f()
+    profile_name = _safe_profile_name(pos_profile)
+    company = fr.db.get_value("POS Profile", profile_name, "company") if profile_name else None
+    if not isinstance(company, str):
+        company = None
+    actor = user or getattr(getattr(fr, "session", None), "user", None) or ""
+    if is_override_policy_active(company):
+        ov = _override_module()
+        if ov.may_perform(
+            actor,
+            profile_name,
+            privilege,
+            percent=percent,
+            amount=amount,
+            privilege_group=privilege_group,
+        ):
+            return True
+        for alt_priv in fallback_privileges:
+            if ov.may_perform(
+                actor,
+                profile_name,
+                alt_priv,
+                percent=percent,
+                amount=amount,
+                privilege_group=privilege_group,
+            ):
+                return True
+        return False
+    return bool(_user_roles(actor) & DEFAULT_MANAGER_ROLES)
+
+
+def mark_verified_pos_approval(doc, privilege: str, approval=None) -> None:
+    """Attach B2a's unforgeable in-process approval proof to `doc` when available."""
+    ov = _override_module()
+    if ov is not None and hasattr(ov, "mark_verified_approval") and doc is not None:
+        ov.mark_verified_approval(doc, privilege, approval)
+
+
+def _select_token_claim_and_privilege(
+    ov,
+    token: str,
+    privilege: str,
+    claim: dict[str, Any],
+    fallback_privileges: tuple[str, ...],
+    alt_claim: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Choose between B5a's claim/privilege and B2a's compat claim without weakening hash checks."""
+    if not fallback_privileges and alt_claim is None:
+        return privilege, claim
+    hash_fn = getattr(ov, "_hash_token", None)
+    if not callable(hash_fn):
+        return privilege, claim
+    fr = _f()
+    try:
+        if fr.db.table_exists("POS Authorisation Log") is not True:
+            return privilege, claim
+        row = fr.db.get_value(
+            "POS Authorisation Log",
+            {"token_hash": hash_fn(token), "outcome": "Approved"},
+            ["privilege", "claim_values"],
+            as_dict=True,
+        )
+    except Exception:
+        return privilege, claim
+    if not row:
+        return privilege, claim
+    stored_priv = _field(row, "privilege")
+    chosen_priv = stored_priv if stored_priv in (privilege, *fallback_privileges) else privilege
+    chosen_claim = claim
+    if alt_claim is not None:
+        raw_cv = _field(row, "claim_values") or ""
+        if isinstance(raw_cv, str) and '"action":' in raw_cv:
+            chosen_claim = alt_claim
+    return chosen_priv, chosen_claim
+
+
 def require_pos_override(
     privilege: str,
     pos_profile: str | None,
@@ -397,6 +509,9 @@ def require_pos_override(
     amount: float | None = None,
     privilege_group: int = 0,
     forbid_solo: bool = False,
+    doc=None,
+    fallback_privileges: tuple[str, ...] = (),
+    alt_claim: dict[str, Any] | None = None,
 ) -> str:
     """Enforce Simphony/SAP privilege or single-use manager PIN token and always log use."""
     fr = _f()
@@ -414,28 +529,63 @@ def require_pos_override(
     if approval_token:
         if ov is None:
             _refuse(CODE_AUTH_REQUIRED, "Manager approval service is unavailable.", fr.PermissionError)
-        consumed = ov.consume(approval_token, privilege, profile_name, reference_name, claim)
+        chosen_priv, chosen_claim = _select_token_claim_and_privilege(
+            ov, approval_token, privilege, claim, fallback_privileges, alt_claim
+        )
+        consumed = ov.consume(approval_token, chosen_priv, profile_name, reference_name, chosen_claim)
+        if doc is not None:
+            mark_verified_pos_approval(doc, chosen_priv, consumed)
+            if chosen_priv != privilege:
+                mark_verified_pos_approval(doc, privilege, consumed)
         return str(consumed.approver)
 
     if forbid_solo:
         _refuse(CODE_AUTH_REQUIRED, "A different manager must approve this action.", fr.PermissionError)
 
-    policy_active = bool(ov is not None and company and ov.is_policy_active(company))
+    policy_active = is_override_policy_active(company)
     if policy_active:
-        ov.require(
-            privilege,
+        allowed_priv = None
+        if ov.may_perform(
+            user,
             profile_name,
-            reference_name,
-            claim,
-            token=None,
+            privilege,
             percent=percent,
             amount=amount,
             privilege_group=privilege_group,
-        )
+        ):
+            allowed_priv = privilege
+        else:
+            for alt_priv in fallback_privileges:
+                if ov.may_perform(
+                    user,
+                    profile_name,
+                    alt_priv,
+                    percent=percent,
+                    amount=amount,
+                    privilege_group=privilege_group,
+                ):
+                    allowed_priv = alt_priv
+                    break
+        if allowed_priv is None:
+            ov.require(
+                privilege,
+                profile_name,
+                reference_name,
+                claim,
+                token=None,
+                percent=percent,
+                amount=amount,
+                privilege_group=privilege_group,
+            )
+            allowed_priv = privilege
+        if doc is not None:
+            mark_verified_pos_approval(doc, allowed_priv)
+            if allowed_priv != privilege:
+                mark_verified_pos_approval(doc, privilege)
         write_authorisation_log(
             requester=user,
             approver=user,
-            privilege=privilege,
+            privilege=allowed_priv,
             pos_profile=profile_name,
             company=company,
             reference_doctype=reference_doctype,
@@ -450,6 +600,8 @@ def require_pos_override(
     # today's manager roles may act alone; others require a manager PIN.
     roles = _user_roles()
     if roles & DEFAULT_MANAGER_ROLES:
+        if doc is not None:
+            mark_verified_pos_approval(doc, privilege)
         write_authorisation_log(
             requester=user,
             approver=user,

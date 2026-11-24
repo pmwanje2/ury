@@ -341,15 +341,111 @@ def validate_invoice(doc, method):
         doc.waiter = doc.modified_by
     if getattr(frappe.flags, "ury_bill_split", False):
         return
-    if getattr(frappe.flags, "ury_qty_reduction", False):
-        return
-    if getattr(frappe.flags, "ury_authorized_void", False):
-        return
-    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
-        return
-    # A new document has no printed copy to compare against, and a return refunds a paid
-    # check; neither is an edit of a printed bill.
+    # A new document has no printed copy or sent baseline to compare against,
+    # and a return refunds a paid check; neither is an edit of a sent bill.
     if doc.is_new() or doc.get("is_return"):
+        return
+
+    # Mutation-level `void_sent_item` / `reduce_sent_qty` gate (Amendment 1 #7):
+    # catches direct REST, Desk, or ORM saves that reduce or remove already-sent
+    # (non-held) lines without a verified in-process approval or `may_perform`.
+    if not getattr(frappe.flags, "in_patch", False) and not getattr(frappe.flags, "in_migrate", False):
+        from ury.ury_pos.void_return_reopen import (
+            CODE_AUTH_REQUIRED,
+            _override_module,
+            has_sent_kot_for_invoice,
+            is_override_policy_active,
+        )
+
+        company = doc.get("company")
+        pos_profile = doc.get("pos_profile")
+        policy_active = bool(company and pos_profile and is_override_policy_active(company))
+        is_sent_check = policy_active or (
+            int(doc.get("docstatus") or 0) == 0
+            and (int(doc.get("invoice_printed") or 0) == 1 or has_sent_kot_for_invoice(doc.name))
+        )
+        if is_sent_check:
+            get_before = getattr(doc, "get_doc_before_save", None)
+            before_doc = (get_before() if callable(get_before) else None) or frappe.get_doc("POS Invoice", doc.name)
+            orig_sent = {}
+            orig_by_code = {}
+            for item in before_doc.get("items") or []:
+                if int(item.get("ury_held") or 0) == 1 or flt(item.qty) <= 0:
+                    continue
+                ident = _line_identity(item)
+                orig_sent[ident] = {
+                    "qty": flt(item.qty),
+                    "rate": flt(item.get("rate") or 0),
+                    "item_code": item.item_code,
+                }
+                orig_by_code[item.item_code] = orig_by_code.get(item.item_code, 0.0) + flt(item.qty)
+
+            curr_sent = {}
+            curr_by_code = {}
+            for item in doc.get("items") or []:
+                if int(item.get("ury_held") or 0) == 1:
+                    continue
+                ident = _line_identity(item)
+                curr_sent[ident] = flt(item.qty)
+                curr_by_code[item.item_code] = curr_by_code.get(item.item_code, 0.0) + flt(item.qty)
+
+            voided_amount = 0.0
+            sent_reduced = False
+            has_full_void = False
+            for ident, info in orig_sent.items():
+                new_qty = curr_sent.get(ident, 0.0)
+                if new_qty < info["qty"] - 1e-9:
+                    sent_reduced = True
+                    voided_amount += info["rate"] * (info["qty"] - new_qty)
+                    if new_qty <= 0:
+                        has_full_void = True
+            if not sent_reduced:
+                for code, old_total in orig_by_code.items():
+                    if curr_by_code.get(code, 0.0) < old_total - 1e-9:
+                        sent_reduced = True
+                        if curr_by_code.get(code, 0.0) <= 0:
+                            has_full_void = True
+                        break
+
+            if sent_reduced:
+                ov = _override_module()
+                has_verified = bool(
+                    ov is not None
+                    and hasattr(ov, "has_verified_approval")
+                    and (
+                        ov.has_verified_approval(doc, "void_sent_item")
+                        or (not has_full_void and ov.has_verified_approval(doc, "reduce_sent_qty"))
+                    )
+                )
+                if policy_active:
+                    rounded_amt = round(voided_amount, 4)
+                    may_act = bool(
+                        ov.may_perform(frappe.session.user, pos_profile, "void_sent_item", amount=rounded_amt)
+                        or (
+                            not has_full_void
+                            and ov.may_perform(
+                                frappe.session.user, pos_profile, "reduce_sent_qty", amount=rounded_amt
+                            )
+                        )
+                    )
+                    if not has_verified and not may_act:
+                        frappe.throw(
+                            frappe._("Removing or reducing a sent item requires manager approval.")
+                            + f" [{CODE_AUTH_REQUIRED}]",
+                            frappe.PermissionError,
+                        )
+                elif not has_verified and not getattr(frappe.flags, "ury_qty_reduction", False) and not getattr(
+                    frappe.flags, "ury_authorized_void", False
+                ):
+                    frappe.throw(
+                        frappe._(
+                            "Reducing or removing sent items requires a reason and manager approval through the POS."
+                        )
+                        + f" [{CODE_AUTH_REQUIRED}]",
+                        frappe.PermissionError,
+                    )
+
+    if getattr(frappe.flags, "ury_qty_reduction", False) or getattr(frappe.flags, "ury_authorized_void", False):
         return
     remove_items = frappe.db.get_value("POS Profile", doc.pos_profile, "remove_items")
 
@@ -395,34 +491,6 @@ def validate_invoice(doc, method):
                 ("Cannot modify items after invoice is printed.\n{0}")
                 .format("\n".join(error_msg))
             )
-
-    # Mutation-level sent-item void gate: REST, Desk, and old clients cannot reduce
-    # or remove already-sent items (printed or KOT fired) without going through the
-    # authorized POS void/reduction flow (even when POS Profile.remove_items == 1).
-    if int(doc.get("docstatus") or 0) == 0:
-        from ury.ury_pos.void_return_reopen import CODE_AUTH_REQUIRED, has_sent_kot_for_invoice
-
-        is_sent_check = int(doc.get("invoice_printed") or 0) == 1 or has_sent_kot_for_invoice(doc.name)
-        if is_sent_check:
-            original_doc = frappe.get_doc("POS Invoice", doc.name)
-            orig_sent = {
-                _line_identity(item): flt(item.qty)
-                for item in (original_doc.items or [])
-                if flt(item.qty) > 0 and int(item.get("ury_held") or 0) == 0
-            }
-            cur_sent = {
-                _line_identity(item): flt(item.qty)
-                for item in (doc.items or [])
-                if int(item.get("ury_held") or 0) == 0
-            }
-            if any(cur_sent.get(line, 0.0) < qty - 1e-9 for line, qty in orig_sent.items()):
-                frappe.throw(
-                    frappe._(
-                        "Reducing or removing sent items requires a reason and manager approval through the POS."
-                    )
-                    + f" [{CODE_AUTH_REQUIRED}]",
-                    frappe.PermissionError,
-                )
 
 
 def before_cancel(doc, method=None):

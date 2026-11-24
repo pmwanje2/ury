@@ -2516,10 +2516,10 @@ def sync_order(
     captured_at=None,
     offline_printed=0,
     expected_total=None,
+    approval_token=None,
     void_reason=None,
     void_note=None,
     is_waste=0,
-    approval_token=None,
 ):
     # None keeps the order's label; any string, blank included, replaces it
     clear_guest_label = guest_label is not None and not str(guest_label).strip()
@@ -2753,8 +2753,9 @@ def sync_order(
     # dish+note quantity emits a kitchen cancellation even if the dish total
     # stays unchanged. Unsent (ury_held=1) items stay free (Simphony error
     # correct), and previously zeroed rows (qty == 0) are never treated as a
-    # second reduction. Sent-item reductions ALWAYS require a reason and
-    # privilege / manager PIN (never bypassed by remove_items or offline replay).
+    # second reduction. Sent-item reductions ALWAYS require authorization
+    # (privilege or manager PIN) AND a mandatory reason (never bypassed by
+    # remove_items or offline replay).
     sent_void_reason_info = None
     sent_void_approver = None
     sent_waste_items = []
@@ -2762,24 +2763,52 @@ def sync_order(
         def sent_quantities(rows):
             totals = defaultdict(float)
             for row in _kitchen_snapshot(rows):
-                totals[row["item_code"], row["comments"], row.get("reservation_line_key")] += flt(row["qty"])
+                totals[(row["item_code"], row["comments"], row.get("reservation_line_key") or "")] += flt(row["qty"])
             return totals
 
         sent_before, sent_after = sent_quantities(past_item), sent_quantities(items)
+        rate_by_line = {}
+        rate_by_code = {}
+        for inv_row in invoice.items or []:
+            if cint(inv_row.get("ury_held")):
+                continue
+            r_val = flt(inv_row.get("rate") or 0)
+            if inv_row.get("reservation_line_key"):
+                rate_by_line[inv_row.get("reservation_line_key")] = r_val
+            if inv_row.get("item_code") and inv_row.get("item_code") not in rate_by_code:
+                rate_by_code[inv_row.get("item_code")] = r_val
+
         sent_reductions = []
-        for key, prev_qty in sent_before.items():
+        b2a_void_lines = []
+        voided_amount = 0.0
+        for key in sorted(sent_before.keys()):
+            prev_qty = flt(sent_before[key])
             if prev_qty <= 0:
                 continue
-            after_qty = sent_after.get(key, 0.0)
+            after_qty = flt(sent_after.get(key, 0.0))
             if after_qty < prev_qty - 1e-9:
                 item_code, _comment, line_key = key
+                delta_pos = prev_qty - after_qty
+                unit_rate = rate_by_line.get(line_key, rate_by_code.get(item_code, 0.0))
+                voided_amount += unit_rate * delta_pos
                 sent_reductions.append({
                     "item_code": item_code,
-                    "line_key": line_key or "",
+                    "line_key": line_key,
                     "from_qty": float(prev_qty),
                     "to_qty": float(after_qty),
                     "delta": float(after_qty - prev_qty),
                 })
+                b2a_void_lines.append({
+                    "item_code": item_code,
+                    "reservation_line_key": line_key,
+                    "from_qty": prev_qty,
+                    "to_qty": after_qty,
+                    "delta": delta_pos,
+                })
+        voided_amount = round(voided_amount, 4)
+
+        company = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
+        policy_active = _void_ops.is_override_policy_active(company)
 
         if sent_reductions:
             if captured_at is not None or cint(offline_printed) == 1:
@@ -2792,21 +2821,10 @@ def sync_order(
             # Reject reducing a partially paid check below already-received tender.
             received_paid = _void_ops.received_tender_total(invoice)
             if received_paid > 0:
-                rate_by_line = {}
-                rate_by_code = {}
-                for row in invoice.items:
-                    r_val = flt(row.get("rate"))
-                    if row.get("reservation_line_key"):
-                        rate_by_line[row.get("reservation_line_key")] = r_val
-                    rate_by_code[row.get("item_code")] = r_val
                 current_total = flt(invoice.get("rounded_total") or invoice.get("grand_total"))
                 if current_total <= 0:
                     current_total = sum(flt(r.get("qty")) * flt(r.get("rate")) for r in invoice.items)
-                reduction_value = sum(
-                    abs(r["delta"]) * rate_by_line.get(r["line_key"], rate_by_code.get(r["item_code"], 0.0))
-                    for r in sent_reductions
-                )
-                if current_total - reduction_value < received_paid - 1e-6:
+                if current_total - voided_amount < received_paid - 1e-6:
                     frappe.throw(
                         _("Cannot reduce items below payments already received on this check. [{0}]").format(
                             _void_ops.CODE_VOID_PARTIAL_PAYMENT
@@ -2815,18 +2833,33 @@ def sync_order(
 
             has_full_void = any(r["to_qty"] <= 0 for r in sent_reductions)
             privilege = "void_sent_item" if has_full_void else "reduce_sent_qty"
+            fallback_privs = ("void_sent_item",) if privilege == "reduce_sent_qty" else ()
             sent_reductions.sort(key=lambda r: (r["item_code"], r["line_key"]))
 
-            # When POS Reason or override policy is present, enforce reason + PIN/privilege.
-            # Keep backward compatibility for legacy tests that do not configure override/POS Reason.
             has_new_gate = (
-                void_reason is not None
+                policy_active
+                or void_reason is not None
                 or approval_token is not None
                 or cint(is_waste) == 1
-                or _void_ops._override_module() is not None
                 or bool(_void_ops._active_pos_reasons(privilege))
             )
             if has_new_gate:
+                # Authorization check precedes reason validation when caller lacks
+                # solo privilege and supplied no approval token (keeps unauthorized
+                # cashiers from probing reason validation & matches B2a contract).
+                if not approval_token and not _void_ops.can_perform_pos_privilege(
+                    frappe.session.user,
+                    pos_profile,
+                    privilege,
+                    amount=voided_amount,
+                    fallback_privileges=fallback_privs,
+                ):
+                    frappe.throw(
+                        _("You are not permitted to reduce or remove items from this order without manager approval.")
+                        + f" [{_void_ops.CODE_AUTH_REQUIRED}]",
+                        frappe.PermissionError,
+                    )
+
                 sent_void_reason_info = _void_ops.resolve_pos_reason(
                     privilege,
                     pos_profile,
@@ -2841,6 +2874,12 @@ def sync_order(
                     "note": sent_void_reason_info["note"],
                     "is_waste": 1 if sent_void_reason_info["is_waste"] else 0,
                 }
+                b2a_compat_claim = {
+                    "action": "sync_order_void_sent_item",
+                    "lines": b2a_void_lines,
+                    "amount": voided_amount,
+                    "reason": (void_reason or "").strip(),
+                }
                 sent_void_approver = _void_ops.require_pos_override(
                     privilege,
                     pos_profile,
@@ -2848,6 +2887,10 @@ def sync_order(
                     invoice.name,
                     claim,
                     approval_token=approval_token,
+                    amount=voided_amount,
+                    doc=invoice,
+                    fallback_privileges=fallback_privs,
+                    alt_claim=b2a_compat_claim,
                 )
                 if sent_void_reason_info["is_waste"]:
                     wh_by_code = {row.get("item_code"): row.get("warehouse") for row in invoice.items}
@@ -2867,11 +2910,11 @@ def sync_order(
                     frappe.PermissionError,
                 )
         else:
-            # No sent items were reduced. In legacy mode (no POS override/reasons),
+            # No sent items were reduced. In legacy mode (no active override policy / reasons),
             # preserve the native remove_items check for persisted held rows;
             # when POS override/reasons are active, unsent/held items stay free (Error Correct).
             has_override_policy = (
-                _void_ops._override_module() is not None
+                policy_active
                 or bool(_void_ops._active_pos_reasons("void_sent_item"))
             )
             if not has_override_policy and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):

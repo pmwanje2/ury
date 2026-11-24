@@ -968,7 +968,16 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
             {"name": "ROW-1", "item": "STEAK", "item_name": "Steak", "qty": 1, "rate": 35000, "ury_held": 0, "reservation_line_key": "line-1"},
             {"name": "ROW-2", "item": "SOUP", "item_name": "Soup", "qty": 1, "rate": 15000, "ury_held": 0, "reservation_line_key": "line-2"},
         ]
-        # Missing reason -> refused even though POS Profile.remove_items == 1
+        # Cashier without token -> refused with POS-AUTH-REQUIRED even though remove_items == 1
+        with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            self.order_mod.sync_order(
+                items=reduced_items, cashier="cashier@example.test", owner="waiter1@example.test",
+                mode_of_payment="Cash", customer="Walk-in", no_of_pax=2, last_invoice=inv.name,
+                waiter="waiter1@example.test", pos_profile="Till A", last_modified_time=inv.modified,
+                table="T1", invoice=inv.name, order_type="Dine In", room="Main Hall",
+            )
+        # Manager acting alone without reason -> refused with POS-REASON-REQUIRED even though remove_items == 1
+        self.h.frappe.session.user = "manager@example.test"
         with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-REASON-REQUIRED"):
             self.order_mod.sync_order(
                 items=reduced_items, cashier="cashier@example.test", owner="waiter1@example.test",
@@ -976,7 +985,8 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
                 waiter="waiter1@example.test", pos_profile="Till A", last_modified_time=inv.modified,
                 table="T1", invoice=inv.name, order_type="Dine In", room="Main Hall",
             )
-        # With reason but no manager PIN -> refused for cashier
+        # Cashier with reason but no manager PIN -> refused with POS-AUTH-REQUIRED
+        self.h.frappe.session.user = "cashier@example.test"
         with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
             self.order_mod.sync_order(
                 items=reduced_items, cashier="cashier@example.test", owner="waiter1@example.test",
@@ -1030,7 +1040,19 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
         self.assertFalse(any(k.type == "Partially cancelled" for k in new_kots))
 
         # Part B: Cutting line-2 to 0 while simultaneously adding a new SOUP line-4 in one sync_order
-        # MUST still trigger the sent-item void gate!
+        # MUST still trigger the sent-item void gate (auth for cashier, reason for manager)!
+        with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            self.order_mod.sync_order(
+                items=[
+                    {"item": "SOUP", "item_name": "Soup", "qty": 1, "rate": 15000, "ury_held": 0, "reservation_line_key": "line-4"},
+                    {"item": "STEAK", "item_name": "Steak", "qty": 1, "rate": 35000, "ury_held": 0, "reservation_line_key": "line-3"},
+                ],
+                cashier="cashier@example.test", owner="waiter1@example.test", mode_of_payment="Cash",
+                customer="Walk-in", no_of_pax=2, last_invoice=inv.name, waiter="waiter1@example.test",
+                pos_profile="Till A", last_modified_time=inv.modified, table="T1", invoice=inv.name,
+                order_type="Dine In", room="Main Hall",
+            )
+        self.h.frappe.session.user = "manager@example.test"
         with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-REASON-REQUIRED"):
             self.order_mod.sync_order(
                 items=[

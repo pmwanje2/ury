@@ -249,6 +249,8 @@ def reduce_order_item_qty(
 	approver = None
 	if not held:
 		privilege = "void_sent_item" if new_qty == 0 else "reduce_sent_qty"
+		voided_qty = flt(current_qty) - flt(new_qty)
+		voided_amount = round(flt(item_row.get("rate") or 0) * voided_qty, 4)
 		reason_info = resolve_pos_reason(
 			privilege,
 			pos_profile.name,
@@ -267,6 +269,15 @@ def reduce_order_item_qty(
 			"note": reason_info["note"],
 			"is_waste": 1 if reason_info["is_waste"] else 0,
 		}
+		b2a_compat_claim = {
+			"action": "reduce_order_item_qty",
+			"item_row_name": item_row_name,
+			"item_code": item_code,
+			"from_qty": flt(current_qty),
+			"to_qty": flt(new_qty),
+			"amount": voided_amount,
+			"reason": (reason or "").strip(),
+		}
 		approver = require_pos_override(
 			privilege,
 			pos_profile.name,
@@ -274,6 +285,10 @@ def reduce_order_item_qty(
 			invoice_id,
 			claim,
 			approval_token=approval_token,
+			amount=voided_amount,
+			doc=pos_invoice,
+			fallback_privileges=("void_sent_item",) if privilege == "reduce_sent_qty" else (),
+			alt_claim=b2a_compat_claim,
 		)
 
 	from ury.ury.api.ury_availability import apply_count_delta
@@ -358,6 +373,7 @@ def reduce_order_item_qty(
 		"cancel_kot_names": created_kot_names,
 		"actor": actor,
 		"approver": approver,
+		"approved_by": approver,
 		"reason": reason_info["code"] if reason_info else reason,
 		"is_waste": bool(reason_info["is_waste"]) if reason_info else False,
 		"waste_stock_entry": waste_stock_entry,
