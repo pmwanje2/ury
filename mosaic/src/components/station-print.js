@@ -200,13 +200,18 @@ export function createStationPrinter({
       if (!remote || typeof remote !== "object") return { ...settings };
       const localStored = read("settings", null);
       if (localStored) {
-        // Fill in backup settings from server when local storage has none.
-        settings = {
-          ...settings,
-          backupPrinter: settings.backupPrinter || String(remote.backupPrinter ?? "").trim(),
-          backupHost: settings.backupHost || String(remote.backupHost ?? "").trim(),
-          backupPort: settings.backupPort || Number(remote.backupPort) || 9100,
-        };
+        // Only backfill server backup target when local storage has neither backup queue nor backup host.
+        const hasLocalBackup = Boolean(
+          String(settings.backupPrinter ?? "").trim() || String(settings.backupHost ?? "").trim(),
+        );
+        if (!hasLocalBackup) {
+          settings = {
+            ...settings,
+            backupPrinter: String(remote.backupPrinter ?? "").trim(),
+            backupHost: String(remote.backupHost ?? "").trim(),
+            backupPort: Number(remote.backupPort) || 9100,
+          };
+        }
         return { ...settings };
       }
       settings = {

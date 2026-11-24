@@ -33,7 +33,9 @@ export interface SettlementPaymentLine {
 }
 
 export interface PaymentSettledEventDetail extends DrawerKickEventDetail {
+  invoice?: string | null;
   autoKickEnabled?: boolean | number | null;
+  modes?: string[];
   payments?: SettlementPaymentLine[];
   changeAmount?: number;
   drawerModes?: Iterable<string>;
@@ -121,11 +123,13 @@ export async function executeDrawerKick(
   deps: DrawerKickDependencies = {},
 ): Promise<DrawerKickResult> {
   const profile = deps.getProfile ? deps.getProfile() : null;
-  const pin = normalizePin(detail.pin ?? profile?.custom_drawer_pin ?? 2);
+  const hasExplicitPin = detail.pin !== undefined && detail.pin !== null && String(detail.pin).trim() !== '';
+  const hasExplicitHex = detail.hex !== undefined && detail.hex !== null && String(detail.hex).trim() !== '';
+  const pin = normalizePin(hasExplicitPin ? detail.pin : (profile?.custom_drawer_pin ?? 2));
   let hex: string;
   try {
     hex = resolveDrawerKickHex({
-      hex: detail.hex ?? profile?.custom_drawer_kick_hex ?? null,
+      hex: hasExplicitHex ? detail.hex : (hasExplicitPin ? null : (profile?.custom_drawer_kick_hex ?? null)),
       pin,
     });
   } catch (error) {
@@ -236,10 +240,13 @@ export function installDrawerKickListener(options: {
         ? detail.autoKickEnabled
         : profile?.custom_auto_kick_on_cash_tender;
     const drawerModes = detail.drawerModes ?? profile?.drawer_opening_modes ?? [];
+    const effectivePayments: SettlementPaymentLine[] = Array.isArray(detail.payments)
+      ? detail.payments
+      : (Array.isArray(detail.modes) ? detail.modes.map((mode_of_payment) => ({ mode_of_payment, amount: 1 })) : []);
     if (
       !shouldAutoKickForSettlement({
         autoKickEnabled,
-        payments: detail.payments,
+        payments: effectivePayments,
         changeAmount: detail.changeAmount,
         drawerModes,
       })

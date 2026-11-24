@@ -344,6 +344,12 @@ def process_items_for_cancel_kot(
 
     created_kot_names = []
 
+    effective_table = restaurant_table or pos_invoice.get("restaurant_table")
+    room = (
+        frappe.db.get_value("URY Table", effective_table, "restaurant_room")
+        if effective_table
+        else None
+    )
     # Build a map of production unit -> items for that unit using the unified resolver
     production_items_map = {}
     for item in kot_items:
@@ -360,6 +366,9 @@ def process_items_for_cancel_kot(
             company=pos_invoice.company,
             branch=pos_profile.branch,
             production_policy=production_policy,
+            pos_profile=pos_profile_id,
+            order_type=pos_invoice.get("order_type"),
+            room=room,
         )
         for production_unit in resolved_units:
             if production_unit not in production_items_map:

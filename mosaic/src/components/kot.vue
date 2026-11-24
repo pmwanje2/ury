@@ -114,8 +114,38 @@
           </select>
         </label>
         <label class="mt-3 block font-semibold">{{ __("Backup printer") }}
-          <input v-model="stationSettings.backupPrinter" class="mt-1 w-full rounded border p-2" type="text" autocomplete="off" :placeholder="__('None')">
+          <input
+            v-model="stationSettings.backupPrinter"
+            @input="onBackupPrinterInput"
+            data-testid="backup-printer-input"
+            class="mt-1 w-full rounded border p-2"
+            type="text"
+            autocomplete="off"
+            :placeholder="__('None')"
+          >
         </label>
+        <template v-if="!stationSettings.backupPrinter">
+          <label class="mt-3 block font-semibold">{{ __("Backup printer host") }}
+            <input
+              v-model="stationSettings.backupHost"
+              data-testid="backup-host-input"
+              class="mt-1 w-full rounded border p-2"
+              type="text"
+              autocomplete="off"
+              :placeholder="__('None')"
+            >
+          </label>
+          <label class="mt-3 block font-semibold">{{ __("Backup printer port") }}
+            <input
+              v-model.number="stationSettings.backupPort"
+              data-testid="backup-port-input"
+              class="mt-1 w-full rounded border p-2"
+              type="number"
+              min="1"
+              max="65535"
+            >
+          </label>
+        </template>
         <label class="mt-4 flex items-center gap-2 font-semibold">
           <input v-model="stationSettings.enabled" type="checkbox"> {{ __("Enable station printing") }}
         </label>
@@ -599,6 +629,8 @@ export default {
       availabilityRoles: [],
       kot_channel: "",
       kot_error_channel: "",
+      kot_priority_channel: "",
+      kot_branch_priority_channel: "",
       clickedItems: new Set(),
       struckThroughItems: {},
       loggeduser: "",
@@ -706,11 +738,17 @@ export default {
         this.printerListError = kitchenErrorMessage(error, t("Installed printers are unavailable. Start QZ Tray, or use a network printer."));
       }
     },
+    onBackupPrinterInput() {
+      if (this.stationSettings.backupPrinter && this.stationSettings.backupPrinter.trim()) {
+        this.stationSettings.backupHost = "";
+      }
+    },
     savePrintSettings() {
       if (!this.canManagePrintSettings) return;
       try {
         const next = { ...this.stationSettings };
         if (next.printer) next.host = "";
+        if (String(next.backupPrinter || "").trim()) next.backupHost = "";
         this.stationSettings = this.stationPrinter.configure(next);
         this.showPrintSettings = false;
         if (this.call && typeof this.call.post === "function" && this.production) {
@@ -721,6 +759,30 @@ export default {
         }
       } catch (error) {
         this.stationSettingsError = clientMessage(error.message || t("Could not load printer settings."));
+      }
+    },
+    sendStationHeartbeat() {
+      if (!this.production || !this.call || typeof this.call.post !== "function") return;
+      return this.call
+        .post("ury.ury.api.ury_kot_display.record_station_heartbeat", {
+          production_unit: this.production,
+        })
+        .catch(() => {});
+    },
+    startStationHeartbeat() {
+      this.stopStationHeartbeat();
+      if (!this.production || !this.serverDeviceConfig?.auto_failover_enabled) return;
+      const timeoutSec = Number(this.serverDeviceConfig.heartbeat_timeout_seconds) || 120;
+      const intervalMs = Math.max(10000, Math.min(30000, Math.floor((timeoutSec * 1000) / 3)));
+      this.sendStationHeartbeat();
+      this.heartbeatInterval = setInterval(() => {
+        if (this.socketActive) this.sendStationHeartbeat();
+      }, intervalMs);
+    },
+    stopStationHeartbeat() {
+      if (this.heartbeatInterval) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
       }
     },
     playAlertSound(path) {
@@ -850,6 +912,9 @@ export default {
               }
               this.kot_channel = `kot_update_${this.branch}_${this.production}`;
               this.kot_error_channel = `kot_error_${this.branch}_${this.production}`;
+              const priorityBranch = this.branch || this.availabilityBranch;
+              this.kot_priority_channel = priorityBranch ? `kot_priority_${priorityBranch}_${this.production}` : "";
+              this.kot_branch_priority_channel = priorityBranch ? `kot_priority_${priorityBranch}` : "";
               this.kot = result.message.KOT;
               this.kot.forEach(kot => this.knownKots.add(kot.name));
               this.loadingKots = false;
@@ -1285,6 +1350,7 @@ export default {
           // Leaving the station during authentication or the first snapshot installs no listeners.
           if (!this.socketActive) return;
           this.startServiceRequests();
+          this.startStationHeartbeat();
           this.socketStale = !socket?.connected;
           if (this.audio_alert === 1) {
             this.showAudioAlertMessage = true;
@@ -1347,6 +1413,19 @@ export default {
               this.hideKotErrorAlert();
             }, 8000);
           };
+          const handlePriorityUpdate = () => {
+            this.fetchKOT()
+              .then(() => {
+                this.masonryLoading();
+              })
+              .catch(console.error);
+          };
+          if (this.kot_priority_channel) {
+            this.socketHandlers[this.kot_priority_channel] = handlePriorityUpdate;
+          }
+          if (this.isExpo && this.kot_branch_priority_channel) {
+            this.socketHandlers[this.kot_branch_priority_channel] = handlePriorityUpdate;
+          }
           if (socket) {
             for (const [channel, handler] of Object.entries(this.socketHandlers)) socket.on(channel, handler);
           }
@@ -1367,7 +1446,7 @@ export default {
     this.stopServiceRequests();
     this.cancelPendingServes();
     clearInterval(this.timeInterval);
-    clearInterval(this.heartbeatInterval);
+    this.stopStationHeartbeat();
     window.removeEventListener("resize", this.masonryLoading);
     window.removeEventListener("online", this.handleOnline);
     window.removeEventListener("offline", this.handleOffline);

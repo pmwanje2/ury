@@ -3092,3 +3092,4 @@ Unique identifier stored in Maximus. Renaming will update linked records automat
 You need the Maximus Manager role to access this section.,تحتاج إلى دور مدير Maximus للوصول إلى هذا القسم.,
 "cancel_partial requires item_states describing per-item execution state, which Maximus KOT Execution does not yet track (KOT-level only, per V3-53's documented scope decision); partial cancellation cannot be safely applied for KOT {0}",يتطلب cancel_partial وجود item_states يصف حالة التنفيذ لكل صنف، وهو ما لا يتتبعه تنفيذ أمر المطبخ في Maximus حاليًا (على مستوى أمر المطبخ فقط، وفق قرار النطاق الموثّق في V3-53)؛ لذلك لا يمكن تطبيق الإلغاء الجزئي بأمان لأمر المطبخ {0},
 "{0}. If this item is linked to existing transactions in Maximus, deactivate it by toggling Disabled instead.","{0}. إذا كان هذا الصنف مرتبطاً بمعاملات قائمة في Maximus، فعطّله من خلال تبديل ""معطّل"" بدلاً من ذلك.",
+URY Routing Override,تجاوز توجيه المحطة,

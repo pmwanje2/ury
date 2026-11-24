@@ -56,6 +56,10 @@ export interface PosProfileLimited {
   room_charge_unconfigured?: boolean;
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
   efris_print_wait_seconds?: number;
+  custom_drawer_pin?: number | string | null;
+  custom_drawer_kick_hex?: string | null;
+  custom_auto_kick_on_cash_tender?: number | boolean | null;
+  drawer_opening_modes?: string[];
 }
 
 export interface PosProfileLimitedResponse {
@@ -118,10 +122,15 @@ export interface PosProfileFull {
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   efris_print_wait_seconds?: number;
+  custom_drawer_pin?: number | string | null;
+  custom_drawer_kick_hex?: string | null;
+  custom_auto_kick_on_cash_tender?: number | boolean | null;
+  drawer_opening_modes?: string[];
 }
 
 // Combined POS Profile with both limited and full fields
 export interface PosProfileCombined extends PosProfileFull {
+  pos_profile?: string;
   ury_offline_capture?: number | string | boolean;
   // Add limited fields that don't exist in full profile
   waiter: string;
@@ -205,6 +214,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
   // Merge both profiles
   const combinedProfile: PosProfileCombined = {
     ...fullProfile,
+    pos_profile: limitedProfile.pos_profile || fullProfile.name,
     currency: fullProfile.currency || limitedProfile.currency || '',
     country: fullProfile.country || limitedProfile.country || '',
     owner: limitedProfile.owner,
@@ -240,6 +250,14 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
     efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    custom_drawer_pin: limitedProfile.custom_drawer_pin ?? fullProfile.custom_drawer_pin ?? 2,
+    custom_drawer_kick_hex: limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
+    custom_auto_kick_on_cash_tender: Number(
+      limitedProfile.custom_auto_kick_on_cash_tender ??
+      fullProfile.custom_auto_kick_on_cash_tender ??
+      1
+    ),
+    drawer_opening_modes: limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
   };
 
   return combinedProfile;

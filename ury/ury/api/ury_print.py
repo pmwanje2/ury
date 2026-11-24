@@ -507,6 +507,47 @@ def get_drawer_kick_config(pos_profile):
     }
 
 
+def _allowed_drawer_printers(pos_profile: str, profile_doc) -> set[str]:
+    """Return bill printers configured on `pos_profile` or rooms in `profile_doc.branch`."""
+    allowed: set[str] = set()
+    for printer in _bill_printers(pos_profile, None) or []:
+        if isinstance(printer, str) and printer.strip():
+            allowed.add(printer.strip())
+
+    for row in getattr(profile_doc, "printer_settings", None) or []:
+        printer = getattr(row, "printer", None)
+        if getattr(row, "bill", 0) and isinstance(printer, str) and printer.strip():
+            allowed.add(printer.strip())
+
+    profile_branch = (
+        profile_doc.get("branch")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "branch", None)
+    )
+    if isinstance(profile_branch, str) and profile_branch.strip():
+        rooms = frappe.get_all(
+            "URY Room",
+            filters={"branch": profile_branch.strip()},
+            pluck="name",
+        ) or []
+        room_names = [r for r in rooms if isinstance(r, str) and r.strip()]
+        if room_names:
+            room_printers = frappe.get_all(
+                "URY Printer Settings",
+                filters={
+                    "parent": ["in", room_names],
+                    "parenttype": "URY Room",
+                    "bill": 1,
+                },
+                pluck="printer",
+            ) or []
+            for printer in room_printers:
+                if isinstance(printer, str) and printer.strip():
+                    allowed.add(printer.strip())
+
+    return allowed
+
+
 def _update_drawer_event_delivery(drawer_event: str | None, delivery_status: str) -> None:
     if not drawer_event:
         return
@@ -578,8 +619,22 @@ def kick_cash_drawer(
             frappe.ValidationError,
         )
 
-    target_printer_setting = printer_setting
-    if not target_printer_setting:
+    target_printer_setting = (
+        str(printer_setting).strip()
+        if printer_setting is not None and str(printer_setting).strip()
+        else None
+    )
+    if target_printer_setting:
+        allowed_printers = _allowed_drawer_printers(pos_profile, profile_doc)
+        if target_printer_setting not in allowed_printers:
+            frappe.throw(
+                coded_message(
+                    "DRAWER-OTHER-BRANCH",
+                    _("Selected printer is not configured for this POS Profile or branch."),
+                ),
+                frappe.PermissionError,
+            )
+    else:
         printers = _bill_printers(pos_profile, None)
         if printers:
             target_printer_setting = printers[0]

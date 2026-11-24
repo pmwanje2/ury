@@ -533,10 +533,12 @@ class TestProcessItemsForKot(FrappeTestCase):
         # Verify resolver was called for each item
         self.assertEqual(mock_resolve.call_count, 2)
         mock_resolve.assert_any_call(
-            item_code="ITEM-1", company="URY Co", branch="Main Branch", production_policy=None
+            item_code="ITEM-1", company="URY Co", branch="Main Branch", production_policy=None,
+            pos_profile="POS-1", order_type=None, room=None,
         )
         mock_resolve.assert_any_call(
-            item_code="ITEM-2", company="URY Co", branch="Main Branch", production_policy=None
+            item_code="ITEM-2", company="URY Co", branch="Main Branch", production_policy=None,
+            pos_profile="POS-1", order_type=None, room=None,
         )
 
         # Verify KOTs were created: one for Unit A (with both items), one for Unit B (with Item 2)
@@ -614,7 +616,8 @@ class TestProcessItemsForKot(FrappeTestCase):
         )
 
         mock_resolve.assert_called_once_with(
-            item_code="ITEM-1", company="URY Co", branch="Main Branch", production_policy="DIRECT_RETAIL"
+            item_code="ITEM-1", company="URY Co", branch="Main Branch", production_policy="DIRECT_RETAIL",
+            pos_profile="POS-1", order_type=None, room=None,
         )
         self.assertEqual(mock_create_kot.call_count, 0)
         self.assertEqual(result, [])
@@ -781,10 +784,12 @@ class TestProcessItemsForCancelKot(FrappeTestCase):
         # Verify resolver was called for each item
         self.assertEqual(mock_resolve.call_count, 2)
         mock_resolve.assert_any_call(
-            item_code="ITEM-1", company="URY Co", branch="Main Branch", production_policy=None
+            item_code="ITEM-1", company="URY Co", branch="Main Branch", production_policy=None,
+            pos_profile="POS-1", order_type=None, room=None,
         )
         mock_resolve.assert_any_call(
-            item_code="ITEM-2", company="URY Co", branch="Main Branch", production_policy=None
+            item_code="ITEM-2", company="URY Co", branch="Main Branch", production_policy=None,
+            pos_profile="POS-1", order_type=None, room=None,
         )
 
         # Verify cancel KOTs were created

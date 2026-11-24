@@ -179,8 +179,31 @@ def recent_served_kots(branch=None, production=None):
     effective_branch = session_branch or branch
     unit_pos_profile = None
     if production:
+        unit_doc = frappe.get_doc("URY Production Unit", production)
+        if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
+            frappe.throw(
+                coded_message(
+                    "KOT-RECALL-NOT-PERMITTED",
+                    _("You do not have permission to read KOTs for this production station."),
+                ),
+                frappe.PermissionError,
+            )
+        unit_branch = (
+            unit_doc.get("branch")
+            if hasattr(unit_doc, "get")
+            else getattr(unit_doc, "branch", None)
+        )
+        if session_branch and isinstance(unit_branch, str) and unit_branch and unit_branch != session_branch:
+            frappe.throw(
+                coded_message("KOT-RECALL-OTHER-BRANCH", _("You do not have permission to read KOTs from other branches.")),
+                frappe.PermissionError,
+            )
         if not effective_branch:
-            effective_branch = frappe.db.get_value("URY Production Unit", production, "branch")
+            effective_branch = (
+                unit_branch
+                if isinstance(unit_branch, str) and unit_branch
+                else frappe.db.get_value("URY Production Unit", production, "branch")
+            )
         unit_pos_profile = frappe.db.get_value("URY Production Unit", production, "pos_profile")
     window_minutes = _kot_recall_window_minutes(
         branch=effective_branch, pos_profile=unit_pos_profile
@@ -414,34 +437,63 @@ def expo_bump_order(invoice, production_unit=None):
             frappe.ValidationError,
         )
 
+    if not frappe.has_permission("URY KOT", "write"):
+        frappe.throw(
+            coded_message("KOT-EXPO-NOT-PERMITTED", _("Not permitted to bump this order.")),
+            frappe.PermissionError,
+        )
+
     session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch:
+        if production_unit:
+            unit_branch = frappe.db.get_value("URY Production Unit", production_unit, "branch")
+            if isinstance(unit_branch, str) and unit_branch and unit_branch != session_branch:
+                frappe.throw(
+                    coded_message("KOT-EXPO-OTHER-BRANCH", _("You cannot bump orders from another branch.")),
+                    frappe.PermissionError,
+                )
+        inv_branch = frappe.db.get_value("POS Invoice", invoice, "branch")
+        if isinstance(inv_branch, str) and inv_branch and inv_branch != session_branch:
+            frappe.throw(
+                coded_message("KOT-EXPO-OTHER-BRANCH", _("You cannot bump orders from another branch.")),
+                frappe.PermissionError,
+            )
+
     filters = {
         "invoice": invoice,
         "docstatus": 1,
         "order_status": "Ready For Prepare",
         "type": ["not in", ["Cancelled", "Partially cancelled"]],
     }
-    if session_branch:
-        filters["branch"] = session_branch
 
     kots = frappe.get_all("URY KOT", filters=filters, fields=["name", "branch"])
     if not kots:
         return {"invoice": invoice, "served_kots": []}
 
-    served = []
+    kot_docs = []
     for row in kots:
         kot_name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
+        kot_branch = row.get("branch") if isinstance(row, dict) else getattr(row, "branch", None)
+        if session_branch and isinstance(kot_branch, str) and kot_branch and kot_branch != session_branch:
+            frappe.throw(
+                coded_message("KOT-EXPO-OTHER-BRANCH", _("You cannot bump orders from another branch.")),
+                frappe.PermissionError,
+            )
         kot_doc = frappe.get_doc("URY KOT", kot_name)
         if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
             frappe.throw(
                 coded_message("KOT-EXPO-NOT-PERMITTED", _("Not permitted to bump this order.")),
                 frappe.PermissionError,
             )
-        if session_branch and kot_doc.branch != session_branch:
+        if session_branch and getattr(kot_doc, "branch", None) and kot_doc.branch != session_branch:
             frappe.throw(
                 coded_message("KOT-EXPO-OTHER-BRANCH", _("You cannot bump orders from another branch.")),
                 frappe.PermissionError,
             )
+        kot_docs.append((kot_name, kot_doc))
+
+    served = []
+    for kot_name, kot_doc in kot_docs:
         record_kot_served(kot_name, kot_doc.creation, kot_doc)
         served.append(kot_name)
 
@@ -460,6 +512,15 @@ def record_station_heartbeat(production_unit):
         return {"status": "Ignored"}
 
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    can_heartbeat = frappe.has_permission("URY Production Unit", "write", doc=unit_doc) or (
+        frappe.has_permission("URY Production Unit", "read", doc=unit_doc)
+        and frappe.has_permission("URY KOT", "write")
+    )
+    if not can_heartbeat:
+        frappe.throw(
+            coded_message("KOT-HEARTBEAT-NOT-PERMITTED", _("You do not have permission to update station heartbeat.")),
+            frappe.PermissionError,
+        )
     session_branch = None if is_kitchen_admin() else getBranch()
     if session_branch and getattr(unit_doc, "branch", None) and unit_doc.branch != session_branch:
         frappe.throw(
@@ -552,6 +613,11 @@ def get_station_device_config(production_unit):
     if not production_unit:
         return None
     unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
+        frappe.throw(
+            coded_message("KOT-DEVICE-NOT-PERMITTED", _("You do not have permission to read station settings.")),
+            frappe.PermissionError,
+        )
     session_branch = None if is_kitchen_admin() else getBranch()
     if session_branch and getattr(unit_doc, "branch", None) and unit_doc.branch != session_branch:
         frappe.throw(
@@ -972,8 +1038,35 @@ def kot_list(production_unit=None):
     today = frappe.utils.now()
     branch = None if is_kitchen_admin() else getBranch()
     availability_branch = branch
-    if not availability_branch and production_unit:
-        availability_branch = frappe.db.get_value("URY Production Unit", production_unit, "branch")
+    if production_unit:
+        unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+        if not frappe.has_permission("URY Production Unit", "read", doc=unit_doc):
+            frappe.throw(
+                coded_message(
+                    "KOT-LIST-NOT-PERMITTED",
+                    _("You do not have permission to view this production station."),
+                ),
+                frappe.PermissionError,
+            )
+        unit_branch = (
+            unit_doc.get("branch")
+            if hasattr(unit_doc, "get")
+            else getattr(unit_doc, "branch", None)
+        )
+        if branch and isinstance(unit_branch, str) and unit_branch and unit_branch != branch:
+            frappe.throw(
+                coded_message(
+                    "KOT-LIST-OTHER-BRANCH",
+                    _("You cannot view kitchen tickets or station settings for another branch."),
+                ),
+                frappe.PermissionError,
+            )
+        if not availability_branch:
+            availability_branch = (
+                unit_branch
+                if isinstance(unit_branch, str) and unit_branch
+                else frappe.db.get_value("URY Production Unit", production_unit, "branch")
+            )
 
     pos_profile_filters = {}
     if branch:

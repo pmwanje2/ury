@@ -216,6 +216,11 @@ describe("G26: KDS Expo Mode, All-Day Summary, Rush/VIP, Course Grouping & Confi
   });
 
   it("G26/G27: starts live station heartbeat interval on mount, cleans up on unmount, and subscribes to kot_priority realtime events", async () => {
+    server.stationDeviceConfig = {
+      production_unit: "Kitchen",
+      auto_failover_enabled: true,
+      heartbeat_timeout_seconds: 120,
+    };
     server.kots = [makeKot({ name: "KOT-1", production: "Kitchen", custom_is_rush: 0 })];
     await mountBoard("Kitchen");
 
