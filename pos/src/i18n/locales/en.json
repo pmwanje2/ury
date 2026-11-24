@@ -392,7 +392,8 @@
     "failed_to_load_details": "Failed to load order details",
     "edit_order": "Edit order",
     "cancel_order": "Cancel order",
-    "qty_label": "Qty: {{qty}}"
+    "qty_label": "Qty: {{qty}}",
+    "reduce_item_qty": "Reduce quantity of {{item}}"
   },
   "tables": {
     "layout_view": "Layout View",
@@ -1063,7 +1064,9 @@
     "error_expired": "This approval has expired or was already used. Ask a manager to approve again.",
     "error_changed": "The check or values changed after approval. Ask a manager to approve again.",
     "error_required": "A manager must approve this action.",
-    "error_generic": "Approval could not be completed. Try again."
+    "error_generic": "Approval could not be completed. Try again.",
+    "pin_entered_count": "{{count}} digits entered",
+    "error_reason": "Choose an active reason (and add a short note if required)."
   },
   "approval_pin": {
     "title": "Set my approval PIN",
@@ -1088,6 +1091,7 @@
     "clear_policy_note": "Managers can clear a staff member's approval PIN so they can enrol a new one. PINs are never readable or settable by others.",
     "clear_pin": "Clear PIN",
     "cleared": "Cleared approval PIN for {{name}}.",
-    "clear_failed": "Could not clear this approval PIN."
+    "clear_failed": "Could not clear this approval PIN.",
+    "error_wrong_password": "Your current password did not match. Your till session is still active."
   }
 }

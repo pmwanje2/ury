@@ -359,60 +359,102 @@ def validate_invoice(doc, method):
         doc.waiter = doc.modified_by
     if getattr(frappe.flags, "ury_bill_split", False):
         return
-    # A new document has no printed copy or sent baseline to compare against,
-    # and a return refunds a paid check; neither is an edit of a sent bill.
-    if doc.is_new() or doc.get("is_return"):
+    if doc.is_new():
         return
 
-    # Mutation-level `void_sent_item` gate (Amendment 1 #7): catches direct REST,
-    # Desk, or ORM saves that reduce or remove already-sent (non-held) lines
-    # without a verified in-process approval or `may_perform` privilege.
-    if not getattr(frappe.flags, "in_patch", False) and not getattr(frappe.flags, "in_migrate", False):
-        company = doc.get("company")
-        pos_profile = doc.get("pos_profile")
-        if company and pos_profile:
+    # Mutation-level `void_sent_item` gate (Amendment 1 #7 + R2 P0 #4 / P1 #5):
+    # Always compare whole-document against the committed DB record so direct REST PUT,
+    # Desk, or ORM saves cannot bypass by flipping `is_return`, changing `company`/
+    # `pos_profile`/`branch`, flipping `ury_held` 0->1, or swapping `item_code` on a
+    # matched row key. Fails closed even when a company has zero rules configured.
+    before_doc = None
+    if frappe.db.exists("POS Invoice", doc.name):
+        before_doc = frappe.get_doc("POS Invoice", doc.name)
+    else:
+        before_doc = doc.get_doc_before_save()
+
+    # Only skip genuine return invoices that were ALREADY returns in DB;
+    # flipping `is_return` from 0 -> 1 on a live sent check is NOT exempt!
+    if before_doc is not None and int(before_doc.get("is_return") or 0) == 1:
+        return
+    if before_doc is None and int(doc.get("is_return") or 0) == 1:
+        return
+
+    if (
+        before_doc is not None
+        and not getattr(frappe.flags, "in_patch", False)
+        and not getattr(frappe.flags, "in_migrate", False)
+    ):
+        orig_company = before_doc.get("company")
+        orig_pos_profile = before_doc.get("pos_profile")
+        orig_branch = before_doc.get("branch")
+        if orig_company and orig_pos_profile:
             from ury.ury_pos import override
 
-            if override.is_policy_active(company):
-                before_doc = doc.get_doc_before_save() or frappe.get_doc("POS Invoice", doc.name)
-                orig_sent = {}
-                orig_by_code = {}
-                for item in before_doc.get("items") or []:
-                    if int(item.get("ury_held") or 0) == 1:
-                        continue
-                    ident = _line_identity(item)
-                    orig_sent[ident] = {
-                        "qty": flt(item.qty),
-                        "rate": flt(item.get("rate") or 0),
-                        "item_code": item.item_code,
-                    }
-                    orig_by_code[item.item_code] = orig_by_code.get(item.item_code, 0.0) + flt(item.qty)
+            orig_sent = {}
+            orig_by_code = {}
+            orig_max_rate_by_code = {}
+            total_orig_sent_amount = 0.0
+            for item in before_doc.get("items") or []:
+                if int(item.get("ury_held") or 0) == 1 or int(item.get("is_disposable") or 0) == 1:
+                    continue
+                qty_val = flt(item.qty)
+                if qty_val <= 0:
+                    continue
+                rate_val = flt(item.get("rate") or 0)
+                key = (_line_identity(item), item.item_code)
+                if key in orig_sent:
+                    orig_sent[key]["qty"] += qty_val
+                    orig_sent[key]["rate"] = max(orig_sent[key]["rate"], rate_val)
+                else:
+                    orig_sent[key] = {"qty": qty_val, "rate": rate_val, "item_code": item.item_code}
+                orig_by_code[item.item_code] = orig_by_code.get(item.item_code, 0.0) + qty_val
+                orig_max_rate_by_code[item.item_code] = max(orig_max_rate_by_code.get(item.item_code, 0.0), rate_val)
+                total_orig_sent_amount += rate_val * qty_val
 
-                curr_sent = {}
-                curr_by_code = {}
-                for item in doc.get("items") or []:
-                    if int(item.get("ury_held") or 0) == 1:
-                        continue
-                    ident = _line_identity(item)
-                    curr_sent[ident] = flt(item.qty)
-                    curr_by_code[item.item_code] = curr_by_code.get(item.item_code, 0.0) + flt(item.qty)
+            if orig_sent:
+                # Flipping is_return 0->1 or moving the check to another company/profile/branch
+                # counts as removing every sent item from the original check/outlet.
+                header_tampered = (
+                    int(doc.get("is_return") or 0) == 1
+                    or (doc.get("company") or "") != orig_company
+                    or (doc.get("pos_profile") or "") != orig_pos_profile
+                    or (orig_branch and (doc.get("branch") or "") != orig_branch)
+                )
 
-                voided_amount = 0.0
-                sent_reduced = False
-                for ident, info in orig_sent.items():
-                    new_qty = curr_sent.get(ident, 0.0)
-                    if new_qty < info["qty"]:
-                        sent_reduced = True
-                        voided_amount += info["rate"] * (info["qty"] - new_qty)
-                if not sent_reduced:
-                    for code, old_total in orig_by_code.items():
-                        if curr_by_code.get(code, 0.0) < old_total:
+                if header_tampered:
+                    sent_reduced = True
+                    voided_amount = total_orig_sent_amount
+                else:
+                    curr_sent = {}
+                    curr_by_code = {}
+                    for item in doc.get("items") or []:
+                        if int(item.get("ury_held") or 0) == 1 or int(item.get("is_disposable") or 0) == 1:
+                            continue
+                        qty_val = max(0.0, flt(item.qty))
+                        key = (_line_identity(item), item.item_code)
+                        curr_sent[key] = curr_sent.get(key, 0.0) + qty_val
+                        curr_by_code[item.item_code] = curr_by_code.get(item.item_code, 0.0) + qty_val
+
+                    voided_amount = 0.0
+                    sent_reduced = False
+                    for key, info in orig_sent.items():
+                        new_qty = curr_sent.get(key, 0.0)
+                        if new_qty < info["qty"] - 1e-9:
                             sent_reduced = True
-                            break
+                            voided_amount += info["rate"] * (info["qty"] - new_qty)
+
+                    code_voided_amount = 0.0
+                    for code, old_total in orig_by_code.items():
+                        curr_total = curr_by_code.get(code, 0.0)
+                        if curr_total < old_total - 1e-9:
+                            sent_reduced = True
+                            code_voided_amount += orig_max_rate_by_code.get(code, 0.0) * (old_total - curr_total)
+                    voided_amount = max(voided_amount, code_voided_amount)
 
                 if sent_reduced:
                     if not override.has_verified_approval(doc, "void_sent_item") and not override.may_perform(
-                        frappe.session.user, pos_profile, "void_sent_item", amount=round(voided_amount, 4)
+                        frappe.session.user, orig_pos_profile, "void_sent_item", amount=round(voided_amount, 4)
                     ):
                         frappe.throw(
                             frappe._("Removing or reducing a sent item requires manager approval.")

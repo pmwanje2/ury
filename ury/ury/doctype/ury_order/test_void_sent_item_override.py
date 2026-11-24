@@ -365,10 +365,13 @@ class TestVoidSentItemOverride(unittest.TestCase):
         res_held = reduce_order_item_qty(inv.name, held_row.name, 1)
         self.assertEqual(res_held["new_qty"], 1.0)
 
-        # Manager with void_sent_item may_perform=1 can reduce the sent line alone.
+        # Manager with void_sent_item may_perform=1 must still supply an active POS Reason (P1 #7).
         frappe.set_user(self.manager)
-        with patch("ury.ury.api.ury_pos_invoice_qty_reduction.process_items_for_cancel_kot", return_value=["CNCL-KOT-M"]):
-            res_mgr = reduce_order_item_qty(inv.name, sent_row.name, 1, reason="Kitchen error")
+        with patch("ury.ury.api.ury_pos_invoice_qty_reduction.process_items_for_cancel_kot", return_value=["CNCL-KOT-M"]) as mock_kot:
+            with self.assertRaisesRegex(frappe.ValidationError, "POS-AUTH-REASON"):
+                reduce_order_item_qty(inv.name, sent_row.name, 1, reason="")
+            mock_kot.assert_not_called()
+            res_mgr = reduce_order_item_qty(inv.name, sent_row.name, 1, reason="Kitchen error / out of stock")
         self.assertEqual(res_mgr["new_qty"], 1.0)
 
     def test_sync_order_reducing_sent_item_enforces_void_sent_item_and_accepts_token(self):
@@ -505,3 +508,148 @@ class TestVoidSentItemOverride(unittest.TestCase):
         doc.save()
         inv.reload()
         self.assertEqual(flt(inv.items[0].qty), 2.0)
+
+    def test_validate_invoice_blocks_rest_bypass_vectors_is_return_company_swap_and_item_code_swap(self):
+        """P0 #4 & P1 #5: flipping is_return, switching company/profile, swapping item_code, or zero rules must refuse."""
+        inv = self._make_pos_invoice(invoice_printed=1, waiter=self.cashier)
+
+        # 1. Flipping is_return=1 on a live non-return sent invoice with negative qtys to erase sent items -> REFUSED!
+        frappe.set_user(self.cashier)
+        doc = frappe.get_doc("POS Invoice", inv.name)
+        doc.is_return = 1
+        for row in doc.items:
+            row.qty = -1
+        with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            doc.save()
+
+        # 2. Flipping ury_held=1 on an already-sent row -> REFUSED!
+        doc = frappe.get_doc("POS Invoice", inv.name)
+        doc.items[0].ury_held = 1
+        with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            doc.save()
+
+        # 3. Swapping item_code on a matched reservation_line_key must count full voided_amount against max_amount!
+        frappe.set_user("Administrator")
+        low_cap_rule = frappe.get_doc({
+            "doctype": "POS Privilege Rule",
+            "company": self.company,
+            "pos_profile": self.profile,
+            "privilege": "void_sent_item",
+            "role": "URY Cashier",
+            "may_perform": 1,
+            "may_authorise": 0,
+            "max_amount": 5.0,
+            "requires_reason": 1,
+        }).insert(ignore_permissions=True)
+        frappe.db.commit()
+        try:
+            frappe.set_user(self.cashier)
+            doc = frappe.get_doc("POS Invoice", inv.name)
+            # item_a is $25 x 2 = $50 (> max_amount $5); swapping to item_b on same line_key MUST NOT bypass $5 cap!
+            doc.items[0].item_code = self.item_b
+            doc.items[0].item_name = "Fresh Juice"
+            doc.items[0].rate = 10.0
+            with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-REQUIRED"):
+                doc.save()
+        finally:
+            frappe.set_user("Administrator")
+            frappe.delete_doc("POS Privilege Rule", low_cap_rule.name, ignore_permissions=True)
+            frappe.db.commit()
+
+        # 4. Switching company / pos_profile to an unseeded company while dropping sent items -> REFUSED!
+        other_company = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
+        if other_company:
+            frappe.set_user(self.cashier)
+            doc = frappe.get_doc("POS Invoice", inv.name)
+            doc.company = other_company
+            doc.items[0].qty = 1
+            with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-REQUIRED"):
+                doc.save()
+
+        # 5. P1 #5: Even if ALL POS Privilege Rules for the company are deleted, cashier STILL fails closed!
+        frappe.set_user("Administrator")
+        frappe.db.delete("POS Privilege Rule", {"company": self.company})
+        frappe.db.commit()
+        try:
+            frappe.set_user(self.cashier)
+            doc = frappe.get_doc("POS Invoice", inv.name)
+            doc.items[0].qty = 1
+            with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-REQUIRED"):
+                doc.save()
+        finally:
+            frappe.set_user("Administrator")
+            frappe.db.delete("DefaultValue", {"defkey": f"pos_override_rules_seeded::{self.company}"})
+            from ury.patches.v2_0 import setup_pos_manager_authorisation
+            setup_pos_manager_authorisation.seed_default_rules(company=self.company)
+            frappe.db.commit()
+
+    def test_sync_order_allows_removing_unsent_held_item_even_when_remove_items_is_zero(self):
+        """P1 #9 (Hydrogen #12): unsent held (ury_held=1) items can always be removed even with remove_items=0."""
+        from ury.ury.doctype.ury_order.ury_order import sync_order
+
+        frappe.set_user("Administrator")
+        frappe.db.set_value("POS Profile", self.profile, "remove_items", 0)
+        frappe.db.commit()
+        try:
+            inv = self._make_pos_invoice(
+                invoice_printed=0,
+                waiter=self.cashier,
+                items=[
+                    {
+                        "item_code": self.item_a, "item_name": "Grilled Fish", "qty": 2,
+                        "rate": 25.0, "price_list_rate": 25.0, "base_price_list_rate": 25.0,
+                        "uom": "Nos", "conversion_factor": 1.0,
+                        "income_account": self.income_account, "expense_account": self.expense_account,
+                        "cost_center": self.cost_center, "warehouse": self.warehouse,
+                        "reservation_line_key": f"sent-{random_string(6)}", "ury_held": 0,
+                    },
+                    {
+                        "item_code": self.item_b, "item_name": "Fresh Juice", "qty": 1,
+                        "rate": 10.0, "price_list_rate": 10.0, "base_price_list_rate": 10.0,
+                        "uom": "Nos", "conversion_factor": 1.0,
+                        "income_account": self.income_account, "expense_account": self.expense_account,
+                        "cost_center": self.cost_center, "warehouse": self.warehouse,
+                        "reservation_line_key": f"held-{random_string(6)}", "ury_held": 1,
+                    },
+                ],
+            )
+            sent_row = inv.items[0]
+            keep_only_sent = [
+                {
+                    "name": sent_row.name,
+                    "item": self.item_a,
+                    "item_name": "Grilled Fish",
+                    "qty": 2,
+                    "rate": 25.0,
+                    "comment": "",
+                    "reservation_line_key": sent_row.reservation_line_key,
+                }
+            ]
+            frappe.set_user(self.cashier)
+            with patch("ury.ury.doctype.ury_order.ury_order._require_open_cashier_session"), \
+                 patch("ury.ury.doctype.ury_order.ury_order._validate_sync_items_against_menu"), \
+                 patch("ury.ury.doctype.ury_order.ury_order.kot_execute") as mock_kot, \
+                 patch("ury.ury.doctype.ury_order.ury_order.getBranch", return_value=self.branch):
+                updated = sync_order(
+                    items=json.dumps(keep_only_sent),
+                    cashier=self.cashier,
+                    owner=self.cashier,
+                    mode_of_payment=self.mop,
+                    customer=self.customer,
+                    no_of_pax=2,
+                    last_invoice=inv.name,
+                    last_modified_time=str(inv.modified),
+                    waiter=self.cashier,
+                    pos_profile=self.profile,
+                    invoice=inv.name,
+                    order_type="Dine In",
+                )
+                mock_kot.assert_not_called()
+            self.assertEqual(updated["name"], inv.name)
+            inv.reload()
+            self.assertEqual(len(inv.items), 1)
+            self.assertEqual(inv.items[0].item_code, self.item_a)
+        finally:
+            frappe.set_user("Administrator")
+            frappe.db.set_value("POS Profile", self.profile, "remove_items", 1)
+            frappe.db.commit()

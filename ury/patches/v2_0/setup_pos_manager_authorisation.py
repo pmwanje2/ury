@@ -1,4 +1,4 @@
-"""Install approval PIN custom fields and seed-once POS Privilege Rule & POS Reason defaults."""
+"""Install approval PIN lockout fields and seed-once POS Privilege Rule & POS Reason defaults."""
 
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
@@ -6,9 +6,11 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from ury.setup_customizations import get_custom_fields
 
 CUSTOM_FIELD_TARGETS = {
-    "User": ("custom_override_pin_hash",),
     "POS Profile": ("custom_override_max_attempts", "custom_override_lock_minutes"),
 }
+
+RULES_SEED_MARKER_PREFIX = "pos_override_rules_seeded::"
+REASONS_SEED_MARKER = "pos_override_reasons_seeded"
 
 # Seed-once client-owned POS Reasons (Amendment 1 #4: discounts use siteops Discount Reason).
 DEFAULT_POS_REASONS = (
@@ -43,6 +45,16 @@ DEFAULT_POS_REASONS = (
 )
 
 
+def _rules_seed_marker(company: str) -> str:
+    return f"{RULES_SEED_MARKER_PREFIX}{company}"
+
+
+def _is_seeded(marker: str) -> bool:
+    if frappe.db.table_exists("DefaultValue"):
+        return bool(frappe.db.get_value("DefaultValue", {"parent": "__default", "defkey": marker}, "defvalue"))
+    return bool(frappe.db.get_default(marker))
+
+
 def ensure_custom_fields():
     definitions = get_custom_fields()
     to_create = {}
@@ -59,11 +71,10 @@ def ensure_custom_fields():
 
 
 def seed_default_rules(company=None):
-    """Seed Simphony/SAP POS Privilege Rule defaults once per company (Amendment 1 #3).
+    """Seed Simphony/SAP POS Privilege Rule defaults once per company (Amendment 1 #3 + P1 #5).
 
-    Every role starts at 0% alone for discounts (enforced with Approval Limit).
-    Never overwrites existing rules and never resurrects deleted rules once a
-    company has any POS Privilege Rule rows.
+    Uses a persistent DefaultValue marker per company so even if an operator later
+    deletes ALL rules for a company, re-running migrations never resurrects them.
     """
     from ury.ury_pos.override import PRIVILEGES
 
@@ -76,7 +87,11 @@ def seed_default_rules(company=None):
     for comp in companies:
         if not comp:
             continue
+        marker = _rules_seed_marker(comp)
+        if _is_seeded(marker):
+            continue
         if frappe.db.exists("POS Privilege Rule", {"company": comp}):
+            frappe.db.set_default(marker, "1")
             continue
 
         for code, spec in PRIVILEGES.items():
@@ -112,12 +127,17 @@ def seed_default_rules(company=None):
                     }
                 ).insert(ignore_permissions=True)
 
+        frappe.db.set_default(marker, "1")
+
 
 def seed_default_reasons():
     """Seed client-owned POS Reason defaults once. Never overwrites or resurrects."""
     if not frappe.db.table_exists("POS Reason"):
         return
+    if _is_seeded(REASONS_SEED_MARKER):
+        return
     if frappe.db.exists("POS Reason", {}):
+        frappe.db.set_default(REASONS_SEED_MARKER, "1")
         return
     for code, description, applies_to, requires_note, sort_order in DEFAULT_POS_REASONS:
         if frappe.db.exists("POS Reason", code):
@@ -133,9 +153,13 @@ def seed_default_reasons():
                 "disabled": 0,
             }
         ).insert(ignore_permissions=True)
+    frappe.db.set_default(REASONS_SEED_MARKER, "1")
 
 
 def execute():
+    from ury.patches.v2_0.migrate_override_pin_out_of_user import remove_legacy_user_pin_field
+
+    remove_legacy_user_pin_field()
     ensure_custom_fields()
     seed_default_rules()
     seed_default_reasons()

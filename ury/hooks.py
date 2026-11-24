@@ -257,11 +257,11 @@ doc_events = {
     "WhatsApp Message": {
         "after_insert": "ury.ury.api.chairman_whatsapp.on_incoming",
     },
+    "Company": {
+        "after_insert": "ury.ury_pos.override.on_company_after_insert",
+    },
     "User": {
-        "validate": [
-            "ury.ury.analytics_access.on_user_validate",
-            "ury.ury_pos.override.guard_user_override_pin_hash",
-        ],
+        "validate": "ury.ury.analytics_access.on_user_validate",
         "on_update": [
             "ury.ury.api.chairman_wa_identity.on_user_update",
             "ury.ury.analytics_access.on_user_update",
@@ -802,7 +802,6 @@ fixtures = [
                     "POS Profile-custom_service_request_escalate_minutes",
                     "Network Printer Settings-custom_printer_queue_name",
                     "Sales Invoice Payment-custom_tender_received",
-                    "User-custom_override_pin_hash",
                     "POS Profile-custom_override_max_attempts",
                     "POS Profile-custom_override_lock_minutes",
                 },
