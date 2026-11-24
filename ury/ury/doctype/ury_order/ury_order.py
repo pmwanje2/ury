@@ -29,6 +29,7 @@ from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
+from ury.ury.hooks.ury_pos_tender import sync_charged_tip
 
 from frappe import cache
 
@@ -3975,8 +3976,11 @@ def _reconcile_settlement_payments(invoice, incoming_payments):
 
 # Method for URY POS
 @frappe.whitelist()
-def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None):
+def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None, tip=None, tip_server=None):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
+    tip = flt(tip)
+    if tip < 0:
+        frappe.throw(coded_message("TIP-NEGATIVE", _("A tip cannot be negative.")))
     client_order_id = _validate_client_ids(client_order_id, round_id)
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     customer_disabled = _lock_settlement_customer(customer, pos_prof)
@@ -4066,7 +4070,14 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
             invoice.discount_amount = 0
         else:
             invoice.additional_discount_percentage = 0
-        
+
+    # The cashier's tip (cash, or charged on a card or room-charge tender):
+    # its Tips Payable line is on the bill before the totals the tenders are
+    # allocated against. Owed to the bill's server unless another is named.
+    invoice.custom_charged_tip = tip
+    invoice.custom_tip_server = (tip_server or invoice.waiter) if tip else None
+    sync_charged_tip(invoice)
+
     invoice.calculate_taxes_and_totals()
 
     target = None
@@ -4124,6 +4135,19 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
                 target.append("payments", dict(mode_of_payment=mode, amount=give))
                 amt -= give
                 target_req -= give
+
+            if amt > 0:
+                # Preserve any remaining over-tender on the primary bill so
+                # ury_pos_tender.before_validate applies the tender's over-tender
+                # rule (Refuse / Post to Charged Tip) or cash change.
+                existing = next(
+                    (row for row in reversed(invoice.payments) if row.mode_of_payment == mode),
+                    None,
+                )
+                if existing:
+                    existing.amount = flt(existing.amount) + amt
+                else:
+                    invoice.append("payments", dict(mode_of_payment=mode, amount=amt))
                 
         if not target.payments and payments:
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))

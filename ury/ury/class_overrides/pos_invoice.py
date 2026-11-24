@@ -66,6 +66,11 @@ _COPY_RENDER_MARKER = object()
 
 
 class CustomPOSInvoice(POSInvoice):
+	def calculate_taxes_and_totals(self):
+		from ury.ury.hooks.ury_pos_tender import calculate_taxes_and_totals_excluding_tip
+
+		return calculate_taxes_and_totals_excluding_tip(self, super().calculate_taxes_and_totals)
+
 	def before_print(self, settings=None):
 		from ury.ury.doctype.ury_order.ury_order import check_split_target_access
 		from ury.ury.print_format.defaults import validate_pos_invoice_print_format

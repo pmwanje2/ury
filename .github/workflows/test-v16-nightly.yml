@@ -121,7 +121,7 @@ jobs:
       # Shard 0 also runs the three guest-session modules that gate
       # self_ordering._resolve_session: they are not in test.yml, which only
       # runs on PRs into v3-stg. Shard 1 also runs the three site-less kitchen
-      # display modules from #115, which test.yml lists too (32/32/28/28).
+      # display modules from #115, which test.yml lists too (32/32/28/28); the tender, tip and till-cash modules later joined shard 2 (32/32/31/28).
       #
       # test_ury_order_v3_73_stock_authority_flag remains excluded (it is
       # absent from test.yml too): it imports and passes locally against a
@@ -228,6 +228,10 @@ jobs:
               ury.ury.doctype.ury_order.test_ury_order
               ury.ury.doctype.ury_order_item.test_ury_order_item
               ury.ury.doctype.ury_ordering_device.test_ury_ordering_device
+              ury.ury.hooks.test_ury_pos_tender
+              ury.ury.hooks.test_ury_cash_movement
+              ury.ury.tests.test_settlement_tip
+              ury.ury_pos.test_till_cash_movements
           - shard: 3
             modules: |
               ury.ury.doctype.ury_payment_terminal.test_ury_payment_terminal
