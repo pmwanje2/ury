@@ -2508,5 +2508,413 @@ class TestHydrogenR1Defects(DiscountBase):
         self.assertEqual(self.discount.user_discount_limit("cashier@example.com", "Lakeside Hotel", "Lakeside Till"), 0.0)
 
 
+class TestHydrogenR2Regressions(DiscountBase):
+    """Strict RED->GREEN regression tests for Hydrogen R2 findings on pmwanje2/ury#148."""
+
+    @staticmethod
+    def _siteops_v3_exceeds_limit(header_pct, disc_units, basis_units, approved_pct):
+        """Mirror siteops#8620 sales-discount-control@3 parse_percent + exceeds_limit."""
+        units = int(round(float(approved_pct) * 1000000.0))
+        scale = 1000000
+        while scale > 1 and units % 10 == 0:
+            units //= 10
+            scale //= 10
+        limit_num = units / float(scale)
+        if float(header_pct or 0.0) > limit_num:
+            return True
+        if disc_units <= 0:
+            return False
+        if units == 0:
+            return True
+        denom = 100 * scale
+        allowed_units = (2 * basis_units * units + denom) // (2 * denom)
+        return disc_units > allowed_units
+
+    def test_r2_p0_1_rounded_percent_pin_approval_covers_requested_percent_kwd_ugx_usd(self):
+        """P0 #1: Rounded % discounts (KWD 15.712, UGX 333, USD 10.04 @ 10%) with Manager PIN
+        must set flags.discount_approval['percent'] to cover both effective_pct and requested
+        additional_discount_percentage without exceeding the approver's authorized ceiling."""
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 25",
+            discount_approver_role="Owner Approver",
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+        ]
+
+        cases = [
+            ("CHK-R2-KWD", "KWD", 3, 15.712, 10.0),
+            ("CHK-R2-UGX", "UGX", 0, 333.0, 10.0),
+            ("CHK-R2-USD", "USD", 2, 10.04, 10.0),
+        ]
+        for inv_name, currency, prec, gross, req_pct in cases:
+            with self.subTest(currency=currency, gross=gross, req_pct=req_pct):
+                self.profile.currency = currency
+                check = self._register_check(
+                    FakePOSInvoice(inv_name, currency=currency, items=[_item("r1", "STEAK", 1, gross)])
+                )
+                check.precision = lambda fieldname, parentfield=None, _p=prec: _p
+
+                def _siteops_v3_save(_chk=check, _prec=prec, _gross=gross, **kw):
+                    flag = getattr(getattr(_chk, "flags", None), "discount_approval", None)
+                    self.assertIsNotNone(flag, "PIN-approved discount must set flags.discount_approval")
+                    scale = 10 ** _prec
+                    disc_units = int(round(float(_chk.discount_amount or 0.0) * scale))
+                    basis_units = int(round(_gross * scale))
+                    if self._siteops_v3_exceeds_limit(
+                        _chk.additional_discount_percentage, disc_units, basis_units, flag["percent"]
+                    ):
+                        raise Refused(
+                            "SITEOPS-DISC-002: The approved discount percentage does not cover the discount on this check."
+                        )
+                    self.hook.validate_pos_discount(_chk)
+
+                check.save = _siteops_v3_save
+                self._patch_settlement_helpers(check)
+
+                prev = self.order.preview_settlement_totals(
+                    invoice=inv_name, pos_profile="Lakeside Till", discount_percent=req_pct, discount_reason="Complaint"
+                )
+                self.assertTrue(prev["needs_approval"])
+                tok = self._issue_override_token(check, prev["claim"], approver="manager@example.com", percent=req_pct)
+                self.order.apply_check_discount(
+                    invoice=inv_name,
+                    pos_profile="Lakeside Till",
+                    discount_percent=req_pct,
+                    discount_reason="Complaint",
+                    approval=tok,
+                )
+                self.assertGreaterEqual(check.flags.discount_approval["percent"], req_pct)
+                self.assertEqual(check.flags.discount_approval["percent"], req_pct)
+                self.assertEqual(check.custom_discount_approved_percent, req_pct)
+
+        # Ceiling safety: UGX 335 @ 10% rounds UP (34 UGX => effective_pct = 10.1493%).
+        # When Manager ceiling is 10%, approved_pct MUST NOT exceed 10.0 and must still pass
+        # both #8620 half-up check and subsequent validate_pos_discount saves.
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 10",
+            discount_approver_role="Owner Approver",
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=10),
+        ]
+        self.profile.currency = "UGX"
+        up_check = self._register_check(
+            FakePOSInvoice("CHK-R2-UGX-UP", currency="UGX", items=[_item("r1", "STEAK", 1, 335.0)])
+        )
+        up_check.precision = lambda fieldname, parentfield=None: 0
+
+        def _siteops_up_save(**kw):
+            flag = getattr(getattr(up_check, "flags", None), "discount_approval", None)
+            self.assertIsNotNone(flag)
+            self.assertLessEqual(flag["percent"], 10.0)
+            disc_units = int(round(float(up_check.discount_amount or 0.0)))
+            self.assertFalse(
+                self._siteops_v3_exceeds_limit(up_check.additional_discount_percentage, disc_units, 335, flag["percent"])
+            )
+            self.hook.validate_pos_discount(up_check)
+
+        up_check.save = _siteops_up_save
+        self._patch_settlement_helpers(up_check)
+        prev_up = self.order.preview_settlement_totals(
+            invoice="CHK-R2-UGX-UP", pos_profile="Lakeside Till", discount_percent=10.0, discount_reason="Complaint"
+        )
+        tok_up = self._issue_override_token(up_check, prev_up["claim"], approver="manager@example.com", percent=10.0)
+        self.order.apply_check_discount(
+            invoice="CHK-R2-UGX-UP",
+            pos_profile="Lakeside Till",
+            discount_percent=10.0,
+            discount_reason="Complaint",
+            approval=tok_up,
+        )
+        self.assertEqual(up_check.flags.discount_approval["percent"], 10.0)
+        self.assertEqual(up_check.custom_discount_approved_percent, 10.0)
+
+        # Subsequent print/settlement save (without approval flag) must also pass validate_pos_discount
+        up_check.flags.discount_approval = None
+        up_check._doc_before_save = FakePOSInvoice(
+            "CHK-R2-UGX-UP",
+            currency="UGX",
+            items=[_item("r1", "STEAK", 1, 335.0)],
+            additional_discount_percentage=10.0,
+            discount_amount=up_check.discount_amount,
+            custom_discount_reason="Complaint",
+            custom_discount_approver="manager@example.com",
+            custom_discount_approved_percent=10.0,
+            ury_discount_meta=up_check.ury_discount_meta,
+        )
+        up_check._doc_before_save.calculate_taxes_and_totals()
+        self.hook.validate_pos_discount(up_check)
+
+    def test_r2_p0_2_consolidate_line_only_discounted_check_preserves_meta_and_passes_siteops_disc_001(self):
+        """P0 #2: Consolidating a line-only discounted check onto a clean check must preserve
+        ury_discount_meta standalone AND write custom_discount_* + flags.discount_approval for #8620."""
+        self.enterContext(patch.object(self.order, "get_branch_stock_policy", return_value=Row(reservation_control_enabled=False)))
+        self.enterContext(patch.object(self.order, "_free_tables_if_no_open_invoices"))
+
+        # Case A: Standalone (without B1 custom_discount_* fields, only ury_discount_meta)
+        orig_get_meta = self.frappe.get_meta
+        def _meta_without_b1(dt):
+            if dt == "POS Invoice":
+                return Row(has_field=lambda f: f == "ury_discount_meta")
+            return orig_get_meta(dt)
+
+        with patch.object(self.frappe, "get_meta", side_effect=_meta_without_b1):
+            src_a = self._register_check(
+                FakePOSInvoice(
+                    "CHK-M-LINE-SRC-A",
+                    currency="UGX",
+                    items=[
+                        _item(
+                            "s1", "STEAK", 1, 24000,
+                            price_list_rate=30000, base_price_list_rate=30000,
+                            discount_percentage=20, discount_amount=6000, amount=24000,
+                        )
+                    ],
+                    ury_discount_meta=json.dumps({
+                        "reason": "Complaint",
+                        "reason_description": "Complaint",
+                        "approver": "manager@example.com",
+                        "approved_percent": 20.0,
+                        "line_reasons": {"s1": "Complaint"},
+                    }),
+                )
+            )
+            dst_a = self._register_check(
+                FakePOSInvoice("CHK-M-LINE-DST-A", currency="UGX", items=[_item("d1", "JUICE", 1, 10000)])
+            )
+            self.order.consolidate_checks(dst_a, [src_a])
+
+            self.assertIsNotNone(dst_a.ury_discount_meta, "Standalone consolidate dropped ury_discount_meta on line-only check")
+            parsed_a = json.loads(dst_a.ury_discount_meta)
+            self.assertEqual(parsed_a["reason"], "Complaint")
+            self.assertEqual(parsed_a["approver"], "manager@example.com")
+            self.assertEqual(parsed_a["approved_percent"], 20.0)
+            self.assertEqual(dst_a.grand_total, 34000)
+
+        # Case B: Under #8620 B1 schema — must pass SITEOPS-DISC-001 and SITEOPS-DISC-002
+        src_b = self._register_check(
+            FakePOSInvoice(
+                "CHK-M-LINE-SRC-B",
+                currency="UGX",
+                items=[
+                    _item(
+                        "s1", "STEAK", 1, 24000,
+                        price_list_rate=30000, base_price_list_rate=30000,
+                        discount_percentage=20, discount_amount=6000, amount=24000,
+                    )
+                ],
+                custom_discount_reason="Complaint",
+                custom_discount_approver="manager@example.com",
+                custom_discount_approved_percent=20.0,
+                ury_discount_meta=json.dumps({
+                    "reason": "Complaint",
+                    "reason_description": "Complaint",
+                    "approver": "manager@example.com",
+                    "approved_percent": 20.0,
+                    "line_reasons": {"s1": "Complaint"},
+                }),
+            )
+        )
+        dst_b = self._register_check(
+            FakePOSInvoice("CHK-M-LINE-DST-B", currency="UGX", items=[_item("d1", "JUICE", 1, 10000)])
+        )
+
+        def _siteops_merge_save(**kw):
+            # Mirror #8620 SITEOPS-DISC-001 + SITEOPS-DISC-002 for line-discounted check
+            if not (dst_b.get("custom_discount_reason") or "").strip():
+                raise Refused("SITEOPS-DISC-001: Every till discount needs an active POS Discount Reason. Nothing was saved.")
+            flag = getattr(getattr(dst_b, "flags", None), "discount_approval", None)
+            if not flag or not flag.get("approver"):
+                raise Refused("SITEOPS-DISC-002: This discount exceeds your 5% limit and needs a supervisor's override.")
+            if self._siteops_v3_exceeds_limit(0.0, 6000, 40000, flag["percent"]):
+                raise Refused("SITEOPS-DISC-002: Approved percentage does not cover consolidated line discount.")
+
+        dst_b.save = _siteops_merge_save
+        self.order.consolidate_checks(dst_b, [src_b])
+
+        self.assertEqual(dst_b.custom_discount_reason, "Complaint")
+        self.assertEqual(dst_b.custom_discount_approver, "manager@example.com")
+        self.assertEqual(dst_b.custom_discount_approved_percent, 20.0)
+        self.assertEqual(dst_b.flags.discount_approval["approver"], "manager@example.com")
+        self.assertEqual(dst_b.flags.discount_approval["percent"], 20.0)
+        self.assertEqual(dst_b.grand_total, 34000)
+
+    def test_r2_p1_split_bill_discount_percent_inflation_blocks_without_pin_and_succeeds_with_pin(self):
+        """P1: split_bill must fail closed with POS-AUTH-REQUIRED when splitting inflates either
+        half's effective discount % above both caller self-limit and prior approved %, and succeed
+        cleanly when re-authorized with a Manager PIN token."""
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 25",
+            discount_approver_role="Owner Approver",
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+        ]
+        self.enterContext(patch.object(self.order, "_enforce_order_access"))
+        self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))
+        self.frappe.generate_hash.return_value = "GRP-R2-SPLIT"
+
+        # Case A: Self-escalation 3.75% (<= 5% cashier limit, no approver) -> 15% on remaining check
+        src_a = self._register_check(
+            FakePOSInvoice(
+                "CHK-R2-SP-A",
+                currency="UGX",
+                items=[
+                    _item(
+                        "i_steak", "STEAK", 1, 25500,
+                        price_list_rate=30000, base_price_list_rate=30000,
+                        discount_percentage=15, discount_amount=4500, amount=25500,
+                    ),
+                    _item("i_platter", "PLATTER", 1, 90000),
+                ],
+                custom_discount_reason="Complaint",
+                ury_discount_meta=json.dumps({"reason": "Complaint", "reason_description": "Complaint"}),
+            )
+        )
+        child_a = FakePOSInvoice("CHK-R2-SP-A-C", currency="UGX", items=[])
+        self.frappe.new_doc.return_value = child_a
+
+        with self.assertRaises((Refused, NotPermitted)) as ctx_a:
+            self.order.split_bill("CHK-R2-SP-A", [{"name": "i_platter", "qty": 1}])
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx_a.exception))
+        self.assertFalse(child_a.events, "Blocked split must not insert child invoice")
+        self.assertFalse(src_a.events, "Blocked split must not save source invoice")
+
+        # Re-attempt Case A with valid Manager PIN token covering 15% -> succeeds cleanly
+        src_a_ok = self._register_check(
+            FakePOSInvoice(
+                "CHK-R2-SP-A2",
+                currency="UGX",
+                items=[
+                    _item(
+                        "i_steak", "STEAK", 1, 25500,
+                        price_list_rate=30000, base_price_list_rate=30000,
+                        discount_percentage=15, discount_amount=4500, amount=25500,
+                    ),
+                    _item("i_platter", "PLATTER", 1, 90000),
+                ],
+                custom_discount_reason="Complaint",
+                ury_discount_meta=json.dumps({"reason": "Complaint", "reason_description": "Complaint"}),
+            )
+        )
+        child_a_ok = FakePOSInvoice("CHK-R2-SP-A2-C", currency="UGX", items=[])
+        self.frappe.new_doc.return_value = child_a_ok
+        split_claim_a = self.discount.canonical_split_discount_claim(
+            "CHK-R2-SP-A2", [{"name": "i_platter", "qty": 1}], percent=15.0, reason="Complaint"
+        )
+        tok_a = self._issue_override_token(src_a_ok, split_claim_a, approver="manager@example.com", percent=15.0)
+        self.order.split_bill("CHK-R2-SP-A2", [{"name": "i_platter", "qty": 1}], approval=tok_a)
+        self.assertEqual(src_a_ok.flags.discount_approval["approver"], "manager@example.com")
+        self.assertEqual(src_a_ok.flags.discount_approval["percent"], 15.0)
+        self.assertEqual(src_a_ok.custom_discount_approver, "manager@example.com")
+        self.assertEqual(src_a_ok.custom_discount_approved_percent, 15.0)
+
+        # Case B: Inflation above prior approved % (15% approved -> 20% on remaining check)
+        src_b = self._register_check(
+            FakePOSInvoice(
+                "CHK-R2-SP-B",
+                currency="UGX",
+                items=[
+                    _item(
+                        "i_steak", "STEAK", 1, 24000,
+                        price_list_rate=30000, base_price_list_rate=30000,
+                        discount_percentage=20, discount_amount=6000, amount=24000,
+                    ),
+                    _item("i_juice", "JUICE", 1, 10000),
+                ],
+                custom_discount_reason="Complaint",
+                custom_discount_approver="manager@example.com",
+                custom_discount_approved_percent=15.0,
+                ury_discount_meta=json.dumps({
+                    "reason": "Complaint",
+                    "approver": "manager@example.com",
+                    "approved_percent": 15.0,
+                }),
+            )
+        )
+        child_b = FakePOSInvoice("CHK-R2-SP-B-C", currency="UGX", items=[])
+        self.frappe.new_doc.return_value = child_b
+
+        with self.assertRaises((Refused, NotPermitted)) as ctx_b:
+            self.order.split_bill("CHK-R2-SP-B", [{"name": "i_juice", "qty": 1}])
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx_b.exception))
+        self.assertFalse(child_b.events)
+        self.assertFalse(src_b.events)
+
+        # Case C: Inflation above prior approved % on the MOVED new split check (moving STEAK 20%)
+        src_c = self._register_check(
+            FakePOSInvoice(
+                "CHK-R2-SP-C",
+                currency="UGX",
+                items=[
+                    _item(
+                        "i_steak", "STEAK", 1, 24000,
+                        price_list_rate=30000, base_price_list_rate=30000,
+                        discount_percentage=20, discount_amount=6000, amount=24000,
+                    ),
+                    _item("i_juice", "JUICE", 1, 10000),
+                ],
+                custom_discount_reason="Complaint",
+                custom_discount_approver="manager@example.com",
+                custom_discount_approved_percent=15.0,
+                ury_discount_meta=json.dumps({
+                    "reason": "Complaint",
+                    "approver": "manager@example.com",
+                    "approved_percent": 15.0,
+                }),
+            )
+        )
+        child_c = FakePOSInvoice("CHK-R2-SP-C-C", currency="UGX", items=[])
+        self.frappe.new_doc.return_value = child_c
+
+        with self.assertRaises((Refused, NotPermitted)) as ctx_c:
+            self.order.split_bill("CHK-R2-SP-C", [{"name": "i_steak", "qty": 1}])
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx_c.exception))
+
+        # Re-attempt Case C with valid Manager PIN token covering 20% -> succeeds cleanly
+        src_c_ok = self._register_check(
+            FakePOSInvoice(
+                "CHK-R2-SP-C2",
+                currency="UGX",
+                items=[
+                    _item(
+                        "i_steak", "STEAK", 1, 24000,
+                        price_list_rate=30000, base_price_list_rate=30000,
+                        discount_percentage=20, discount_amount=6000, amount=24000,
+                    ),
+                    _item("i_juice", "JUICE", 1, 10000),
+                ],
+                custom_discount_reason="Complaint",
+                custom_discount_approver="manager@example.com",
+                custom_discount_approved_percent=15.0,
+                ury_discount_meta=json.dumps({
+                    "reason": "Complaint",
+                    "approver": "manager@example.com",
+                    "approved_percent": 15.0,
+                }),
+            )
+        )
+        child_c_ok = FakePOSInvoice("CHK-R2-SP-C2-C", currency="UGX", items=[])
+        self.frappe.new_doc.return_value = child_c_ok
+        split_claim_c = self.discount.canonical_split_discount_claim(
+            "CHK-R2-SP-C2", [{"name": "i_steak", "qty": 1}], percent=20.0, reason="Complaint"
+        )
+        tok_c = self._issue_override_token(src_c_ok, split_claim_c, approver="manager@example.com", percent=20.0)
+        self.order.split_bill("CHK-R2-SP-C2", [{"name": "i_steak", "qty": 1}], approval=tok_c)
+        self.assertEqual(child_c_ok.flags.discount_approval["approver"], "manager@example.com")
+        self.assertEqual(child_c_ok.flags.discount_approval["percent"], 20.0)
+        self.assertEqual(child_c_ok.custom_discount_approver, "manager@example.com")
+        self.assertEqual(child_c_ok.custom_discount_approved_percent, 20.0)
+
+
 if __name__ == "__main__":
     unittest.main()
