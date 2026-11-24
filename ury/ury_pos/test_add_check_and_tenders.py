@@ -320,6 +320,61 @@ class TestGetPosInvoiceItemsPayments(Loaded):
             [{"mode_of_payment": "Online Mobile Money", "amount": 4.72, "reference_no": "PR-00122"}],
         )
 
+    def test_rechecks_live_phone_payment_request_status_when_row_has_stale_received_flag(self):
+        """P1 #1: a Phone row with stale custom_tender_received=1 whose Payment Request is
+        no longer Paid/Partially Paid must NOT be returned as Already received."""
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "Online Mobile Money" and field == "type" else None
+        )
+        invoice = SimpleNamespace(
+            name="LKG-00089",
+            branch="Lakeside",
+            company="Lakeside Hotel",
+            items=[Row(name="i1", item_name="Iced Tea", qty=1, rate=5.0, amount=5.0, is_disposable=0)],
+            taxes=[],
+            payments=[
+                Row(
+                    mode_of_payment="Online Mobile Money",
+                    type="Phone",
+                    amount=5.90,
+                    reference_no="ACC-PRQ-2026-00052",
+                    custom_tender_received=1,
+                ),
+            ],
+            get=lambda k, default=None: getattr(invoice, k, default),
+        )
+        self.frappe.get_doc.return_value = invoice
+
+        # PR was cancelled or failed -> no live Paid/Partially Paid PR -> must return [].
+        self.frappe.get_all.return_value = []
+        _, _, payments = self.api.getPosInvoiceItems("LKG-00089")
+        self.assertEqual(payments, [])
+
+        # PR is still live Paid -> must return the received Phone tender.
+        self.frappe.get_all.return_value = [
+            Row(
+                name="ACC-PRQ-2026-00052",
+                mode_of_payment="Online Mobile Money",
+                payment_account="MoMo - LH",
+                grand_total=5.90,
+                outstanding_amount=0.0,
+                status="Paid",
+            )
+        ]
+        _, _, payments = self.api.getPosInvoiceItems("LKG-00089")
+        self.assertEqual(
+            payments,
+            [{"mode_of_payment": "Online Mobile Money", "amount": 5.90, "reference_no": "ACC-PRQ-2026-00052"}],
+        )
+
+    def test_invoice_list_endpoints_select_currency_for_multi_currency_orders(self):
+        """P1 UI: getPosInvoice, searchPosInvoice, and get_split_group must expose currency."""
+        import inspect
+
+        for fn_name in ("getPosInvoice", "searchPosInvoice", "get_split_group"):
+            src = inspect.getsource(getattr(self.api, fn_name))
+            self.assertIn("currency", src, f"{fn_name} must select POS Invoice.currency")
+
 
 if __name__ == "__main__":
     unittest.main()
