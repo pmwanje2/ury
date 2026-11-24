@@ -90,4 +90,34 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
       });
     });
   });
+
+  it('hides Clear staff PIN tab when external_verifier manages PINs and displays neutral wrong-password refusal', async () => {
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.override.my_pin_status') {
+        return { message: { has_pin: true, external_verifier: true } };
+      }
+      return { message: [] };
+    });
+
+    const { rerender } = render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /clear staff pin/i })).not.toBeInTheDocument();
+    });
+
+    // When built-in store is active and password is wrong, show neutral POS-AUTH-PASSWORD message
+    vi.spyOn(call, 'get').mockResolvedValue({ message: { has_pin: false, external_verifier: false } });
+    vi.spyOn(call, 'post').mockRejectedValue(new Error('Your current password did not match. [POS-AUTH-PASSWORD]'));
+    rerender(<ApprovalPinDialog open={false} onOpenChange={vi.fn()} posProfile="Main Till" canManagePins={false} />);
+    rerender(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins={false} />);
+
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText(/current password/i), 'wrong');
+    await user.type(screen.getByLabelText(/new approval pin/i), '4826');
+    await user.type(screen.getByLabelText(/confirm approval pin/i), '4826');
+    await user.click(screen.getByRole('button', { name: /save approval pin/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/password/i);
+    expect(alert.textContent).not.toMatch(/POS-AUTH-PASSWORD|URY|HUF|Kamra/i);
+  });
 });
