@@ -191,6 +191,21 @@ class TestPosInvoiceRowSizeBudget(unittest.TestCase):
             + "; ".join(widened),
         )
 
+    def test_ury_last_round_id_accommodates_merge_rounds_composite_uuid(self):
+        """G46 Merge Rounds writes `<client_order_id>:<round_id>` (73 chars for two UUIDv4s)
+        into `ury_last_round_id`; its configured length must be >= 73 (or unbounded 0)."""
+        sources = load_ury_pos_invoice_sources()
+        spec = sources["fixtures/custom_field.json"].get("ury_last_round_id") or {}
+        raw_len = int(spec.get("length") or 0)
+        eff_len = max(64, raw_len) if raw_len > 0 else 140
+        composite_uuid_len = 36 + 1 + 36  # "<uuid4>:<uuid4>" == 73
+        self.assertGreaterEqual(
+            eff_len,
+            composite_uuid_len,
+            f"POS Invoice-ury_last_round_id length={eff_len} truncates Merge Rounds "
+            f"composite round_id ({composite_uuid_len} chars).",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
