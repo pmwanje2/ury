@@ -142,3 +142,159 @@ class TestChargedTip(FrappeTestCase):
 		self.assertEqual(gl.get(till_fx.TIPS_ACCOUNT), (0, 20))
 		self.assertEqual(gl.get(till_fx.INCOME_ACCOUNT), (0, 100))
 		self.assertEqual(gl.get(till_fx.CASH_ACCOUNT), (120, 0))
+
+	def test_grand_total_discount_never_discounts_the_tip(self):
+		invoice = till_fx.bill(
+			self.till,
+			100,
+			[(till_fx.CASH, 110)],
+			tip=20,
+			additional_discount_percentage=10,
+			apply_discount_on="Grand Total",
+		)
+
+		self.assertEqual(invoice.additional_discount_percentage, 10)
+		self.assertEqual(invoice.discount_amount, 10)
+		self.assertEqual(invoice.net_total, 90)
+		self.assertEqual(invoice.grand_total, 110)
+		self.assertEqual(invoice.change_amount, 0)
+		self.assertEqual([row.tax_amount for row in _tip_rows(invoice)], [20])
+
+	def test_card_overtender_tip_with_grand_total_discount(self):
+		till_fx.set_overtender_rule(till_fx.CARD, "Post to Charged Tip")
+		try:
+			invoice = till_fx.bill(
+				self.till,
+				100,
+				[(till_fx.CARD, 110)],
+				additional_discount_percentage=10,
+				apply_discount_on="Grand Total",
+			)
+		finally:
+			till_fx.set_overtender_rule(till_fx.CARD, "Refuse")
+
+		self.assertEqual(invoice.discount_amount, 10)
+		self.assertEqual(invoice.net_total, 90)
+		self.assertEqual(invoice.custom_charged_tip, 20)
+		self.assertEqual(invoice.grand_total, 110)
+		self.assertEqual(invoice.change_amount, 0)
+		self.assertEqual([row.tax_amount for row in _tip_rows(invoice)], [20])
+
+	def test_discount_never_discounts_tip_across_bases_tax_modes_rounding_and_preview(self):
+		from frappe.tests.utils import change_settings
+		from frappe.utils import round_based_on_smallest_currency_fraction
+
+		with change_settings("Global Defaults", {"disable_rounded_total": 1}):
+			# Net Total basis (no tax)
+			net_inv = till_fx.bill(
+				self.till,
+				100,
+				[(till_fx.CASH, 110)],
+				tip=20,
+				additional_discount_percentage=10,
+				apply_discount_on="Net Total",
+				disable_rounded_total=1,
+			)
+			self.assertEqual((net_inv.discount_amount, net_inv.net_total, net_inv.grand_total, net_inv.change_amount), (10, 90, 110, 0))
+
+			# Exclusive and inclusive VAT (18%) across both apply_discount_on bases
+			for basis, expected_discount in (("Grand Total", 11.8), ("Net Total", 10.0)):
+				for vat_inclusive, rate in ((False, 100), (True, 118)):
+					with self.subTest(basis=basis, vat_inclusive=vat_inclusive):
+						inv = till_fx.bill(
+							self.till,
+							rate,
+							[(till_fx.CASH, 126.2)],
+							tip=20,
+							vat_rate=18,
+							vat_inclusive=vat_inclusive,
+							additional_discount_percentage=10,
+							apply_discount_on=basis,
+							disable_rounded_total=1,
+						)
+						vat = [row for row in inv.taxes if row.account_head == till_fx.VAT_ACCOUNT]
+						self.assertAlmostEqual(inv.discount_amount, expected_discount, places=2)
+						self.assertAlmostEqual(inv.net_total, 90.0, places=2)
+						self.assertAlmostEqual(vat[0].tax_amount_after_discount_amount, 16.2, places=2)
+						self.assertEqual([row.tax_amount for row in _tip_rows(inv)], [20])
+						self.assertAlmostEqual(inv.grand_total, 126.2, places=2)
+						self.assertAlmostEqual(inv.change_amount, 0.0, places=2)
+
+			# Flat discount_amount works cleanly and cannot eat into the tip
+			flat_inv = till_fx.bill(
+				self.till,
+				100,
+				[(till_fx.CASH, 110)],
+				tip=20,
+				discount_amount=10,
+				apply_discount_on="Grand Total",
+				disable_rounded_total=1,
+			)
+			self.assertEqual((flat_inv.discount_amount, flat_inv.net_total, flat_inv.grand_total, flat_inv.change_amount), (10, 90, 110, 0))
+			with self.assertRaises(frappe.ValidationError):
+				till_fx.bill(
+					self.till,
+					100,
+					[(till_fx.CASH, 10)],
+					tip=20,
+					discount_amount=110,
+					apply_discount_on="Grand Total",
+					disable_rounded_total=1,
+				)
+
+			# Unsaved preview (same calculate_taxes_and_totals seam used by preview_settlement_totals)
+			draft = till_fx.bill(self.till, 100, [(till_fx.CASH, 120)], tip=20, submit=False, disable_rounded_total=1)
+			preview = frappe.get_doc("POS Invoice", draft.name)
+			preview.apply_discount_on = "Grand Total"
+			preview.additional_discount_percentage = 10
+			preview.discount_amount = 0
+			preview.calculate_taxes_and_totals()
+			self.assertEqual(preview.discount_amount, 10)
+			self.assertEqual(preview.net_total, 90)
+			self.assertEqual(preview.grand_total, 110)
+
+		# Rounding enabled (disable_rounded_total=0) with Grand Total discount + VAT + tip
+		with change_settings("Global Defaults", {"disable_rounded_total": 0}):
+			expected_rounded = round_based_on_smallest_currency_fraction(126.2, self.till.profile.currency, 2)
+			rounded_inv = till_fx.bill(
+				self.till,
+				100,
+				[(till_fx.CASH, expected_rounded)],
+				tip=20,
+				vat_rate=18,
+				additional_discount_percentage=10,
+				apply_discount_on="Grand Total",
+				disable_rounded_total=0,
+			)
+			self.assertAlmostEqual(rounded_inv.discount_amount, 11.8, places=2)
+			self.assertAlmostEqual(rounded_inv.grand_total, 126.2, places=2)
+			self.assertAlmostEqual(rounded_inv.rounded_total, expected_rounded, places=2)
+			self.assertAlmostEqual(rounded_inv.change_amount, 0.0, places=2)
+
+	def test_sales_return_keeps_tip_reversal_visible_and_preserves_discount(self):
+		from erpnext.accounts.doctype.pos_invoice.pos_invoice import make_sales_return
+
+		original = till_fx.bill(
+			self.till,
+			100,
+			[(till_fx.CASH, 110)],
+			tip=20,
+			additional_discount_percentage=10,
+			apply_discount_on="Grand Total",
+			disable_rounded_total=1,
+		)
+		self.assertEqual((original.grand_total, original.custom_charged_tip, original.custom_tip_server), (110, 20, till_fx.WAITER))
+
+		frappe.set_user(self.till.holder)
+		try:
+			ret = make_sales_return(original.name)
+			ret.insert(ignore_permissions=True)
+			ret.submit()
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(ret.custom_charged_tip, -20)
+		self.assertEqual(ret.custom_tip_server, till_fx.WAITER)
+		self.assertEqual(ret.discount_amount, -10)
+		self.assertEqual(ret.grand_total, -110)
+		self.assertEqual([row.tax_amount for row in _tip_rows(ret)], [-20])

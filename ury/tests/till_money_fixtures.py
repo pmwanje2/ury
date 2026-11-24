@@ -10,12 +10,18 @@ import frappe
 
 COMPANY = "_Test Company"
 BRANCH = "_Test Till Money Branch"
+OTHER_BRANCH = "_Test Till Money Other Branch"
 ROOM = "_Test Till Money Room"
 RESTAURANT = "_Test Till Money Restaurant"
 CUSTOMER = "_Test Till Money Customer"
 ITEM = "_Test Non Stock Item"
 WAITER = "till-money-waiter@example.com"
 MANAGER = "till-money-manager@example.com"
+MANAGER_2 = "till-money-manager-2@example.com"
+PURE_CASHIER = "till-money-pure-cashier@example.com"
+PURE_MANAGER = "till-money-pure-manager@example.com"
+PURE_WAITER = "till-money-pure-waiter@example.com"
+OTHER_BRANCH_USER = "till-money-other-branch@example.com"
 ROLES = ("Accounts Manager", "Accounts User", "Sales Manager", "Stock User", "Item Manager")
 
 CASH = "Cash"
@@ -37,13 +43,22 @@ APPROVER_ROLE = "URY Manager"
 def ensure_masters():
 	frappe.set_user("Administrator")
 	frappe.db.set_single_value("POS Settings", "invoice_type", "POS Invoice")
-	for email in (WAITER, MANAGER):
+	for email in (WAITER, MANAGER, MANAGER_2):
 		_make_user(email)
 	frappe.get_doc("User", MANAGER).add_roles(APPROVER_ROLE)
-	if not frappe.db.exists("Branch", BRANCH):
-		branch = frappe.get_doc({"doctype": "Branch", "branch": BRANCH})
-		branch.flags.ignore_mandatory = True
-		branch.insert(ignore_permissions=True)
+	frappe.get_doc("User", MANAGER_2).add_roles(APPROVER_ROLE)
+	_make_role_only_user(PURE_CASHIER, "URY Cashier")
+	_make_role_only_user(PURE_MANAGER, APPROVER_ROLE)
+	_make_role_only_user(PURE_WAITER, "URY Captain")
+	_make_role_only_user(OTHER_BRANCH_USER, "URY Cashier")
+	for branch_name in (BRANCH, OTHER_BRANCH):
+		if not frappe.db.exists("Branch", branch_name):
+			branch = frappe.get_doc({"doctype": "Branch", "branch": branch_name})
+			branch.flags.ignore_mandatory = True
+			branch.insert(ignore_permissions=True)
+	for email in (PURE_CASHIER, PURE_MANAGER, PURE_WAITER, MANAGER, MANAGER_2):
+		assign_branch_user(BRANCH, email)
+	assign_branch_user(OTHER_BRANCH, OTHER_BRANCH_USER)
 	if not frappe.db.exists("Customer", CUSTOMER):
 		frappe.get_doc(
 			{
@@ -83,6 +98,24 @@ def _make_user(email):
 	frappe.get_doc("User", email).add_roles(*ROLES)
 
 
+def _make_role_only_user(email, *roles):
+	if not frappe.db.exists("User", email):
+		frappe.get_doc(
+			{"doctype": "User", "email": email, "first_name": email.split("@")[0], "send_welcome_email": 0}
+		).insert(ignore_permissions=True)
+	user = frappe.get_doc("User", email)
+	user.set("roles", [{"role": role} for role in roles])
+	user.save(ignore_permissions=True)
+
+
+def assign_branch_user(branch_name, email):
+	branch = frappe.get_doc("Branch", branch_name)
+	if not any(row.user == email for row in (branch.get("user") or [])):
+		branch.append("user", {"user": email})
+		branch.flags.ignore_mandatory = True
+		branch.save(ignore_permissions=True)
+
+
 def _leaf(name, parent, root_type, account_type=""):
 	if frappe.db.exists("Account", name):
 		return
@@ -112,13 +145,15 @@ def set_overtender_rule(mode, rule):
 	doc.save(ignore_permissions=True)
 
 
-def make_till(name, **settings):
+def make_till(name, holder=None, applicable_users=None, **settings):
 	"""A POS Profile named ``name`` with Cash, Card and Wire tenders, plus an
 	open POS Opening Entry held by its own holder (URY lets a cashier hold one
 	open till at a time). ``settings`` are POS Profile fields."""
 	frappe.set_user("Administrator")
-	holder = frappe.scrub(name).strip("_").replace("_", "-") + "@example.com"
-	_make_user(holder)
+	if holder is None:
+		holder = frappe.scrub(name).strip("_").replace("_", "-") + "@example.com"
+		_make_user(holder)
+	assign_branch_user(BRANCH, holder)
 	defaults = {
 		"custom_tips_payable_account": TIPS_ACCOUNT,
 		"custom_cash_safe_account": SAFE_ACCOUNT,
@@ -152,8 +187,9 @@ def make_till(name, **settings):
 	profile.append("payments", {"mode_of_payment": CASH, "default": 1})
 	profile.append("payments", {"mode_of_payment": CARD})
 	profile.append("payments", {"mode_of_payment": WIRE})
-	profile.append("applicable_for_users", {"user": holder})
-	profile.append("applicable_for_users", {"user": WAITER})
+	users = list(dict.fromkeys([holder, WAITER, *(applicable_users or [])]))
+	for email in users:
+		profile.append("applicable_for_users", {"user": email})
 	profile.insert(ignore_permissions=True)
 
 	opening = frappe.new_doc("POS Opening Entry")
@@ -170,7 +206,20 @@ def make_till(name, **settings):
 	return frappe._dict(profile=profile, opening=opening, name=name, holder=holder)
 
 
-def bill(till, rate, payments, tip=None, waiter=WAITER, vat_rate=None, submit=True):
+def bill(
+	till,
+	rate,
+	payments,
+	tip=None,
+	waiter=WAITER,
+	vat_rate=None,
+	submit=True,
+	additional_discount_percentage=None,
+	discount_amount=None,
+	apply_discount_on=None,
+	vat_inclusive=False,
+	disable_rounded_total=None,
+):
 	"""A POS Invoice for one ``rate`` item on ``till``, paid by ``payments``
 	(``[(mode, amount), ...]``), created by the till's holder."""
 	frappe.set_user(till.holder)
@@ -182,6 +231,14 @@ def bill(till, rate, payments, tip=None, waiter=WAITER, vat_rate=None, submit=Tr
 		invoice.is_pos = 1
 		invoice.update_stock = 0
 		invoice.waiter = waiter
+		if apply_discount_on:
+			invoice.apply_discount_on = apply_discount_on
+		if additional_discount_percentage is not None:
+			invoice.additional_discount_percentage = additional_discount_percentage
+		if discount_amount is not None:
+			invoice.discount_amount = discount_amount
+		if disable_rounded_total is not None:
+			invoice.disable_rounded_total = disable_rounded_total
 		invoice.append(
 			"items",
 			{
@@ -201,6 +258,7 @@ def bill(till, rate, payments, tip=None, waiter=WAITER, vat_rate=None, submit=Tr
 					"description": "VAT",
 					"rate": vat_rate,
 					"cost_center": COST_CENTER,
+					"included_in_print_rate": 1 if vat_inclusive else 0,
 				},
 			)
 		if tip is not None:

@@ -12,6 +12,8 @@ Over/Short entry is a native Journal Entry the closing posts on submit. All
 accounts, the threshold and the approver role are POS Profile settings.
 """
 
+import json
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
@@ -20,38 +22,39 @@ from ury.tests import till_money_fixtures as till_fx
 DRAWER_CREDIT = {"Pickup": True, "Loan": False, "Paid Out": True}
 
 
-def movement(till, kind, amount, counter=None, reason=None, submit=True, drawer=None):
+def movement(till, kind, amount, counter=None, reason=None, submit=True, drawer=None, creator=None, extra=None):
 	if counter is None:
 		counter = till_fx.PAID_OUT_ACCOUNT if kind == "Paid Out" else till_fx.SAFE_ACCOUNT
 	drawer = drawer or till_fx.CASH_ACCOUNT
 	out = DRAWER_CREDIT[kind]
-	frappe.set_user(till.holder)
+	frappe.set_user(creator or till.holder)
 	try:
-		entry = frappe.get_doc(
-			{
-				"doctype": "Journal Entry",
-				"voucher_type": "Cash Entry",
-				"company": till_fx.COMPANY,
-				"posting_date": frappe.utils.nowdate(),
-				"custom_pos_opening_entry": till.opening.name,
-				"custom_cash_movement_type": kind,
-				"custom_cash_movement_reason": reason,
-				"accounts": [
-					{
-						"account": drawer,
-						"debit_in_account_currency": 0 if out else amount,
-						"credit_in_account_currency": amount if out else 0,
-						"cost_center": till_fx.COST_CENTER,
-					},
-					{
-						"account": counter,
-						"debit_in_account_currency": amount if out else 0,
-						"credit_in_account_currency": 0 if out else amount,
-						"cost_center": till_fx.COST_CENTER,
-					},
-				],
-			}
-		)
+		payload = {
+			"doctype": "Journal Entry",
+			"voucher_type": "Cash Entry",
+			"company": till_fx.COMPANY,
+			"posting_date": frappe.utils.nowdate(),
+			"custom_pos_opening_entry": till.opening.name,
+			"custom_cash_movement_type": kind,
+			"custom_cash_movement_reason": reason,
+			"accounts": [
+				{
+					"account": drawer,
+					"debit_in_account_currency": 0 if out else amount,
+					"credit_in_account_currency": amount if out else 0,
+					"cost_center": till_fx.COST_CENTER,
+				},
+				{
+					"account": counter,
+					"debit_in_account_currency": amount if out else 0,
+					"credit_in_account_currency": 0 if out else amount,
+					"cost_center": till_fx.COST_CENTER,
+				},
+			],
+		}
+		if extra:
+			payload.update(extra)
+		entry = frappe.get_doc(payload)
 		entry.insert()
 		if submit:
 			entry.submit()
@@ -153,6 +156,70 @@ class TestTillCashMovements(FrappeTestCase):
 		till_fx.close_till(till, counted=900)
 		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SHIFT\]"):
 			frappe.get_doc("Journal Entry", pickup.name).cancel()
+
+	def test_manager_cannot_self_submit_own_paid_out_above_threshold(self):
+		till = till_fx.make_till("_Test Till Manager SoD")
+		draft = movement(till, "Paid Out", 600, reason="Generator fuel", submit=False, creator=till_fx.MANAGER)
+		self.assertEqual(draft.owner, till_fx.MANAGER)
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SECOND-PERSON\]") as ctx:
+			submit_as(draft, till_fx.MANAGER)
+		message = str(ctx.exception).lower()
+		for vendor in ("ury", "kamra", "huf"):
+			self.assertNotIn(vendor, message)
+
+		approved = submit_as(draft, till_fx.MANAGER_2)
+		self.assertEqual(approved.docstatus, 1)
+		self.assertEqual(approved.custom_cash_movement_approver, till_fx.MANAGER_2)
+
+	def test_approver_field_cannot_be_spoofed_on_draft_or_below_threshold(self):
+		till = till_fx.make_till("_Test Till Approver Spoof")
+		small = movement(
+			till,
+			"Paid Out",
+			300,
+			reason="Lemons",
+			submit=True,
+			extra={"custom_cash_movement_approver": till_fx.MANAGER},
+		)
+		self.assertFalse(small.custom_cash_movement_approver)
+
+		pickup = movement(
+			till,
+			"Pickup",
+			100,
+			submit=True,
+			extra={"custom_cash_movement_approver": till_fx.MANAGER},
+		)
+		self.assertFalse(pickup.custom_cash_movement_approver)
+
+		draft = movement(
+			till,
+			"Paid Out",
+			600,
+			reason="Gas refill",
+			submit=False,
+			extra={"custom_cash_movement_approver": till_fx.MANAGER},
+		)
+		self.assertFalse(draft.custom_cash_movement_approver)
+
+	def test_pos_profile_account_fields_declare_link_filters(self):
+		meta = frappe.get_meta("POS Profile")
+		expected_root = {
+			"custom_tips_payable_account": ("=", "Liability"),
+			"custom_cash_over_short_account": ("in", ["Expense", "Income"]),
+			"custom_cash_safe_account": ("=", "Asset"),
+			"custom_paid_out_account": ("=", "Expense"),
+		}
+		for fieldname, root_clause in expected_root.items():
+			with self.subTest(fieldname=fieldname):
+				field = meta.get_field(fieldname)
+				self.assertIsNotNone(field)
+				self.assertTrue(field.link_filters, f"{fieldname} must define link_filters")
+				clauses = json.loads(field.link_filters)
+				self.assertIn(["Account", "company", "=", "eval:doc.company"], clauses)
+				self.assertIn(["Account", "is_group", "=", 0], clauses)
+				self.assertIn(["Account", "disabled", "=", 0], clauses)
+				self.assertIn(["Account", "root_type", root_clause[0], root_clause[1]], clauses)
 
 
 class TestCashOverShort(FrappeTestCase):
