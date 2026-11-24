@@ -2491,6 +2491,16 @@ def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
     if disc > 0:
         dst.apply_discount_on = _field(src, "apply_discount_on") or "Grand Total"
         dst.discount_amount = disc
+        for disc_field in (
+            "custom_discount_reason",
+            "custom_discount_note",
+            "custom_discount_approver",
+            "custom_discount_approved_percent",
+            "ury_discount_meta",
+        ):
+            val = _field(src, disc_field, None)
+            if val is not None and _has_field("POS Invoice", disc_field):
+                setattr(dst, disc_field, val)
     for t in _field(src, "taxes") or []:
         if _is_tip_tax_row(t, tips_account):
             continue
@@ -2665,8 +2675,13 @@ def adjust_closed_check(
             "amount": float(prow["amount"]),
         })
 
-    rep.insert(ignore_permissions=True)
-    rep.submit()
+    prev_reopen_copy = getattr(fr.flags, "ury_reopen_adjust_copy", False)
+    fr.flags.ury_reopen_adjust_copy = True
+    try:
+        rep.insert(ignore_permissions=True)
+        rep.submit()
+    finally:
+        fr.flags.ury_reopen_adjust_copy = prev_reopen_copy
 
     after_snapshot = {
         "reversal_return": rev.name,
@@ -2796,7 +2811,12 @@ def reopen_closed_check(
         reopened.custom_tip_server = None
 
     _clone_check_lines_and_taxes(orig, reopened, pos_profile_doc=profile_doc)
-    reopened.insert(ignore_permissions=True)
+    prev_reopen_copy = getattr(fr.flags, "ury_reopen_adjust_copy", False)
+    fr.flags.ury_reopen_adjust_copy = True
+    try:
+        reopened.insert(ignore_permissions=True)
+    finally:
+        fr.flags.ury_reopen_adjust_copy = prev_reopen_copy
 
     after_snapshot = {
         "reversal_return": rev.name,

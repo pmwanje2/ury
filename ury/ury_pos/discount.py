@@ -1756,7 +1756,11 @@ def validate_pos_discount(doc, method=None):
         return
     if cint(doc.get("is_return")) == 1 or cint(doc.get("is_consolidated")) == 1:
         return
-    if getattr(frappe.flags, "ury_bill_split", False) or getattr(frappe.flags, "in_bill_merge_sync", False):
+    if (
+        getattr(frappe.flags, "ury_bill_split", False)
+        or getattr(frappe.flags, "in_bill_merge_sync", False)
+        or getattr(frappe.flags, "ury_reopen_adjust_copy", False)
+    ):
         return
 
     # 1) Hard cap Item.max_discount on every row
