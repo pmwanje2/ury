@@ -163,6 +163,8 @@
     "room_match": "Room {{room}} · {{guest}} · departs {{departure}}",
     "room_no_post": "This guest's bill is closed to room charges",
     "room_check_required": "Check the room before taking Room Charge",
+    "receipt_print_failed": "Payment recorded, but the receipt did not print: {{reason}}. Reprint it from Orders.",
+    "fiscal_reprint_printed": "Fiscal receipt COPY #{{copy}} printed for {{invoice}} (FDN {{fdn}}).",
     "room_check_failed": "Could not check this room",
     "room_charge_not_configured": "Room charge isn't set up for this company. Finance maps the guest ledger clearing account.",
     "discount_not_applied": "Press Apply to update the total before paying.",

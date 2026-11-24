@@ -178,3 +178,513 @@ class BillCopy(unittest.TestCase):
         html = Environment().from_string(json.loads(form.read_text())['html']).render(doc=doc, frappe=MagicMock(), _=lambda x:x)
         for value in ('Cash', 'Visa', 'Charged to account AC-12: 60 UGX'):
             self.assertIn(value, html)
+
+    def test_print_bill_copy_does_not_require_cups_for_browser_or_qz_print(self):
+        records = []
+        doc = frappe._dict(
+            name='INV-B1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[frappe._dict(item_name='Tea', qty=1, amount=5000)],
+            taxes=[], payments=[frappe._dict(mode_of_payment='Cash', amount=5000)],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            self.assertEqual(arg['doctype'], 'URY Bill Reprint Log')
+            rec = frappe._dict(arg)
+            return type('Row', (), {'insert': lambda _, **kw: records.append(rec) or rec})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log' and isinstance(flt, dict):
+                if 'request_key' in flt:
+                    matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                    return matches[-1] if matches else None
+                if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                    self.assertTrue(for_update, 'copy_number counter lookup must use a locking read (for_update=True)')
+                    self.assertEqual(order_by, 'copy_number desc')
+                    nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                    return max(nums) if nums else None
+            return None
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=[]):
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'test-cashier'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.db.count.side_effect = AssertionError('print_bill_copy must not use non-locking frappe.db.count for copy numbering')
+            f.utils.now.return_value = '2026-11-23 12:34:00'
+            f.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+                f'<article><h1>COPY #{doc.copy_number}</h1><p>{name}</p></article>'
+            )
+
+            browser = api.print_bill_copy('INV-B1', idempotency_key='browser-key', delivery='browser')
+            qz = api.print_bill_copy('INV-B1', idempotency_key='qz-key', delivery='qz')
+
+        self.assertEqual(browser['status'], 'COMPLETED')
+        self.assertEqual(browser['copy_number'], 1)
+        self.assertEqual(browser['delivery'], 'browser')
+        self.assertIn('COPY #1', browser['html'])
+        self.assertIn('copy_number=1', browser['print_url'])
+        self.assertEqual(qz['status'], 'COMPLETED')
+        self.assertEqual(qz['copy_number'], 2)
+        self.assertEqual(qz['delivery'], 'qz')
+        self.assertIn('COPY #2', qz['html'])
+        self.assertEqual(len(records), 2)
+        self.assertIsNone(records[0]['printer'])
+        self.assertEqual(records[0]['copy_number'], 1)
+        self.assertEqual(records[1]['copy_number'], 2)
+
+    def test_printview_populates_copy_number_and_renders_hash_n(self):
+        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
+        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
+
+        doc = object.__new__(CustomPOSInvoice)
+        doc.__dict__.update(name='POS-INV-00024', docstatus=1, customer='Walk In', currency='UGX', outstanding_amount=0)
+        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, \
+             patch.object(POSInvoice, 'before_print'), \
+             patch('ury.ury.doctype.ury_order.ury_order.check_split_target_access'):
+            f.db.exists.return_value = True
+            f.get_doc.return_value = frappe._dict(name='POS-INV-00024', docstatus=1, custom_merged_pos_invoice=None)
+            f.form_dict = {}
+            f.db.get_value.return_value = 3
+            CustomPOSInvoice.before_print(doc)
+        self.assertEqual(doc.copy_number, 3)
+
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        copy_html = json.loads(path.read_text())['html']
+        # Direct /printview without in-memory copy_number still prints COPY #n
+        pv_doc = frappe._dict(
+            name='POS-INV-00024', docstatus=1, currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=100, rounded_total=100, outstanding_amount=0, copy_timestamp='2026-11-23 12:34',
+        )
+        fake_f = MagicMock()
+        fake_f.db.get_value.return_value = None
+        html_default = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
+        self.assertIn('COPY #1', html_default)
+        fake_f.db.get_value.return_value = 4
+        html_logged = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
+        self.assertIn('COPY #4', html_logged)
+
+    def test_bill_copy_includes_merged_partner_items_payments_and_efris(self):
+        """Reproduces Hydrogen's billcopy-merged live probe (POS-INV-00031 + partner POS-INV-00030)."""
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        partner = frappe._dict(
+            name='POS-INV-00030', docstatus=1, currency='UGX', customer='Walk In',
+            items=[frappe._dict(item_name='Water', qty=1, amount=10000)],
+            taxes=[frappe._dict(description='Exempt', tax_amount=0)],
+            payments=[frappe._dict(mode_of_payment='Cash', amount=10000)],
+            grand_total=10000, rounded_total=10000, outstanding_amount=0,
+            efris_e_invoice='EINV-30', tax_id=None,
+        )
+        primary = frappe._dict(
+            name='POS-INV-00031', docstatus=1, currency='UGX', customer='Walk In',
+            custom_merged_pos_invoice='POS-INV-00030', ury_print_partner=partner,
+            items=[frappe._dict(item_name='Burger', qty=1, amount=15000)],
+            taxes=[frappe._dict(description='VAT 18%', tax_amount=2288)],
+            payments=[frappe._dict(mode_of_payment='Card', amount=15000)],
+            grand_total=15000, rounded_total=15000, outstanding_amount=0,
+            efris_e_invoice='EINV-31', tax_id=None, copy_number=1, copy_timestamp='2026-11-23 12:34',
+        )
+        e_invoices = {
+            'EINV-31': frappe._dict(taxes=[frappe._dict(tax_category_code='01:A: Standard (18%)', net_amount=12712, tax_amount=2288)]),
+            'EINV-30': frappe._dict(taxes=[frappe._dict(tax_category_code='03:C: Exempt', net_amount=10000, tax_amount=0)]),
+        }
+        efris_map = {
+            'POS-INV-00031': {'state': 'fiscalised', 'fdn': '326041234567', 'verification_code': 'VC-31', 'qr': 'data:image/png;base64,AAA', 'sandbox': 0, 'is_return': 0},
+            'POS-INV-00030': {'state': 'fiscalised', 'fdn': '326041234568', 'verification_code': 'VC-30', 'qr': 'data:image/png;base64,BBB', 'sandbox': 0, 'is_return': 0},
+        }
+        fake_f = MagicMock()
+        fake_f.get_doc.side_effect = lambda dt, name: e_invoices[name]
+        fake_f.utils.fmt_money.side_effect = lambda val, **kw: f'UGX {val}'
+        html = Environment(autoescape=False).from_string(json.loads(path.read_text())['html']).render(
+            doc=primary, frappe=fake_f, _=lambda x: x, efris_receipt_data=lambda b: efris_map[b.name],
+        )
+        for token in ('COPY #1', 'POS-INV-00031', 'Burger', 'Card', '326041234567', 'A: Standard (18%)',
+                      'POS-INV-00030', 'Water', 'Cash', '326041234568', 'C: Exempt', '25000'):
+            self.assertIn(token, html, token)
+
+    def test_before_print_and_bill_copy_query_pass_frappe_v16_select_validation(self):
+        """P0: Frappe v16 rejects SQL function strings like max(copy_number) in get_value."""
+        from erpnext.accounts.doctype.pos_invoice.pos_invoice import POSInvoice
+        from frappe.database.query import _validate_select_field
+        from ury.ury.class_overrides.pos_invoice import CustomPOSInvoice
+
+        def _raise_frappe_throw(msg, exc=frappe.ValidationError, **kw):
+            raise exc(msg)
+
+        seen_before_print = []
+        doc = object.__new__(CustomPOSInvoice)
+        doc.__dict__.update(name='POS-INV-00024', docstatus=1, customer='Walk In', currency='UGX', outstanding_amount=0)
+        with patch('ury.ury.class_overrides.pos_invoice.frappe') as f, \
+             patch.object(POSInvoice, 'before_print'), \
+             patch('ury.ury.doctype.ury_order.ury_order.check_split_target_access'), \
+             patch('frappe.database.query._', lambda msg: msg), \
+             patch('frappe.database.query.frappe.throw', side_effect=_raise_frappe_throw):
+            f.db.exists.return_value = True
+            f.get_doc.return_value = frappe._dict(name='POS-INV-00024', docstatus=1, custom_merged_pos_invoice=None)
+            f.form_dict = {}
+
+            def capture_bp(doctype, flt, fieldname=None, **kw):
+                seen_before_print.append((doctype, flt, fieldname, kw))
+                _validate_select_field(fieldname)
+                return 3
+
+            f.db.get_value.side_effect = capture_bp
+            CustomPOSInvoice.before_print(doc)
+
+        self.assertEqual(doc.copy_number, 3)
+        self.assertEqual(len(seen_before_print), 1)
+        self.assertEqual(seen_before_print[0][2], 'copy_number')
+        self.assertEqual(seen_before_print[0][3].get('order_by'), 'copy_number desc')
+
+        # Now validate URY Bill Copy template's fallback query through Frappe v16's real validator too.
+        path = Path(__file__).resolve().parents[1] / 'print_format/ury_bill_copy/ury_bill_copy.json'
+        copy_html = json.loads(path.read_text())['html']
+        pv_doc = frappe._dict(
+            name='POS-INV-00024', docstatus=1, currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=100, rounded_total=100, outstanding_amount=0, copy_timestamp='2026-11-24 00:30',
+        )
+        seen_template = []
+        with patch('frappe.database.query._', lambda msg: msg), \
+             patch('frappe.database.query.frappe.throw', side_effect=_raise_frappe_throw):
+            def capture_tpl(doctype, flt, fieldname=None, **kw):
+                seen_template.append((doctype, flt, fieldname, kw))
+                _validate_select_field(fieldname)
+                return 4
+
+            fake_f = MagicMock()
+            fake_f.db.get_value.side_effect = capture_tpl
+            html = Environment(autoescape=False).from_string(copy_html).render(doc=pv_doc, frappe=fake_f, _=lambda x: x)
+        self.assertIn('COPY #4', html)
+        self.assertEqual(len(seen_template), 1)
+        self.assertEqual(seen_template[0][2], 'copy_number')
+        self.assertEqual(seen_template[0][3].get('order_by'), 'copy_number desc')
+
+    def test_completed_replay_returns_copy_number_delivery_html_and_print_url(self):
+        """P1: Replaying a COMPLETED copy must return copy_number, delivery, html, and print_url."""
+        records = []
+        doc = frappe._dict(
+            name='INV-R1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+            return type('Row', (), {'insert': lambda _, **kw: records.append(rec) or rec})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'POS Profile' and fieldname == 'qz_print':
+                return 0
+            if dt == 'URY Bill Reprint Log' and isinstance(flt, dict):
+                if 'request_key' in flt:
+                    matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                    return matches[-1] if matches else None
+                if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                    nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                    return max(nums) if nums else None
+            return None
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=[]):
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'test-cashier'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.db.count.return_value = 0
+            f.utils.now.return_value = '2026-11-24 00:30:00'
+            f.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+                f'<article><h1>COPY #{doc.copy_number}</h1></article>'
+            )
+
+            first = api.print_bill_copy('INV-R1', idempotency_key='idem-1', delivery='browser')
+            replay = api.print_bill_copy('INV-R1', idempotency_key='idem-1')
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(first['copy_number'], 1)
+        self.assertEqual(replay['status'], 'COMPLETED')
+        self.assertEqual(replay.get('copy_number'), 1)
+        self.assertEqual(replay.get('delivery'), 'browser')
+        self.assertIn('COPY #1', replay.get('html') or '')
+        self.assertIn('copy_number=1', replay.get('print_url') or '')
+
+    def test_print_bill_copy_unique_copy_slot_and_retry_on_snapshot_race(self):
+        """P1: URY Bill Reprint Log carries unique copy_slot and print_bill_copy retries on snapshot/duplicate race."""
+        schema_path = Path(__file__).resolve().parents[1] / 'doctype/ury_bill_reprint_log/ury_bill_reprint_log.json'
+        schema = json.loads(schema_path.read_text())
+        fields = {f['fieldname']: f for f in schema['fields']}
+        self.assertIn('copy_slot', fields, 'URY Bill Reprint Log must declare a unique copy_slot field')
+        self.assertEqual(fields['copy_slot'].get('unique'), 1)
+
+        records = []
+        doc = frappe._dict(
+            name='INV-RACE', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+        attempts = {'count': 0}
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+
+            def insert(_self, **kw):
+                attempts['count'] += 1
+                if attempts['count'] == 1:
+                    # Simulate a racing connection having just committed COPY #1 on the same slot.
+                    records.append(frappe._dict(
+                        name='COPY-other-1', print_job_id='COPY-other-1', request_key='other-key',
+                        invoice='INV-RACE', copy_number=1, attempt=1, copy_slot='INV-RACE:1:1', status='COMPLETED',
+                    ))
+                    raise frappe.DuplicateEntryError('URY Bill Reprint Log', rec.get('copy_slot'))
+                records.append(rec)
+                return rec
+
+            return type('Row', (), {'insert': insert})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log' and isinstance(flt, dict):
+                if 'request_key' in flt:
+                    matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                    return matches[-1] if matches else None
+                if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                    self.assertTrue(for_update)
+                    nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                    return max(nums) if nums else None
+            return None
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=[]):
+            f.DuplicateEntryError = frappe.DuplicateEntryError
+            f.QueryDeadlockError = frappe.QueryDeadlockError
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'test-cashier'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.utils.now.return_value = '2026-11-24 00:30:00'
+            f.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+                f'<article><h1>COPY #{doc.copy_number}</h1></article>'
+            )
+
+            res = api.print_bill_copy('INV-RACE', idempotency_key='race-key', delivery='browser')
+
+        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['copy_number'], 2)
+        self.assertEqual([r['copy_number'] for r in records], [1, 2])
+        self.assertEqual(records[-1].get('copy_slot'), 'INV-RACE:2:1')
+        f.db.rollback.assert_called()
+
+    def test_reprint_dispatch_is_idempotent_across_users_and_marks_network_pending_dispatched(self):
+        """P1: Network dispatch marks PENDING-EFRIS DISPATCHED; another user with same key does not print COPY #2."""
+        records = []
+        pending_status = {'PENDING-EFRIS-INV-NET1': 'AWAITING_FDN'}
+        doc = frappe._dict(
+            name='INV-NET1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+            return type('Row', (), {'insert': lambda _, **kw: records.append(rec) or rec})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log':
+                if isinstance(flt, str):
+                    return next((r for r in records if r.name == flt), None)
+                if isinstance(flt, dict):
+                    if 'request_key' in flt:
+                        matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                        return matches[-1] if matches else None
+                    if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                        nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                        return max(nums) if nums else None
+            return None
+
+        def set_value(dt, name, values, **kw):
+            if dt == 'URY Bill Reprint Log':
+                if name in pending_status:
+                    pending_status[name] = values.get('status', pending_status[name])
+                    return
+                for r in records:
+                    if r.name == name:
+                        r.update(values)
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=['Bar Printer']), \
+             patch('ury.ury.printing.file_store.save_job', return_value=True), \
+             patch('ury.ury.printing.service.submit_and_monitor_print_job', return_value={'status': 'Success'}) as submit:
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.db.set_value.side_effect = set_value
+            f.db.exists.side_effect = lambda dt, name: dt == 'URY Bill Reprint Log' and name in pending_status
+            f.utils.now.return_value = '2026-11-24 00:30:00'
+
+            # 1) Cashier dispatches efris-auto-INV-NET1 over network
+            f.session.user = 'cashier@example.com'
+            cashier_res = api.print_bill_copy('INV-NET1', idempotency_key='efris-auto-INV-NET1', delivery='network')
+
+            # 2) Scheduler (Administrator) attempts the same auto-reprint key
+            f.session.user = 'Administrator'
+            cron_res = api.print_bill_copy('INV-NET1', idempotency_key='efris-auto-INV-NET1', delivery='network')
+
+        self.assertEqual(cashier_res['status'], 'SUBMITTED')
+        self.assertEqual(pending_status['PENDING-EFRIS-INV-NET1'], 'DISPATCHED')
+        self.assertEqual(submit.call_count, 1, 'Different session user must not dispatch a duplicate COPY #2')
+        self.assertEqual(len(records), 1)
+        self.assertEqual(cron_res['print_job_id'], cashier_res['print_job_id'])
+
+    def test_print_bill_copy_retry_uses_savepoint_without_committing_or_wiping_caller_tx(self):
+        """R4 P1: Retry uses a savepoint and never commits or bare-rolls-back a caller's transaction."""
+        records = []
+        doc = frappe._dict(
+            name='INV-SP1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+        attempts = {'count': 0}
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+
+            def insert(_self, **kw):
+                attempts['count'] += 1
+                if attempts['count'] == 1:
+                    raise frappe.QueryDeadlockError('simulated 1213 deadlock')
+                records.append(rec)
+                return rec
+
+            return type('Row', (), {'insert': insert})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log' and isinstance(flt, dict):
+                if 'request_key' in flt:
+                    matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                    return matches[-1] if matches else None
+                if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                    nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                    return max(nums) if nums else None
+            return None
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=[]):
+            f.DuplicateEntryError = frappe.DuplicateEntryError
+            f.QueryDeadlockError = frappe.QueryDeadlockError
+            f.QueryTimeoutError = getattr(frappe, 'QueryTimeoutError', TimeoutError)
+            f.db.transaction_writes = 1  # External caller has uncommitted work in this transaction.
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'test-cashier'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.utils.now.return_value = '2026-11-24 06:30:00'
+            f.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+                f'<article><h1>COPY #{doc.copy_number}</h1></article>'
+            )
+
+            res = api.print_bill_copy('INV-SP1', idempotency_key='sp-key', delivery='browser')
+
+        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['copy_number'], 1)
+        f.db.savepoint.assert_called()
+        f.db.rollback.assert_called()
+        for call in f.db.rollback.call_args_list:
+            self.assertTrue(
+                call.kwargs.get('save_point'),
+                f'print_bill_copy must roll back only its savepoint, not caller transaction: {call}',
+            )
+        f.db.commit.assert_not_called()
+
+    def test_print_bill_copy_recognizes_legacy_r2_request_key_and_prevents_copy_2(self):
+        """R4 P2: Pre-upgrade R2 [owner, invoice, key] row must not be duplicated as COPY #2."""
+        from hashlib import sha256
+
+        legacy_key = sha256(json.dumps(['cashier@example.com', 'INV-UPG1', 'efris-auto-INV-UPG1']).encode()).hexdigest()
+        records = [
+            frappe._dict(
+                name=f'COPY-{legacy_key}-1',
+                print_job_id=f'COPY-{legacy_key}-1',
+                request_key=legacy_key,
+                copy_slot=None,
+                invoice='INV-UPG1',
+                job_owner='cashier@example.com',
+                printer='Bar Printer',
+                status='SUBMITTED',
+                failure_reason=None,
+                copy_number=1,
+                attempt=1,
+            ),
+        ]
+        pending_status = {'PENDING-EFRIS-INV-UPG1': 'AWAITING_FDN'}
+        doc = frappe._dict(
+            name='INV-UPG1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+            return type('Row', (), {'insert': lambda _, **kw: records.append(rec) or rec})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log':
+                if isinstance(flt, str):
+                    if flt == 'PENDING-EFRIS-INV-UPG1' and fieldname == 'job_owner':
+                        return 'cashier@example.com'
+                    return next((r for r in records if r.name == flt), None)
+                if isinstance(flt, dict):
+                    if 'request_key' in flt:
+                        matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                        return matches[-1] if matches else None
+                    if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                        nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                        return max(nums) if nums else None
+            return None
+
+        def set_value(dt, name, values, **kw):
+            if dt == 'URY Bill Reprint Log' and name in pending_status:
+                pending_status[name] = values.get('status', pending_status[name])
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=['Bar Printer']), \
+             patch('ury.ury.printing.file_store.save_job', return_value=True), \
+             patch('ury.ury.printing.service.submit_and_monitor_print_job', return_value={'status': 'Success'}) as submit:
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'cashier@example.com'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.db.set_value.side_effect = set_value
+            f.db.exists.side_effect = lambda dt, name: dt == 'URY Bill Reprint Log' and name in pending_status
+            f.utils.now.return_value = '2026-11-24 06:30:00'
+
+            res = api.print_bill_copy('INV-UPG1', idempotency_key='efris-auto-INV-UPG1', delivery='network')
+
+        self.assertEqual(res['status'], 'SUBMITTED')
+        self.assertEqual(res['copy_number'], 1)
+        self.assertEqual(res['print_job_id'], f'COPY-{legacy_key}-1')
+        submit.assert_not_called()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(pending_status['PENDING-EFRIS-INV-UPG1'], 'DISPATCHED')
