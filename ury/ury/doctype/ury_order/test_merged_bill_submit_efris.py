@@ -756,6 +756,135 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 		self.assertEqual(len(records), 1)
 		self.assertEqual(pending_status["PENDING-EFRIS-INV-LEG"], "DISPATCHED")
 
+	def test_copy_race_errno_unwraps_nested_causes_and_args(self):
+		"""R5 P1 (site-less): _copy_race_errno unwraps nested pymysql/Frappe exception wrappers."""
+		class _OpErr(Exception):
+			pass
+
+		class _Deadlock(Exception):
+			pass
+
+		class _Dup(Exception):
+			pass
+
+		self.assertEqual(api._copy_race_errno(_Deadlock(_OpErr(1020, "Record has changed"))), 1020)
+		self.assertEqual(api._copy_race_errno(_Deadlock(_OpErr(1213, "Deadlock found"))), 1213)
+		self.assertEqual(api._copy_race_errno(_OpErr(1305, "SAVEPOINT does not exist")), 1305)
+		self.assertEqual(api._copy_race_errno(_Dup("URY Bill Reprint Log", "slot", _OpErr(1062, "Duplicate"))), 1062)
+		try:
+			try:
+				raise _OpErr(1020, "Record has changed")
+			except Exception as inner:
+				raise _Deadlock("wrapped") from inner
+		except Exception as chained:
+			self.assertEqual(api._copy_race_errno(chained), 1020)
+		self.assertIsNone(api._copy_race_errno(ValueError("plain")))
+
+	def test_print_bill_copy_isolated_db_preserves_caller_writes_across_1020_retry(self):
+		"""R5 P1 (site-less): Isolated claim connection retries wrapped 1020 without committing or rolling back caller tx."""
+		class _OpErr(Exception):
+			pass
+
+		class _Deadlock(Exception):
+			pass
+
+		class _Dup(Exception):
+			pass
+
+		records = []
+		doc = SimpleNamespace(
+			name="INV-ISO-SL", status="Paid", branch="Main", pos_profile="Till", docstatus=1,
+			restaurant_table="T1", currency="UGX",
+		)
+		attempts = {"n": 0}
+
+		claim_db = MagicMock(name="claim_db")
+		claim_db.cur_db_name = "site_db"
+		claim_db.transaction_writes = 0
+		claim_db.sql.return_value = [(1,)]
+		claim_db.exists.return_value = False
+
+		def claim_get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+			if dt == "URY Bill Reprint Log" and isinstance(flt, dict):
+				if "request_key" in flt:
+					matches = [r for r in records if r.get("request_key") == flt["request_key"]]
+					return SimpleNamespace(**matches[-1]) if matches else None
+				if flt.get("attempt") == 1 and fieldname == "copy_number":
+					nums = [r["copy_number"] for r in records if r.get("invoice") == flt.get("invoice") and r.get("attempt") == 1]
+					return max(nums) if nums else None
+			return None
+
+		claim_db.get_value.side_effect = claim_get_value
+
+		def get_doc(arg, *a, **kw):
+			if arg == "POS Invoice":
+				return doc
+			rec = dict(arg)
+
+			def insert(_self, **ikw):
+				attempts["n"] += 1
+				if attempts["n"] == 1:
+					records.append({
+						"name": "COPY-other-1", "print_job_id": "COPY-other-1", "request_key": "other",
+						"invoice": "INV-ISO-SL", "copy_number": 1, "attempt": 1, "status": "COMPLETED",
+					})
+					raise _Deadlock(_OpErr(1020, "Record has changed since last read"))
+				records.append(rec)
+				return rec
+
+			return type("Row", (), {"insert": insert})()
+
+		caller_db = MagicMock(name="caller_db")
+		caller_db.transaction_writes = 1
+		caller_db.get_value.return_value = None
+		caller_db.exists.return_value = False
+
+		fake_frappe = MagicMock()
+		fake_frappe.db = caller_db
+		fake_frappe.DuplicateEntryError = _Dup
+		fake_frappe.QueryDeadlockError = _Deadlock
+		fake_frappe.QueryTimeoutError = TimeoutError
+		fake_frappe.session = SimpleNamespace(user="cashier@example.com")
+		fake_frappe.get_roles.return_value = ["URY Cashier"]
+		fake_frappe.has_permission.return_value = True
+		fake_frappe.get_doc.side_effect = get_doc
+		fake_frappe.utils.now.return_value = "2026-11-24 09:00:00"
+		fake_frappe.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+			f"<article><h1>COPY #{doc.copy_number}</h1></article>"
+		)
+
+		pos_inv_mod = ModuleType("ury.ury.class_overrides.pos_invoice")
+		pos_inv_mod._COPY_RENDER_MARKER = object()
+		file_store_mod = ModuleType("ury.ury.printing.file_store")
+		file_store_mod.save_job = MagicMock(return_value=True)
+		service_mod = ModuleType("ury.ury.printing.service")
+		service_mod.submit_and_monitor_print_job = MagicMock(return_value={"status": "Success"})
+		ury_print_mod = ModuleType("ury.ury.api.ury_print")
+		ury_print_mod._bill_printers = MagicMock(return_value=[])
+
+		with patch.dict(sys.modules, {
+			"ury.ury.class_overrides": ModuleType("ury.ury.class_overrides"),
+			"ury.ury.class_overrides.pos_invoice": pos_inv_mod,
+			"ury.ury.printing": ModuleType("ury.ury.printing"),
+			"ury.ury.printing.file_store": file_store_mod,
+			"ury.ury.printing.service": service_mod,
+			"ury.ury.api.ury_print": ury_print_mod,
+		}), patch.object(api, "frappe", fake_frappe), \
+			patch.object(api, "_open_isolated_copy_db", return_value=claim_db, create=True) as opener, \
+			patch.object(api, "getBranch", return_value="Main"), \
+			patch("ury.ury.doctype.ury_order.ury_order._enforce_order_access"):
+			res = api.print_bill_copy("INV-ISO-SL", idempotency_key="iso-key", delivery="browser")
+
+		opener.assert_called()
+		self.assertEqual(res["status"], "COMPLETED")
+		self.assertEqual(res["copy_number"], 2)
+		self.assertIs(fake_frappe.db, caller_db)
+		claim_db.rollback.assert_called()
+		claim_db.commit.assert_called()
+		claim_db.close.assert_called()
+		caller_db.commit.assert_not_called()
+		caller_db.rollback.assert_not_called()
+
 
 if __name__ == "__main__":
 	unittest.main()
