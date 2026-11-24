@@ -72,8 +72,9 @@ def after_install():
     # permission baseline is exactly the failure mode this function exists to
     # prevent, so it must fail loudly rather than leave the site half-set-up.
     ensure_role_permissions()
-    from ury.patches.v2_0 import setup_pos_manager_authorisation
+    from ury.patches.v2_0 import setup_pos_manager_authorisation, setup_pos_void_return_reopen
     setup_pos_manager_authorisation.execute()
+    setup_pos_void_return_reopen.execute()
 
 
 def before_tests():

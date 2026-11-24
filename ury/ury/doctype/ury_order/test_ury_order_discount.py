@@ -2925,6 +2925,82 @@ class TestHydrogenR2Regressions(DiscountBase):
         self.assertEqual(child_c_ok.custom_discount_approver, "manager@example.com")
         self.assertEqual(child_c_ok.custom_discount_approved_percent, 20.0)
 
+    def test_r3_p1_approved_percentage_check_discount_allows_adding_item_while_blocking_forged_raise(self):
+        """R3 Finding 2: adding an item to an already-approved 10% check scales discount_amount cleanly without SITEOPS-DISC-007."""
+        prev = FakePOSInvoice(
+            "CHK-R3-PCT",
+            currency="UGX",
+            items=[_item("r1", "STEAK", 1, 35000)],
+            additional_discount_percentage=10.0,
+            ury_discount_meta=json.dumps({
+                "reason": "Corporate rate",
+                "reason_description": "Corporate rate",
+                "approver": "manager@example.com",
+                "approved_percent": 10.0,
+            }, sort_keys=True),
+        )
+        prev.calculate_taxes_and_totals()
+        self.assertEqual(prev.discount_amount, 3500.0)
+
+        # 1) Legitimate edit: cashier adds an undiscounted item (10,000) -> 10% of 45,000 = 4,500 -> MUST PASS!
+        added = FakePOSInvoice(
+            "CHK-R3-PCT",
+            currency="UGX",
+            items=[
+                _item("r1", "STEAK", 1, 35000),
+                _item("r2", "JUICE", 1, 10000),
+            ],
+            additional_discount_percentage=10.0,
+            ury_discount_meta=prev.ury_discount_meta,
+        )
+        added._doc_before_save = prev
+        added.calculate_taxes_and_totals()
+        self.assertEqual(added.discount_amount, 4500.0)
+        self.hook.validate_pos_discount(added)  # must not raise SITEOPS-DISC-007!
+
+        # 2) Malicious raise: bumping additional_discount_percentage from 10% -> 15% MUST still raise SITEOPS-DISC-007!
+        raised_pct = FakePOSInvoice(
+            "CHK-R3-PCT",
+            currency="UGX",
+            items=[
+                _item("r1", "STEAK", 1, 35000),
+                _item("r2", "JUICE", 1, 10000),
+            ],
+            additional_discount_percentage=15.0,
+            ury_discount_meta=prev.ury_discount_meta,
+        )
+        raised_pct._doc_before_save = prev
+        raised_pct.calculate_taxes_and_totals()
+        with self.assertRaises((Refused, NotPermitted)):
+            self.hook.validate_pos_discount(raised_pct)
+
+        # 3) Malicious flat raise: on a flat-discounted check (additional_discount_percentage=0, 3,500 off),
+        #    bumping discount_amount to 4,500 while adding an item MUST still raise SITEOPS-DISC-007!
+        prev_flat = FakePOSInvoice(
+            "CHK-R3-FLAT",
+            currency="UGX",
+            items=[_item("r1", "STEAK", 1, 35000)],
+            additional_discount_percentage=0.0,
+            discount_amount=3500.0,
+            ury_discount_meta=prev.ury_discount_meta,
+        )
+        prev_flat.calculate_taxes_and_totals()
+        raised_flat = FakePOSInvoice(
+            "CHK-R3-FLAT",
+            currency="UGX",
+            items=[
+                _item("r1", "STEAK", 1, 35000),
+                _item("r2", "JUICE", 1, 10000),
+            ],
+            additional_discount_percentage=0.0,
+            discount_amount=4500.0,
+            ury_discount_meta=prev.ury_discount_meta,
+        )
+        raised_flat._doc_before_save = prev_flat
+        raised_flat.calculate_taxes_and_totals()
+        with self.assertRaises((Refused, NotPermitted)):
+            self.hook.validate_pos_discount(raised_flat)
+
 
 if __name__ == "__main__":
     unittest.main()

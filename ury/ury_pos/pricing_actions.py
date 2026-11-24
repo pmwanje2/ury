@@ -2573,10 +2573,28 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
                 )
 
     if not server_disc_write and not has_disc_approval:
-        if (
-            flt(doc.get("discount_amount")) > flt(before.get("discount_amount")) + 1e-6
-            or flt(doc.get("additional_discount_percentage")) > flt(before.get("additional_discount_percentage")) + 1e-6
-        ):
+        prev_add_pct = flt(before.get("additional_discount_percentage"))
+        curr_add_pct = flt(doc.get("additional_discount_percentage"))
+        prev_disc_amt = flt(before.get("discount_amount"))
+        curr_disc_amt = flt(doc.get("discount_amount"))
+        add_pct_raised = curr_add_pct > prev_add_pct + 1e-6
+        disc_amt_raised = curr_disc_amt > prev_disc_amt + 1e-6
+        if disc_amt_raised and prev_add_pct > 0 and not add_pct_raised:
+            # Allow ERPNext's proportional recalculation of an unchanged % header discount
+            # when items are added to an already-discounted check (never exceeding curr_add_pct).
+            apply_on = (doc.get("apply_discount_on") or "Grand Total").strip()
+            if apply_on == "Net Total":
+                doc_total = flt(doc.get("total"))
+                net_plus = flt(doc.get("net_total")) + curr_disc_amt
+                curr_basis = min(doc_total, net_plus) if doc_total > 0 else net_plus
+            else:
+                curr_basis = flt(doc.get("grand_total")) + curr_disc_amt
+            if curr_basis <= 0:
+                curr_basis = flt(doc.get("total"))
+            expected_max = flt(curr_basis * curr_add_pct / 100.0, prec)
+            if curr_basis > 0 and curr_disc_amt <= expected_max + rate_tol:
+                disc_amt_raised = False
+        if disc_amt_raised or add_pct_raised:
             frappe.throw(
                 coded_message(
                     "POS-AUTH-REQUIRED",

@@ -1493,6 +1493,69 @@ class TestPricingPrivilegedActions(unittest.TestCase):
         finally:
             self.h.frappe.flags.ury_offline_replay = False
 
+    def test_r3_p1_validate_privileged_pricing_allows_unchanged_percentage_discount_scaling_on_added_item(self):
+        """R3 Finding 2: adding an item on an unchanged 10% percentage check discount must not trigger POS-AUTH-REQUIRED."""
+        pricing, _ = self._import_pricing_actions()
+        before = FakeDoc({
+            "name": "POS-INV-PCT",
+            "customer": "Walk-in Customer",
+            "pos_profile": "Main Till",
+            "selling_price_list": "Standard Selling",
+            "additional_discount_percentage": 10.0,
+            "discount_amount": 3500.0,
+            "total": 35000.0,
+            "net_total": 35000.0,
+            "grand_total": 31500.0,
+            "items": [FakeDict({"name": "ITEM-ROW-1", "item_code": "STEAK-01", "qty": 1.0, "rate": 35000.0, "price_list_rate": 35000.0})],
+            "taxes": [],
+            "payments": [],
+        })
+        # Adding a priced item scales 10% discount from 3,500 -> 4,500 while additional_discount_percentage stays 10.0
+        scaled = FakeDoc({
+            "name": "POS-INV-PCT",
+            "customer": "Walk-in Customer",
+            "pos_profile": "Main Till",
+            "selling_price_list": "Standard Selling",
+            "additional_discount_percentage": 10.0,
+            "discount_amount": 4500.0,
+            "total": 45000.0,
+            "net_total": 45000.0,
+            "grand_total": 40500.0,
+            "items": [
+                FakeDict({"name": "ITEM-ROW-1", "item_code": "STEAK-01", "qty": 1.0, "rate": 35000.0, "price_list_rate": 35000.0}),
+                FakeDict({"name": "ITEM-ROW-2", "item_code": "JUICE-01", "qty": 1.0, "rate": 10000.0, "price_list_rate": 10000.0}),
+            ],
+            "taxes": [],
+            "payments": [],
+        }, before_save=before)
+        pricing.validate_privileged_pricing_mutations(scaled)  # must not raise
+
+        # Raising additional_discount_percentage directly MUST still fail!
+        raised_pct = FakeDoc({
+            **dict(scaled),
+            "additional_discount_percentage": 15.0,
+            "discount_amount": 6750.0,
+            "grand_total": 38250.0,
+        }, before_save=before)
+        with self.assertRaises(FakePermissionError) as ctx1:
+            pricing.validate_privileged_pricing_mutations(raised_pct)
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx1.exception))
+
+        # Raising flat discount_amount when additional_discount_percentage == 0 MUST still fail!
+        before_flat = FakeDoc({
+            **dict(before),
+            "additional_discount_percentage": 0.0,
+            "discount_amount": 3500.0,
+        })
+        raised_flat = FakeDoc({
+            **dict(scaled),
+            "additional_discount_percentage": 0.0,
+            "discount_amount": 4500.0,
+        }, before_save=before_flat)
+        with self.assertRaises(FakePermissionError) as ctx2:
+            pricing.validate_privileged_pricing_mutations(raised_flat)
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx2.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
