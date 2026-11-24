@@ -704,9 +704,10 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
             )
         self.assertEqual(res["status"], "Open")
 
-    def test_reopen_till_elevates_frappe_flags_ignore_permissions_during_unconsolidation_only(self):
-        # ERPNext unconsolidate_pos_invoices() cancels the linked Sales Invoice under the
-        # active cashier session without copying closing_doc.flags.ignore_permissions.
+    def test_reopen_till_elevates_permissions_during_unconsolidation_and_restores_cashier_session(self):
+        # ERPNext unconsolidate_pos_invoices() cancels the linked Sales Invoice without
+        # setting si.flags.ignore_permissions, so reopen_till runs closing_doc.cancel()
+        # as Administrator after PIN verification and restores frappe.session.user immediately.
         self.store.current_user = "cashier@example.com"
         first = self.tc.close_till_with_controls(
             pos_profile="Main Till",
@@ -716,10 +717,10 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
         closing_name = first["name"]
         closing_doc = self.cs.closings[closing_name]
         orig_cancel = type(closing_doc).cancel
-        seen_flag = []
+        seen_users = []
 
         def checked_cancel(doc_self):
-            seen_flag.append(bool(getattr(self.frappe.flags, "ignore_permissions", False)))
+            seen_users.append(self.frappe.session.user)
             return orig_cancel(doc_self)
 
         claim = {
@@ -738,18 +739,14 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
             reference_name=closing_name,
             claim=claim,
         )
-        self.frappe.flags.ignore_permissions = False
         with patch.object(type(closing_doc), "cancel", checked_cancel):
             self.tc.reopen_till(
                 pos_closing_entry=closing_name,
                 reason="Cashier session unconsolidation",
                 approval_token="tok-reopen-perm",
             )
-        self.assertEqual(seen_flag, [True], "frappe.flags.ignore_permissions must be True during unconsolidation")
-        self.assertFalse(
-            bool(getattr(self.frappe.flags, "ignore_permissions", False)),
-            "frappe.flags.ignore_permissions must be restored after reopen_till",
-        )
+        self.assertEqual(seen_users, ["Administrator"], "cancel() must run elevated for ERPNext unconsolidation")
+        self.assertEqual(self.store.current_user, "cashier@example.com", "cashier session must be restored")
 
     def test_force_close_requires_pin_snapshots_open_checks_and_preserves_consolidation(self):
         # Add an open draft check on Main Till
