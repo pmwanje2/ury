@@ -182,6 +182,10 @@ class TestOfflineCollisionAndRelayHelpers(unittest.TestCase):
         self.assertIn("build_offline_collision_plan", text)
         # Waiter offline shift check parameter on _offline_capture_time
         self.assertRegex(text, r"def _offline_capture_time\([^)]*billing_user")
+        # #152 + G46: Merge Rounds collision_merge preserves existing order_type/no_of_pax
+        # and skips the online-only order_type_change/guest_count_change gate.
+        self.assertIn("if invoice.name and not collision_merge:\n        DEFAULT_MANAGER_ROLES", text)
+        self.assertIn("if not collision_merge:\n        invoice.no_of_pax =", text)
 
 
 if __name__ == "__main__":

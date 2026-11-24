@@ -921,16 +921,46 @@ class TestDirectRestFxInvoiceValidation(unittest.TestCase):
             # Legitimate 2: Overridden rate WITH matching consumed #147 POS Authorisation Log -> PASS
             self.frappe.get_all.return_value = [
                 _Dict(
+                    creation="2026-11-24 12:00:05",
                     claim_values=json.dumps({
                         "action": "pos_fx_rate_override",
                         "mode_of_payment": "USD Cash",
                         "from_currency": "USD",
                         "to_currency": "UGX",
                         "override_rate": 3800.0,
-                    })
+                    }),
                 )
             ]
+            unauth_override_doc.creation = "2026-11-24 12:00:00"
             fx.validate_invoice_fx_payments(unauth_override_doc)
+
+            # Attack 4: Brand-new REST POST /api/resource/POS Invoice (is_new=True) or recycled
+            # invoice name (doc.creation > log.creation) CANNOT reuse an old POS Authorisation Log!
+            new_rest_doc = self._make_doc([
+                {
+                    "mode_of_payment": "USD Cash",
+                    "amount": 13300.0,
+                    "custom_tender_currency": "USD",
+                    "custom_tender_amount": 3.5,
+                    "custom_exchange_rate": 3800.0,
+                }
+            ])
+            new_rest_doc["__islocal"] = 1
+            with self.assertRaises(self.frappe.PermissionError):
+                fx.validate_invoice_fx_payments(new_rest_doc)
+
+            recycled_doc = self._make_doc([
+                {
+                    "mode_of_payment": "USD Cash",
+                    "amount": 13300.0,
+                    "custom_tender_currency": "USD",
+                    "custom_tender_amount": 3.5,
+                    "custom_exchange_rate": 3800.0,
+                }
+            ])
+            recycled_doc.creation = "2026-11-24 12:05:00"  # newer than log creation 12:00:05
+            with self.assertRaises(self.frappe.PermissionError):
+                fx.validate_invoice_fx_payments(recycled_doc)
 
 
 class TestFxReceiptTemplates(unittest.TestCase):
