@@ -1192,6 +1192,23 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
         with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-VOID-CLOSED-USE-RETURN"):
             self.inv_hook.before_cancel(plain_closed, "before_cancel")
 
+    def test_void_return_reopen_has_zero_hardcoded_role_names_and_delegates_to_override(self):
+        src = (ROOT / "ury/ury_pos/void_return_reopen.py").read_text(encoding="utf-8")
+        self.assertNotIn("DEFAULT_MANAGER_ROLES", src)
+        for forbidden_role in ("URY Manager", "URY Admin", "Accounts Manager", "URY Cashier", "System Manager"):
+            self.assertNotIn(forbidden_role, src)
+
+    def test_cancel_order_refuses_fiscalised_check_even_if_in_memory_efris_status_cleared(self):
+        self.h.frappe.session.user = "manager@example.test"
+        orig_before = Doc(efris_irn=None, efris_status="Submitted")
+        fiscal = self.h.add_invoice("POS-FISC-CLEARED", docstatus=1, efris_irn=None)
+        fiscal.efris_status = ""
+        fiscal.get_doc_before_save = lambda: orig_before
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-VOID-FISCALISED-USE-RETURN"):
+            self.order_mod.cancel_order(fiscal.name, "VOID-GUEST")
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-VOID-FISCALISED-USE-RETURN"):
+            self.inv_hook.before_cancel(fiscal, "before_cancel")
+
 
 if __name__ == "__main__":
     unittest.main()

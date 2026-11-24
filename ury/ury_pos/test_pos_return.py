@@ -991,6 +991,38 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-RETURN-UNREFERENCED-NOT-ALLOWED"):
             self.inv_hook.validate_invoice(bad_unref, "validate")
 
+    def test_three_decimal_currency_kwd_proportional_return_closure(self):
+        """0/2/3dp currency precision: KWD (3dp) discounted check returned 1-by-1 closes to exact 3.250."""
+        self.h.profiles["Till KWD"] = Doc(
+            name="Till KWD",
+            company="Hotel Co",
+            currency="KWD",
+            branch="Branch A",
+            warehouse="Kitchen - HC",
+            cost_center="Restaurant - HC",
+            selling_price_list="KWD Selling",
+            custom_unreferenced_return_roles="",
+            payments=[Doc(mode_of_payment="Cash", default=1)],
+        )
+        self.h.frappe.session.user = "manager2@example.test"
+        inv = self.h.add_closed_check(
+            "POS-KWD-1",
+            pos_profile="Till KWD",
+            currency="KWD",
+            discount_amount=0.500,
+            items=[{"name": "KWD-ROW-1", "item_code": "BURGER", "item_name": "Burger", "qty": 3, "rate": 1.250}],
+            payments=[{"mode_of_payment": "Cash", "amount": 3.250}],
+        )
+        prev = self.mod.preview_pos_return(inv.name, [{"item_row_name": "KWD-ROW-1", "qty": 1}])
+        self.assertEqual(prev["precision"], 3)
+        self.assertEqual(prev["refund_total"], 1.083)
+
+        r1 = self.mod.create_pos_return(inv.name, [{"item_row_name": "KWD-ROW-1", "qty": 1}], reason="RET-QUALITY")
+        r2 = self.mod.create_pos_return(inv.name, [{"item_row_name": "KWD-ROW-1", "qty": 1}], reason="RET-QUALITY")
+        r3 = self.mod.create_pos_return(inv.name, [{"item_row_name": "KWD-ROW-1", "qty": 1}], reason="RET-QUALITY")
+        self.assertEqual([r1["refund_total"], r2["refund_total"], r3["refund_total"]], [1.083, 1.084, 1.083])
+        self.assertAlmostEqual(r1["refund_total"] + r2["refund_total"] + r3["refund_total"], 3.250, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

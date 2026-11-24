@@ -12,6 +12,7 @@ import SettledBills from '../pages/SettledBills';
 import VoidItemDialog from './VoidItemDialog';
 import ReturnCheckDialog from './ReturnCheckDialog';
 import ReopenAdjustCheckDialog from './ReopenAdjustCheckDialog';
+import { formatMoneyAmount } from '../lib/void-return-api';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const LOCALE_DIR = join(__dir, '..', 'i18n', 'locales');
@@ -340,7 +341,117 @@ describe('ReopenAdjustCheckDialog & SettledBills integration', () => {
       expect(json.void_return, `${lang}.json missing void_return`).toBeDefined();
       expect(Object.keys(json.void_return).sort()).toEqual(enKeys);
       const serialized = JSON.stringify(json.void_return);
-      expect(serialized).not.toMatch(/\b(URY|HUF|Kamra)\b/i);
+      expect(serialized).not.toMatch(/\b(URY|HUF|Kamra|Tridz)\b/i);
     }
+  });
+
+  it('formats 0dp (UGX), 2dp (USD), and 3dp (KWD) currencies accurately', () => {
+    expect(formatMoneyAmount(8333, 'UGX')).toMatch(/UGX\s+8,333$/);
+    expect(formatMoneyAmount(12.5, 'USD')).toMatch(/USD\s+12\.50$/);
+    expect(formatMoneyAmount(3.25, 'KWD')).toMatch(/KWD\s+3\.250$/);
+  });
+
+  it('reloads POS reasons when switching from Adjust to Reopen tab and hydrates bill details when payments are missing', async () => {
+    const requestedPrivs: string[] = [];
+    const getSpy = vi.spyOn(call, 'get').mockImplementation(async (method: string, params?: unknown) => {
+      const q = (params || {}) as Record<string, unknown>;
+      if (method === 'ury.ury_pos.override.list_reasons') {
+        requestedPrivs.push(String(q.privilege || ''));
+        return {
+          message: [
+            { code: 'REOPEN-SPLIT', description: 'Split after close', requires_note: 0, applies_to: ['reopen_check'] },
+          ],
+        };
+      }
+      if (method === 'ury.ury_pos.void_return_reopen.get_returnable_check') {
+        return {
+          message: {
+            invoice: 'POS-INV-HYDRATE',
+            pos_profile: 'Till A',
+            branch: 'Branch A',
+            customer: 'Walk-in',
+            currency: 'KWD',
+            precision: 3,
+            grand_total: 12.5,
+            discount_amount: 0,
+            total_taxes_and_charges: 0,
+            net_paid_amount: 12.5,
+            already_refunded_amount: 0,
+            remaining_refundable_amount: 12.5,
+            original_payments: [{ mode_of_payment: 'Card', amount: 12.5 }],
+            available_modes: ['Cash', 'Card'],
+            is_room_charge: false,
+            is_fiscalised: true,
+            items: [{ item_row_name: 'R-1', item_code: 'STEAK', item_name: 'Steak', sold_qty: 1, returned_qty: 0, remaining_qty: 1, rate: 12.5, amount: 12.5 }],
+            reasons: [],
+          },
+        };
+      }
+      return { message: [] };
+    });
+
+    render(
+      <ReopenAdjustCheckDialog
+        open
+        bill={{
+          name: 'POS-INV-HYDRATE',
+          pos_profile: 'Till A',
+          currency: 'KWD',
+          grand_total: 12.5,
+          rounded_total: 12.5,
+          items: [{ item_name: 'Steak', qty: 1, amount: 12.5 }],
+          payments: [],
+        }}
+        onCompleted={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // Hydrates fiscalised notice & original payments from get_returnable_check when bill.payments is empty
+    await screen.findByLabelText(/credit note and rebill/i);
+    expect(getSpy).toHaveBeenCalledWith(
+      'ury.ury_pos.void_return_reopen.get_returnable_check',
+      { invoice_id: 'POS-INV-HYDRATE' },
+    );
+
+    // Switching to Reopen tab fetches reopen_check reasons
+    fireEvent.click(screen.getByRole('tab', { name: /reopen check/i }));
+    await waitFor(() => expect(requestedPrivs).toContain('reopen_check'));
+  });
+
+  it('uses localized aria-labels on ReturnCheckDialog quantity buttons in French', async () => {
+    await initI18n('fr');
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.void_return_reopen.get_returnable_check') {
+        return {
+          message: {
+            invoice: 'POS-INV-FR',
+            pos_profile: 'Till A',
+            branch: 'Branch A',
+            customer: 'Walk-in',
+            currency: 'EUR',
+            precision: 2,
+            grand_total: 20,
+            discount_amount: 0,
+            total_taxes_and_charges: 0,
+            net_paid_amount: 20,
+            already_refunded_amount: 0,
+            remaining_refundable_amount: 20,
+            original_payments: [{ mode_of_payment: 'Cash', amount: 20 }],
+            available_modes: ['Cash'],
+            is_room_charge: false,
+            is_fiscalised: false,
+            items: [{ item_row_name: 'R-FR', item_code: 'FISH', item_name: 'Poisson', sold_qty: 2, returned_qty: 0, remaining_qty: 2, rate: 10, amount: 20 }],
+            reasons: [{ code: 'RET-QUALITY', description: 'Qualité', requires_note: 0, applies_to: ['return'] }],
+          },
+        };
+      }
+      return { message: [] };
+    });
+
+    render(<ReturnCheckDialog open invoiceId="POS-INV-FR" onCompleted={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByText(/Poisson/);
+    expect(screen.queryByRole('button', { name: /Increase return quantity for Poisson/i })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Poisson/i }).length).toBeGreaterThanOrEqual(2);
   });
 });
