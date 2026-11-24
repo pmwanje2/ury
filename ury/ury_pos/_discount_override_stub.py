@@ -21,6 +21,7 @@ LOCKOUT_MINUTES = 15
 
 PRIVILEGES = {
     "discount": ("Apply discount", True, ("URY Manager",), ("URY Manager",)),
+    "discount_remove": ("Remove discount", False, ("URY Manager",), ("URY Manager",)),
     "complimentary": ("Complimentary check", True, (), ("URY Manager",)),
 }
 
@@ -101,7 +102,7 @@ def _is_eligible_approver(approver, requester, pos_profile, privilege, reference
 
     if privilege in ("discount", "complimentary"):
         policy = company_discount_policy(company)
-        limit = user_discount_limit(approver, company)
+        limit = user_discount_limit(approver, company, pos_profile)
         req_pct = flt(percent) if percent is not None else 0.0
         approver_role = policy.get("approver_role")
         if approver_role and approver_role in roles:
@@ -112,7 +113,7 @@ def _is_eligible_approver(approver, requester, pos_profile, privilege, reference
             return True
         return False
 
-    return "URY Manager" in roles
+    return bool(roles & {"URY Manager", "URY Admin"})
 
 
 def may_perform(user, pos_profile, privilege, percent=None, amount=None):
@@ -122,11 +123,14 @@ def may_perform(user, pos_profile, privilege, percent=None, amount=None):
         _, user_discount_limit = _discount_helpers()
 
         profile = frappe.get_cached_doc("POS Profile", pos_profile)
-        limit = user_discount_limit(user, profile.get("company"))
+        limit = user_discount_limit(user, profile.get("company"), pos_profile)
         req_pct = flt(percent) if percent is not None else 0.0
         if req_pct >= 100.0:
             return False
         return req_pct <= limit and req_pct >= 0
+    if privilege == "discount_remove":
+        roles = set(frappe.get_roles(user) or [])
+        return bool(roles & {"URY Manager", "URY Admin"})
     return False
 
 

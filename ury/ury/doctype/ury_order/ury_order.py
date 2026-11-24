@@ -18,6 +18,7 @@ from ury.ury_pos.default_customer import get_default_customer_config, resolve_de
 from ury.ury_pos.discount import (
     apply_discount_to_invoice,
     currency_precision,
+    enforce_remove_discount_auth,
     get_check_discounts as _get_check_discounts_impl,
     list_discount_options as _list_discount_options_impl,
     parse_discount_request,
@@ -3690,7 +3691,7 @@ def apply_check_discount(
 
 
 @frappe.whitelist()
-def remove_check_discount(invoice, pos_profile, row=None):
+def remove_check_discount(invoice, pos_profile, row=None, approval=None):
     """Remove a discount (all discounts or a single line discount) before settlement."""
     bill = frappe.get_doc("POS Invoice", invoice, for_update=True)
     bill.check_permission("write")
@@ -3701,6 +3702,7 @@ def remove_check_discount(invoice, pos_profile, row=None):
         frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
 
     profile = frappe.get_cached_doc("POS Profile", pos_profile)
+    enforce_remove_discount_auth(bill, profile, row=row, approval=approval)
     partner = (
         frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice, for_update=True)
         if bill.custom_merged_pos_invoice

@@ -171,15 +171,134 @@ def company_discount_policy(company):
         return default
 
 
-def user_discount_limit(user, company):
-    """Highest matching 'Role: %' line among the user's roles, else company base (0% when blank).
-    Administrator and System Manager get no free pass."""
+def _privilege_rules_for(company, privilege, pos_profile=None):
+    """Read POS Privilege Rule rows for (company, privilege) when B2a's DocType exists.
+    Returns (has_any_rules_for_privilege, role_to_narrowest_rule)."""
+    if not company or not privilege:
+        return False, {}
+    try:
+        if not frappe.db.exists("DocType", "POS Privilege Rule"):
+            return False, {}
+        rows = frappe.get_all(
+            "POS Privilege Rule",
+            filters={"company": company, "privilege": privilege},
+            fields=[
+                "role", "pos_profile", "may_perform", "may_authorise",
+                "max_percent", "max_amount", "requires_reason",
+                "allow_self_approval", "require_clocked_in", "privilege_group",
+            ],
+        ) or []
+    except Exception:
+        return False, {}
+
+    if not rows:
+        return False, {}
+
+    # Prefer narrower pos_profile rule over company-wide (pos_profile empty/None)
+    resolved = {}
+    for row in rows:
+        role = row.get("role")
+        if not role:
+            continue
+        r_profile = (row.get("pos_profile") or "").strip()
+        if r_profile:
+            if pos_profile and r_profile == pos_profile:
+                resolved[role] = row
+        else:
+            if role not in resolved:
+                resolved[role] = row
+    return True, resolved
+
+
+def user_discount_limit(user, company, pos_profile=None):
+    """Effective solo discount % limit for `user` at `pos_profile`:
+    - Starts from company Approval Limit ('Role: %' lines; blank base = 0%).
+    - When POS Privilege Rule rows exist for (company, 'discount'), Amendment 1 applies:
+      no rule for a role = 0% alone; may_perform=0 = 0% alone; min(Approval Limit, rule.max_percent)
+      wins when rule.max_percent > 0 (0 on rule defers to Approval Limit).
+    - Administrator and System Manager get no free pass."""
     policy = company_discount_policy(company)
     roles = frappe.get_roles(user) or []
-    matched = [policy["role_limits"][r] for r in roles if r in policy["role_limits"]]
-    if matched:
-        return max(matched)
-    return policy["base_limit"]
+    has_rules, rules_by_role = _privilege_rules_for(company, "discount", pos_profile=pos_profile)
+
+    if not has_rules:
+        matched = [policy["role_limits"][r] for r in roles if r in policy["role_limits"]]
+        if matched:
+            return max(matched)
+        return policy["base_limit"]
+
+    effective = []
+    for role in roles:
+        rule = rules_by_role.get(role)
+        if not rule or cint(rule.get("may_perform")) != 1:
+            continue
+        app_lim = policy["role_limits"][role] if role in policy["role_limits"] else policy["base_limit"]
+        rule_max = flt(rule.get("max_percent"))
+        if rule_max > 0:
+            effective.append(min(app_lim, rule_max))
+        else:
+            effective.append(app_lim)
+    return max(effective) if effective else 0.0
+
+
+def user_can_remove_discount(user, company, pos_profile=None, invoice_printed=0):
+    """Whether `user` may remove a discount without manager PIN approval."""
+    roles = frappe.get_roles(user) or []
+    has_rules, rules_by_role = _privilege_rules_for(company, "discount_remove", pos_profile=pos_profile)
+    if has_rules:
+        return any(
+            (role in rules_by_role and cint(rules_by_role[role].get("may_perform")) == 1)
+            for role in roles
+        )
+    if cint(invoice_printed) == 1:
+        return bool(set(roles) & {"URY Manager", "URY Admin"})
+    return True
+
+
+def canonical_remove_claim(doc, row=None):
+    prec = currency_precision(doc)
+    return {
+        "action": "remove",
+        "row": str(row).strip() if row else None,
+        "discount_amount": _norm_number(doc.get("discount_amount"), prec) or 0,
+        "additional_discount_percentage": _norm_number(doc.get("additional_discount_percentage"), 4) or 0,
+    }
+
+
+def enforce_remove_discount_auth(bill, pos_profile_doc, row=None, approval=None):
+    """Gate discount removal under the `discount_remove` privilege (Amendment 1)."""
+    company = bill.get("company") or pos_profile_doc.get("company")
+    claim = canonical_remove_claim(bill, row=row)
+    token = str(approval).strip() if approval is not None and str(approval).strip() else None
+    if token:
+        override_mod = _get_override_module()
+        consumed = override_mod.consume(
+            token,
+            "discount_remove",
+            pos_profile_doc.name,
+            bill.name,
+            claim,
+        )
+        approver = consumed.get("approver")
+        if not approver or approver == frappe.session.user:
+            frappe.throw(
+                coded_message("POS-AUTH-SELF", _("You cannot approve your own request.")),
+                frappe.PermissionError,
+            )
+        return consumed
+
+    if user_can_remove_discount(
+        frappe.session.user,
+        company,
+        pos_profile=pos_profile_doc.name,
+        invoice_printed=bill.get("invoice_printed"),
+    ):
+        return None
+
+    frappe.throw(
+        coded_message("POS-AUTH-REQUIRED", _("Manager approval is required to remove this discount.")),
+        frappe.PermissionError,
+    )
 
 
 if hasattr(_OVERRIDE_MODULE, "_bind_discount_helpers"):
@@ -714,9 +833,10 @@ def apply_discount_to_invoice(
             {
                 "currency": currency,
                 "precision": prec,
-                "limit_percent": user_discount_limit(frappe.session.user, company),
+                "limit_percent": user_discount_limit(frappe.session.user, company, pos_profile_doc.name),
                 "needs_approval": False,
                 "is_comp": False,
+                "privilege": "discount",
                 "approval_reasons": [],
                 "reason_required": False,
                 "note_required": False,
@@ -893,8 +1013,8 @@ def apply_discount_to_invoice(
             frappe.ValidationError,
         )
 
-    # Authority check (Approval Limit Role: % lines; blank base = 0%; 100% comp ALWAYS needs 2nd person)
-    limit_pct = user_discount_limit(frappe.session.user, company)
+    # Authority check (min(Approval Limit, POS Privilege Rule); blank base = 0%; 100% comp ALWAYS needs 2nd person)
+    limit_pct = user_discount_limit(frappe.session.user, company, pos_profile_doc.name)
     effective_pct = summary["effective_percent"]
     is_comp = bool(
         has_positive_discount
@@ -903,6 +1023,7 @@ def apply_discount_to_invoice(
             or (summary["before_total"] > 0 and flt(summary["after_total"], prec) <= 0)
         )
     )
+    privilege = "complimentary" if is_comp else "discount"
     over_limit = bool(
         has_positive_discount
         and _above_limit(
@@ -963,7 +1084,7 @@ def apply_discount_to_invoice(
                 )
             consumed = override_mod.consume(
                 spec["approval"],
-                "discount",
+                privilege,
                 pos_profile_doc.name,
                 invoice.name,
                 claim,
@@ -1030,6 +1151,7 @@ def apply_discount_to_invoice(
             "limit_percent": limit_pct,
             "needs_approval": needs_approval,
             "is_comp": is_comp,
+            "privilege": privilege,
             "approval_reasons": approval_reasons,
             "reason_required": bool(has_positive_discount and not resolved_reason),
             "note_required": bool(resolved_reason and cint(resolved_reason.get("requires_note")) == 1),
@@ -1052,10 +1174,12 @@ def list_discount_options(pos_profile, invoice=None):
     prec = currency_precision(currency=currency)
     price_list = profile.get("selling_price_list")
     posting_date = _today_str()
+    inv_printed = 0
     if invoice:
         inv_date = frappe.db.get_value("POS Invoice", invoice, "posting_date")
         if inv_date:
             posting_date = str(inv_date)
+        inv_printed = cint(frappe.db.get_value("POS Invoice", invoice, "invoice_printed") or 0)
 
     # 1) Reasons in sort_order
     if frappe.db.exists("DocType", "Discount Reason"):
@@ -1133,7 +1257,10 @@ def list_discount_options(pos_profile, invoice=None):
         "reasons": reasons,
         "presets": presets,
         "allow_discount_change": _allow_open_discounts(profile),
-        "limit_percent": user_discount_limit(frappe.session.user, company),
+        "limit_percent": user_discount_limit(frappe.session.user, company, pos_profile),
+        "can_remove_discount": user_can_remove_discount(
+            frappe.session.user, company, pos_profile=pos_profile, invoice_printed=inv_printed
+        ),
         "currency": currency,
         "precision": prec,
     }
@@ -1189,6 +1316,13 @@ def get_check_discounts(invoice):
         "note": note,
         "currency": doc.get("currency"),
         "precision": prec,
+        "can_remove_discount": user_can_remove_discount(
+            frappe.session.user,
+            doc.get("company"),
+            pos_profile=doc.get("pos_profile"),
+            invoice_printed=doc.get("invoice_printed"),
+        ),
+        "remove_claim": canonical_remove_claim(doc),
         "line_discounts": line_discounts,
     }
 
@@ -1310,7 +1444,7 @@ def validate_pos_discount(doc, method=None):
         )
 
     company = doc.get("company")
-    limit_pct = user_discount_limit(frappe.session.user, company)
+    limit_pct = user_discount_limit(frappe.session.user, company, doc.get("pos_profile"))
     is_comp = curr_summary["effective_percent"] >= 100.0 or (
         curr_summary["before_total"] > 0 and flt(curr_summary["after_total"], prec) <= 0
     )
