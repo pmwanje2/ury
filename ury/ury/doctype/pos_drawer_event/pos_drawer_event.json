@@ -1,7 +1,7 @@
 {
  "doctype": "DocType",
  "name": "POS Drawer Event",
- "module": "URY POS",
+ "module": "URY",
  "engine": "InnoDB",
  "autoname": "format:PDE-{YYYY}-{#####}",
  "field_order": [
