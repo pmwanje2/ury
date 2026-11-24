@@ -914,6 +914,189 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
         self.assertEqual(res["close_approver"], "manager@example.com")
         self.assertIn("tok-other-reason-1", self.override.consumed)
 
+    def test_blind_close_other_till_preserves_close_other_token_on_variance_refusal(self):
+        # Defect 1 (R1 live probe): when closing another cashier's blind till and counted cash
+        # exceeds tolerance without over_short_approval_token, close_till_with_controls must
+        # refuse POS-CLOSE-VARIANCE-APPROVAL WITHOUT burning close_other_approval_token so
+        # retrying with both tokens succeeds (never POS-AUTH-EXPIRED).
+        self.store.profiles["Main Till"]["custom_blind_cash_count"] = 1
+        self.store.profiles["Main Till"]["custom_over_short_tolerance"] = 5000
+        self.store.current_user = "cashier2@example.com"
+
+        other_reason = "Other: Shift handover close"
+        other_claim = {
+            "action": "close_other_till",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "opening_user": "cashier@example.com",
+            "reason": other_reason,
+        }
+        self.override.mint(
+            "tok-other-preserve-1",
+            requester="cashier2@example.com",
+            approver="manager@example.com",
+            privilege="close_other_till",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=other_claim,
+        )
+
+        # Step 1: variance is -30,000 (> 5,000 tolerance), no over_short_approval_token yet
+        with self.assertRaisesRegex(PermissionDenied, r"POS-CLOSE-VARIANCE-APPROVAL") as ctx:
+            self.tc.close_till_with_controls(
+                pos_profile="Main Till",
+                pos_opening_entry="OPEN-MAIN-1",
+                counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 120000}],
+                close_other_approval_token="tok-other-preserve-1",
+                close_other_reason=other_reason,
+            )
+        # Blind zero-leak: expected 150,000 must not appear in refusal message
+        self.assertNotIn("150000", str(ctx.exception))
+        self.assertNotIn("150,000", str(ctx.exception))
+        # CRITICAL: close_other_till token must STILL be unconsumed!
+        self.assertNotIn("tok-other-preserve-1", self.override.consumed)
+
+        # Step 2: retry with BOTH the preserved close_other token and the new over_short token
+        os_reason = "Other: Confirmed blind recount short 30000"
+        os_claim = {
+            "action": "over_short_close",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "counted_payments": [{"mode_of_payment": "Cash", "closing_amount": 120000}],
+            "reason": os_reason,
+        }
+        self.override.mint(
+            "tok-os-preserve-2",
+            requester="cashier2@example.com",
+            approver="manager@example.com",
+            privilege="over_short_close",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=os_claim,
+        )
+        res = self.tc.close_till_with_controls(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 120000}],
+            over_short_reason=os_reason,
+            over_short_approval_token="tok-os-preserve-2",
+            close_other_approval_token="tok-other-preserve-1",
+            close_other_reason=other_reason,
+        )
+        self.assertEqual(res["docstatus"], 1)
+        self.assertEqual(res["close_approver"], "manager@example.com")
+        self.assertEqual(res["over_short_approver"], "manager@example.com")
+        self.assertIn("tok-other-preserve-1", self.override.consumed)
+        self.assertIn("tok-os-preserve-2", self.override.consumed)
+
+    def test_force_close_enforces_over_short_close_privilege_and_max_amount_cap(self):
+        # Defect 3 (R1 review): force_close_till must NOT stamp closing.flags.over_short_approval
+        # unchecked from the force-close PIN approver when variance exceeds tolerance.
+        self.store.profiles["Main Till"]["custom_over_short_tolerance"] = 5000
+        self.store.user_roles["admin_mgr@example.com"] = ["URY Admin"]
+        self.store.user_branches["admin_mgr@example.com"] = "Main Branch"
+        self.store.privilege_rules["Hotel Co"] = [
+            {"privilege": "reopen_till", "role": "URY Manager", "may_perform": 1, "may_authorise": 1, "max_amount": 0},
+            {"privilege": "over_short_close", "role": "URY Manager", "may_perform": 1, "may_authorise": 1, "max_amount": 10000},
+            {"privilege": "over_short_close", "role": "URY Admin", "may_perform": 1, "may_authorise": 1, "max_amount": 0},
+        ]
+        self.store.current_user = "cashier@example.com"
+
+        fc_reason = "Other: Night audit force close"
+        fc_claim = {
+            "action": "force_close",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "reason": fc_reason,
+            "discard_pending_movements": False,
+        }
+        self.override.mint(
+            "tok-fc-cap-1",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="reopen_till",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=fc_claim,
+        )
+
+        # Variance is -90,000 (exceeds tolerance 5,000 AND manager's over_short_close max_amount 10,000).
+        # Omitting over_short_approval_token MUST be refused with POS-CLOSE-VARIANCE-APPROVAL
+        # and MUST NOT consume tok-fc-cap-1 prematurely.
+        with self.assertRaisesRegex(PermissionDenied, r"POS-CLOSE-VARIANCE-APPROVAL"):
+            self.tc.force_close_till(
+                pos_profile="Main Till",
+                pos_opening_entry="OPEN-MAIN-1",
+                counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 60000}],
+                reason=fc_reason,
+                approval_token="tok-fc-cap-1",
+            )
+        self.assertNotIn("tok-fc-cap-1", self.override.consumed)
+        self.assertEqual(len(self.cs.consolidations), 0)
+
+        # Retrying with an explicit over_short_close PIN from URY Admin (unlimited) succeeds!
+        os_reason = "Other: Approved 90k force close shortage"
+        os_claim = {
+            "action": "over_short_close",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "counted_payments": [{"mode_of_payment": "Cash", "closing_amount": 60000}],
+            "reason": os_reason,
+        }
+        self.override.mint(
+            "tok-fc-os-admin",
+            requester="cashier@example.com",
+            approver="admin_mgr@example.com",
+            privilege="over_short_close",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=os_claim,
+        )
+        res = self.tc.force_close_till(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 60000}],
+            reason=fc_reason,
+            approval_token="tok-fc-cap-1",
+            over_short_reason=os_reason,
+            over_short_approval_token="tok-fc-os-admin",
+        )
+        closing = self.cs.closings[res["name"]]
+        self.assertEqual(closing.docstatus, 1)
+        self.assertEqual(closing.custom_force_closed, 1)
+        self.assertEqual(closing.custom_over_short_approver, "admin_mgr@example.com")
+
+    def test_concurrent_double_close_query_deadlock_1020_returns_clean_already_closed_refusal(self):
+        # Defect 4 (R1 live Barrier(2) probe): MariaDB REPEATABLE-READ FOR UPDATE raises
+        # QueryDeadlockError(1020, "Record has changed since last read in table 'tabPOS Opening Entry'")
+        # on concurrent double-close. close_till_with_controls must catch it and raise a clean
+        # POS-CLOSE-ALREADY-CLOSED ValidationError (never HTTP 500).
+        class QueryDeadlockError(Exception):
+            pass
+
+        self.frappe.QueryDeadlockError = QueryDeadlockError
+        self.frappe.exceptions = SimpleNamespace(QueryDeadlockError=QueryDeadlockError)
+        self.frappe.db.rollback = MagicMock()
+        self.store.current_user = "cashier@example.com"
+
+        orig_get_value = self.frappe.db.get_value.side_effect
+
+        def deadlock_on_for_update(doctype, filters=None, fieldname=None, as_dict=False, for_update=False, **kwargs):
+            if doctype == "POS Opening Entry" and for_update:
+                raise QueryDeadlockError(
+                    1020,
+                    "Record has changed since last read in table 'tabPOS Opening Entry'; try restarting transaction",
+                )
+            return orig_get_value(doctype, filters, fieldname, as_dict=as_dict, for_update=for_update, **kwargs)
+
+        with patch.object(self.frappe.db, "get_value", side_effect=deadlock_on_for_update):
+            with self.assertRaisesRegex(Refused, r"POS-CLOSE-ALREADY-CLOSED"):
+                self.tc.close_till_with_controls(
+                    pos_profile="Main Till",
+                    pos_opening_entry="OPEN-MAIN-1",
+                    counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 150000}],
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

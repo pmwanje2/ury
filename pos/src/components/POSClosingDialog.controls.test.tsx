@@ -330,4 +330,85 @@ describe('POSClosingDialog till controls (Over/Short PIN, Blind Close, Close Oth
       ),
     );
   });
+
+  it('preserves close_other_approval_token across blind variance refusal so second step sends both tokens', async () => {
+    const { postSpy } = setupClosingMocks({
+      blind: true,
+      tolerance: 5000,
+      closeThrowsBlindVarianceFirst: true,
+      openEntries: [
+        {
+          name: 'POS-OPE-OTHER',
+          user: 'other.cashier@example.com',
+          user_name: 'Peter Cashier',
+          period_start_date: '2026-11-24 08:00:00',
+          pos_profile: 'Main Till',
+          is_own: false,
+        },
+      ],
+      reasons: [{ code: 'OTHER', description: 'Other', requires_note: 1, applies_to: [] }],
+    });
+    let authCalls = 0;
+    const origImpl = postSpy.getMockImplementation()!;
+    postSpy.mockImplementation((method: string, body?: unknown) => {
+      if (method === 'ury.ury_pos.override.authorise') {
+        authCalls += 1;
+        return Promise.resolve({
+          message: {
+            token: authCalls === 1 ? 'close-other-tok-1' : 'over-short-tok-2',
+            approver: 'manager@example.com',
+            approver_name: 'Alex Manager',
+            expires_in: 120,
+          },
+        });
+      }
+      return origImpl(method, body as never);
+    });
+
+    render(<POSClosingDialog open onOpenChange={vi.fn()} />);
+    expect(await screen.findByText(/Peter Cashier/i)).toBeInTheDocument();
+
+    const input = await screen.findByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '120000' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Close POS$/i }));
+
+    // Step 1: approve close_other_till PIN -> backend refuses blind POS-CLOSE-VARIANCE-APPROVAL
+    expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    const reasonSelect = await screen.findByLabelText(/Reason/i);
+    fireEvent.change(reasonSelect, { target: { value: 'OTHER' } });
+    const noteBox = await screen.findByRole('textbox');
+    fireEvent.change(noteBox, { target: { value: 'Cashier handed over till' } });
+    for (const digit of ['2', '4', '6', '8']) {
+      fireEvent.click(await screen.findByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    expect(await screen.findByText(/outside this till's allowed variance/i)).toBeInTheDocument();
+
+    // Step 2: enter variance reason and approve over_short_close PIN
+    fireEvent.change(screen.getByLabelText(/Over\/Short reason/i), {
+      target: { value: 'Confirmed blind short on other till' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Approve Variance with PIN/i }));
+
+    expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    for (const digit of ['2', '4', '6', '8']) {
+      fireEvent.click(await screen.findByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    // Second close_till_with_controls call MUST carry BOTH preserved close_other_approval_token and over_short_approval_token
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.till_controls.close_till_with_controls',
+        expect.objectContaining({
+          pos_opening_entry: 'POS-OPE-OTHER',
+          close_other_approval_token: 'close-other-tok-1',
+          close_other_reason: 'Other: Cashier handed over till',
+          over_short_approval_token: 'over-short-tok-2',
+          over_short_reason: 'Other: Confirmed blind short on other till',
+        }),
+      ),
+    );
+  });
 });

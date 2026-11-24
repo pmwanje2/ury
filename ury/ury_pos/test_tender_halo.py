@@ -318,6 +318,71 @@ class TestTenderHalo(LoadedSlice3):
         with self.assertRaisesRegex(Refused, r"POS-CASH-PRECISION"):
             self.tender_hook.before_validate(bad_usd)
 
+    def test_record_till_cash_movement_enforces_precision_cash_loan_privilege_drawer_and_fx(self):
+        # Defect 2 (R1 live probe): calling cash_movements.record_till_cash_movement directly
+        # without approval_token (e.g. Loan 5000.5 on UGX 0dp as cashier) must delegate to
+        # till_controls precision, cash_loan privilege, drawer collision, and #145 R3 FX/tip_server.
+        self.store.current_user = "cashier@example.com"
+
+        # 1. UGX (0dp) fractional Loan 5000.5 MUST be refused with POS-CASH-PRECISION
+        with self.assertRaisesRegex(Refused, r"POS-CASH-PRECISION"):
+            self.cma.record_till_cash_movement(
+                pos_profile="Main Till",
+                movement_type="Loan",
+                amount=5000.5,
+                reason="Safe drop / cash pickup",
+            )
+        self.assertEqual(len(self.store.journal_entries), 0)
+
+        # 2. Whole-number Loan by cashier without cash_loan privilege MUST be refused POS-AUTH-REQUIRED
+        with self.assertRaisesRegex(PermissionDenied, r"POS-AUTH-REQUIRED"):
+            self.cma.record_till_cash_movement(
+                pos_profile="Main Till",
+                movement_type="Loan",
+                amount=5000,
+                reason="Safe drop / cash pickup",
+            )
+        self.assertEqual(len(self.store.journal_entries), 0)
+
+        # 3. Drawer collision check MUST be enforced on direct Pickup too
+        self.store.profiles["Pool Till"]["custom_cash_drawer_id"] = "DRAWER-MAIN-1"
+        try:
+            with self.assertRaisesRegex(Refused, r"POS-DRAWER-IN-USE"):
+                self.cma.record_till_cash_movement(
+                    pos_profile="Main Till",
+                    movement_type="Pickup",
+                    amount=5000,
+                )
+        finally:
+            self.store.profiles["Pool Till"]["custom_cash_drawer_id"] = "DRAWER-POOL-1"
+
+        # 4. Foreign-currency USD till Pickup posts multi_currency JE with FX rate 3700
+        fx_res = self.cma.record_till_cash_movement(
+            pos_profile="USD Till",
+            movement_type="Pickup",
+            amount=25.50,
+            pos_opening_entry="OPEN-USD-1",
+        )
+        self.assertEqual(fx_res["docstatus"], 1)
+        fx_je = self.store.journal_entries[fx_res["name"]]
+        self.assertEqual(fx_je.multi_currency, 1)
+        drawer_line = next(r for r in fx_je.accounts if r.account == "Cash USD - HC")
+        self.assertEqual(drawer_line.account_currency, "USD")
+        self.assertAlmostEqual(drawer_line.credit, 25.50 * 3700.0, places=2)
+
+        # 5. Tip Payout preserves custom_tip_server (#145 R3)
+        tip_res = self.cma.record_till_cash_movement(
+            pos_profile="Main Till",
+            movement_type="Paid Out",
+            amount=20000,
+            reason="Server tips",
+            paid_out_target="tips",
+            tip_server="waiter@example.com",
+        )
+        self.assertEqual(tip_res["docstatus"], 1)
+        self.assertEqual(tip_res["tip_server"], "waiter@example.com")
+        self.assertEqual(self.store.journal_entries[tip_res["name"]].custom_tip_server, "waiter@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()
