@@ -783,6 +783,20 @@ def get_custom_fields():
 			},
 		],
 
+		"Sales Invoice Payment": [
+			{
+				"fieldname": "custom_tender_received",
+				"fieldtype": "Check",
+				"label": "Tender Received",
+				"description": "Set only by confirmed server payment flows when money was genuinely received on an open check.",
+				"default": "0",
+				"no_copy": 1,
+				"read_only": 1,
+				"print_hide": 1,
+				"insert_after": "reference_no",
+			},
+		],
+
 		"URY Sales Plan": [
 			{
 				"fieldname": "custom_ury_production_plan",

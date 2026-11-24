@@ -29,7 +29,7 @@ beforeEach(async () => {
     posProfile: {
       name: 'Till A', customer: 'Walk-in Customer', allow_partial_payment: 1,
       order_type_customer_map: { 'Dine In': { customer: 'Table Guest' } }, default_customer: null,
-      room_lookup_method: METHOD,
+      room_lookup_method: METHOD, room_charge_modes: ['Room Charge'],
     } as unknown as Profile,
   });
   vi.spyOn(console, 'error').mockImplementation(() => {});

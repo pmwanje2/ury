@@ -27,7 +27,9 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
     quickFilter,
     fetchMenuItems,
     isMenuInteractionDisabled,
-    isOrderInteractionDisabled
+    isOrderInteractionDisabled,
+    posProfile,
+    currency,
   } = usePOSStore();
 
   useEffect(() => {
@@ -81,6 +83,7 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
             {filteredItems.map((item) => (
               <MenuCard
                 key={item.id}
+                currency={posProfile?.currency || currency}
                 id={item.id}
                 name={item.name}
                 price={item.price}

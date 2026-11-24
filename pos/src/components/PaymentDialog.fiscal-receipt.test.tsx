@@ -102,6 +102,7 @@ describe("PaymentDialog fiscal receipt order", () => {
       fetchPaymentModes: vi.fn(),
       posProfile: {
         name: "POS001",
+        default_payment_mode: "Cash",
         enable_discount: 1,
         enable_payment_without_printing: 1,
         print_format: "Restaurant Receipt 80mm",
@@ -189,6 +190,7 @@ describe("PaymentDialog fiscal receipt order", () => {
       fetchPaymentModes: vi.fn(),
       posProfile: {
         name: "POS001",
+        default_payment_mode: "Cash",
         enable_discount: 1,
         enable_payment_without_printing: 1,
         print_format: "Restaurant Receipt 80mm",
@@ -312,6 +314,7 @@ describe("PaymentDialog fiscal receipt order", () => {
       fetchPaymentModes: vi.fn(),
       posProfile: {
         name: "POS001",
+        default_payment_mode: "Cash",
         enable_discount: 1,
         enable_payment_without_printing: 0,
         print_format: "Restaurant Receipt 80mm",

@@ -174,6 +174,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     `${selectedStatus}|${orders.map((order) => `${order.name}:${order.invoice_printed}`).join(',')}`,
   );
   const posStore = usePOSStore();
+  const profileCurrency = posStore.posProfile?.currency;
+  const selectedOrderCurrency = selectedOrder?.currency || profileCurrency;
   const printWarningMinutes = posStore.posProfile?.custom_invoice_warning_time ?? 0;
   const [clockNow, setClockNow] = React.useState(() => Date.now());
   useEffect(() => {
@@ -626,8 +628,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 const splitBill = isSplitBill(order);
                 const mergedBill = isMergedBill(order);
                 const cardTotal = mergedBill
-                  ? order.rounded_total + Math.round(order.custom_merged_total ?? 0)
-                  : order.rounded_total;
+                  ? getCombinedOrderTotals(order).roundedTotal
+                  : (order.rounded_total || order.grand_total || 0);
 
                 return (
                 <Card 
@@ -646,7 +648,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         {order.name}
                       </h3>
                       <span className="ms-auto shrink-0 whitespace-nowrap text-sm font-semibold tabular-nums text-gray-900">
-                        {formatCurrency(cardTotal)}
+                        {formatCurrency(cardTotal, order.currency || profileCurrency)}
                       </span>
                     </div>
                     <p className="mt-1 min-w-0 break-words text-xs text-gray-500">
@@ -886,11 +888,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
+                currency={selectedOrderCurrency}
                 onOpenInvoice={openRelatedInvoice}
               />
 
               <MergedBillPanel
                 order={selectedOrder}
+                currency={selectedOrderCurrency}
                 onOpenSecondary={openSecondaryInvoice}
               />
 
@@ -991,7 +995,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         </div>
                         <div className="shrink-0 text-end tabular-nums">
                           <p className="text-sm font-semibold text-gray-900">
-                            {formatCurrency(item.amount)}
+                            {formatCurrency(item.amount, selectedOrderCurrency)}
                           </p>
                         </div>
                       </div>
@@ -1009,7 +1013,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                       <div key={index} className="flex justify-between items-center py-1">
                         <span className="text-sm text-gray-600">{tax.description}</span>
                         <span className="text-sm font-medium text-gray-900">
-                          {formatCurrency(tax.rate)}
+                          {formatCurrency(tax.rate, selectedOrderCurrency)}
                         </span>
                       </div>
                     ))}
@@ -1065,10 +1069,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   {isMergedBill(selectedOrder) ? (
                     <span className="flex flex-col items-end leading-tight">
                       <span className="text-xs font-medium text-gray-500">{t('bill_merge.combined_total')}</span>
-                      <span>{formatCurrency(selectedOrderTotals.roundedTotal)}</span>
+                      <span>{formatCurrency(selectedOrderTotals.roundedTotal, selectedOrderCurrency)}</span>
                     </span>
                   ) : (
-                    formatCurrency(selectedOrder.rounded_total)
+                    formatCurrency(selectedOrder.rounded_total || selectedOrder.grand_total || 0, selectedOrderCurrency)
                   )}
                 </span>
               </div>
@@ -1100,6 +1104,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showMergeDialog}
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
+          currency={selectedOrderCurrency}
           onConfirm={handleMergeBill}
         />
       )}
@@ -1109,6 +1114,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           onOpenChange={setShowSplitDialog}
           invoiceName={selectedOrder.name}
           items={selectedOrderItems}
+          currency={selectedOrderCurrency}
           sourceCustomer={
             selectedOrder.customer
               ? { id: selectedOrder.customer, name: selectedOrder.customer_name || selectedOrder.customer, phone: selectedOrder.mobile_number }
