@@ -133,7 +133,7 @@ describe("PaymentDialog", () => {
     expect(buttons.length).toBeGreaterThan(0);
   });
 
-  it("shows discount section when enable_discount is true", () => {
+  it("never renders a discount entry box in PaymentDialog (Simphony: discounts live on open check)", () => {
     render(
       <PaymentDialog
         onClose={vi.fn()}
@@ -150,21 +150,16 @@ describe("PaymentDialog", () => {
       />
     );
     
-    expect(screen.getByText(/payment.apply_discount/)).toBeInTheDocument();
+    expect(screen.queryByText(/payment.apply_discount/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/payment.discount_placeholder/)).not.toBeInTheDocument();
   });
 
-  it("hides discount section when enable_discount is false", () => {
-    mockUsePOSStore.mockReturnValue({
-      paymentModes: ["Cash", "Card"],
-      fetchPaymentModes: vi.fn(),
-      posProfile: { default_payment_mode: "Cash", enable_discount: 0 },
-    });
-
+  it("displays an already-applied check discount read-only with its reason in Order Summary", () => {
     render(
       <PaymentDialog
         onClose={vi.fn()}
-        grandTotal={1000}
-        roundedTotal={1000}
+        grandTotal={900}
+        roundedTotal={900}
         invoice="INV001"
         customer="CUST001"
         posProfile="POS001"
@@ -173,9 +168,17 @@ describe("PaymentDialog", () => {
         owner="user1"
         fetchOrders={vi.fn()}
         clearSelectedOrder={vi.fn()}
+        discountPercentage={10}
+        discountAmount={100}
+        discountReason="Guest complaint"
+        couponCode="LUNCH10"
       />
     );
-    
+
+    const summaryRow = screen.getByTestId("payment-discount-summary");
+    expect(summaryRow).toHaveTextContent("Guest complaint");
+    expect(summaryRow).toHaveTextContent("LUNCH10");
+    expect(summaryRow).toHaveTextContent("100");
     expect(screen.queryByText(/payment.apply_discount/)).not.toBeInTheDocument();
   });
 
