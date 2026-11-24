@@ -219,6 +219,7 @@ export default function CaptainTables() {
   }, []);
 
   const loadActiveOrders = useCallback(async (branchName: string) => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const orders = await getActiveTableOrders(branchName);
       setActiveOrders(orders);
@@ -229,17 +230,31 @@ export default function CaptainTables() {
     } catch (err) {
       // Non-fatal: table grid still renders with occupied/free state from
       // the bulk table list, just without waiter/total annotations.
-      console.error('Failed to load active table orders', err);
+      const isOfflineErr =
+        (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+        Boolean((err as { ury_network_failure?: boolean })?.ury_network_failure);
+      if (!isOfflineErr) {
+        console.error('Failed to load active table orders', err);
+      }
     }
   }, []);
 
   const loadBookings = useCallback(async (branchName: string) => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setBookings(new Map());
+      return;
+    }
     try {
       setBookings(await getUpcomingBookings(branchName));
     } catch (err) {
       // Advisory only: a booking read must never prevent seating.
       setBookings(new Map());
-      console.error('Failed to load table bookings', err);
+      const isOfflineErr =
+        (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+        Boolean((err as { ury_network_failure?: boolean })?.ury_network_failure);
+      if (!isOfflineErr) {
+        console.error('Failed to load table bookings', err);
+      }
     }
   }, []);
 
