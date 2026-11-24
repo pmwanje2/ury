@@ -3488,8 +3488,9 @@ def preview_settlement_totals(invoice, pos_profile, additionalDiscount=None):
 
 
 def _copy_payment_row(row):
-    if hasattr(row, "as_dict"):
-        data = row.as_dict(
+    as_dict = getattr(row, "as_dict", None)
+    if callable(as_dict):
+        data = as_dict(
             no_default_fields=True,
             no_child_table_fields=True,
             no_private_properties=True,
@@ -3533,7 +3534,7 @@ def _reconcile_settlement_payments(invoice, incoming_payments):
     its reference is refused in plain words before any invoice state is mutated.
     """
     precision = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
-    if precision is None:
+    if not isinstance(precision, int) or isinstance(precision, bool):
         precision = 2
 
     existing_rows = [
