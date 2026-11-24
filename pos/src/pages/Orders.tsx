@@ -618,8 +618,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 const splitBill = isSplitBill(order);
                 const mergedBill = isMergedBill(order);
                 const cardTotal = mergedBill
-                  ? order.rounded_total + Math.round(order.custom_merged_total ?? 0)
-                  : order.rounded_total;
+                  ? getCombinedOrderTotals(order).roundedTotal
+                  : (order.rounded_total || order.grand_total || 0);
 
                 return (
                 <Card 
@@ -1060,7 +1060,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                       <span>{formatCurrency(selectedOrderTotals.roundedTotal)}</span>
                     </span>
                   ) : (
-                    formatCurrency(selectedOrder.rounded_total)
+                    formatCurrency(selectedOrder.rounded_total || selectedOrder.grand_total || 0)
                   )}
                 </span>
               </div>

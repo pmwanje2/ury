@@ -164,7 +164,12 @@
     "room_match": "Room {{room}} · {{guest}} · departs {{departure}}",
     "room_no_post": "This guest's bill is closed to room charges",
     "room_check_required": "Check the room before taking Room Charge",
-    "room_check_failed": "Could not check this room"
+    "room_check_failed": "Could not check this room",
+    "room_charge_not_configured": "Room charge isn't set up for this company. Finance maps the guest ledger clearing account.",
+    "discount_not_applied": "Press Apply to update the total before paying.",
+    "already_received": "Already received",
+    "balance_due": "Balance due",
+    "reference_label": "Ref: {{ref}}"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
@@ -487,6 +492,7 @@
     "select_table_placeholder": "Select a table",
     "no_tables_for_slot": "No tables are available for the selected date and time.",
     "cancel_title": "Cancel Reservation",
+    "mark_no_show": "Mark as No Show",
     "cancel_description": "Are you sure you want to cancel this reservation?",
     "keep_reservation": "Keep Reservation",
     "cancel_reservation": "Cancel Reservation",
@@ -504,9 +510,18 @@
     "status_completed": "Completed",
     "status_cancelled": "Cancelled",
     "status_no_show": "No Show",
+    "status_seated": "Seated",
+    "seat_action": "Seat guest",
+    "unseat_action": "Unseat",
+    "seat_title": "Seat Guest",
+    "seat_description": "Seat the party at table {{table}} ({{time}}) and open their order.",
+    "cancel_reason_label": "Cancellation Reason",
+    "cancel_reason_required": "Enter a reason to cancel this reservation.",
+    "timeline_table_column": "Table",
     "loading_timeline": "Loading timeline view...",
     "empty_timeline_title": "No Reservations for this Date",
-    "empty_timeline_hint": "Reservations will appear along the time axis."
+    "empty_timeline_hint": "Reservations will appear along the time axis.",
+    "min_notice": "A reservation needs at least {{minutes}} minutes' notice."
   },
   "bill_split": {
     "split_bill": "Split bill",

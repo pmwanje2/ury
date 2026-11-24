@@ -44,8 +44,20 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  payments?: POSInvoicePayment[];
+  room_number?: string | null;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
+}
+
+export interface POSInvoicePayment {
+  mode_of_payment: string;
+  amount: number;
+  reference_no?: string | null;
+  reference_date?: string | null;
+  clearance_date?: string | null;
+  room_number?: string | null;
+  custom_tender_received?: number | boolean;
 }
 
 export interface SplitGroupInvoice extends POSInvoice {
@@ -93,7 +105,7 @@ interface GetPOSInvoicesParams {
 }
 
 interface GetPOSInvoiceItemsResponse {
-  message: [POSInvoiceItem[], POSInvoiceTax[]];
+  message: [POSInvoiceItem[], POSInvoiceTax[], POSInvoicePayment[]?];
 }
 
 export const outstandingFields = [
@@ -216,7 +228,8 @@ export async function getPOSInvoiceItems(invoiceId: string) {
 
     return {
       items: response.message[0],
-      taxes: response.message[1]
+      taxes: response.message[1],
+      payments: Array.isArray(response.message[2]) ? response.message[2] : undefined,
     };
   } catch (error) {
     console.error('Error fetching POS invoice items:', error);
@@ -398,14 +411,15 @@ export interface MergeBillsResponse {
 //   };
 // }
 export function getCombinedOrderTotals(
-  order: Pick<POSInvoice, 'rounded_total' | 'custom_merged_total'>
+  order: Pick<POSInvoice, 'grand_total' | 'rounded_total' | 'custom_merged_total'>
 ) {
-  const roundedTotal =
-    (order.rounded_total ?? 0) + Math.round(order.custom_merged_total ?? 0);
+  // The server's totals: its rounded total, or its grand total where the profile does not
+  // round. A legacy linked bill adds its partner's server total as it is.
+  const merged = order.custom_merged_total ?? 0;
 
   return {
-    grandTotal: roundedTotal,
-    roundedTotal,
+    grandTotal: (order.grand_total ?? 0) + merged,
+    roundedTotal: (order.rounded_total || order.grand_total || 0) + merged,
   };
 }
 

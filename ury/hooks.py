@@ -272,17 +272,30 @@ doc_events = {
         "before_validate": "ury.ury.hooks.ury_pos_tender.before_validate",
         "before_insert": "ury.ury.hooks.ury_pos_invoice.before_insert",
         "validate": "ury.ury.hooks.ury_pos_invoice.validate",
-        "after_insert":"ury.ury.api.ury_kot_order_number.set_order_number",
+        "after_insert": [
+            "ury.ury.api.ury_kot_order_number.set_order_number",
+            # A check opened on a table binds the party seated there (Simphony seats into a guest check).
+            "ury.ury.api.table_reservation.bind_seated_reservation_to_check",
+        ],
         "before_submit": "ury.ury.hooks.ury_pos_invoice.before_submit",
         "on_submit": [
             "ury.ury.hooks.ury_pos_invoice.on_submit",
             "ury.ury.api.ury_feature_flags.maybe_wire_fulfilment_on_submit",
+            "ury.ury.api.table_reservation.complete_seated_reservation_on_submit",
         ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
-        "on_cancel": "ury.ury.hooks.ury_pos_invoice.on_trash",
-        "on_trash": "ury.ury.hooks.ury_pos_invoice.on_trash",
+        "on_discard": "ury.ury.api.table_reservation.release_reservation_check_binding",
+        "on_cancel": [
+            "ury.ury.hooks.ury_pos_invoice.on_trash",
+            "ury.ury.api.table_reservation.release_reservation_check_binding",
+        ],
+        "on_trash": [
+            "ury.ury.hooks.ury_pos_invoice.on_trash",
+            "ury.ury.api.table_reservation.release_reservation_check_binding",
+        ],
     },
     "POS Profile": {"validate": "ury.ury.hooks.ury_pos_profile.validate"},
+    "Branch": {"validate": "ury.ury.api.table_reservation.validate_branch_reservation_settings"},
     "Sales Invoice": {
         "validate": "ury.ury.hooks.ury_sales_invoice.validate",
         "before_insert": "ury.ury.hooks.ury_sales_invoice.before_insert",
@@ -375,6 +388,9 @@ doc_events = {
     },
     "Production Plan": {
         "before_cancel": "ury.ury.api.ury_production_plan_cancel_hooks.before_cancel",
+    },
+    "Payment Request": {
+        "on_payment_authorized": "ury.ury.api.self_ordering.mark_phone_payment_received",
     },
 }
 
@@ -684,6 +700,9 @@ fixtures = [
                     "Branch-custom_enable_reservation",
                     "Branch-custom_buffer_time",
                     "Branch-custom_grace_period",
+                    "Branch-custom_unset_grace_policy",
+                    "Branch-custom_min_reservation_notice",
+                    "Branch-custom_target_turn_time",
                     "Branch-custom_avg_table_time_last_day",
                     "Branch-custom_avg_table_time_last_week",
                     "Price List-restaurant_menu",
@@ -804,7 +823,8 @@ fixtures = [
                     "POS Profile-custom_disable_print_status_tracking",
                     "POS Profile-custom_service_request_sound",
                     "POS Profile-custom_service_request_escalate_minutes",
-                    "Network Printer Settings-custom_printer_queue_name"
+                    "Network Printer Settings-custom_printer_queue_name",
+                    "Sales Invoice Payment-custom_tender_received"
                 },
             ]
         ],

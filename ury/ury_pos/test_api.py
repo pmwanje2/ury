@@ -117,14 +117,17 @@ class TestMergeBillsSEC07(unittest.TestCase):
         mock_throw.assert_called_once_with("Cannot merge bills from different branches.", frappe.PermissionError)
         mock_rollback.assert_called_once()
 
+    @patch("ury.ury.doctype.ury_order.ury_order.consolidate_checks")
     @patch("ury.ury_pos.api.frappe.get_doc")
     @patch("ury.ury_pos.api.frappe.has_permission")
     @patch("ury.ury_pos.api.frappe.db.set_value")
     @patch("ury.ury_pos.api.frappe.db.commit")
-    def test_merge_bills_success(self, mock_commit, mock_set_value, mock_has_permission, mock_get_doc):
+    def test_merge_bills_success(self, mock_commit, mock_set_value, mock_has_permission, mock_get_doc, mock_consolidate):
+        """Add Check: the selected check's lines move onto the primary; no two-invoice link is written."""
         mock_primary = MagicMock()
         mock_primary.name = "INV-01"
         mock_primary.branch = "Branch A"
+        mock_primary.order_type = "Dine In"
         mock_primary.docstatus = 0
         mock_primary.custom_merged_pos_invoice = None
         mock_primary.items = [MagicMock(item_code="Item 1")]
@@ -132,11 +135,11 @@ class TestMergeBillsSEC07(unittest.TestCase):
         mock_secondary = MagicMock()
         mock_secondary.name = "INV-02"
         mock_secondary.branch = "Branch A"
+        mock_secondary.order_type = "Dine In"
         mock_secondary.docstatus = 0
         mock_secondary.custom_merged_pos_invoice = None
         mock_secondary.items = [MagicMock(item_code="Item 2")]
         
-        # When update_merge_details calls frappe.get_doc again
         def get_doc_side_effect(doctype, name):
             if name == "INV-01":
                 return mock_primary
@@ -152,9 +155,10 @@ class TestMergeBillsSEC07(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["name"], "INV-01")
         mock_commit.assert_called_once()
-        self.assertEqual(mock_set_value.call_count, 2)
-        mock_primary.save.assert_called_once_with(ignore_version=True)
-        mock_secondary.save.assert_called_once_with(ignore_version=True)
+        mock_consolidate.assert_called_once_with(mock_primary, [mock_secondary])
+        mock_set_value.assert_not_called()
+        mock_primary.save.assert_not_called()
+        mock_secondary.save.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
@@ -818,7 +822,7 @@ class TestPOSOpeningOccupancy(unittest.TestCase):
     def test_unavailable_profile_cannot_disclose_occupancy(self):
         from ury.ury_pos.api import get_pos_opening_screen_data
 
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-OPENING-PROFILE-NOT-ALLOWED\]"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"\[POS-OPENING-PROFILE-NOT-ALLOWED\]"):
             get_pos_opening_screen_data(pos_profile="Forbidden POS")
         self.frappe.get_all.assert_not_called()
 

@@ -164,7 +164,12 @@
     "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
     "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
     "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
-    "room_check_failed": "تعذر التحقق من هذه الغرفة"
+    "room_check_failed": "تعذر التحقق من هذه الغرفة",
+    "room_charge_not_configured": "لم يتم إعداد رسوم الغرفة لهذه الشركة. يتولى قسم المالية ربط حساب تسوية دفتر النزلاء.",
+    "discount_not_applied": "اضغط على تطبيق لتحديث الإجمالي قبل الدفع.",
+    "already_received": "تم استلامه مسبقاً",
+    "balance_due": "الرصيد المتبقي",
+    "reference_label": "المرجع: {{ref}}"
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -485,6 +490,7 @@
     "select_table_placeholder": "اختر طاولة",
     "no_tables_for_slot": "لا توجد طاولات متاحة للتاريخ والوقت المحددين.",
     "cancel_title": "إلغاء الحجز",
+    "mark_no_show": "تسجيل عدم الحضور",
     "cancel_description": "هل أنت متأكد من أنك تريد إلغاء هذا الحجز؟",
     "keep_reservation": "الاحتفاظ بالحجز",
     "cancel_reservation": "إلغاء الحجز",
@@ -502,9 +508,18 @@
     "status_completed": "مكتمل",
     "status_cancelled": "ملغي",
     "status_no_show": "لم يحضر",
+    "status_seated": "تم الإجلاس",
+    "seat_action": "إجلاس الضيف",
+    "unseat_action": "إلغاء الإجلاس",
+    "seat_title": "إجلاس الضيف",
+    "seat_description": "أجلس المجموعة على الطاولة {{table}} ({{time}}) وافتح طلبها.",
+    "cancel_reason_label": "سبب الإلغاء",
+    "cancel_reason_required": "أدخل سببًا لإلغاء هذا الحجز.",
+    "timeline_table_column": "الطاولة",
     "loading_timeline": "جارٍ تحميل الجدول الزمني...",
     "empty_timeline_title": "لا توجد حجوزات لهذا التاريخ",
-    "empty_timeline_hint": "ستظهر الحجوزات على طول المحور الزمني."
+    "empty_timeline_hint": "ستظهر الحجوزات على طول المحور الزمني.",
+    "min_notice": "يجب أن يكون الحجز قبل موعده بـ {{minutes}} دقيقة على الأقل."
   },
   "bill_split": {
     "split_bill": "تقسيم الفاتورة",

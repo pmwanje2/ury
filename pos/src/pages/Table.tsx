@@ -14,6 +14,8 @@ import {
   createTableReservation,
   getActiveReservations,
   getBranchReservationSettings,
+  updateTableReservationStatus,
+  extractErrorMessage,
   type Room,
   type Table,
   type TableReservation,
@@ -39,6 +41,7 @@ import TableCard from '../components/TableCard';
 import { resolveTableServiceRequest, useOpenServiceRequestTables } from '../components/ServiceRequestAlert';
 import MergeLinkConnector from '../components/MergeLinkConnector';
 import TableReservationDialog, { type ReservationFormData } from '../components/TableReservationDialog';
+import TableReservationWarningDialog from '../components/TableReservationWarningDialog';
 
 const TableView = () => {
   const navigate = useNavigate();
@@ -87,6 +90,8 @@ const TableView = () => {
   const [branchSettings, setBranchSettings] = useState<BranchReservationSettings | null>(null);
   const [activeReservationsList, setActiveReservationsList] = useState<TableReservation[]>([]);
   const [reservationTable, setReservationTable] = useState<Table | null>(null);
+  const [heldReservation, setHeldReservation] = useState<{ reservation: TableReservation; tableName: string } | null>(null);
+  const [seatLoading, setSeatLoading] = useState(false);
 
   // Load branch reservation settings
   useEffect(() => {
@@ -332,8 +337,7 @@ const TableView = () => {
       activeLockRes.status === 'Confirmed';
 
     if (isActiveLockRes) {
-      const timeStr = formatReservationTime(activeLockRes.reserved_at);
-      showToast.error(t('tables.reserved_choose_another', { table: tableName, time: timeStr }));
+      setHeldReservation({ reservation: activeLockRes, tableName });
       return;
     }
 
@@ -346,8 +350,7 @@ const TableView = () => {
         reservation.status === 'Confirmed';
 
       if (isResLocked) {
-        const timeStr = formatReservationTime(reservation.reserved_at);
-        showToast.error(t('tables.reserved_choose_another', { table: tableName, time: timeStr }));
+        setHeldReservation({ reservation, tableName });
         return;
       }
 
@@ -358,6 +361,22 @@ const TableView = () => {
       setSelectedOrderType(DINE_IN);
       setSelectedTable(tableName, selectedRoom);
       navigate('/register');
+    }
+  };
+
+  const handleSeatHeldReservation = async () => {
+    if (!heldReservation || !selectedRoom) return;
+    setSeatLoading(true);
+    try {
+      await updateTableReservationStatus(heldReservation.reservation.name, 'Seated');
+      setHeldReservation(null);
+      setSelectedOrderType(DINE_IN);
+      setSelectedTable(heldReservation.tableName, selectedRoom);
+      navigate('/register');
+    } catch (error) {
+      showToast.error(extractErrorMessage(error, t('reservations.update_failed')));
+    } finally {
+      setSeatLoading(false);
     }
   };
 
@@ -803,6 +822,16 @@ const TableView = () => {
           if (!open) setReservationTable(null);
         }}
         onConfirm={handleReserveConfirm}
+        minNoticeMinutes={branchSettings?.min_reservation_notice}
+      />
+
+      <TableReservationWarningDialog
+        open={heldReservation !== null}
+        reservation={heldReservation?.reservation ?? null}
+        tableName={heldReservation?.tableName ?? ''}
+        onClose={() => setHeldReservation(null)}
+        onSeat={() => void handleSeatHeldReservation()}
+        seatLoading={seatLoading}
       />
 
       {/* Status Legend */}

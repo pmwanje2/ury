@@ -641,7 +641,7 @@ def seed():
 		)
 		company_name = profile_company
 
-	naming_series = frappe.db.get_value("POS Profile", pos_profile_name, "custom_kot_naming_series") or "KOT-URY-"
+	naming_series = frappe.db.get_value("POS Profile", pos_profile_name, "custom_kot_naming_series") or "KOT-"
 	price_list = _get_price_list()
 	customer = _get_customer()
 	if not customer:

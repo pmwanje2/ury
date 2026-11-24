@@ -1,7 +1,7 @@
 """Main till-close regressions; no Frappe site or database is required.
 
 Ported from the Maximus fork (799dc28e, 82fdb0d4). Denials are
-``frappe.PermissionError`` with a stable ``[URY-TILL-*]`` id.
+``frappe.PermissionError`` with a neutral ``[POS-TILL-*]`` code.
 """
 
 import unittest
@@ -119,7 +119,7 @@ class TestTillInvoices(unittest.TestCase):
     def test_other_cashier_cannot_impersonate_holder(self):
         self.frappe.session.user = "cashier1"
         self._invoice("SECRET")
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-TILL-NOT-HOLDER\]"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"^\[POS-TILL-NOT-HOLDER\] "):
             self._read()
         self._assert_no_invoice_reads()
 
@@ -148,7 +148,7 @@ class TestTillInvoices(unittest.TestCase):
         self.frappe.session.user = "manager"
         self.frappe.get_roles.return_value = ["URY Manager"]
         self.openings = []
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-TILL-NO-OPEN-SESSION\]"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"^\[POS-TILL-NO-OPEN-SESSION\] "):
             self._read()
         self._assert_no_invoice_reads()
 

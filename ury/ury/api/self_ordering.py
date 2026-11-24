@@ -33,6 +33,7 @@ from functools import wraps
 from uuid import uuid4
 
 import frappe
+from ury.brand import coded_message
 from frappe import _
 from frappe.rate_limiter import rate_limit
 from frappe.utils import add_to_date, cint, flt, now_datetime
@@ -803,7 +804,7 @@ def add_customer_items(session, items):
             default_mode = posprofile.payments[0].mode_of_payment if posprofile.payments else None
             if not default_mode:
                 frappe.throw(_("POS Profile has no mode of payment configured"), frappe.ValidationError)
-            invoice.append("payments", dict(mode_of_payment=default_mode, amount=invoice.grand_total))
+            invoice.append("payments", dict(mode_of_payment=default_mode, amount=0, custom_tender_received=0))
             invoice.invoice_created = 1
 
         try:
@@ -844,8 +845,8 @@ def add_customer_items(session, items):
 # ---------------------------------------------------------------------------
 # Request bill
 # ---------------------------------------------------------------------------
-# Guest service-request refusal ids (append-only, ValidationError):
-# URY-GUEST-BILL-DISABLED, URY-GUEST-ASSISTANCE-DISABLED, URY-GUEST-NO-ACTIVE-ORDER.
+# Guest service-request refusal keys (append-only, ValidationError):
+# GUEST-BILL-DISABLED, GUEST-ASSISTANCE-DISABLED, GUEST-NO-ACTIVE-ORDER.
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 @rate_limit(limit=5, seconds=60)
@@ -854,9 +855,9 @@ def request_bill(session):
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not profile.enable_request_bill:
-        frappe.throw(_("[URY-GUEST-BILL-DISABLED] Requesting the bill is not enabled"), frappe.ValidationError)
+        frappe.throw(coded_message("GUEST-BILL-DISABLED", _("Requesting the bill is not enabled")), frappe.ValidationError)
     if not session.table or not session.invoice:
-        frappe.throw(_("[URY-GUEST-NO-ACTIVE-ORDER] No active order for this table"), frappe.ValidationError)
+        frappe.throw(coded_message("GUEST-NO-ACTIVE-ORDER", _("No active order for this table")), frappe.ValidationError)
 
     with _elevated():
         existing = frappe.db.exists(
@@ -888,9 +889,9 @@ def request_assistance(session):
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not profile.enable_request_bill:
-        frappe.throw(_("[URY-GUEST-ASSISTANCE-DISABLED] Requesting staff assistance is not enabled"), frappe.ValidationError)
+        frappe.throw(coded_message("GUEST-ASSISTANCE-DISABLED", _("Requesting staff assistance is not enabled")), frappe.ValidationError)
     if not session.table or not session.invoice:
-        frappe.throw(_("[URY-GUEST-NO-ACTIVE-ORDER] No active order for this table"), frappe.ValidationError)
+        frappe.throw(coded_message("GUEST-NO-ACTIVE-ORDER", _("No active order for this table")), frappe.ValidationError)
 
     with _elevated():
         existing = frappe.db.exists(
@@ -1008,7 +1009,7 @@ def _payment_url(pr):
 
 def _refuse_unconfigured_payment(pos_profile_name):
     frappe.log_error(
-        title="[URY-PAYMENT-NOT-CONFIGURED] Guest phone payment is not configured",
+        title=coded_message("PAYMENT-NOT-CONFIGURED", "Guest phone payment is not configured"),
         message=(
             "Add a Phone mode of payment to this POS Profile whose account has a "
             "Phone Payment Gateway Account for the invoice company."
@@ -1019,8 +1020,10 @@ def _refuse_unconfigured_payment(pos_profile_name):
         defer_insert=True,
     )
     frappe.throw(
-        "[URY-PAYMENT-NOT-CONFIGURED] "
-        + _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        coded_message(
+            "PAYMENT-NOT-CONFIGURED",
+            _("Online payment isn't set up for this restaurant yet. Please pay at the counter."),
+        ),
         frappe.ValidationError,
     )
 
@@ -1059,9 +1062,9 @@ def create_payment_request(session):
     profile = frappe.get_doc("URY Self Ordering Profile", session.ordering_profile)
 
     if not (profile.enable_customer_payment or profile.enable_payment_link):
-        frappe.throw("[URY-PAYMENT-DISABLED] " + _("Online payment is not enabled"), frappe.ValidationError)
+        frappe.throw(coded_message("PAYMENT-DISABLED", _("Online payment is not enabled")), frappe.ValidationError)
     if not session.invoice:
-        frappe.throw("[URY-PAYMENT-NO-ORDER] " + _("No active order for this session"), frappe.ValidationError)
+        frappe.throw(coded_message("PAYMENT-NO-ORDER", _("No active order for this session")), frappe.ValidationError)
 
     with _elevated():
         from erpnext.accounts.doctype.payment_request.payment_request import make_payment_request
@@ -1069,7 +1072,7 @@ def create_payment_request(session):
         # Serialises a double tap on the check before any request is read or made.
         invoice = frappe.get_doc("POS Invoice", session.invoice, for_update=True)
         if invoice.docstatus == 1:
-            frappe.throw("[URY-PAYMENT-SETTLED] " + _("This order is already settled"), frappe.ValidationError)
+            frappe.throw(coded_message("PAYMENT-SETTLED", _("This order is already settled")), frappe.ValidationError)
 
         # ERPNext v16 get_amount() for a POS Invoice reads only the Phone
         # payment row whose account matches the gateway's payment account.
@@ -1138,9 +1141,9 @@ def create_payment_request(session):
         # gateway app cancels requests that truly failed or expired, and the
         # next tap then creates a new one. Requests made elsewhere (e.g. a
         # cashier) are never cancelled here.
-        busy = _(
-            "[URY-PAYMENT-IN-PROGRESS] A payment for this order is already in progress. "
-            "Please ask staff for help."
+        busy = coded_message(
+            "PAYMENT-IN-PROGRESS",
+            _("A payment for this order is already in progress. Please ask staff for help."),
         )
         open_requests = frappe.get_all(
             "Payment Request",
@@ -1182,6 +1185,8 @@ def create_payment_request(session):
         phone_payment.account = payment_account
         phone_payment.type = "Phone"
         phone_payment.amount = outstanding_amount
+        # Provisional request row only — money is NOT received until the gateway confirms Paid.
+        phone_payment.custom_tender_received = 0
         invoice.save(ignore_permissions=True)
 
         # make_payment_request() derives its own amount from the reference
@@ -1214,6 +1219,73 @@ def _payment_request_response(pr, payment_url, paid_amount, remaining_amount):
         # The check balance; after growth it can exceed a kept request.
         "remaining_amount": max(0, remaining_amount),
     }
+
+
+def mark_phone_payment_received(doc, method=None, status=None):
+    """Mark a draft POS Invoice's Phone payment row as received when its Payment Request
+    reaches Paid via a confirmed gateway callback (on_payment_authorized)."""
+    if (
+        doc.get("reference_doctype") != "POS Invoice"
+        or not doc.get("reference_name")
+        or doc.get("payment_channel") != "Phone"
+        or doc.get("payment_request_type") != "Inward"
+        or cint(doc.get("docstatus")) != 1
+        or doc.get("status") not in ("Paid", "Partially Paid")
+    ):
+        return
+
+    paid_amount = flt(doc.get("grand_total")) - flt(doc.get("outstanding_amount"))
+    if paid_amount <= 0:
+        return
+
+    mode_of_payment = doc.get("mode_of_payment")
+    if not mode_of_payment:
+        return
+
+    with _elevated():
+        invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
+        if cint(invoice.docstatus) != 0:
+            return
+
+        payments = invoice.payments or []
+        row = next(
+            (
+                p for p in payments
+                if (p.get("reference_no") or "").strip() == doc.name
+            ),
+            None,
+        )
+        if row is None:
+            row = next(
+                (
+                    p for p in payments
+                    if p.get("mode_of_payment") == mode_of_payment
+                    and not (p.get("reference_no") or "").strip()
+                ),
+                None,
+            )
+        if row is None:
+            row = invoice.append("payments", {})
+
+        row.mode_of_payment = mode_of_payment
+        if doc.get("payment_account"):
+            row.account = doc.payment_account
+        row.type = "Phone"
+        row.amount = paid_amount
+        row.reference_no = doc.name
+        row.custom_tender_received = 1
+
+        if callable(getattr(invoice, "set_paid_amount", None)):
+            invoice.set_paid_amount()
+        if callable(getattr(invoice, "set_outstanding_amount", None)):
+            invoice.set_outstanding_amount()
+
+        prev_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        frappe.flags.ury_server_tender_received = True
+        try:
+            invoice.save(ignore_permissions=True)
+        finally:
+            frappe.flags.ury_server_tender_received = prev_flag
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -1316,16 +1388,17 @@ def share_payment_link(session, recipient):
 #
 # Native Quality Feedback.document_type is only User or Customer, so the bill
 # is stored in the tenant field custom_pos_invoice. This module does not
-# create that field and refuses with URY-FEEDBACK-BILL-LINK-MISSING without it.
+# create that field and refuses with FEEDBACK-BILL-LINK-MISSING without it.
 # A receipt link is minted with the profile QR secret while the bill is
 # rendered; URY marks the bill printed only after rendering, so submit_feedback
 # rechecks the live printed-or-paid state. Grants are purpose-scoped so a later
 # bill grant can reuse the same secret without accepting a feedback QR.
 #
-# Refusal ids (append-only): URY-FEEDBACK-LINK-INVALID (PermissionError);
-# URY-FEEDBACK-DISABLED, URY-FEEDBACK-TEMPLATE, URY-FEEDBACK-BILL-LINK-MISSING,
-# URY-FEEDBACK-NOT-ELIGIBLE, URY-FEEDBACK-RATINGS, URY-FEEDBACK-RETRY
-# (ValidationError); URY-FEEDBACK-RATE-LIMITED (RateLimitExceededError).
+# Refusal keys (append-only, emitted via coded_message): FEEDBACK-LINK-INVALID
+# (PermissionError); FEEDBACK-DISABLED, FEEDBACK-TEMPLATE,
+# FEEDBACK-BILL-LINK-MISSING, FEEDBACK-NOT-ELIGIBLE, FEEDBACK-RATINGS,
+# FEEDBACK-RETRY (ValidationError); FEEDBACK-RATE-LIMITED
+# (RateLimitExceededError).
 # ---------------------------------------------------------------------------
 
 FEEDBACK_BILL_FIELD = "custom_pos_invoice"
@@ -1334,7 +1407,7 @@ _FEEDBACK_RATINGS = {"1", "2", "3", "4", "5"}
 
 
 def _feedback_link_invalid():
-    frappe.throw(_("[URY-FEEDBACK-LINK-INVALID] Invalid feedback link"), frappe.PermissionError)
+    frappe.throw(coded_message("FEEDBACK-LINK-INVALID", _("Invalid feedback link")), frappe.PermissionError)
 
 
 def _feedback_rate_limit_id(fn):
@@ -1345,7 +1418,10 @@ def _feedback_rate_limit_id(fn):
             return fn(*args, **kwargs)
         except frappe.RateLimitExceededError:
             frappe.clear_last_message()
-            frappe.throw(_("[URY-FEEDBACK-RATE-LIMITED] Too many attempts. Please try again later."), frappe.RateLimitExceededError)
+            frappe.throw(
+                coded_message("FEEDBACK-RATE-LIMITED", _("Too many attempts. Please try again later.")),
+                frappe.RateLimitExceededError,
+            )
     return wrapper
 
 
@@ -1452,12 +1528,12 @@ def _invoice_accepts_feedback(invoice):
 
 def _feedback_rating(value):
     if isinstance(value, bool) or isinstance(value, float):
-        frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+        frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
     if isinstance(value, int) and value in (1, 2, 3, 4, 5):
         return str(value)
     if isinstance(value, str) and value in _FEEDBACK_RATINGS:
         return value
-    frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+    frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
 
 
 def _feedback_parameters(ratings, expected):
@@ -1465,21 +1541,21 @@ def _feedback_parameters(ratings, expected):
         try:
             ratings = json.loads(ratings)
         except Exception:
-            frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+            frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
     if not isinstance(ratings, list):
-        frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+        frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
 
     supplied = {}
     allowed = set(expected)
     for row in ratings:
         if not isinstance(row, dict) or set(row) != {"parameter", "rating"}:
-            frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+            frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
         parameter = row.get("parameter")
         if not isinstance(parameter, str) or parameter not in allowed or parameter in supplied:
-            frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+            frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
         supplied[parameter] = _feedback_rating(row.get("rating"))
     if set(supplied) != allowed:
-        frappe.throw(_("[URY-FEEDBACK-RATINGS]"), frappe.ValidationError)
+        frappe.throw(coded_message("FEEDBACK-RATINGS"), frappe.ValidationError)
     return [{"parameter": parameter, "rating": supplied[parameter]} for parameter in expected]
 
 
@@ -1507,7 +1583,7 @@ def _feedback_bill(session, receipt_token):
         profile = frappe.get_doc("URY Self Ordering Profile", resolved.ordering_profile)
         invoice_name = resolved.invoice
         if not invoice_name:
-            frappe.throw(_("[URY-FEEDBACK-NOT-ELIGIBLE]"), frappe.ValidationError)
+            frappe.throw(coded_message("FEEDBACK-NOT-ELIGIBLE"), frappe.ValidationError)
         _limit_feedback_credential("session", resolved.name)
     elif receipt_token:
         profile_name, invoice_name = read_signed_invoice_grant(receipt_token, "feedback")
@@ -1517,11 +1593,11 @@ def _feedback_bill(session, receipt_token):
         _feedback_link_invalid()
 
     if not cint(getattr(profile, "enabled", 0)) or not cint(getattr(profile, "enable_feedback", 0)):
-        frappe.throw(_("[URY-FEEDBACK-DISABLED]"), frappe.ValidationError)
+        frappe.throw(coded_message("FEEDBACK-DISABLED"), frappe.ValidationError)
     if not getattr(profile, "feedback_template", None):
-        frappe.throw(_("[URY-FEEDBACK-TEMPLATE]"), frappe.ValidationError)
+        frappe.throw(coded_message("FEEDBACK-TEMPLATE"), frappe.ValidationError)
     if not frappe.get_meta("Quality Feedback").has_field(FEEDBACK_BILL_FIELD):
-        frappe.throw(_("[URY-FEEDBACK-BILL-LINK-MISSING]"), frappe.ValidationError)
+        frappe.throw(coded_message("FEEDBACK-BILL-LINK-MISSING"), frappe.ValidationError)
     return profile, invoice_name
 
 
@@ -1572,7 +1648,7 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         try:
             invoice_doc = frappe.get_doc("POS Invoice", invoice_name, for_update=True)
             if not _feedback_bill_check(profile, invoice_doc):
-                frappe.throw(_("[URY-FEEDBACK-NOT-ELIGIBLE]"), frappe.ValidationError)
+                frappe.throw(coded_message("FEEDBACK-NOT-ELIGIBLE"), frappe.ValidationError)
 
             # Current locking reads serialize the exact bill. MariaDB can
             # refuse a stale transaction snapshot rather than expose the winner.
@@ -1582,7 +1658,10 @@ def submit_feedback(session=None, receipt_token=None, ratings=None, invoice=None
         except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
             # Let the native request boundary roll back; never reset its
             # isolation, commit unrelated writes, or guess that feedback exists.
-            frappe.throw(_("[URY-FEEDBACK-RETRY] Another request is finishing. Please try again."), frappe.ValidationError)
+            frappe.throw(
+                coded_message("FEEDBACK-RETRY", _("Another request is finishing. Please try again.")),
+                frappe.ValidationError,
+            )
         if existing:
             return {"status": "Already Received"}
 

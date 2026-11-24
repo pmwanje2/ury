@@ -4,6 +4,7 @@ from frappe import _
 from datetime import date, datetime, timedelta
 from frappe.utils import cint, nestedset, validate_phone_number
 
+from ury.brand import coded_message
 from ury.ury_pos.default_customer import get_default_customer_config
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
@@ -164,7 +165,7 @@ def _user_branch_assignments():
         if permission.get("is_default") and permission.get("doc") in branches
     }
     if len(defaults) != 1:
-        frappe.throw(_("URY-BRANCH-AMBIGUOUS: Set a default Branch User Permission for an assigned branch."))
+        frappe.throw(coded_message("BRANCH-AMBIGUOUS", _("Set a default Branch User Permission for an assigned branch.")))
     branch = defaults.pop()
     return [row for row in rows if row.get("branch") == branch]
 
@@ -877,10 +878,25 @@ def getPosProfile():
         else:
             print_type = "socket"
 
+    payment_mode_accounts = {
+        payment.mode_of_payment: frappe.db.get_value(
+            "Mode of Payment Account",
+            {"parent": payment.mode_of_payment, "company": company},
+            "default_account",
+        )
+        for payment in (pos_profiles.get("payments") or [])
+    }
+
+    room_lookup_method = (pos_profiles.get("custom_room_lookup_method") or "").strip()
+    room_charge_modes, room_charge_unconfigured = _room_charge_config(
+        payment_mode_accounts, company, room_lookup_method
+    )
+
     invoice_details = {
         "pos_profile": pos_profile_name,
         "branch": branch,
         "company": company,
+        "currency": pos_profiles.get("currency") or frappe.db.get_value("Company", company, "default_currency"),
         "country": getattr(pos_profiles, "country", None) or frappe.db.get_value("Company", company, "country"),
         "waiter": waiter,
         "warehouse": warehouse,
@@ -904,20 +920,48 @@ def getPosProfile():
         "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
-        "payment_mode_accounts": {
-            payment.mode_of_payment: frappe.db.get_value(
-                "Mode of Payment Account",
-                {"parent": payment.mode_of_payment, "company": company},
-                "default_account",
-            )
-            for payment in (pos_profiles.get("payments") or [])
-        },
+        "payment_mode_accounts": payment_mode_accounts,
+        # the till's tenders come from configuration, never literals
+        "default_payment_mode": next(
+            (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),
+            None,
+        ),
+        "room_charge_modes": room_charge_modes,
+        "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
-        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
+        "room_lookup_method": room_lookup_method,
         **get_default_customer_config(pos_profiles),
     }
 
     return invoice_details
+
+
+def _room_charge_config(payment_mode_accounts, company, room_lookup_method=""):
+    """Room-charge tenders and setup status from Company.custom_guest_ledger_clearing.
+
+    The hotel bridge posts exactly the payment methods whose company account equals
+    Company.custom_guest_ledger_clearing. When a site carries that field or configures a
+    room lookup method without mapping the clearing account on this Company, report
+    room_charge_unconfigured=True so the till informs staff instead of silently hiding
+    the room prompt.
+    """
+    has_clearing_field = frappe.get_meta("Company").has_field("custom_guest_ledger_clearing")
+    clearing = (
+        frappe.db.get_value("Company", company, "custom_guest_ledger_clearing")
+        if has_clearing_field
+        else None
+    )
+    if clearing:
+        return [mode for mode, account in payment_mode_accounts.items() if account == clearing], False
+    return [], bool(has_clearing_field or room_lookup_method)
+
+
+def _room_charge_modes(payment_mode_accounts, company):
+    """The payment methods whose company account is the Company's Guest Ledger Clearing
+    account. The hotel bridge posts exactly those to a guest folio, so the till asks for the
+    room on them; a site without the hotel bridge has none."""
+    modes, _ = _room_charge_config(payment_mode_accounts, company)
+    return modes
 
 
 @frappe.whitelist()
@@ -1013,7 +1057,92 @@ def getPosInvoiceItems(invoice):
                 "rate": rate,
             }
         )
-    return itemDetails, taxDetails
+    paymentDetails = []
+    room_number = orderdItems.get("room_number")
+    room_modes = None
+    received_rows = []
+    matched_pr_names = set()
+    matched_phone_modes = {}
+    for payment in orderdItems.get("payments") or []:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
+            continue
+        received_rows.append(payment)
+        ref = (payment.get("reference_no") or "").strip()
+        if ref:
+            matched_pr_names.add(ref)
+        mode = payment.get("mode_of_payment")
+        if payment.get("type") == "Phone" and mode:
+            matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
+
+    pr_filters = {
+        "reference_doctype": "POS Invoice",
+        "reference_name": orderdItems.name,
+        "docstatus": 1,
+        "payment_channel": "Phone",
+        "payment_request_type": "Inward",
+        "status": ["in", ["Paid", "Partially Paid"]],
+    }
+    if orderdItems.get("company"):
+        pr_filters["company"] = orderdItems.get("company")
+    paid_requests = frappe.get_all(
+        "Payment Request",
+        filters=pr_filters,
+        fields=["name", "mode_of_payment", "payment_account", "grand_total", "outstanding_amount", "status"],
+        order_by="creation asc",
+    )
+    if isinstance(paid_requests, (list, tuple)):
+        for pr in paid_requests:
+            pr_name = pr.get("name")
+            if pr_name in matched_pr_names:
+                continue
+            paid_amt = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
+            mode = pr.get("mode_of_payment")
+            if not mode or paid_amt <= 0:
+                continue
+            if matched_phone_modes.get(mode, 0.0) >= paid_amt:
+                matched_phone_modes[mode] -= paid_amt
+                continue
+            received_rows.append(
+                {
+                    "mode_of_payment": mode,
+                    "amount": paid_amt,
+                    "reference_no": pr_name,
+                    "type": "Phone",
+                    "custom_tender_received": 1,
+                }
+            )
+
+    for payment in received_rows:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0:
+            continue
+        entry = {
+            "mode_of_payment": payment.get("mode_of_payment"),
+            "amount": amt,
+        }
+        if payment.get("reference_no"):
+            entry["reference_no"] = payment.get("reference_no")
+        if payment.get("reference_date"):
+            entry["reference_date"] = str(payment.get("reference_date"))
+        if payment.get("clearance_date"):
+            entry["clearance_date"] = str(payment.get("clearance_date"))
+        if room_number:
+            if room_modes is None:
+                payment_mode_accounts = {
+                    row.get("mode_of_payment"): frappe.db.get_value(
+                        "Mode of Payment Account",
+                        {"parent": row.get("mode_of_payment"), "company": orderdItems.company},
+                        "default_account",
+                    )
+                    for row in received_rows
+                    if row.get("mode_of_payment")
+                }
+                room_modes = set(_room_charge_modes(payment_mode_accounts, orderdItems.company))
+            if payment.get("mode_of_payment") in room_modes:
+                entry["room_number"] = room_number
+        paymentDetails.append(entry)
+    return itemDetails, taxDetails, paymentDetails
 
 
 @frappe.whitelist()
@@ -1245,7 +1374,7 @@ def get_till_invoices(start, end, pos_profile, user):
     if frappe.session.user != user and not (
         {"URY Manager", "System Manager"} & set(frappe.get_roles(frappe.session.user))
     ):
-        frappe.throw(_("[URY-TILL-NOT-HOLDER] Not permitted"), frappe.PermissionError)
+        frappe.throw(coded_message("TILL-NOT-HOLDER", _("Not permitted")), frappe.PermissionError)
 
     openings = frappe.get_list(
         "POS Opening Entry",
@@ -1255,7 +1384,7 @@ def get_till_invoices(start, end, pos_profile, user):
         limit_page_length=1,
     )
     if not openings:
-        frappe.throw(_("[URY-TILL-NO-OPEN-SESSION] Not permitted"), frappe.PermissionError)
+        frappe.throw(coded_message("TILL-NO-OPEN-SESSION", _("Not permitted")), frappe.PermissionError)
 
     def reader(doctype, **query):
         # Full documents are read below; keep the endpoint's narrow query.
@@ -1549,7 +1678,7 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     if pos_profile:
         if pos_profile not in {profile["name"] for profile in allowed_profiles}:
             frappe.throw(
-                _("[URY-OPENING-PROFILE-NOT-ALLOWED] Not permitted to use this POS Profile."),
+                coded_message("OPENING-PROFILE-NOT-ALLOWED", _("Not permitted to use this POS Profile.")),
                 frappe.PermissionError,
             )
         pos_profile_name = pos_profile
@@ -2353,108 +2482,76 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
     }
 
 
+def _merge_sources(secondary_invoice):
+    """One check name, or a JSON list of check names, in the order given."""
+    if isinstance(secondary_invoice, str) and secondary_invoice.strip().startswith("["):
+        secondary_invoice = json.loads(secondary_invoice)
+    names = [secondary_invoice] if isinstance(secondary_invoice, str) else list(secondary_invoice or [])
+    return list(dict.fromkeys(name for name in names if name))
+
+
 @frappe.whitelist()
 
 def merge_bills(primary_invoice, secondary_invoice):
+    """Add Check (Oracle Simphony Add/Transfer Check): move every line of the selected open
+    check(s) onto the primary check, which stays the guest's one POS Invoice.
+
+    `secondary_invoice` is one check name or a JSON list of names. The checks must be drafts of
+    one branch and one order type that the caller may write.
+    """
 
     try:
 
-        if primary_invoice == secondary_invoice:
+        secondaries = _merge_sources(secondary_invoice)
+
+        if not secondaries or primary_invoice in secondaries:
             frappe.throw("Cannot merge an invoice with itself.")
 
         primary_doc = frappe.get_doc("POS Invoice", primary_invoice)
-        secondary_doc = frappe.get_doc("POS Invoice", secondary_invoice)
+        secondary_docs = [frappe.get_doc("POS Invoice", name) for name in secondaries]
 
-        # Authorization: caller must have write permission on both invoices
+        # Authorization: caller must have write permission on every invoice
         if not frappe.has_permission("POS Invoice", "write", doc=primary_doc):
             frappe.throw(
                 "You do not have permission to merge this bill.",
                 frappe.PermissionError,
             )
 
-        if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
-            frappe.throw(
-                "You do not have permission to merge the selected bill.",
-                frappe.PermissionError,
-            )
+        for secondary_doc in secondary_docs:
 
-          # Prevent cross-branch merging
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw(
-                "Cannot merge bills from different branches.",
-                frappe.PermissionError,
-            )
-
-        # Validation
-        if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
-            frappe.throw("Both invoices must be in Draft state to merge.")
-
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw("Cannot merge bills from different branches.")
-
-        if primary_doc.custom_merged_pos_invoice:
-            frappe.throw("This bill already includes a merged bill.")
-
-        if secondary_doc.custom_merged_pos_invoice:
-            frappe.throw("The selected bill already includes another bill.")
-
-        if not secondary_doc.items:
-            frappe.throw("The selected bill has no items to merge.")
-
-
-        def update_merge_details(target_invoice,source_invoice,):
-
-            doc = frappe.get_doc("POS Invoice",target_invoice,)
-
-            # clear old rows
-            doc.set("custom_merged_pos_invoice_details",[],)
-
-            # only linked invoice items
-            for item in source_invoice.items:
-
-                doc.append(
-                    "custom_merged_pos_invoice_details",
-                    {
-                        "item_code": item.item_code,
-                        "item_name": item.item_name,
-                        "qty": item.qty,
-                        "rate": item.rate,
-                        "amount": item.amount,
-                    },
+            if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
+                frappe.throw(
+                    "You do not have permission to merge the selected bill.",
+                    frappe.PermissionError,
                 )
 
-            doc.custom_merged_total = source_invoice.rounded_total
+            # Prevent cross-branch merging
+            if primary_doc.branch != secondary_doc.branch:
+                frappe.throw(
+                    "Cannot merge bills from different branches.",
+                    frappe.PermissionError,
+                )
 
-            doc.flags.ignore_version = True
+            # Validation
+            if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
+                frappe.throw("Both invoices must be in Draft state to merge.")
 
-            doc.save(
-                ignore_version=True,
-            )
+            # Bills linked before Add Check consolidated lines settle as their pair.
+            if primary_doc.custom_merged_pos_invoice:
+                frappe.throw("This bill already includes a merged bill.")
 
+            if secondary_doc.custom_merged_pos_invoice:
+                frappe.throw("The selected bill already includes another bill.")
 
-        # Update merge references directly
-        frappe.db.set_value(
-            "POS Invoice",
-            primary_doc.name,
-            "custom_merged_pos_invoice",
-            secondary_doc.name,
-            update_modified=False,
-        )
+            if not secondary_doc.items:
+                frappe.throw("The selected bill has no items to merge.")
 
-        frappe.db.set_value(
-            "POS Invoice",
-            secondary_doc.name,
-            "custom_merged_pos_invoice",
-            primary_doc.name,
-            update_modified=False,
-        )
+            if primary_doc.order_type != secondary_doc.order_type:
+                frappe.throw(_("Only bills of the same order type can be merged."))
 
+        from ury.ury.doctype.ury_order.ury_order import consolidate_checks
 
-        # Build detail table
-        update_merge_details(primary_doc.name,secondary_doc,)
-
-        update_merge_details(secondary_doc.name,primary_doc,)
-
+        consolidate_checks(primary_doc, secondary_docs)
 
         frappe.db.commit()
 

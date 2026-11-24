@@ -15,6 +15,7 @@ def validate(doc, method):
     validate_invoice(doc, method)
     validate_customer(doc, method)
     validate_price_list(doc, method)
+    validate_server_only_tender_received(doc, method)
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)
@@ -23,6 +24,7 @@ def validate(doc, method):
 def before_submit(doc, method):
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
+    validate_confirmed_phone_payments(doc, method)
     ro_reload_submit(doc, method)
     set_commission_attribution(doc, method)
     apply_disposable_items(doc, method)
@@ -328,6 +330,12 @@ def apply_staff_discount_policy(doc, method=None):
     doc.staff_discount_policy = policy.get("name")
 
 
+def _line_identity(item):
+    # The stable line key sync_order carries across saves, else the row itself; never the
+    # item code, since two lines of one item are two lines.
+    return item.get("reservation_line_key") or item.name
+
+
 def validate_invoice(doc, method):
     if doc.waiter == None or doc.waiter == "":
         doc.waiter = doc.modified_by
@@ -335,41 +343,45 @@ def validate_invoice(doc, method):
         return
     if getattr(frappe.flags, "ury_qty_reduction", False):
         return
+    # A new document has no printed copy to compare against, and a return refunds a paid
+    # check; neither is an edit of a printed bill.
+    if doc.is_new() or doc.get("is_return"):
+        return
     remove_items = frappe.db.get_value("POS Profile", doc.pos_profile, "remove_items")
-    
+
     if doc.invoice_printed == 1 and remove_items == 0:
         # Get the original items from db
         original_doc = frappe.get_doc("POS Invoice", doc.name)
-        
-        # Create dictionaries to store both quantities and names
+
+        # Create dictionaries to store both quantities and names, one entry per line
         original_items = {
-            item.item_code: {"qty": item.qty, "name": item.item_name} 
+            _line_identity(item): {"qty": item.qty, "name": item.item_name}
             for item in original_doc.items
         }
         current_items = {
-            item.item_code: {"qty": item.qty, "name": item.item_name} 
+            _line_identity(item): {"qty": item.qty, "name": item.item_name}
             for item in doc.items
         }
-          
+
         # Check for removed items
         removed_items = set(original_items.keys()) - set(current_items.keys())
-        
+
         # Check for quantity reductions
         reduced_qty_items = []
-        for item_code, item_data in original_items.items():
-            if (item_code in current_items and 
-                current_items[item_code]["qty"] < item_data["qty"]):
+        for line, item_data in original_items.items():
+            if (line in current_items and
+                current_items[line]["qty"] < item_data["qty"]):
                 reduced_qty_items.append(
                     f"{item_data['name']} (qty reduced from {item_data['qty']} "
-                    f"to {current_items[item_code]['qty']})"
+                    f"to {current_items[line]['qty']})"
                 )
-        
+
         if removed_items or reduced_qty_items:
             error_msg = []
             if removed_items:
                 removed_item_names = [
-                    original_items[item_code]["name"] 
-                    for item_code in removed_items
+                    original_items[line]["name"]
+                    for line in removed_items
                 ]
                 error_msg.append(f"Removed items: {', '.join(removed_item_names)}")
             if reduced_qty_items:
@@ -384,6 +396,131 @@ def validate_invoice(doc, method):
 def validate_customer(doc, method):
     if not doc.customer and not doc.customer_name:
         frappe.throw(_("Customer is required."))
+
+
+def _is_phone_payment_row(row):
+    if row.get("type") == "Phone":
+        return True
+    mode = row.get("mode_of_payment")
+    if not mode:
+        return False
+    return frappe.db.get_value("Mode of Payment", mode, "type") == "Phone"
+
+
+def validate_server_only_tender_received(doc, method=None):
+    """custom_tender_received on payment rows may only be set by confirmed server flows."""
+    if getattr(frappe.flags, "ury_server_tender_received", False):
+        return
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if getattr(getattr(frappe, "session", None), "user", None) == "Administrator":
+        return
+
+    flagged = [
+        row for row in (doc.get("payments") or []) if int(row.get("custom_tender_received") or 0) == 1
+    ]
+    if not flagged:
+        return
+
+    if doc.is_new():
+        frappe.throw(
+            frappe._("Only confirmed server payment flows can mark a tender as received."),
+            frappe.ValidationError,
+        )
+
+    existing_rows = frappe.get_all(
+        "Sales Invoice Payment",
+        filters={
+            "parent": doc.name,
+            "parenttype": "POS Invoice",
+            "custom_tender_received": 1,
+        },
+        fields=["name", "mode_of_payment", "amount", "reference_no"],
+    )
+    if not isinstance(existing_rows, (list, tuple)):
+        existing_rows = []
+    by_name = {r.get("name"): r for r in existing_rows if r.get("name")}
+
+    precision = doc.precision("paid_amount") if callable(getattr(doc, "precision", None)) else 2
+    if not isinstance(precision, int) or isinstance(precision, bool):
+        precision = 2
+
+    for row in flagged:
+        stored = by_name.get(row.get("name"))
+        if not stored:
+            frappe.throw(
+                frappe._("Only confirmed server payment flows can mark a tender as received."),
+                frappe.ValidationError,
+            )
+        if (
+            stored.get("mode_of_payment") != row.get("mode_of_payment")
+            or round(flt(stored.get("amount")), precision) != round(flt(row.get("amount")), precision)
+            or (stored.get("reference_no") or "").strip() != (row.get("reference_no") or "").strip()
+        ):
+            frappe.throw(
+                frappe._("Only confirmed server payment flows can mark a tender as received."),
+                frappe.ValidationError,
+            )
+
+
+def validate_confirmed_phone_payments(doc, method=None):
+    """Refuse submitting any Phone payment row without a confirmed Paid Payment Request.
+
+    ERPNext POSInvoice.check_phone_payments() skips validation when no Paid Payment Request
+    exists (paid_amt is None), which lets an unconfirmed mobile-money check close as paid.
+    """
+    if doc.get("is_return"):
+        return
+
+    phone_totals = {}
+    for row in doc.get("payments") or []:
+        amt = flt(row.get("amount"))
+        if amt <= 0:
+            continue
+        if not _is_phone_payment_row(row):
+            continue
+        mode = row.get("mode_of_payment")
+        phone_totals[mode] = phone_totals.get(mode, 0.0) + amt
+
+    if not phone_totals:
+        return
+
+    precision = doc.precision("paid_amount") if callable(getattr(doc, "precision", None)) else 2
+    if not isinstance(precision, int) or isinstance(precision, bool):
+        precision = 2
+
+    for mode, requested_total in phone_totals.items():
+        paid_requests = frappe.get_all(
+            "Payment Request",
+            filters={
+                "reference_doctype": "POS Invoice",
+                "reference_name": doc.name,
+                "mode_of_payment": mode,
+                "docstatus": 1,
+                "status": ["in", ["Paid", "Partially Paid"]],
+            },
+            fields=["name", "grand_total", "outstanding_amount"],
+        )
+        if not isinstance(paid_requests, (list, tuple)):
+            paid_requests = []
+        paid_total = sum(
+            max(0.0, flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")))
+            for pr in paid_requests
+        )
+        if round(flt(paid_total), precision) <= 0:
+            frappe.throw(
+                frappe._(
+                    "Payment for {0} has not been confirmed yet. Confirm the payment or choose another payment method."
+                ).format(mode),
+                frappe.ValidationError,
+            )
+        if round(flt(requested_total), precision) != round(flt(paid_total), precision):
+            frappe.throw(
+                frappe._("Confirmed payment for {0} is {1}, not {2}.").format(
+                    mode, round(flt(paid_total), precision), round(flt(requested_total), precision)
+                ),
+                frappe.ValidationError,
+            )
 
 
 def calculate_and_set_times(doc, method=None):
@@ -478,43 +615,47 @@ def ro_reload_submit(doc, method):
 
 
 def validate_price_list(doc, method):
-        
-    if doc.restaurant:
-        
-        if doc.restaurant_table:
+    """Keep the price list of the menu this check was rung on.
+
+    Resolution mirrors how sync_order prices a line, so validate never re-prices a check from
+    another menu: an aggregator check uses its Aggregator Settings price list; a table check
+    uses its room's menu when the restaurant prices by room; a counter check uses its order
+    type's menu when the restaurant prices by order type; otherwise the active menu. The
+    menu's enabled Price List is the check's price list.
+    """
+    if not doc.restaurant:
+        return
+
+    if doc.order_type == "Aggregators":
+        price_list = frappe.db.get_value("Aggregator Settings",
+            {"customer": doc.customer, "parent": doc.branch, "parenttype": "Branch"},
+            "price_list",
+            )
+
+        if not price_list:
+            frappe.throw(f"Price list for customer {doc.customer} in branch {doc.branch} not found in Aggregator Settings.")
+
+        doc.selling_price_list = price_list
+        return
+
+    menu_name = None
+    if doc.restaurant_table:
+        if frappe.db.get_value("URY Restaurant", doc.restaurant, "room_wise_menu"):
             room = frappe.db.get_value("URY Table", doc.restaurant_table, "restaurant_room")
-            menu_name = (
-                frappe.db.get_value("URY Restaurant", doc.restaurant, "active_menu")
-                if not frappe.db.get_value(
-                    "URY Restaurant", doc.restaurant, "room_wise_menu"
-                )
-                else frappe.db.get_value(
-                    "Menu for Room", {"parent": doc.restaurant, "room": room}, "menu"
-                )
+            menu_name = frappe.db.get_value(
+                "Menu for Room", {"parent": doc.restaurant, "room": room}, "menu"
             )
+    elif frappe.db.get_value("URY Restaurant", doc.restaurant, "order_type_wise_menu"):
+        menu_name = frappe.db.get_value(
+            "Order Type Menu", {"parent": doc.restaurant, "order_type": doc.order_type}, "menu"
+        )
 
-            doc.selling_price_list = frappe.db.get_value(
-                "Price List", dict(restaurant_menu=menu_name, enabled=1)
-            )
-        
-        if doc.order_type == "Aggregators":
-            price_list = frappe.db.get_value("Aggregator Settings",
-                {"customer": doc.customer, "parent": doc.branch, "parenttype": "Branch"},
-                "price_list",
-                )
-            
-            if not price_list:
-                frappe.throw(f"Price list for customer {doc.customer} in branch {doc.branch} not found in Aggregator Settings.")
-                
-            doc.selling_price_list = price_list
-            
-        else:
-            menu_name = frappe.db.get_value("URY Restaurant", doc.restaurant, "active_menu") 
+    menu_name = menu_name or frappe.db.get_value("URY Restaurant", doc.restaurant, "active_menu")
 
-            doc.selling_price_list = frappe.db.get_value(
-                "Price List", dict(restaurant_menu=menu_name, enabled=1)
-            )
-            
+    doc.selling_price_list = frappe.db.get_value(
+        "Price List", dict(restaurant_menu=menu_name, enabled=1)
+    )
+
 
 def restrict_existing_order(doc, event):
     if not doc.restaurant_table:
@@ -608,32 +749,22 @@ def sync_merged_invoice(doc):
 
         target = frappe.get_doc("POS Invoice", linked_invoice)
 
+        # A partner that already posted has nothing left to mirror.
+        if target.docstatus != 0:
+            return
+
         # sync invoice printed
         target.invoice_printed = doc.invoice_printed
 
-        # sync payment
-        if doc.paid_amount > 0 and not getattr(doc.flags, "ignore_payment_sync", False):
-
-            target.set("payments", [])
-
-            for p in doc.payments:
-                target.append("payments", {
-                    "mode_of_payment": p.mode_of_payment,
-                    "amount": target.rounded_total,
-                    "base_amount": target.rounded_total,
-                    "account": getattr(p, "account", None)
-                })
-
-            target.paid_amount = target.rounded_total
+        # The partner keeps the tenders make_invoice allocated and saved on it; the
+        # primary's tender rows are the primary's, never copied onto the partner.
 
         # sync submit/payment status
-        if doc.docstatus == 1 and target.docstatus == 0:
+        if doc.docstatus == 1:
 
             target.flags.ignore_validate_update_after_submit = True
-
-            if target.docstatus == 0:
-                target.save(ignore_permissions=True)
-                target.submit()
+            target.save(ignore_permissions=True)
+            target.submit()
 
         else:
             target.save(ignore_permissions=True)
@@ -649,15 +780,19 @@ def sync_merged_invoice(doc):
         )
 
     except Exception:
+        # One guest bill posts both halves or neither: a partner that cannot post stops
+        # the primary posting.
+        if doc.docstatus == 1:
+            raise
         frappe.log_error(
             frappe.get_traceback(),
             "Merged Invoice Sync Failed"
         )
-        # Don't re-raise: this is an on_update/on_submit hook, and other
+        # Don't re-raise a draft save: this is an on_update hook, and other
         # linked-record sync hooks in this module (e.g.
         # release_merged_tables) deliberately swallow failures so a
         # secondary sync problem can't block the primary POS Invoice's own
-        # save/submit. Still make sure operators are notified, since the
+        # draft save. Still make sure operators are notified, since the
         # success publish_realtime above never fires on this path.
         #
         # linked_invoice is assigned before this try block starts, so it is
