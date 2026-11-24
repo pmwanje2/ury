@@ -399,7 +399,7 @@ def add_open_item(
         amount=line_total,
         reason=reason,
         reason_note=reason_note,
-        require_reason=bool(over_halo or below_min or below_cost),
+        require_reason=None,
         fallback_roles=DEFAULT_MANAGER_ROLES | ({"URY Cashier", "URY Captain"} if priv_group == 0 and not (over_halo or below_min or below_cost) else set()),
         force_pin=bool(over_halo or below_min or below_cost),
         required_privilege_group=priv_group,
