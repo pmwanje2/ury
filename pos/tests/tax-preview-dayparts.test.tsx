@@ -512,4 +512,101 @@ describe('POS-PR-7: Header status strip, MenuCard daypart/promo, OrderPanel & Pa
     expect(badge.className).toMatch(/\bbottom-/);
     expect(badge.className).not.toMatch(/\btop-1\b/);
   });
+
+  it('OrderPanel renders a single authoritative Service Charge row from server preview without duplicating the client estimate', async () => {
+    mockPosState.value = {
+      ...mockPosState.value,
+      posProfile: {
+        ...(mockPosState.value.posProfile as Record<string, unknown>),
+        custom_service_charge_rules: [
+          {
+            order_type: 'Dine In',
+            enabled: 1,
+            charge_mode: 'Percentage',
+            rate: 10,
+            fixed_amount: 0,
+            min_amount_floor: 0,
+            min_pax: 4,
+            calculation_basis: 'Post-Discount Subtotal',
+            taxable: 1,
+            account_head: 'Service Charge Payable - KHH',
+            description: 'Service Charge',
+          },
+        ],
+      },
+      selectedOrderType: 'Dine In',
+      selectedTable: 'T-03',
+      noOfPax: 4,
+      activeOrders: [
+        {
+          id: 'KH-BURGER-18',
+          item: 'KH-BURGER-18',
+          name: 'Classic Beef Burger',
+          price: 20000,
+          promo_rate: 16000,
+          promo_label: 'PRLE-0001 Happy Hour 20%',
+          quantity: 1,
+          uniqueId: 'KH-BURGER-18-default',
+        },
+      ],
+    };
+    mockCallPost.mockResolvedValueOnce({
+      message: {
+        net_total: 16000,
+        discount_amount: 0,
+        tax_rows: [
+          {
+            description: 'VAT 18%',
+            rate: 18,
+            tax_amount: 2880,
+            account_head: 'VAT 18% Output - KHH',
+            custom_pos_charge_kind: '',
+          },
+          {
+            description: 'Service Charge',
+            rate: 10,
+            tax_amount: 1600,
+            account_head: 'Service Charge Payable - KHH',
+            custom_pos_charge_kind: 'Service Charge',
+          },
+          {
+            description: 'VAT 18% on Service Charge',
+            rate: 18,
+            tax_amount: 288,
+            account_head: 'VAT 18% Output - KHH',
+            custom_pos_charge_kind: 'Service Charge Tax',
+          },
+        ],
+        total_taxes_and_charges: 4768,
+        grand_total: 20768,
+        rounded_total: 20768,
+        item_taxes: [{ item_code: 'KH-BURGER-18', rate: 16000, net_amount: 16000 }],
+        efris_warnings: [],
+      },
+    });
+
+    render(<OrderPanel />);
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 20768');
+      },
+      { timeout: 1000 },
+    );
+
+    const footer = screen.getByTestId('order-tax-preview-footer');
+    // Server authoritative lines sum strictly to 20,768 (16,000 + 2,880 + 1,600 + 288)
+    expect(footer).toHaveTextContent('UGX 16000');
+    expect(footer).toHaveTextContent('UGX 2880');
+    expect(footer).toHaveTextContent('UGX 1600');
+    expect(footer).toHaveTextContent('UGX 288');
+    // Pre-discount client estimate (10% of 20,000 = UGX 2,000) MUST NOT appear anywhere in desktop or mobile summary
+    expect(footer).not.toHaveTextContent('UGX 2000');
+    expect(footer).not.toHaveTextContent(/4\+\s*guests/i);
+
+    // Expanding mobile summary bar must also show single authoritative SC (UGX 1600), never duplicate UGX 2000
+    await userEvent.click(screen.getByTestId('mobile-summary-toggle'));
+    expect(footer).not.toHaveTextContent('UGX 2000');
+    expect(footer).toHaveTextContent('UGX 1600');
+  });
 });

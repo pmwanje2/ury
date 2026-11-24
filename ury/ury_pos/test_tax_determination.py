@@ -2337,6 +2337,273 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
         self.assertEqual(sc_tax_row["description"], "VAT on Service Charge")
         self.assertFalse(sc_tax_row["item_rate_override"])
 
+    def test_preview_order_totals_preserves_152_overrides_open_items_and_item_complimentary_without_double_discount(self):
+        """R4 BLOCKING-1 RED: preview_order_totals(invoice_name=...) must preserve #152 privileged
+        row flags (override, open item, item complimentary, ignore_pricing_rule) and shield them
+        from set_missing_values(for_validate=True) re-applying PRLE pricing rules, while keeping
+        normal PRLE sibling rows discounted and emitting custom_pos_charge_kind on tax_rows.
+        """
+        frappe_mock, utils = _make_frappe_env()
+        frappe_mock.session = SimpleNamespace(user="cashier_a@example.com")
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        frappe_mock.has_permission = MagicMock(return_value=True)
+        frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+            "Rest A"
+            if dt == "URY Restaurant"
+            else ("Main Branch A" if dt == "POS Profile" and field == "branch" else None)
+        )
+        frappe_mock.get_all.return_value = []
+
+        class _PrlePreviewInvoice(FakeInvoice):
+            """Simulates real ERPNext v16 POSInvoice.set_missing_values(for_validate=True),
+            where POS Invoice Item has no ignore_pricing_rule column and apply_pricing_rule()
+            applies PRLE-0008 (-20%) to EVERY row unless shielded."""
+
+            def precision(self, _f=None):
+                return 0
+
+            def set_missing_values(self, for_validate=False):
+                super().set_missing_values(for_validate=for_validate)
+                if _cint(self.get("ignore_pricing_rule")) == 1:
+                    return
+                self["pricing_rules"] = []
+                for idx, r in enumerate(self.get("items") or [], start=1):
+                    r.setdefault("name", f"PREVIEW-ROW-{idx}")
+                    plr = float(r.get("price_list_rate") or 0)
+                    r["discount_percentage"] = 20.0
+                    r["discount_amount"] = round(plr * 0.20, 0)
+                    r["rate"] = round(plr * 0.80, 0)
+                    r["pricing_rules"] = '["PRLE-0008"]'
+                    self["pricing_rules"].append(
+                        Row(pricing_rule="PRLE-0008", item_code=r["item_code"], child_docname=r["name"])
+                    )
+
+            def calculate_taxes_and_totals(self):
+                prec = self.precision("grand_total")
+                net = 0.0
+                for r in self.get("items") or []:
+                    plr = float(r.get("price_list_rate") or 0)
+                    disc_pct = float(r.get("discount_percentage") or 0)
+                    if disc_pct > 0:
+                        eff_rate = round(plr * (1.0 - disc_pct / 100.0), prec)
+                    else:
+                        eff_rate = round(float(r.get("rate") or 0), prec)
+                    r["rate"] = eff_rate
+                    r["amount"] = round(eff_rate * float(r.get("qty") or 0), prec)
+                    r["net_amount"] = r["amount"]
+                    net += r["net_amount"]
+                self["total"] = round(net, prec)
+                self["net_total"] = round(net, prec)
+                tax_total = 0.0
+                for t in self.get("taxes") or []:
+                    t["tax_amount"] = round(net * float(t.get("rate") or 0) / 100.0, prec)
+                    tax_total += t["tax_amount"]
+                self["total_taxes_and_charges"] = round(tax_total, prec)
+                self["grand_total"] = round(net + tax_total, prec)
+                self["rounded_total"] = self["grand_total"]
+                self["rounding_adjustment"] = 0.0
+
+        profile = Row(
+            name="POS Profile A",
+            company="Kampala House Hospitality",
+            currency="UGX",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            selling_price_list="Kampala Menu",
+            cost_center="Main - KHH",
+            warehouse="Stores - KHH",
+            applicable_for_users=[Row(user="cashier_a@example.com")],
+            customer_groups=[],
+        )
+
+        # Case 1: Overridden (12,500) + PRLE sibling (20,000 -> 16,000) + Open Item (14,000) = 42,500 net / 50,150 gross
+        orig_override_inv = Row(
+            name="KHH-00062",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk-in Guest - KHH",
+            no_of_pax=1,
+            custom_serving_period="Happy Hour",
+            custom_transaction_local_time="23:01:33",
+            custom_transaction_weekday="Tue",
+            selling_price_list="Kampala Menu",
+            custom_is_complimentary=0,
+            items=[
+                Row(
+                    name="row-ov",
+                    item_code="KH-BURGER-18",
+                    item_name="Classic Beef Burger",
+                    qty=1.0,
+                    price_list_rate=12500.0,
+                    base_price_list_rate=12500.0,
+                    rate=12500.0,
+                    base_rate=12500.0,
+                    discount_percentage=0.0,
+                    discount_amount=0.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=1,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=0,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+                Row(
+                    name="row-prle",
+                    item_code="KH-BURGER-SPICY-18",
+                    item_name="Spicy Beef Burger",
+                    qty=1.0,
+                    price_list_rate=20000.0,
+                    base_price_list_rate=20000.0,
+                    rate=16000.0,
+                    base_rate=16000.0,
+                    discount_percentage=20.0,
+                    discount_amount=4000.0,
+                    pricing_rules='["PRLE-0008"]',
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=0,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+                Row(
+                    name="row-open",
+                    item_code="KH-OPEN-ITEM",
+                    item_name="Chef Special",
+                    qty=1.0,
+                    price_list_rate=14000.0,
+                    base_price_list_rate=14000.0,
+                    rate=14000.0,
+                    base_rate=14000.0,
+                    discount_percentage=0.0,
+                    discount_amount=0.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=1,
+                    custom_is_complimentary=0,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+            ],
+        )
+
+        # Case 2: Item-scope complimentary (KH-BURGER-18, discount_percentage=100, rate=0) -> net 0 / grand 0
+        orig_comp_inv = Row(
+            name="KHH-00068",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk-in Guest - KHH",
+            no_of_pax=1,
+            custom_serving_period="Happy Hour",
+            custom_transaction_local_time="23:01:33",
+            custom_transaction_weekday="Tue",
+            selling_price_list="Kampala Menu",
+            custom_is_complimentary=1,
+            items=[
+                Row(
+                    name="row-comp",
+                    item_code="KH-BURGER-18",
+                    item_name="Classic Beef Burger",
+                    qty=1.0,
+                    price_list_rate=20000.0,
+                    base_price_list_rate=20000.0,
+                    rate=0.0,
+                    base_rate=0.0,
+                    discount_percentage=100.0,
+                    discount_amount=20000.0,
+                    pricing_rules=None,
+                    ignore_pricing_rule=0,
+                    custom_price_overridden=0,
+                    custom_is_open_item=0,
+                    custom_is_complimentary=1,
+                    item_tax_template="UG VAT 18% - KHH - KHH",
+                    item_tax_rate='{"VAT 18% Output - KHH": 18.0}',
+                ),
+            ],
+        )
+
+        created_docs = []
+
+        def _new_doc(_dt):
+            d = _PrlePreviewInvoice(
+                taxes=[
+                    Row(
+                        charge_type="On Net Total",
+                        account_head="VAT 18% Output - KHH",
+                        description="VAT 18%",
+                        rate=18.0,
+                        tax_amount=0.0,
+                        custom_pos_charge_kind="",
+                    )
+                ]
+            )
+            created_docs.append(d)
+            return d
+
+        frappe_mock.new_doc = MagicMock(side_effect=_new_doc)
+        frappe_mock.get_doc = MagicMock(
+            side_effect=lambda dt, name=None: (
+                orig_override_inv
+                if dt == "POS Invoice" and name == "KHH-00062"
+                else (orig_comp_inv if dt == "POS Invoice" and name == "KHH-00068" else profile)
+            )
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury_pos.dayparts": _stub(
+                "ury.ury_pos.dayparts",
+                resolve_menu_and_price_list=MagicMock(return_value={"price_list": "Kampala Menu", "serving_period": "Happy Hour"}),
+                stamp_invoice_outlet_time=MagicMock(return_value={"local_dt": datetime(2026, 11, 24, 23, 1, 33), "local_time": "23:01:33"}),
+            ),
+            "ury.ury_pos.default_customer": _stub(
+                "ury.ury_pos.default_customer",
+                resolve_default_customer=MagicMock(return_value="Walk-in Guest - KHH"),
+                get_default_customer_config=MagicMock(return_value={}),
+            ),
+            "ury.ury_pos.tax_determination": _stub(
+                "ury.ury_pos.tax_determination",
+                apply_order_type_tax=MagicMock(),
+                validate_efris_readiness=MagicMock(return_value=[]),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                sync_service_charge=MagicMock(),
+            ),
+        }
+        with patch.dict(sys.modules, modules):
+            api_mod = _load_module("ury.ury_pos.api", URY_PKG / "ury_pos/api.py")
+            with (
+                patch.object(api_mod, "_authorize_pos_profile_access", MagicMock()),
+                patch.object(api_mod, "_authorize_customer_for_pos_profile", MagicMock(return_value=Row(name="Walk-in Guest - KHH"))),
+            ):
+                res_ov = api_mod.preview_order_totals(pos_profile="POS Profile A", invoice_name="KHH-00062")
+                res_comp = api_mod.preview_order_totals(pos_profile="POS Profile A", invoice_name="KHH-00068")
+
+        # Case 1: Overridden (12,500) + PRLE sibling (16,000) + Open Item (14,000) = 42,500 net / 50,150 gross
+        self.assertEqual(res_ov["net_total"], 42500.0)
+        self.assertEqual(res_ov["grand_total"], 50150.0)
+        self.assertEqual([r["rate"] for r in res_ov["item_taxes"]], [12500.0, 16000.0, 14000.0])
+        # Privileged flags preserved on cloned in-memory preview doc
+        ov_doc = created_docs[0]
+        self.assertEqual(ov_doc["items"][0].get("custom_price_overridden"), 1)
+        self.assertEqual(ov_doc["items"][0].get("ignore_pricing_rule"), 1)
+        self.assertEqual(ov_doc["items"][2].get("custom_is_open_item"), 1)
+        self.assertEqual(ov_doc["items"][2].get("ignore_pricing_rule"), 1)
+
+        # Case 2: Item-scope complimentary stays 0.0 / 0.0 (never repriced back to 16,000 / 18,880!)
+        self.assertEqual(res_comp["net_total"], 0.0)
+        self.assertEqual(res_comp["grand_total"], 0.0)
+        self.assertEqual(res_comp["item_taxes"][0]["rate"], 0.0)
+        comp_doc = created_docs[1]
+        self.assertEqual(comp_doc["items"][0].get("custom_is_complimentary"), 1)
+        self.assertEqual(comp_doc["items"][0].get("discount_percentage"), 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()

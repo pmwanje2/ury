@@ -1574,6 +1574,215 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
             self.assertEqual(row_norm_cot.rate, 17600.0)
             self.assertEqual(row_norm_cot.discount_percentage, 20.0)
 
+    def test_return_reopen_adjust_coexist_with_sales_time_pricing_and_preserve_same_second_microseconds(self):
+        """R4 BLOCKING-3 RED: #150 return/reopen/adjust flows must never set set_posting_time=1
+        (which trips SALES-TIME-005 for URY Manager), CustomPOSInvoice.validate() must restore
+        microsecond precision on is_return=1 with set_posting_time=0 before ERPNext's
+        validate_return_against compares against ref_doc.posting_time, and
+        enforce_authoritative_outlet_time must preserve ury_reopen_adjust_copy clones and
+        Administrator explicit rates/taxes while keeping unprivileged REST tampering blocked.
+        """
+        # Part A: void_return_reopen.py must NEVER assign set_posting_time = 1 on POS Invoice creation
+        vr_src = (URY_PKG / "ury_pos/void_return_reopen.py").read_text(encoding="utf-8")
+        self.assertEqual(
+            vr_src.count("set_posting_time = 1"),
+            0,
+            "void_return_reopen.py must not set set_posting_time = 1 (triggers SALES-TIME-005 for URY Manager)",
+        )
+
+        # Part B: CustomPOSInvoice.validate() refreshes microsecond posting_time for is_return=1, set_posting_time=0
+        # BEFORE super().validate() runs validate_return_against, without touching explicit set_posting_time=1.
+        frappe_mock, utils = _make_frappe()
+        now_with_us = datetime(2026, 11, 25, 1, 44, 32, 850000)
+        utils.now_datetime = lambda: now_with_us
+        seen_validate_ts = []
+
+        class _ReturnBasePOSInvoice:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+                self.flags = SimpleNamespace()
+
+            def get(self, key, default=None):
+                return self.__dict__.get(key, default)
+
+            def validate(self):
+                seen_validate_ts.append(
+                    (
+                        self.get("name"),
+                        str(self.get("posting_date")),
+                        str(self.get("posting_time")),
+                        int(self.get("set_posting_time") or 0),
+                    )
+                )
+
+        erpnext_pos_mod = _stub(
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice",
+            POSInvoice=_ReturnBasePOSInvoice,
+            get_stock_availability=MagicMock(),
+        )
+        modules_b = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.ury.hooks.ury_pos_tender": _stub(
+                "ury.ury.hooks.ury_pos_tender",
+                calculate_taxes_and_totals_excluding_tip=lambda doc, fn: fn(),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                calculate_taxes_and_totals_for_service_charge=lambda doc, fn: fn(),
+            ),
+            "erpnext": _stub("erpnext"),
+            "erpnext.accounts": _stub("erpnext.accounts"),
+            "erpnext.accounts.doctype": _stub("erpnext.accounts.doctype"),
+            "erpnext.accounts.doctype.pos_invoice": _stub("erpnext.accounts.doctype.pos_invoice"),
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice": erpnext_pos_mod,
+        }
+        with patch.dict(sys.modules, modules_b):
+            pos_inv_mod = _load("ury.ury.class_overrides.pos_invoice", URY_PKG / "ury/class_overrides/pos_invoice.py")
+            # Return doc after Sales Time Pricing truncated posting_time to whole second "01:44:32"
+            ret_doc = pos_inv_mod.CustomPOSInvoice(
+                name="RET-SAME-SEC",
+                is_return=1,
+                return_against="ORIG-1",
+                set_posting_time=0,
+                posting_date="2026-11-25",
+                posting_time="01:44:32",
+                items=[],
+            )
+            ret_doc.validate()
+
+            # Explicit set_posting_time=1 (e.g. Administrator/Accounts Manager override) stays untouched
+            explicit_ret = pos_inv_mod.CustomPOSInvoice(
+                name="RET-EXPLICIT",
+                is_return=1,
+                return_against="ORIG-1",
+                set_posting_time=1,
+                posting_date="2026-11-24",
+                posting_time="10:00:00",
+                items=[],
+            )
+            explicit_ret.validate()
+
+        self.assertEqual(seen_validate_ts[0], ("RET-SAME-SEC", "2026-11-25", "01:44:32.850000", 0))
+        self.assertEqual(seen_validate_ts[1], ("RET-EXPLICIT", "2026-11-24", "10:00:00", 1))
+
+        # Part C: enforce_authoritative_outlet_time preserves (1) ury_reopen_adjust_copy clones
+        # (cloned 10% line discount + Charged Tip tax row) and (2) Administrator explicit rates/taxes,
+        # while still force-repricing untrusted URY Cashier direct REST POSTs.
+        frappe_c, utils_c = _make_frappe()
+        frappe_c.get_roles = MagicMock(return_value=["URY Manager", "URY Cashier"])
+        frappe_c.session.user = "manager2@example.test"
+        dayparts_c, hooks_c = self._load_hooks(frappe_c, utils_c)
+        frappe_c.get_all.return_value = []
+        profile_c = Row(
+            name="B5aTill",
+            branch="B5aBranch",
+            company="B5aUGX",
+            selling_price_list="B5aPL",
+            taxes_and_charges="",
+            tax_category="",
+            custom_order_type_tax_categories=[],
+        )
+        frappe_c.get_cached_doc = MagicMock(return_value=profile_c)
+        frappe_c.get_doc = MagicMock(return_value=profile_c)
+
+        def _db_get_val_c(dt, flt=None, field=None, **kw):
+            if dt == "POS Profile":
+                if isinstance(field, (list, tuple)):
+                    return Row(branch="B5aBranch", restaurant=None)
+                if field == "selling_price_list":
+                    return "B5aPL"
+                return "B5aBranch" if field == "branch" else None
+            if dt == "Item Price":
+                return 35000.0
+            if dt == "URY Branch Operating Schedule":
+                return "Asia/Kolkata"
+            return None
+
+        frappe_c.db.get_value.side_effect = _db_get_val_c
+
+        # C1: ury_reopen_adjust_copy=True preserves cloned line discount & Charged Tip tax row
+        reopen_doc = Row(
+            name=None,
+            is_return=0,
+            docstatus=0,
+            pos_profile="B5aTill",
+            branch="B5aBranch",
+            company="B5aUGX",
+            order_type="Dine In",
+            customer="B5a Guest",
+            selling_price_list="B5aPL",
+            items=[
+                Row(
+                    item_code="B5A-SVC",
+                    qty=1.0,
+                    price_list_rate=35000.0,
+                    discount_percentage=10.0,
+                    rate=31500.0,
+                )
+            ],
+            taxes=[Row(charge_type="Actual", account_head="Tips Payable", description="Charged Tip", tax_amount=5000.0)],
+            flags=SimpleNamespace(),
+        )
+        reopen_doc.is_new = lambda: True
+        reopen_doc.get_doc_before_save = lambda: None
+        reopen_doc.set = lambda k, v: reopen_doc.__setitem__(k, v)
+        frappe_c.flags.ury_reopen_adjust_copy = True
+        try:
+            hooks_c.before_validate(reopen_doc, "before_validate")
+        finally:
+            frappe_c.flags.ury_reopen_adjust_copy = False
+        self.assertEqual(reopen_doc["items"][0].rate, 31500.0)
+        self.assertEqual(reopen_doc["items"][0].discount_percentage, 10.0)
+        self.assertEqual(len(reopen_doc["taxes"]), 1)
+        self.assertEqual(reopen_doc["taxes"][0].tax_amount, 5000.0)
+
+        # C2: Administrator new ORM invoice with explicit rate (10,000 vs Item Price 35,000) & explicit taxes
+        frappe_c.session.user = "Administrator"
+        admin_doc = Row(
+            name=None,
+            is_return=0,
+            docstatus=0,
+            pos_profile="B5aTill",
+            branch="B5aBranch",
+            company="B5aUGX",
+            order_type="Dine In",
+            customer="B5a Guest",
+            selling_price_list="B5aPL",
+            items=[Row(item_code="B5A-SVC", qty=2.0, price_list_rate=10000.0, rate=10000.0)],
+            taxes=[Row(charge_type="On Net Total", account_head="Output VAT", description="VAT 18% Inclusive", rate=18.0, included_in_print_rate=1)],
+            flags=SimpleNamespace(),
+        )
+        admin_doc.is_new = lambda: True
+        admin_doc.get_doc_before_save = lambda: None
+        admin_doc.set = lambda k, v: admin_doc.__setitem__(k, v)
+        hooks_c.before_validate(admin_doc, "before_validate")
+        self.assertEqual(admin_doc["items"][0].rate, 10000.0)
+        self.assertEqual(len(admin_doc["taxes"]), 1)
+
+        # C3: Unprivileged cashier direct REST POST is STILL force-repriced to Item Price (35,000)!
+        frappe_c.session.user = "cashier@example.test"
+        frappe_c.get_roles = MagicMock(return_value=["URY Cashier"])
+        cashier_doc = Row(
+            name=None,
+            is_return=0,
+            docstatus=0,
+            pos_profile="B5aTill",
+            branch="B5aBranch",
+            company="B5aUGX",
+            order_type="Dine In",
+            customer="B5a Guest",
+            selling_price_list="B5aPL",
+            items=[Row(item_code="B5A-SVC", qty=1.0, price_list_rate=1.0, rate=1.0)],
+            taxes=[],
+            flags=SimpleNamespace(),
+        )
+        cashier_doc.is_new = lambda: True
+        cashier_doc.get_doc_before_save = lambda: None
+        cashier_doc.set = lambda k, v: cashier_doc.__setitem__(k, v)
+        hooks_c.before_validate(cashier_doc, "before_validate")
+        self.assertEqual(cashier_doc["items"][0].rate, 35000.0)
+
 
 class TestStampInvoiceOutletClock(unittest.TestCase):
     def setUp(self):
