@@ -1,25 +1,34 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-vi.mock('../offline/cashier', () => ({
+vi.mock('../src/offline/cashier', () => ({
   assertOfflineActionAllowed: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@ury/core', () => ({
-  call: {
-    get: vi.fn(),
-    post: vi.fn().mockResolvedValue({ message: {} }),
-  },
-  db: {
-    getDoc: vi.fn(),
-    getDocList: vi.fn(),
-  },
-  printWithQz: vi.fn(),
-  ownedSessionKey: vi.fn(),
-}));
+vi.mock('@ury/core', async () => {
+  const actual = await vi.importActual<typeof import('@ury/core')>('@ury/core');
+  return {
+    ...actual,
+    call: {
+      get: vi.fn().mockResolvedValue({ message: { html: '<div class="sr">ok</div>' } }),
+      post: vi.fn().mockResolvedValue({ message: {} }),
+    },
+    db: {
+      getDoc: vi.fn(),
+      getDocList: vi.fn(),
+    },
+    printWithQz: vi.fn(),
+    ownedSessionKey: vi.fn(),
+  };
+});
 
-import { MERGED_POS_INVOICE_PRINT_FORMAT, resolvePrintFormat } from './invoice-api';
-import { printOrder } from './print';
-import type { PosProfileCombined } from './pos-profile-api';
+import { call } from '@ury/core';
+import {
+  MERGED_POS_INVOICE_PRINT_FORMAT,
+  UNSAFE_POS_INVOICE_PRINT_FORMATS,
+  resolvePrintFormat,
+} from '../src/lib/invoice-api';
+import { printBillCopy, printOrder } from '../src/lib/print';
+import type { PosProfileCombined } from '../src/lib/pos-profile-api';
 
 describe('resolvePrintFormat safety & default guest-check fallback', () => {
   it('defaults to Merged POS Invoice Format when defaultFormat is empty or null', () => {
@@ -28,8 +37,8 @@ describe('resolvePrintFormat safety & default guest-check fallback', () => {
     expect(resolvePrintFormat({ custom_merged_pos_invoice: null }, '   ')).toBe(MERGED_POS_INVOICE_PRINT_FORMAT);
   });
 
-  it('never returns unsafe ERPNext standard POS Invoice formats', () => {
-    for (const unsafe of [
+  it('never returns any of the 8 unsafe ERPNext / EFRIS standard POS Invoice formats', () => {
+    const allUnsafe = [
       'POS Invoice Classic',
       'POS Invoice Bordered',
       'POS Invoice Modern',
@@ -37,7 +46,10 @@ describe('resolvePrintFormat safety & default guest-check fallback', () => {
       'POS Invoice',
       'Return POS Invoice',
       'EFRIS POS Receipt 80mm',
-    ]) {
+      'POS EFRIS Invoice',
+    ];
+    for (const unsafe of allUnsafe) {
+      expect(UNSAFE_POS_INVOICE_PRINT_FORMATS.has(unsafe), `Missing ${unsafe} from UNSAFE_POS_INVOICE_PRINT_FORMATS`).toBe(true);
       expect(resolvePrintFormat({ custom_merged_pos_invoice: null }, unsafe)).toBe(
         MERGED_POS_INVOICE_PRINT_FORMAT
       );
@@ -57,7 +69,7 @@ describe('resolvePrintFormat safety & default guest-check fallback', () => {
   });
 });
 
-describe('printOrder browser printview URL', () => {
+describe('printOrder and printBillCopy letterhead forwarding', () => {
   const openSpy = vi.fn();
 
   beforeEach(() => {
@@ -125,5 +137,47 @@ describe('printOrder browser printview URL', () => {
     const url = openSpy.mock.calls[0][0] as string;
     expect(url).toContain(`format=${encodeURIComponent(MERGED_POS_INVOICE_PRINT_FORMAT)}`);
     expect(url).toContain('no_letterhead=1');
+  });
+
+  it('forwards configured POS Profile letter_head on QZ Tray getInvoicePrintHtml (P1-5)', async () => {
+    await printOrder({
+      orderId: 'POS-INV-0003',
+      posProfile: makeProfile({
+        print_type: 'qz',
+        qz_host: 'localhost',
+        print_format: 'POS EFRIS Invoice',
+        letter_head: 'Grand Terrace Receipt',
+      }),
+      skipStatusUpdate: true,
+    });
+
+    expect(call.get).toHaveBeenCalledWith(
+      'frappe.www.printview.get_html_and_style',
+      expect.objectContaining({
+        doc: 'POS Invoice',
+        name: 'POS-INV-0003',
+        print_format: MERGED_POS_INVOICE_PRINT_FORMAT,
+        no_letterhead: 0,
+        letterhead: 'Grand Terrace Receipt',
+      })
+    );
+  });
+
+  it('forwards configured POS Profile letter_head in printBillCopy browser fallback URL (P1-5)', async () => {
+    vi.mocked(call.post).mockResolvedValueOnce({
+      message: { status: 'COMPLETED', delivery: 'browser', copy_number: 2 },
+    });
+
+    await printBillCopy({
+      orderId: 'POS-INV-0004',
+      posProfile: makeProfile({ print_type: 'socket', letter_head: 'Grand Terrace Receipt' }),
+      idempotencyKey: 'copy-lh-1',
+    });
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    const url = openSpy.mock.calls[0][0] as string;
+    expect(url).toContain('no_letterhead=0');
+    expect(url).toContain(`letterhead=${encodeURIComponent('Grand Terrace Receipt')}`);
+    expect(url).toContain('copy_number=2');
   });
 });

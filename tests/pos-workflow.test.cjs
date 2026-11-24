@@ -28,6 +28,7 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
     // MenuItemCard and the other shared components are also rendered by serve.
     'npm --prefix ../packages/ui test --offline -- --maxWorkers=1',
     'npm --prefix ../serve test --offline -- --maxWorkers=1',
+    'npm --prefix ../frontend test --offline -- src/pages/Dashboard/PrinterConfigPage.test.tsx src/pages/Pos/lib/print.test.ts --maxWorkers=1',
     // The print-format tests render with the Jinja2 and MarkupSafe that Frappe v16 pins.
     `python3 -m pip install --user --break-system-packages --no-deps --only-binary=:all: --require-hashes -r ../${PRINT_JINJA}`,
     [

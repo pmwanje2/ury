@@ -507,7 +507,24 @@ describe("PrinterConfigPage", () => {
     expect(screen.getByText("network down")).toBeInTheDocument();
   });
 
-  it("queries only enabled Print Formats so disabled unsafe ERPNext formats cannot be selected", async () => {
+  it("queries only enabled Print Formats and hides unsafe ERPNext POS Invoice formats from hospitality dropdown", async () => {
+    mockCall.mockImplementation(async (method: string, params: any) => {
+      if (method === "frappe.client.get_list" && params?.doctype === "Print Format") {
+        return [
+          { name: "Merged POS Invoice Format", doc_type: "POS Invoice" },
+          { name: "POS Invoice Classic", doc_type: "POS Invoice" },
+          { name: "POS EFRIS Invoice", doc_type: "POS Invoice" },
+          { name: "Restaurant Receipt 80mm", doc_type: "POS Invoice" },
+        ];
+      }
+      if (method === "frappe.client.get_list" && params?.doctype === "POS Profile") return [{ name: "Main POS", branch: "Main Branch" }];
+      if (method === "frappe.client.get" && params?.doctype === "POS Profile") {
+        return { name: "Main POS", branch: "Main Branch", print_format: "Merged POS Invoice Format", printer_settings: [] };
+      }
+      if (method === "frappe.client.get_list") return [];
+      return {};
+    });
+
     render(<PrinterConfigPage />);
     await screen.findByTestId("printer-section-pos-profile");
     expect(mockCall).toHaveBeenCalledWith(
@@ -517,5 +534,11 @@ describe("PrinterConfigPage", () => {
         filters: [["disabled", "=", 0]],
       })
     );
+    const selectTrigger = document.getElementById("print_format");
+    expect(selectTrigger).toBeTruthy();
+    await userEvent.click(selectTrigger!);
+    expect(await screen.findByText("Restaurant Receipt 80mm")).toBeInTheDocument();
+    expect(screen.queryByText("POS Invoice Classic")).not.toBeInTheDocument();
+    expect(screen.queryByText("POS EFRIS Invoice")).not.toBeInTheDocument();
   });
 });

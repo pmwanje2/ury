@@ -335,6 +335,26 @@ class TestRecordValuesPrintAsText(unittest.TestCase):
 				self.assertEqual(printed.tags, Printed(render(fmt, build(plain), plain)).tags)
 				self.assertIn("VAT <b>18%</b> & levy", printed.text)
 
+	def test_bill_copy_escapes_copy_number_timestamp_posting_date_and_time(self):
+		# P1-1: URY Bill Copy must escape copy_number, copy_timestamp, posting_date, and posting_time.
+		crafted = bill_copy(plain)
+		crafted.copy_number = '<img src=x onerror="window.__copy_xss=1">'
+		crafted.copy_timestamp = '<script>window.__ts_xss=1</script>'
+		crafted.posting_date = '<img src=x onerror="window.__pd_xss=1">'
+		crafted.posting_time = '<img src=x onerror="window.__pt_xss=1">'
+		html = render("ury_bill_copy", crafted, plain)
+		for raw in (
+			'<img src=x onerror="window.__copy_xss=1">',
+			'<script>window.__ts_xss=1</script>',
+			'<img src=x onerror="window.__pd_xss=1">',
+			'<img src=x onerror="window.__pt_xss=1">',
+			'onerror="window.__copy_xss=1"',
+			'onerror="window.__pd_xss=1"',
+			'onerror="window.__pt_xss=1"',
+		):
+			self.assertNotIn(raw, html, f"Unescaped XSS payload in URY Bill Copy: {raw}")
+		self.assertEqual(Printed(html).tags, Printed(render("ury_bill_copy", bill_copy(plain), plain)).tags)
+
 	def test_empty_optional_fields_print_nothing_across_all_formats(self):
 		# Guard: optional blank/None fields must print nothing, never "None" (#141 P2).
 		blank_merged = {

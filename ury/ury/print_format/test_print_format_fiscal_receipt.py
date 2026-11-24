@@ -400,7 +400,7 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 		)
 		flat = text(render(COPY, doc, fmt_money=ugx_fmt)[0])
 		for expected in ("UGX 30,000", "UGX 5,000", "UGX 5,339", "UGX 35,000", "UGX 23,000",
-		                 "UGX 12,000", "UGX 10,000", "UGX 45,000", "UGX 0"):
+		                 "UGX 12,000", "UGX 10,000", "UGX 45,000"):
 			self.assertIn(expected, flat, f"Expected formatted currency {expected!r} in: {flat}")
 		for raw_float in ("30000.0", "5000.0", "5338.98", "35000.0", "23000.0", "12000.0", "10000.0", "45000.0", "0.0"):
 			self.assertNotIn(raw_float, flat, f"Raw float {raw_float!r} leaked into URY Bill Copy: {flat}")
@@ -417,7 +417,7 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 		ugx_doc = bill(
 			name="POS-INV-UGX",
 			currency="UGX",
-			items=[Doc(item_code="ROLEX", item_name="Rolex", qty=2.0, amount=35000.0)],
+			items=[Doc(item_code="ROLEX", item_name="Rolex", qty=2.0, rate=17500.0, amount=35000.0)],
 			taxes=[Doc(description="VAT 18%", tax_amount=5338.98)],
 			payments=[Doc(mode_of_payment="Cash", amount=35000.0, account="Cash - DR")],
 			grand_total=35000.0,
@@ -427,11 +427,12 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 		usd_doc = bill(
 			name="POS-INV-USD",
 			currency="USD",
-			items=[Doc(item_code="GRILL", item_name="USD Grill Plate", qty=1.0, amount=12.50)],
+			items=[Doc(item_code="GRILL", item_name="USD Grill Plate", qty=1.0, rate=12.50, amount=12.50)],
 			taxes=[Doc(description="VAT 18%", tax_amount=1.91)],
 			payments=[Doc(mode_of_payment="Cash", amount=15.00, account="Cash - DR")],
 			grand_total=12.50,
 			rounded_total=12.50,
+			change_amount=2.50,
 			outstanding_amount=0.0,
 			efris_e_invoice="EINV-USD",
 		)
@@ -440,11 +441,13 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 		ugx_flat = text(render(COPY, ugx_doc, format_bill_money=multi_money)[0])
 		usd_flat = text(render(COPY, usd_doc, {usd_doc.name: fiscalised()}, {"EINV-USD": einv_usd}, format_bill_money=multi_money)[0])
 
-		for expected in ("UGX 35,000", "UGX 5,339", "UGX 0"):
+		for expected in ("UGX 35,000", "UGX 5,339"):
 			self.assertIn(expected, ugx_flat, ugx_flat)
-		for expected in ("$ 12.50", "$ 1.91", "$ 15.00", "$ 10.59", "$ 0.00"):
+		self.assertNotIn("Outstanding", ugx_flat, ugx_flat)
+		for expected in ("$ 12.50", "$ 1.91", "$ 15.00", "$ 2.50", "$ 10.59"):
 			self.assertIn(expected, usd_flat, usd_flat)
-		self.assertGreater(spec(COPY)["modified"], "2026-11-24 04:30:00.000000")
+		self.assertNotIn("Outstanding", usd_flat, usd_flat)
+		self.assertGreater(spec(COPY)["modified"], "2026-11-24 09:30:00.000000")
 
 	def test_bill_copy_prints_room_charge_signature_block_and_escapes_values(self):
 		"""R5 G21 parity: URY Bill Copy prints the room-charge signature block (room, guest, amount, signature lines) and omits it for cash/returns."""
