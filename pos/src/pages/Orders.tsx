@@ -37,6 +37,8 @@ import {
   isOrderTypeNotAllowedError,
   isLastItemCannotBeRemovedError,
 } from '../lib/order-api';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import { parseFrappeError } from '@ury/core';
 import { formatMergedTableLabel } from '../lib/table-utils';
 import { t } from '../i18n';
@@ -174,6 +176,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     `${selectedStatus}|${orders.map((order) => `${order.name}:${order.invoice_printed}`).join(',')}`,
   );
   const posStore = usePOSStore();
+  const profileCurrency = posStore.posProfile?.currency;
+  const selectedOrderCurrency = selectedOrder?.currency || profileCurrency;
   const printWarningMinutes = posStore.posProfile?.custom_invoice_warning_time ?? 0;
   const [clockNow, setClockNow] = React.useState(() => Date.now());
   useEffect(() => {
@@ -207,6 +211,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const [isPrinting, setIsPrinting] = React.useState(false);
   const [canCancelInvoice, setCanCancelInvoice] = React.useState(false);
   const [reducingItemKey, setReducingItemKey] = React.useState<string | null>(null);
+  const [pendingVoidApproval, setPendingVoidApproval] = React.useState<{
+    order: POSInvoice;
+    item: (typeof selectedOrderItems)[number];
+    newQty: number;
+    amount: number;
+    claim: Record<string, unknown>;
+  } | null>(null);
 
   React.useEffect(() => {
     if (selectedOrder?.name) {
@@ -372,7 +383,20 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       // Fill POS store
       posStore.resetOrderState();
       posStore.setSelectedOrderType(order.order_type);
-      posStore.setOrderForUpdate(order.name, order.customer, order.modified);
+      posStore.setOrderForUpdate(
+        order.name,
+        order.customer,
+        order.modified,
+        (order.items || []).map((item: any) => ({
+          item_code: item.item_code,
+          item_name: item.item_name,
+          reservation_line_key: item.reservation_line_key || '',
+          qty: Number(item.qty || 0),
+          rate: Number(item.rate || 0),
+          comment: item.comment || '',
+          ury_held: Number(item.ury_held || 0),
+        })),
+      );
       if (order.restaurant_table) {
         posStore.setSelectedTable(order.restaurant_table, order.custom_restaurant_room || null,true);
       }
@@ -413,33 +437,69 @@ function OwnerOrders({ owner }: { owner: string | null }) {
 
   // Reduces a saved/printed order's line item by 1 (or removes it at qty 1)
   // via `reduce_order_item_qty` — a partial cancel-KOT is generated
-  // server-side for the delta. Only permitted for the invoice's Order Type
-  // when the POS Profile's allow-list includes it; that rejection is
-  // surfaced as a specific message rather than a generic failure toast.
-  async function handleReduceItemQty(item: (typeof selectedOrderItems)[number]) {
-    if (!selectedOrder) return;
+  // server-side for the delta. When the server requires `void_sent_item`
+  // authorisation (`POS-AUTH-REQUIRED`), opens `<ManagerApproval>` in place
+  // and retries with the single-use approval token without changing session.
+  async function handleReduceItemQty(
+    item: (typeof selectedOrderItems)[number],
+    approval?: { token: string; reason?: string; targetOrder?: POSInvoice; targetQty?: number }
+  ) {
+    const order = approval?.targetOrder ?? selectedOrder;
+    if (!order) return;
     setReducingItemKey(item.name);
+    const newQty = approval?.targetQty ?? item.qty - 1;
     try {
-      // `item.name` is the real POS Invoice Item child-table row name (see
-      // `getPOSInvoiceItems`/`POSInvoiceItem` in invoice-api.ts) — the
-      // authoritative selector `reduce_order_item_qty` matches on, not a
-      // locally-derived key.
-      const newQty = item.qty - 1;
-      const result = await reduceOrderItemQty(selectedOrder.name, item.name, newQty);
+      const result = await reduceOrderItemQty(
+        order.name,
+        item.name,
+        newQty,
+        approval?.reason,
+        approval?.token,
+      );
       showToast.success(qtyReductionMessage(item.item_name, newQty, result.cancel_kot_names));
-      await selectOrder(selectedOrder);
+      await selectOrder(order);
     } catch (err) {
       const parsedMessage = parseFrappeError(err) || (err instanceof Error ? err.message : null);
-      if (isOrderTypeNotAllowedError(parsedMessage)) {
-        showToast.error(t('orders.qty_reduction_not_allowed', { order_type: orderTypeLabel(selectedOrder.order_type) }));
+      if (!approval?.token && isAuthRequiredError(parsedMessage || err)) {
+        const deltaQty = item.qty - newQty;
+        const amount = Math.round(Number(item.rate || 0) * deltaQty * 10000) / 10000;
+        setPendingVoidApproval({
+          order,
+          item,
+          newQty,
+          amount,
+          claim: {
+            action: 'reduce_order_item_qty',
+            item_row_name: item.name,
+            item_code: item.item_code || '',
+            from_qty: item.qty,
+            to_qty: newQty,
+            amount,
+            reason: '',
+          },
+        });
+      } else if (isOrderTypeNotAllowedError(parsedMessage)) {
+        showToast.error(t('orders.qty_reduction_not_allowed', { order_type: orderTypeLabel(order.order_type) }));
       } else if (isLastItemCannotBeRemovedError(parsedMessage)) {
         showToast.error(t('orders.last_item_cannot_remove'));
       } else {
-        showToast.error(parsedMessage || 'Failed to reduce item quantity.');
+        showToast.error(overrideErrorMessage(err) || parsedMessage || 'Failed to reduce item quantity.');
       }
     } finally {
       setReducingItemKey(null);
     }
+  }
+
+  async function handleVoidApprovalGranted(result: ManagerApprovalResult) {
+    const pending = pendingVoidApproval;
+    setPendingVoidApproval(null);
+    if (!pending) return;
+    await handleReduceItemQty(pending.item, {
+      token: result.token,
+      reason: result.reason,
+      targetOrder: pending.order,
+      targetQty: pending.newQty,
+    });
   }
 
   async function handlePrintOrder() {
@@ -638,7 +698,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         {order.name}
                       </h3>
                       <span className="ms-auto shrink-0 whitespace-nowrap text-sm font-semibold tabular-nums text-gray-900">
-                        {formatCurrency(cardTotal)}
+                        {formatCurrency(cardTotal, order.currency || profileCurrency)}
                       </span>
                     </div>
                     <p className="mt-1 min-w-0 break-words text-xs text-gray-500">
@@ -983,7 +1043,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         </div>
                         <div className="shrink-0 text-end tabular-nums">
                           <p className="text-sm font-semibold text-gray-900">
-                            {formatCurrency(item.amount)}
+                            {formatCurrency(item.amount, selectedOrderCurrency)}
                           </p>
                         </div>
                       </div>
@@ -1001,7 +1061,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                       <div key={index} className="flex justify-between items-center py-1">
                         <span className="text-sm text-gray-600">{tax.description}</span>
                         <span className="text-sm font-medium text-gray-900">
-                          {formatCurrency(tax.rate)}
+                          {formatCurrency(tax.rate, selectedOrderCurrency)}
                         </span>
                       </div>
                     ))}
@@ -1057,10 +1117,10 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   {isMergedBill(selectedOrder) ? (
                     <span className="flex flex-col items-end leading-tight">
                       <span className="text-xs font-medium text-gray-500">{t('bill_merge.combined_total')}</span>
-                      <span>{formatCurrency(selectedOrderTotals.roundedTotal)}</span>
+                      <span>{formatCurrency(selectedOrderTotals.roundedTotal, selectedOrderCurrency)}</span>
                     </span>
                   ) : (
-                    formatCurrency(selectedOrder.rounded_total || selectedOrder.grand_total || 0)
+                    formatCurrency(selectedOrder.rounded_total || selectedOrder.grand_total || 0, selectedOrderCurrency)
                   )}
                 </span>
               </div>
@@ -1101,12 +1161,35 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           onOpenChange={setShowSplitDialog}
           invoiceName={selectedOrder.name}
           items={selectedOrderItems}
+          currency={selectedOrderCurrency}
           sourceCustomer={
             selectedOrder.customer
               ? { id: selectedOrder.customer, name: selectedOrder.customer_name || selectedOrder.customer, phone: selectedOrder.mobile_number }
               : null
           }
           onConfirm={handleSplitBill}
+        />
+      )}
+      {pendingVoidApproval && (
+        <ManagerApproval
+          open
+          posProfile={posStore.posProfile?.name || ''}
+          privilege="void_sent_item"
+          title={t('manager_approval.void_sent_item_title')}
+          summaryLines={[
+            t('manager_approval.void_sent_line', {
+              item: pendingVoidApproval.item.item_name,
+              from: pendingVoidApproval.item.qty,
+              to: pendingVoidApproval.newQty,
+            }),
+            t('manager_approval.amount_line', { amount: formatCurrency(pendingVoidApproval.amount) }),
+            t('manager_approval.check_line', { check: pendingVoidApproval.order.name }),
+          ]}
+          reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}
+          claim={pendingVoidApproval.claim}
+          amount={pendingVoidApproval.amount}
+          onApproved={(res) => void handleVoidApprovalGranted(res)}
+          onCancel={() => setPendingVoidApproval(null)}
         />
       )}
     </div>

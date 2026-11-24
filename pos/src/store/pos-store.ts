@@ -182,6 +182,15 @@ interface POSState {
   editCustomer: { invoice: string; customer: string } | null;
   isUpdatingOrder: boolean;
   orderId: string | null;
+  originalSentItems: Array<{
+    item_code: string;
+    item_name: string;
+    reservation_line_key: string;
+    qty: number;
+    rate: number;
+    comment: string;
+    ury_held?: number;
+  }>;
   posProfile: PosProfileCombined | null;
   customerGroups: string[];
   territories: string[];
@@ -236,7 +245,12 @@ interface POSStore extends POSState {
   isMenuInteractionDisabled: () => boolean;
   isOrderInteractionDisabled: () => boolean;
   initializeApp: () => Promise<void>;
-  setOrderForUpdate: (orderId: string | null, customer?: string, modified?: string) => void;
+  setOrderForUpdate: (
+    orderId: string | null,
+    customer?: string,
+    modified?: string,
+    originalItems?: POSState['originalSentItems'],
+  ) => void;
   resetOrderState: () => void;
   setSelectedAggregator: (aggregator: Aggregator | null) => void;
   setOrderComment: (comment: string) => void;
@@ -301,6 +315,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   editCustomer: null,
   isUpdatingOrder: false,
   orderId: null,
+  originalSentItems: [],
   showVoluntaryClosing: false,
   orderComment: '',
   guestLabel: '',
@@ -827,6 +842,15 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           customerSource: 'order',
           isUpdatingOrder: true,
           orderId: order.name,
+          originalSentItems: order.items.map((item) => ({
+            item_code: item.item_code,
+            item_name: item.item_name,
+            reservation_line_key: item.reservation_line_key || '',
+            qty: Number(item.qty || 0),
+            rate: Number(item.rate || 0),
+            comment: item.comment || '',
+            ury_held: Number(item.ury_held || 0),
+          })),
           noOfPax: order.no_of_pax || 1,
           lastModifiedTime: order.modified || null,
           orderComment: order.custom_comments || '',
@@ -899,12 +923,13 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     });
   },
 
-  setOrderForUpdate: (orderId, customer, modified) => {
+  setOrderForUpdate: (orderId, customer, modified, originalItems) => {
     set({ 
       editCustomer: orderId && customer ? { invoice: orderId, customer } : null,
       lastModifiedTime: modified ?? null,
       isUpdatingOrder: orderId !== null,
       orderId,
+      originalSentItems: originalItems ?? [],
     });
   },
 
@@ -920,6 +945,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       isUpdatingOrder: false,
       editCustomer: null,
       orderId: null,
+      originalSentItems: [],
       activeOrders: [],
       selectedItem: null,
       orderLoading: false,
