@@ -41,7 +41,9 @@ from ury.brand import coded_message
 from ury.ury.hooks.ury_cash_movement import (
 	LEAVES_DRAWER,
 	_drawer_accounts,
+	_is_fx_mode,
 	_mode_account,
+	_till_currency,
 	build_movement_je_accounts,
 	paid_out_threshold,
 	till_cash_movements,
@@ -486,11 +488,13 @@ def _is_blind_masked_for_user(profile, user: str | None = None) -> bool:
 def _compute_expected_drawer_cash(profile, opening) -> float:
 	"""Expected cash in this shift's drawer: opening float + submitted cash sales - change + submitted movements."""
 	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	till_curr = _till_currency(profile, profile.company)
 	precision = currency_precision(currency)
 	cash_modes = [
 		row.mode_of_payment
 		for row in (profile.get("payments") or [])
 		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") == "Cash"
+		and not _is_fx_mode(row.mode_of_payment, till_curr)
 	]
 	cash_mode_set = set(cash_modes)
 	drawer_accounts = _drawer_accounts(profile, profile.company)
@@ -1457,16 +1461,18 @@ def get_till_close_preview(pos_profile: str, pos_opening_entry: str | None = Non
 		"POS Drawer Event", {"pos_opening_entry": opening.name, "event_type": "No Sale"}
 	)
 
+	till_curr = _till_currency(profile, profile.company)
 	payment_rows = []
 	for p in profile.get("payments") or []:
 		mode = p.mode_of_payment
 		is_cash = frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
+		is_local_cash = is_cash and not _is_fx_mode(mode, till_curr)
 		payment_rows.append(
 			{
 				"mode_of_payment": mode,
 				"is_cash": is_cash,
 				"opening_amount": opening_by_mode.get(mode, 0),
-				"expected_amount": None if blind else (expected_cash if is_cash else opening_by_mode.get(mode, 0)),
+				"expected_amount": None if blind else (expected_cash if is_local_cash else opening_by_mode.get(mode, 0)),
 			}
 		)
 
