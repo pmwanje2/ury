@@ -53,6 +53,9 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
       'ury.ury.hooks.test_pos_invoice_money_integrity',
       'ury.ury.doctype.ury_order.test_merged_bill_integrity',
       'ury.ury_pos.test_add_check_and_tenders',
+      'ury.ury_pos.test_till_cash_controls',
+      'ury.ury_pos.test_till_close_controls',
+      'ury.ury_pos.test_tender_halo',
     ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',
   ]);
 });
