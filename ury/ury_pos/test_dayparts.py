@@ -498,6 +498,10 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
                 if field == "enabled":
                     return 1
                 return "Standard UGX"
+            if dt == "Item Price":
+                if isinstance(flt, dict) and flt.get("price_list") == "Standard UGX" and flt.get("item_code") == "KH-BURGER-18":
+                    return 20000.0
+                return None
             return None
 
         frappe_mock.db.get_value.side_effect = db_get_value
@@ -535,6 +539,33 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
         self.assertEqual(doc.custom_serving_period, "All Day Dining")
         self.assertEqual(doc.selling_price_list, "Standard UGX")
         self.assertEqual(doc.set_posting_time, 0)
+        # Repriced from authoritative Standard UGX Item Price (never left at 0.0 or spoofed 5000.0)
+        self.assertEqual(doc["items"][0].price_list_rate, 20000.0)
+        self.assertEqual(doc["items"][0].rate, 20000.0)
+
+        # Direct REST POST omitting item price_list_rate/rate must also resolve authoritative
+        # Item Price before ury_pos_tender.before_validate calls calculate_taxes_and_totals().
+        doc_no_rate = Row(
+            name=None,
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk In Guest",
+            items=[Row(item_code="KH-BURGER-18", qty=1, price_list_rate=None, rate=None)],
+            flags=SimpleNamespace(),
+        )
+        doc_no_rate.is_new = lambda: True
+        doc_no_rate.get_doc_before_save = lambda: None
+
+        with patch.object(
+            dayparts,
+            "resolve_outlet_local_datetime",
+            return_value=(real_eat, "16:03:00", "Tue"),
+        ):
+            hooks.before_validate(doc_no_rate, "before_validate")
+
+        self.assertEqual(doc_no_rate.selling_price_list, "Standard UGX")
+        self.assertEqual(doc_no_rate["items"][0].price_list_rate, 20000.0)
+        self.assertEqual(doc_no_rate["items"][0].rate, 20000.0)
 
     def test_before_validate_and_validate_price_list_block_spoofed_put_on_existing_invoice(self):
         frappe_mock, utils = _make_frappe()
