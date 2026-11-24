@@ -138,24 +138,20 @@ class TestPrivilegedContractParity(TestPricingPrivilegedActions):
 
     def test_get_pos_profile_full_exposes_privileged_fields_without_nameerror(self):
         """getPosProfileFull must import flt cleanly and return Scope e+f profile fields."""
-        import importlib
-        import sys
-        import types
+        from ury.ury_pos.test_floor_privileged_actions import FloorHarness
 
-        self._import_pricing_actions()
-        utils_mod = sys.modules["frappe.utils"]
-        utils_mod.nestedset = types.SimpleNamespace()
-        utils_mod.validate_phone_number = lambda v, throw=False: True
-        sys.modules["frappe"].get_meta = lambda dt: types.SimpleNamespace(has_field=lambda fn: False)
-        sys.modules.pop("ury.ury_pos.api", None)
-        api_mod = importlib.import_module("ury.ury_pos.api")
-        orig_get_branch = api_mod.getBranch
-        api_mod.getBranch = lambda: "Main Branch"
-        try:
-            full = api_mod.getPosProfileFull("Main Till")
-        finally:
-            api_mod.getBranch = orig_get_branch
-            sys.modules.pop("ury.ury_pos.api", None)
+        fh = FloorHarness()
+        with fh.patched():
+            api_mod = fh.load("ury.ury_pos.api")
+            fh.profiles["Main Till"]["allow_rate_change"] = 1
+            fh.profiles["Main Till"]["custom_service_charge_rate"] = 10.0
+            fh.profiles["Main Till"]["custom_tips_payable_account"] = "Tips Payable - TC"
+            orig_get_branch = api_mod.getBranch
+            api_mod.getBranch = lambda: fh.branch
+            try:
+                full = api_mod.getPosProfileFull("Main Till")
+            finally:
+                api_mod.getBranch = orig_get_branch
         self.assertEqual(full["allow_rate_change"], 1)
         self.assertEqual(full["custom_service_charge_rate"], 10.0)
         self.assertEqual(full["custom_tips_payable_account"], "Tips Payable - TC")
