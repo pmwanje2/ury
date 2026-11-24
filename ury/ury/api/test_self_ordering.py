@@ -1498,6 +1498,113 @@ class TestCreatePaymentRequest(unittest.TestCase):
         self.assertEqual(phone_row.amount, 50.0)
         invoice.save.assert_called_once()
 
+    def test_hooks_register_payment_request_cancel_and_status_handlers(self):
+        from ury import hooks
+
+        pr_events = (hooks.doc_events or {}).get("Payment Request") or {}
+        for event in ("on_payment_authorized", "on_cancel", "on_update_after_submit", "set_failed", "on_discard"):
+            self.assertIn(event, pr_events, f"Payment Request doc_events missing {event}")
+
+    def test_clear_and_sync_phone_payment_received_clears_non_paid_but_never_really_paid(self):
+        from ury.ury.api import self_ordering
+
+        clear_fn = getattr(self_ordering, "clear_phone_payment_received", None)
+        sync_fn = getattr(self_ordering, "sync_phone_payment_received", None)
+        mark_fn = getattr(self_ordering, "mark_phone_payment_received", None)
+        self.assertTrue(callable(clear_fn), "clear_phone_payment_received missing from self_ordering.py")
+        self.assertTrue(callable(sync_fn), "sync_phone_payment_received missing from self_ordering.py")
+
+        # 1. Cancelled / Failed / Expired / Refunded PR clears ONLY the matching Phone row and leaves Cash intact.
+        for label, docstatus, status in (
+            ("cancelled", 2, "Cancelled"),
+            ("failed", 1, "Failed"),
+            ("expired", 1, "Expired"),
+            ("refunded", 1, "Refunded"),
+        ):
+            with self.subTest(case=label):
+                phone_row = frappe._dict(
+                    mode_of_payment="P2 Phone",
+                    account="P2 Bank",
+                    type="Phone",
+                    amount=50.0,
+                    reference_no="PR-DEAD",
+                    custom_tender_received=1,
+                )
+                cash_row = frappe._dict(
+                    mode_of_payment="Cash",
+                    amount=10.0,
+                    reference_no=None,
+                    custom_tender_received=1,
+                )
+                invoice = MagicMock()
+                invoice.docstatus = 0
+                invoice.name = "POS-INV-100"
+                invoice.payments = [phone_row, cash_row]
+                flag_during_save = []
+                invoice.save.side_effect = lambda **kw: flag_during_save.append(
+                    bool(getattr(self_ordering.frappe.flags, "ury_server_tender_received", False))
+                )
+                dead_pr = frappe._dict(
+                    name="PR-DEAD",
+                    reference_doctype="POS Invoice",
+                    reference_name="POS-INV-100",
+                    payment_channel="Phone",
+                    payment_request_type="Inward",
+                    mode_of_payment="P2 Phone",
+                    payment_account="P2 Bank",
+                    grand_total=50.0,
+                    outstanding_amount=50.0,
+                    docstatus=docstatus,
+                    status=status,
+                )
+                with patch(f"{MOD}.frappe.get_doc", return_value=invoice), patch(f"{MOD}.frappe.set_user"):
+                    if label == "failed":
+                        sync_fn(dead_pr, "on_update_after_submit")
+                    else:
+                        clear_fn(dead_pr, "on_cancel")
+                self.assertEqual(phone_row.custom_tender_received, 0)
+                self.assertEqual(phone_row.amount, 0)
+                self.assertFalse(phone_row.reference_no)
+                self.assertEqual(cash_row.custom_tender_received, 1)
+                self.assertEqual(cash_row.amount, 10.0)
+                self.assertEqual(flag_during_save, [True])
+
+        # 2. A genuinely Paid or Partially Paid PR can NEVER be cleared via clear/sync/failure hook.
+        for paid_status, outstanding in (("Paid", 0.0), ("Partially Paid", 20.0)):
+            with self.subTest(paid_status=paid_status):
+                paid_row = frappe._dict(
+                    mode_of_payment="P2 Phone",
+                    account="P2 Bank",
+                    type="Phone",
+                    amount=50.0 - outstanding,
+                    reference_no="PR-REALLY-PAID",
+                    custom_tender_received=1,
+                )
+                invoice = MagicMock()
+                invoice.docstatus = 0
+                invoice.name = "POS-INV-100"
+                invoice.payments = [paid_row]
+                paid_pr = frappe._dict(
+                    name="PR-REALLY-PAID",
+                    reference_doctype="POS Invoice",
+                    reference_name="POS-INV-100",
+                    payment_channel="Phone",
+                    payment_request_type="Inward",
+                    mode_of_payment="P2 Phone",
+                    payment_account="P2 Bank",
+                    grand_total=50.0,
+                    outstanding_amount=outstanding,
+                    docstatus=1,
+                    status=paid_status,
+                )
+                with patch(f"{MOD}.frappe.get_doc", return_value=invoice), patch(f"{MOD}.frappe.set_user"):
+                    clear_fn(paid_pr, "set_failed")
+                    sync_fn(paid_pr, "on_update_after_submit")
+                    mark_fn(paid_pr, "on_payment_authorized", "Failed")
+                self.assertEqual(paid_row.custom_tender_received, 1)
+                self.assertEqual(paid_row.reference_no, "PR-REALLY-PAID")
+                self.assertEqual(paid_row.amount, 50.0 - outstanding)
+
 
 class TestSharePaymentLink(unittest.TestCase):
     def tearDown(self):

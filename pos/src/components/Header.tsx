@@ -10,6 +10,7 @@ import {
   LogOut,
   RefreshCw,
   Lock,
+  KeyRound,
 } from 'lucide-react';
 import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
@@ -22,6 +23,7 @@ import { showToast } from '@ury/ui';
 import { PrinterStatusButton } from './PrinterWatch';
 import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
+import ApprovalPinDialog from './ApprovalPinDialog';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'Maximus POS', logo: '/assets/ury/Images/maximus-mark.svg' });
@@ -37,6 +39,7 @@ const Header = () => {
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
   const [showStaffPins, setShowStaffPins] = useState(false);
   const [showPairTablet, setShowPairTablet] = useState(false);
+  const [showApprovalPin, setShowApprovalPin] = useState(false);
   const [canManagePins, setCanManagePins] = useState(false);
   const posProfileName = posProfile?.name;
 
@@ -139,9 +142,9 @@ const Header = () => {
   return (
     <>
     <header className="sticky top-0 z-40 bg-header text-header-foreground border-b border-header-border">
-      <div className="flex items-center justify-between h-12 px-4 md:px-6">
+      <div className="flex items-center justify-between gap-2 h-12 px-2 sm:px-4 md:px-6">
         {/* Logo */}
-        <div className="flex items-center">
+        <div className="flex shrink-0 items-center">
           <div className="flex items-center gap-3">
             <img
               src={brand.logo}
@@ -153,15 +156,15 @@ const Header = () => {
 
         {/* Search Bar */}
         {location.pathname !== '/dashboard' ? (
-          <div className="px-3 py-1 h-7 flex-1 flex items-center max-w-2xl mx-8 bg-gray-50 hover:bg-gray-100 border border-input rounded-md text-sm">
+          <div className="min-w-0 px-2 sm:px-3 py-1 h-7 flex-1 flex items-center max-w-2xl mx-1 sm:mx-4 md:mx-8 bg-gray-50 hover:bg-gray-100 border border-input rounded-md text-sm">
             <Input
               ref={searchInputRef}
               placeholder={searchPlaceholder}
-              className="h-fit p-0 w-full bg-transparent border-0 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="h-fit min-w-0 p-0 w-full bg-transparent border-0 focus:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
               value={searchValue}
               onChange={searchOnChange}
             />
-            <div className="flex items-center gap-2 text-gray-400">
+            <div className="hidden sm:flex items-center gap-2 shrink-0 text-gray-400">
               <Command className="w-4 h-4" />
               <span>K</span>
             </div>
@@ -171,21 +174,21 @@ const Header = () => {
         )}
 
         {/* Right side actions */}
-        <div className="flex items-center gap-4">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-4">
           {/* Printer status (fail-closed when the watch app is absent) */}
           {!printStatusDisabled && <PrinterStatusButton />}
           {/* User menu */}
-          <div className="relative" ref={userMenuRef}>
+          <div className="relative min-w-0" ref={userMenuRef}>
             <Button
               onClick={handleUserMenuToggle}
               variant="ghost"
-              className="flex items-center gap-2 h-7 text-header-user hover:text-header-title"
+              className="flex items-center gap-1.5 sm:gap-2 h-7 px-1.5 sm:px-3 text-header-user hover:text-header-title"
             >
-              <div className="w-6 h-6 bg-primary-500 rounded-full flex items-center justify-center">
+              <div className="w-6 h-6 shrink-0 bg-primary-500 rounded-full flex items-center justify-center">
                 <User className="w-3.5 h-3.5 text-white" />
               </div>
-              <span className="text-sm font-medium">{tUser(user?.full_name) || t('header.user_fallback')}</span>
-              <ChevronDown className="w-4 h-4" />
+              <span className="max-w-[7rem] sm:max-w-none truncate text-sm font-medium">{tUser(user?.full_name) || t('header.user_fallback')}</span>
+              <ChevronDown className="w-4 h-4 shrink-0" />
             </Button>
 
             {/* User dropdown */}
@@ -212,6 +215,14 @@ const Header = () => {
                   >
                     <Monitor className="w-4 h-4 me-3" />
                     {t('header.switch_to_dashboard')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    onClick={() => { setShowUserMenu(false); setShowApprovalPin(true); }}
+                  >
+                    <KeyRound className="w-4 h-4 me-3" />
+                    {t('header.my_approval_pin')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -257,6 +268,12 @@ const Header = () => {
         </div>
       </div>
     </header>
+    <ApprovalPinDialog
+      open={showApprovalPin}
+      onOpenChange={setShowApprovalPin}
+      posProfile={posProfileName}
+      canManagePins={canManagePins}
+    />
     {canManagePins && posProfileName && (
       <>
         <StaffPinsDialog open={showStaffPins} onOpenChange={setShowStaffPins} />
