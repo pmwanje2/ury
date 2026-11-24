@@ -66,12 +66,15 @@ class Doc:
 
 def merged_bill(text):
 	partner = Doc(
+		name=text("partner.name"), docstatus=1, is_return=0, company="Demo Restaurant",
+		room_number=None, kamra_ref=None,
 		customer=text("partner.customer"), currency=text("partner.currency"),
-		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=20)],
+		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=20, account=None)],
 		paid_amount=20, change_amount=0, outstanding_amount=60,
 	)
 	return Doc(
 		name=text("doc.name"), status=text("doc.status"), custom_guest_label=text("doc.custom_guest_label"),
+		docstatus=1, is_return=0, company="Demo Restaurant", room_number=text("doc.room_number"), kamra_ref=None,
 		customer=text("doc.customer"), customer_name=text("doc.customer_name"),
 		mobile_number=text("doc.mobile_number"), order_type=text("doc.order_type"), waiter=WAITER,
 		restaurant=text("doc.restaurant"), branch=text("doc.branch"), no_of_pax=text("doc.no_of_pax"),
@@ -85,19 +88,37 @@ def merged_bill(text):
 		total_qty=2, net_total=100, grand_total=100,
 		custom_merged_pos_invoice=text("doc.custom_merged_pos_invoice"), custom_merged_total=80,
 		custom_merged_pos_invoice_details=[Doc(item_name=text("merged.item_name"), qty=1, rate=80, amount=80)],
-		payments=[Doc(mode_of_payment=text("doc.mode_of_payment"), amount=40)],
+		payments=[
+			Doc(mode_of_payment=text("doc.mode_of_payment"), amount=20, account=None),
+			Doc(mode_of_payment="Room Charge", amount=20, account=None),
+		],
 		paid_amount=40, change_amount=0, outstanding_amount=60, ury_print_partner=partner,
 	)
 
 
 def bill_copy(text):
+	partner = Doc(
+		name=text("partner.name"), docstatus=1, is_return=0, company="Demo Restaurant",
+		room_number=None, kamra_ref=None,
+		currency=text("partner.currency"), customer=text("partner.customer"),
+		items=[Doc(item_name=text("partner.item_name"), qty=1, amount=50)],
+		taxes=[Doc(description=text("partner.tax_description"), tax_amount=9)],
+		grand_total=59, rounded_total=59, outstanding_amount=0,
+		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59, account=None)],
+	)
 	return Doc(
-		name=text("doc.name"), copy_number=2, copy_timestamp="2026-11-23 20:15:00", posting_date="2026-11-23",
+		name=text("doc.name"), docstatus=1, is_return=0, company="Demo Restaurant",
+		room_number=text("doc.room_number"), custom_guest_label=text("doc.custom_guest_label"), kamra_ref=None,
+		copy_number=2, copy_timestamp="2026-11-23 20:15:00", posting_date="2026-11-23",
 		currency=text("doc.currency"), customer=text("doc.customer"),
 		items=[Doc(item_name=text("item.item_name"), qty=2, amount=100)],
 		taxes=[Doc(description=text("tax.description"), tax_amount=18)],
 		grand_total=118, rounded_total=118, outstanding_amount=60,
-		payments=[Doc(mode_of_payment=text("payment.mode_of_payment"), amount=58)],
+		payments=[
+			Doc(mode_of_payment=text("payment.mode_of_payment"), amount=38, account=None),
+			Doc(mode_of_payment="Room Charge", amount=20, account=None),
+		],
+		ury_print_partner=partner,
 	)
 
 
@@ -120,21 +141,23 @@ def waiter_slip(text):
 # Each format, its record, and the text values it prints (tax descriptions print tag-stripped).
 FORMATS = {
 	"merged_pos_invoice_format": (merged_bill, (
-		"doc.name", "doc.status", "doc.custom_guest_label", "doc.customer_name", "doc.mobile_number",
+		"doc.name", "doc.room_number", "doc.custom_guest_label", "doc.customer_name", "doc.mobile_number",
 		"doc.order_type", "waiter.full_name", "doc.restaurant", "doc.branch", "doc.no_of_pax", "doc.cashier",
 		"item.item_code", "item.item_name", "item.stock_uom", "item.uom", "doc.custom_merged_pos_invoice",
 		"merged.item_name", "doc.mode_of_payment", "doc.customer", "doc.currency",
 		"partner.mode_of_payment", "partner.customer", "partner.currency",
 	)),
 	"ury_bill_copy": (bill_copy, (
-		"doc.name", "doc.currency", "item.item_name", "tax.description", "payment.mode_of_payment", "doc.customer",
+		"doc.name", "doc.currency", "doc.room_number", "doc.custom_guest_label",
+		"item.item_name", "tax.description", "payment.mode_of_payment", "doc.customer",
+		"partner.name", "partner.item_name", "partner.tax_description", "partner.mode_of_payment",
 	)),
 	"ury_waiter_order_slip": (waiter_slip, (
 		"kot.invoice", "kot.restaurant_table", "kot.custom_guest_label", "kot.customer_name", "kot.order_no",
 		"waiter.full_name", "changed.item_name", "added.item",
 	)),
 }
-TAG_STRIPPED = {"tax.description"}
+TAG_STRIPPED = {"tax.description", "partner.tax_description"}
 
 
 def spec(name):

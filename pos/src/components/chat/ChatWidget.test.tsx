@@ -93,7 +93,7 @@ describe("ChatWidget", () => {
     await user.click(button);
 
     await waitFor(() => {
-      expect(screen.getByText("HUF")).toBeInTheDocument();
+      expect(screen.getByLabelText("Close chat")).toBeInTheDocument();
     });
   });
 
@@ -114,16 +114,17 @@ describe("ChatWidget", () => {
     expect(screen.queryByLabelText("Close chat")).not.toBeInTheDocument();
   });
 
-  it("displays HUF branding in header", async () => {
+  it("shows no third-party assistant brand in the open panel (Maximus only)", async () => {
     const user = userEvent.setup();
     render(<ChatWidgetTestWrapper aiEnabled={true} />);
 
     const button = screen.getByLabelText("Open assistant chat");
     await user.click(button);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("HUF").length).toBeGreaterThan(0);
-    });
+    const input = await screen.findByPlaceholderText("Ask about tonight…");
+    // Per element, so adjacent text cannot hide the badge from a word match.
+    expect(screen.queryAllByText(/\bHUF\b/)).toEqual([]);
+    expect(input.getAttribute("placeholder")).not.toMatch(/\bHUF\b/);
   });
 
   it("displays floating button with message icon", () => {
@@ -142,7 +143,7 @@ describe("ChatWidget", () => {
     render(<ChatWidgetTestWrapper aiEnabled={true} />);
 
     await user.click(screen.getByLabelText("Open assistant chat"));
-    const input = await screen.findByPlaceholderText("Ask HUF about tonight…");
+    const input = await screen.findByPlaceholderText("Ask about tonight…");
     await waitFor(() => expect(input).not.toBeDisabled());
     await waitFor(() => expect(screen.queryByText("Connecting…")).not.toBeInTheDocument());
     await user.type(input, "how are sales?{Enter}");

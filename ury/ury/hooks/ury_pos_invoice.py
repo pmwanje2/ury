@@ -608,6 +608,10 @@ def sync_merged_invoice(doc):
 
         target = frappe.get_doc("POS Invoice", linked_invoice)
 
+        # A partner that already posted has nothing left to mirror.
+        if target.docstatus != 0:
+            return
+
         # sync invoice printed
         target.invoice_printed = doc.invoice_printed
 
@@ -649,6 +653,10 @@ def sync_merged_invoice(doc):
         )
 
     except Exception:
+        # One guest bill posts both halves or neither: a partner that cannot post stops
+        # the primary posting (compatible with #143).
+        if doc.docstatus == 1:
+            raise
         frappe.log_error(
             frappe.get_traceback(),
             "Merged Invoice Sync Failed"

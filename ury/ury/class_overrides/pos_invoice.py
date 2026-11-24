@@ -7,7 +7,7 @@ from erpnext.accounts.doctype.pos_invoice.pos_invoice import (
 )
 
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 try:
 	from erpnext.accounts.doctype.pos_invoice.pos_invoice import ProductBundleStockValidationError
@@ -84,6 +84,18 @@ class CustomPOSInvoice(POSInvoice):
 				partner = frappe.get_doc("POS Invoice", saved.custom_merged_pos_invoice, check_permission="read")
 				check_split_target_access(partner, "read")
 				self.ury_print_partner = partner
+			if not getattr(self, "copy_number", None) and saved.docstatus == 1:
+				requested = cint((getattr(frappe, "form_dict", None) or {}).get("copy_number"))
+				if requested > 0:
+					self.copy_number = requested
+				else:
+					logged = frappe.db.get_value(
+						"URY Bill Reprint Log",
+						{"invoice": self.name},
+						"copy_number",
+						order_by="copy_number desc",
+					)
+					self.copy_number = cint(logged) or 1
 		super().before_print(settings)
 		if flt(getattr(self, "outstanding_amount", 0)) > 0:
 			# The native POS receipt renders terms. Add the balance to this print-only copy.

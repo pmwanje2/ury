@@ -12,12 +12,26 @@ it('names the configured site during POS startup', () => {
   } finally { vi.unstubAllGlobals(); }
 });
 
-it('offers the classic POS on small displays without a vendor name', () => {
+it('offers Desk on small displays without a vendor name', () => {
   render(<ScreenSizeDialog />);
-  expect(screen.getByText(/classic POS/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /open desk/i })).toBeInTheDocument();
+  expect(screen.queryByText(/ury|frappe|erpnext/i)).toBeNull();
 });
 
 it('uses the contrast-selected text colour on branded accent buttons', () => {
   render(<Button variant="accent">Continue</Button>);
   expect(screen.getByRole('button')).toHaveClass('bg-primary', 'text-primary-foreground');
+});
+
+// Source text with comments removed: what remains can reach a screen, a label or the bundle.
+const uiText = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+it('ships no third-party assistant name, logo or wordmark in the POS sources', () => {
+  // G51: users never see the assistant vendor's name or art; the product is Maximus.
+  const sources = import.meta.glob(['../src/**/*.{ts,tsx}', '!../src/**/*.test.{ts,tsx}'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+  expect(Object.keys(sources).length).toBeGreaterThan(10);
+  const offenders = Object.entries(sources)
+    .filter(([, text]) => /huf-logo-gradient/.test(text) || /\bHUF\b/.test(uiText(text)))
+    .map(([path]) => path);
+  expect(offenders).toEqual([]);
 });

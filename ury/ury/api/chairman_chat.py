@@ -983,4 +983,4 @@ def _delete_huf_file(file_id):
 		if frappe.db.exists("File", file_id):
 			frappe.delete_doc("File", file_id, ignore_permissions=True, force=True)
 	except Exception:
-		frappe.log_error(frappe.get_traceback(), "URY chairman chat: could not delete Huf TTS file")
+		frappe.log_error(frappe.get_traceback(), "URY chairman chat: could not delete assistant TTS file")
