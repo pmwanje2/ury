@@ -800,6 +800,12 @@ fixtures = [
                     "User-custom_override_pin_hash",
                     "POS Profile-custom_override_max_attempts",
                     "POS Profile-custom_override_lock_minutes",
+                    "Mode of Payment-custom_allow_offline",
+                    "Mode of Payment-custom_offline_requires_reference",
+                    "POS Profile-custom_offline_tender_limit",
+                    "POS Invoice-custom_room_charge_stay",
+                    "POS Invoice-custom_override_approver",
+                    "POS Invoice-custom_override_reason",
                 },
             ]
         ],

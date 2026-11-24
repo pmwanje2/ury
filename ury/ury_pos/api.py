@@ -211,14 +211,28 @@ def getRoom():
 
 @frappe.whitelist()
 def getModeOfPayment():
+    from ury.ury_pos.offline_tenders import profile_offline_payment_modes
+
     posDetails = getPosProfile()
     posProfile = posDetails["pos_profile"]
     posProfiles = frappe.get_doc("POS Profile", posProfile)
     mode_of_payments = posProfiles.payments
+    offline_by_mode = {
+        row["mode_of_payment"]: row
+        for row in profile_offline_payment_modes(
+            posProfiles, posDetails.get("room_charge_modes"), _frappe=frappe
+        )
+    }
     modeOfPayments = []
     for mop in mode_of_payments:
+        meta = offline_by_mode.get(mop.mode_of_payment, {})
         modeOfPayments.append(
-            {"mode_of_payment": mop.mode_of_payment, "opening_amount": float(0)}
+            {
+                "mode_of_payment": mop.mode_of_payment,
+                "opening_amount": float(0),
+                "allow_offline": bool(meta.get("allow_offline")),
+                "requires_reference": bool(meta.get("requires_reference")),
+            }
         )
     return modeOfPayments
 
@@ -891,6 +905,12 @@ def getPosProfile():
     room_charge_modes, room_charge_unconfigured = _room_charge_config(
         payment_mode_accounts, company, room_lookup_method
     )
+    from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
+
+    offline_payment_modes = profile_offline_payment_modes(
+        pos_profiles, room_charge_modes, _frappe=frappe
+    )
+    till_offline_limit = offline_tender_limit(pos_profiles)
 
     invoice_details = {
         "pos_profile": pos_profile_name,
@@ -930,6 +950,8 @@ def getPosProfile():
         "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": room_lookup_method,
+        "offline_tender_limit": till_offline_limit,
+        "offline_payment_modes": offline_payment_modes,
         **get_default_customer_config(pos_profiles),
     }
 
@@ -978,6 +1000,8 @@ def getPosProfileFull(pos_profile):
     if profile.branch != branch_name:
         frappe.throw(frappe._("Not permitted to view this POS Profile"), frappe.PermissionError)
 
+    from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
+
     return {
         "name": profile.name,
         "owner": profile.owner,
@@ -1011,6 +1035,8 @@ def getPosProfileFull(pos_profile):
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
+        "offline_tender_limit": offline_tender_limit(profile),
+        "offline_payment_modes": profile_offline_payment_modes(profile, _frappe=frappe),
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # one configured void reason per line; None on sites without the field

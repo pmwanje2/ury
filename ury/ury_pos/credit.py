@@ -35,7 +35,7 @@ def require_credit_access(profile):
 
 
 def credit_limit(customer, company):
-    return flt(
+    limit = flt(
         frappe.db.get_value(
             "Customer Credit Limit",
             {
@@ -48,6 +48,79 @@ def credit_limit(customer, company):
             for_update=True,
         )
     )
+    if limit > 0:
+        return limit
+    group = frappe.db.get_value("Customer", customer, "customer_group")
+    if isinstance(group, str) and group:
+        return flt(
+            frappe.db.get_value(
+                "Customer Credit Limit",
+                {
+                    "parenttype": "Customer Group",
+                    "parentfield": "credit_limits",
+                    "parent": group,
+                    "company": company,
+                },
+                "credit_limit",
+            )
+        )
+    return limit
+
+
+def _is_checkread_error(exc: Exception) -> bool:
+    args = getattr(exc, "args", ())
+    if args and args[0] == 1020:
+        return True
+    return "1020" in str(exc) and "changed since last read" in str(exc).lower()
+
+
+def _committed_exposure(customer, company, exclude=""):
+    """Read current committed exposure (GL Receivable + unconsolidated POS Invoices)
+    on a fresh short-lived MariaDB connection so concurrent REPEATABLE READ
+    transactions holding the Customer row lock see freshly committed invoices
+    without hitting MariaDB 11.8 errno 1020 (ER_CHECKREAD)."""
+    from frappe.database.database import Database
+
+    if not isinstance(frappe.db, Database):
+        return None
+    create_conn = getattr(frappe.db, "create_connection", None)
+    if not callable(create_conn):
+        return None
+    conn = None
+    try:
+        conn = create_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT SUM((CASE WHEN is_return = 1 THEN
+                     LEAST(0, COALESCE(NULLIF(rounded_total, 0), grand_total) - paid_amount)
+                   ELSE outstanding_amount END) * conversion_rate)
+                 FROM `tabPOS Invoice`
+                 WHERE customer=%s AND company=%s AND docstatus=1
+                   AND IFNULL(consolidated_invoice, '')='' AND status!='Consolidated' AND name!=%s""",
+                (customer, company, exclude),
+            )
+            pending_row = cur.fetchone()
+            pending_val = flt(pending_row[0]) if pending_row else 0.0
+
+            cur.execute(
+                """SELECT SUM(gle.debit - gle.credit)
+                 FROM `tabGL Entry` gle
+                 INNER JOIN `tabAccount` acc ON acc.name = gle.account
+                 WHERE gle.party_type='Customer' AND gle.party=%s AND gle.company=%s
+                   AND IFNULL(gle.is_cancelled, 0)=0 AND acc.account_type='Receivable'""",
+                (customer, company),
+            )
+            gl_row = cur.fetchone()
+            gl_val = flt(gl_row[0]) if gl_row else 0.0
+            return gl_val + pending_val
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def balance(customer, company, exclude="", *, current=False):
@@ -60,9 +133,23 @@ def balance(customer, company, exclude="", *, current=False):
                ELSE outstanding_amount END) * conversion_rate)
              FROM `tabPOS Invoice` WHERE customer=%s AND company=%s AND docstatus=1
                AND IFNULL(consolidated_invoice, '')='' AND status!='Consolidated' AND name!=%s"""
-    pending = frappe.db.sql(
-        sql + (" FOR UPDATE" if current else ""), (customer, company, exclude)
-    )
-    return get_customer_outstanding(
-        customer, company, ignore_outstanding_sales_order=True
-    ) + flt(pending[0][0])
+    try:
+        pending = frappe.db.sql(
+            sql + (" FOR UPDATE" if current else ""), (customer, company, exclude)
+        )
+        in_txn_total = get_customer_outstanding(
+            customer, company, ignore_outstanding_sales_order=True
+        ) + flt(pending[0][0])
+    except Exception as exc:
+        if not (current and _is_checkread_error(exc)):
+            raise
+        committed = _committed_exposure(customer, company, exclude)
+        if committed is not None:
+            return committed
+        raise
+
+    if current:
+        committed = _committed_exposure(customer, company, exclude)
+        if committed is not None:
+            return max(in_txn_total, committed)
+    return in_txn_total
