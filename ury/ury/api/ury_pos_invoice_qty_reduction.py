@@ -244,9 +244,9 @@ def reduce_order_item_qty(
 		)
 	cancel_kot_naming_series = "CNCL-" + (kot_naming_series or "")
 
-	# Sent items require reason + privilege/manager PIN; unsent (held) items stay free.
-	reason_info = None
+	# Sent items require reason + privilege/manager PIN (Simphony Opt 135 keeps unsent/held free).
 	approver = None
+	reason_info = None
 	if not held:
 		privilege = "void_sent_item" if new_qty == 0 else "reduce_sent_qty"
 		voided_qty = flt(current_qty) - flt(new_qty)
@@ -318,6 +318,17 @@ def reduce_order_item_qty(
 	# validate_invoice's post-print guard for exactly this legitimate write.
 	frappe.flags.ury_qty_reduction = True
 	try:
+		# A full removal (new_qty == 0) sets the row's qty to 0 rather than
+		# deleting it from the child table. Physically removing a row changes
+		# the child table's row COUNT after submit, which ERPNext's own
+		# accounts_controller.check_if_child_table_updated() cannot handle --
+		# it diffs before/after child rows by parallel index and raises a raw
+		# IndexError once the arrays are different lengths (observed live on
+		# a real restored dataset, not merely theoretical). Frontends must
+		# treat a qty == 0 row as removed/hidden -- it stays present in
+		# `items` for ERPNext's own post-submit bookkeeping, but contributes
+		# nothing to totals or KDS/cancel-KOT display beyond the cancel-KOT
+		# already generated for its full original qty.
 		item_row.qty = new_qty
 		if held and new_qty == 0:
 			item_row.ury_held = 0

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { call, parseFrappeError } from '@ury/core';
+import { call, parseFrappeError, printWithQz } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
+import { usePOSStore } from '../store/pos-store';
 import ReturnCheckDialog from '../components/ReturnCheckDialog';
 import ReopenAdjustCheckDialog from '../components/ReopenAdjustCheckDialog';
 
@@ -82,12 +83,28 @@ export default function SettledBills() {
     setBusy(true);
     setMessage('');
     try {
-      const { message: result } = await call.post<{ message: { status: string; failure_reason?: string } }>(
-        method + 'print_bill_copy',
-        { invoice: bill.name, idempotency_key: key },
-      );
+      const { message: result } = await call.post<{
+        message: {
+          status: string;
+          failure_reason?: string;
+          delivery?: string;
+          html?: string;
+          print_url?: string;
+          copy_number?: number;
+        };
+      }>(method + 'print_bill_copy', { invoice: bill.name, idempotency_key: key });
+      if (result.delivery === 'qz' && result.html) {
+        const qzHost = usePOSStore.getState().posProfile?.qz_host;
+        if (qzHost) await printWithQz(qzHost, result.html);
+      } else if (result.delivery === 'browser' && result.print_url) {
+        window.open(result.print_url, '_blank', 'noopener,noreferrer');
+      }
       setOutcome(result.status);
-      setMessage([tData('Copy'), result.status, result.failure_reason].filter(Boolean).join(' · '));
+      setMessage(
+        [tData('Copy'), result.copy_number ? `#${result.copy_number}` : '', result.status, result.failure_reason]
+          .filter(Boolean)
+          .join(' · '),
+      );
       if (result.status === 'COMPLETED') keys.delete(bill.name);
     } catch (error) {
       setOutcome('ERROR');

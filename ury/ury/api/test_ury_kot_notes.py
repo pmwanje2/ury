@@ -21,17 +21,29 @@ class OrderingCases:
         self.framework.ValidationError = ValueError
         self.framework.PermissionError = PermissionError
         self.framework.whitelist.side_effect = lambda **kwargs: lambda function: function
-        self.framework.session = Row(user="Guest")
+        self.framework.session = Row(user="Guest", sid="sid-test", data={})
+        self.framework.flags = SimpleNamespace()
+        self.framework.local = SimpleNamespace(flags=SimpleNamespace())
+        self.framework.request = None
         self.framework.set_user.side_effect = lambda user: setattr(self.framework.session, "user", user)
         self.framework.has_permission.return_value = True
         self.framework.get_roles.return_value = ["URY Cashier"]
         self.framework.throw.side_effect = lambda message, exc=ValueError: self.raise_error(message, exc)
-        self.framework.db.exists.return_value = True
+        self.privilege_rules = []
+        self.framework.db.exists.side_effect = lambda dt, filters=None: (
+            bool(self.privilege_rules) if dt == "POS Privilege Rule" else True
+        )
         self.framework.db.get_value.side_effect = self.get_value
         self.framework.db.get_list.return_value = [Row(price_list_rate=100)]
         self.framework.db.get_all.return_value = [Row(name="Kitchen")]
         self.framework.get_all.side_effect = lambda dt, **kw: (
-            [Row(item="Fish"), Row(item="Tea")] if dt == "URY Menu Item" else [Row(item_group="Food")]
+            list(self.privilege_rules)
+            if dt == "POS Privilege Rule"
+            else []
+            if dt == "POS Reason"
+            else [Row(item="Fish"), Row(item="Tea")]
+            if dt == "URY Menu Item"
+            else [Row(item_group="Food")]
         )
         self.framework.get_precision.return_value = 3
         self.framework.get_doc.side_effect = self.get_doc
@@ -58,11 +70,14 @@ class OrderingCases:
         pos_api.resolve_restaurant_menu = MagicMock(return_value={"items": [{"item": "Fish"}, {"item": "Tea"}]})
         printer = ModuleType("ury.ury.api.ury_waiter_print")
         printer.print_combined_waiter_order_slip = MagicMock()
+        user_perm = ModuleType("frappe.core.doctype.user_permission.user_permission")
+        user_perm.get_user_permissions = lambda user=None: {}
         self.enterContext(patch.dict(sys.modules, {
             "ury.ury.api.ury_mto_work_order_service": MagicMock(),
             "frappe": self.framework, "frappe.utils": utils,
             "frappe.rate_limiter": rate_limiter,
             "frappe.model.document": document, "erpnext.controllers.queries": queries,
+            "frappe.core.doctype.user_permission.user_permission": user_perm,
             "ury.ury_pos.api": pos_api, "ury.ury.api.ury_waiter_print": printer,
         }))
         self.kot = self.load_module("ury.ury.api.ury_kot_generate", "ury_kot_generate.py")
@@ -113,13 +128,21 @@ class OrderingCases:
         raise exception(message)
 
     @staticmethod
-    def get_value(doctype, filters, field, *, for_update=False):
+    def get_value(doctype, filters, field, *, for_update=False, as_dict=False):
+        if doctype == "User":
+            if as_dict or isinstance(field, (list, tuple)):
+                return {"enabled": 1, "user_type": "System User"}
+            return 1 if field == "enabled" else "System User"
+        if doctype == "POS Profile" and field in ("company", "branch"):
+            return {"company": "Company", "branch": "Branch A"}[field]
         if doctype == "Item" and field == "disabled":
             return 0
         if doctype == "Workflow":
             return None  # the fixture site has no Item Price release workflow
-        return {"ury_offline_capture": 1, "item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
-                "active_menu": "Menu A"}.get(field)
+        if isinstance(field, str):
+            return {"ury_offline_capture": 1, "item_group": "Food", "course": "Main", "cost_center": "CC", "name": "Menu A",
+                    "active_menu": "Menu A"}.get(field)
+        return None
 
     def get_doc(self, doctype, name=None):
         if isinstance(doctype, dict):
@@ -547,7 +570,7 @@ class TestSentNotePermissions(OrderingCases, TestCase):
         self.framework.get_roles.return_value = ["URY Manager"]
         self.pos_profile.remove_items = 1
         self.seed("no onions")
-        self.send([self.requested("extra chilli")])
+        self.send([self.requested("extra chilli")], void_reason="Guest changed mind")
         self.framework.log_error.assert_not_called()
         self.assertEqual([(ticket.type, row.comments, getattr(row, "cancelled_qty", None))
                           for ticket in self.tickets for row in ticket.kot_items],
@@ -557,7 +580,24 @@ class TestSentNotePermissions(OrderingCases, TestCase):
         self.invoice.save.assert_called_once()
 
     def test_removal_permission_does_not_require_a_manager_role(self):
+        # Under B2a, non-manager roles may perform void_sent_item when granted by POS Privilege Rule.
         self.pos_profile.remove_items = 1
+        self.privilege_rules.append(
+            Row(
+                company="Company",
+                pos_profile="",
+                privilege="void_sent_item",
+                role="URY Captain",
+                may_perform=1,
+                may_authorise=0,
+                max_percent=0,
+                max_amount=0,
+                requires_reason=0,
+                allow_self_approval=0,
+                require_clocked_in=0,
+                privilege_group=0,
+            )
+        )
         self.seed("no onions", 2)
         self.seed("")
         self.send([self.requested("no onions"), self.requested("", 2)])

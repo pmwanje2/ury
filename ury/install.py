@@ -58,6 +58,10 @@ def after_install():
 
         ensure_default()
 
+        from ury.ury.print_format.defaults import configure_pos_invoice_print_formats
+
+        configure_pos_invoice_print_formats()
+
         click.secho("Thank you for installing URY App!", fg="green")
 
 

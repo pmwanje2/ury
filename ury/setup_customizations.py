@@ -521,6 +521,15 @@ def get_custom_fields():
 				"insert_after": "custom_override_lock_minutes",
 				"translatable": 0,
 			},
+			{
+				"fieldname": "custom_efris_print_wait_seconds",
+				"fieldtype": "Int",
+				"label": "Fiscal Receipt Wait Timeout (Seconds)",
+				"default": "5",
+				"non_negative": 1,
+				"description": "Seconds the till waits for the EFRIS FDN before printing a pending receipt and queueing an automatic COPY reprint (default 5; 0 prints immediately; max 15).",
+				"insert_after": "custom_disable_print_status_tracking",
+			}
 		],
   
 		"POS Opening Entry": [
@@ -845,22 +854,6 @@ def get_custom_fields():
 				"read_only": 1,
 				"print_hide": 1,
 				"insert_after": "reference_no",
-			},
-		],
-
-		"User": [
-			{
-				"fieldname": "custom_override_pin_hash",
-				"fieldtype": "Data",
-				"label": "Approval PIN Hash",
-				"insert_after": "custom_floor_pin_hash",
-				"hidden": 1,
-				"read_only": 1,
-				"no_copy": 1,
-				"print_hide": 1,
-				"report_hide": 1,
-				"unique": 0,
-				"translatable": 0,
 			},
 		],
 

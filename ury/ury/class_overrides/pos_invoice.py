@@ -5,9 +5,8 @@ from erpnext.accounts.doctype.pos_invoice.pos_invoice import (
 	POSInvoice,
 	get_stock_availability,
 )
-
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 try:
 	from erpnext.accounts.doctype.pos_invoice.pos_invoice import ProductBundleStockValidationError
@@ -35,11 +34,11 @@ try:
 except ImportError:
 	def get_product_bundle_stock_availability(item_code, warehouse, item_qty):
 		try:
-			from erpnext.stock.stock_ledger import is_negative_stock_allowed
 			from erpnext.accounts.doctype.pos_invoice.pos_invoice import (
 				get_bin_qty,
 				get_pos_reserved_qty,
 			)
+			from erpnext.stock.stock_ledger import is_negative_stock_allowed
 
 			is_stock_item = True
 			bundle = frappe.get_doc("Product Bundle", item_code)
@@ -69,21 +68,64 @@ _COPY_RENDER_MARKER = object()
 class CustomPOSInvoice(POSInvoice):
 	def before_print(self, settings=None):
 		from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+		from ury.ury.print_format.defaults import validate_pos_invoice_print_format
+
+		# Enforce Print Format.disabled (closing Frappe v16 beta bypass) and block
+		# XSS-vulnerable standard formats on hospitality POS Invoices without frame walking.
+		form_dict = getattr(frappe, "form_dict", None)
+		requested_fmt = None
+		if isinstance(form_dict, dict):
+			requested_fmt = form_dict.get("format") or form_dict.get("print_format")
+		validate_pos_invoice_print_format(self, requested_fmt)
+
+		is_internal_copy = getattr(self, "_ury_copy_render", None) is _COPY_RENDER_MARKER
+		if is_internal_copy:
+			self.copy_number = cint(getattr(self, "copy_number", None)) or 1
+		else:
+			# Never trust client-supplied copy_timestamp or non-integer copy_number from serialized doc payloads.
+			self.copy_timestamp = None
 
 		# Frappe printview also accepts a serialized document. Authorize the saved check.
 		if self.name and frappe.db.exists("POS Invoice", self.name):
-			permission = "read" if getattr(self, "_ury_copy_render", None) is _COPY_RENDER_MARKER else "write"
+			permission = "read" if is_internal_copy else "write"
 			saved = frappe.get_doc("POS Invoice", self.name)
 			check_split_target_access(saved, permission)
 			if saved.get("custom_merged_pos_invoice") and saved.get("custom_merged_pos_invoice") == self.get("custom_merged_pos_invoice"):
 				partner = frappe.get_doc("POS Invoice", saved.custom_merged_pos_invoice, check_permission="read")
 				check_split_target_access(partner, "read")
 				self.ury_print_partner = partner
+			if not is_internal_copy and saved.docstatus == 1:
+				logged = cint(
+					frappe.db.get_value(
+						"URY Bill Reprint Log",
+						{"invoice": self.name},
+						"copy_number",
+						order_by="copy_number desc",
+					)
+				)
+				requested = cint((form_dict if isinstance(form_dict, dict) else {}).get("copy_number"))
+				if logged > 0 and 1 <= requested <= logged:
+					self.copy_number = requested
+				else:
+					self.copy_number = logged or 1
+		elif not is_internal_copy:
+			self.copy_number = cint(getattr(self, "copy_number", None)) or 1
 		super().before_print(settings)
 		if flt(getattr(self, "outstanding_amount", 0)) > 0:
 			# The native POS receipt renders terms. Add the balance to this print-only copy.
 			line = _("Charged to account {0}: {1} {2}").format(self.customer, self.outstanding_amount, self.currency)
 			self.terms = (self.terms or "") + "<p>" + escape(line) + "</p>"
+
+	def check_phone_payments(self):
+		"""Validate Phone payment rows against the sum of live confirmed Payment Requests.
+
+		ERPNext's stock check_phone_payments() uses get_value(..., status='Paid'), which
+		both skips validation when no Paid PR exists and breaks when a grown check has
+		two Paid Payment Requests or a partially refunded Payment Request.
+		"""
+		from ury.ury.hooks.ury_pos_invoice import validate_confirmed_phone_payments
+
+		validate_confirmed_phone_payments(self, "on_submit")
 
 	def validate_stock_availablility(self):
 		if self.is_return or frappe.get_cached_doc("Stock Settings").allow_negative_stock:

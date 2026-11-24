@@ -38,7 +38,8 @@
     "confirm_cancel": "Confirmer l'annulation",
     "loading_ury_pos": "Chargement de {{name}}...",
     "please_wait_setup": "Veuillez patienter pendant que nous préparons tout",
-    "reserved": "Réservé"
+    "reserved": "Réservé",
+    "dismiss": "Fermer"
   },
   "header": {
     "search_placeholder_default": "Rechercher commandes, articles ou clients...",
@@ -142,6 +143,8 @@
     "room_match": "Chambre {{room}} · {{guest}} · départ {{departure}}",
     "room_no_post": "La note de ce client est fermée aux imputations",
     "room_check_required": "Vérifiez la chambre avant une imputation",
+    "receipt_print_failed": "Paiement enregistré, mais le reçu ne s'est pas imprimé : {{reason}}. Réimprimez-le depuis Commandes.",
+    "fiscal_reprint_printed": "Reçu fiscal COPIE #{{copy}} imprimé pour {{invoice}} (FDN {{fdn}}).",
     "room_check_failed": "Impossible de vérifier cette chambre",
     "room_charge_not_configured": "L'imputation en chambre n'est pas configurée pour cette société. La finance associe le compte de compensation du folio client.",
     "discount_not_applied": "Appuyez sur Appliquer pour mettre à jour le total avant de payer.",
@@ -260,7 +263,8 @@
       "previous": "Précédent",
       "next": "Suivant",
       "page": "Page {{number}}"
-    }
+    },
+    "reduce_item_qty": "Réduire la quantité de {{item}}"
   },
   "tables": {
     "layout_view": "Vue de mise en page",
@@ -819,7 +823,9 @@
     "error_expired": "Cette approbation a expiré ou a déjà été utilisée. Demandez une nouvelle approbation.",
     "error_changed": "L'addition ou les montants ont changé après l'approbation. Demandez une nouvelle approbation.",
     "error_required": "Un responsable doit approuver cette action.",
-    "error_generic": "L'approbation n'a pas pu être effectuée. Réessayez."
+    "error_generic": "L'approbation n'a pas pu être effectuée. Réessayez.",
+    "pin_entered_count": "{{count}} chiffres saisis",
+    "error_reason": "Choisissez un motif actif (et ajoutez une note si nécessaire)."
   },
   "approval_pin": {
     "title": "Définir mon PIN d'approbation",
@@ -844,7 +850,8 @@
     "clear_policy_note": "Les responsables peuvent effacer le PIN d'un employé afin qu'il en choisisse un nouveau. Un PIN n'est jamais lisible ni définissable par un tiers.",
     "clear_pin": "Effacer le PIN",
     "cleared": "PIN d'approbation effacé pour {{name}}.",
-    "clear_failed": "Impossible d'effacer ce PIN d'approbation."
+    "clear_failed": "Impossible d'effacer ce PIN d'approbation.",
+    "error_wrong_password": "Votre mot de passe actuel ne correspond pas. Votre session de caisse reste ouverte."
   },
   "void_return": {
     "void_item_title": "Annuler ou passer en perte un article envoyé",

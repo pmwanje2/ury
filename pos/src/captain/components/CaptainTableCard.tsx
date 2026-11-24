@@ -17,6 +17,7 @@ export interface CaptainTableCardProps {
   /** Names of other tables merged into this one's cluster (excludes `table.name` itself). */
   mergePartners?: string[];
   onTap: () => void;
+  currency?: string;
   serviceRequest?: { request_type: string; escalated: boolean; status?: string } | null;
 }
 
@@ -53,6 +54,7 @@ const CaptainTableCard = ({
   mergePartners,
   onTap,
   serviceRequest = null,
+  currency,
 }: CaptainTableCardProps) => {
   const callingNow = serviceRequest && serviceRequest.status !== 'Acknowledged';
   const isOccupied = table.occupied === 1;
@@ -145,7 +147,7 @@ const CaptainTableCard = ({
           <div className="flex items-center justify-between text-xs font-medium opacity-80">
             <span>{elapsed ?? '—'}</span>
             {typeof order?.grandTotal === 'number' && (
-              <span>{formatCurrency(order.grandTotal)}</span>
+              <span>{formatCurrency(order.grandTotal, currency)}</span>
             )}
           </div>
         )}

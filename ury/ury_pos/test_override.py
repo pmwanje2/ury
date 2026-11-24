@@ -1,15 +1,21 @@
-"""Site-less unit tests for POS manager PIN authorisation (Simphony/SAP core + Amendment 1, B2a).
+"""Site-less unit tests for POS manager PIN authorisation (Simphony/SAP core + Amendment 1 + R2 security hardening).
 
-Tests the fixed shared contract + Amendment 1 in `ury/ury_pos/override.py`, the
-`POS Privilege Rule`, `POS Authorisation Log`, and `POS Reason` DocTypes,
-`User.custom_override_pin_hash` and POS Profile lockout fields, seed-once patch
-behavior, and all adversarial cases.
+Tests the fixed shared contract + Amendment 1 + R2 security fixes in `ury/ury_pos/override.py`:
+- PINs stored exclusively in Frappe `__Auth` via `update_password`/`check_password` (never on `User`)
+- Wrong password in `set_my_pin` refuses with ValidationError (never AuthenticationError) + counts failures
+- Impersonated and non-interactive/AI sessions refused across `authorise`, `consume`, `may_perform`, `list_approvers`, enrolment
+- Fail closed when company/profile has zero rules (manager roles only, never "everyone"); explicit 0% discount rule is 0%
+- `consume()` re-checks approver & requester role/rule/outlet/enabled and survives caller DB rollback
+- `requires_reason` enforced server-side against active `POS Reason` rows (+ mandatory note)
+- DB-backed lockout survives Redis flush, scoped per `(approver, pos_profile)`, with per-session rate limit
+- `list_approvers` enforces requester outlet/company membership; external verifier codes pass through without strikes
 """
 
 import hashlib
 import importlib.util
 import json
 import re
+import secrets
 import sys
 import unittest
 from datetime import datetime, timedelta
@@ -94,7 +100,7 @@ class FakeDocRecord(Doc):
 
 
 class InMemoryStore:
-    """In-memory stand-in for MariaDB tables used by override.py."""
+    """In-memory stand-in for MariaDB tables (`__Auth`, `POS Authorisation Log`, etc.)."""
 
     def __init__(self, case):
         self.case = case
@@ -111,14 +117,42 @@ class InMemoryStore:
         self.invoices = {}  # name -> Doc
         self.auth_logs = []  # list[Doc]
         self.consumed_hashes = set()
-        self.passwords = {}  # user -> plain password
+        # __Auth table: (doctype, name_lower, fieldname) -> (canonical_name, salted_hash)
+        self.auth_table = {}
+        self.defaults = {}
         self.has_approval_limit_doctype = True
         self.has_checkin_doctype = True
         self.pending_logs = []
         self.committed_logs = []
         self.force_consume_collision = False
 
-    def insert_doc(self, doc):
+    def set_auth(self, doctype, user, fieldname, secret):
+        salt = secrets.token_hex(16)
+        digest = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt.encode(), 1000).hex()
+        self.auth_table[(doctype, user.casefold(), fieldname)] = (user, f"$pbkdf2-sha256${salt}${digest}")
+
+    def verify_auth(self, doctype, user, fieldname, secret):
+        entry = self.auth_table.get((doctype, user.casefold(), fieldname))
+        if not entry:
+            return None
+        canonical, stored = entry
+        _, salt, digest = stored.split("$")[1:]
+        candidate = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt.encode(), 1000).hex()
+        if candidate == digest:
+            return canonical
+        return None
+
+    def get_auth_hash(self, doctype, user, fieldname):
+        entry = self.auth_table.get((doctype, user.casefold(), fieldname))
+        return entry[1] if entry else None
+
+    def delete_auth(self, doctype, user, fieldname):
+        self.auth_table.pop((doctype, user.casefold(), fieldname), None)
+
+    def users_with_auth(self, doctype, fieldname):
+        return [canonical for (dt, _u, fn), (canonical, _h) in self.auth_table.items() if dt == doctype and fn == fieldname]
+
+    def insert_doc(self, doc, *, isolated=False):
         if doc.doctype == "POS Authorisation Log":
             if doc.get("consumed_token_hash"):
                 if self.force_consume_collision or doc["consumed_token_hash"] in self.consumed_hashes:
@@ -128,7 +162,10 @@ class InMemoryStore:
             if not row.get("name"):
                 row["name"] = f"POS-AUTH-LOG-{len(self.auth_logs) + 1:04d}"
             self.auth_logs.append(row)
-            self.pending_logs.append(row)
+            if isolated:
+                self.committed_logs.append(row)
+            else:
+                self.pending_logs.append(row)
         elif doc.doctype == "POS Privilege Rule":
             row = Doc(doc)
             if not row.get("name"):
@@ -194,7 +231,7 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.ValidationError = Invalid
         self.frappe.UniqueValidationError = UniqueCollision
         self.frappe.AuthenticationError = AuthenticationFailed
-        self.frappe.session = Doc(user="cashier@example.test", sid="sess-cashier-1")
+        self.frappe.session = Doc(user="cashier@example.test", sid="sess-cashier-1", data={})
         self.frappe.flags = Doc()
         self.frappe.conf = {}
         self.frappe.form_dict = {}
@@ -202,18 +239,19 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.local = Doc(session=self.frappe.session)
         self.frappe.has_permission.return_value = True
         self.frappe.get_hooks.side_effect = lambda name: self.hooks.get(name, [])
+        self.frappe.generate_hash.side_effect = lambda length=10: secrets.token_hex(length)[:length]
 
         self.store.users = {
-            "cashier@example.test": Doc(name="cashier@example.test", full_name="Carla Cashier", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "manager@example.test": Doc(name="manager@example.test", full_name="Maya Manager", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "manager2@example.test": Doc(name="manager2@example.test", full_name="Moses Manager", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "admin_user@example.test": Doc(name="admin_user@example.test", full_name="Alex Admin", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "sysmgr@example.test": Doc(name="sysmgr@example.test", full_name="Sam SysMgr", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "disabled@example.test": Doc(name="disabled@example.test", full_name="Dana Disabled", enabled=0, user_type="System User", custom_override_pin_hash=None),
-            "other_outlet@example.test": Doc(name="other_outlet@example.test", full_name="Omar OtherOutlet", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "other_co@example.test": Doc(name="other_co@example.test", full_name="Olivia OtherCo", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "Administrator": Doc(name="Administrator", full_name="Administrator", enabled=1, user_type="System User", custom_override_pin_hash=None),
-            "Guest": Doc(name="Guest", full_name="Guest", enabled=1, user_type="Website User", custom_override_pin_hash=None),
+            "cashier@example.test": Doc(name="cashier@example.test", full_name="Carla Cashier", enabled=1, user_type="System User"),
+            "manager@example.test": Doc(name="manager@example.test", full_name="Maya Manager", enabled=1, user_type="System User"),
+            "manager2@example.test": Doc(name="manager2@example.test", full_name="Moses Manager", enabled=1, user_type="System User"),
+            "admin_user@example.test": Doc(name="admin_user@example.test", full_name="Alex Admin", enabled=1, user_type="System User"),
+            "sysmgr@example.test": Doc(name="sysmgr@example.test", full_name="Sam SysMgr", enabled=1, user_type="System User"),
+            "disabled@example.test": Doc(name="disabled@example.test", full_name="Dana Disabled", enabled=0, user_type="System User"),
+            "other_outlet@example.test": Doc(name="other_outlet@example.test", full_name="Omar OtherOutlet", enabled=1, user_type="System User"),
+            "other_co@example.test": Doc(name="other_co@example.test", full_name="Olivia OtherCo", enabled=1, user_type="System User"),
+            "Administrator": Doc(name="Administrator", full_name="Administrator", enabled=1, user_type="System User"),
+            "Guest": Doc(name="Guest", full_name="Guest", enabled=1, user_type="Website User"),
         }
         self.store.user_roles = {
             "cashier@example.test": ["URY Cashier"],
@@ -227,14 +265,22 @@ class TestOverrideContract(unittest.TestCase):
             "Administrator": ["Administrator", "System Manager", "URY Admin", "URY Manager", "URY Cashier"],
             "Guest": ["Guest"],
         }
-        self.store.passwords = {
-            "manager@example.test": "secret-pass-1",
-            "manager2@example.test": "secret-pass-2",
-            "cashier@example.test": "cashier-pass",
-        }
+        for u, pw in (
+            ("manager@example.test", "secret-pass-1"),
+            ("manager2@example.test", "secret-pass-2"),
+            ("cashier@example.test", "cashier-pass"),
+            ("admin_user@example.test", "admin-pass"),
+        ):
+            self.store.set_auth("User", u, "password", pw)
+
         self.store.profiles = {
             "Main Till": Doc(
                 name="Main Till", company="Hotel Co", branch="Main Branch", disabled=0,
+                custom_override_max_attempts=5, custom_override_lock_minutes=15,
+                applicable_for_users=[Doc(user="cashier@example.test")],
+            ),
+            "Bar Till": Doc(
+                name="Bar Till", company="Hotel Co", branch="Main Branch", disabled=0,
                 custom_override_max_attempts=5, custom_override_lock_minutes=15,
                 applicable_for_users=[Doc(user="cashier@example.test")],
             ),
@@ -262,11 +308,15 @@ class TestOverrideContract(unittest.TestCase):
         self.store.invoices = {
             "POS-INV-100": Doc(
                 name="POS-INV-100", owner="cashier@example.test", waiter="cashier@example.test",
-                pos_profile="Main Till", company="Hotel Co",
+                pos_profile="Main Till", branch="Main Branch", company="Hotel Co",
             ),
             "POS-INV-MGR": Doc(
                 name="POS-INV-MGR", owner="manager@example.test", waiter="manager@example.test",
-                pos_profile="Main Till", company="Hotel Co",
+                pos_profile="Main Till", branch="Main Branch", company="Hotel Co",
+            ),
+            "POS-INV-POOL": Doc(
+                name="POS-INV-POOL", owner="other_outlet@example.test", waiter="other_outlet@example.test",
+                pos_profile="Pool Till", branch="Pool Branch", company="Hotel Co",
             ),
         }
         for priv in EXPECTED_PRIVILEGES:
@@ -302,15 +352,21 @@ class TestOverrideContract(unittest.TestCase):
             Doc(name="VOID-GUEST", code="VOID-GUEST", description="Guest changed mind", applies_to="void_sent_item\nreduce_sent_qty\ncancel_check", requires_note=0, sort_order=10, disabled=0),
             Doc(name="VOID-OFF", code="VOID-OFF", description="Disabled reason", applies_to="void_sent_item", requires_note=0, sort_order=15, disabled=1),
             Doc(name="RET-QUAL", code="RET-QUAL", description="Quality issue", applies_to="return", requires_note=0, sort_order=20, disabled=0),
+            Doc(name="NOSALE-CHANGE", code="NOSALE-CHANGE", description="Making change for guest", applies_to="no_sale", requires_note=0, sort_order=30, disabled=0),
+            Doc(name="PRICE-SPECIAL", code="PRICE-SPECIAL", description="Manager agreed price", applies_to="price_override\nopen_item", requires_note=1, sort_order=40, disabled=0),
             Doc(name="OTHER", code="OTHER", description="Other", applies_to="", requires_note=1, sort_order=999, disabled=0),
         ]
 
         self._wire_frappe_db()
 
-        def check_password(user, pwd, **kw):
-            if self.store.passwords.get(user) != pwd:
-                raise AuthenticationFailed("Incorrect password")
-            return user
+        def check_password(user, pwd, doctype="User", fieldname="password", delete_tracker_cache=True):
+            matched = self.store.verify_auth(doctype, user, fieldname, pwd)
+            if not matched:
+                raise AuthenticationFailed("Incorrect User or Password")
+            return matched
+
+        def update_password(user, pwd, doctype="User", fieldname="password", logout_all_sessions=False):
+            self.store.set_auth(doctype, user, fieldname, pwd)
 
         self.audit = MagicMock()
         self.frappe.utils = SimpleNamespace(
@@ -331,6 +387,7 @@ class TestOverrideContract(unittest.TestCase):
             "frappe.utils.password": SimpleNamespace(
                 get_encryption_key=lambda: "test-site-encryption-key",
                 check_password=check_password,
+                update_password=update_password,
             ),
             "frappe.core": ModuleType("frappe.core"),
             "frappe.core.doctype": ModuleType("frappe.core.doctype"),
@@ -444,6 +501,83 @@ class TestOverrideContract(unittest.TestCase):
             if doctype == "User" and name in store.users:
                 store.users[name][field] = value
 
+        def db_sql(query, values=None, as_dict=False, **kw):
+            q = " ".join(str(query).split())
+            q_upper = q.upper()
+            vals = values or ()
+            if "`__AUTH`" in q_upper:
+                if q_upper.startswith("SELECT"):
+                    if "AND NAME =" in q_upper or "AND NAME=" in q_upper:
+                        dt, user, fn = vals[0], vals[1], vals[2]
+                        entry = store.auth_table.get((dt, str(user).casefold(), fn))
+                        if not entry:
+                            return []
+                        return [Doc(name=entry[0])] if as_dict else [(entry[0],)]
+                    dt, fn = vals[0], vals[1]
+                    users = store.users_with_auth(dt, fn)
+                    return [Doc(name=u) for u in users] if as_dict else [(u,) for u in users]
+                if q_upper.startswith("DELETE"):
+                    dt, user, fn = vals[0], vals[1], vals[2]
+                    store.delete_auth(dt, str(user), fn)
+                    return []
+            if "`TABPOS AUTHORISATION LOG`" in q_upper:
+                if q_upper.startswith("SELECT MAX(EVENT_TIME)"):
+                    # Reset timestamp query for approver + pos_profile or password
+                    if "OUTCOME IN" in q_upper and "POS_PROFILE" in q_upper:
+                        approver, pos_profile, since = vals[0], vals[1], vals[2]
+                        times = [
+                            r["event_time"] for r in store.auth_logs
+                            if (r.get("approver") or "").casefold() == str(approver).casefold()
+                            and r.get("event_time") >= since
+                            and (
+                                (r.get("outcome") == "Approved" and r.get("pos_profile") == pos_profile)
+                                or r.get("outcome") == "PIN Reset"
+                            )
+                        ]
+                        mx = max(times) if times else None
+                        return [Doc(last_reset=mx)] if as_dict else [(mx,)]
+                    if "OUTCOME = 'PIN RESET'" in q_upper or "OUTCOME='PIN RESET'" in q_upper:
+                        user, since = vals[0], vals[1]
+                        times = [
+                            r["event_time"] for r in store.auth_logs
+                            if (r.get("approver") or "").casefold() == str(user).casefold()
+                            and r.get("outcome") == "PIN Reset"
+                            and r.get("event_time") >= since
+                        ]
+                        mx = max(times) if times else None
+                        return [Doc(last_reset=mx)] if as_dict else [(mx,)]
+                if q_upper.startswith("SELECT COUNT(*)"):
+                    if "OUTCOME = 'FAILED PASSWORD'" in q_upper:
+                        user, since = vals[0], vals[1]
+                        cnt = sum(
+                            1 for r in store.auth_logs
+                            if (r.get("approver") or "").casefold() == str(user).casefold()
+                            and r.get("outcome") == "Failed Password"
+                            and r.get("event_time") > since
+                        )
+                        return [Doc(cnt=cnt)] if as_dict else [(cnt,)]
+                    if "REQUESTER =" in q_upper:
+                        requester, pos_profile, since = vals[0], vals[1], vals[2]
+                        cnt = sum(
+                            1 for r in store.auth_logs
+                            if (r.get("requester") or "").casefold() == str(requester).casefold()
+                            and r.get("pos_profile") == pos_profile
+                            and r.get("outcome") == "Failed PIN"
+                            and r.get("event_time") > since
+                        )
+                        return [Doc(cnt=cnt)] if as_dict else [(cnt,)]
+                    if "APPROVER =" in q_upper:
+                        approver, pos_profile, since = vals[0], vals[1], vals[2]
+                        cnt = sum(
+                            1 for r in store.auth_logs
+                            if (r.get("approver") or "").casefold() == str(approver).casefold()
+                            and r.get("pos_profile") == pos_profile
+                            and r.get("outcome") == "Failed PIN"
+                            and r.get("event_time") > since
+                        )
+                        return [Doc(cnt=cnt)] if as_dict else [(cnt,)]
+            return []
+
         def get_doc(arg1, arg2=None, **kw):
             if isinstance(arg1, dict):
                 return FakeDocRecord(store, arg1["doctype"], arg1)
@@ -512,6 +646,9 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.db.exists.side_effect = db_exists
         self.frappe.db.get_value.side_effect = db_get_value
         self.frappe.db.set_value.side_effect = db_set_value
+        self.frappe.db.sql.side_effect = db_sql
+        self.frappe.db.get_default.side_effect = lambda k: store.defaults.get(k)
+        self.frappe.db.set_default.side_effect = lambda k, v: store.defaults.__setitem__(k, v)
         self.frappe.db.table_exists.side_effect = db_table_exists
         self.frappe.db.commit.side_effect = store.commit
         self.frappe.db.rollback.side_effect = store.rollback
@@ -534,8 +671,19 @@ class TestOverrideContract(unittest.TestCase):
         prev_user = self.frappe.session.user
         try:
             self.frappe.session.user = user
-            self.store.passwords.setdefault(user, "pw-" + user)
-            api.set_my_pin(self.store.passwords[user], pin)
+            pw = "pw-" + user
+            if not self.store.get_auth_hash("User", user, "password"):
+                self.store.set_auth("User", user, "password", pw)
+                pass_to_use = pw
+            else:
+                # Use known fixture passwords for standard test accounts.
+                pass_to_use = {
+                    "manager@example.test": "secret-pass-1",
+                    "manager2@example.test": "secret-pass-2",
+                    "cashier@example.test": "cashier-pass",
+                    "admin_user@example.test": "admin-pass",
+                }.get(user, pw)
+            api.set_my_pin(pass_to_use, pin)
         finally:
             self.frappe.session.user = prev_user
 
@@ -549,7 +697,7 @@ class TestOverrideContract(unittest.TestCase):
         self.assertNotRegex(message, VENDOR_RE, f"Vendor name leaked in refusal: {message!r}")
         return message
 
-    # --- Schema, Fixtures & Hooks (Contract + Amendment 1) ---
+    # --- Schema, Fixtures & Hooks (Contract + Amendment 1 + R2 P0 #1 / P1 #5) ---
 
     def test_doctypes_exist_with_contract_and_amendment_1_fields_and_docperms(self):
         rule_path = ROOT / "ury/ury/doctype/pos_privilege_rule/pos_privilege_rule.json"
@@ -590,6 +738,8 @@ class TestOverrideContract(unittest.TestCase):
         ):
             self.assertIn(name, log_fields, f"POS Authorisation Log missing field {name}")
         self.assertEqual(log_fields["consumed_token_hash"].get("unique"), 1)
+        outcome_opts = set((log_fields["outcome"].get("options") or "").splitlines())
+        self.assertTrue({"Approved", "Consumed", "Refused", "Failed PIN", "Failed Password", "Locked", "PIN Reset"} <= outcome_opts)
         for perm in log_dt["permissions"]:
             self.assertEqual(perm.get("create", 0), 0, f"Log must not grant create to {perm['role']}")
             self.assertEqual(perm.get("write", 0), 0, f"Log must not grant write to {perm['role']}")
@@ -606,15 +756,13 @@ class TestOverrideContract(unittest.TestCase):
         self.assertEqual(reason_perms.get("URY Cashier", {}).get("read"), 1)
         self.assertEqual(reason_perms.get("URY Cashier", {}).get("write", 0), 0)
 
-    def test_custom_fields_and_hooks_declare_override_pin_hash_non_unique_and_lockout_config(self):
+    def test_override_pin_hash_removed_from_user_and_company_after_insert_wired(self):
+        """P0 #1 & P1 #5: PIN hash must NOT exist on User; Company.after_insert seeds rules."""
         fields = {f["name"]: f for f in json.loads((ROOT / "ury/fixtures/custom_field.json").read_text())}
-        pin_field = fields.get("User-custom_override_pin_hash", {})
-        self.assertEqual(pin_field.get("dt"), "User")
-        self.assertEqual(pin_field.get("fieldname"), "custom_override_pin_hash")
-        self.assertEqual(pin_field.get("fieldtype"), "Data")
-        self.assertEqual(pin_field.get("unique", 0), 0, "Shared PINs between users must be permitted")
-        for flag in ("hidden", "read_only", "no_copy", "print_hide", "report_hide"):
-            self.assertEqual(pin_field.get(flag), 1, flag)
+        self.assertNotIn("User-custom_override_pin_hash", fields, "PIN hash must not be a Custom Field on User")
+
+        setup_src = (ROOT / "ury/setup_customizations.py").read_text()
+        self.assertNotIn("custom_override_pin_hash", setup_src, "setup_customizations must not recreate User PIN field")
 
         for fname in ("custom_override_max_attempts", "custom_override_lock_minutes"):
             cf = fields.get(f"POS Profile-{fname}", {})
@@ -624,15 +772,22 @@ class TestOverrideContract(unittest.TestCase):
         from ury import hooks
         fixture = next(row for row in hooks.fixtures if row.get("doctype") == "Custom Field")
         names = next(row[2] for row in fixture["filters"] if row[:2] == ["name", "in"])
+        self.assertNotIn("User-custom_override_pin_hash", names)
         for name in (
-            "User-custom_override_pin_hash",
             "POS Profile-custom_override_max_attempts",
             "POS Profile-custom_override_lock_minutes",
         ):
             self.assertIn(name, names)
 
+        company_events = hooks.doc_events.get("Company", {})
+        after_insert = company_events.get("after_insert")
+        if isinstance(after_insert, str):
+            after_insert = [after_insert]
+        self.assertIn("ury.ury_pos.override.on_company_after_insert", after_insert or [])
+
         patches_txt = (ROOT / "ury/patches.txt").read_text()
         self.assertIn("setup_pos_manager_authorisation", patches_txt)
+        self.assertIn("migrate_override_pin_out_of_user", patches_txt)
 
     # --- PRIVILEGES table (Amendment 1: all 35 codes) ---
 
@@ -650,7 +805,7 @@ class TestOverrideContract(unittest.TestCase):
             self.assertIsInstance(authorise_roles, (tuple, list))
         self.assertEqual(tuple(api.PRIVILEGES["complimentary"][2]), ())
 
-    # --- may_perform ---
+    # --- may_perform & P1 #5 fail-closed ---
 
     def test_may_perform_respects_rules_narrower_profile_override_and_limits(self):
         api = self.api()
@@ -658,7 +813,6 @@ class TestOverrideContract(unittest.TestCase):
         self.assertTrue(api.may_perform("manager@example.test", "Main Till", "void_sent_item"))
         self.assertTrue(api.may_perform("cashier@example.test", "Main Till", "reprint_bill"))
 
-        # Narrower POS Profile rule disables manager on Main Till even though company rule allows it.
         self.store.privilege_rules.append(Doc(
             name="PPR-narrow-off", company="Hotel Co", pos_profile="Main Till",
             privilege="void_sent_item", role="URY Manager",
@@ -667,7 +821,6 @@ class TestOverrideContract(unittest.TestCase):
         ))
         self.assertFalse(api.may_perform("manager@example.test", "Main Till", "void_sent_item"))
 
-        # Narrower rule with max_amount limit.
         self.store.privilege_rules.append(Doc(
             name="PPR-narrow-cap", company="Hotel Co", pos_profile="Main Till",
             privilege="void_sent_item", role="URY Cashier",
@@ -676,6 +829,31 @@ class TestOverrideContract(unittest.TestCase):
         ))
         self.assertTrue(api.may_perform("cashier@example.test", "Main Till", "void_sent_item", amount=50.0))
         self.assertFalse(api.may_perform("cashier@example.test", "Main Till", "void_sent_item", amount=50.01))
+
+    def test_zero_rules_company_fails_closed_to_manager_roles_only(self):
+        """P1 #5: zero rules for a company = manager roles only act alone & authorise, cashiers need PIN."""
+        api = self.api()
+        self.store.privilege_rules.clear()
+        self.enroll("manager@example.test", "2468")
+
+        self.assertFalse(api.may_perform("cashier@example.test", "Main Till", "void_sent_item"))
+        self.assertFalse(api.may_perform("Administrator", "Main Till", "void_sent_item"))
+        self.assertFalse(api.may_perform("sysmgr@example.test", "Main Till", "void_sent_item"))
+        self.assertTrue(api.may_perform("manager@example.test", "Main Till", "void_sent_item"))
+        self.assertFalse(api.may_perform("manager@example.test", "Main Till", "complimentary"))
+        self.assertFalse(api.may_perform("manager@example.test", "Main Till", "discount", percent=1))
+
+        self.frappe.session.user = "cashier@example.test"
+        self.refused("POS-AUTH-REQUIRED", Denied, lambda: api.require(
+            "void_sent_item", "Main Till", "POS-INV-100", {"amount": 25, "reason": "Guest changed mind"}
+        ))
+        approvers = api.list_approvers("Main Till", "void_sent_item", reference_name="POS-INV-100")
+        self.assertEqual([a["user"] for a in approvers], ["manager@example.test"])
+        issued = api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", {"amount": 25, "reason": "Guest changed mind"},
+        )
+        self.assertEqual(issued["approver"], "manager@example.test")
 
     def test_may_perform_denies_administrator_system_manager_disabled_and_other_outlet(self):
         api = self.api()
@@ -693,26 +871,35 @@ class TestOverrideContract(unittest.TestCase):
             discount_limits_by_role="URY Manager: 100",
             discount_approver_role="URY Manager",
         )
+        for r in self.store.privilege_rules:
+            if r["privilege"] == "discount" and r["role"] == "URY Manager":
+                r["max_percent"] = 100
         self.assertFalse(api.may_perform("manager@example.test", "Main Till", "complimentary"))
         self.assertFalse(api.may_perform("manager@example.test", "Main Till", "discount", percent=100))
 
-    def test_discount_defaults_to_zero_and_min_of_approval_limit_and_rule_wins(self):
+    def test_discount_defaults_to_zero_and_explicit_zero_rule_never_falls_back(self):
+        """P1 #5: explicit max_percent=0 on POS Privilege Rule means 0%, never fallback to Approval Limit."""
         api = self.api()
-        # With no Approval Limit set, EVERY role starts at 0% alone (Amendment 1 #3).
         self.assertFalse(api.may_perform("cashier@example.test", "Main Till", "discount", percent=1))
         self.assertFalse(api.may_perform("manager@example.test", "Main Till", "discount", percent=1))
         self.assertFalse(api.may_perform("admin_user@example.test", "Main Till", "discount", percent=1))
 
         # Approval Limit says Cashier=5%, Manager=25%, Approver=URY Admin.
-        # Even if cashier's rule has max_percent=50, min(Approval Limit 5, rule 50) = 5 wins!
-        for r in self.store.privilege_rules:
-            if r["name"] == "PPR-discount-cashier":
-                r["max_percent"] = 50
+        # Seeded rules still have max_percent=0 -> explicit 0% MUST stay 0%, NOT fall back to 5% or 25%!
         self.store.approval_limits["Hotel Co"] = Doc(
             max_document_discount_percent="",
             discount_limits_by_role="URY Cashier: 5\nURY Manager: 25\nBroken: nan\nInf: inf",
             discount_approver_role="URY Admin",
         )
+        self.assertFalse(api.may_perform("cashier@example.test", "Main Till", "discount", percent=1))
+        self.assertFalse(api.may_perform("manager@example.test", "Main Till", "discount", percent=1))
+
+        # Now raise rule caps: min(Approval Limit, rule) wins!
+        for r in self.store.privilege_rules:
+            if r["name"] == "PPR-discount-cashier":
+                r["max_percent"] = 50
+            elif r["privilege"] == "discount" and r["role"] == "URY Manager":
+                r["max_percent"] = 25
         self.assertTrue(api.may_perform("cashier@example.test", "Main Till", "discount", percent=5))
         self.assertFalse(api.may_perform("cashier@example.test", "Main Till", "discount", percent=6))
         self.assertTrue(api.may_perform("manager@example.test", "Main Till", "discount", percent=25))
@@ -739,7 +926,6 @@ class TestOverrideContract(unittest.TestCase):
         self.enroll("manager@example.test", "2468")
         self.enroll("manager2@example.test", "3579")
 
-        # 1. privilege_group (0-3): restrict manager to group 1 on Main Till.
         self.store.privilege_rules.append(Doc(
             name="PPR-pg1", company="Hotel Co", pos_profile="Main Till",
             privilege="price_override", role="URY Manager",
@@ -750,37 +936,32 @@ class TestOverrideContract(unittest.TestCase):
         self.assertFalse(api.may_perform("manager@example.test", "Main Till", "price_override", privilege_group=2))
         self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
             "Main Till", "price_override", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"privilege_group": 2, "amount": 10},
+            "POS Invoice", "POS-INV-100", {"privilege_group": 2, "amount": 10, "reason": "Other: Special menu"},
         ))
 
-        # 2. require_clocked_in: ignored when no attendance data exists, enforced when check-in rows exist!
         self.store.privilege_rules.append(Doc(
             name="PPR-clock", company="Hotel Co", pos_profile="Main Till",
             privilege="no_sale", role="URY Manager",
             may_perform=1, may_authorise=1, max_percent=0, max_amount=0, requires_reason=1,
             allow_self_approval=0, require_clocked_in=1, privilege_group=0,
         ))
-        # No Employee Checkin rows exist -> allowed!
         self.assertTrue(api.may_perform("manager@example.test", "Main Till", "no_sale"))
 
-        # Now add Employee + OUT checkin for manager@example.test -> refused!
         self.store.employees["manager@example.test"] = Doc(name="EMP-MGR-1", company="Hotel Co", status="Active")
         self.store.checkins["EMP-MGR-1"] = [Doc(log_type="OUT", time=self.clock - timedelta(hours=1))]
         self.assertFalse(api.may_perform("manager@example.test", "Main Till", "no_sale"))
         self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
             "Main Till", "no_sale", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"reason": "Change"},
+            "POS Invoice", "POS-INV-100", {"reason": "Making change for guest"},
         ))
-        # Clock IN -> allowed!
         self.store.checkins["EMP-MGR-1"].append(Doc(log_type="IN", time=self.clock - timedelta(minutes=5)))
         self.assertTrue(api.may_perform("manager@example.test", "Main Till", "no_sale"))
         res = api.authorise(
             "Main Till", "no_sale", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"reason": "Change"},
+            "POS Invoice", "POS-INV-100", {"reason": "Making change for guest"},
         )
         self.assertEqual(res["approver"], "manager@example.test")
 
-        # 3. allow_self_approval=1 permits check-owner override by another requester (never requester == approver).
         self.store.privilege_rules.append(Doc(
             name="PPR-self-ok", company="Hotel Co", pos_profile="Main Till",
             privilege="void_sent_item", role="URY Manager",
@@ -790,14 +971,13 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.session.user = "cashier@example.test"
         r_owner = api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-MGR", {"qty": 1},
+            "POS Invoice", "POS-INV-MGR", {"qty": 1, "reason": "Guest changed mind"},
         )
         self.assertEqual(r_owner["approver"], "manager@example.test")
-        # Even with allow_self_approval=1, requester == approver in authorise() is STILL refused (use may_perform!).
         self.frappe.session.user = "manager@example.test"
         self.refused("POS-AUTH-SELF", Denied, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"qty": 1},
+            "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"},
         ))
 
     def test_list_reasons_filters_active_reasons_by_privilege_in_sort_order(self):
@@ -809,47 +989,105 @@ class TestOverrideContract(unittest.TestCase):
         ret_reasons = api.list_reasons("return")
         self.assertEqual([r["code"] for r in ret_reasons], ["RET-QUAL", "OTHER"])
 
-    # --- PIN enrolment, shared PINs, manager clear ---
+    # --- P1 #7: Server-side requires_reason enforcement ---
 
-    def test_pin_enrolment_requires_own_password_stores_per_user_hmac_and_allows_shared_pin(self):
+    def test_requires_reason_enforced_server_side_for_authorise_and_solo_require(self):
+        api = self.api()
+        self.enroll("manager@example.test", "2468")
+
+        # Empty, unknown, disabled, and wrong-privilege reasons must all be refused.
+        for bad_reason in ("", "   ", "Made up excuse", "Disabled reason", "VOID-OFF", "Quality issue", "RET-QUAL"):
+            with self.subTest(reason=bad_reason):
+                self.refused("POS-AUTH-REASON", Invalid, lambda r=bad_reason: api.authorise(
+                    "Main Till", "void_sent_item", "manager@example.test", "2468",
+                    "POS Invoice", "POS-INV-100", {"qty": 1, "reason": r},
+                ))
+
+        # Reason with requires_note=1 requires a >=4 char note.
+        for short_other in ("Other", "OTHER", "Other: ", "Other: ab"):
+            with self.subTest(other=short_other):
+                self.refused("POS-AUTH-REASON", Invalid, lambda r=short_other: api.authorise(
+                    "Main Till", "void_sent_item", "manager@example.test", "2468",
+                    "POS Invoice", "POS-INV-100", {"qty": 1, "reason": r},
+                ))
+
+        # Valid Other + note succeeds.
+        ok = api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Other: Dropped plate at pass"},
+        )
+        self.assertEqual(ok["approver"], "manager@example.test")
+
+        # Manager acting alone via require() is ALSO bound by requires_reason!
+        self.frappe.session.user = "manager@example.test"
+        self.refused("POS-AUTH-REASON", Invalid, lambda: api.require(
+            "void_sent_item", "Main Till", "POS-INV-100", {"qty": 1, "reason": ""},
+        ))
+        self.refused("POS-AUTH-REASON", Invalid, lambda: api.require(
+            "void_sent_item", "Main Till", "POS-INV-100", {"qty": 1, "reason": "Disabled reason"},
+        ))
+        self.assertIsNone(api.require(
+            "void_sent_item", "Main Till", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"},
+        ))
+
+    # --- P0 #1 & P0 #2: PIN enrolment in __Auth, shared PINs, wrong password keeps session alive ---
+
+    def test_pin_enrolment_stores_in_auth_table_never_user_and_allows_shared_pin(self):
         api = self.api()
         self.frappe.session.user = "manager@example.test"
-        self.frappe.form_dict = {"password": "secret-pass-1", "pin": "2468"}
+        self.frappe.form_dict = {"password": "secret-pass-1", "pin": "2468", "new_pin": "2468"}
         result = api.set_my_pin("secret-pass-1", "2468")
         self.assertEqual(result, {"ok": True, "has_pin": True})
         self.assertNotIn("pin", self.frappe.form_dict)
+        self.assertNotIn("new_pin", self.frappe.form_dict)
         self.assertNotIn("password", self.frappe.form_dict)
         self.assertNotIn("2468", json.dumps(result))
 
-        hash1 = self.store.users["manager@example.test"]["custom_override_pin_hash"]
-        self.assertEqual(len(hash1), 64)
-        self.assertNotEqual(hash1, hashlib.sha256(b"2468").hexdigest())
+        # Never written onto User doc!
+        self.assertNotIn("custom_override_pin_hash", self.store.users["manager@example.test"])
+        hash1 = self.store.get_auth_hash("POS Override PIN", "manager@example.test", "pin_hash")
+        self.assertIsNotNone(hash1)
+        self.assertNotIn("2468", hash1)
         self.assertNotIn("2468", str(self.audit.call_args))
 
-        # Second manager sets the EXACT SAME PIN "2468" -> distinct hash, both work!
+        # Second manager sets the EXACT SAME PIN "2468" -> distinct salted passlib hashes, both work!
         self.frappe.session.user = "manager2@example.test"
         api.set_my_pin("secret-pass-2", "2468")
-        hash2 = self.store.users["manager2@example.test"]["custom_override_pin_hash"]
-        self.assertNotEqual(hash1, hash2, "Per-user HMAC must produce distinct digests for shared PINs")
+        hash2 = self.store.get_auth_hash("POS Override PIN", "manager2@example.test", "pin_hash")
+        self.assertIsNotNone(hash2)
+        self.assertNotEqual(hash1, hash2)
 
         self.frappe.session.user = "cashier@example.test"
-        r1 = api.authorise("Main Till", "void_sent_item", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", {"qty": 1})
-        r2 = api.authorise("Main Till", "void_sent_item", "manager2@example.test", "2468", "POS Invoice", "POS-INV-100", {"qty": 1})
+        r1 = api.authorise("Main Till", "void_sent_item", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"})
+        r2 = api.authorise("Main Till", "void_sent_item", "manager2@example.test", "2468", "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"})
         self.assertEqual(r1["approver"], "manager@example.test")
         self.assertEqual(r2["approver"], "manager2@example.test")
 
-    def test_set_my_pin_refuses_wrong_password_and_bad_pin_format(self):
+    def test_set_my_pin_wrong_password_raises_validation_error_and_locks_without_ending_session(self):
+        """P0 #2: wrong password MUST raise ValidationError (not AuthenticationError) and count failures."""
         api = self.api()
         self.frappe.session.user = "manager@example.test"
-        with self.assertRaises((AuthenticationFailed, Invalid)):
-            api.set_my_pin("wrong-password", "2468")
-        self.assertIsNone(self.store.users["manager@example.test"]["custom_override_pin_hash"])
 
+        for _ in range(4):
+            self.refused("POS-AUTH-PASSWORD", Invalid, lambda: api.set_my_pin("wrong-password", "2468"))
+            self.frappe.db.rollback()
+        self.assertIsNone(self.store.get_auth_hash("POS Override PIN", "manager@example.test", "pin_hash"))
+
+        # 5th wrong password locks out set_my_pin (still ValidationError, never AuthenticationError!).
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.set_my_pin("wrong-password", "2468"))
+        self.frappe.db.rollback()
+
+        # Even correct password is refused while locked, surviving Redis flush.
+        self.counts.clear()
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.set_my_pin("secret-pass-1", "2468"))
+
+        # After lockout window expires, bad PIN formats still refused; valid PIN succeeds.
+        self.clock += timedelta(minutes=15, seconds=1)
         for bad_pin in ("", "123", "123456789", "abcd", "12 34"):
             with self.subTest(pin=bad_pin):
                 with self.assertRaises(Invalid):
                     api.set_my_pin("secret-pass-1", bad_pin)
-        self.assertIsNone(self.store.users["manager@example.test"]["custom_override_pin_hash"])
+        self.assertIsNone(self.store.get_auth_hash("POS Override PIN", "manager@example.test", "pin_hash"))
 
     def test_manager_can_clear_other_users_pin_but_cashier_cannot(self):
         api = self.api()
@@ -858,21 +1096,21 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.has_permission.return_value = False
         with self.assertRaises(Denied):
             api.clear_user_pin("manager2@example.test", "Main Till")
-        self.assertIsNotNone(self.store.users["manager2@example.test"]["custom_override_pin_hash"])
+        self.assertIsNotNone(self.store.get_auth_hash("POS Override PIN", "manager2@example.test", "pin_hash"))
 
         self.frappe.session.user = "manager@example.test"
         self.frappe.has_permission.return_value = True
         cleared = api.clear_user_pin("manager2@example.test", "Main Till")
         self.assertEqual(cleared, {"ok": True, "user": "manager2@example.test", "has_pin": False})
-        self.assertIsNone(self.store.users["manager2@example.test"]["custom_override_pin_hash"])
+        self.assertIsNone(self.store.get_auth_hash("POS Override PIN", "manager2@example.test", "pin_hash"))
 
-    # --- list_approvers ---
+    # --- P1 #9: list_approvers scoping & outlet isolation ---
 
     def test_list_approvers_returns_names_only_excluding_requester_owner_and_ineligible(self):
         api = self.api()
         for u in ("manager@example.test", "manager2@example.test", "disabled@example.test",
                   "other_outlet@example.test", "other_co@example.test", "sysmgr@example.test"):
-            self.store.users[u]["custom_override_pin_hash"] = api._pin_digest(u, "2468")
+            self.store.set_auth("POS Override PIN", u, "pin_hash", "2468")
 
         self.frappe.session.user = "cashier@example.test"
         rows = api.list_approvers("Main Till", "void_sent_item", reference_name="POS-INV-MGR")
@@ -884,6 +1122,20 @@ class TestOverrideContract(unittest.TestCase):
         rows_for_mgr = api.list_approvers("Main Till", "complimentary", reference_name="POS-INV-100")
         self.assertEqual([r["user"] for r in rows_for_mgr], ["manager2@example.test"])
 
+    def test_list_approvers_and_authorise_refuse_cross_outlet_and_cross_company_requesters(self):
+        """P1 #9 (Hydrogen #10): requester outside the profile's outlet/company cannot enumerate or authorise."""
+        api = self.api()
+        self.enroll("manager@example.test", "2468")
+
+        for outsider in ("other_outlet@example.test", "other_co@example.test"):
+            self.frappe.session.user = outsider
+            with self.subTest(requester=outsider):
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.list_approvers("Main Till", "void_sent_item"))
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+                    "Main Till", "void_sent_item", "manager@example.test", "2468",
+                    "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"},
+                ))
+
     # --- authorise adversarial cases ---
 
     def test_authorise_refuses_self_approval_and_check_owner_approval(self):
@@ -891,12 +1143,14 @@ class TestOverrideContract(unittest.TestCase):
         self.enroll("manager@example.test", "2468")
         self.frappe.session.user = "manager@example.test"
         self.refused("POS-AUTH-SELF", Denied, lambda: api.authorise(
-            "Main Till", "complimentary", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", {"percent": 100}
+            "Main Till", "complimentary", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", {"percent": 100, "reason": "Other: VIP comp"},
         ))
 
         self.frappe.session.user = "cashier@example.test"
         self.refused("POS-AUTH-SELF", Denied, lambda: api.authorise(
-            "Main Till", "void_sent_item", "manager@example.test", "2468", "POS Invoice", "POS-INV-MGR", {"qty": 1}
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-MGR", {"qty": 1, "reason": "Guest changed mind"},
         ))
 
     def test_authorise_refuses_disabled_admin_sysmgr_and_other_outlet_or_company(self):
@@ -909,127 +1163,200 @@ class TestOverrideContract(unittest.TestCase):
             "other_outlet@example.test",
             "other_co@example.test",
         ):
-            self.store.users[bad_approver]["custom_override_pin_hash"] = api._pin_digest(bad_approver, "2468")
+            self.store.set_auth("POS Override PIN", bad_approver, "pin_hash", "2468")
             with self.subTest(approver=bad_approver):
                 self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda a=bad_approver: api.authorise(
-                    "Main Till", "void_sent_item", a, "2468", "POS Invoice", "POS-INV-100", {"qty": 1}
+                    "Main Till", "void_sent_item", a, "2468",
+                    "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"},
                 ))
 
     def test_authorise_refuses_approver_without_pin(self):
         api = self.api()
         self.refused("POS-AUTH-NO-PIN", Invalid, lambda: api.authorise(
-            "Main Till", "void_sent_item", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", {"qty": 1}
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", {"qty": 1, "reason": "Guest changed mind"},
         ))
 
-    def test_wrong_pin_counts_through_rollback_locks_and_never_leaks_pin(self):
+    # --- P1 #8: DB-backed lockout, profile-scoped, session rate limit ---
+
+    def test_db_lockout_survives_redis_flush_is_profile_scoped_and_session_rate_limited(self):
         api = self.api()
         self.enroll("manager@example.test", "2468")
+        self.enroll("manager2@example.test", "3579")
         self.store.profiles["Main Till"]["custom_override_max_attempts"] = 3
         self.store.profiles["Main Till"]["custom_override_lock_minutes"] = 10
+        self.store.profiles["Bar Till"]["custom_override_max_attempts"] = 5
 
+        claim = {"amount": 25, "reason": "Guest changed mind"}
         for _ in range(2):
             self.frappe.form_dict = {"pin": "9999"}
             msg = self.refused("POS-AUTH-PIN", Invalid, lambda: api.authorise(
                 "Main Till", "void_sent_item", "manager@example.test", "9999",
-                "POS Invoice", "POS-INV-100", {"amount": 25},
+                "POS Invoice", "POS-INV-100", claim,
             ))
             self.assertNotIn("9999", msg)
             self.assertNotIn("2468", msg)
             self.assertNotIn("pin", self.frappe.form_dict)
             self.frappe.db.rollback()
 
-        msg = self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.authorise(
+        # 3rd attempt locks manager on Main Till.
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "9999",
-            "POS Invoice", "POS-INV-100", {"amount": 25},
+            "POS Invoice", "POS-INV-100", claim,
         ))
-        self.assertNotIn("9999", msg)
         self.frappe.db.rollback()
 
+        # Flush Redis completely -> DB-backed lockout MUST STILL block manager on Main Till!
+        self.counts.clear()
         self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"amount": 25},
+            "POS Invoice", "POS-INV-100", claim,
         ))
 
-        dumped_logs = json.dumps(self.store.committed_logs, default=str)
-        self.assertGreaterEqual(len(self.store.committed_logs), 3)
-        self.assertNotIn("9999", dumped_logs)
-        self.assertNotIn("2468", dumped_logs)
-        self.assertNotIn(self.store.users["manager@example.test"]["custom_override_pin_hash"], dumped_logs)
+        # Profile isolation: manager is NOT locked on Bar Till (one till's low max_attempts can't lock elsewhere).
+        bar_ok = api.authorise(
+            "Bar Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", claim,
+        )
+        self.assertEqual(bar_ok["approver"], "manager@example.test")
 
+        # After 10 minutes, Main Till unlocks cleanly.
         self.clock += timedelta(minutes=10, seconds=1)
         res = api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"amount": 25},
+            "POS Invoice", "POS-INV-100", claim,
         )
         self.assertEqual(res["approver"], "manager@example.test")
         self.assertEqual(res["expires_in"], 120)
 
-    def test_authorise_and_consume_refuse_ai_and_api_key_sessions(self):
+        # Per-session rate limit: configure tight session cap (4) so spamming across managers
+        # locks the requesting session before it can lock an untouched manager2.
+        self.frappe.conf["pos_override_session_max_attempts"] = 4
+        self.store.profiles["Main Till"]["custom_override_max_attempts"] = 5
+        for _ in range(4):
+            self.refused("POS-AUTH-PIN", Invalid, lambda: api.authorise(
+                "Main Till", "void_sent_item", "manager@example.test", "0001",
+                "POS Invoice", "POS-INV-100", claim,
+            ))
+        # Now cashier session is rate-limited even when targeting a DIFFERENT manager2!
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.authorise(
+            "Main Till", "void_sent_item", "manager2@example.test", "3579",
+            "POS Invoice", "POS-INV-100", claim,
+        ))
+
+    # --- P0 #3: Impersonated, AI, and API-key sessions refused everywhere ---
+
+    def test_authorise_consume_and_may_perform_refuse_impersonated_ai_and_api_key_sessions(self):
         api = self.api()
         self.enroll("manager@example.test", "2468")
+        claim = {"amount": 10, "reason": "Guest changed mind"}
 
+        # Impersonated session (sudo) refused everywhere!
+        self.frappe.session.user = "manager@example.test"
+        self.frappe.session.data = {"impersonated_by": "Administrator"}
+        self.assertFalse(api.may_perform("manager@example.test", "Main Till", "void_sent_item"))
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.set_my_pin("secret-pass-1", "9876"))
+        self.frappe.session.user = "cashier@example.test"
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.list_approvers("Main Till", "void_sent_item"))
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", claim,
+        ))
+        self.frappe.session.data = {}
+
+        # Non-System User session_type also refused.
+        self.frappe.session.data = {"user_type": "Website User"}
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", claim,
+        ))
+        self.frappe.session.data = {}
+
+        # API key & OAuth Bearer & Agent flag refused.
         self.frappe.request = SimpleNamespace(headers={"Authorization": "token abcdef:123456"}, cookies={})
         self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"amount": 10},
+            "POS Invoice", "POS-INV-100", claim,
         ))
-
         self.frappe.request = SimpleNamespace(headers={"Authorization": "Bearer eyJ.test"}, cookies={})
         self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"amount": 10},
+            "POS Invoice", "POS-INV-100", claim,
         ))
-
         self.frappe.request = None
         self.frappe.flags.kamra_agent_call = "MCP"
         self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"amount": 10},
+            "POS Invoice", "POS-INV-100", claim,
         ))
         self.frappe.flags.kamra_agent_call = None
 
+        # Valid interactive session mints token, then impersonation / API key at consume() is refused!
         self.frappe.request = SimpleNamespace(headers={}, cookies={"sid": "sess-cashier-1"})
         issued = api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
-            "POS Invoice", "POS-INV-100", {"amount": 10},
+            "POS Invoice", "POS-INV-100", claim,
         )
+        self.frappe.session.data = {"impersonated_by": "Administrator"}
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
+            issued["token"], "void_sent_item", "Main Till", "POS-INV-100", claim,
+        ))
+        self.frappe.session.data = {}
         self.frappe.request = SimpleNamespace(headers={"Authorization": "token k:s"}, cookies={})
         self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
-            issued["token"], "void_sent_item", "Main Till", "POS-INV-100", {"amount": 10},
+            issued["token"], "void_sent_item", "Main Till", "POS-INV-100", claim,
         ))
 
-    def test_pos_override_pin_verifier_hook_replaces_builtin_store(self):
+    # --- P1 #9 (Hydrogen #11): external verifier error codes passed through ---
+
+    def test_pos_override_pin_verifier_hook_replaces_builtin_store_and_passes_codes_through(self):
         api = self.api()
         called = []
 
         def custom_verifier(user, pin, pos_profile=None):
             called.append((user, pin, pos_profile))
+            if pin == "5555":
+                return {"ok": False, "code": "POS-AUTH-NOT-ELIGIBLE"}
+            if pin == "6666":
+                return {"ok": False, "code": "POS-AUTH-LOCKED"}
             return pin == "7788"
 
         self.hooks["pos_override_pin_verifier"] = ["custom_app.pin.verify"]
         self.hooks["__attr__:custom_app.pin.verify"] = custom_verifier
+        claim = {"qty": 1, "reason": "Guest changed mind"}
 
-        self.assertIsNone(self.store.users["manager@example.test"]["custom_override_pin_hash"])
         approvers = api.list_approvers("Main Till", "void_sent_item", reference_name="POS-INV-100")
         self.assertIn("manager@example.test", [a["user"] for a in approvers])
 
+        # External verifier's POS-AUTH-NOT-ELIGIBLE must pass through as PermissionError without a PIN strike!
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "5555",
+            "POS Invoice", "POS-INV-100", claim,
+        ))
+        failed_pin_logs = [r for r in self.store.auth_logs if r.get("outcome") == "Failed PIN"]
+        self.assertEqual(len(failed_pin_logs), 0, "External NOT-ELIGIBLE must not record a Failed PIN strike")
+
+        self.refused("POS-AUTH-LOCKED", Invalid, lambda: api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "6666",
+            "POS Invoice", "POS-INV-100", claim,
+        ))
         self.refused("POS-AUTH-PIN", Invalid, lambda: api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "0000",
-            "POS Invoice", "POS-INV-100", {"qty": 1},
+            "POS Invoice", "POS-INV-100", claim,
         ))
         res = api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "7788",
-            "POS Invoice", "POS-INV-100", {"qty": 1},
+            "POS Invoice", "POS-INV-100", claim,
         )
         self.assertEqual(res["approver"], "manager@example.test")
         self.assertEqual(called[-1], ("manager@example.test", "7788", "Main Till"))
 
-    # --- consume & require adversarial cases ---
+    # --- P1 #6: consume re-checks role/rule/outlet/enabled and survives rollback ---
 
     def test_consume_binds_claim_check_user_ttl_and_single_use(self):
         api = self.api()
         self.enroll("manager@example.test", "2468")
-        claim = {"amount": 50, "percent": 10, "reason": "Kitchen error"}
+        claim = {"amount": 50, "percent": 10, "reason": "Guest changed mind"}
         issued = api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
             "POS Invoice", "POS-INV-100", claim,
@@ -1039,7 +1366,7 @@ class TestOverrideContract(unittest.TestCase):
 
         self.refused("POS-AUTH-CHANGED", Invalid, lambda: api.consume(
             token, "void_sent_item", "Main Till", "POS-INV-100",
-            {"amount": 60, "percent": 10, "reason": "Kitchen error"},
+            {"amount": 60, "percent": 10, "reason": "Guest changed mind"},
         ))
         self.refused("POS-AUTH-CHANGED", Invalid, lambda: api.consume(
             token, "void_sent_item", "Main Till", "POS-INV-OTHER", claim,
@@ -1055,7 +1382,7 @@ class TestOverrideContract(unittest.TestCase):
 
         consumed = api.consume(
             token, "void_sent_item", "Main Till", "POS-INV-100",
-            {"reason": "Kitchen error", "percent": 10.0, "amount": 50.0},
+            {"reason": "Guest changed mind", "percent": 10.0, "amount": 50.0},
         )
         self.assertEqual(consumed.approver, "manager@example.test")
         self.assertEqual(consumed.percent, 10.0)
@@ -1065,10 +1392,49 @@ class TestOverrideContract(unittest.TestCase):
             token, "void_sent_item", "Main Till", "POS-INV-100", claim,
         ))
 
+    def test_consume_rechecks_approver_and_requester_and_survives_rollback(self):
+        """P1 #6: role/outlet revocation before consume refuses; consume survives caller rollback."""
+        api = self.api()
+        self.enroll("manager@example.test", "2468")
+        claim = {"amount": 25, "reason": "Guest changed mind"}
+
+        # 1. Approver loses URY Manager role mid-flow -> consume refuses POS-AUTH-NOT-ELIGIBLE!
+        issued1 = api.authorise(
+            "Main Till", "void_sent_item", "manager@example.test", "2468",
+            "POS Invoice", "POS-INV-100", claim,
+        )
+        self.store.user_roles["manager@example.test"] = ["URY Cashier"]
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
+            issued1["token"], "void_sent_item", "Main Till", "POS-INV-100", claim,
+        ))
+        self.store.user_roles["manager@example.test"] = ["URY Manager"]
+
+        # 2. Approver removed from outlet mid-flow -> consume refuses POS-AUTH-NOT-ELIGIBLE!
+        self.store.branch_users.discard(("Main Branch", "manager@example.test"))
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
+            issued1["token"], "void_sent_item", "Main Till", "POS-INV-100", claim,
+        ))
+        self.store.branch_users.add(("Main Branch", "manager@example.test"))
+
+        # 3. Requester disabled mid-flow -> consume refuses POS-AUTH-NOT-ELIGIBLE!
+        self.store.users["cashier@example.test"]["enabled"] = 0
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
+            issued1["token"], "void_sent_item", "Main Till", "POS-INV-100", claim,
+        ))
+        self.store.users["cashier@example.test"]["enabled"] = 1
+
+        # 4. Valid consume followed by caller rollback MUST NOT allow replay!
+        consumed = api.consume(issued1["token"], "void_sent_item", "Main Till", "POS-INV-100", claim)
+        self.assertEqual(consumed.approver, "manager@example.test")
+        self.frappe.db.rollback()
+        self.refused("POS-AUTH-EXPIRED", Invalid, lambda: api.consume(
+            issued1["token"], "void_sent_item", "Main Till", "POS-INV-100", claim,
+        ))
+
     def test_consume_refuses_expired_token_and_concurrent_unique_collision(self):
         api = self.api()
         self.enroll("manager@example.test", "2468")
-        claim = {"amount": 20}
+        claim = {"amount": 20, "reason": "Guest changed mind"}
         issued = api.authorise(
             "Main Till", "void_sent_item", "manager@example.test", "2468",
             "POS Invoice", "POS-INV-100", claim,
@@ -1090,7 +1456,7 @@ class TestOverrideContract(unittest.TestCase):
     def test_require_returns_none_when_allowed_consumes_token_or_raises_required(self):
         api = self.api()
         self.enroll("manager@example.test", "2468")
-        claim = {"amount": 15}
+        claim = {"amount": 15, "reason": "Guest changed mind"}
 
         self.frappe.session.user = "manager@example.test"
         self.assertIsNone(api.require("void_sent_item", "Main Till", "POS-INV-100", claim))

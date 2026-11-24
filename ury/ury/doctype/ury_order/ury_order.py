@@ -2751,11 +2751,12 @@ def sync_order(
 
     # Authorize before changing headers, payments or lines. Reducing a sent
     # dish+note quantity emits a kitchen cancellation even if the dish total
-    # stays unchanged. Unsent (ury_held=1) items stay free (Simphony error
-    # correct), and previously zeroed rows (qty == 0) are never treated as a
-    # second reduction. Sent-item reductions ALWAYS require authorization
-    # (privilege or manager PIN) AND a mandatory reason (never bypassed by
-    # remove_items or offline replay).
+    # stays unchanged. Unsent held items (`ury_held=1`) are always freely
+    # editable/removable even when `remove_items=0` (Amendment 1 + R2 P1 #9),
+    # and previously zeroed rows (qty == 0) are never treated as a second
+    # reduction. Sent-item reductions ALWAYS require authorization (privilege
+    # or manager PIN) AND a mandatory reason (never bypassed by remove_items
+    # or offline replay).
     sent_void_reason_info = None
     sent_void_approver = None
     sent_waste_items = []
@@ -2807,9 +2808,6 @@ def sync_order(
                 })
         voided_amount = round(voided_amount, 4)
 
-        company = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
-        policy_active = _void_ops.is_override_policy_active(company)
-
         if sent_reductions:
             if captured_at is not None or cint(offline_printed) == 1:
                 frappe.throw(
@@ -2836,101 +2834,66 @@ def sync_order(
             fallback_privs = ("void_sent_item",) if privilege == "reduce_sent_qty" else ()
             sent_reductions.sort(key=lambda r: (r["item_code"], r["line_key"]))
 
-            has_new_gate = (
-                policy_active
-                or void_reason is not None
-                or approval_token is not None
-                or cint(is_waste) == 1
-                or bool(_void_ops._active_pos_reasons(privilege))
-            )
-            if has_new_gate:
-                # Authorization check precedes reason validation when caller lacks
-                # solo privilege and supplied no approval token (keeps unauthorized
-                # cashiers from probing reason validation & matches B2a contract).
-                if not approval_token and not _void_ops.can_perform_pos_privilege(
-                    frappe.session.user,
-                    pos_profile,
-                    privilege,
-                    amount=voided_amount,
-                    fallback_privileges=fallback_privs,
-                ):
-                    frappe.throw(
-                        _("You are not permitted to reduce or remove items from this order without manager approval.")
-                        + f" [{_void_ops.CODE_AUTH_REQUIRED}]",
-                        frappe.PermissionError,
-                    )
-
-                sent_void_reason_info = _void_ops.resolve_pos_reason(
-                    privilege,
-                    pos_profile,
-                    void_reason,
-                    note=void_note,
-                    is_waste=is_waste,
-                )
-                claim = {
-                    "invoice": invoice.name,
-                    "reductions": sent_reductions,
-                    "reason": sent_void_reason_info["code"],
-                    "note": sent_void_reason_info["note"],
-                    "is_waste": 1 if sent_void_reason_info["is_waste"] else 0,
-                }
-                b2a_compat_claim = {
-                    "action": "sync_order_void_sent_item",
-                    "lines": b2a_void_lines,
-                    "amount": voided_amount,
-                    "reason": (void_reason or "").strip(),
-                }
-                sent_void_approver = _void_ops.require_pos_override(
-                    privilege,
-                    pos_profile,
-                    "POS Invoice",
-                    invoice.name,
-                    claim,
-                    approval_token=approval_token,
-                    amount=voided_amount,
-                    doc=invoice,
-                    fallback_privileges=fallback_privs,
-                    alt_claim=b2a_compat_claim,
-                )
-                if sent_void_reason_info["is_waste"]:
-                    wh_by_code = {row.get("item_code"): row.get("warehouse") for row in invoice.items}
-                    uom_by_code = {row.get("item_code"): row.get("uom") for row in invoice.items}
-                    sent_waste_items = [
-                        {
-                            "item_code": r["item_code"],
-                            "qty": abs(r["delta"]),
-                            "warehouse": wh_by_code.get(r["item_code"]),
-                            "uom": uom_by_code.get(r["item_code"]),
-                        }
-                        for r in sent_reductions
-                    ]
-            elif not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+            # Authorization check precedes reason validation when caller lacks
+            # solo privilege and supplied no approval token (keeps unauthorized
+            # cashiers from probing reason validation & matches B2a R2 fail-closed contract).
+            if not approval_token and not _void_ops.can_perform_pos_privilege(
+                frappe.session.user,
+                pos_profile,
+                privilege,
+                amount=voided_amount,
+                fallback_privileges=fallback_privs,
+            ):
                 frappe.throw(
-                    _("You are not permitted to reduce or remove items from this order."),
+                    _("You are not permitted to reduce or remove items from this order without manager approval.")
+                    + f" [{_void_ops.CODE_AUTH_REQUIRED}]",
                     frappe.PermissionError,
                 )
-        else:
-            # No sent items were reduced. In legacy mode (no active override policy / reasons),
-            # preserve the native remove_items check for persisted held rows;
-            # when POS override/reasons are active, unsent/held items stay free (Error Correct).
-            has_override_policy = (
-                policy_active
-                or bool(_void_ops._active_pos_reasons("void_sent_item"))
+
+            sent_void_reason_info = _void_ops.resolve_pos_reason(
+                privilege,
+                pos_profile,
+                void_reason,
+                note=void_note,
+                is_waste=is_waste,
             )
-            if not has_override_policy and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
-                requested_qty_by_item = {}
-                for item in items:
-                    code = item.get("item")
-                    requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
-                previous_qty_by_item = {}
-                for item in past_item:
-                    code = item["item_code"]
-                    previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
-                if any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items()):
-                    frappe.throw(
-                        _("You are not permitted to reduce or remove items from this order."),
-                        frappe.PermissionError,
-                    )
+            claim = {
+                "invoice": invoice.name,
+                "reductions": sent_reductions,
+                "reason": sent_void_reason_info["code"],
+                "note": sent_void_reason_info["note"],
+                "is_waste": 1 if sent_void_reason_info["is_waste"] else 0,
+            }
+            b2a_compat_claim = {
+                "action": "sync_order_void_sent_item",
+                "lines": b2a_void_lines,
+                "amount": voided_amount,
+                "reason": (void_reason or "").strip(),
+            }
+            sent_void_approver = _void_ops.require_pos_override(
+                privilege,
+                pos_profile,
+                "POS Invoice",
+                invoice.name,
+                claim,
+                approval_token=approval_token,
+                amount=voided_amount,
+                doc=invoice,
+                fallback_privileges=fallback_privs,
+                alt_claim=b2a_compat_claim,
+            )
+            if sent_void_reason_info["is_waste"]:
+                wh_by_code = {row.get("item_code"): row.get("warehouse") for row in invoice.items}
+                uom_by_code = {row.get("item_code"): row.get("uom") for row in invoice.items}
+                sent_waste_items = [
+                    {
+                        "item_code": r["item_code"],
+                        "qty": abs(r["delta"]),
+                        "warehouse": wh_by_code.get(r["item_code"]),
+                        "uom": uom_by_code.get(r["item_code"]),
+                    }
+                    for r in sent_reductions
+                ]
 
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
@@ -3113,33 +3076,41 @@ def sync_order(
     finally:
         frappe.flags.ury_authorized_void = prev_void_flag
 
+    current_kitchen = _kitchen_snapshot(items)
+    previous_kitchen = [] if append else _kitchen_snapshot(past_item)
+    held_only_edit = (
+        not append
+        and current_kitchen == previous_kitchen
+        and (any(cint(row.get("ury_held")) for row in past_item) or any(cint(row.get("ury_held")) for row in items))
+    )
     cancel_kot_names = []
-    try:
-        kot_kwargs = {"offline_printed": offline_printed}
-        if sent_void_reason_info is not None:
-            import inspect
+    if not held_only_edit:
+        try:
+            kot_kwargs = {"offline_printed": offline_printed}
+            if sent_void_reason_info is not None:
+                import inspect
 
-            sig_params = inspect.signature(kot_execute).parameters
-            if "cancel_reason" in sig_params:
-                kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
-            if "void_reason_code" in sig_params:
-                kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
-        kot_res = kot_execute(
-            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), invoice.custom_comments,
-            **kot_kwargs,
-        )
-        if isinstance(kot_res, list):
-            cancel_kot_names = kot_res
-    except Exception as e:
-        # KOT creation/routing failing is not a side detail to swallow: a
-        # customer must never be charged for an item the kitchen never
-        # receives. Log for diagnostics, then re-raise so the whole request
-        # (including the invoice.save() above) rolls back and the caller
-        # sees a real failure instead of a silently accepted order.
-        # See sa-post-373-review-fixes Blocker 2.
-        error_msg = f"KOT Creation Failed: {str(e)}"
-        frappe.log_error(error_msg, "KOT Error")
-        frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
+                sig_params = inspect.signature(kot_execute).parameters
+                if "cancel_reason" in sig_params:
+                    kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
+                if "void_reason_code" in sig_params:
+                    kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
+            kot_res = kot_execute(
+                invoice.name, customer, table, current_kitchen, previous_kitchen, invoice.custom_comments,
+                **kot_kwargs,
+            )
+            if isinstance(kot_res, list):
+                cancel_kot_names = kot_res
+        except Exception as e:
+            # KOT creation/routing failing is not a side detail to swallow: a
+            # customer must never be charged for an item the kitchen never
+            # receives. Log for diagnostics, then re-raise so the whole request
+            # (including the invoice.save() above) rolls back and the caller
+            # sees a real failure instead of a silently accepted order.
+            # See sa-post-373-review-fixes Blocker 2.
+            error_msg = f"KOT Creation Failed: {str(e)}"
+            frappe.log_error(error_msg, "KOT Error")
+            frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
 
     if sent_void_reason_info and sent_void_reason_info["is_waste"] and sent_waste_items:
         _void_ops.post_waste_stock_entry(
@@ -3549,8 +3520,14 @@ def cancel_order(invoice_id, reason, note=None, is_waste=0, approval_token=None)
     if pos_invoice.docstatus == 2:
         frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
 
-    # Closed checks may NEVER be cancelled directly — void a closed check only through a return.
+    # Closed / fiscalised checks may NEVER be cancelled directly — void a closed check only through a return.
     if pos_invoice.docstatus == 1:
+        if _void_ops.is_fiscalised_invoice(pos_invoice):
+            frappe.throw(
+                _("This check was fiscalised and cannot be cancelled directly. Process a return / credit note instead. [{0}]").format(
+                    _void_ops.CODE_VOID_FISCALISED_USE_RETURN
+                ),
+            )
         frappe.throw(
             _("Closed checks cannot be cancelled directly. Process a return instead. [{0}]").format(
                 _void_ops.CODE_VOID_CLOSED_USE_RETURN
@@ -3857,7 +3834,7 @@ def _confirmed_phone_payment_requests(invoice_name, company=None):
         "docstatus": 1,
         "payment_channel": "Phone",
         "payment_request_type": "Inward",
-        "status": ["in", ["Paid", "Partially Paid"]],
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
     }
     if company:
         filters["company"] = company
@@ -3880,9 +3857,10 @@ def _received_payment_rows(invoice):
     """Return payment rows that represent money genuinely received on an open check.
 
     Only rows explicitly marked custom_tender_received=1 by a confirmed server flow, or
-    backed by a confirmed Paid/Partially Paid Phone Payment Request, are received.
-    Phone rows are always re-checked against live Payment Request status so cancelled,
-    failed, expired, or refunded requests never deadlock the check.
+    backed by a confirmed Paid/Partially Paid/Partially Refunded Phone Payment Request,
+    are received. Phone rows are always re-checked and capped against live Payment Request
+    paid amounts so cancelled, failed, expired, or partially/fully refunded requests never
+    deadlock the check.
     """
     confirmed_prs = _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company"))
     live_pr_by_name = {pr.get("name"): pr for pr in confirmed_prs if pr.get("name")}
@@ -3895,7 +3873,7 @@ def _received_payment_rows(invoice):
 
     rows = []
     matched_pr_names = set()
-    matched_phone_modes = {}
+    matched_unreferenced_phone_modes = {}
 
     for row in invoice.get("payments") or []:
         amt = flt(row.get("amount"))
@@ -3905,16 +3883,28 @@ def _received_payment_rows(invoice):
         ref = (row.get("reference_no") or "").strip()
         if _is_phone_mode(row):
             if ref:
-                if ref not in live_pr_by_name:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                live_amt = round(flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")), 9)
+                if live_amt <= 0:
                     continue
                 matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                copied = _copy_payment_row(row)
+                copied["amount"] = live_amt
+                rows.append(copied)
             else:
-                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
                     continue
-                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
-            if mode:
-                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-            rows.append(row)
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                copied = _copy_payment_row(row)
+                copied["amount"] = used
+                rows.append(copied)
             continue
 
         rows.append(row)
@@ -3929,8 +3919,8 @@ def _received_payment_rows(invoice):
         mode = pr.get("mode_of_payment")
         if not mode or paid_amt <= 0:
             continue
-        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-            matched_phone_modes[mode] -= paid_amt
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
             continue
         rows.append(
             {
@@ -3985,7 +3975,7 @@ def _validate_confirmed_phone_payments(invoice, payment_rows):
                 "reference_name": invoice.name,
                 "mode_of_payment": mode,
                 "docstatus": 1,
-                "status": ["in", ["Paid", "Partially Paid"]],
+                "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
             },
             fields=["name", "grand_total", "outstanding_amount"],
         )
@@ -4426,6 +4416,8 @@ def _check_held_before_settlement(invoice, preserve_resolved=False):
 
 def _submit_and_release_tables(invoice, profile, customer_disabled, target=None):
     credit_partner = None
+    if target:
+        invoice.flags.ignore_payment_sync = True
     if _enforce_on_account(invoice, profile, customer_disabled, target) and target:
         if (target.customer, target.company, target.pos_profile, target.docstatus) != (
             invoice.customer, invoice.company, invoice.pos_profile, 0
@@ -4484,6 +4476,8 @@ def submit_order_invoice(invoice):
     if (doc.customer, doc.pos_profile) != (customer, profile_name):
         frappe.throw(_('The order changed; reopen settlement.'))
     target = frappe.get_doc('POS Invoice', doc.custom_merged_pos_invoice, for_update=True) if doc.custom_merged_pos_invoice else None
+    if target:
+        doc.flags.ignore_payment_sync = True
     _submit_and_release_tables(doc, profile, customer_disabled, target)
     return {"name": doc.name, "status": "Submitted"}
         

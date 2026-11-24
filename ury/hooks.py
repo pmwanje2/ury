@@ -176,6 +176,8 @@ jinja = {
     "methods": [
         "ury.ury.api.self_ordering.feedback_receipt_link",
         "ury.ury.api.self_ordering.feedback_receipt_qr",
+        "ury.ury.print_format.utils.format_bill_money",
+        "ury.ury.print_format.utils.resolve_bill_logo_src",
     ],
 }
 
@@ -257,11 +259,11 @@ doc_events = {
     "WhatsApp Message": {
         "after_insert": "ury.ury.api.chairman_whatsapp.on_incoming",
     },
+    "Company": {
+        "after_insert": "ury.ury_pos.override.on_company_after_insert",
+    },
     "User": {
-        "validate": [
-            "ury.ury.analytics_access.on_user_validate",
-            "ury.ury_pos.override.guard_user_override_pin_hash",
-        ],
+        "validate": "ury.ury.analytics_access.on_user_validate",
         "on_update": [
             "ury.ury.api.chairman_wa_identity.on_user_update",
             "ury.ury.analytics_access.on_user_update",
@@ -399,6 +401,7 @@ scheduler_events = {
 			"ury.ury.api.reservation_scheduler.process_reservation_no_shows",
 			"ury.ury.printing.print_job_poller.poll_active_print_jobs",
 			"ury.ury.printing.file_store.prune_expired_jobs",
+			"ury.ury_pos.api.process_pending_fiscal_reprints",
 		],
 		"*/5 * * * *":[
 			"ury.ury.services.food_cost_alerts.notify_high_food_cost"
@@ -445,7 +448,9 @@ before_tests = "ury.install.before_tests"
 # ------------------------------
 #
 override_whitelisted_methods = {
-	"erpnext.setup.demo.clear_demo_data": "ury.setup.demo.clear_demo_data"
+	"erpnext.setup.demo.clear_demo_data": "ury.setup.demo.clear_demo_data",
+	"frappe.www.printview.get_html_and_style": "ury.ury.print_format.guards.get_html_and_style",
+	"frappe.utils.print_format.download_pdf": "ury.ury.print_format.guards.download_pdf",
 }
 #
 # each overriding function accepts a `data` argument;
@@ -754,6 +759,7 @@ fixtures = [
                     "POS Profile-custom_floor_device_epoch",
                     "User-custom_floor_pin_hash",
                     "POS Profile-custom_room_lookup_method",
+                    "POS Profile-custom_efris_print_wait_seconds",
                     "POS Profile-buying_price_list",
                     "POS Profile-high_margin",
                     "POS Profile-low_margin",
@@ -802,7 +808,6 @@ fixtures = [
                     "POS Profile-custom_service_request_escalate_minutes",
                     "Network Printer Settings-custom_printer_queue_name",
                     "Sales Invoice Payment-custom_tender_received",
-                    "User-custom_override_pin_hash",
                     "POS Profile-custom_override_max_attempts",
                     "POS Profile-custom_override_lock_minutes",
                     "POS Profile-custom_unreferenced_return_roles",
