@@ -1052,6 +1052,64 @@ class TestServiceChargeEngineAndHooks(unittest.TestCase):
         self.assertEqual(inv.taxes[2].tax_amount, 1800)
         self.assertEqual(inv.grand_total, 129800)
 
+    def test_mariadb_zero_default_override_fields_never_trigger_false_override(self):
+        """Real MariaDB DECIMAL(21,9) NOT NULL DEFAULT 0.0 loads override fields as 0.0 on saved docs.
+
+        sync_service_charge MUST treat 0.0 override_rate / override_amount as unset (not as an
+        active 0% override!) so second saves preserve the matched rule and order-type switches
+        clear Service Charge rows completely.
+        """
+        prof = self._make_profile(rules=[
+            {
+                "order_type": "Dine In",
+                "enabled": 1,
+                "charge_mode": "Percentage",
+                "rate": 10,
+                "min_pax": 6,
+                "calculation_basis": "Post-Discount Subtotal",
+                "taxable": 1,
+                "account_head": "Service Charge Payable - TC",
+                "description": "Service Charge",
+            }
+        ])
+        inv = self._make_invoice(
+            name="INV-MARIADB-ZERO",
+            order_type="Dine In",
+            no_of_pax=6,
+            custom_service_charge_override_rate=0.0,
+            custom_service_charge_override_amount=0.0,
+        )
+        self.pricing.sync_service_charge(inv, prof)
+        inv.calculate_taxes_and_totals()
+
+        sc_rows = [t for t in inv.taxes if t.get("custom_pos_charge_kind") == "Service Charge"]
+        self.assertEqual(len(sc_rows), 1)
+        self.assertEqual(sc_rows[0].rate, 10.0)
+        self.assertEqual(sc_rows[0].tax_amount, 10000)
+
+        status = self.pricing.get_service_charge_status(inv.name, prof.name)
+        self.assertIsNone(status["override_rate"])
+        self.assertIsNone(status["override_amount"])
+
+        # Switching to Take Away (no rule) must clear SC & SC Tax completely even with 0.0 DB columns
+        inv.order_type = "Take Away"
+        self.pricing.sync_service_charge(inv, prof)
+        inv.calculate_taxes_and_totals()
+        self.assertEqual(
+            [t for t in inv.taxes if t.get("custom_pos_charge_kind") in ("Service Charge", "Service Charge Tax")],
+            [],
+        )
+
+        # Explicit change to 0 rate/amount behaves as a clean waive (no phantom 0% row)
+        inv.order_type = "Dine In"
+        self.pricing.sync_service_charge(inv, prof)
+        self.pricing.adjust_service_charge(invoice=inv.name, action="change", new_rate=0.0, reason="VIP_COMP")
+        self.assertEqual(inv.custom_service_charge_waived, 1)
+        self.assertEqual(
+            [t for t in inv.taxes if t.get("custom_pos_charge_kind") in ("Service Charge", "Service Charge Tax")],
+            [],
+        )
+
 
 class TestServiceChargeLifecycleAndPrintTemplates(unittest.TestCase):
     """Static + contract checks for unconditional lifecycle triggers, API payload, and print formats."""
