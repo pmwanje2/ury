@@ -361,6 +361,9 @@ class TestOnAccountOverLimitGate(unittest.TestCase):
         self.invoice = self._bill("INV-KWD", 12.345, currency="KWD", conversion_rate=1)
         self.invoice.precision.return_value = 3
         self.profile.currency = "KWD"
+        self.f.get_cached_value.side_effect = lambda dt, name, field=None: (
+            "KWD" if dt == "Company" and field == "default_currency" else None
+        )
         self.gl.return_value = 90.0
         self.limit = 100.0
         consumed = frappe._dict(approver="mgr@example.com", amount=12.345, claim={"reason": "KWD VIP"})
@@ -379,6 +382,48 @@ class TestOnAccountOverLimitGate(unittest.TestCase):
             )
         self.assertEqual(out["status"], "Submitted")
         self.assertEqual(mock_consume.call_args.args[4]["proposed"], 12.345)
+
+    def test_foreign_currency_on_account_override_claim_uses_company_currency_and_precision(self):
+        # 20.00 USD @ 3700 UGX/USD = 74,000 UGX against 50,000 UGX company limit.
+        # Claim currency & precision MUST be Company default_currency ("UGX", 0dp), not invoice currency ("USD")!
+        self.invoice = self._bill("INV-FX-OA", 20.0, currency="USD", conversion_rate=3700)
+        self.profile.currency = "USD"
+        self.gl.return_value = 0
+        self.limit = 50000
+        consumed = frappe._dict(approver="mgr@example.com", amount=74000, claim={"reason": "FX VIP banquet"})
+        with patch.object(order, "get_order_invoice", return_value=self.invoice), \
+                patch("ury.ury_pos.override.consume", return_value=consumed) as mock_consume:
+            out = order.make_invoice(
+                "AC-1",
+                [{"mode_of_payment": "Cash", "amount": 0}],
+                "cashier@example.com",
+                "Till A",
+                "cashier@example.com",
+                invoice="INV-FX-OA",
+                submit_invoice=1,
+                on_account_approval="fx-acct-tok",
+                on_account_reason="FX VIP banquet",
+            )
+        self.assertEqual(out["status"], "Submitted")
+        claim = mock_consume.call_args.args[4]
+        self.assertEqual(claim["currency"], "UGX")
+        self.assertEqual(claim["proposed"], 74000)
+        self.assertEqual(claim["limit"], 50000)
+        self.assertEqual(claim["reason"], "FX VIP banquet")
+
+    def test_credit_accounts_exposes_conversion_rate_for_fx_pos_profile(self):
+        self.profile.currency = "USD"
+        self.f.get_list.return_value = [
+            frappe._dict(name="AC-1", customer_name="Acme FX", limit_amount=50000.0)
+        ]
+        self.f.utils.flt.side_effect = lambda v, p=None: round(float(v or 0), p) if p is not None else float(v or 0)
+        self.gl.return_value = 10000.0
+        with patch.object(api, "frappe", self.f), \
+                patch("erpnext.setup.utils.get_exchange_rate", return_value=3700.0):
+            rows = api.credit_accounts("Till A", "Acme")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["currency"], "UGX")
+        self.assertEqual(rows[0]["conversion_rate"], 3700.0)
 
 
 class TestRoomChargeServerGate(unittest.TestCase):
@@ -421,7 +466,6 @@ class TestRoomChargeServerGate(unittest.TestCase):
         self.invoice.get.side_effect = lambda k, d=None: vars(self.invoice).get(k, d)
         self.invoice.set.side_effect = lambda k, v: setattr(self.invoice, k, v)
         self.invoice.append.side_effect = lambda k, row: getattr(self.invoice, k).append(frappe._dict(row))
-        self.enterContext(patch.object(order, "_validate_additional_discount", return_value=0))
         self.enterContext(patch.object(order, "get_order_invoice", return_value=self.invoice))
         self.enterContext(patch.object(order, "_submit_and_release_tables"))
         self.enterContext(patch.object(order, "_lock_settlement_customer", return_value=0))
@@ -598,6 +642,73 @@ class TestRoomChargeServerGate(unittest.TestCase):
         self.assertEqual(out["status"], "Submitted")
         self.assertEqual(mock_consume.call_args.args[4]["amount"], 12.345)
 
+    def test_blank_room_lookup_method_fails_closed_when_room_charge_tender_is_positive(self):
+        for blank in ("", "   ", None):
+            with self.subTest(method=blank):
+                self.profile.custom_room_lookup_method = blank
+                with self.assertRaisesRegex(ValueError, r"POS-RC-UNCONFIGURED") as caught:
+                    self._pay(room_charge_stay="RES-101")
+                msg = str(caught.exception)
+                for vendor in ("ury", "kamra", "frappe", "erpnext", "huf"):
+                    self.assertNotIn(vendor, msg.lower())
+
+    def test_foreign_currency_room_charge_uses_property_currency_amount_in_claim_and_override_flag(self):
+        # 20.00 USD room charge against UGX property (74,000 UGX > 50,000 UGX limit).
+        # Both override.consume claim AND frappe.flags.kamra_room_charge_override must carry
+        # property-currency amount (74000 UGX), never unconverted 20.0 USD!
+        self.profile.currency = "USD"
+        self.invoice.currency = "USD"
+        self.invoice.conversion_rate = 3700
+        self.invoice.rounded_total = self.invoice.grand_total = 20.0
+        verifier = MagicMock(return_value={
+            "ok": True,
+            "reservation": "RES-101",
+            "room_number": "101",
+            "guest_name": "Grace O.",
+            "posting_allowed": False,
+            "no_post": 0,
+            "limit": 50000,
+            "balance": 0,
+            "available": 50000,
+            "currency": "UGX",
+            "charge_amount": 74000,
+            "override_required": True,
+            "reason_code": "POS-RC-OVER-LIMIT",
+            "reason": "Charge (74000 UGX) exceeds the room charge limit (50000 UGX). Manager approval is required.",
+        })
+        consumed = frappe._dict(approver="duty@example.com", amount=74000, claim={"reason": "VIP FX room"})
+        observed_flags = []
+
+        def capture_submit(*args, **kwargs):
+            observed_flags.append(dict(getattr(self.f.flags, "kamra_room_charge_override", None) or {}))
+
+        with patch("ury.ury_pos.room_charge._resolve_verifier", return_value=verifier), \
+                patch("ury.ury_pos.override.consume", return_value=consumed) as mock_consume, \
+                patch.object(order, "_submit_and_release_tables", side_effect=capture_submit):
+            out = order.make_invoice(
+                customer="Walk-in",
+                payments=[{"mode_of_payment": "Room Charge", "amount": 20.0}],
+                cashier="cashier@example.com",
+                pos_profile="Till A",
+                owner="cashier@example.com",
+                invoice="INV-RC-1",
+                room_number="101",
+                room_charge_stay="RES-101",
+                room_charge_approval="rc-fx-tok",
+                room_charge_reason="VIP FX room",
+            )
+        self.assertEqual(out["status"], "Submitted")
+        claim = mock_consume.call_args.args[4]
+        self.assertEqual(claim["amount"], 74000)
+        self.assertEqual(claim["currency"], "UGX")
+        self.assertEqual(claim["room"], "101")
+        self.assertEqual(claim["reservation"], "RES-101")
+        self.assertEqual(len(observed_flags), 1)
+        self.assertEqual(observed_flags[0].get("amount"), 74000)
+        self.assertEqual(observed_flags[0].get("currency"), "UGX")
+        self.assertEqual(observed_flags[0].get("reservation"), "RES-101")
+        self.assertEqual(observed_flags[0].get("approver"), "duty@example.com")
+
 
 class TestOfflineTenderReplayServerGate(unittest.TestCase):
     """Server re-checks Mode of Payment.custom_allow_offline and
@@ -645,7 +756,6 @@ class TestOfflineTenderReplayServerGate(unittest.TestCase):
         self.invoice.get.side_effect = lambda k, d=None: vars(self.invoice).get(k, d)
         self.invoice.set.side_effect = lambda k, v: setattr(self.invoice, k, v)
         self.invoice.append.side_effect = lambda k, row: getattr(self.invoice, k).append(frappe._dict(row))
-        self.enterContext(patch.object(order, "_validate_additional_discount", return_value=0))
         self.enterContext(patch.object(order, "get_order_invoice", return_value=self.invoice))
         self.enterContext(patch.object(order, "_submit_and_release_tables"))
         self.enterContext(patch.object(order, "_lock_settlement_customer", return_value=0))
@@ -767,6 +877,45 @@ class TestOfflineTenderReplayServerGate(unittest.TestCase):
             )
         self.assertEqual(out["status"], "Submitted")
         self.assertEqual(mock_consume.call_args.args[4]["amount"], 100.004)
+
+
+class TestServerOnlyOverrideFieldsGuard(unittest.TestCase):
+    """Clients must not forge server-only room-charge stay or override attribution fields via REST."""
+
+    def test_validate_server_only_override_fields_blocks_client_forging_custom_room_charge_stay(self):
+        fake_frappe = MagicMock()
+        fake_frappe.flags = frappe._dict()
+        fake_frappe.session = SimpleNamespace(user="cashier@example.com")
+        fake_frappe.PermissionError = PermissionError
+        fake_frappe._ = lambda m: m
+        fake_frappe.throw.side_effect = lambda msg, exc=PermissionError, **kw: (_ for _ in ()).throw(exc(msg))
+
+        # 1. Forged on new document via REST insert
+        new_doc = MagicMock()
+        new_doc.is_new.return_value = True
+        new_doc.get.side_effect = lambda k, d=None: "RES-FORGED" if k == "custom_room_charge_stay" else None
+        with patch.object(ury_pos_invoice, "frappe", fake_frappe):
+            with self.assertRaises(PermissionError):
+                ury_pos_invoice.validate_server_only_override_fields(new_doc)
+
+        # 2. Mutated on existing draft document via REST save
+        before_doc = frappe._dict(
+            custom_room_charge_stay="",
+            custom_override_approver="",
+            custom_override_reason="",
+        )
+        existing_doc = MagicMock()
+        existing_doc.is_new.return_value = False
+        existing_doc.get_doc_before_save.return_value = before_doc
+        existing_doc.get.side_effect = lambda k, d=None: "RES-FORGED" if k == "custom_room_charge_stay" else ""
+        with patch.object(ury_pos_invoice, "frappe", fake_frappe):
+            with self.assertRaises(PermissionError):
+                ury_pos_invoice.validate_server_only_override_fields(existing_doc)
+
+        # 3. Allowed when server flow sets pos_server_override_fields=True
+        fake_frappe.flags.pos_server_override_fields = True
+        with patch.object(ury_pos_invoice, "frappe", fake_frappe):
+            ury_pos_invoice.validate_server_only_override_fields(existing_doc)
 
 
 if __name__ == "__main__":

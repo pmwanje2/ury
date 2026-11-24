@@ -448,4 +448,190 @@ describe("POS On-Account over-limit opens ManagerApproval (on_account_over_limit
       expect.anything(),
     );
   });
+
+  it("FX On-Account converts USD shortfall to UGX company currency for over-limit check and claim", async () => {
+    setProfile({ currency: "USD", room_charge_modes: [], room_lookup_method: "" });
+    store.state = { ...store.state, currency: "USD", paymentModes: ["Cash"] };
+
+    vi.mocked(call.get).mockImplementation(async (method: string) => {
+      if (method === "ury.ury_pos.api.credit_accounts") {
+        return {
+          message: [
+            {
+              name: "R1H Credit Corp",
+              customer_name: "R1H Credit Corp",
+              balance: 0,
+              limit: 50000,
+              available: 50000,
+              currency: "UGX",
+              conversion_rate: 3700,
+            },
+          ],
+        };
+      }
+      if (method === "ury.ury_pos.override.privilege_policy") {
+        return { message: { privilege: "on_account_over_limit", label: "On-account over limit", may_perform: false, requires_reason: true } };
+      }
+      if (method === "ury.ury_pos.override.list_approvers") {
+        return { message: [{ user: "fin@hotel.test", full_name: "Grace Finance" }] };
+      }
+      if (method === "ury.ury_pos.override.list_reasons") {
+        return { message: [{ code: "OTHER", description: "Other", requires_note: 1, applies_to: [] }] };
+      }
+      return { message: [] };
+    });
+
+    vi.mocked(call.post).mockImplementation(async (method: string) => {
+      if (method === "ury.ury_pos.override.authorise") {
+        return {
+          message: {
+            token: "fx-oa-tok",
+            approver: "fin@hotel.test",
+            approver_name: "Grace Finance",
+            expires_in: 120,
+          },
+        };
+      }
+      return { message: { name: "BILL-FX", status: "Submitted" } };
+    });
+
+    // 20 USD @ 3700 UGX/USD = 74,000 UGX > 50,000 UGX available!
+    // Unconverted 20 < 50000 would falsely skip ManagerApproval and mismatch server claim!
+    renderDialog({
+      invoice: "BILL-FX",
+      order: { invoice_printed: 1, currency: "USD", conversion_rate: 3700 } as any,
+      grandTotal: 20,
+      roundedTotal: 20,
+    });
+    fireEvent.change(screen.getByRole("searchbox", { name: /charge to account/i }), {
+      target: { value: "R1H" },
+    });
+    const acctBtn = await screen.findByRole("button", { name: /R1H Credit Corp/i });
+    fireEvent.click(acctBtn);
+
+    const cashInput = document.querySelector<HTMLInputElement>('input[type="number"]')!;
+    fireEvent.change(cashInput, { target: { value: "0" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
+    await screen.findByText(/manager authorisation required/i);
+
+    const reasonSelect = await screen.findByLabelText(/reason/i);
+    fireEvent.change(reasonSelect, { target: { value: "OTHER" } });
+    const noteInput = await screen.findByLabelText(/note/i);
+    fireEvent.change(noteInput, { target: { value: "FX corporate approval" } });
+    for (const digit of ["4", "3", "2", "1"]) {
+      fireEvent.click(screen.getByRole("button", { name: digit }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        "ury.ury_pos.override.authorise",
+        expect.objectContaining({
+          privilege: "on_account_over_limit",
+          claim: expect.objectContaining({
+            customer: "R1H Credit Corp",
+            company: "Hotel Co",
+            proposed: 74000,
+            limit: 50000,
+            currency: "UGX",
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("FX Room-Charge uses property-currency charge_amount in room_charge_over_limit claim", async () => {
+    setProfile({ currency: "USD", room_charge_modes: ["Room Charge"], room_lookup_method: METHOD });
+    store.state = { ...store.state, currency: "USD", paymentModes: ["Room Charge", "Cash"] };
+
+    vi.mocked(call.get).mockImplementation(async (method: string) => {
+      if (method === METHOD) {
+        return {
+          message: {
+            ok: true,
+            reservation: "RES-101",
+            room_number: "101",
+            guest_name: "Grace O.",
+            departure: "2026-11-26",
+            posting_allowed: false,
+            no_post: 0,
+            limit: 50000,
+            balance: 0,
+            available: 50000,
+            currency: "UGX",
+            charge_amount: 74000,
+            override_required: true,
+            reason_code: "POS-RC-OVER-LIMIT",
+            reason: "Charge (74000 UGX) exceeds the room charge limit (50000 UGX). Manager approval is required.",
+          },
+        };
+      }
+      if (method === "ury.ury_pos.override.privilege_policy") {
+        return { message: { privilege: "room_charge_over_limit", label: "Room charge over limit", may_perform: false, requires_reason: true } };
+      }
+      if (method === "ury.ury_pos.override.list_approvers") {
+        return { message: [{ user: "duty@hotel.test", full_name: "Amina Duty" }] };
+      }
+      if (method === "ury.ury_pos.override.list_reasons") {
+        return { message: [{ code: "OTHER", description: "Other", requires_note: 1, applies_to: [] }] };
+      }
+      return { message: [] };
+    });
+
+    vi.mocked(call.post).mockImplementation(async (method: string) => {
+      if (method === "ury.ury_pos.override.authorise") {
+        return {
+          message: {
+            token: "fx-rc-tok",
+            approver: "duty@hotel.test",
+            approver_name: "Amina Duty",
+            expires_in: 120,
+          },
+        };
+      }
+      return { message: { name: "BILL-FX-RC", status: "Submitted" } };
+    });
+
+    renderDialog({
+      invoice: "BILL-FX-RC",
+      order: { invoice_printed: 1, currency: "USD", conversion_rate: 3700 } as any,
+      grandTotal: 20,
+      roundedTotal: 20,
+    });
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[type="number"]');
+    fireEvent.change(inputs[0], { target: { value: "20" } });
+    fireEvent.change(document.querySelector<HTMLInputElement>("#room-charge-reference")!, {
+      target: { value: "101" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /check room/i }));
+
+    const overrideBtn = await screen.findByRole("button", { name: /manager approval|override/i });
+    fireEvent.click(overrideBtn);
+    await screen.findByText(/manager authorisation required/i);
+
+    const reasonSelect = await screen.findByLabelText(/reason/i);
+    fireEvent.change(reasonSelect, { target: { value: "OTHER" } });
+    const noteInput = await screen.findByLabelText(/note/i);
+    fireEvent.change(noteInput, { target: { value: "VIP FX room charge" } });
+    for (const digit of ["4", "3", "2", "1"]) {
+      fireEvent.click(screen.getByRole("button", { name: digit }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        "ury.ury_pos.override.authorise",
+        expect.objectContaining({
+          privilege: "room_charge_over_limit",
+          claim: expect.objectContaining({
+            reservation: "RES-101",
+            room: "101",
+            amount: 74000,
+            currency: "UGX",
+          }),
+        }),
+      ),
+    );
+  });
 });
