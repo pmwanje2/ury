@@ -704,6 +704,53 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
             )
         self.assertEqual(res["status"], "Open")
 
+    def test_reopen_till_elevates_frappe_flags_ignore_permissions_during_unconsolidation_only(self):
+        # ERPNext unconsolidate_pos_invoices() cancels the linked Sales Invoice under the
+        # active cashier session without copying closing_doc.flags.ignore_permissions.
+        self.store.current_user = "cashier@example.com"
+        first = self.tc.close_till_with_controls(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 150000}],
+        )
+        closing_name = first["name"]
+        closing_doc = self.cs.closings[closing_name]
+        orig_cancel = type(closing_doc).cancel
+        seen_flag = []
+
+        def checked_cancel(doc_self):
+            seen_flag.append(bool(getattr(self.frappe.flags, "ignore_permissions", False)))
+            return orig_cancel(doc_self)
+
+        claim = {
+            "action": "reopen_till",
+            "pos_profile": "Main Till",
+            "pos_closing_entry": closing_name,
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "reason": "Cashier session unconsolidation",
+        }
+        self.override.mint(
+            "tok-reopen-perm",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="reopen_till",
+            pos_profile="Main Till",
+            reference_name=closing_name,
+            claim=claim,
+        )
+        self.frappe.flags.ignore_permissions = False
+        with patch.object(type(closing_doc), "cancel", checked_cancel):
+            self.tc.reopen_till(
+                pos_closing_entry=closing_name,
+                reason="Cashier session unconsolidation",
+                approval_token="tok-reopen-perm",
+            )
+        self.assertEqual(seen_flag, [True], "frappe.flags.ignore_permissions must be True during unconsolidation")
+        self.assertFalse(
+            bool(getattr(self.frappe.flags, "ignore_permissions", False)),
+            "frappe.flags.ignore_permissions must be restored after reopen_till",
+        )
+
     def test_force_close_requires_pin_snapshots_open_checks_and_preserves_consolidation(self):
         # Add an open draft check on Main Till
         self.store.pos_invoices["POS-DRAFT-1"] = FakeDoc(
