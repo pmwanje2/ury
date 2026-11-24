@@ -1361,8 +1361,10 @@ def sync_service_charge(doc, profile=None) -> None:
 
     override_rate = doc.get("custom_service_charge_override_rate")
     override_amount = doc.get("custom_service_charge_override_amount")
-    has_override_rate = override_rate not in (None, "")
-    has_override_amount = override_amount not in (None, "")
+    # MariaDB DECIMAL(21,9) NOT NULL DEFAULT 0.0 loads unset Percent/Currency fields as 0.0;
+    # only strictly positive values represent an active override (zeroing uses waive).
+    has_override_rate = flt(override_rate) > 0
+    has_override_amount = flt(override_amount) > 0
     has_override = has_override_rate or has_override_amount
 
     matched_rule = match_service_charge_rule(doc, profile)
@@ -1612,11 +1614,13 @@ def get_service_charge_status(invoice: str, pos_profile: str | None = None) -> d
         for t in (doc.get("taxes") or [])
         if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge Tax"
     )
+    raw_ov_rate = flt(doc.get("custom_service_charge_override_rate"))
+    raw_ov_amount = flt(doc.get("custom_service_charge_override_amount"))
     return {
         "invoice": doc.name,
         "waived": cint(doc.get("custom_service_charge_waived")) == 1,
-        "override_rate": doc.get("custom_service_charge_override_rate"),
-        "override_amount": doc.get("custom_service_charge_override_amount"),
+        "override_rate": raw_ov_rate if raw_ov_rate > 0 else None,
+        "override_amount": raw_ov_amount if raw_ov_amount > 0 else None,
         "reason": doc.get("custom_service_charge_reason") or "",
         "approver": doc.get("custom_service_charge_approver") or "",
         "service_charge_amount": sc_amount,
@@ -1736,20 +1740,28 @@ def adjust_service_charge(
     full_reason = f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
     if action == "waive":
         doc.custom_service_charge_waived = 1
-        doc.custom_service_charge_override_rate = None
-        doc.custom_service_charge_override_amount = None
+        doc.custom_service_charge_override_rate = 0.0
+        doc.custom_service_charge_override_amount = 0.0
         doc.custom_service_charge_reason = full_reason
         doc.custom_service_charge_approver = auth["approver"]
     elif action == "change":
-        doc.custom_service_charge_waived = 0
-        doc.custom_service_charge_override_rate = rate_val
-        doc.custom_service_charge_override_amount = amount_val
+        is_zero_override = (rate_val is not None and flt(rate_val) == 0) or (
+            amount_val is not None and flt(amount_val) == 0
+        )
+        if is_zero_override:
+            doc.custom_service_charge_waived = 1
+            doc.custom_service_charge_override_rate = 0.0
+            doc.custom_service_charge_override_amount = 0.0
+        else:
+            doc.custom_service_charge_waived = 0
+            doc.custom_service_charge_override_rate = flt(rate_val) if rate_val is not None else 0.0
+            doc.custom_service_charge_override_amount = flt(amount_val) if amount_val is not None else 0.0
         doc.custom_service_charge_reason = full_reason
         doc.custom_service_charge_approver = auth["approver"]
     else:
         doc.custom_service_charge_waived = 0
-        doc.custom_service_charge_override_rate = None
-        doc.custom_service_charge_override_amount = None
+        doc.custom_service_charge_override_rate = 0.0
+        doc.custom_service_charge_override_amount = 0.0
         doc.custom_service_charge_reason = ""
         doc.custom_service_charge_approver = ""
 
@@ -2100,7 +2112,7 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
             )
 
     for ov_field in ("custom_service_charge_override_rate", "custom_service_charge_override_amount"):
-        if (doc.get(ov_field) or None) != (before.get(ov_field) or None):
+        if abs(flt(doc.get(ov_field)) - flt(before.get(ov_field))) > 1e-6:
             frappe.throw(
                 coded_message(
                     "POS-AUTH-REQUIRED",
