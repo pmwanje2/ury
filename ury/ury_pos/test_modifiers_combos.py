@@ -1278,6 +1278,141 @@ class TestModifiersAndCombosEngine(unittest.TestCase):
 					self.assertEqual(price_map[f"c-{currency}-fee"]["rate"], expected_fee)
 					self.assertEqual(norm[1]["rate"], expected_fee)
 
+	def test_privileged_price_override_and_comp_on_modifier_rows_preserves_rest_tamper_block(self):
+		"""#152 + #156 compatibility RED: server-verified price override / line comp on a linked
+		modifier row must pass validate & before_submit while forged REST POST/PUT stays blocked."""
+		with patch.dict(sys.modules, self.modules):
+			_, _, _, mods = self._load_engines()
+
+			ribeye_ok = Row(
+				name="r1",
+				item_code="RIBEYE",
+				item_name="Ribeye Steak",
+				qty=1,
+				rate=45000,
+				price_list_rate=45000,
+				reservation_line_key="k1",
+				custom_is_modifier=0,
+				custom_modifiers_json=json.dumps([
+					{"group": "Meat Temperature", "option_code": "MED-RARE", "label": "Medium Rare"},
+				]),
+			)
+
+			def make_doc(items, *, is_new=False, verified=False, name="POS-PRIV-001"):
+				d = Doc(
+					name=name,
+					docstatus=0,
+					is_return=0,
+					branch="Main",
+					company="Maximus Hospitality",
+					pos_profile="Main POS",
+					selling_price_list="Menu A",
+					currency="UGX",
+					posting_date="2026-11-24",
+					items=items,
+					flags=SimpleNamespace(ury_privileged_action_verified=verified),
+				)
+				d.is_new = lambda: is_new
+				return d
+
+			# 1. Direct REST POST (new doc) forging custom_price_overridden=1 or custom_is_complimentary=1
+			#    without server verification MUST remain blocked!
+			forged_new = make_doc(
+				[
+					ribeye_ok,
+					Row(
+						name="c-forged",
+						item_code="EXTRA-CHEESE",
+						item_name="Aged Cheddar",
+						qty=1,
+						rate=0.0,
+						price_list_rate=3000,
+						reservation_line_key="kc-forged",
+						custom_parent_line_key="k1",
+						custom_is_modifier=1,
+						custom_line_role="Modifier",
+						custom_modifier_group="Steak Extras",
+						custom_modifier_option="EXTRA-CHEESE",
+						custom_price_overridden=1,
+						custom_is_complimentary=1,
+					),
+				],
+				is_new=True,
+				verified=False,
+			)
+			with self.assertRaises(self.framework.ValidationError) as ctx:
+				mods.validate_pos_invoice_modifiers(forged_new)
+			self.assertIn("[POS-MODIFIER-RATE-MISMATCH]", str(ctx.exception))
+
+			# 2. Server-verified override_line_price (ury_privileged_action_verified=True,
+			#    custom_price_overridden=1, rate=1500) MUST succeed on validate!
+			overridden_child = Row(
+				name="c-ov",
+				item_code="EXTRA-CHEESE",
+				item_name="Aged Cheddar",
+				qty=1,
+				rate=1500,
+				price_list_rate=1500,
+				custom_original_price_list_rate=3000,
+				custom_price_overridden=1,
+				reservation_line_key="kc-ov",
+				custom_parent_line_key="k1",
+				custom_is_modifier=1,
+				custom_line_role="Modifier",
+				custom_modifier_group="Steak Extras",
+				custom_modifier_option="EXTRA-CHEESE",
+			)
+			verified_override_doc = make_doc([ribeye_ok, overridden_child], is_new=False, verified=True)
+			mods.validate_pos_invoice_modifiers(verified_override_doc)
+
+			# 3. Subsequent save & before_submit of that ALREADY-SAVED overridden check
+			#    (verified=False) MUST succeed at the saved rate=1500, but tampering rate to 100 MUST fail!
+			orig_exists = self.framework.db.exists
+			orig_get_doc = self.framework.get_doc
+			saved_snapshot = make_doc([ribeye_ok, Row(**overridden_child.__dict__)], is_new=False, verified=False)
+			try:
+				self.framework.db.exists = MagicMock(
+					side_effect=lambda dt, nm=None: True if (dt == "POS Invoice" and nm == "POS-PRIV-001") else orig_exists(dt, nm)
+				)
+				self.framework.get_doc = MagicMock(
+					side_effect=lambda dt, nm=None: saved_snapshot if (dt == "POS Invoice" and nm == "POS-PRIV-001") else orig_get_doc(dt, nm)
+				)
+				resave_doc = make_doc([ribeye_ok, Row(**overridden_child.__dict__)], is_new=False, verified=False)
+				mods.validate_pos_invoice_modifiers(resave_doc)
+				mods.validate_invoice_modifiers_before_submit(resave_doc)
+
+				# Tampering the already-overridden row's rate from 1500 -> 100 without verification MUST fail
+				tampered_child = Row(**overridden_child.__dict__)
+				tampered_child.rate = 100
+				tampered_doc = make_doc([ribeye_ok, tampered_child], is_new=False, verified=False)
+				with self.assertRaises(self.framework.ValidationError) as ctx:
+					mods.validate_pos_invoice_modifiers(tampered_doc)
+				self.assertIn("[POS-MODIFIER-RATE-MISMATCH]", str(ctx.exception))
+			finally:
+				self.framework.db.exists = orig_exists
+				self.framework.get_doc = orig_get_doc
+
+			# 4. Server-verified apply_complimentary(scope="item") (custom_is_complimentary=1, rate=0)
+			#    MUST succeed on validate and subsequent before_submit!
+			comped_child = Row(
+				name="c-comp",
+				item_code="EXTRA-CHEESE",
+				item_name="Aged Cheddar",
+				qty=1,
+				rate=0.0,
+				price_list_rate=3000,
+				discount_percentage=100.0,
+				custom_is_complimentary=1,
+				reservation_line_key="kc-comp",
+				custom_parent_line_key="k1",
+				custom_is_modifier=1,
+				custom_line_role="Modifier",
+				custom_modifier_group="Steak Extras",
+				custom_modifier_option="EXTRA-CHEESE",
+			)
+			verified_comp_doc = make_doc([ribeye_ok, comped_child], is_new=False, verified=True, name="POS-PRIV-002")
+			mods.validate_pos_invoice_modifiers(verified_comp_doc)
+
 
 class TestSplitBillAtomicParentChildModifiers(unittest.TestCase):
 	def test_split_bill_moves_child_modifiers_with_parent_and_blocks_orphan_child_split(self):
