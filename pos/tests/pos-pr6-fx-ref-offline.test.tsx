@@ -204,10 +204,37 @@ describe('POS-PR-6: G46 Waiter offline capabilities, outbox reference_no passthr
     expect(received.length).toBeGreaterThanOrEqual(1);
     expect(fetchMock).toHaveBeenCalledWith(
       'http://192.168.1.50:8080/relay',
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({ method: 'POST', mode: 'no-cors' }),
     );
     peerA.close();
     peerB.close();
+  });
+
+  it('skips peer relay network fetches while browser is offline (navigator.onLine === false)', async () => {
+    const peerSyncMod = await import('../src/offline/peer-sync');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, peers: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const origOnline = Object.getOwnPropertyDescriptor(navigator, 'onLine');
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+    try {
+      const peer = peerSyncMod.createOfflinePeerSync({
+        branch: 'Kampala',
+        posProfile: 'Main Till',
+        relayUrl: 'http://192.168.1.50:8080/relay',
+      });
+      await peer.broadcast({
+        type: 'outbox_snapshot',
+        sender: 'waiter-1',
+        pendingTables: [{ table: 'T-05', clientOrderId: 'abc12345', waiter: 'waiter-1', itemCount: 1, updatedAt: '2026-11-24T12:00:00Z' }],
+      });
+      const polled = await peer.pollRelay();
+      expect(polled).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      peer.close();
+    } finally {
+      if (origOnline) Object.defineProperty(navigator, 'onLine', origOnline);
+      else Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+    }
   });
 });
 
@@ -255,6 +282,56 @@ describe('POS-PR-6: G22 & G25 ClosingPaymentTable currency-wise foreign cash cou
     await waitFor(() => {
       expect(onForeignChange).toHaveBeenCalledWith('USD Cash', 95);
     });
+  });
+
+  it('flags exact 0.001 KWD (3dp) variance as a difference and renders responsive mobile card layout without clipping', async () => {
+    const { default: ClosingPaymentTable } = await import('../src/components/ClosingPaymentTable');
+    const { container } = render(
+      <ClosingPaymentTable
+        currency="UGX"
+        touchedModes={new Set(['KWD Cash'])}
+        onChange={vi.fn()}
+        onForeignChange={vi.fn()}
+        rows={[
+          {
+            mode_of_payment: 'KWD Cash',
+            opening_amount: 0,
+            expected_amount: 13500,
+            closing_amount: 13488,
+            difference: -12,
+            custom_tender_currency: 'KWD',
+            custom_expected_foreign_amount: 1.125,
+            custom_closing_foreign_amount: 1.124,
+            custom_foreign_difference: -0.001,
+            effective_exchange_rate: 12000,
+          } as any,
+        ]}
+      />,
+    );
+
+    const kwdRow = container.querySelector('tbody tr') as HTMLTableRowElement;
+    expect(kwdRow).toBeTruthy();
+    const cells = kwdRow.querySelectorAll('td');
+    const diffCell = cells[cells.length - 1];
+    // 0.001 KWD is 1 full minor unit on a 3dp currency -> MUST be flagged red, not green!
+    expect(diffCell.className).toContain('text-red-600');
+    expect(diffCell.className).not.toContain('text-green-600');
+    // Mobile responsive stacked layout classes prevent 390px horizontal clipping of Payment Mode / Difference
+    expect(kwdRow.className).toContain('block');
+    expect(kwdRow.className).toContain('sm:table-row');
+    expect(diffCell.getAttribute('data-label')).toBeTruthy();
+  });
+
+  it('rounds FX base closing preview to home currency decimal places (0dp UGX, 2dp USD, 3dp KWD)', async () => {
+    const mod = await import('../src/components/POSClosingDialog');
+    const roundBase = (mod as any).roundToCurrencyPrecision;
+    expect(roundBase).toBeTypeOf('function');
+    // 3.20 * 3715.12345679 = 11888.395 -> 0dp UGX = 11888 (NOT 11888.4)
+    expect(roundBase(3.2 * 3715.12345679, 'UGX')).toBe(11888);
+    // 2dp USD
+    expect(roundBase(10.126, 'USD')).toBe(10.13);
+    // 3dp KWD
+    expect(roundBase(10 * 0.30725, 'KWD')).toBe(3.073);
   });
 });
 

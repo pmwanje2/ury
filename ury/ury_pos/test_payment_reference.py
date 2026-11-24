@@ -3,8 +3,8 @@ Config-driven per-tender payment reference / auth code capture.
 
 Tests:
 - Custom fields on Mode of Payment in custom_field.json, hooks.py fixtures, and setup_customizations.py
-- Server validation helper (`validate_payment_reference`) enforcing URY-PAY-REF-REQUIRED,
-  URY-PAY-REF-INVALID (safe bounded regex <= 128 chars), and required reference_date
+- Server validation helper (`validate_payment_reference`) enforcing [POS-PAY-REF-REQUIRED],
+  [POS-PAY-REF-INVALID] (safe bounded regex <= 128 chars), and required reference_date
 - Invoice hook enforcement (`ury_pos_invoice.validate_payment_references`)
 - API exposure (`getModeOfPayment`, `getPosProfileFull`, `getPosInvoiceItems`, `search_settled_bills`)
 - Guest-check print format rendering (`Merged POS Invoice Format` & `URY Bill Copy`) with HTML escaping
@@ -140,8 +140,8 @@ class TestPaymentReferenceValidation(unittest.TestCase):
         }
         with self.assertRaises(self.frappe.ValidationError) as ctx:
             fx.validate_payment_reference("MTN Mobile Money", reference_no="   ", mode_config=cfg)
-        self.assertIn("URY-PAY-REF-REQUIRED", str(ctx.exception))
-        self.assertNotIn("[URY-", str(ctx.exception))
+        self.assertIn("[POS-PAY-REF-REQUIRED]", str(ctx.exception))
+        self.assertNotIn("URY-", str(ctx.exception))
 
     def test_required_mode_rejects_pattern_mismatch_with_stable_code(self):
         fx = self._fx()
@@ -153,8 +153,8 @@ class TestPaymentReferenceValidation(unittest.TestCase):
         }
         with self.assertRaises(self.frappe.ValidationError) as ctx:
             fx.validate_payment_reference("MTN Mobile Money", reference_no="bad!", mode_config=cfg)
-        self.assertIn("URY-PAY-REF-INVALID", str(ctx.exception))
-        self.assertNotIn("[URY-", str(ctx.exception))
+        self.assertIn("[POS-PAY-REF-INVALID]", str(ctx.exception))
+        self.assertNotIn("URY-", str(ctx.exception))
 
     def test_required_mode_accepts_valid_reference_and_trims(self):
         fx = self._fx()
@@ -178,7 +178,7 @@ class TestPaymentReferenceValidation(unittest.TestCase):
         self.assertEqual(fx.validate_payment_reference("Visa", reference_no="", mode_config=cfg)["reference_no"], "")
         with self.assertRaises(self.frappe.ValidationError) as ctx:
             fx.validate_payment_reference("Visa", reference_no="ABC", mode_config=cfg)
-        self.assertIn("URY-PAY-REF-INVALID", str(ctx.exception))
+        self.assertIn("[POS-PAY-REF-INVALID]", str(ctx.exception))
         self.assertEqual(fx.validate_payment_reference("Visa", reference_no="123456", mode_config=cfg)["reference_no"], "123456")
 
     def test_overlong_or_redos_regex_pattern_is_safely_rejected(self):
@@ -190,16 +190,33 @@ class TestPaymentReferenceValidation(unittest.TestCase):
         }
         with self.assertRaises(self.frappe.ValidationError) as ctx:
             fx.validate_payment_reference("Bank", reference_no="a" * 130, mode_config=overlong_cfg)
-        self.assertIn("URY-PAY-REF-INVALID", str(ctx.exception))
+        self.assertIn("[POS-PAY-REF-INVALID]", str(ctx.exception))
 
-        redos_cfg = {
-            "custom_reference_mode": "Required",
-            "custom_reference_pattern": r"^(a+)+$",
-            "custom_reference_date_required": 0,
-        }
-        with self.assertRaises(self.frappe.ValidationError) as ctx:
-            fx.validate_payment_reference("Bank", reference_no="a" * 30 + "!", mode_config=redos_cfg)
-        self.assertIn("URY-PAY-REF-INVALID", str(ctx.exception))
+        for unsafe_pat in (
+            r"^(a+)+$",
+            r"^(a|aa)+$",
+            r"^(a|a?)+$",
+            r"^(?:ab|a){2,}$",
+            r"^a+a+$",
+        ):
+            with self.subTest(unsafe_pattern=unsafe_pat):
+                self.assertFalse(fx.is_safe_regex_pattern(unsafe_pat))
+                redos_cfg = {
+                    "custom_reference_mode": "Required",
+                    "custom_reference_pattern": unsafe_pat,
+                    "custom_reference_date_required": 0,
+                }
+                with self.assertRaises(self.frappe.ValidationError) as ctx:
+                    fx.validate_payment_reference("Bank", reference_no="a" * 24 + "!", mode_config=redos_cfg)
+                self.assertIn("[POS-PAY-REF-INVALID]", str(ctx.exception))
+
+        for safe_pat in (
+            r"^[A-Z0-9-]{6,20}$",
+            r"^(TX|MM)-[0-9]{6,12}$",
+            r"^[A-Z]{2,4}-[0-9]{4,10}(-[A-Z0-9]{2,4})?$",
+        ):
+            with self.subTest(safe_pattern=safe_pat):
+                self.assertTrue(fx.is_safe_regex_pattern(safe_pat))
 
     def test_reference_date_required_enforced(self):
         fx = self._fx()
@@ -211,7 +228,8 @@ class TestPaymentReferenceValidation(unittest.TestCase):
         }
         with self.assertRaises(self.frappe.ValidationError) as ctx:
             fx.validate_payment_reference("Bank Transfer", reference_no="SLIP-900", reference_date=None, mode_config=cfg)
-        self.assertIn("URY-PAY-REF-REQUIRED", str(ctx.exception))
+        self.assertIn("[POS-PAY-REF-REQUIRED]", str(ctx.exception))
+        self.assertNotIn("URY-", str(ctx.exception))
 
         ok = fx.validate_payment_reference("Bank Transfer", reference_no="SLIP-900", reference_date="2026-11-24", mode_config=cfg)
         self.assertEqual(ok["reference_no"], "SLIP-900")
