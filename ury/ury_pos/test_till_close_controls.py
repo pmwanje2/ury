@@ -1097,6 +1097,101 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
                     counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 150000}],
                 )
 
+    def test_pending_movement_refused_before_variance_approval_for_cashier(self):
+        # A pending draft cash movement makes counted cash look short vs expected;
+        # close_till_with_controls must refuse with POS-CLOSE-PENDING-MOVEMENT before
+        # raising a misleading POS-CLOSE-VARIANCE-APPROVAL.
+        self.store.journal_entries["JE-PEND-1"] = FakeDoc(
+            {
+                "doctype": "Journal Entry",
+                "name": "JE-PEND-1",
+                "docstatus": 0,
+                "custom_pos_opening_entry": "OPEN-MAIN-1",
+                "custom_cash_movement_type": "Paid Out",
+                "total_debit": 60000,
+            },
+            store=self.store,
+        )
+        self.store.current_user = "cashier@example.com"
+        with self.assertRaisesRegex(Refused, r"POS-CLOSE-PENDING-MOVEMENT"):
+            self.tc.close_till_with_controls(
+                pos_profile="Main Till",
+                pos_opening_entry="OPEN-MAIN-1",
+                counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 90000}],
+            )
+
+    def test_manager_with_over_short_close_may_perform_within_cap_closes_own_till_and_admin_closes_natively(self):
+        # Under #147 R2 Simphony rules, may_perform=1 authorises solo execution up to max_amount
+        # (allow_self_approval=0 governs PIN overrides, not solo may_perform), while variances
+        # above max_amount still refuse with POS-CLOSE-VARIANCE-APPROVAL.
+        self.store.profiles["Main Till"]["custom_over_short_tolerance"] = 5000
+        self.store.privilege_rules["Hotel Co"] = [
+            {
+                "company": "Hotel Co",
+                "privilege": "over_short_close",
+                "role": "URY Manager",
+                "may_perform": 1,
+                "may_authorise": 1,
+                "allow_self_approval": 0,
+                "max_amount": 10000,
+            },
+            {
+                "company": "Hotel Co",
+                "privilege": "close_other_till",
+                "role": "URY Manager",
+                "may_perform": 1,
+                "may_authorise": 1,
+                "allow_self_approval": 0,
+                "max_amount": 0,
+            },
+        ]
+        self.store.openings["OPEN-MGR-1"] = FakeDoc(
+            {
+                "doctype": "POS Opening Entry",
+                "name": "OPEN-MGR-1",
+                "pos_profile": "Main Till",
+                "company": "Hotel Co",
+                "user": "manager@example.com",
+                "status": "Open",
+                "docstatus": 1,
+                "period_start_date": "2026-11-24 08:00:00",
+                "balance_details": [Row({"mode_of_payment": "Cash", "opening_amount": 100000})],
+            },
+            store=self.store,
+        )
+        # Expected cash = 100,000 open + 50,000 invoice = 150,000
+        self.store.current_user = "manager@example.com"
+
+        # Variance -20,000 exceeds manager's max_amount=10,000 -> MUST still refuse
+        with self.assertRaisesRegex(PermissionDenied, r"POS-CLOSE-VARIANCE-APPROVAL"):
+            self.tc.close_till_with_controls(
+                pos_profile="Main Till",
+                pos_opening_entry="OPEN-MGR-1",
+                counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 130000}],
+            )
+
+        # Variance -8,000 exceeds tolerance 5,000 but is within manager's may_perform cap (10,000) -> succeeds
+        res = self.tc.close_till_with_controls(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MGR-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 142000}],
+        )
+        self.assertEqual(res["docstatus"], 1)
+
+        # Native Administrator submit on another cashier's shift also succeeds when rules are active
+        self.store.current_user = "Administrator"
+        closing = self.frappe.new_doc("POS Closing Entry")
+        closing.pos_opening_entry = "OPEN-MAIN-1"
+        closing.pos_profile = "Main Till"
+        closing.company = "Hotel Co"
+        closing.user = "cashier@example.com"
+        closing.period_start_date = "2026-11-24 08:00:00"
+        closing.period_end_date = "2026-11-24 18:00:00"
+        closing.append("payment_reconciliation", {"mode_of_payment": "Cash", "closing_amount": 140000})
+        closing.insert(ignore_permissions=True)
+        closing.submit()
+        self.assertEqual(closing.docstatus, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
