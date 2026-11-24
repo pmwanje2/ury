@@ -74,16 +74,21 @@ Website Theme. No theme scripts or custom stylesheets are embedded. The merged
 POS invoice shows the invoice’s restaurant and branch. React QZ and register
 browser printing (including classic POS in the browser) suppress the letterhead.
 Classic QZ leaves letterhead selection to Frappe; network printing forwards
-`no_letterhead`, defaulting to `0`. POS and guest footers carry the AGPL-3.0
-source offer under the site's name. Set the
+`no_letterhead`, defaulting to `0`. Every network-facing app (`/pos`, `/order`,
+`/ury`, `/ury/serve`, `/mosaic/`, `/urypos/`, `/ury/brief/`) carries the
+brand-neutral AGPL-3.0 §13 source offer under the site's name. Set the
 site-config key `ury_source_url` to the public source for the deployed release;
 when unset it links to this fork's `maximus/v16-integration` branch.
 
 Refusals show a brand-free code such as `[POS-CLOSE-LATE-INVOICE]`. Tests and
 logs match the key after the prefix. Set the site-config key
 `ury_message_code_prefix` (2–10 capital letters or digits, starting with a
-letter) to change the prefix. A value that is malformed or names the engine
-keeps `POS`.
+letter) to change the prefix. A value that is malformed or names a vendor
+(`URY`, `Frappe`, `ERPNext`, `Kamra`, `HUF`, `Tridz`, `HeyKoala`) keeps `POS`.
+New KOTs use the neutral `KOT-` naming series; existing records keep their names.
+Desk workspace, DocType and print-format labels are translated via
+`ury/translations/en.csv` without renaming internal DocTypes (`URY Bill Copy`
+remains owned by `maximus_branding`).
 
 ## Features
 
