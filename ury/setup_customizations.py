@@ -471,7 +471,25 @@ def get_custom_fields():
 				"non_negative": 1,
 				"description": "Kitchen and bar screens show tickets created within this many hours (1-24). Empty or 0 uses 3.",
 				"insert_after": "custom_kot_warning_time",
-			}
+			},
+			{
+				"fieldname": "custom_override_max_attempts",
+				"fieldtype": "Int",
+				"label": "Approval PIN Max Attempts",
+				"default": "5",
+				"non_negative": 1,
+				"description": "Wrong approval PIN attempts before lockout (default 5).",
+				"insert_after": "custom_floor_device_epoch",
+			},
+			{
+				"fieldname": "custom_override_lock_minutes",
+				"fieldtype": "Int",
+				"label": "Approval PIN Lockout (Minutes)",
+				"default": "15",
+				"non_negative": 1,
+				"description": "Minutes an approver PIN stays locked after too many wrong attempts (default 15).",
+				"insert_after": "custom_override_max_attempts",
+			},
 		],
   
 		"POS Opening Entry": [
@@ -796,6 +814,22 @@ def get_custom_fields():
 				"read_only": 1,
 				"print_hide": 1,
 				"insert_after": "reference_no",
+			},
+		],
+
+		"User": [
+			{
+				"fieldname": "custom_override_pin_hash",
+				"fieldtype": "Data",
+				"label": "Approval PIN Hash",
+				"insert_after": "custom_floor_pin_hash",
+				"hidden": 1,
+				"read_only": 1,
+				"no_copy": 1,
+				"print_hide": 1,
+				"report_hide": 1,
+				"unique": 0,
+				"translatable": 0,
 			},
 		],
 
