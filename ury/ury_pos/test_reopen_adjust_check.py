@@ -848,6 +848,35 @@ class TestReopenAndAdjustClosedCheck(unittest.TestCase):
         self.assertEqual(draft_line.get("custom_discount_approver"), "manager2@example.test")
         self.assertEqual(draft_line.get("custom_discount_approved_percent"), 10.0)
 
+    def test_r3_pos_invoice_custom_fields_bounded_length_for_mariadb_65535_row_budget(self):
+        """MariaDB 11.8.9 row-size guard: #150/#151/#152 POS Invoice Link/Select/Data fields must bound varchar length."""
+        fixture_rows = json.loads((ROOT / "ury/fixtures/custom_field.json").read_text(encoding="utf-8"))
+        by_name = {r["name"]: r for r in fixture_rows}
+
+        for fname, max_len in (
+            ("POS Invoice-custom_reopened_from", 64),
+            ("POS Invoice-custom_return_approver", 80),
+            ("POS Invoice-custom_waste_stock_entry", 64),
+            ("POS Invoice-custom_halo_approver", 80),
+        ):
+            self.assertIn(fname, by_name, f"Missing {fname} from custom_field.json")
+            length = int(by_name[fname].get("length") or 0)
+            self.assertTrue(
+                64 <= length <= max_len,
+                f"{fname} must bound varchar length in [64, {max_len}] to stay under MariaDB 65535B row limit (got {length})",
+            )
+
+        setup_src = (ROOT / "ury/setup_customizations.py").read_text(encoding="utf-8")
+        priv_src = (ROOT / "ury/ury_pos/privileged_fields.py").read_text(encoding="utf-8")
+        for fname in ("custom_reopened_from", "custom_return_approver", "custom_waste_stock_entry"):
+            idx = setup_src.index(f'"{fname}"')
+            block = setup_src[idx:idx + 350]
+            self.assertIn('"length":', block, f"{fname} in setup_customizations.py must declare bounded length")
+        for fname in ("custom_comp_type", "custom_efris_tax_category", "custom_tip_adjustment_je"):
+            idx = priv_src.index(f'"{fname}"')
+            block = priv_src[idx:idx + 350]
+            self.assertIn('"length":', block, f"{fname} in privileged_fields.py must declare bounded length")
+
 
 if __name__ == "__main__":
     unittest.main()
