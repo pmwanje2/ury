@@ -1192,6 +1192,98 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
         closing.submit()
         self.assertEqual(closing.docstatus, 1)
 
+    def test_capped_manager_over_short_pin_without_amount_in_claim_refused_blind_safely(self):
+        # Even when an over_short_close token's claim omits "amount" (blind-close UX),
+        # _require_till_privilege must enforce the approver's over_short_close max_amount
+        # against the server-computed variance, without leaking amounts or burning fc_token.
+        self.store.profiles["Main Till"]["custom_blind_cash_count"] = 1
+        self.store.profiles["Main Till"]["custom_over_short_tolerance"] = 5000
+        self.store.user_roles["admin_mgr@example.com"] = ["URY Admin"]
+        self.store.user_branches["admin_mgr@example.com"] = "Main Branch"
+        self.store.privilege_rules["Hotel Co"] = [
+            {"company": "Hotel Co", "privilege": "reopen_till", "role": "URY Manager", "may_perform": 1, "may_authorise": 1, "max_amount": 0},
+            {"company": "Hotel Co", "privilege": "over_short_close", "role": "URY Manager", "may_perform": 1, "may_authorise": 1, "max_amount": 10000},
+            {"company": "Hotel Co", "privilege": "over_short_close", "role": "URY Admin", "may_perform": 1, "may_authorise": 1, "max_amount": 0},
+        ]
+        self.store.current_user = "cashier@example.com"
+
+        fc_reason = "Other: Night audit blind force close"
+        fc_claim = {
+            "action": "force_close",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "reason": fc_reason,
+            "discard_pending_movements": False,
+        }
+        self.override.mint(
+            "tok-fc-blind-1",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="reopen_till",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=fc_claim,
+        )
+
+        # Capped manager (max_amount=10,000) mints an over_short_close token WITHOUT amount in claim.
+        # Actual variance = -90,000 (150,000 expected vs 60,000 counted).
+        os_reason = "Other: Blind count shortage"
+        os_claim = {
+            "action": "over_short_close",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "counted_payments": [{"mode_of_payment": "Cash", "closing_amount": 60000}],
+            "reason": os_reason,
+        }
+        self.override.mint(
+            "tok-os-capped-mgr",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="over_short_close",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=os_claim,
+        )
+
+        with self.assertRaises(PermissionDenied) as ctx:
+            self.tc.force_close_till(
+                pos_profile="Main Till",
+                pos_opening_entry="OPEN-MAIN-1",
+                counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 60000}],
+                reason=fc_reason,
+                approval_token="tok-fc-blind-1",
+                over_short_reason=os_reason,
+                over_short_approval_token="tok-os-capped-mgr",
+            )
+        msg = str(ctx.exception)
+        self.assertIn("POS-AUTH-NOT-ELIGIBLE", msg)
+        self.assertNotIn("150000", msg.replace(",", ""))
+        self.assertNotIn("90000", msg.replace(",", ""))
+        # Force-close token MUST still be preserved for retry with URY Admin!
+        self.assertNotIn("tok-fc-blind-1", self.override.consumed)
+
+        # Retry with URY Admin (unlimited) over_short_close token + SAME fc token succeeds!
+        self.override.mint(
+            "tok-os-admin-ok",
+            requester="cashier@example.com",
+            approver="admin_mgr@example.com",
+            privilege="over_short_close",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=os_claim,
+        )
+        res = self.tc.force_close_till(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 60000}],
+            reason=fc_reason,
+            approval_token="tok-fc-blind-1",
+            over_short_reason=os_reason,
+            over_short_approval_token="tok-os-admin-ok",
+        )
+        self.assertEqual(res["docstatus"], 1)
+        self.assertEqual(self.cs.closings[res["name"]].custom_over_short_approver, "admin_mgr@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()
