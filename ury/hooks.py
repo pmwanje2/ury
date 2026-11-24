@@ -271,11 +271,14 @@ doc_events = {
         "on_trash": "ury.ury.api.chairman_wa_identity.on_user_trash",
     },
     "POS Invoice": {
-        # Simphony tender rules: non-cash over-tender is refused or becomes a
-        # charged tip; tips are a Tips Payable line. Runs before the native
-        # validate computes change, so change only ever comes from cash.
-        "before_validate": "ury.ury.hooks.ury_pos_tender.before_validate",
         "before_insert": "ury.ury.hooks.ury_pos_invoice.before_insert",
+        "before_validate": [
+            "ury.ury.hooks.ury_pos_invoice.before_validate",
+            # Simphony tender rules: non-cash over-tender is refused or becomes a
+            # charged tip; tips are a Tips Payable line. Runs before the native
+            # validate computes change, so change only ever comes from cash.
+            "ury.ury.hooks.ury_pos_tender.before_validate",
+        ],
         "validate": "ury.ury.hooks.ury_pos_invoice.validate",
         "after_insert": [
             "ury.ury.api.ury_kot_order_number.set_order_number",

@@ -27,6 +27,7 @@ export interface PosProfileLimited {
   paid_limit: number;
   disable_rounded_total: number;
   enable_discount: number;
+  allow_discount_change?: number;
   multiple_cashier: number;
   owner: string;
   edit_order_type?: number;
@@ -89,6 +90,7 @@ export interface PosProfileFull {
   company: string;
   customer: string | null;
   allow_partial_payment?: number;
+  allow_discount_change?: number;
   country: string;
   disabled: number;
   warehouse: string;
@@ -134,6 +136,7 @@ export interface PosProfileCombined extends PosProfileFull {
   paid_limit: number;
   disable_rounded_total: number;
   enable_discount: number;
+  allow_discount_change?: number;
   multiple_cashier: number;
   edit_order_type?: number;
   view_all_status?: number;
@@ -217,6 +220,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     paid_limit: limitedProfile.paid_limit,
     disable_rounded_total: limitedProfile.disable_rounded_total,
     enable_discount: limitedProfile.enable_discount,
+    allow_discount_change: Number(fullProfile.allow_discount_change ?? limitedProfile.allow_discount_change ?? 0),
     multiple_cashier: limitedProfile.multiple_cashier,
     edit_order_type: limitedProfile.edit_order_type,
     custom_invoice_warning_time: limitedProfile.custom_invoice_warning_time ?? 0,

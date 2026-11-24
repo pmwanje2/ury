@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Percent, Coins, Printer } from 'lucide-react';
+import { X, Coins, Printer } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
@@ -57,6 +57,10 @@ interface PaymentDialogProps {
   clearSelectedOrder: () => void;
   discountPercentage?: number;
   discountAmount?: number;
+  lineDiscountTotal?: number;
+  discountReason?: string | null;
+  discountNote?: string | null;
+  couponCode?: string | null;
 }
 
 const PaymentDialog: React.FC<PaymentDialogProps> = ({
@@ -75,7 +79,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   fetchOrders,
   clearSelectedOrder,
   discountPercentage,
-  discountAmount
+  discountAmount,
+  lineDiscountTotal,
+  discountReason,
+  discountNote,
+  couponCode,
 }) => {
   const user = useRootStore((state) => state.user);
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
@@ -95,17 +103,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [printInvoice, setPrintInvoice] = useState(true);
   const effectivePrintInvoice = printRequired ? true : printInvoice;
   const [error, setError] = useState<string | null>(null);
-  const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
-  
-  // Only send a percentage discount the server already carries or previewed via Apply;
-  // never derive a synthetic percentage from a fixed discount_amount or send unapplied typing.
-  const initialAppliedPct = discountPercentage && discountPercentage > 0 ? discountPercentage : null;
-  const [discountValue, setDiscountValue] = useState<string>(initialAppliedPct !== null ? String(initialAppliedPct) : '');
-  const [appliedDiscountPct, setAppliedDiscountPct] = useState<number | null>(initialAppliedPct);
-  const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
+  const appliedDiscount = discountAmount || 0;
+  const appliedLineDiscount = lineDiscountTotal || 0;
+  const totalDiscount = appliedDiscount + appliedLineDiscount;
+  const hasDiscount = totalDiscount > 0 || (discountPercentage ?? 0) > 0;
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
-  // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
-  const [serverTotals, setServerTotals] = useState<{ grand_total: number; rounded_total: number } | null>(null);
   const receivedPayments = (existingPayments ?? order?.payments ?? []).filter(
     (row) => Number(row?.amount) > 0 && row?.custom_tender_received !== 0 && row?.custom_tender_received !== false,
   );
@@ -147,60 +149,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     fetchPaymentModes();
   }, [fetchPaymentModes]);
 
-  // baseTotal represents the pre-tip amount before any invoice-level discount
-  const baseTotal = preTipGrandTotal + (discountAmount || 0);
+  // baseTotal represents the pre-tip amount before any check or line discount
+  const baseTotal = preTipGrandTotal + totalDiscount;
 
-  const handleApplyDiscount = async () => {
-    try {
-      await assertOfflineActionAllowed('discount');
-    } catch (error) {
-      setError(error instanceof Error ? error.message : t('errors.invalid_discount'));
-      return;
-    }
-    const trimmed = discountValue.trim();
-    const isClearToZero = appliedDiscountPct !== null && (trimmed === '' || parseFloat(trimmed) === 0);
-    const value = isClearToZero ? 0 : parseFloat(trimmed);
-    if (!isClearToZero && (isNaN(value) || value <= 0)) {
-      setError(t('errors.invalid_discount'));
-      return;
-    }
-    if (value > 100) {
-      setError(t('errors.discount_exceeds_max'));
-      return;
-    }
-    try {
-      const { message } = await call.get<{ message: { grand_total: number; rounded_total: number } }>(
-        'ury.ury.doctype.ury_order.ury_order.preview_settlement_totals',
-        { invoice, pos_profile: posProfile, additionalDiscount: value },
-      );
-      setServerTotals(message);
-      setAppliedDiscountPct(isClearToZero ? null : value);
-      if (isClearToZero) {
-        setDiscountValue('');
-      }
-      setAppliedDiscount(Math.max(0, roundToCurrency(baseTotal - Math.max(0, message.grand_total - existingTip), currencyCode)));
-    } catch (err) {
-      setError(parseFrappeError(err, t('errors.invalid_discount')));
-      return;
-    }
-    setError(null);
-  };
-
-  // Order summary logic
+  // Order summary logic (discounts are applied on the open check, read-only here)
   const subtotal = baseTotal;
-  const adjustment = preTipRoundedTotal - preTipGrandTotal;
-  const roundedAdjustment = roundToCurrency(adjustment, currencyCode);
-  const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
-  const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // The server's pre-tip total: its rounded total, or its grand total where the profile does not round.
-  const preTipServerGrand = serverTotals ? Math.max(0, serverTotals.grand_total - existingTip) : 0;
-  const preTipServerRounded = serverTotals?.rounded_total
-    ? Math.max(0, serverTotals.rounded_total - existingTip)
-    : 0;
-  const finalTotal = serverTotals
-    ? (preTipServerRounded || preTipServerGrand)
-    : (preTipRoundedTotal || preTipGrandTotal);
+  const finalTotal = preTipRoundedTotal || preTipGrandTotal;
   // A charged or cash tip is owed to the server: the tenders cover it, it is
   // never change, and the server books it to the till's Tips Payable account.
   const tipAmount = parseFloat(tipInput) || 0;
@@ -257,12 +213,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
   const roomChargeModes = storePosProfile?.room_charge_modes || [];
   const roomChargeUnconfigured = Boolean(storePosProfile?.room_charge_unconfigured) && roomChargeModes.length === 0;
-  const trimmedDiscount = discountValue.trim();
-  const typedDiscount = trimmedDiscount === '' ? null : parseFloat(trimmedDiscount);
-  const hasUnappliedDiscount =
-    appliedDiscountPct !== null
-      ? typedDiscount === null || typedDiscount !== appliedDiscountPct
-      : trimmedDiscount !== '';
   const roomChargeAmount = roomChargeModes
     .reduce((sum: number, mode: string) => sum + (parseFloat(paymentInputs[mode] || '') || 0), 0);
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
@@ -271,6 +221,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const rawShortfall = amountDue - rawTotalTendered;
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
   const isShort = rawShortfall > 0.005;
+  // The POS Profile payment row marked Default is prefilled with the remaining balance due
+  // and used as the zero-amount tender row when settling a 100% comped check (Simphony/SAP).
+  const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
   // A named (non-default) customer on a profile with allow_partial_payment
   // may settle short; the balance stays owed on the invoice. Profile, order-type
   // and profile-level default customers are not named accounts; a profile that
@@ -279,18 +232,24 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const accountPaymentMode = paymentModes
     .map((mode: string | { id: string }) => (typeof mode === 'string' ? mode : mode.id))
     .find(Boolean);
+  const zeroSettlementMode = defaultPaymentMode || accountPaymentMode;
   const canPayOnAccount = canSelectCredit && isShort && !!accountPaymentMode
     && storePosProfile?.name === posProfile
     && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
+  // A verified 0-balance check (100% comped or already fully covered by received tenders)
+  // can settle cleanly without entering a positive payment amount (Simphony/SAP 100% comp close).
+  const isZeroBalanceSettlement = balanceDue <= 0 && !isShort
+    && (hasDiscount || receivedTotal > 0)
+    && (combinedPayments.length > 0 || Boolean(zeroSettlementMode));
   // Both rules hold: a Room Charge waits for a verified room, and only a named
   // account may settle short.
   const paymentDisabled = isProcessing || !roomVerified || tipInvalid
-    || ((combinedPayments.length === 0 || isShort) && !canPayOnAccount);
-  const settlementPayments = combinedPayments.length === 0 && canPayOnAccount
-    ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
+    || ((combinedPayments.length === 0 || isShort) && !canPayOnAccount && !isZeroBalanceSettlement);
+  const settlementPayments = combinedPayments.length === 0 && (canPayOnAccount || isZeroBalanceSettlement) && zeroSettlementMode
+    ? [{ mode_of_payment: zeroSettlementMode, amount: 0 }]
     : combinedPayments;
 
   const handleCheckRoom = async () => {
@@ -320,9 +279,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const finalAdjustment = finalTotal - discountedTotal;
   const roundedFinalAdjustment = roundToCurrency(finalAdjustment, currencyCode);
   const showFinalAdjustment = Math.abs(roundedFinalAdjustment) > 0.001;
-
-  // The POS Profile payment row marked Default is prefilled with the remaining balance due.
-  const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
 
   useEffect(()=>{
     const defaultPaymentModePresent=paymentModes.find((mode: string | { id: string })=>(typeof mode === 'string' ? mode : mode.id)===defaultPaymentMode)
@@ -384,9 +340,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       const trimmedRoomNumber = roomChargeAmount > 0 ? roomNumber.trim() : undefined;
 
       if (effectivePrintInvoice && !offlineCapable) {
-        // Step 1: Save the draft invoice with discount and payment modes
+        // Step 1: Save draft invoice with payment modes without submitting (saved check discount is preserved server-side)
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-          additionalDiscount: appliedDiscountPct,
           cashier,
           customer,
           invoice,
@@ -409,11 +364,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         const settlement = await submitSettlementOfflineAware({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
-          amount: totalTendered, due: amountDue, discount: appliedDiscount, tip: tipAmount,
-          modeOfPayment: receivedPayments.length === 0 && newPayments.length === 1 ? newPayments[0]?.mode_of_payment ?? '' : '',
+          amount: totalTendered, due: amountDue, discount: totalDiscount, tip: tipAmount,
+          modeOfPayment: receivedPayments.length === 0 && settlementPayments.length === 1 ? settlementPayments[0]?.mode_of_payment ?? '' : '',
           roomNumber: trimmedRoomNumber,
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-            additionalDiscount: appliedDiscountPct,
             cashier,
             customer,
             invoice,
@@ -492,38 +446,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               <X className="w-5 h-5" />
             </Button>
           </div>
-
-          {/* Discount Section (conditional) */}
-          {storePosProfile?.enable_discount === 1 && (
-            <div className="space-y-4 mb-6">
-              <h3 className="text-lg font-semibold flex items-center gap-2">
-                <Percent className="w-5 h-5" />
-                {t('payment.apply_discount')}
-              </h3>
-              <div className="flex gap-2">
-                <Input
-                  type="number"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(e.target.value)}
-                  placeholder={t('payment.discount_placeholder')}
-                  size="sm"
-                  className="flex-1"
-                />
-                <Button
-                  onClick={handleApplyDiscount}
-                  variant="default"
-                  size="sm"
-                >
-                  {t('common.apply')}
-                </Button>
-              </div>
-              {hasUnappliedDiscount && (
-                <p role="status" className="text-xs text-amber-700">
-                  {t('payment.discount_not_applied')}
-                </p>
-              )}
-            </div>
-          )}
 
           {/* Payment Methods Section - Split Payment */}
           <div className="space-y-4 mb-6">
@@ -714,11 +636,26 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 <span className="text-gray-600">{t('payment.subtotal')}</span>
                 <span>{formatMoney(subtotal)}</span>
               </div>
-              {/* Discount */}
-              {appliedDiscount > 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>{t('payment.discount')}</span>
-                  <span>-{formatMoney(appliedDiscount)}</span>
+              {/* Discount (read-only display of check & line discounts applied on the open check) */}
+              {hasDiscount && (
+                <div
+                  data-testid="payment-discount-summary"
+                  className="flex justify-between items-start gap-2 text-emerald-700"
+                >
+                  <div className="min-w-0">
+                    <span className="font-medium">
+                      {t('payment.discount')}
+                      {(discountPercentage ?? 0) > 0 ? ` (${discountPercentage}%)` : ''}
+                      {couponCode ? ` · ${couponCode}` : ''}
+                    </span>
+                    {discountReason && (
+                      <p className="text-xs text-emerald-600">
+                        {discountReason}
+                        {discountNote ? ` — ${discountNote}` : ''}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 font-semibold tabular-nums">-{formatMoney(totalDiscount)}</span>
                 </div>
               )}
               {/* Adjustment (if any) */}

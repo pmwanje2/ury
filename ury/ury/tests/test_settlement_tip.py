@@ -34,7 +34,6 @@ class TestSettlementTip(unittest.TestCase):
 			"_validate_client_ids": None,
 			"_lock_settlement_customer": 0,
 			"_client_order_invoice": None,
-			"_validate_additional_discount": 0,
 			"_check_held_before_settlement": None,
 			"_refuse_client_order_rebind": None,
 			"_set_settlement_customer": None,
