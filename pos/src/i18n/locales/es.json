@@ -331,7 +331,8 @@
       "next": "Siguiente",
       "page": "Página {{number}}"
     },
-    "reduce_item_qty": "Reducir cantidad de {{item}}"
+    "reduce_item_qty": "Reducir cantidad de {{item}}",
+    "settled_closed": "Cobradas / Cerradas"
   },
   "tables": {
     "layout_view": "Vista de plano",
@@ -580,7 +581,8 @@
     "recently_paid": "Pagado reciente",
     "paid": "Pagado",
     "consolidated": "Consolidado",
-    "return": "Devolución"
+    "return": "Devolución",
+    "outstanding": "Pendiente"
   },
   "settings": {
     "title": "Configuración",

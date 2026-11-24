@@ -55,6 +55,7 @@ interface PaymentDialogProps {
   clearSelectedOrder: () => void;
   discountPercentage?: number;
   discountAmount?: number;
+  lineDiscountTotal?: number;
   discountReason?: string | null;
   discountNote?: string | null;
   couponCode?: string | null;
@@ -77,6 +78,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   clearSelectedOrder,
   discountPercentage,
   discountAmount,
+  lineDiscountTotal,
   discountReason,
   discountNote,
   couponCode,
@@ -94,6 +96,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [printInvoice, setPrintInvoice] = useState(enablePaymentWithoutPrinting);
   const [error, setError] = useState<string | null>(null);
   const appliedDiscount = discountAmount || 0;
+  const appliedLineDiscount = lineDiscountTotal || 0;
+  const totalDiscount = appliedDiscount + appliedLineDiscount;
+  const hasDiscount = totalDiscount > 0 || (discountPercentage ?? 0) > 0;
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
   const receivedPayments = (existingPayments ?? order?.payments ?? []).filter(
     (row) => Number(row?.amount) > 0 && row?.custom_tender_received !== 0 && row?.custom_tender_received !== false,
@@ -136,12 +141,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     fetchPaymentModes();
   }, [fetchPaymentModes]);
 
-  // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
-  const baseTotal = grandTotal + (discountAmount || 0);
+  // baseTotal represents the amount before any check or line discount
+  const baseTotal = grandTotal + totalDiscount;
 
   // Order summary logic (discounts are applied on the open check, read-only here)
   const subtotal = baseTotal;
-  const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // The server's total: its rounded total, or its grand total where the profile does not round.
   const finalTotal = roundedTotal || grandTotal;
@@ -180,6 +184,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
   const isShort = rawShortfall > 0.005;
   const changeDue = Math.max(0, roundToCurrency(rawTotalTendered - finalTotal, currencyCode));
+  // The POS Profile payment row marked Default is prefilled with the remaining balance due
+  // and used as the zero-amount tender row when settling a 100% comped check (Simphony/SAP).
+  const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
   // A named (non-default) customer on a profile with allow_partial_payment
   // may settle short; the balance stays owed on the invoice. Profile, order-type
   // and profile-level default customers are not named accounts; a profile that
@@ -188,18 +195,24 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const accountPaymentMode = paymentModes
     .map((mode: string | { id: string }) => (typeof mode === 'string' ? mode : mode.id))
     .find(Boolean);
+  const zeroSettlementMode = defaultPaymentMode || accountPaymentMode;
   const canPayOnAccount = canSelectCredit && isShort && !!accountPaymentMode
     && storePosProfile?.name === posProfile
     && storePosProfile.allow_partial_payment === 1 && !!storePosProfile.customer
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
+  // A verified 0-balance check (100% comped or already fully covered by received tenders)
+  // can settle cleanly without entering a positive payment amount (Simphony/SAP 100% comp close).
+  const isZeroBalanceSettlement = balanceDue <= 0 && !isShort
+    && (hasDiscount || receivedTotal > 0)
+    && (combinedPayments.length > 0 || Boolean(zeroSettlementMode));
   // Both rules hold: a Room Charge waits for a verified room, and only a named
   // account may settle short.
   const paymentDisabled = isProcessing || !roomVerified
-    || ((combinedPayments.length === 0 || isShort) && !canPayOnAccount);
-  const settlementPayments = combinedPayments.length === 0 && canPayOnAccount
-    ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
+    || ((combinedPayments.length === 0 || isShort) && !canPayOnAccount && !isZeroBalanceSettlement);
+  const settlementPayments = combinedPayments.length === 0 && (canPayOnAccount || isZeroBalanceSettlement) && zeroSettlementMode
+    ? [{ mode_of_payment: zeroSettlementMode, amount: 0 }]
     : combinedPayments;
 
   const handleCheckRoom = async () => {
@@ -229,9 +242,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const finalAdjustment = finalTotal - discountedTotal;
   const roundedFinalAdjustment = roundToCurrency(finalAdjustment, currencyCode);
   const showFinalAdjustment = Math.abs(roundedFinalAdjustment) > 0.001;
-
-  // The POS Profile payment row marked Default is prefilled with the remaining balance due.
-  const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
 
   useEffect(()=>{
     const defaultPaymentModePresent=paymentModes.find((mode: string | { id: string })=>(typeof mode === 'string' ? mode : mode.id)===defaultPaymentMode)
@@ -325,8 +335,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         const settlement = await submitSettlementOfflineAware({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
-          amount: totalTendered, due: finalTotal, discount: appliedDiscount,
-          modeOfPayment: receivedPayments.length === 0 && newPayments.length === 1 ? newPayments[0]?.mode_of_payment ?? '' : '',
+          amount: totalTendered, due: finalTotal, discount: totalDiscount,
+          modeOfPayment: receivedPayments.length === 0 && settlementPayments.length === 1 ? settlementPayments[0]?.mode_of_payment ?? '' : '',
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
             cashier,
             customer,
@@ -544,8 +554,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 <span className="text-gray-600">{t('payment.subtotal')}</span>
                 <span>{formatMoney(subtotal)}</span>
               </div>
-              {/* Discount (read-only display of discount applied on the open check) */}
-              {(appliedDiscount > 0 || (discountPercentage ?? 0) > 0) && (
+              {/* Discount (read-only display of check & line discounts applied on the open check) */}
+              {hasDiscount && (
                 <div
                   data-testid="payment-discount-summary"
                   className="flex justify-between items-start gap-2 text-emerald-700"
@@ -563,7 +573,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                       </p>
                     )}
                   </div>
-                  <span className="shrink-0 font-semibold tabular-nums">-{formatMoney(appliedDiscount)}</span>
+                  <span className="shrink-0 font-semibold tabular-nums">-{formatMoney(totalDiscount)}</span>
                 </div>
               )}
               {/* Adjustment (if any) */}

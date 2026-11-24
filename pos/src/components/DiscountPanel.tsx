@@ -37,7 +37,10 @@ interface LineDraft {
   value: string;
 }
 
-const QUICK_PERCENTS = [5, 10, 15, 20, 100];
+function formatPercentDisplay(pct: number): string {
+  const rounded = Math.round(pct * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, '');
+}
 
 const DiscountPanel: React.FC<DiscountPanelProps> = ({
   open,
@@ -55,6 +58,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
 
   // Check-level draft
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+  const [isComplimentary, setIsComplimentary] = useState(false);
   const [checkMode, setCheckMode] = useState<EntryMode>('percent');
   const [checkValue, setCheckValue] = useState('');
 
@@ -66,10 +70,13 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
 
-  // Live server preview & errors
+  // Live server preview & errors (keep preview errors separate from transient submission errors
+  // so re-authorising after a failed apply immediately clears the banner and unlocks Apply)
   const [preview, setPreview] = useState<DiscountPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const error = submitError || previewError;
 
   // Approval state (cleared immediately whenever ANY discount field changes!)
   const [approved, setApproved] = useState<{ token: string; approverName: string } | null>(null);
@@ -91,7 +98,8 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     let active = true;
 
     setLoadingOptions(true);
-    setError(null);
+    setPreviewError(null);
+    setSubmitError(null);
     setApproved(null);
     setApplyApprovalOpen(false);
     setRemoveApprovalOpen(false);
@@ -99,18 +107,27 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
 
     if (existingDiscounts?.coupon_code) {
       setSelectedPreset(existingDiscounts.coupon_code);
+      setIsComplimentary(false);
       setCheckValue('');
       setCheckMode('percent');
+    } else if (existingDiscounts && existingDiscounts.additional_discount_percentage >= 100) {
+      setSelectedPreset(null);
+      setIsComplimentary(true);
+      setCheckMode('percent');
+      setCheckValue('');
     } else if (existingDiscounts && existingDiscounts.additional_discount_percentage > 0) {
       setSelectedPreset(null);
+      setIsComplimentary(false);
       setCheckMode('percent');
       setCheckValue(String(existingDiscounts.additional_discount_percentage));
     } else if (existingDiscounts && existingDiscounts.discount_amount > 0) {
       setSelectedPreset(null);
+      setIsComplimentary(false);
       setCheckMode('amount');
       setCheckValue(String(existingDiscounts.discount_amount));
     } else {
       setSelectedPreset(null);
+      setIsComplimentary(false);
       setCheckMode('percent');
       setCheckValue('');
     }
@@ -137,7 +154,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
       })
       .catch((err) => {
         if (!active) return;
-        setError(parseFrappeError(err, t('errors.invalid_discount')));
+        setPreviewError(parseFrappeError(err, t('errors.invalid_discount')));
       })
       .finally(() => {
         if (active) setLoadingOptions(false);
@@ -151,6 +168,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   const currency = options?.currency || existingDiscounts?.currency || propCurrency || '';
   const precision = currencyPrecisionFor(currency, options?.precision ?? existingDiscounts?.precision);
   const allowOpen = options?.allow_discount_change ?? false;
+  const complimentaryEnabled = options?.complimentary_enabled !== false;
   const formatMoney = (n: number) => formatCurrencyPrecision(n, currency, precision);
 
   const selectedReasonObj = useMemo(
@@ -162,9 +180,11 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   const parsedDraft = useMemo(() => {
     let discountPercent: number | null = null;
     let discountAmount: number | null = null;
-    const couponCode: string | null = selectedPreset;
+    const couponCode: string | null = isComplimentary ? null : selectedPreset;
 
-    if (!couponCode && allowOpen) {
+    if (isComplimentary) {
+      discountPercent = 100;
+    } else if (!couponCode && allowOpen) {
       const trimmed = checkValue.trim();
       if (trimmed !== '') {
         const parsed = Number(trimmed);
@@ -191,21 +211,23 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     }
 
     const hasAnyPositive = Boolean(
-      couponCode || discountPercent !== null || discountAmount !== null || lineDiscounts.length > 0,
+      isComplimentary || couponCode || discountPercent !== null || discountAmount !== null || lineDiscounts.length > 0,
     );
 
     return {
+      isComplimentary,
       discountPercent,
       discountAmount,
       couponCode,
       lineDiscounts,
       hasAnyPositive,
     };
-  }, [selectedPreset, allowOpen, checkMode, checkValue, lineDrafts]);
+  }, [isComplimentary, selectedPreset, allowOpen, checkMode, checkValue, lineDrafts]);
 
-  // Clear stored approval token immediately whenever ANY draft field changes
+  // Clear stored approval token & stale submit error immediately whenever ANY draft field changes
   const invalidateApproval = () => {
     setApproved(null);
+    setSubmitError(null);
     setApplyApprovalOpen(false);
     setRemoveApprovalOpen(false);
   };
@@ -215,14 +237,14 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     if (!open || !options) return;
     if (!parsedDraft.hasAnyPositive) {
       setPreview(null);
-      setError(null);
+      setPreviewError(null);
       return;
     }
 
     const seq = ++previewSeq.current;
     const timer = window.setTimeout(async () => {
       setPreviewLoading(true);
-      setError(null);
+      setPreviewError(null);
       try {
         const res = await previewCheckDiscount({
           invoice,
@@ -230,6 +252,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
           discount_percent: parsedDraft.discountPercent,
           discount_amount: parsedDraft.discountAmount,
           coupon_code: parsedDraft.couponCode,
+          complimentary: parsedDraft.isComplimentary ? 1 : undefined,
           line_discounts: parsedDraft.lineDiscounts.length > 0 ? parsedDraft.lineDiscounts : undefined,
           discount_reason: reason || undefined,
           discount_note: note.trim() || undefined,
@@ -239,7 +262,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
       } catch (err) {
         if (seq !== previewSeq.current) return;
         setPreview(null);
-        setError(parseFrappeError(err, t('errors.invalid_discount')));
+        setPreviewError(parseFrappeError(err, t('errors.invalid_discount')));
       } finally {
         if (seq === previewSeq.current) setPreviewLoading(false);
       }
@@ -251,6 +274,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     options,
     invoice,
     posProfile,
+    parsedDraft.isComplimentary,
     parsedDraft.discountPercent,
     parsedDraft.discountAmount,
     parsedDraft.couponCode,
@@ -281,6 +305,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     }
     if (tab === 'check') {
       setSelectedPreset(null);
+      setIsComplimentary(false);
       setCheckValue(normalized);
     } else if (selectedRow) {
       setLineDrafts((prev) => ({
@@ -294,6 +319,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     invalidateApproval();
     if (tab === 'check') {
       setSelectedPreset(null);
+      setIsComplimentary(false);
       setCheckMode(mode);
       setCheckValue('');
     } else if (selectedRow) {
@@ -302,6 +328,18 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         [selectedRow]: { mode, value: '' },
       }));
     }
+  };
+
+  const handleToggleComplimentary = () => {
+    invalidateApproval();
+    setIsComplimentary((prev) => {
+      const next = !prev;
+      if (next) {
+        setSelectedPreset(null);
+        setCheckValue('');
+      }
+      return next;
+    });
   };
 
   const handleKeypadPress = (key: string) => {
@@ -324,6 +362,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
 
   const handleSelectPreset = (presetName: string) => {
     invalidateApproval();
+    setIsComplimentary(false);
     if (selectedPreset === presetName) {
       setSelectedPreset(null);
       return;
@@ -353,7 +392,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     !previewLoading &&
     !submitting &&
     parsedDraft.hasAnyPositive &&
-    !error &&
+    !previewError &&
     Boolean(preview) &&
     !reasonMissing &&
     !noteMissing &&
@@ -368,8 +407,8 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     if (preview.approval_reasons.includes('over_limit')) {
       lines.push(
         t('discount.needs_approval_over_limit', {
-          limit: preview.limit_percent,
-          effective: preview.effective_percent,
+          limit: formatPercentDisplay(preview.limit_percent),
+          effective: formatPercentDisplay(preview.effective_percent),
         }),
       );
     }
@@ -385,7 +424,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   const handleApply = async () => {
     if (!canApply) return;
     setSubmitting(true);
-    setError(null);
+    setSubmitError(null);
     try {
       const saved = await applyCheckDiscount({
         invoice,
@@ -393,6 +432,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         discount_percent: parsedDraft.discountPercent,
         discount_amount: parsedDraft.discountAmount,
         coupon_code: parsedDraft.couponCode,
+        complimentary: parsedDraft.isComplimentary ? 1 : undefined,
         line_discounts: parsedDraft.lineDiscounts.length > 0 ? parsedDraft.lineDiscounts : undefined,
         discount_reason: reason,
         discount_note: note.trim() || undefined,
@@ -403,7 +443,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
       onClose();
     } catch (err) {
       setApproved(null);
-      setError(parseFrappeError(err, t('errors.invalid_discount')));
+      setSubmitError(parseFrappeError(err, t('errors.invalid_discount')));
     } finally {
       setSubmitting(false);
     }
@@ -411,7 +451,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
 
   const executeRemove = async (approvalToken?: string) => {
     setRemoving(true);
-    setError(null);
+    setSubmitError(null);
     try {
       const cleared = await removeCheckDiscount({
         invoice,
@@ -423,13 +463,14 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
       await onApplied(cleared);
       onClose();
     } catch (err) {
-      setError(parseFrappeError(err, t('errors.invalid_discount')));
+      setSubmitError(parseFrappeError(err, t('errors.invalid_discount')));
     } finally {
       setRemoving(false);
     }
   };
 
   const handleRemoveClick = () => {
+    setSubmitError(null);
     const canRemoveAlone = options?.can_remove_discount ?? existingDiscounts?.can_remove_discount ?? true;
     if (!canRemoveAlone) {
       setRemoveApprovalOpen(true);
@@ -454,10 +495,10 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         <DialogContent
           variant="xlarge"
           showCloseButton={false}
-          className="relative z-10 bg-white w-full max-w-4xl max-h-[92vh] rounded-t-2xl sm:rounded-xl flex flex-col p-0 overflow-hidden shadow-xl"
+          className="relative z-10 animate-none opacity-100 bg-white w-full max-w-4xl max-h-[92vh] rounded-t-2xl sm:rounded-xl flex flex-col p-0 overflow-hidden shadow-xl"
         >
         {/* Top Header */}
-        <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4">
+        <div className="shrink-0 flex items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3 sm:px-5 sm:py-4">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
             <Percent className="h-5 w-5 text-gray-700 shrink-0" />
             <h2 className="text-lg font-bold text-gray-900">{t('discount.title')}</h2>
@@ -485,9 +526,9 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         </div>
 
         {/* Body: 1-col on phone, 2-col on tablet/desktop */}
-        <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-          {/* Start Column: Tabs, Presets / Line Picker, Open Keypad */}
-          <div className="p-5 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto bg-white grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+          {/* Start Column: Tabs, Presets / Explicit Complimentary / Line Picker, Open Keypad */}
+          <div className="p-3.5 sm:p-5 space-y-3 sm:space-y-4 bg-white">
             {/* Check vs Line Tabs */}
             <div role="tablist" className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1">
               <button
@@ -560,6 +601,25 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                   </div>
                 )}
 
+                {/* Explicit Complimentary (100%) privilege control — governed by `complimentary`
+                    privilege & 2nd-person PIN, independent of open-discount toggle or %/Amount mode */}
+                {complimentaryEnabled && (
+                  <button
+                    type="button"
+                    data-testid="comp-100-btn"
+                    aria-pressed={isComplimentary}
+                    onClick={handleToggleComplimentary}
+                    className={`w-full min-h-11 flex items-center justify-between rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                      isComplimentary
+                        ? 'border-blue-600 bg-blue-50 text-blue-900 ring-1 ring-blue-600'
+                        : 'border-gray-200 bg-white text-gray-900 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span>{t('discount.comp_100')}</span>
+                    <span className="text-xs font-medium text-gray-500">100%</span>
+                  </button>
+                )}
+
                 {/* Open Amount / Percent Keypad — ONLY when POS Profile allow_discount_change is on */}
                 {allowOpen ? (
                   <div className="space-y-3">
@@ -602,25 +662,6 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                       className="min-h-12 w-full rounded-lg border border-gray-300 bg-white px-4 text-end text-xl font-bold tabular-nums text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
 
-                    {checkMode === 'percent' && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {QUICK_PERCENTS.map((pct) => (
-                          <button
-                            key={pct}
-                            type="button"
-                            onClick={() => setActiveValue(String(pct))}
-                            className={`min-h-10 rounded-lg border px-3 text-xs font-semibold tabular-nums ${
-                              checkValue === String(pct) && !selectedPreset
-                                ? 'border-blue-600 bg-blue-50 text-blue-900'
-                                : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'
-                            }`}
-                          >
-                            {pct === 100 ? t('discount.comp_100') : `${pct}%`}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
                     {/* 48px Touch Keypad */}
                     <div className="grid grid-cols-3 gap-2" data-testid="discount-open-keypad">
                       {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
@@ -628,7 +669,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                           key={digit}
                           type="button"
                           onClick={() => handleKeypadPress(digit)}
-                          className="min-h-12 rounded-lg border border-gray-200 bg-white text-lg font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
+                          className="min-h-11 sm:min-h-12 rounded-lg border border-gray-200 bg-white text-lg font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
                         >
                           {digit}
                         </button>
@@ -637,7 +678,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => handleKeypadPress('.')}
-                          className="min-h-12 rounded-lg border border-gray-200 bg-white text-lg font-semibold text-gray-900 hover:bg-gray-50"
+                          className="min-h-11 sm:min-h-12 rounded-lg border border-gray-200 bg-white text-lg font-semibold text-gray-900 hover:bg-gray-50"
                         >
                           .
                         </button>
@@ -645,7 +686,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => handleKeypadPress('C')}
-                          className="min-h-12 rounded-lg border border-gray-200 bg-gray-50 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+                          className="min-h-11 sm:min-h-12 rounded-lg border border-gray-200 bg-gray-50 text-sm font-semibold text-gray-700 hover:bg-gray-100"
                         >
                           {t('common.clear')}
                         </button>
@@ -653,7 +694,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                       <button
                         type="button"
                         onClick={() => handleKeypadPress('0')}
-                        className="min-h-12 rounded-lg border border-gray-200 bg-white text-lg font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
+                        className="min-h-11 sm:min-h-12 rounded-lg border border-gray-200 bg-white text-lg font-semibold text-gray-900 hover:bg-gray-50 active:bg-gray-100"
                       >
                         0
                       </button>
@@ -661,7 +702,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                         type="button"
                         aria-label="Backspace"
                         onClick={() => handleKeypadPress('BACK')}
-                        className="flex min-h-12 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100"
+                        className="flex min-h-11 sm:min-h-12 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100"
                       >
                         <Delete className="h-5 w-5" />
                       </button>
@@ -816,9 +857,9 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
             )}
           </div>
 
-          {/* End Column: Reason, Note, Live Preview, Inline ManagerApproval, Apply / Remove */}
-          <div className="p-5 flex flex-col justify-between gap-4 bg-gray-50/40">
-            <div className="space-y-4">
+          {/* End Column: Reason, Note, Live Preview, Inline ManagerApproval */}
+          <div className="p-3.5 sm:p-5 flex flex-col gap-4 bg-gray-50">
+            <div className="space-y-3 sm:space-y-4">
               {/* Reason & Note */}
               <div className="space-y-3">
                 <div className="space-y-1">
@@ -896,7 +937,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                     <div className="flex justify-between font-medium text-emerald-700">
                       <span>
                         {t('discount.discount_line')}
-                        {preview.effective_percent > 0 ? ` (${preview.effective_percent}%)` : ''}
+                        {preview.effective_percent > 0 ? ` (${formatPercentDisplay(preview.effective_percent)}%)` : ''}
                       </span>
                       <span data-testid="preview-discount">−{formatMoney(preview.discount_total)}</span>
                     </div>
@@ -940,7 +981,10 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                   <Button
                     type="button"
                     className="w-full min-h-12"
-                    onClick={() => setApplyApprovalOpen(true)}
+                    onClick={() => {
+                      setSubmitError(null);
+                      setApplyApprovalOpen(true);
+                    }}
                   >
                     {t('discount.authorise')}
                   </Button>
@@ -954,44 +998,47 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                 </div>
               )}
             </div>
+          </div>
+        </div>
 
-            {/* Footer Action Buttons */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 pt-4">
-              {hasExistingDiscount ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 gap-1.5 border-rose-200 text-rose-700 hover:bg-rose-50"
-                  onClick={handleRemoveClick}
-                  disabled={removing || submitting}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  {removing ? t('discount.removing') : t('discount.remove')}
-                </Button>
-              ) : (
-                <div />
-              )}
+        {/* Pinned Footer Action Bar (always visible on phone 390x844, tablet, and desktop) */}
+        <div
+          data-testid="discount-panel-footer"
+          className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200 bg-white px-4 py-3 sm:px-5"
+        >
+          {hasExistingDiscount ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 gap-1.5 border-rose-200 text-rose-700 hover:bg-rose-50"
+              onClick={handleRemoveClick}
+              disabled={removing || submitting}
+            >
+              <Trash2 className="h-4 w-4" />
+              {removing ? t('discount.removing') : t('discount.remove')}
+            </Button>
+          ) : (
+            <div />
+          )}
 
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="min-h-11"
-                  onClick={onClose}
-                  disabled={submitting || removing}
-                >
-                  {t('common.cancel')}
-                </Button>
-                <Button
-                  type="button"
-                  className="min-h-11 min-w-36"
-                  onClick={handleApply}
-                  disabled={!canApply}
-                >
-                  {submitting ? t('discount.applying') : t('discount.apply')}
-                </Button>
-              </div>
-            </div>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11"
+              onClick={onClose}
+              disabled={submitting || removing}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              type="button"
+              className="min-h-11 min-w-36"
+              onClick={handleApply}
+              disabled={!canApply}
+            >
+              {submitting ? t('discount.applying') : t('discount.apply')}
+            </Button>
           </div>
         </div>
         </DialogContent>
@@ -1010,6 +1057,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         amount={preview?.discount_total}
         requireReason={false}
         onApproved={(res) => {
+          setSubmitError(null);
           setApproved({ token: res.token, approverName: res.approverName });
           setApplyApprovalOpen(false);
         }}
@@ -1028,7 +1076,10 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         reference={{ doctype: 'POS Invoice', name: invoice }}
         claim={existingDiscounts?.remove_claim || { action: 'remove', row: null }}
         requireReason={false}
-        onApproved={({ token }) => executeRemove(token)}
+        onApproved={({ token }) => {
+          setSubmitError(null);
+          void executeRemove(token);
+        }}
         onCancel={() => setRemoveApprovalOpen(false)}
       />
     </>

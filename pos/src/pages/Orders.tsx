@@ -1110,7 +1110,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="text-sm font-bold text-emerald-900 tabular-nums">
-                        −{formatCurrency(selectedOrderDiscounts?.discount_amount || selectedOrder.discount_amount || 0)}
+                        −{formatCurrency(selectedOrderDiscounts?.discount_amount || selectedOrder.discount_amount || 0, selectedOrderCurrency)}
                       </span>
                       {isOrderEditable(selectedOrder.status) && (
                         <Button
@@ -1234,7 +1234,18 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           clearSelectedOrder={clearSelectedOrder}
           discountPercentage={selectedOrderDiscounts?.additional_discount_percentage ?? selectedOrder.additional_discount_percentage}
           discountAmount={selectedOrderDiscounts?.discount_amount ?? selectedOrder.discount_amount}
-          discountReason={selectedOrderDiscounts?.reason_description || selectedOrderDiscounts?.reason || null}
+          lineDiscountTotal={
+            selectedOrderDiscounts?.line_discounts?.reduce((sum, ld) => sum + (ld.line_discount_total || 0), 0) ??
+            selectedOrderItems
+              .filter((item) => !item.is_disposable && item.qty > 0 && item.price_list_rate > item.rate)
+              .reduce((sum, item) => sum + Math.max(0, (item.price_list_rate - item.rate) * item.qty), 0)
+          }
+          discountReason={
+            selectedOrderDiscounts?.reason_description ||
+            selectedOrderDiscounts?.reason ||
+            selectedOrderDiscounts?.line_discounts?.find((ld) => ld.reason)?.reason ||
+            null
+          }
           discountNote={selectedOrderDiscounts?.note || null}
           couponCode={selectedOrderDiscounts?.coupon_code || selectedOrder.coupon_code || null}
         />
@@ -1299,7 +1310,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               from: pendingVoidApproval.item.qty,
               to: pendingVoidApproval.newQty,
             }),
-            t('manager_approval.amount_line', { amount: formatCurrency(pendingVoidApproval.amount) }),
+            t('manager_approval.amount_line', { amount: formatCurrency(pendingVoidApproval.amount, selectedOrderCurrency) }),
             t('manager_approval.check_line', { check: pendingVoidApproval.order.name }),
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}

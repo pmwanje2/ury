@@ -309,7 +309,8 @@
       "next": "Suivant",
       "page": "Page {{number}}"
     },
-    "reduce_item_qty": "Réduire la quantité de {{item}}"
+    "reduce_item_qty": "Réduire la quantité de {{item}}",
+    "settled_closed": "Réglées / Clôturées"
   },
   "tables": {
     "layout_view": "Vue de mise en page",

@@ -24,6 +24,7 @@ export interface DiscountOptionsResponse {
   reasons: DiscountReasonOption[];
   presets: DiscountPresetOption[];
   allow_discount_change: boolean;
+  complimentary_enabled?: boolean;
   limit_percent: number;
   can_remove_discount: boolean;
   currency: string;
@@ -122,6 +123,7 @@ export interface DiscountRequestPayload {
   coupon_code?: string | null;
   line_discounts?: LineDiscountInput[] | null;
   approval?: string | null;
+  complimentary?: number | boolean | null;
 }
 
 const ZERO_DECIMAL_CURRENCIES = new Set([
@@ -210,6 +212,7 @@ export async function previewCheckDiscount(
   if (payload.discount_reason) params.discount_reason = payload.discount_reason;
   if (payload.discount_note) params.discount_note = payload.discount_note;
   if (payload.coupon_code) params.coupon_code = payload.coupon_code;
+  if (payload.complimentary) params.complimentary = 1;
   if (payload.line_discounts !== undefined && payload.line_discounts !== null) {
     params.line_discounts = JSON.stringify(payload.line_discounts);
   }
@@ -237,6 +240,7 @@ export async function applyCheckDiscount(
   if (payload.discount_reason) body.discount_reason = payload.discount_reason;
   if (payload.discount_note) body.discount_note = payload.discount_note;
   if (payload.coupon_code) body.coupon_code = payload.coupon_code;
+  if (payload.complimentary) body.complimentary = 1;
   if (payload.line_discounts !== undefined && payload.line_discounts !== null) {
     body.line_discounts = payload.line_discounts;
   }

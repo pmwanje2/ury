@@ -791,6 +791,14 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
         for r in new_invoice.items
     )
+    source_has_remaining_line_discount = any(
+        flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
+        for r in source.items
+    )
+    source_has_remaining_discount = has_header_discount or source_has_remaining_line_discount
+    if source.get("owner"):
+        new_invoice.owner = source.get("owner")
+
     if has_header_discount:
         new_invoice.apply_discount_on = orig_basis
         if orig_pct > 0:
@@ -808,6 +816,11 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             if hasattr(new_invoice, "coupon_code"):
                 new_invoice.coupon_code = None
 
+    src_meta = _read_discount_meta(source)
+    carry_approver = source.get("custom_discount_approver") or src_meta.get("approver")
+    carry_approved_pct = flt(source.get("custom_discount_approved_percent")) or flt(src_meta.get("approved_percent"))
+    source_had_db_approver = bool(source.get("custom_discount_approver"))
+
     if has_header_discount or has_moved_line_discount:
         for field in (
             "custom_discount_reason",
@@ -819,13 +832,30 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             val = source.get(field)
             if val not in (None, "", 0, 0.0):
                 new_invoice.set(field, val)
-        if source.get("custom_discount_approver"):
+        if not new_invoice.get("custom_discount_reason") and src_meta.get("reason"):
+            if frappe.get_meta("POS Invoice").has_field("custom_discount_reason"):
+                new_invoice.set("custom_discount_reason", src_meta.get("reason"))
+        if not new_invoice.get("custom_discount_note") and src_meta.get("note"):
+            if frappe.get_meta("POS Invoice").has_field("custom_discount_note"):
+                new_invoice.set("custom_discount_note", src_meta.get("note"))
+        if carry_approver:
             approval_payload = frappe._dict(
-                approver=source.get("custom_discount_approver"),
-                percent=flt(source.get("custom_discount_approved_percent")),
+                approver=carry_approver,
+                percent=carry_approved_pct or orig_pct,
             )
-            source.flags.discount_approval = approval_payload
             new_invoice.flags.discount_approval = approval_payload
+            # Only set source.flags.discount_approval when source lacked DB custom_discount_approver
+            # (pre-B1 meta-only carry); when source ALREADY has custom_discount_approver in DB,
+            # leaving flags.discount_approval unset lets siteops#8620 take its has_prior_approval
+            # path so an approving owner splitting the check does not hit SUPERVISOR_SELF_APPROVAL.
+            if source_has_remaining_discount and not source_had_db_approver:
+                source.flags.discount_approval = approval_payload
+
+    if not source_has_remaining_discount and (source_had_db_approver or carry_approver):
+        removal_actor = carry_approver or frappe.session.user
+        source.flags.discount_removal = frappe._dict(approver=removal_actor, action="remove")
+        source.flags.discount_approval = frappe._dict(approver=removal_actor, percent=0.0, action="remove")
+        _write_discount_audit_fields(source)
 
     payment_mode = source.payments[0].mode_of_payment if source.payments else None
     source_received = _received_payment_rows(source)
@@ -882,7 +912,27 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             )
             new_invoice.invoice_created = 1
 
-        new_invoice.insert()
+        # When the approving supervisor splits a check they previously approved for another
+        # owner, siteops#8620 checks `approver != frappe.session.user` on new_invoice.insert().
+        # Caller write/access checks already passed above, so preserve original check ownership
+        # across the insert/save of the inherited approval.
+        orig_session_user = frappe.session.user
+        swap_for_inherited_approval = bool(
+            carry_approver
+            and carry_approver == orig_session_user
+            and source.get("owner")
+            and source.get("owner") != carry_approver
+        )
+        if swap_for_inherited_approval:
+            frappe.session.user = source.get("owner")
+        try:
+            if swap_for_inherited_approval:
+                new_invoice.insert(ignore_permissions=True)
+            else:
+                new_invoice.insert()
+        finally:
+            if swap_for_inherited_approval:
+                frappe.session.user = orig_session_user
         new_invoice.reload()
         frappe.db.set_value(
             "POS Invoice",
@@ -895,7 +945,19 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         )
         if source_received:
             frappe.flags.ury_server_tender_received = True
-        source.save()
+        swap_source_save = bool(
+            swap_for_inherited_approval and getattr(source.flags, "discount_approval", None) is not None
+        )
+        if swap_source_save:
+            frappe.session.user = source.get("owner")
+        try:
+            if swap_source_save:
+                source.save(ignore_permissions=True)
+            else:
+                source.save()
+        finally:
+            if swap_source_save:
+                frappe.session.user = orig_session_user
 
         # Reconcile reservations for both sides of the split, reusing the
         # same reconcile_order_reservations() primitive sync_order already
@@ -1226,9 +1288,24 @@ def consolidate_checks(destination, sources):
     frappe.flags.ury_server_tender_received = True
     frappe.flags.ury_server_discount_write = True
     frappe.flags.in_bill_merge_sync = True
+    orig_session_user = frappe.session.user
+    swap_for_inherited_approval = bool(
+        discount_plan
+        and discount_plan.get("approver")
+        and discount_plan.get("approver") == orig_session_user
+        and destination.get("owner")
+        and destination.get("owner") != discount_plan.get("approver")
+    )
+    if swap_for_inherited_approval:
+        frappe.session.user = destination.get("owner")
     try:
-        destination.save()
+        if swap_for_inherited_approval:
+            destination.save(ignore_permissions=True)
+        else:
+            destination.save()
     finally:
+        if swap_for_inherited_approval:
+            frappe.session.user = orig_session_user
         frappe.flags.ury_server_tender_received = prev_tender_flag
         frappe.flags.ury_server_discount_write = prev_disc_flag
         frappe.flags.in_bill_merge_sync = prev_merge_flag
@@ -3697,6 +3774,7 @@ def preview_settlement_totals(
     line_discounts=None,
     approval=None,
     clear_discount=0,
+    complimentary=0,
 ):
     """The totals make_invoice / apply_check_discount charges for this check at this discount,
     computed by the native controller (currency precision, smallest currency fraction, system
@@ -3711,6 +3789,7 @@ def preview_settlement_totals(
         approval=approval,
         additionalDiscount=additionalDiscount,
         clear_discount=clear_discount,
+        complimentary=complimentary,
     )
     bill = frappe.get_doc("POS Invoice", invoice)
     bill.check_permission("read")
@@ -3750,6 +3829,7 @@ def apply_check_discount(
     line_discounts=None,
     approval=None,
     additionalDiscount=None,
+    complimentary=0,
 ):
     """Apply a check, preset, or line discount onto an open (draft) check before settlement."""
     spec = parse_discount_request(
@@ -3761,6 +3841,7 @@ def apply_check_discount(
         line_discounts=line_discounts,
         approval=approval,
         additionalDiscount=additionalDiscount,
+        complimentary=complimentary,
     )
     bill = frappe.get_doc("POS Invoice", invoice, for_update=True)
     bill.check_permission("write")
@@ -3807,7 +3888,9 @@ def remove_check_discount(invoice, pos_profile, row=None, approval=None):
         frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
 
     profile = frappe.get_cached_doc("POS Profile", pos_profile)
-    enforce_remove_discount_auth(bill, profile, row=row, approval=approval)
+    consumed = enforce_remove_discount_auth(bill, profile, row=row, approval=approval)
+    removal_actor = (consumed.get("approver") if isinstance(consumed, dict) else None) or frappe.session.user
+    bill.flags.discount_removal = frappe._dict(approver=removal_actor, action="remove")
     partner = (
         frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice, for_update=True)
         if bill.custom_merged_pos_invoice
@@ -4252,6 +4335,7 @@ def make_invoice(
     line_discounts=None,
     approval=None,
     clear_discount=0,
+    complimentary=0,
 ):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
     client_order_id = _validate_client_ids(client_order_id, round_id)
@@ -4265,6 +4349,7 @@ def make_invoice(
         approval=approval,
         additionalDiscount=additionalDiscount,
         clear_discount=clear_discount,
+        complimentary=complimentary,
     )
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     customer_disabled = _lock_settlement_customer(customer, pos_prof)

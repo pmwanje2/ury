@@ -1588,7 +1588,7 @@ class TestSplitMergeAndOptions(DiscountBase):
                 "CHK-SP-1",
                 currency="UGX",
                 items=[
-                    _item("i1", "FISH", 1, 30000, discount_percentage=10, discount_amount=3000, rate=27000, amount=27000),
+                    _item("i1", "FISH", 1, 27000, price_list_rate=30000, base_price_list_rate=30000, discount_percentage=10, discount_amount=3000, amount=27000),
                     _item("i2", "STEAK", 1, 20000),
                 ],
                 custom_discount_reason="Complaint",
@@ -2194,13 +2194,13 @@ class TestHydrogenR1Defects(DiscountBase):
         # Vector 4b: direct REST save clearing line discount on printed check
         prev_line = FakePOSInvoice(
             "CHK-P04-RESTL",
-            items=[_item("r1", "FISH", 1, 50000, discount_percentage=10, discount_amount=5000, rate=45000, amount=45000)],
+            items=[_item("r1", "FISH", 1, 45000, price_list_rate=50000, base_price_list_rate=50000, discount_percentage=10, discount_amount=5000, amount=45000)],
             invoice_printed=1,
             custom_discount_reason="Complaint",
         )
         rest_line_cleared = FakePOSInvoice(
             "CHK-P04-RESTL",
-            items=[_item("r1", "FISH", 1, 50000, discount_percentage=0, discount_amount=0, rate=50000, amount=50000)],
+            items=[_item("r1", "FISH", 1, 50000, discount_percentage=0, discount_amount=0, amount=50000)],
             invoice_printed=1,
         )
         rest_line_cleared._doc_before_save = prev_line
