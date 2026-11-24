@@ -658,6 +658,11 @@ class TestTillCashControlsFixtures(unittest.TestCase):
         self.assertTrue(schema_path.exists(), "POS Drawer Event DocType json must exist")
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertEqual(schema["name"], "POS Drawer Event")
+        self.assertEqual(
+            schema["module"],
+            "URY",
+            "POS Drawer Event lives under ury/ury/doctype/ so its module must be URY for bench migrate sync",
+        )
         fieldnames = {f["fieldname"] for f in schema["fields"]}
         for required in (
             "event_type",
