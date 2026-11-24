@@ -10,24 +10,33 @@ Key accounting & security invariants:
   from `FX Till Clearing` (company currency) into `custom_fx_vault_account` (exact native
   foreign currency amount at the locked shift rate), posting physical note over/short to
   the till's write-off / over-short account and sub-minor-unit rounding to the exchange
-  gain/loss account.
+  gain/loss account — balanced at ERPNext's exact Journal Entry Account precision.
 - Exchange rates come strictly from native ERPNext `Currency Exchange` (honoring active
   Workflow `workflow_state == "Approved"`) guarded by `Accounts Settings.stale_days`
   (fail-closed `stale_days = 1` when unset). Missing or stale rates throw
-  `URY-FX-RATE-STALE` and never fall back to `1.0` or trust client-supplied rates.
-- Payment reference regex patterns are length-bounded (<= 128 chars) and checked against
-  catastrophic nested quantifiers before matching inputs (<= 256 chars).
+  `[POS-FX-RATE-STALE]` and never fall back to `1.0` or trust client-supplied rates.
+- Payment reference regex patterns are length-bounded (<= 128 chars) and AST-validated
+  against catastrophic backtracking (nested quantifiers, alternation inside repeats,
+  adjacent unbounded repeats, and backreferences) before matching inputs (<= 256 chars).
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import json
 import re
 from urllib.parse import urlparse
+
+try:
+    from re import _parser as _re_parser
+except ImportError:  # pragma: no cover - Python < 3.11 fallback
+    import sre_parse as _re_parser  # type: ignore
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
+
+from ury.brand import coded_message
 
 
 def _today() -> str:
@@ -56,6 +65,7 @@ def _add_days(val, days: int) -> date:
         return fn(val, days)
     return _getdate(val) + timedelta(days=int(days))
 
+
 MAX_REFERENCE_PATTERN_LENGTH = 128
 MAX_REFERENCE_VALUE_LENGTH = 256
 GUEST_LABEL_MAX = 40
@@ -65,13 +75,6 @@ ZERO_DECIMAL_CURRENCIES = frozenset(
     {"BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "TZS", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"}
 )
 THREE_DECIMAL_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"})
-
-# Reject nested quantifiers / backreferences that could cause catastrophic backtracking.
-_UNSAFE_REGEX_FRAGMENTS = (
-    re.compile(r"\([^)]*[+*?][^)]*\)[+*?{]"),
-    re.compile(r"[+*?]\s*[+*?]"),
-    re.compile(r"\\[1-9]"),
-)
 
 
 def currency_precision(currency: str | None) -> int:
@@ -112,15 +115,98 @@ def _base_precision(currency: str | None) -> int:
     return currency_precision(currency)
 
 
+def _je_debit_precision(je, home_currency: str | None = None) -> int:
+    """Resolve the exact company-currency debit/credit precision ERPNext JournalEntry uses."""
+    accounts = getattr(je, "accounts", None) or (je.get("accounts") if isinstance(je, dict) else None) or []
+    if accounts:
+        first_row = accounts[0]
+        prec_fn = getattr(first_row, "precision", None)
+        if callable(prec_fn):
+            try:
+                p = prec_fn("debit")
+                if isinstance(p, int) and not isinstance(p, bool) and p >= 0:
+                    return p
+            except Exception:
+                pass
+    try:
+        p = frappe.get_precision("Journal Entry Account", "debit")
+        if isinstance(p, int) and not isinstance(p, bool) and p >= 0:
+            return p
+    except Exception:
+        pass
+    return max(2, _base_precision(home_currency))
+
+
+def _ast_is_redos_safe(nodes, in_repeat: bool = False) -> bool:
+    """Walk parsed regex AST and reject ReDoS-prone constructs:
+    - Backreferences (GROUPREF / GROUPREF_EXISTS)
+    - Lookarounds inside repeated groups
+    - Nested quantifiers (any repeat inside a repeat whose upper bound > 1)
+    - Alternation (BRANCH) inside a repeated group (e.g., (a|aa)+, (a|a?)+, (?:ab|a){2,})
+    - Adjacent unbounded repeats (e.g., a+a+, .*.*)
+    """
+    max_repeat = _re_parser.MAXREPEAT
+    repeat_ops = {_re_parser.MAX_REPEAT, _re_parser.MIN_REPEAT}
+    if hasattr(_re_parser, "POSSESSIVE_REPEAT"):
+        repeat_ops.add(_re_parser.POSSESSIVE_REPEAT)
+
+    prev_unbounded = False
+    for op, av in nodes:
+        if op in (_re_parser.GROUPREF, _re_parser.GROUPREF_EXISTS):
+            return False
+
+        if op in (_re_parser.ASSERT, _re_parser.ASSERT_NOT):
+            if in_repeat:
+                return False
+            if not _ast_is_redos_safe(av[1], in_repeat=False):
+                return False
+            prev_unbounded = False
+            continue
+
+        if op == _re_parser.BRANCH:
+            if in_repeat:
+                return False
+            for branch in av[1]:
+                if not _ast_is_redos_safe(branch, in_repeat=in_repeat):
+                    return False
+            prev_unbounded = False
+            continue
+
+        if op == _re_parser.SUBPATTERN:
+            if not _ast_is_redos_safe(av[3], in_repeat=in_repeat):
+                return False
+            prev_unbounded = False
+            continue
+
+        if op in repeat_ops:
+            _lo, hi, subpattern = av
+            is_multi = hi == max_repeat or hi > 1
+            is_unbounded = hi == max_repeat
+            if in_repeat:
+                # Any quantifier nested inside a multi-repeat risks exponential backtracking.
+                return False
+            if prev_unbounded and is_unbounded:
+                # Adjacent unbounded repeats like a+a+ or .*.* risk polynomial backtracking.
+                return False
+            if not _ast_is_redos_safe(subpattern, in_repeat=is_multi):
+                return False
+            prev_unbounded = is_unbounded
+            continue
+
+        prev_unbounded = False
+
+    return True
+
+
 def is_safe_regex_pattern(pattern: str) -> bool:
     if not isinstance(pattern, str):
         return False
     if len(pattern) > MAX_REFERENCE_PATTERN_LENGTH:
         return False
-    for bad in _UNSAFE_REGEX_FRAGMENTS:
-        if bad.search(pattern):
-            return False
     try:
+        parsed = _re_parser.parse(pattern)
+        if not _ast_is_redos_safe(parsed, in_repeat=False):
+            return False
         re.compile(pattern)
     except re.error:
         return False
@@ -154,6 +240,7 @@ def get_mode_payment_config(mode_of_payment: str, company: str | None = None) ->
             row = {}
 
     cfg = dict(row) if isinstance(row, dict) else {}
+
     def _s(key: str, default: str = "") -> str:
         val = cfg.get(key)
         return val.strip() if isinstance(val, str) and val.strip() else default
@@ -212,31 +299,50 @@ def validate_payment_reference(
 
     if len(ref) > MAX_REFERENCE_VALUE_LENGTH:
         frappe.throw(
-            f"URY-PAY-REF-INVALID: {label} for {mode_of_payment} exceeds maximum length of {MAX_REFERENCE_VALUE_LENGTH} characters.",
+            coded_message(
+                "PAY-REF-INVALID",
+                _("{0} for {1} exceeds maximum length of {2} characters.").format(
+                    label, mode_of_payment, MAX_REFERENCE_VALUE_LENGTH
+                ),
+            ),
             frappe.ValidationError,
         )
 
     if ref_mode == "Required" and not ref:
         frappe.throw(
-            f"URY-PAY-REF-REQUIRED: {label} is required for payment mode {mode_of_payment}.",
+            coded_message(
+                "PAY-REF-REQUIRED",
+                _("{0} is required for payment mode {1}.").format(label, mode_of_payment),
+            ),
             frappe.ValidationError,
         )
 
     if ref and pattern:
         if not is_safe_regex_pattern(pattern):
             frappe.throw(
-                f"URY-PAY-REF-INVALID: Configured reference validation pattern for {mode_of_payment} is invalid or unsafe.",
+                coded_message(
+                    "PAY-REF-INVALID",
+                    _("Configured reference validation pattern for {0} is invalid or unsafe.").format(
+                        mode_of_payment
+                    ),
+                ),
                 frappe.ValidationError,
             )
         if not re.fullmatch(pattern, ref):
             frappe.throw(
-                f"URY-PAY-REF-INVALID: {label} for {mode_of_payment} does not match the required format.",
+                coded_message(
+                    "PAY-REF-INVALID",
+                    _("{0} for {1} does not match the required format.").format(label, mode_of_payment),
+                ),
                 frappe.ValidationError,
             )
 
     if date_required and (ref_mode == "Required" or bool(ref)) and not ref_date:
         frappe.throw(
-            f"URY-PAY-REF-REQUIRED: Reference date is required for payment mode {mode_of_payment}.",
+            coded_message(
+                "PAY-REF-REQUIRED",
+                _("Reference date is required for payment mode {0}.").format(mode_of_payment),
+            ),
             frappe.ValidationError,
         )
 
@@ -279,7 +385,7 @@ def resolve_pos_exchange_rate(
 ) -> dict:
     """Resolve an approved, non-stale POS exchange rate from ERPNext Currency Exchange.
 
-    Never falls back to 1.0 or an unapproved/stale rate; throws `URY-FX-RATE-STALE`.
+    Never falls back to 1.0 or an unapproved/stale rate; throws `[POS-FX-RATE-STALE]`.
     """
     src = (from_currency or "").strip().upper()
     dst = (to_currency or "").strip().upper()
@@ -324,7 +430,12 @@ def resolve_pos_exchange_rate(
 
     if not rows:
         frappe.throw(
-            f"URY-FX-RATE-STALE: No approved fresh exchange rate found for {src} to {dst} within {stale_days} day(s) of {eff_date}.",
+            coded_message(
+                "FX-RATE-STALE",
+                _("No approved fresh exchange rate found for {0} to {1} within {2} day(s) of {3}.").format(
+                    src, dst, stale_days, eff_date
+                ),
+            ),
             frappe.ValidationError,
         )
 
@@ -332,7 +443,12 @@ def resolve_pos_exchange_rate(
     rate = flt(chosen.get("exchange_rate"), 9)
     if rate <= 0:
         frappe.throw(
-            f"URY-FX-RATE-STALE: Exchange rate for {src} to {dst} ({chosen.get('name')}) is not positive.",
+            coded_message(
+                "FX-RATE-STALE",
+                _("Exchange rate for {0} to {1} ({2}) is not positive.").format(
+                    src, dst, chosen.get("name")
+                ),
+            ),
             frappe.ValidationError,
         )
 
@@ -348,6 +464,112 @@ def resolve_pos_exchange_rate(
     }
 
 
+class _VerifiedFxOverrideProof:
+    """In-process proof that a server-side FX rate override check succeeded; cannot be forged via REST JSON."""
+
+    __slots__ = ("docname", "from_currency", "mode_of_payment", "rate", "to_currency")
+
+    def __init__(self, docname: str, mode_of_payment: str, from_currency: str, to_currency: str, rate: float):
+        self.docname = str(docname or "")
+        self.mode_of_payment = mode_of_payment
+        self.from_currency = from_currency
+        self.to_currency = to_currency
+        self.rate = flt(rate, 9)
+
+
+def mark_verified_fx_override(
+    doc,
+    mode_of_payment: str,
+    from_currency: str,
+    to_currency: str,
+    rate: float,
+) -> None:
+    if doc is None:
+        return
+    flags = getattr(doc, "flags", None)
+    if flags is None:
+        return
+    proofs = flags.get("pos_verified_fx_overrides")
+    if not isinstance(proofs, list):
+        proofs = []
+        flags["pos_verified_fx_overrides"] = proofs
+    proofs.append(
+        _VerifiedFxOverrideProof(
+            docname=str(getattr(doc, "name", None) or doc.get("name") or ""),
+            mode_of_payment=mode_of_payment,
+            from_currency=(from_currency or "").strip().upper(),
+            to_currency=(to_currency or "").strip().upper(),
+            rate=rate,
+        )
+    )
+
+
+def _has_verified_fx_override(
+    doc,
+    mode_of_payment: str,
+    from_currency: str,
+    to_currency: str,
+    rate: float,
+) -> bool:
+    docname = str(getattr(doc, "name", None) or doc.get("name") or "")
+    src = (from_currency or "").strip().upper()
+    dst = (to_currency or "").strip().upper()
+    target_rate = flt(rate, 9)
+
+    flags = getattr(doc, "flags", None)
+    if isinstance(flags, dict):
+        for proof in flags.get("pos_verified_fx_overrides") or []:
+            if (
+                isinstance(proof, _VerifiedFxOverrideProof)
+                and proof.docname == docname
+                and proof.mode_of_payment == mode_of_payment
+                and proof.from_currency == src
+                and proof.to_currency == dst
+                and abs(proof.rate - target_rate) <= 1e-6
+            ):
+                return True
+
+    pos_profile = doc.get("pos_profile")
+    if not docname or not pos_profile:
+        return False
+
+    try:
+        logs = frappe.get_all(
+            "POS Authorisation Log",
+            filters={
+                "privilege": "fx_rate_override",
+                "pos_profile": pos_profile,
+                "reference_name": docname,
+                "outcome": "Consumed",
+            },
+            fields=["claim_values"],
+            order_by="creation desc",
+            limit_page_length=20,
+        )
+    except Exception:
+        return False
+
+    for entry in logs or []:
+        raw_claim = entry.get("claim_values") or entry.get("claim_json")
+        if not raw_claim:
+            continue
+        try:
+            parsed = json.loads(raw_claim) if isinstance(raw_claim, str) else raw_claim
+        except Exception:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        if (
+            parsed.get("mode_of_payment") == mode_of_payment
+            and (parsed.get("from_currency") or "").strip().upper() == src
+            and (parsed.get("to_currency") or "").strip().upper() == dst
+            and abs(flt(parsed.get("override_rate"), 9) - target_rate) <= 1e-6
+        ):
+            return True
+
+    return False
+
+
 def _authorize_fx_rate_override(
     *,
     pos_profile,
@@ -359,15 +581,22 @@ def _authorize_fx_rate_override(
     token: str | None,
     invoice_name: str | None,
     reason: str | None = None,
+    invoice_doc=None,
 ) -> None:
     if cint(pos_profile.get("custom_allow_fx_rate_override")) != 1:
         frappe.throw(
-            f"URY-FX-RATE-STALE: FX rate override is not enabled on POS Profile {pos_profile.get('name')}.",
+            coded_message(
+                "FX-RATE-STALE",
+                _("FX rate override is not enabled on POS Profile {0}.").format(pos_profile.get("name")),
+            ),
             frappe.PermissionError,
         )
     if override_rate <= 0:
         frappe.throw(
-            f"URY-FX-RATE-STALE: Override exchange rate for {tender_currency} must be positive.",
+            coded_message(
+                "FX-RATE-STALE",
+                _("Override exchange rate for {0} must be positive.").format(tender_currency),
+            ),
             frappe.ValidationError,
         )
     max_var_pct = flt(pos_profile.get("custom_max_fx_variance_pct"))
@@ -375,7 +604,12 @@ def _authorize_fx_rate_override(
         actual_var_pct = abs(override_rate - market_rate) / market_rate * 100.0
         if actual_var_pct > max_var_pct + 1e-9:
             frappe.throw(
-                f"POS-FX-RATE-VARIANCE: Override rate {override_rate} deviates by {actual_var_pct:.2f}% from {market_rate}, exceeding maximum allowed variance of {max_var_pct:.2f}%.",
+                coded_message(
+                    "FX-RATE-VARIANCE",
+                    _("Override rate {0} deviates by {1:.2f}% from {2}, exceeding maximum allowed variance of {3:.2f}%.").format(
+                        override_rate, actual_var_pct, market_rate, max_var_pct
+                    ),
+                ),
                 frappe.ValidationError,
             )
 
@@ -392,12 +626,36 @@ def _authorize_fx_rate_override(
     if token:
         override.consume(token, "fx_rate_override", pos_profile.get("name"), invoice_name or pos_profile.get("name"), claim)
     elif override.may_perform(frappe.session.user, pos_profile.get("name"), "fx_rate_override"):
-        override._validate_reason(pos_profile.get("name"), "fx_rate_override", claim)
+        validated_reason = override._validate_reason(pos_profile.get("name"), "fx_rate_override", claim)
+        if invoice_name and callable(getattr(override, "_write_log", None)):
+            try:
+                if frappe.db.table_exists("POS Authorisation Log"):
+                    override._write_log(
+                        requester=frappe.session.user,
+                        approver=frappe.session.user,
+                        privilege="fx_rate_override",
+                        pos_profile=pos_profile.get("name"),
+                        company=pos_profile.get("company"),
+                        reference_doctype="POS Invoice",
+                        reference_name=invoice_name,
+                        claim_json=override._canonical_claim_json(claim),
+                        reason=validated_reason or (reason or "").strip(),
+                        outcome="Consumed",
+                        token_hash=None,
+                        consumed_token_hash=None,
+                        claim_hash=override._canonical_claim_hash(claim),
+                        isolated=True,
+                    )
+            except Exception:
+                pass
     else:
         frappe.throw(
             _("Manager authorisation is required to override an exchange rate.") + " [POS-AUTH-REQUIRED]",
             frappe.PermissionError,
         )
+
+    if invoice_doc is not None:
+        mark_verified_fx_override(invoice_doc, mode_of_payment, tender_currency, home_currency, override_rate)
 
 
 def prepare_settlement_payments(
@@ -406,6 +664,7 @@ def prepare_settlement_payments(
     posting_date=None,
     invoice_name: str | None = None,
     is_return: bool = False,
+    invoice_doc=None,
 ) -> list[dict]:
     """Authoritatively validate G25 payment references and resolve G22 FX conversions.
 
@@ -501,6 +760,7 @@ def prepare_settlement_payments(
                     token=override_token,
                     invoice_name=invoice_name,
                     reason=override_reason,
+                    invoice_doc=invoice_doc,
                 )
                 rate = override_rate
                 rate_date = str(eff_date)
@@ -530,6 +790,185 @@ def prepare_settlement_payments(
         prepared.append(entry)
 
     return prepared
+
+
+def validate_invoice_fx_payments(doc, pos_profile=None) -> None:
+    """Enforce G22 FX rate & converted base-amount integrity on POS Invoice validate/before_submit.
+
+    Blocks direct REST POST/PUT `/api/resource/POS Invoice` or ORM bypasses that forge
+    `custom_exchange_rate`, `custom_tender_amount`, or home-currency `amount` without
+    an authoritative `Currency Exchange` rate or server-verified `#147` `fx_rate_override`.
+    """
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if cint(doc.get("is_consolidated")) == 1:
+        return
+
+    payments = doc.get("payments") or []
+    if not payments:
+        return
+
+    raw_company = doc.get("company")
+    company = raw_company if isinstance(raw_company, str) else None
+    profile = pos_profile
+    if profile is None and isinstance(doc.get("pos_profile"), str) and doc.get("pos_profile"):
+        try:
+            profile = frappe.get_cached_doc("POS Profile", doc.get("pos_profile"))
+        except Exception:
+            profile = None
+
+    raw_home = doc.get("currency") or (profile.get("currency") if profile else None)
+    home_currency = raw_home.strip().upper() if isinstance(raw_home, str) else ""
+    base_prec = _base_precision(home_currency)
+    amount_tol = max(1e-6, 0.5 * (10 ** -base_prec)) if base_prec > 0 else 0.5
+    eff_date = _getdate(doc.get("posting_date") if isinstance(doc.get("posting_date"), (str, date, datetime)) else _today())
+    is_return = bool(cint(doc.get("is_return")))
+
+    for row in payments:
+        mode = row.get("mode_of_payment")
+        if not mode:
+            continue
+        amt = flt(row.get("amount"))
+        fx_amt = flt(row.get("custom_tender_amount"))
+        row_fx_curr = (row.get("custom_tender_currency") or "").strip().upper()
+        cfg = get_mode_payment_config(mode, company=company)
+        tender_curr = (cfg.get("custom_tender_currency") or "").strip().upper()
+        is_fx = bool(tender_curr and home_currency and tender_curr != home_currency)
+
+        if not is_fx:
+            if (row_fx_curr and row_fx_curr != home_currency) or abs(fx_amt) > 0:
+                frappe.throw(
+                    coded_message(
+                        "FX-INVALID",
+                        _("Foreign currency tender fields are not allowed on home-currency payment mode {0}.").format(
+                            mode
+                        ),
+                    ),
+                    frappe.ValidationError,
+                )
+            continue
+
+        if abs(amt) <= 0 and abs(fx_amt) <= 0:
+            continue
+
+        if not is_return and (amt < 0 or fx_amt < 0):
+            frappe.throw(
+                coded_message(
+                    "FX-INVALID",
+                    _("Negative foreign currency payment amount for {0} is not allowed.").format(mode),
+                ),
+                frappe.ValidationError,
+            )
+
+        if row_fx_curr != tender_curr:
+            frappe.throw(
+                coded_message(
+                    "FX-INVALID",
+                    _("Payment mode {0} requires tender currency {1}.").format(mode, tender_curr),
+                ),
+                frappe.ValidationError,
+            )
+
+        if abs(fx_amt) <= 0:
+            frappe.throw(
+                coded_message(
+                    "FX-INVALID",
+                    _("Foreign tender amount is required for payment mode {0}.").format(mode),
+                ),
+                frappe.ValidationError,
+            )
+
+        rate = flt(row.get("custom_exchange_rate"), 9)
+        if rate <= 0:
+            frappe.throw(
+                coded_message(
+                    "FX-RATE-STALE",
+                    _("A valid exchange rate is required for payment mode {0}.").format(mode),
+                ),
+                frappe.ValidationError,
+            )
+
+        fx_prec = currency_precision(tender_curr)
+        # Allow up to 4dp proportional split on merged bills while validating conversion math.
+        expected_base = flt(flt(fx_amt, max(fx_prec, 4)) * rate, base_prec)
+        if abs(flt(amt) - expected_base) > amount_tol:
+            frappe.throw(
+                coded_message(
+                    "FX-AMOUNT-MISMATCH",
+                    _("Converted base amount {0} for {1} does not match {2} {3} at rate {4} ({5}).").format(
+                        flt(amt), mode, fx_amt, tender_curr, rate, expected_base
+                    ),
+                ),
+                frappe.ValidationError,
+            )
+
+        # Return invoices may match the original invoice's recorded exchange rate.
+        if is_return and doc.get("return_against"):
+            orig_rate = frappe.db.get_value(
+                "Sales Invoice Payment",
+                {
+                    "parent": doc.get("return_against"),
+                    "parenttype": "POS Invoice",
+                    "mode_of_payment": mode,
+                },
+                "custom_exchange_rate",
+            )
+            if orig_rate and abs(flt(orig_rate, 9) - rate) <= 1e-6:
+                continue
+
+        rate_type = cfg.get("custom_fx_rate_type") or "Buying"
+        market_info = None
+        market_error = None
+        try:
+            market_info = resolve_pos_exchange_rate(
+                tender_curr,
+                home_currency,
+                posting_date=eff_date,
+                company=company,
+                rate_type=rate_type,
+            )
+        except frappe.ValidationError as exc:
+            market_error = exc
+
+        if market_info is not None and abs(rate - flt(market_info["rate"], 9)) <= 1e-6:
+            if not row.get("custom_exchange_rate_date"):
+                row.custom_exchange_rate_date = market_info["rate_date"]
+            continue
+
+        # Rate differs from authoritative Currency Exchange (or market rate is missing/stale):
+        # MUST satisfy POS Profile override policy, variance cap, AND server-verified #147 approval!
+        if not profile or cint(profile.get("custom_allow_fx_rate_override")) != 1:
+            if market_error is not None and not (profile and cint(profile.get("custom_allow_fx_rate_override")) == 1):
+                raise market_error
+            frappe.throw(
+                coded_message(
+                    "FX-RATE-STALE",
+                    _("Exchange rate {0} for {1} does not match the approved rate and FX rate override is disabled.").format(
+                        rate, mode
+                    ),
+                ),
+                frappe.PermissionError,
+            )
+
+        max_var_pct = flt(profile.get("custom_max_fx_variance_pct"))
+        if market_info is not None and flt(market_info["rate"]) > 0 and max_var_pct > 0:
+            actual_var_pct = abs(rate - flt(market_info["rate"])) / flt(market_info["rate"]) * 100.0
+            if actual_var_pct > max_var_pct + 1e-9:
+                frappe.throw(
+                    coded_message(
+                        "FX-RATE-VARIANCE",
+                        _("Override rate {0} deviates by {1:.2f}% from {2}, exceeding maximum allowed variance of {3:.2f}%.").format(
+                            rate, actual_var_pct, market_info["rate"], max_var_pct
+                        ),
+                    ),
+                    frappe.ValidationError,
+                )
+
+        if not _has_verified_fx_override(doc, mode, tender_curr, home_currency, rate):
+            frappe.throw(
+                _("Manager authorisation is required to override an exchange rate.") + " [POS-AUTH-REQUIRED]",
+                frappe.PermissionError,
+            )
 
 
 def ensure_local_change_payment_row(doc, pos_profile=None) -> None:
@@ -658,25 +1097,45 @@ def validate_fx_payment_modes(pos_profile_doc) -> None:
 
         if not clearing_acct:
             frappe.throw(
-                f"POS-FX-ACCOUNT-INVALID: Foreign tender mode {mode} ({tender_currency}) must configure a {home_currency} FX Till Clearing account in default_account for {company}.",
+                coded_message(
+                    "FX-ACCOUNT-INVALID",
+                    _("Foreign tender mode {0} ({1}) must configure a {2} FX Till Clearing account in default_account for {3}.").format(
+                        mode, tender_currency, home_currency, company
+                    ),
+                ),
                 frappe.ValidationError,
             )
         clearing_curr = (frappe.db.get_value("Account", clearing_acct, "account_currency") or "").strip().upper()
         if clearing_curr and clearing_curr != home_currency:
             frappe.throw(
-                f"POS-FX-ACCOUNT-INVALID: Foreign tender mode {mode} default_account ({clearing_acct}) must be in {home_currency} (FX Till Clearing), not {clearing_curr}. Configure the {tender_currency} drawer in custom_fx_vault_account instead.",
+                coded_message(
+                    "FX-ACCOUNT-INVALID",
+                    _("Foreign tender mode {0} default_account ({1}) must be in {2} (FX Till Clearing), not {3}. Configure the {4} drawer in custom_fx_vault_account instead.").format(
+                        mode, clearing_acct, home_currency, clearing_curr, tender_currency
+                    ),
+                ),
                 frappe.ValidationError,
             )
 
         if not vault_acct:
             frappe.throw(
-                f"POS-FX-ACCOUNT-INVALID: Foreign tender mode {mode} ({tender_currency}) must configure custom_fx_vault_account in {tender_currency} for {company}.",
+                coded_message(
+                    "FX-ACCOUNT-INVALID",
+                    _("Foreign tender mode {0} ({1}) must configure custom_fx_vault_account in {1} for {2}.").format(
+                        mode, tender_currency, company
+                    ),
+                ),
                 frappe.ValidationError,
             )
         vault_curr = (frappe.db.get_value("Account", vault_acct, "account_currency") or "").strip().upper()
         if vault_curr and vault_curr != tender_currency:
             frappe.throw(
-                f"POS-FX-ACCOUNT-INVALID: Foreign tender mode {mode} custom_fx_vault_account ({vault_acct}) must be in {tender_currency}, not {vault_curr}.",
+                coded_message(
+                    "FX-ACCOUNT-INVALID",
+                    _("Foreign tender mode {0} custom_fx_vault_account ({1}) must be in {2}, not {3}.").format(
+                        mode, vault_acct, tender_currency, vault_curr
+                    ),
+                ),
                 frappe.ValidationError,
             )
 
@@ -687,13 +1146,21 @@ def validate_offline_peer_relay_url(url: str | None) -> None:
         return
     if len(raw) > 512:
         frappe.throw(
-            "POS-OFFLINE-RELAY-INVALID: Offline peer relay URL must be 512 characters or fewer.",
+            coded_message(
+                "OFFLINE-RELAY-INVALID",
+                _("Offline peer relay URL must be 512 characters or fewer."),
+            ),
             frappe.ValidationError,
         )
+    if raw.startswith("/"):
+        return
     parsed = urlparse(raw)
     if parsed.scheme not in ("http", "https", "ws", "wss") or not parsed.netloc:
         frappe.throw(
-            "POS-OFFLINE-RELAY-INVALID: Offline peer relay URL must be a valid http(s):// or ws(s):// URL.",
+            coded_message(
+                "OFFLINE-RELAY-INVALID",
+                _("Offline peer relay URL must be a valid http(s)://, ws(s)://, or same-origin /path URL."),
+            ),
             frappe.ValidationError,
         )
 
@@ -736,6 +1203,10 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
     sweeping each FX mode from its company-currency FX Till Clearing account into its
     native foreign-currency FX Vault account, routing physical over/short to the
     write-off / cash-over-short account and sub-minor-unit rounding to exchange gain/loss.
+
+    All company-currency debit/credit amounts match ERPNext JournalEntry's actual
+    field precision (`debit`/`credit`) so non-integer multiples on 0dp/2dp/3dp currencies
+    balance to 0.00 during `JournalEntry.validate()`.
     """
     if doc.get("custom_fx_vault_journal_entry"):
         return doc.get("custom_fx_vault_journal_entry")
@@ -757,8 +1228,6 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
             profile = None
     if not home_currency and profile:
         home_currency = (profile.get("currency") or "").strip().upper()
-
-    base_prec = _base_precision(home_currency)
 
     fx_rows = []
     for row in doc.get("payment_reconciliation") or []:
@@ -793,8 +1262,7 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
     if doc.get("branch") and hasattr(je, "branch"):
         je.branch = doc.get("branch")
 
-    total_debit = 0.0
-    total_credit = 0.0
+    je_prec = _je_debit_precision(je, home_currency)
 
     for row in fx_rows:
         mode = row.get("mode_of_payment")
@@ -812,11 +1280,16 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
 
         if not clearing_acct or not vault_acct:
             frappe.throw(
-                f"POS-FX-ACCOUNT-INVALID: Mode of Payment {mode} requires both FX Till Clearing (default_account) and FX Vault (custom_fx_vault_account) for {company}.",
+                coded_message(
+                    "FX-ACCOUNT-INVALID",
+                    _("Mode of Payment {0} requires both FX Till Clearing (default_account) and FX Vault (custom_fx_vault_account) for {1}.").format(
+                        mode, company
+                    ),
+                ),
                 frappe.ValidationError,
             )
 
-        clearing_base = flt(row.get("expected_amount"), base_prec)
+        clearing_base = flt(row.get("expected_amount"), je_prec)
         expected_fx = flt(row.get("custom_expected_foreign_amount"), fx_prec)
         counted_fx = flt(row.get("custom_closing_foreign_amount"), fx_prec)
 
@@ -846,11 +1319,10 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
                     "cost_center": cost_center,
                 },
             )
-            total_credit = flt(total_credit + clearing_base, base_prec)
 
         # 2. Debit FX Vault Account (native foreign currency at shift_rate)
         if counted_fx > 0:
-            vault_base = flt(counted_fx * shift_rate, base_prec)
+            vault_base = flt(counted_fx * shift_rate, je_prec)
             je.append(
                 "accounts",
                 {
@@ -864,17 +1336,21 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
                     "cost_center": cost_center,
                 },
             )
-            total_debit = flt(total_debit + vault_base, base_prec)
 
         # 3. Physical FX cash variance (overage/shortage -> Cash Over & Short / Write Off)
         fx_diff = flt(counted_fx - expected_fx, fx_prec)
         if abs(fx_diff) > 0:
             if not variance_account:
                 frappe.throw(
-                    f"POS-FX-ACCOUNT-INVALID: Configure a Write Off / Cash Over and Short account on POS Profile {doc.get('pos_profile')} or Company {company} to post FX variance.",
+                    coded_message(
+                        "FX-ACCOUNT-INVALID",
+                        _("Configure a Write Off / Cash Over and Short account on POS Profile {0} or Company {1} to post FX variance.").format(
+                            doc.get("pos_profile"), company
+                        ),
+                    ),
                     frappe.ValidationError,
                 )
-            var_base = flt(abs(fx_diff) * shift_rate, base_prec)
+            var_base = flt(abs(fx_diff) * shift_rate, je_prec)
             if var_base > 0:
                 if fx_diff < 0:
                     # Physical shortage: Dr Cash Over and Short
@@ -891,7 +1367,6 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
                             "cost_center": cost_center,
                         },
                     )
-                    total_debit = flt(total_debit + var_base, base_prec)
                 else:
                     # Physical overage: Cr Cash Over and Short
                     je.append(
@@ -907,14 +1382,26 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
                             "cost_center": cost_center,
                         },
                     )
-                    total_credit = flt(total_credit + var_base, base_prec)
+
+    # Recompute exact ERPNext company-currency debit/credit amounts before balancing so
+    # 0dp UGX / 2dp USD / 3dp KWD precision differences never leave a residual imbalance.
+    if callable(getattr(je, "set_amounts_in_company_currency", None)):
+        je.set_amounts_in_company_currency()
+    je_prec = _je_debit_precision(je, home_currency)
+    total_debit = flt(sum(flt(r.get("debit"), je_prec) for r in (je.get("accounts") or [])), je_prec)
+    total_credit = flt(sum(flt(r.get("credit"), je_prec) for r in (je.get("accounts") or [])), je_prec)
 
     # 4. Sub-minor-unit rounding imbalance -> Exchange Gain/Loss
-    imbalance = flt(total_debit - total_credit, base_prec)
+    imbalance = flt(total_debit - total_credit, je_prec)
     if abs(imbalance) > 0:
         if not rounding_account:
             frappe.throw(
-                f"POS-FX-ACCOUNT-INVALID: Configure an Exchange Gain/Loss account on Company {company} or POS Profile {doc.get('pos_profile')}.",
+                coded_message(
+                    "FX-ACCOUNT-INVALID",
+                    _("Configure an Exchange Gain/Loss account on Company {0} or POS Profile {1}.").format(
+                        company, doc.get("pos_profile")
+                    ),
+                ),
                 frappe.ValidationError,
             )
         if imbalance > 0:

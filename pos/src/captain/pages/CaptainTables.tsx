@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ury/core';
 import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
 import { getPOSInvoiceItems, getSplitGroup, type POSInvoiceItem } from '../../lib/invoice-api';
@@ -29,6 +29,51 @@ import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
 
+const CAPTAIN_ROOMS_CACHE_PREFIX = 'ury_captain_rooms_cache:';
+const CAPTAIN_TABLES_CACHE_PREFIX = 'ury_captain_tables_cache:';
+
+function readCachedRooms(branchName: string): Room[] {
+  if (typeof localStorage === 'undefined' || !branchName) return [];
+  try {
+    const raw = localStorage.getItem(`${CAPTAIN_ROOMS_CACHE_PREFIX}${branchName}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Room[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedRooms(branchName: string, roomsList: Room[]): void {
+  if (typeof localStorage === 'undefined' || !branchName) return;
+  try {
+    localStorage.setItem(`${CAPTAIN_ROOMS_CACHE_PREFIX}${branchName}`, JSON.stringify(roomsList));
+  } catch {
+    // Ignore storage quota errors.
+  }
+}
+
+function readCachedTables(roomName: string): Table[] | null {
+  if (typeof localStorage === 'undefined' || !roomName) return null;
+  try {
+    const raw = localStorage.getItem(`${CAPTAIN_TABLES_CACHE_PREFIX}${roomName}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Table[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedTables(roomName: string, tableList: Table[]): void {
+  if (typeof localStorage === 'undefined' || !roomName) return;
+  try {
+    localStorage.setItem(`${CAPTAIN_TABLES_CACHE_PREFIX}${roomName}`, JSON.stringify(tableList));
+  } catch {
+    // Ignore storage quota errors.
+  }
+}
+
 /**
  * Captain "Tables" home screen (`/order`). See PLAN.md §5/§6 for the
  * intended IA. Mobile-first: large single-tap table cards, room tabs,
@@ -50,7 +95,8 @@ export default function CaptainTables() {
   const posProfile = usePOSStore((s) => s.posProfile);
   const tillCurrency = posProfile?.currency || usePOSStore((s) => s.currency);
   const rootUser = useRootStore((s) => s.user);
-  const { rows: outboxRows, offline: isOffline } = useOutbox(posProfile, rootUser, true);
+  const { rows: outboxRows, offline: outboxOffline } = useOutbox(posProfile, rootUser, true);
+  const isOffline = outboxOffline || (typeof navigator !== 'undefined' && navigator.onLine === false);
   const [peerPendingTables, setPeerPendingTables] = useState<OfflinePeerTableSummary[]>([]);
   const currentUser = context?.user ?? null;
   const canAccessOtherCaptainsTables = Boolean(capabilities?.canAccessOtherCaptainsTables);
@@ -107,6 +153,9 @@ export default function CaptainTables() {
   // assignment, since room-level restriction (if any) is enforced
   // server-side (captain_transfer's room-match, table_transfer's branch
   // check), not by hiding rooms from the picker.
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
+
   useEffect(() => {
     if (!branch) return;
     let cancelled = false;
@@ -114,10 +163,19 @@ export default function CaptainTables() {
     getRooms(branch)
       .then((fetched) => {
         if (cancelled) return;
+        saveCachedRooms(branch, fetched);
         setBranchRooms(fetched);
       })
       .catch(() => {
-        if (!cancelled) setBranchRooms([]);
+        if (cancelled) return;
+        const cached = readCachedRooms(branch);
+        if (cached.length > 0) {
+          setBranchRooms(cached);
+        } else if (roomsRef.current.some((r) => r.name)) {
+          setBranchRooms(roomsRef.current.filter((r) => r.name));
+        } else {
+          setBranchRooms([]);
+        }
       })
       .finally(() => {
         if (!cancelled) setRoomsLoading(false);
@@ -142,11 +200,19 @@ export default function CaptainTables() {
     setTablesError(null);
     try {
       const fetchedTables = await getTables(roomName);
-      setTables(sortTablesByMergeGroups(fetchedTables));
+      const sorted = sortTablesByMergeGroups(fetchedTables);
+      saveCachedTables(roomName, sorted);
+      setTables(sorted);
     } catch (err) {
-      console.error(err);
-      setTablesError('Failed to load tables');
-      setTables([]);
+      const cached = readCachedTables(roomName);
+      if (cached) {
+        setTables(sortTablesByMergeGroups(cached));
+        setTablesError(null);
+      } else {
+        console.error(err);
+        setTablesError('Failed to load tables');
+        setTables([]);
+      }
     } finally {
       setTablesLoading(false);
     }

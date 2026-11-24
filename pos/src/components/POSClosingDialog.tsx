@@ -34,6 +34,31 @@ import {
   type ClosingPaymentSummary,
 } from '../lib/pos-closing-api';
 
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'TZS', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+]);
+const THREE_DECIMAL_CURRENCIES = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
+
+export function currencyDecimalPlaces(code?: string | null): number {
+  const norm = (code || '').trim().toUpperCase();
+  if (!norm) return 2;
+  if (ZERO_DECIMAL_CURRENCIES.has(norm)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.has(norm)) return 3;
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency: norm }).resolvedOptions()
+      .maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
+export function roundToCurrencyPrecision(amount: number, code?: string | null): number {
+  const digits = currencyDecimalPlaces(code);
+  const factor = Math.pow(10, digits);
+  const rounded = Math.round((amount + Math.sign(amount) * 1e-12) * factor) / factor;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
 interface POSClosingDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -558,13 +583,13 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         const shiftRate =
           row.effective_exchange_rate ||
           (expectedFx > 0 && row.expected_amount > 0 ? row.expected_amount / expectedFx : cfgRate || 1);
-        const baseClosing = Math.round(closingForeignAmount * shiftRate * 100) / 100;
+        const baseClosing = roundToCurrencyPrecision(closingForeignAmount * shiftRate, tillCurrency);
         return {
           ...row,
           custom_closing_foreign_amount: closingForeignAmount,
           custom_foreign_difference: closingForeignAmount - expectedFx,
           closing_amount: baseClosing,
-          difference: baseClosing - row.expected_amount,
+          difference: roundToCurrencyPrecision(baseClosing - row.expected_amount, tillCurrency),
         };
       }),
     );
@@ -599,12 +624,20 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     const meta = posProfile?.payment_mode_meta;
     const hasMeta = Boolean(meta && Object.keys(meta).length > 0);
     const cashRows = hasMeta
-      ? rows.filter((row) => meta?.[row.mode_of_payment]?.type === 'Cash')
+      ? rows.filter(
+          (row) =>
+            meta?.[row.mode_of_payment]?.type === 'Cash' ||
+            Boolean(row.custom_tender_currency && row.custom_tender_currency !== tillCurrency),
+        )
       : rows;
     return cashRows.some(
-      (row) => Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001,
+      (row) =>
+        Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001 ||
+        (Boolean(row.custom_tender_currency && row.custom_tender_currency !== tillCurrency) &&
+          overShortTolerance <= 0 &&
+          Math.abs((Number(row.custom_closing_foreign_amount) || 0) - (Number(row.custom_expected_foreign_amount) || 0)) > 0.00001),
     );
-  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance]);
+  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance, tillCurrency]);
 
   // Closing may be submitted with blank or zero amount fields. Blank inputs
   // count as 0; rows that had activity but a zero close only show a warning.
@@ -843,7 +876,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           <DialogDescription>{t('pos_closing.description')}</DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 pb-4">
+        <div className="px-4 sm:px-6 pb-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Spinner message={t('pos_closing.loading')} />

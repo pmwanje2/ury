@@ -11,6 +11,16 @@ CUSTOM_FIELD_TARGETS = {
 
 RULES_SEED_MARKER_PREFIX = "pos_override_rules_seeded::"
 REASONS_SEED_MARKER = "pos_override_reasons_seeded"
+FX_RULES_SEED_MARKER_PREFIX = "pos_override_fx_rules_seeded::"
+FX_REASON_SEED_MARKER = "pos_override_fx_reason_seeded"
+
+DEFAULT_FX_RATE_OVERRIDE_REASON = (
+    "FX-RATE-OVERRIDE",
+    "Exchange Rate Adjustment",
+    "fx_rate_override",
+    0,
+    185,
+)
 
 # Seed-once client-owned POS Reasons (Amendment 1 #4: discounts use siteops Discount Reason).
 DEFAULT_POS_REASONS = (
@@ -40,6 +50,8 @@ DEFAULT_POS_REASONS = (
     # Reprint
     ("REPRINT-GUEST", "Guest requested copy", "reprint_bill\nreprint_kot", 0, 170),
     ("REPRINT-PRINTER", "Printer jam / paper out", "reprint_bill\nreprint_kot", 0, 180),
+    # Foreign currency rate override
+    DEFAULT_FX_RATE_OVERRIDE_REASON,
     # Catch-all (note mandatory)
     ("OTHER", "Other", "", 1, 999),
 )
@@ -156,6 +168,77 @@ def seed_default_reasons():
     frappe.db.set_default(REASONS_SEED_MARKER, "1")
 
 
+def ensure_fx_override_defaults(company=None):
+    """Idempotently seed default fx_rate_override privilege rules and POS Reason.
+
+    Works on both brand-new sites (via seed_default_rules/seed_default_reasons)
+    and existing upgraded sites where the earlier #147 seed markers are already set.
+    Never overwrites or resurrects operator-deleted rules/reasons on repeat runs.
+    """
+    from ury.ury_pos.override import PRIVILEGES
+
+    seed_default_rules(company=company)
+    seed_default_reasons()
+
+    if frappe.db.table_exists("POS Privilege Rule") and "fx_rate_override" in PRIVILEGES:
+        spec = PRIVILEGES["fx_rate_override"]
+        companies = [company] if company else frappe.get_all("Company", pluck="name")
+        existing_roles = set(frappe.get_all("Role", pluck="name"))
+        for comp in companies or []:
+            if not comp:
+                continue
+            marker = f"{FX_RULES_SEED_MARKER_PREFIX}{comp}"
+            if _is_seeded(marker):
+                continue
+            if frappe.db.exists("POS Privilege Rule", {"company": comp, "privilege": "fx_rate_override"}):
+                frappe.db.set_default(marker, "1")
+                continue
+            roles = sorted(set(spec.default_perform_roles) | set(spec.default_authorise_roles))
+            for role in roles:
+                if role not in existing_roles:
+                    continue
+                frappe.get_doc(
+                    {
+                        "doctype": "POS Privilege Rule",
+                        "company": comp,
+                        "pos_profile": "",
+                        "privilege": "fx_rate_override",
+                        "role": role,
+                        "may_perform": 1 if role in spec.default_perform_roles else 0,
+                        "may_authorise": 1 if role in spec.default_authorise_roles else 0,
+                        "max_percent": 0,
+                        "max_amount": 0,
+                        "requires_reason": 1 if spec.reason_required else 0,
+                        "allow_self_approval": 0,
+                        "require_clocked_in": 0,
+                        "privilege_group": 0,
+                    }
+                ).insert(ignore_permissions=True)
+            frappe.db.set_default(marker, "1")
+
+    if frappe.db.table_exists("POS Reason"):
+        if not _is_seeded(FX_REASON_SEED_MARKER):
+            code, description, applies_to, requires_note, sort_order = DEFAULT_FX_RATE_OVERRIDE_REASON
+            existing_fx_reasons = [
+                row
+                for row in (frappe.get_all("POS Reason", fields=["name", "applies_to"]) or [])
+                if "fx_rate_override" in (row.get("applies_to") or "").splitlines()
+            ]
+            if not existing_fx_reasons and not frappe.db.exists("POS Reason", code):
+                frappe.get_doc(
+                    {
+                        "doctype": "POS Reason",
+                        "code": code,
+                        "description": description,
+                        "applies_to": applies_to,
+                        "requires_note": requires_note,
+                        "sort_order": sort_order,
+                        "disabled": 0,
+                    }
+                ).insert(ignore_permissions=True)
+            frappe.db.set_default(FX_REASON_SEED_MARKER, "1")
+
+
 def execute():
     from ury.patches.v2_0.migrate_override_pin_out_of_user import remove_legacy_user_pin_field
 
@@ -163,3 +246,4 @@ def execute():
     ensure_custom_fields()
     seed_default_rules()
     seed_default_reasons()
+    ensure_fx_override_defaults()

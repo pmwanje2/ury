@@ -181,6 +181,7 @@ def _set_expected_amounts(doc):
         modes = [
             mode for mode in till_modes_by_account.get(account, [])
             if frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
+            and mode not in early_fx_modes
         ]
         if not modes:
             continue

@@ -116,7 +116,7 @@ CUSTOM_FIELDS = {
             "label": "Offline Peer Relay URL",
             "insert_after": "ury_offline_capture",
             "depends_on": "eval:doc.ury_offline_capture == 1",
-            "description": "Optional LAN relay URL (http(s):// or ws(s)://) for cross-device waiter offline outbox visibility.",
+            "description": "Optional LAN relay URL (http(s):// or ws(s)://) for cross-device waiter offline outbox visibility. Cross-origin relays must return Access-Control-Allow-Origin headers or be reverse-proxied on the POS origin.",
             "translatable": 0,
         },
         {
@@ -226,12 +226,7 @@ CUSTOM_FIELDS = {
 
 
 def execute():
-    create_custom_fields(CUSTOM_FIELDS, update=True)
-    # Seed default fx_rate_override privilege rules for existing companies if override module is available.
-    try:
-        from ury.ury_pos.override import ensure_company_rules
+    from ury.patches.v2_0.setup_pos_manager_authorisation import ensure_fx_override_defaults
 
-        for company in frappe.get_all("Company", pluck="name") or []:
-            ensure_company_rules(company)
-    except Exception:
-        pass
+    create_custom_fields(CUSTOM_FIELDS, update=True)
+    ensure_fx_override_defaults()

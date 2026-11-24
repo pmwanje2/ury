@@ -5,6 +5,48 @@ import {
   getCaptainContext,
   type CaptainContext,
 } from '../../lib/captain-context-api';
+import { useRootStore } from '../../store/root-store';
+
+const CAPTAIN_CONTEXT_CACHE_PREFIX = 'ury_captain_context_cache:';
+const CAPTAIN_CONTEXT_LAST_KEY = 'ury_captain_context_cache:last';
+
+function saveCachedCaptainContext(ctx: CaptainContext): void {
+  if (typeof localStorage === 'undefined' || !ctx?.user) return;
+  try {
+    const serialized = JSON.stringify(ctx);
+    localStorage.setItem(`${CAPTAIN_CONTEXT_CACHE_PREFIX}${ctx.user}`, serialized);
+    localStorage.setItem(CAPTAIN_CONTEXT_LAST_KEY, serialized);
+  } catch {
+    // Ignore storage quota / private mode failures.
+  }
+}
+
+function readCachedCaptainContext(expectedUser?: string | null): CaptainContext | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = expectedUser
+      ? localStorage.getItem(`${CAPTAIN_CONTEXT_CACHE_PREFIX}${expectedUser}`)
+      : localStorage.getItem(CAPTAIN_CONTEXT_LAST_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CaptainContext;
+    if (!parsed || typeof parsed !== 'object' || !parsed.user) return null;
+    if (expectedUser && parsed.user !== expectedUser) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isAuthOrPermissionError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const anyErr = err as { httpStatus?: number; status?: number; exc_type?: string; message?: string };
+  if (anyErr.httpStatus === 401 || anyErr.httpStatus === 403 || anyErr.status === 401 || anyErr.status === 403) {
+    return true;
+  }
+  const exc = String(anyErr.exc_type || '');
+  if (exc === 'PermissionError' || exc === 'AuthenticationError') return true;
+  return false;
+}
 
 export interface UseCaptainContextResult {
   /** Raw backend response from `get_captain_context()`, or null while loading/on error. */
@@ -115,10 +157,24 @@ export const useCaptainContext = (): UseCaptainContextResult => {
       setIsLoading(true);
       setError(null);
       const result = await getCaptainContext();
+      saveCachedCaptainContext(result);
       setContext(result);
     } catch (err) {
-      setError((err as Error).message || 'Failed to load captain context.');
-      setContext(null);
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+      const expectedUser =
+        typeof (useRootStore as any)?.getState === 'function'
+          ? (useRootStore as any).getState()?.user?.name ?? null
+          : null;
+      const cached = !isAuthOrPermissionError(err)
+        ? readCachedCaptainContext(expectedUser) ?? (offline ? readCachedCaptainContext(null) : null)
+        : null;
+      if (cached && (offline || !isAuthOrPermissionError(err))) {
+        setContext(cached);
+        setError(null);
+      } else {
+        setError((err as Error).message || 'Failed to load captain context.');
+        setContext(null);
+      }
     } finally {
       setIsLoading(false);
     }

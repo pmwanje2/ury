@@ -2997,7 +2997,7 @@ def sync_order(
         if existing_meta and (existing_meta.get("ury_client_order_id") or "") != client_order_id:
             if existing_meta.get("pos_profile") and existing_meta.get("pos_profile") != pos_profile:
                 frappe.throw(
-                    _("URY_PROFILE_MISMATCH: This order belongs to a different POS Profile."),
+                    coded_message("PROFILE-MISMATCH", _("This order belongs to a different POS Profile.")),
                     frappe.PermissionError,
                 )
             collision_plan = build_offline_collision_plan(
@@ -3034,7 +3034,10 @@ def sync_order(
 
     invoice = invoice_doc or client_invoice or get_order_invoice(table, invoice, order_type)
     if invoice.name and invoice.pos_profile and invoice.pos_profile != pos_profile:
-        frappe.throw(_("URY_PROFILE_MISMATCH: This order belongs to a different POS Profile."), frappe.PermissionError)
+        frappe.throw(
+            coded_message("PROFILE-MISMATCH", _("This order belongs to a different POS Profile.")),
+            frappe.PermissionError,
+        )
     hold_enabled = cint(getattr(posprofile, "ury_enable_hold_fire", 0)) == 1
     if hold_enabled:
         _lock_hold_order(invoice, preserve_resolved=True)
@@ -4724,6 +4727,7 @@ def make_invoice(
         posting_date=invoice.get("posting_date"),
         invoice_name=invoice.name,
         is_return=bool(invoice.get("is_return")),
+        invoice_doc=invoice,
     )
 
     existing_received_tenders = _received_payment_rows(invoice)
@@ -4755,6 +4759,11 @@ def make_invoice(
     if invoice.custom_merged_pos_invoice:
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
         target.cashier = frappe.session.user
+        fx_proofs = getattr(getattr(invoice, "flags", None), "get", lambda *a: None)("pos_verified_fx_overrides")
+        if fx_proofs:
+            from ury.ury_pos.fx import mark_verified_fx_override
+            for proof in fx_proofs:
+                mark_verified_fx_override(target, proof.mode_of_payment, proof.from_currency, proof.to_currency, proof.rate)
 
     if discount_spec["has_any_arg"]:
         apply_discount_to_invoice(

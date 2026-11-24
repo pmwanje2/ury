@@ -20,15 +20,32 @@ interface ClosingPaymentTableProps {
   currency?: string;
 }
 
-function fxStepForCurrency(code?: string | null): string {
-  if (!code) return '0.01';
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'TZS', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+]);
+const THREE_DECIMAL_CURRENCIES = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
+
+function currencyDecimalPlaces(code?: string | null): number {
+  const norm = (code || '').trim().toUpperCase();
+  if (!norm) return 2;
+  if (ZERO_DECIMAL_CURRENCIES.has(norm)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.has(norm)) return 3;
   try {
-    const digits = new Intl.NumberFormat('en', { style: 'currency', currency: code }).resolvedOptions()
+    return new Intl.NumberFormat('en', { style: 'currency', currency: norm }).resolvedOptions()
       .maximumFractionDigits ?? 2;
-    return digits === 0 ? '1' : digits === 3 ? '0.001' : '0.01';
   } catch {
-    return '0.01';
+    return 2;
   }
+}
+
+function currencyVarianceEpsilon(code?: string | null): number {
+  const digits = currencyDecimalPlaces(code);
+  return 0.5 * Math.pow(10, -digits);
+}
+
+function fxStepForCurrency(code?: string | null): string {
+  const digits = currencyDecimalPlaces(code);
+  return digits <= 0 ? '1' : digits === 3 ? '0.001' : '0.01';
 }
 
 const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
@@ -65,8 +82,8 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
 
   return (
     <div className="w-full overflow-x-auto">
-      <table className="w-full border-collapse">
-        <thead>
+      <table className="w-full border-collapse block sm:table">
+        <thead className="hidden sm:table-header-group">
           <tr className="border-b border-border bg-gray-50">
             <th className="text-start py-3 px-4 font-semibold text-gray-900">
               {t('pos_closing.payment_mode')}
@@ -122,7 +139,7 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
             )}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="block space-y-3 sm:table-row-group sm:space-y-0">
           {rows.map((row) => {
             // Positive = overage (cashier has more than expected), negative
             // = shortage. Must match the sign convention used in the submit
@@ -135,18 +152,22 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
             const closingFx = Number(row.custom_closing_foreign_amount) || 0;
             const foreignDiff = closingFx - expectedFx;
             const difference = row.closing_amount - row.expected_amount;
-            const hasDifference = fxCurrency ? Math.abs(foreignDiff) > 0.001 : Math.abs(difference) > 0.001;
+            const fxEpsilon = currencyVarianceEpsilon(fxCurrency);
+            const baseEpsilon = currencyVarianceEpsilon(currency);
+            const hasDifference = fxCurrency
+              ? Math.abs(foreignDiff) > fxEpsilon
+              : Math.abs(difference) > baseEpsilon;
             const isTouched = touchedModes.has(row.mode_of_payment);
 
             return (
               <tr
                 key={row.mode_of_payment}
                 className={cn(
-                  'border-b border-border hover:bg-gray-50 transition-colors',
+                  'block rounded-lg border border-border p-3 sm:table-row sm:rounded-none sm:border-0 sm:border-b sm:p-0 hover:bg-gray-50 transition-colors',
                   !isTouched && 'bg-amber-50/60'
                 )}
               >
-                <td className="py-3 px-4 text-gray-900 font-medium">
+                <td className="block pb-2 mb-1.5 border-b border-border/60 sm:mb-0 sm:border-0 sm:table-cell sm:py-3 sm:px-4 text-gray-900 font-medium">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span>{row.mode_of_payment}</span>
                     {fxCurrency && (
@@ -156,15 +177,21 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                     )}
                   </div>
                 </td>
-                <td className="py-3 px-4 text-end text-gray-700">
+                <td
+                  data-label={t('pos_closing.opening')}
+                  className="flex items-center justify-between gap-2 py-1.5 text-end text-gray-700 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
+                >
                   {formatCurrency(row.opening_amount, currency)}
                 </td>
                 {!blindCashCount && (
-                <td className="py-3 px-4 text-end text-gray-700">
+                <td
+                  data-label={t('pos_closing.expected')}
+                  className="flex items-center justify-between gap-2 py-1.5 text-end text-gray-700 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
+                >
                   {hideExpected ? (
                     '—'
                   ) : fxCurrency ? (
-                    <div className="tabular-nums">
+                    <div className="tabular-nums text-end">
                       <div className="font-medium">{formatCurrency(expectedFx, fxCurrency)}</div>
                       <div className="text-xs text-gray-500">
                         {t('pos_closing.fx_base_equivalent', { amount: formatCurrency(row.expected_amount, currency) })}
@@ -175,9 +202,12 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                   )}
                 </td>
                 )}
-                <td className="py-3 px-4">
+                <td
+                  data-label={t('pos_closing.closing')}
+                  className="flex items-center justify-between gap-2 py-1.5 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
+                >
                   {fxCurrency ? (
-                    <div className="space-y-1">
+                    <div className="w-36 sm:w-full space-y-1">
                       <Input
                         data-testid={`closing-fx-input-${row.mode_of_payment}`}
                         aria-label={t('pos_closing.fx_native_count', { currency: fxCurrency })}
@@ -195,24 +225,27 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                       </div>
                     </div>
                   ) : (
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={row.closing_amount > 0 ? String(row.closing_amount) : ''}
-                      onChange={(e) =>
-                        handleClosingAmountChange(row.mode_of_payment, e.target.value)
-                      }
-                      placeholder="0.00"
-                      className={cn('w-full text-center', !isTouched && 'border-amber-400')}
-                      size="sm"
-                    />
+                    <div className="w-36 sm:w-full">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={row.closing_amount > 0 ? String(row.closing_amount) : ''}
+                        onChange={(e) =>
+                          handleClosingAmountChange(row.mode_of_payment, e.target.value)
+                        }
+                        placeholder="0.00"
+                        className={cn('w-full text-center', !isTouched && 'border-amber-400')}
+                        size="sm"
+                      />
+                    </div>
                   )}
                 </td>
                 {!blindCashCount && (
                 <td
+                  data-label={t('pos_closing.difference')}
                   className={cn(
-                    'py-3 px-4 text-end font-medium',
+                    'flex items-center justify-between gap-2 py-1.5 text-end font-medium before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4',
                     hideExpected
                       ? 'text-gray-700'
                       : hasDifference
@@ -223,7 +256,7 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                   {hideExpected ? (
                     '—'
                   ) : fxCurrency ? (
-                    <div className="tabular-nums">
+                    <div className="tabular-nums text-end">
                       <div>{formatCurrency(foreignDiff, fxCurrency)}</div>
                       <div className="text-xs opacity-80">{formatCurrency(difference, currency)}</div>
                     </div>

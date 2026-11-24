@@ -28,7 +28,7 @@ function matchesReferencePattern(value: string, pattern?: string | null): boolea
   const raw = (pattern || '').trim();
   if (!raw) return true;
   if (raw.length > MAX_REF_PATTERN_LENGTH) return false;
-  if (/\([^)]*[+*?][^)]*\)[+*?{]|[+*?]\s*[+*?]|\\[1-9]/.test(raw)) return false;
+  if (/\([^)]*[+*?|][^)]*\)[+*?{]|[+*?]\s*[+*?]|\\[1-9]/.test(raw)) return false;
   try {
     const anchored = raw.startsWith('^') && raw.endsWith('$') ? raw : `^(?:${raw})$`;
     return new RegExp(anchored).test(value);
