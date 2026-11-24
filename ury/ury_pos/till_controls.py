@@ -1519,21 +1519,29 @@ def reopen_till(
 			)
 		)
 
-	# Refuse reopening if any consolidated Sales Invoice has already been fiscalised (EFRIS)
-	consolidated_sis = frappe.get_all(
-		"Sales Invoice",
-		filters={"pos_closing_entry": closing_meta.name, "docstatus": 1},
-		fields=["name", "custom_efris_fdn", "custom_efris_irn"],
-		limit_page_length=50,
-	)
-	for si in consolidated_sis:
-		if si.get("custom_efris_fdn") or si.get("custom_efris_irn"):
-			frappe.throw(
-				coded_message(
-					"REOPEN-LOCKED",
-					_("Consolidated invoice {0} is already fiscalised and cannot be reopened.").format(si.name),
+	# Refuse reopening if any consolidated Sales Invoice has already been fiscalised (EFRIS).
+	# Guard column existence so non-Uganda sites without uganda_compliance don't hit Unknown column 1054.
+	has_col = getattr(frappe.db, "has_column", None)
+	efris_cols = [
+		col
+		for col in ("custom_efris_fdn", "custom_efris_irn")
+		if (has_col("Sales Invoice", col) if callable(has_col) else True)
+	]
+	if efris_cols:
+		consolidated_sis = frappe.get_all(
+			"Sales Invoice",
+			filters={"pos_closing_entry": closing_meta.name, "docstatus": 1},
+			fields=["name", *efris_cols],
+			limit_page_length=50,
+		)
+		for si in consolidated_sis:
+			if any(si.get(col) for col in efris_cols):
+				frappe.throw(
+					coded_message(
+						"REOPEN-LOCKED",
+						_("Consolidated invoice {0} is already fiscalised and cannot be reopened.").format(si.name),
+					)
 				)
-			)
 
 	claim = {
 		"action": "reopen_till",
