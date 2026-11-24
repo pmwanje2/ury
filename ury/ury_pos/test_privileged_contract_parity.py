@@ -142,7 +142,11 @@ class TestPosProfileFullParity(unittest.TestCase):
         """getPosProfileFull must import flt cleanly and return Scope e+f profile fields."""
         from ury.ury_pos.test_floor_privileged_actions import TestFloorPrivilegedActions
 
-        helper = TestFloorPrivilegedActions("test_table_transfer_requires_pin_or_rule_and_keeps_session")
+        class _Loader(TestFloorPrivilegedActions):
+            def runTest(self):
+                pass
+
+        helper = _Loader()
         helper.setUp()
         try:
             helper.h.profiles["Main Till"]["allow_rate_change"] = 1
