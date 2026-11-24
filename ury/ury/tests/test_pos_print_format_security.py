@@ -57,10 +57,11 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 			self.skipTest("POS Invoice Classic not installed")
 		doc = self._make_in_memory_invoice(docstatus=0)
 		pf = frappe.get_doc("Print Format", "POS Invoice Classic")
-		# Direct PrintFormatGenerator invocation reproduces the upstream Frappe/ERPNext
+		# Render with disabled=0 in memory to reproduce the upstream Frappe/ERPNext
 		# beta Print Format Builder bug (Data.html omits `| e`).
+		pf.disabled = 0
 		gen = PrintFormatGenerator(pf, doc, None)
-		html = gen.render_html()
+		html = gen.get_html_preview()
 		self.assertIn("<script>window.__xss=1;alert(1)</script>", html)
 		self.assertIn('onerror="window.__img_xss=1"', html)
 
@@ -83,7 +84,10 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 		self.assertEqual(meta.default_print_format, GUEST_CHECK_PRINT_FORMAT)
 
 		# 3. Desk format picker (__print_formats) excludes every unsafe format
-		picker = meta.get("__print_formats") or []
+		picker = [
+			p.get("name") if isinstance(p, dict) else p
+			for p in (meta.get("__print_formats") or [])
+		]
 		self.assertIn(GUEST_CHECK_PRINT_FORMAT, picker)
 		for name in UNSAFE_POS_INVOICE_PRINT_FORMATS:
 			self.assertNotIn(name, picker, f"Unsafe format {name!r} leaked into Desk picker")
