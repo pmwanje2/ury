@@ -25,6 +25,7 @@ function setupClosingMocks(opts?: {
   tolerance?: number;
   openEntries?: Array<{ name: string; user: string; user_name?: string; period_start_date: string; pos_profile: string; is_own?: boolean }>;
   closeThrowsBlindVarianceFirst?: boolean;
+  reasons?: Array<{ code: string; description: string; requires_note: number; applies_to: string[] }>;
 }) {
   const blind = opts?.blind ?? false;
   const tolerance = opts?.tolerance ?? 5000;
@@ -114,6 +115,9 @@ function setupClosingMocks(opts?: {
     }
     if (method === 'ury.ury_pos.override.privilege_policy') {
       return Promise.resolve({ message: { may_perform: false, requires_reason: true } });
+    }
+    if (method === 'ury.ury_pos.override.list_reasons') {
+      return Promise.resolve({ message: opts?.reasons ?? [] });
     }
     return Promise.resolve({ message: {} });
   });
@@ -214,7 +218,7 @@ describe('POSClosingDialog till controls (Over/Short PIN, Blind Close, Close Oth
     );
   });
 
-  it('supports closing another person\'s till with ManagerApproval PIN', async () => {
+  it('supports closing another person\'s till with ManagerApproval PIN and active POS Reason', async () => {
     const { postSpy } = setupClosingMocks({
       openEntries: [
         {
@@ -226,6 +230,7 @@ describe('POSClosingDialog till controls (Over/Short PIN, Blind Close, Close Oth
           is_own: false,
         },
       ],
+      reasons: [{ code: 'OTHER', description: 'Other', requires_note: 1, applies_to: [] }],
     });
 
     render(<POSClosingDialog open onOpenChange={vi.fn()} />);
@@ -236,6 +241,10 @@ describe('POSClosingDialog till controls (Over/Short PIN, Blind Close, Close Oth
     fireEvent.click(screen.getByRole('button', { name: /^Close POS$/i }));
 
     expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    const reasonSelect = await screen.findByLabelText(/Reason/i);
+    fireEvent.change(reasonSelect, { target: { value: 'OTHER' } });
+    const noteBox = await screen.findByRole('textbox');
+    fireEvent.change(noteBox, { target: { value: 'Cashier handed over till' } });
     for (const digit of ['2', '4', '6', '8']) {
       fireEvent.click(await screen.findByRole('button', { name: digit }));
     }
@@ -247,6 +256,45 @@ describe('POSClosingDialog till controls (Over/Short PIN, Blind Close, Close Oth
         expect.objectContaining({
           pos_opening_entry: 'POS-OPE-OTHER',
           close_other_approval_token: 'close-pin-tok-1',
+          close_other_reason: 'Other: Cashier handed over till',
+        }),
+      ),
+    );
+  });
+
+  it('formats free-text Over/Short reason under active catch-all POS Reason for #147 R2 validation', async () => {
+    const { postSpy } = setupClosingMocks({
+      tolerance: 0,
+      reasons: [{ code: 'OTHER', description: 'Other', requires_note: 1, applies_to: [] }],
+    });
+    render(<POSClosingDialog open onOpenChange={vi.fn()} />);
+
+    const input = await screen.findByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '145000' } });
+    fireEvent.change(screen.getByLabelText(/Over\/Short reason/i), { target: { value: 'Short 5000 coin roll' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Close POS$/i }));
+
+    expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    for (const digit of ['2', '4', '6', '8']) {
+      fireEvent.click(await screen.findByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.override.authorise',
+        expect.objectContaining({
+          privilege: 'over_short_close',
+          claim: expect.objectContaining({ reason: 'Other: Short 5000 coin roll' }),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.till_controls.close_till_with_controls',
+        expect.objectContaining({
+          over_short_reason: 'Other: Short 5000 coin roll',
+          over_short_approval_token: 'close-pin-tok-1',
         }),
       ),
     );

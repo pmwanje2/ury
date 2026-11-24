@@ -167,4 +167,66 @@ describe('PaymentDialog High Amount Lockout (HALO) per tender', () => {
     ).rejects.toEqual(gatewayErr);
     expect(queueSpy).not.toHaveBeenCalled();
   });
+
+  it('collects active POS Reason via ManagerApproval when over_halo_tender policy requires_reason and sends halo_approval_reason to make_invoice', async () => {
+    vi.spyOn(call, 'get').mockImplementation((method: string) => {
+      if (method === 'ury.ury_pos.override.list_approvers') {
+        return Promise.resolve({ message: [{ user: 'manager@example.com', full_name: 'Alex Manager' }] });
+      }
+      if (method === 'ury.ury_pos.override.privilege_policy') {
+        return Promise.resolve({ message: { may_perform: false, requires_reason: true } });
+      }
+      if (method === 'ury.ury_pos.override.list_reasons') {
+        return Promise.resolve({
+          message: [{ code: 'OTHER', description: 'Other', requires_note: 1, applies_to: [] }],
+        });
+      }
+      return Promise.resolve({ message: {} });
+    });
+    const postSpy = vi.spyOn(call, 'post').mockImplementation((method: string) => {
+      if (method === 'ury.ury_pos.override.authorise') {
+        return Promise.resolve({
+          message: { token: 'halo-pin-tok-r2', approver: 'manager@example.com', approver_name: 'Alex Manager', expires_in: 120 },
+        });
+      }
+      return Promise.resolve({ message: { status: 'Submitted' } });
+    });
+
+    renderPayment({ grandTotal: 50000 });
+    const [cashInput] = screen.getAllByRole('spinbutton');
+    fireEvent.change(cashInput, { target: { value: '5000000' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Pay /i }));
+
+    expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    // Reason selector from #147 R2 must be rendered (not suppressed by requireReason={false})
+    const reasonSelect = await screen.findByLabelText(/Reason/i);
+    fireEvent.change(reasonSelect, { target: { value: 'OTHER' } });
+    const noteBox = await screen.findByLabelText(/Note/i);
+    fireEvent.change(noteBox, { target: { value: 'Large banquet cash' } });
+
+    for (const digit of ['2', '4', '6', '8']) {
+      fireEvent.click(await screen.findByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.override.authorise',
+        expect.objectContaining({
+          privilege: 'over_halo_tender',
+          claim: expect.objectContaining({ reason: 'Other: Large banquet cash' }),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury.doctype.ury_order.ury_order.make_invoice',
+        expect.objectContaining({
+          invoice: 'POS-INV-HALO-UI-1',
+          halo_approval_token: 'halo-pin-tok-r2',
+          halo_approval_reason: 'Other: Large banquet cash',
+        }),
+      ),
+    );
+  });
 });

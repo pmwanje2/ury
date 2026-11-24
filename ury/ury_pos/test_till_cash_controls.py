@@ -44,6 +44,8 @@ class PermissionDenied(Exception):
 class FakeDoc(Row):
     def __init__(self, data=None, store=None):
         super().__init__(data or {})
+        if isinstance(self.get("accounts"), list):
+            self["accounts"] = [r if isinstance(r, Row) else Row(r) for r in self["accounts"]]
         self.flags = SimpleNamespace()
         self._store = store
         self._is_new = not bool(self.get("name"))
@@ -601,6 +603,9 @@ def _build_env():
     override_stub.may_perform = override.may_perform
     override_stub.consume = override.consume
     override_stub.require = override.require
+    override_stub._is_non_interactive_or_agent_session = lambda user=None: bool(
+        getattr(override, "force_non_interactive", False)
+    )
 
     brand_spec = importlib.util.spec_from_file_location("ury.brand", APP / "brand.py")
     brand_mod = importlib.util.module_from_spec(brand_spec)
@@ -1163,6 +1168,38 @@ class TestPickupLoanThresholdAndNoSale(LoadedSlice1):
         self.store.current_user = "manager@example.com"
         with self.assertRaisesRegex(Refused, r"POS-DRAWER-IN-USE"):
             self.tc.trigger_no_sale(pos_profile="Pool Till", reason="CHANGE")
+
+    def test_till_controls_imports_without_top_level_frappe_utils_get_time(self):
+        # Site-less tests (e.g. test_ury_hold_fire) stub frappe.utils without get_time.
+        # Importing till_controls must not fail at module import time.
+        store, _override, frappe_mod, brand_spec, brand_mod, modules = _build_env()
+        delattr(modules["frappe.utils"], "get_time")
+        with patch.dict(sys.modules, modules):
+            brand_spec.loader.exec_module(brand_mod)
+            cm_spec = importlib.util.spec_from_file_location("ury.ury.hooks.ury_cash_movement", CASH_MOVEMENT_HOOK)
+            cm_mod = importlib.util.module_from_spec(cm_spec)
+            with patch.dict(sys.modules, {"ury.ury.hooks.ury_cash_movement": cm_mod}):
+                cm_spec.loader.exec_module(cm_mod)
+                tc_spec = importlib.util.spec_from_file_location("ury.ury_pos.till_controls", TILL_CONTROLS_PY)
+                tc_mod = importlib.util.module_from_spec(tc_spec)
+                tc_spec.loader.exec_module(tc_mod)
+                self.assertTrue(callable(tc_mod.lock_open_shift_for_settlement))
+
+    def test_three_decimal_currency_precision_enforced(self):
+        # Currencies with 3 decimal places (e.g. KWD, OMR) resolve to 3dp even without a Currency doc.
+        self.assertEqual(self.tc.currency_precision("KWD"), 3)
+        self.assertEqual(self.tc.parse_positive_amount(10.125, "KWD"), 10.125)
+        with self.assertRaisesRegex(Refused, r"POS-CASH-PRECISION"):
+            self.tc.parse_positive_amount(10.1234, "KWD")
+
+    def test_zero_rules_company_still_refuses_impersonated_or_agent_session(self):
+        # #147 R2 P0 #3: even when a company has zero POS Privilege Rule rows,
+        # impersonated / non-interactive / AI-agent sessions must never act solo.
+        self.store.privilege_rules.clear()
+        self.override.force_non_interactive = True
+        profile = self.store.profiles["Main Till"]
+        self.assertFalse(self.tc._may_perform_till_privilege("manager@example.com", profile, "no_sale"))
+        self.assertFalse(self.tc._can_perform_over_short_solo("manager@example.com", profile, "cashier@example.com", 10000))
 
 
 if __name__ == "__main__":

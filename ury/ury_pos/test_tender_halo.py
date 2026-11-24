@@ -245,6 +245,79 @@ class TestTenderHalo(LoadedSlice3):
         self.assertEqual(res["approver"], "manager@example.com")
         self.assertEqual(res["reference"], "VCH-99")
 
+    def test_over_halo_forwards_reason_in_claim_for_r2_reason_validation(self):
+        # #147 R2 enforces _validate_reason on over_halo_tender: apply_halo_approval_token
+        # must accept reason and bind it into the claim verified by override.consume.
+        self.store.current_user = "cashier@example.com"
+        inv = self._invoice(total=50000, payments=[{"mode_of_payment": "Cash", "amount": 5000000}])
+        reason = "Other: Banquet cash deposit confirmed"
+        claim = {
+            "action": "over_halo_tender",
+            "invoice": "POS-INV-HALO-1",
+            "pos_profile": "Main Till",
+            "tenders": [{"mode_of_payment": "Cash", "amount": 5000000}],
+            "reason": reason,
+        }
+        self.override.mint(
+            "tok-halo-reason-1",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="over_halo_tender",
+            pos_profile="Main Till",
+            reference_name="POS-INV-HALO-1",
+            claim=claim,
+        )
+        self.tc.apply_halo_approval_token(inv, "tok-halo-reason-1", reason=reason)
+        self.tender_hook.before_validate(inv)
+        self.assertEqual(inv.custom_halo_approver, "manager@example.com")
+        self.assertIn("tok-halo-reason-1", self.override.consumed)
+
+    def test_approve_till_cash_movement_pin_binds_entry_reason_in_claim(self):
+        # Pending Paid Out JE approved in place with Manager PIN must include reason in claim
+        # so #147 R2 _validate_reason succeeds.
+        self.store.current_user = "cashier@example.com"
+        draft = self.cma.record_till_cash_movement(
+            pos_profile="Main Till",
+            movement_type="Paid Out",
+            amount=100000,
+            reason="Other: Emergency ice delivery",
+            reference="VCH-77",
+        )
+        self.assertEqual(draft["docstatus"], 0)
+        claim = {
+            "action": "approve_cash_movement",
+            "journal_entry": draft["name"],
+            "movement_type": "Paid Out",
+            "amount": 100000.0,
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "reason": "Other: Emergency ice delivery",
+        }
+        self.override.mint(
+            "tok-approve-je-1",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="paid_out",
+            pos_profile="Main Till",
+            reference_name=draft["name"],
+            claim=claim,
+        )
+        approved = self.cma.approve_till_cash_movement(draft["name"], approval_token="tok-approve-je-1")
+        self.assertEqual(approved["docstatus"], 1)
+        self.assertEqual(approved["approver"], "manager@example.com")
+
+    def test_three_decimal_and_two_decimal_tender_precision_enforced(self):
+        self.store.current_user = "cashier@example.com"
+        ok_kwd = self._invoice(total=25.125, payments=[{"mode_of_payment": "Room Charge", "amount": 25.125}], currency="KWD")
+        self.tender_hook.before_validate(ok_kwd)
+
+        bad_kwd = self._invoice(total=25.1234, payments=[{"mode_of_payment": "Room Charge", "amount": 25.1234}], currency="KWD")
+        with self.assertRaisesRegex(Refused, r"POS-CASH-PRECISION"):
+            self.tender_hook.before_validate(bad_kwd)
+
+        bad_usd = self._invoice(total=25.125, payments=[{"mode_of_payment": "Room Charge", "amount": 25.125}], currency="USD")
+        with self.assertRaisesRegex(Refused, r"POS-CASH-PRECISION"):
+            self.tender_hook.before_validate(bad_usd)
+
 
 if __name__ == "__main__":
     unittest.main()

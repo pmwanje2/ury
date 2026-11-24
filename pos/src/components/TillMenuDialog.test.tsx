@@ -69,6 +69,8 @@ function setupMockCalls(overrides?: {
   drawerStatus?: Record<string, unknown>;
   closedTills?: Array<Record<string, unknown>>;
   xReport?: Record<string, unknown>;
+  reasons?: Array<{ code: string; description: string; requires_note: number; applies_to: string[] }>;
+  loanRequiresAuth?: boolean;
 }) {
   const getSpy = vi.spyOn(call, 'get').mockImplementation((method: string) => {
     if (method === 'ury.ury_pos.cash_movements.get_till_cash_state') {
@@ -82,6 +84,9 @@ function setupMockCalls(overrides?: {
     }
     if (method === 'ury.ury_pos.override.privilege_policy') {
       return Promise.resolve({ message: { may_perform: false, requires_reason: true } });
+    }
+    if (method === 'ury.ury_pos.override.list_reasons') {
+      return Promise.resolve({ message: overrides?.reasons ?? [] });
     }
     if (method === 'ury.ury_pos.till_controls.list_closed_tills') {
       return Promise.resolve({
@@ -134,6 +139,9 @@ function setupMockCalls(overrides?: {
       return Promise.resolve({
         message: { name: 'ACC-JV-99', docstatus: 1, status: 'Submitted', approver: 'manager@example.com' },
       });
+    }
+    if (method === 'ury.ury_pos.cash_movements.record_till_cash_movement' && overrides?.loanRequiresAuth) {
+      return Promise.reject({ message: '[POS-AUTH-REQUIRED] A manager must approve this action with their PIN.' });
     }
     if (method === 'ury.ury_pos.till_controls.trigger_no_sale') {
       return Promise.resolve({
@@ -338,5 +346,100 @@ describe('Till Menu controls (Paid Out/In PIN, Safe Drop Threshold Exception, No
     expect(txt).not.toContain('ury');
     expect(txt).not.toContain('kamra');
     expect(txt).not.toContain('huf');
+  });
+
+  it('prompts active POS Reason via ManagerApproval for cash_loan when policy requires_reason and forwards reason to record_cash_movement', async () => {
+    const { postSpy } = setupMockCalls({
+      loanRequiresAuth: true,
+      reasons: [{ code: 'CASH-DROP', description: 'Safe drop / cash pickup', requires_note: 0, applies_to: ['cash_pickup', 'cash_loan'] }],
+    });
+    useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Grace Cashier', roles: ['URY Cashier'] } });
+    usePOSStore.setState({
+      posProfile: { name: 'Main Till', enable_cash_movements: 1, currency: 'UGX' } as ReturnType<typeof usePOSStore.getState>['posProfile'],
+    });
+
+    render(<TillCashDialog open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Loan$/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Loan$/i }));
+    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '50000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Record Loan/i }));
+
+    expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    const reasonSelect = await screen.findByLabelText(/Reason/i);
+    fireEvent.change(reasonSelect, { target: { value: 'CASH-DROP' } });
+    for (const digit of ['2', '4', '6', '8']) {
+      fireEvent.click(await screen.findByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.override.authorise',
+        expect.objectContaining({
+          privilege: 'cash_loan',
+          claim: expect.objectContaining({ reason: 'Safe drop / cash pickup' }),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.till_controls.record_cash_movement',
+        expect.objectContaining({
+          movement_type: 'Loan',
+          amount: 50000,
+          reason: 'Safe drop / cash pickup',
+          approval_token: 'mgr-pin-token-123',
+        }),
+      ),
+    );
+  });
+
+  it('wraps free-text Paid Out reason under active catch-all POS Reason for #147 R2 validation', async () => {
+    const { postSpy } = setupMockCalls({
+      reasons: [
+        { code: 'PAIDOUT-SUPPLIES', description: 'Petty cash supplies purchase', requires_note: 1, applies_to: ['paid_out'] },
+        { code: 'OTHER', description: 'Other', requires_note: 1, applies_to: [] },
+      ],
+    });
+    useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Grace Cashier', roles: ['URY Cashier'] } });
+    usePOSStore.setState({
+      posProfile: { name: 'Main Till', enable_cash_movements: 1, currency: 'UGX', paid_in_enabled: true } as ReturnType<typeof usePOSStore.getState>['posProfile'],
+    });
+
+    render(<TillCashDialog open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Paid Out$/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Paid Out$/i }));
+    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '120000' } });
+    fireEvent.change(screen.getByLabelText(/^Reason/i), { target: { value: 'Ice delivery' } });
+    fireEvent.change(screen.getByLabelText(/Reference/i), { target: { value: 'RCP-881' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & Record Paid Out/i }));
+
+    expect(await screen.findByText(/Manager authorisation required/i)).toBeInTheDocument();
+    for (const digit of ['2', '4', '6', '8']) {
+      fireEvent.click(await screen.findByRole('button', { name: digit }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.override.authorise',
+        expect.objectContaining({
+          privilege: 'paid_out',
+          claim: expect.objectContaining({ reason: 'Other: Ice delivery' }),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.till_controls.record_cash_movement',
+        expect.objectContaining({
+          movement_type: 'Paid Out',
+          reason: 'Other: Ice delivery',
+          approval_token: 'mgr-pin-token-123',
+        }),
+      ),
+    );
   });
 });

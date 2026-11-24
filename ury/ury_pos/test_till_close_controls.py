@@ -882,6 +882,38 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
             client_order_id="offline-order-2",
         )
 
+    def test_close_other_till_forwards_reason_in_claim_for_r2_reason_validation(self):
+        # #147 R2 enforces _validate_reason on close_other_till: close_till_with_controls
+        # must accept close_other_reason and bind it into the claim verified by override.consume.
+        self.store.current_user = "cashier2@example.com"
+        reason = "Other: Shift handover after cashier left ill"
+        claim = {
+            "action": "close_other_till",
+            "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "opening_user": "cashier@example.com",
+            "reason": reason,
+        }
+        self.override.mint(
+            "tok-other-reason-1",
+            requester="cashier2@example.com",
+            approver="manager@example.com",
+            privilege="close_other_till",
+            pos_profile="Main Till",
+            reference_name="OPEN-MAIN-1",
+            claim=claim,
+        )
+        res = self.tc.close_till_with_controls(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 150000}],
+            close_other_approval_token="tok-other-reason-1",
+            close_other_reason=reason,
+        )
+        self.assertEqual(res["docstatus"], 1)
+        self.assertEqual(res["close_approver"], "manager@example.com")
+        self.assertIn("tok-other-reason-1", self.override.consumed)
+
 
 if __name__ == "__main__":
     unittest.main()
