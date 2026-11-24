@@ -30,6 +30,11 @@ from ury.brand import coded_message
 OVERTENDER_TO_TIP = "Post to Charged Tip"
 
 
+def _grand_total_precision(doc):
+	precision_fn = getattr(doc, "precision", None)
+	return precision_fn("grand_total") if callable(precision_fn) else None
+
+
 def before_validate(doc, method=None):
 	"""Runs before the native POS Invoice validate computes paid and change
 	amounts, so the native change can only ever come from cash received."""
@@ -87,7 +92,7 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 
 	kept = [row for row in taxes if row.account_head != account]
 	saved_pct = doc.get("additional_discount_percentage")
-	precision = doc.precision("grand_total")
+	precision = _grand_total_precision(doc)
 	reattached = False
 	doc._ury_tip_discount_guard = True
 	try:
@@ -126,7 +131,7 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 
 def sync_charged_tip(doc):
 	"""Make the bill's Tips Payable row match ``custom_charged_tip``."""
-	tip = flt(doc.get("custom_charged_tip"), doc.precision("grand_total"))
+	tip = flt(doc.get("custom_charged_tip"), _grand_total_precision(doc))
 	if tip < 0:
 		frappe.throw(coded_message("TIP-NEGATIVE", _("A tip cannot be negative.")))
 	account = _tips_account(doc)
@@ -155,7 +160,7 @@ def _adopt_return_tip_if_unset(doc):
 	existing = [row for row in doc.get("taxes") or [] if row.account_head == account]
 	if not existing:
 		return
-	precision = doc.precision("grand_total")
+	precision = _grand_total_precision(doc)
 	existing_total = flt(sum(flt(row.tax_amount) for row in existing), precision)
 	if existing_total < 0:
 		doc.custom_charged_tip = existing_total
@@ -164,7 +169,7 @@ def _adopt_return_tip_if_unset(doc):
 
 def _sync_return_tip(doc):
 	"""Keep the tip reversal visible on sales returns, and honour explicit zeroing on partial returns."""
-	precision = doc.precision("grand_total")
+	precision = _grand_total_precision(doc)
 	if doc.is_new() and doc.get("custom_charged_tip") is None:
 		_adopt_return_tip_if_unset(doc)
 	tip = flt(doc.get("custom_charged_tip"), precision)
@@ -239,7 +244,7 @@ def _check_tips_account(doc, account):
 
 def _non_cash_overtender(doc):
 	"""The part of the over-payment that cash received cannot return as change."""
-	precision = doc.precision("grand_total")
+	precision = _grand_total_precision(doc)
 	bill = flt(doc.get("rounded_total")) or flt(doc.get("grand_total"))
 	paid = cash = 0
 	non_cash_modes = []
