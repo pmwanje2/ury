@@ -41,6 +41,8 @@ export interface PosProfileLimited {
   room_charge_modes?: string[];
   /** True when the site/profile expects room charge but Company.custom_guest_ledger_clearing is unmapped. */
   room_charge_unconfigured?: boolean;
+  /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
+  efris_print_wait_seconds?: number;
 }
 
 export interface PosProfileLimitedResponse {
@@ -100,6 +102,7 @@ export interface PosProfileFull {
   custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
+  efris_print_wait_seconds?: number;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -132,6 +135,7 @@ export interface PosProfileCombined extends PosProfileFull {
   default_payment_mode?: string;
   room_charge_modes?: string[];
   room_charge_unconfigured?: boolean;
+  efris_print_wait_seconds?: number;
 }
 
 export interface Currency {
@@ -208,6 +212,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     default_payment_mode: limitedProfile.default_payment_mode ?? '',
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
+    efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
   };
 
   return combinedProfile;

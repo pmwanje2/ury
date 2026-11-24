@@ -406,11 +406,16 @@ describe('POS-PR-2 R2 hermetic checks', () => {
     expect(container.textContent).toContain('UGX 900');
   });
 
-  it('recovers cleanly after Step-2 print failure so the cashier can switch methods and submit', async () => {
-    vi.mocked(printOrder)
-      .mockRejectedValueOnce(new Error('Receipt printer offline'))
-      .mockResolvedValueOnce('qz');
-    const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { name: 'CHK-PRINT', status: 'Draft' } });
+  it('recovers cleanly after Step-2 submit failure so the cashier can switch methods and submit', async () => {
+    vi.mocked(printOrder).mockClear();
+    let submitAttempts = 0;
+    const post = vi.spyOn(call, 'post').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury.doctype.ury_order.ury_order.submit_order_invoice') {
+        submitAttempts += 1;
+        if (submitAttempts === 1) throw new Error('Temporary submit failure');
+      }
+      return { message: { name: 'CHK-PRINT', status: 'Draft' } };
+    });
     usePOSStore.setState({
       paymentModes: ['Cash', 'Mobile Money'],
       fetchPaymentModes: vi.fn(async () => {}),
@@ -442,7 +447,8 @@ describe('POS-PR-2 R2 hermetic checks', () => {
     );
 
     await act(async () => button(/^Pay /).click());
-    expect(container.textContent).toContain('Payment was not processed');
+    expect(container.textContent).toMatch(/Temporary submit failure|Payment failed/i);
+    expect(printOrder).not.toHaveBeenCalled();
 
     const inputs = container.querySelectorAll<HTMLInputElement>('input[type="number"][step="0.01"]');
     await act(async () => {
