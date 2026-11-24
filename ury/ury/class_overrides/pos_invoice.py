@@ -246,6 +246,13 @@ class CustomPOSInvoice(POSInvoice):
 			return
 		return super().set_taxes()
 
+	def set_missing_values(self, for_validate=False):
+		protected_rows = self._snapshot_authorized_pricing_rows()
+		res = super().set_missing_values(for_validate=for_validate)
+		if protected_rows:
+			self._restore_authorized_pricing_rows(protected_rows)
+		return res
+
 	def set_pos_fields(self, for_validate=False):
 		# Open-check rate stability (G40): ERPNext's set_pos_fields() unconditionally resets
 		# selling_price_list to POS Profile.selling_price_list on every validate(). Preserve ONLY
