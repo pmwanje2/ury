@@ -343,11 +343,68 @@ def validate_invoice(doc, method):
         doc.waiter = doc.modified_by
     if getattr(frappe.flags, "ury_bill_split", False):
         return
-    if getattr(frappe.flags, "ury_qty_reduction", False):
-        return
-    # A new document has no printed copy to compare against, and a return refunds a paid
-    # check; neither is an edit of a printed bill.
+    # A new document has no printed copy or sent baseline to compare against,
+    # and a return refunds a paid check; neither is an edit of a sent bill.
     if doc.is_new() or doc.get("is_return"):
+        return
+
+    # Mutation-level `void_sent_item` gate (Amendment 1 #7): catches direct REST,
+    # Desk, or ORM saves that reduce or remove already-sent (non-held) lines
+    # without a verified in-process approval or `may_perform` privilege.
+    if not getattr(frappe.flags, "in_patch", False) and not getattr(frappe.flags, "in_migrate", False):
+        company = doc.get("company")
+        pos_profile = doc.get("pos_profile")
+        if company and pos_profile:
+            from ury.ury_pos import override
+
+            if override.is_policy_active(company):
+                before_doc = doc.get_doc_before_save() or frappe.get_doc("POS Invoice", doc.name)
+                orig_sent = {}
+                orig_by_code = {}
+                for item in before_doc.get("items") or []:
+                    if int(item.get("ury_held") or 0) == 1:
+                        continue
+                    ident = _line_identity(item)
+                    orig_sent[ident] = {
+                        "qty": flt(item.qty),
+                        "rate": flt(item.get("rate") or 0),
+                        "item_code": item.item_code,
+                    }
+                    orig_by_code[item.item_code] = orig_by_code.get(item.item_code, 0.0) + flt(item.qty)
+
+                curr_sent = {}
+                curr_by_code = {}
+                for item in doc.get("items") or []:
+                    if int(item.get("ury_held") or 0) == 1:
+                        continue
+                    ident = _line_identity(item)
+                    curr_sent[ident] = flt(item.qty)
+                    curr_by_code[item.item_code] = curr_by_code.get(item.item_code, 0.0) + flt(item.qty)
+
+                voided_amount = 0.0
+                sent_reduced = False
+                for ident, info in orig_sent.items():
+                    new_qty = curr_sent.get(ident, 0.0)
+                    if new_qty < info["qty"]:
+                        sent_reduced = True
+                        voided_amount += info["rate"] * (info["qty"] - new_qty)
+                if not sent_reduced:
+                    for code, old_total in orig_by_code.items():
+                        if curr_by_code.get(code, 0.0) < old_total:
+                            sent_reduced = True
+                            break
+
+                if sent_reduced:
+                    if not override.has_verified_approval(doc, "void_sent_item") and not override.may_perform(
+                        frappe.session.user, pos_profile, "void_sent_item", amount=round(voided_amount, 4)
+                    ):
+                        frappe.throw(
+                            frappe._("Removing or reducing a sent item requires manager approval.")
+                            + " [POS-AUTH-REQUIRED]",
+                            frappe.PermissionError,
+                        )
+
+    if getattr(frappe.flags, "ury_qty_reduction", False):
         return
     remove_items = frappe.db.get_value("POS Profile", doc.pos_profile, "remove_items")
 
