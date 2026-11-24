@@ -4,6 +4,13 @@ from frappe import _
 from datetime import date, datetime, timedelta
 from frappe.utils import cint, nestedset, validate_phone_number
 
+try:
+    from frappe.utils import flt
+except ImportError:
+    def flt(value, precision=None):
+        num = float(value or 0)
+        return round(num, precision) if precision is not None else num
+
 from urllib.parse import quote
 
 from ury.brand import coded_message
@@ -157,6 +164,27 @@ def resolve_restaurant_menu(
         except Exception:
             release_field, released = (None, None)
 
+    item_codes = [item.item for item in menu_items if item.item]
+    open_item_flags = {}
+    if item_codes:
+        item_fields = ["name", "image"]
+        has_col = getattr(getattr(frappe, "db", None), "has_column", None)
+        has_open_col = not callable(has_col) or bool(has_col("Item", "custom_is_open_priced"))
+        has_zero_col = not callable(has_col) or bool(has_col("Item", "custom_allow_zero_price"))
+        if has_open_col:
+            item_fields.append("custom_is_open_priced")
+        if has_zero_col:
+            item_fields.append("custom_allow_zero_price")
+        try:
+            for row in frappe.get_all(
+                "Item",
+                filters={"name": ["in", item_codes]},
+                fields=item_fields,
+            ):
+                open_item_flags[row.name] = row
+        except Exception:
+            open_item_flags = {}
+
     menu_items_with_image = []
     for item in menu_items:
         resolved_rate = item.rate
@@ -180,7 +208,17 @@ def resolve_restaurant_menu(
                 "rate": resolved_rate,
                 "special_dish": item.special_dish,
                 "disabled": item.disabled,
-                "item_image": frappe.db.get_value("Item", item.item, "image"),
+                "item_image": (
+                    open_item_flags[item.item].get("image")
+                    if item.item in open_item_flags
+                    else frappe.db.get_value("Item", item.item, "image")
+                ),
+                "custom_is_open_priced": cint(
+                    open_item_flags.get(item.item, {}).get("custom_is_open_priced")
+                ),
+                "custom_allow_zero_price": cint(
+                    open_item_flags.get(item.item, {}).get("custom_allow_zero_price")
+                ),
                 "course": item.course,
                 "course_label": _(item.course) if item.course else item.course,
                 "course_priority": course_priority.get(item.course),
@@ -407,14 +445,28 @@ def getRoom():
 
 @frappe.whitelist()
 def getModeOfPayment():
+    from ury.ury_pos.offline_tenders import profile_offline_payment_modes
+
     posDetails = getPosProfile()
     posProfile = posDetails["pos_profile"]
     posProfiles = frappe.get_doc("POS Profile", posProfile)
     mode_of_payments = posProfiles.payments
+    offline_by_mode = {
+        row["mode_of_payment"]: row
+        for row in profile_offline_payment_modes(
+            posProfiles, posDetails.get("room_charge_modes"), _frappe=frappe
+        )
+    }
     modeOfPayments = []
     for mop in mode_of_payments:
+        meta = offline_by_mode.get(mop.mode_of_payment, {})
         modeOfPayments.append(
-            {"mode_of_payment": mop.mode_of_payment, "opening_amount": float(0)}
+            {
+                "mode_of_payment": mop.mode_of_payment,
+                "opening_amount": float(0),
+                "allow_offline": bool(meta.get("allow_offline")),
+                "requires_reference": bool(meta.get("requires_reference")),
+            }
         )
     return modeOfPayments
 
@@ -567,6 +619,7 @@ def get_split_group(invoice):
         "name",
         "ury_client_order_id",
         "currency",
+        "conversion_rate",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",
@@ -761,7 +814,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -784,7 +837,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -806,7 +859,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -826,7 +879,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -888,6 +941,7 @@ def searchPosInvoice(query,status):
         fields=[
             "name",
             "currency",
+            "conversion_rate",
             "customer",
             "customer_name",
             "no_of_pax",
@@ -1090,6 +1144,12 @@ def getPosProfile():
     room_charge_modes, room_charge_unconfigured = _room_charge_config(
         payment_mode_accounts, company, room_lookup_method
     )
+    from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
+
+    offline_payment_modes = profile_offline_payment_modes(
+        pos_profiles, room_charge_modes, _frappe=frappe
+    )
+    till_offline_limit = offline_tender_limit(pos_profiles)
 
     invoice_details = {
         "pos_profile": pos_profile_name,
@@ -1128,12 +1188,29 @@ def getPosProfile():
                 "overtender_rule": frappe.db.get_value(
                     "Mode of Payment", payment.mode_of_payment, "custom_overtender_rule"
                 ) or "Refuse",
+                "halo_max_amount": frappe.utils.flt(
+                    frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "custom_halo_max_amount")
+                ),
             }
             for payment in (pos_profiles.get("payments") or [])
         },
         "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
         "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
+        "over_short_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_tolerance")),
+        "cash_pull_threshold": frappe.utils.flt(pos_profiles.get("custom_cash_pull_threshold")),
+        "paid_out_approval_threshold": (
+            None
+            if pos_profiles.get("custom_paid_out_approval_threshold") is None
+            or (
+                isinstance(pos_profiles.get("custom_paid_out_approval_threshold"), str)
+                and not pos_profiles.get("custom_paid_out_approval_threshold").strip()
+            )
+            else frappe.utils.flt(pos_profiles.get("custom_paid_out_approval_threshold"))
+        ),
+        "paid_in_approval_threshold": frappe.utils.flt(pos_profiles.get("custom_paid_in_approval_threshold")),
+        "paid_in_enabled": bool(pos_profiles.get("custom_paid_in_account")),
+        "cash_drawer_id": (pos_profiles.get("custom_cash_drawer_id") or "").strip(),
         # the till's tenders come from configuration, never literals
         "default_payment_mode": next(
             (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),
@@ -1143,6 +1220,8 @@ def getPosProfile():
         "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": room_lookup_method,
+        "offline_tender_limit": till_offline_limit,
+        "offline_payment_modes": offline_payment_modes,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **_drawer_kick_profile_fields(pos_profiles),
         **get_default_customer_config(pos_profiles),
@@ -1194,6 +1273,8 @@ def getPosProfileFull(pos_profile):
     if profile.branch != branch_name:
         frappe.throw(frappe._("Not permitted to view this POS Profile"), frappe.PermissionError)
 
+    from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
+
     return {
         "name": profile.name,
         "owner": profile.owner,
@@ -1228,10 +1309,40 @@ def getPosProfileFull(pos_profile):
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
+        "offline_tender_limit": offline_tender_limit(profile),
+        "offline_payment_modes": profile_offline_payment_modes(profile, _frappe=frappe),
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # native ERPNext open-discount switch (default 0); gates Open amount/percent keypad
         "allow_discount_change": 1 if profile.get("allow_discount_change") else 0,
+        "allow_rate_change": 1 if profile.get("allow_rate_change") else 0,
+        "custom_max_free_bill_prints": cint(profile.get("custom_max_free_bill_prints")) if profile.get("custom_max_free_bill_prints") is not None else 1,
+        "custom_max_free_closed_copies": cint(profile.get("custom_max_free_closed_copies") or 0),
+        "custom_service_charge_rate": flt(profile.get("custom_service_charge_rate") or 0),
+        "custom_service_charge_account": profile.get("custom_service_charge_account") or "",
+        "custom_service_charge_min_pax": cint(profile.get("custom_service_charge_min_pax") or 0),
+        "custom_service_charge_order_types": profile.get("custom_service_charge_order_types") or "",
+        "custom_service_charge_taxable": 1 if profile.get("custom_service_charge_taxable") else 0,
+        "custom_service_charge_description": profile.get("custom_service_charge_description") or "",
+        "custom_service_charge_rules": [
+            {
+                "order_type": row.get("order_type") or "",
+                "enabled": cint(row.get("enabled") if row.get("enabled") is not None else 1),
+                "charge_mode": row.get("charge_mode") or "Percentage",
+                "rate": flt(row.get("rate") or 0),
+                "fixed_amount": flt(row.get("fixed_amount") or 0),
+                "min_amount_floor": flt(row.get("min_amount_floor") or 0),
+                "min_pax": cint(row.get("min_pax") or 0),
+                "calculation_basis": row.get("calculation_basis") or "Post-Discount Subtotal",
+                "taxable": cint(row.get("taxable") or 0),
+                "account_head": row.get("account_head") or "",
+                "description": row.get("description") or "",
+                "efris_item_code": row.get("efris_item_code") or "",
+            }
+            for row in (profile.get("custom_service_charge_rules") or [])
+        ],
+        "custom_tax_exempt_category": profile.get("custom_tax_exempt_category") or "",
+        "custom_tips_payable_account": profile.get("custom_tips_payable_account") or "",
         # one configured void reason per line; None on sites without the field
         "custom_void_reasons": profile.get("custom_void_reasons"),
         "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
@@ -1283,13 +1394,28 @@ def getPosInvoiceItems(invoice):
             }
         )
     taxDetail = orderdItems.taxes
+    has_discount = bool(
+        flt(getattr(orderdItems, "discount_amount", 0))
+        or flt(getattr(orderdItems, "additional_discount_percentage", 0))
+    )
     for tax in taxDetail:
         description = tax.description
-        rate = tax.tax_amount
+        get_t = tax.get if callable(getattr(tax, "get", None)) else (lambda k, d=None: getattr(tax, k, d))
+        raw_amt = flt(get_t("tax_amount"))
+        after_amt = get_t("tax_amount_after_discount_amount")
+        if after_amt is not None and (flt(after_amt) != 0 or has_discount or raw_amt == 0):
+            rate = flt(after_amt)
+        else:
+            rate = raw_amt
         taxDetails.append(
             {
                 "description": description,
                 "rate": rate,
+                "tax_amount": flt(rate),
+                "tax_rate": flt(get_t("rate") or 0),
+                "charge_type": get_t("charge_type") or "",
+                "custom_pos_charge_kind": get_t("custom_pos_charge_kind") or "",
+                "account_head": get_t("account_head") or "",
             }
         )
     paymentDetails = []
@@ -2842,13 +2968,25 @@ def _merge_sources(secondary_invoice):
 
 @frappe.whitelist()
 
-def merge_bills(primary_invoice, secondary_invoice):
+def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=None, reason_note=None):
     """Add Check (Oracle Simphony Add/Transfer Check): move every line of the selected open
     check(s) onto the primary check, which stays the guest's one POS Invoice.
 
     `secondary_invoice` is one check name or a JSON list of names. The checks must be drafts of
-    one branch and one order type that the caller may write.
+    one branch and one order type that the caller may write. Governed by `merge_checks` privilege
+    / Manager PIN in place with deterministic sorted `FOR UPDATE` locking.
     """
+    from ury.ury_pos.privileged_auth import (
+        DEFAULT_MANAGER_ROLES,
+        _is_valid_str,
+        _table_exists,
+        assert_not_efris_fiscalised,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        is_company_policy_active,
+    )
+
+    assert_not_offline_replay()
 
     try:
 
@@ -2857,8 +2995,12 @@ def merge_bills(primary_invoice, secondary_invoice):
         if not secondaries or primary_invoice in secondaries:
             frappe.throw("Cannot merge an invoice with itself.")
 
-        primary_doc = frappe.get_doc("POS Invoice", primary_invoice)
-        secondary_docs = [frappe.get_doc("POS Invoice", name) for name in secondaries]
+        # Lock all participating checks in deterministic sorted order to prevent deadlocks / races.
+        locked_docs = {}
+        for name in sorted([primary_invoice, *secondaries]):
+            locked_docs[name] = frappe.get_doc("POS Invoice", name, for_update=True)
+        primary_doc = locked_docs[primary_invoice]
+        secondary_docs = [locked_docs[name] for name in secondaries]
 
         # Authorization: caller must have write permission on every invoice
         if not frappe.has_permission("POS Invoice", "write", doc=primary_doc):
@@ -2867,6 +3009,8 @@ def merge_bills(primary_invoice, secondary_invoice):
                 frappe.PermissionError,
             )
 
+        assert_not_efris_fiscalised(primary_doc)
+
         for secondary_doc in secondary_docs:
 
             if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
@@ -2874,6 +3018,8 @@ def merge_bills(primary_invoice, secondary_invoice):
                     "You do not have permission to merge the selected bill.",
                     frappe.PermissionError,
                 )
+
+            assert_not_efris_fiscalised(secondary_doc)
 
             # Prevent cross-branch merging
             if primary_doc.branch != secondary_doc.branch:
@@ -2899,6 +3045,53 @@ def merge_bills(primary_invoice, secondary_invoice):
             if primary_doc.order_type != secondary_doc.order_type:
                 frappe.throw(_("Only bills of the same order type can be merged."))
 
+        pos_profile_name = getattr(primary_doc, "pos_profile", None)
+        raw_company = getattr(primary_doc, "company", None)
+        company = raw_company if _is_valid_str(raw_company) else None
+        policy_active = is_company_policy_active(company)
+
+        # Determine legacy fallback when no POS Privilege Rule rows exist yet:
+        # keep same-operator / elevated / billing merges usable, while cross-waiter
+        # merges by an ordinary floor captain require a manager PIN.
+        user = getattr(getattr(frappe, "session", None), "user", None)
+        other_waiters = [
+            getattr(d, "waiter", None)
+            for d in [primary_doc, *secondary_docs]
+            if getattr(d, "waiter", None) and getattr(d, "waiter", None) != user
+        ]
+        user_roles = set(frappe.get_roles() or [])
+        elevated_or_billing = bool(user_roles & (DEFAULT_MANAGER_ROLES | {"System Manager", "URY Cashier"}))
+        if _is_valid_str(pos_profile_name) and _table_exists("POS Profile"):
+            try:
+                profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+                transfer_roles = {r.role for r in (getattr(profile_doc, "transfer_role_permissions", None) or [])}
+                billing_roles = {r.role for r in (getattr(profile_doc, "role_allowed_for_billing", None) or [])}
+                if user_roles & (transfer_roles | billing_roles):
+                    elevated_or_billing = True
+            except Exception:
+                pass
+        legacy_allowed = (not other_waiters) or elevated_or_billing or user == "Administrator"
+
+        if policy_active or approval_token or not legacy_allowed or _table_exists("POS Authorisation Log"):
+            authorize_or_perform(
+                privilege="merge_checks",
+                pos_profile=pos_profile_name if _is_valid_str(pos_profile_name) else None,
+                company=company,
+                skip_profile_company_lookup=True,
+                reference_doctype="POS Invoice",
+                reference_name=primary_doc.name,
+                claim={
+                    "action": "merge_bills",
+                    "primary_invoice": primary_doc.name,
+                    "secondary_invoices": sorted(secondaries),
+                },
+                token=approval_token,
+                reason=reason,
+                reason_note=reason_note,
+                require_reason=None if policy_active else False,
+                allow_fallback_predicate=legacy_allowed,
+            )
+
         from ury.ury.doctype.ury_order.ury_order import consolidate_checks
 
         consolidate_checks(primary_doc, secondary_docs)
@@ -2918,6 +3111,25 @@ def merge_bills(primary_invoice, secondary_invoice):
         frappe.db.rollback()
 
         raise
+
+
+    except frappe.ValidationError as e:
+
+        frappe.db.rollback()
+
+        msg = str(e)
+        if any(code in msg for code in ("POS-AUTH-", "POS-REASON-", "POS-OFFLINE-", "EFRIS_FISCALISED")):
+            raise
+
+        frappe.log_error(
+            title="Bill Merge Error",
+            message=frappe.get_traceback(),
+        )
+
+        return {
+            "status": "error",
+            "message": msg,
+        }
 
 
     except Exception as e:
@@ -3321,13 +3533,31 @@ def _mark_pending_fiscal_reprint_dispatched(invoice: str):
 
 
 @frappe.whitelist(methods=['POST'])
-def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = None, delivery: str | None = None):
+def print_bill_copy(
+    invoice: str,
+    idempotency_key: str,
+    printer: str | None = None,
+    delivery: str | None = None,
+    approval_token: str | None = None,
+    reason: str | None = None,
+    reason_note: str | None = None,
+):
     from hashlib import sha256
 
     from ury.ury.api.ury_print import _bill_printers
     from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
     from ury.ury.printing.file_store import save_job
     from ury.ury.printing.service import submit_and_monitor_print_job
+    from ury.ury_pos.privileged_auth import (
+        DEFAULT_MANAGER_ROLES,
+        _doc_get,
+        _is_valid_str,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        is_company_policy_active,
+    )
+
+    assert_not_offline_replay()
 
     if not idempotency_key or len(idempotency_key) > 128:
         frappe.throw('A copy request key is required (maximum 128 characters).')
@@ -3378,6 +3608,7 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
                 attempt = previous.attempt + 1 if previous else 1
                 if previous:
                     number = previous.copy_number
+                    prior_copies = max(0, cint(number) - 1)
                 else:
                     # Locking read prevents MariaDB 11.8 innodb_snapshot_isolation stale-count races.
                     latest_copy = frappe.db.get_value(
@@ -3387,7 +3618,45 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
                         order_by='copy_number desc',
                         for_update=True,
                     )
-                    number = cint(latest_copy) + 1
+                    prior_copies = cint(latest_copy)
+                    number = prior_copies + 1
+
+                # Enforce free closed-copy cap (`custom_max_free_closed_copies`, default 0 on configured profiles)
+                # and `reprint_bill` privilege / Manager PIN + reason on every manual copy beyond the free cap.
+                # Automatic EFRIS post-fiscalisation dispatches (`efris-auto-<invoice>`) are exempt.
+                if not previous and not is_auto_fiscal:
+                    raw_profile = _doc_get(doc, 'pos_profile')
+                    raw_max_free = (
+                        frappe.db.get_value('POS Profile', raw_profile, 'custom_max_free_closed_copies')
+                        if _is_valid_str(raw_profile)
+                        else None
+                    )
+                    raw_company = _doc_get(doc, 'company')
+                    company = raw_company if _is_valid_str(raw_company) else None
+                    policy_active = is_company_policy_active(company)
+
+                    if raw_max_free is not None or policy_active or approval_token:
+                        max_free = max(0, cint(raw_max_free)) if raw_max_free is not None else 0
+                        if prior_copies >= max_free:
+                            authorize_or_perform(
+                                privilege='reprint_bill',
+                                pos_profile=doc.pos_profile,
+                                company=company,
+                                skip_profile_company_lookup=True,
+                                reference_doctype='POS Invoice',
+                                reference_name=invoice,
+                                claim={
+                                    'action': 'print_bill_copy',
+                                    'invoice': invoice,
+                                    'copy_number': number,
+                                },
+                                token=approval_token,
+                                reason=reason,
+                                reason_note=reason_note,
+                                require_reason=True,
+                                fallback_roles=DEFAULT_MANAGER_ROLES,
+                            )
+
                 job_id = f'COPY-{key}-{attempt}'
                 copy_slot = f'{invoice}:{number}:{attempt}'
 
@@ -3435,7 +3704,6 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
 
     if transport in ('browser', 'qz'):
         return _copy_result(record, doc=doc, delivery=transport)
-
     doc.copy_timestamp = frappe.utils.now()
     doc.copy_number = number
     doc._ury_copy_render = _COPY_RENDER_MARKER
@@ -3598,11 +3866,29 @@ def credit_accounts(pos_profile: str, query: str):
         fields=['name','customer_name','credit_limits.credit_limit as limit_amount'],
         order_by='customer_name asc, name asc', page_length=20)
     currency = frappe.get_cached_value('Company', profile.company, 'default_currency')
+    profile_currency = (profile.get('currency') or currency or '').strip()
+    conversion_rate = 1.0
+    if profile_currency and currency and profile_currency.upper() != str(currency).strip().upper():
+        try:
+            from erpnext.setup.utils import get_exchange_rate
+
+            conversion_rate = frappe.utils.flt(get_exchange_rate(profile_currency, currency)) or 0.0
+        except Exception:
+            conversion_rate = 0.0
+        if conversion_rate <= 0:
+            conversion_rate = frappe.utils.flt(
+                frappe.db.get_value(
+                    'Currency Exchange',
+                    {'from_currency': profile_currency, 'to_currency': currency},
+                    'exchange_rate',
+                )
+            ) or 0.0
     result = []
     for row in accounts:
         outstanding = balance(row.name, profile.company)
         result.append(dict(name=row.name, customer_name=row.customer_name, balance=outstanding,
-                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding, currency=currency))
+                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding,
+                           currency=currency, conversion_rate=conversion_rate))
     return result
 
 

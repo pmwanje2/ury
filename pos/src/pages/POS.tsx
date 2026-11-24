@@ -1,10 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { t } from '../i18n';
-import { Star, TrendingUp } from 'lucide-react';
+import { Sparkles, Star, TrendingUp } from 'lucide-react';
 import Sidebar from '../components/Sidebar';
 import OrderPanel from '../components/OrderPanel';
 import ProductDialog from '../components/ProductDialog';
 import MenuList from '../components/MenuList';
+import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
@@ -14,6 +15,9 @@ import { useRootStore } from '../store/root-store';
 import { availabilityPermissions, type AvailabilityChange } from '@ury/core/availability';
 import { setItemAvailability } from '../lib/availability-api';
 import { SoldOutSheet } from '../components/SoldOutSheet';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
+import { showToast } from '@ury/ui';
 
 const EMPTY_MENU: Array<{ item: string }> = [];
 
@@ -29,17 +33,72 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
     isInitializing,
     menuItems,
     posProfile,
+    orderId,
+    selectedOrderType,
+    selectedTable,
+    selectedCustomer,
+    noOfPax,
+    currency,
+    loadTableOrder,
   } = usePOSStore();
+  const openMenuItems = useMemo(
+    () =>
+      (menuItems ?? [])
+        .filter(
+          (item) =>
+            Number((item as { custom_is_open_priced?: number }).custom_is_open_priced || 0) === 1 ||
+            Number((item as { custom_allow_zero_price?: number }).custom_allow_zero_price || 0) === 1,
+        )
+        .map((item) => ({
+          item: item.item || item.id,
+          item_name: item.item_name || item.name,
+          rate: item.price,
+        })),
+    [menuItems],
+  );
+  const [openItemDialog, setOpenItemDialog] = useState<{
+    itemCode: string;
+    itemName: string;
+  } | null>(null);
   const { availabilityMap, availabilityStale, refetchAll } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
   const user = useRootStore(state => state.user);
-  const { canMark, canRestore } = availabilityPermissions(user?.roles);
+  const { canMark, canRestore, canRequestRestoreWithPin } = availabilityPermissions(user?.roles);
   const branch = posProfile?.branch;
   const company = posProfile?.company;
-  const itemAvailabilityActions = canMark && branch ? (item: string) => ({
-    canRestore,
-    update: async (change: AvailabilityChange) => {
-      await setItemAvailability(branch, item, change);
+  const [pending86Approval, setPending86Approval] = useState<{
+    branch: string;
+    item: string;
+    change: AvailabilityChange;
+  } | null>(null);
+
+  const runAvailabilityUpdate = async (
+    targetBranch: string,
+    item: string,
+    change: AvailabilityChange,
+    approval?: ManagerApprovalResult,
+  ) => {
+    try {
+      await setItemAvailability(targetBranch, item, change, {
+        approvalToken: approval?.token,
+        reason: approval?.reason,
+        reasonNote: approval?.note,
+        posProfile: posProfile?.name,
+      });
       await refetchAll();
+    } catch (err) {
+      if (!approval?.token && isAuthRequiredError(err)) {
+        setPending86Approval({ branch: targetBranch, item, change });
+        return;
+      }
+      showToast.error(overrideErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const itemAvailabilityActions = canMark && branch ? (item: string) => ({
+    canRestore: canRestore || canRequestRestoreWithPin,
+    update: async (change: AvailabilityChange) => {
+      await runAvailabilityUpdate(branch, item, change);
     },
   }) : undefined;
   
@@ -49,7 +108,17 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
 
   const handleItemClick = (item: any) => {
     if (isMenuInteractionDisabled() || item?.unavailable_daypart) return;
-    
+
+    if (
+      Number(item?.custom_is_open_priced || 0) === 1 ||
+      (Number(item?.custom_allow_zero_price || 0) === 1 && Number(item?.price || 0) === 0)
+    ) {
+      setOpenItemDialog({
+        itemCode: item.item || item.id,
+        itemName: item.item_name || item.name || item.item,
+      });
+      return;
+    }
     clickCountRef.current += 1;
     
     if (clickTimerRef.current) {
@@ -149,6 +218,26 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
               
               <QuickFilterButton filter="all" icon={Star} label={t('common.all')} />
               <QuickFilterButton filter="special" icon={TrendingUp} label={t('menu.special_items')} />
+              {openMenuItems.length > 0 && (
+                <button
+                  type="button"
+                  data-testid="register-open-item-btn"
+                  disabled={isMenuInteractionDisabled()}
+                  onClick={() =>
+                    setOpenItemDialog({
+                      itemCode: openMenuItems[0].item,
+                      itemName: openMenuItems[0].item_name,
+                    })
+                  }
+                  className={cn(
+                    'flex min-h-11 shrink-0 items-center gap-2 rounded-full bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-800 border border-amber-200 transition-colors hover:bg-amber-100',
+                    isMenuInteractionDisabled() && 'opacity-50 cursor-not-allowed pointer-events-none',
+                  )}
+                >
+                  <Sparkles className="w-4 h-4" />
+                  {t('privileged_actions.open_item')}
+                </button>
+              )}
               {branch && company && itemAvailabilityActions && <SoldOutSheet key={branch}
                 branch={branch} company={company} availability={availabilityMap} actions={itemAvailabilityActions} />}
             </div>
@@ -160,6 +249,56 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
       </div>
       <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
+      {openItemDialog && posProfile && (
+        <PriceOverrideDialog
+          open
+          onOpenChange={(next) => !next && setOpenItemDialog(null)}
+          mode="open_item"
+          posProfile={posProfile.name}
+          invoiceName={orderId || ''}
+          itemCode={openItemDialog.itemCode}
+          itemName={openItemDialog.itemName}
+          currentRate={0}
+          currency={currency || posProfile.currency || 'UGX'}
+          openItems={openMenuItems}
+          orderType={selectedOrderType}
+          table={selectedTable}
+          customer={selectedCustomer?.id || null}
+          noOfPax={noOfPax}
+          onSuccess={async () => {
+            if (selectedTable && typeof loadTableOrder === 'function') {
+              await loadTableOrder(selectedTable);
+            }
+          }}
+        />
+      )}
+      {pending86Approval && posProfile && (
+        <ManagerApproval
+          open
+          posProfile={posProfile.name}
+          privilege="item_86_restore"
+          title={t('privileged_actions.restore_86')}
+          summaryLines={[
+            `${pending86Approval.item} (${pending86Approval.branch})`,
+            pending86Approval.change.status || String(pending86Approval.change.count ?? pending86Approval.change.reset_policy ?? ''),
+          ]}
+          reference={{ doctype: 'URY Item Availability', name: `${pending86Approval.branch}:${pending86Approval.item}` }}
+          claim={{
+            action: 'item_86_restore',
+            branch: pending86Approval.branch,
+            item_code: pending86Approval.item,
+            status: pending86Approval.change.status || '',
+            count: pending86Approval.change.count ?? '',
+            reset_policy: pending86Approval.change.reset_policy || '',
+          }}
+          onApproved={(res) => {
+            const pending = pending86Approval;
+            setPending86Approval(null);
+            void runAvailabilityUpdate(pending.branch, pending.item, pending.change, res);
+          }}
+          onCancel={() => setPending86Approval(null)}
+        />
+      )}
     </div>
   );
 }

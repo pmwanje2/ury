@@ -17,6 +17,18 @@ except ImportError:  # pragma: no cover - partial frappe.utils stubs in unrelate
 
         return _validate_pos_discount(doc, method)
 
+try:
+    from ury.ury_pos.pricing_actions import (
+        prorate_return_service_charge,
+        sync_service_charge_on_before_validate,
+    )
+except ImportError:  # pragma: no cover - partial frappe stubs in unrelated unit tests
+    def prorate_return_service_charge(doc, *, recalc=True):
+        return None
+
+    def sync_service_charge_on_before_validate(doc):
+        return None
+
 
 def before_insert(doc, method):
     pos_invoice_naming(doc, method)
@@ -27,6 +39,10 @@ def before_insert(doc, method):
 def before_validate(doc, method=None):
     prorate_return_discount(doc, method)
     enforce_authoritative_outlet_time(doc, method)
+    if getattr(doc, "is_return", 0) or (callable(getattr(doc, "get", None)) and doc.get("is_return")):
+        prorate_return_service_charge(doc)
+    else:
+        sync_service_charge_on_before_validate(doc)
 
 
 def validate(doc, method):
@@ -34,16 +50,21 @@ def validate(doc, method):
     validate_customer(doc, method)
     validate_price_list(doc, method)
     validate_server_only_tender_received(doc, method)
+    validate_server_only_override_fields(doc, method)
     validate_pos_discount(doc, method)
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)
+    from ury.ury_pos.pricing_actions import validate_privileged_pricing_mutations
+    validate_privileged_pricing_mutations(doc, method)
 
 
 def before_submit(doc, method):
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
     validate_confirmed_phone_payments(doc, method)
+    validate_offline_tenders_before_submit(doc, method)
+    validate_credit_and_room_charge_before_submit(doc, method)
     ro_reload_submit(doc, method)
     set_commission_attribution(doc, method)
     apply_disposable_items(doc, method)
@@ -664,6 +685,123 @@ def validate_server_only_tender_received(doc, method=None):
                 frappe._("Cannot drop, reduce, or alter a tender already received on this check."),
                 frappe.ValidationError,
             )
+
+
+def validate_server_only_override_fields(doc, method=None):
+    """Override attribution fields on POS Invoice may only be written by verified server flows."""
+    if getattr(frappe.flags, "pos_server_override_fields", False):
+        return
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if getattr(getattr(frappe, "session", None), "user", None) == "Administrator":
+        return
+
+    fields = ("custom_room_charge_stay", "custom_override_approver", "custom_override_reason")
+    if doc.is_new():
+        if any(doc.get(f) for f in fields):
+            frappe.throw(
+                frappe._("Override approval details can only be recorded by verified manager approval."),
+                frappe.PermissionError,
+            )
+        return
+
+    before = doc.get_doc_before_save()
+    if before is None:
+        return
+    for f in fields:
+        if (doc.get(f) or "") != (before.get(f) or ""):
+            frappe.throw(
+                frappe._("Override approval details can only be recorded by verified manager approval."),
+                frappe.PermissionError,
+            )
+
+
+def validate_offline_tenders_before_submit(doc, method=None):
+    """Enforce live Mode of Payment offline flags and per-till offline limit on submit."""
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if not doc.get("ury_offline_captured_at") or doc.get("is_return"):
+        return
+    pos_profile = doc.get("pos_profile")
+    if not pos_profile:
+        return
+    from ury.ury_pos import offline_tenders
+
+    profile = offline_tenders.frappe.get_cached_doc("POS Profile", pos_profile)
+    offline_tenders.enforce_offline_tender_replay(
+        doc,
+        profile,
+        doc.get("payments") or [],
+        offline_replay=1,
+    )
+
+
+def validate_credit_and_room_charge_before_submit(doc, method=None):
+    """Mutation-level before_submit guard for Desk / REST submits of room charges and on-account checks."""
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if doc.get("is_return") or not doc.get("pos_profile"):
+        return
+
+    profile = frappe.get_cached_doc("POS Profile", doc.pos_profile)
+    flags = getattr(doc, "flags", None)
+
+    if not getattr(flags, "pos_verified_room_charge", False):
+        from ury.ury_pos import room_charge
+
+        room_charge.enforce_room_charge_settlement(
+            doc,
+            profile,
+            doc.get("payments") or [],
+        )
+
+    if not getattr(flags, "pos_verified_on_account_checked", False) and profile.get("allow_partial_payment"):
+        precision = doc.precision("outstanding_amount") if callable(getattr(doc, "precision", None)) else 2
+        if not isinstance(precision, int) or isinstance(precision, bool):
+            precision = 2
+        remaining = flt(doc.get("rounded_total") or doc.get("grand_total")) - sum(
+            flt(r.get("amount")) for r in (doc.get("payments") or [])
+        )
+        if flt(remaining, precision) > 0:
+            from ury.ury_pos import credit
+
+            customer = doc.get("customer")
+            if not customer or not profile.get("customer") or customer in credit.default_accounts(profile):
+                frappe.throw(
+                    "[POS-CREDIT-001] " + frappe._("Select a named customer account."),
+                    frappe.ValidationError,
+                )
+            limit = credit.credit_limit(customer, doc.company)
+            if limit <= 0:
+                frappe.throw(
+                    "[POS-CREDIT-003] " + frappe._("This customer has no positive credit limit for the company."),
+                    frappe.ValidationError,
+                )
+            rate = flt(doc.get("conversion_rate") or 1)
+            proposed = remaining * rate
+            projected = credit.balance(customer, doc.company, doc.name, current=True) + proposed
+            from ury.ury_pos.offline_tenders import currency_precision
+
+            raw_company_currency = frappe.get_cached_value("Company", doc.company, "default_currency")
+            acct_currency = (
+                raw_company_currency.strip()
+                if isinstance(raw_company_currency, str) and raw_company_currency.strip()
+                else (doc.get("currency") or profile.get("currency") or "")
+            )
+            claim_prec = currency_precision(acct_currency)
+            base_precision = doc.precision("base_grand_total") if callable(getattr(doc, "precision", None)) else 2
+            if not isinstance(base_precision, int) or isinstance(base_precision, bool):
+                base_precision = 2
+            eff_precision = max(base_precision, claim_prec)
+            if flt(projected, eff_precision) > flt(limit, eff_precision):
+                approval_key = (customer, round(flt(proposed), claim_prec), round(flt(limit), claim_prec))
+                if getattr(flags, "pos_verified_on_account_override", None) != approval_key:
+                    frappe.throw(
+                        "[POS-CREDIT-004] "
+                        + frappe._("The charge exceeds the available credit.")
+                        + " [POS-AUTH-REQUIRED]",
+                        frappe.ValidationError,
+                    )
 
 
 def validate_confirmed_phone_payments(doc, method=None):

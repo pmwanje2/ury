@@ -31,6 +31,8 @@ export interface MenuItem {
   daypart_label?: string | null;
   promo_rate?: number | null;
   promo_label?: string | null;
+  custom_is_open_priced?: number;
+  custom_allow_zero_price?: number;
 }
 
 export interface MenuResponsePayload {

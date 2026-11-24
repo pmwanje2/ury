@@ -8,6 +8,7 @@ import { CustomerSelect } from './CustomerSelect';
 import ProductDialog from './ProductDialog';
 import OrderTypeSelect from './OrderTypeSelect';
 import CommentDialog from './CommentDialog';
+import CheckPrivilegedDialog from './CheckPrivilegedDialog';
 import { Button, Badge } from '@ury/ui';
 import { getOrderKotStatus, type KotItemState } from '../lib/kot-status-api';
 import { Spinner } from '@ury/ui';
@@ -27,6 +28,11 @@ import { DINE_IN, orderTypeLabel } from '../data/order-types';
 import { t } from '../i18n';
 import { cartQtyForItem, remainingHeadroom } from '../lib/cart-capacity';
 import type { MenuAvailability } from '../lib/availability-api';
+import {
+  estimateServiceCharge,
+  resolveActiveServiceChargeRule,
+  roundCurrency,
+} from '../lib/service-charge';
 
 const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'warning' | 'info' | 'success' }> = {
   QUEUED: { label: 'order.kot_sent', variant: 'cancelled' },
@@ -78,11 +84,15 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const [editingItem, setEditingItem] = useState<typeof activeOrders[0] | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
+  const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
+  const [showServiceChargeDialog, setShowServiceChargeDialog] = useState(false);
   const [pendingSyncVoidApproval, setPendingSyncVoidApproval] = useState<{
+    privilege: 'void_sent_item' | 'guest_count_change' | 'order_type_change' | 'pickup_other_check';
     orderData: SyncOrderRequest;
     amount: number;
     linesCount: number;
     claim: Record<string, unknown>;
+    summaryLines: string[];
   } | null>(null);
 
   // Read-only kitchen state per item_code for a running (saved) order.
@@ -115,8 +125,23 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     (sum, item) => sum + calculateItemTotal(item),
     0
   );
+  const activeServiceChargeRule = resolveActiveServiceChargeRule(posProfile, selectedOrderType, noOfPax);
+  const estimatedServiceCharge = estimateServiceCharge(total, activeServiceChargeRule, activeCurrency);
+  const estimatedTotal = roundCurrency(total + estimatedServiceCharge, activeCurrency);
+  const serviceChargeMeta = activeServiceChargeRule
+    ? [
+        activeServiceChargeRule.charge_mode === 'Fixed Amount'
+          ? t('privileged_actions.sc_fixed_label')
+          : `${activeServiceChargeRule.rate || 0}%`,
+        activeServiceChargeRule.order_type === '*' ? null : orderTypeLabel(activeServiceChargeRule.order_type),
+        (activeServiceChargeRule.min_pax || 0) > 0
+          ? t('privileged_actions.sc_pax_threshold', { count: activeServiceChargeRule.min_pax })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
 
-  const [showMobileBreakdown, setShowMobileBreakdown] = useState(true);
   const defaultPreviewCustomer =
     !selectedCustomer?.id && posProfile && (selectedOrderType === DINE_IN || selectedOrderType === 'Take Away')
       ? resolveDefaultCustomer(selectedOrderType, posProfile)?.id
@@ -151,7 +176,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const displayTotal =
     !outbox.offline && orderPreview
       ? (orderPreview.rounded_total || orderPreview.grand_total)
-      : total;
+      : estimatedTotal;
   const effectiveItemLineTotal = (item: typeof activeOrders[0], idx: number) => {
     const baseTotal = calculateItemTotal(item);
     const previewRow = !outbox.offline ? orderPreview?.item_taxes?.[idx] : undefined;
@@ -297,11 +322,89 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     } catch (error) {
       if (allowPromptOnAuthRequired && isUpdatingOrder && orderId && isAuthRequiredError(error)) {
         const voidInfo = buildSyncVoidClaim(orderData);
+        if (voidInfo.linesCount > 0) {
+          setPendingSyncVoidApproval({
+            privilege: 'void_sent_item',
+            orderData,
+            amount: voidInfo.amount,
+            linesCount: voidInfo.linesCount,
+            claim: voidInfo.claim,
+            summaryLines: [
+              t('manager_approval.void_sent_order_summary', { count: voidInfo.linesCount }),
+              t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount, currency) }),
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
+        const existingInv = tableOrder?.message?.name === orderId ? tableOrder.message : null;
+        if (existingInv?.order_type && orderData.order_type && existingInv.order_type !== orderData.order_type) {
+          setPendingSyncVoidApproval({
+            privilege: 'order_type_change',
+            orderData,
+            amount: 0,
+            linesCount: 0,
+            claim: {
+              action: 'order_type_change',
+              invoice: orderId,
+              from_order_type: existingInv.order_type,
+              to_order_type: orderData.order_type,
+            },
+            summaryLines: [
+              `${existingInv.order_type} → ${orderData.order_type}`,
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
+        if (existingInv?.no_of_pax && Number(existingInv.no_of_pax) !== Number(orderData.no_of_pax)) {
+          setPendingSyncVoidApproval({
+            privilege: 'guest_count_change',
+            orderData,
+            amount: 0,
+            linesCount: 0,
+            claim: {
+              action: 'guest_count_change',
+              invoice: orderId,
+              from_pax: Number(existingInv.no_of_pax),
+              to_pax: Number(orderData.no_of_pax),
+            },
+            summaryLines: [
+              `${existingInv.no_of_pax} → ${orderData.no_of_pax}`,
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
+        if (existingInv?.waiter && existingInv.waiter !== user.name) {
+          setPendingSyncVoidApproval({
+            privilege: 'pickup_other_check',
+            orderData,
+            amount: 0,
+            linesCount: 0,
+            claim: {
+              action: 'pickup_other_check',
+              invoice: orderId,
+              owner_waiter: existingInv.waiter,
+            },
+            summaryLines: [
+              `${t('privileged_actions.pickup_other_check')}: ${existingInv.waiter}`,
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
         setPendingSyncVoidApproval({
+          privilege: 'void_sent_item',
           orderData,
           amount: voidInfo.amount,
           linesCount: voidInfo.linesCount,
           claim: voidInfo.claim,
+          summaryLines: [
+            t('manager_approval.void_sent_order_summary', { count: voidInfo.linesCount || 1 }),
+            t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount, currency) }),
+            t('manager_approval.check_line', { check: orderId }),
+          ],
         });
         return;
       }
@@ -316,11 +419,18 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     const pending = pendingSyncVoidApproval;
     setPendingSyncVoidApproval(null);
     if (!pending) return;
+    const tokenPatch: Partial<SyncOrderRequest> =
+      pending.privilege === 'guest_count_change'
+        ? { guest_count_approval_token: res.token, privilege_reason: res.reason, privilege_reason_note: res.note }
+        : pending.privilege === 'order_type_change'
+          ? { order_type_approval_token: res.token, privilege_reason: res.reason, privilege_reason_note: res.note }
+          : pending.privilege === 'pickup_other_check'
+            ? { pickup_approval_token: res.token, privilege_reason: res.reason, privilege_reason_note: res.note }
+            : { approval_token: res.token, void_reason: res.reason };
     await submitSyncPayload(
       {
         ...pending.orderData,
-        approval_token: res.token,
-        void_reason: res.reason,
+        ...tokenPatch,
       },
       false,
     );
@@ -625,44 +735,125 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               className="mb-3 w-full rounded-md border border-border px-3 py-1.5 text-sm"
               disabled={isInteractionDisabled}
             />
-            {outbox.offline ? (
+            {outbox.offline && (
               <div
                 data-testid="offline-estimate-badge"
                 className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800"
               >
                 {t('cart.offline_estimate')}
               </div>
-            ) : orderPreview ? (
-              <div className="mb-2 space-y-1 text-xs text-gray-600">
-                <div className="flex items-center justify-between lg:hidden">
-                  <button
-                    type="button"
-                    onClick={() => setShowMobileBreakdown((prev) => !prev)}
-                    className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
-                  >
-                    <span>{t('cart.toggle_breakdown')}</span>
-                    {showMobileBreakdown ? (
-                      <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-                    )}
-                  </button>
-                </div>
-                <div className={cn('space-y-1', !showMobileBreakdown && 'hidden lg:block')}>
-                  <div className="flex justify-between tabular-nums">
-                    <span>{t('cart.net_total')}</span>
-                    <span>{formatCurrency(orderPreview.net_total, activeCurrency)}</span>
+            )}
+
+            {/* Phone (390px) collapsible summary bar with >=44px touch target */}
+            <div className="lg:hidden mb-3">
+              <button
+                type="button"
+                data-testid="mobile-summary-toggle"
+                aria-expanded={mobileSummaryOpen}
+                onClick={() => setMobileSummaryOpen((prev) => !prev)}
+                className="min-h-11 w-full flex items-center justify-between gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-start text-sm"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs text-gray-600">
+                    {t('privileged_actions.sc_summary_net')}: {formatCurrency(!outbox.offline && orderPreview ? orderPreview.net_total : total, activeCurrency)}
+                    {activeServiceChargeRule && estimatedServiceCharge > 0
+                      ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${formatCurrency(estimatedServiceCharge, activeCurrency)}`
+                      : ''}
                   </div>
-                  {orderPreview.discount_amount > 0 && (
-                    <div className="flex justify-between text-emerald-700 tabular-nums">
+                  <div className="text-xs font-medium text-blue-700">
+                    {t('privileged_actions.sc_summary_toggle')}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5 font-semibold text-gray-900 tabular-nums">
+                  <span>{formatCurrency(displayTotal, activeCurrency)}</span>
+                  {mobileSummaryOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
+              </button>
+              {mobileSummaryOpen && (
+                <div className="mt-2 rounded-md border border-gray-200 bg-white p-3 space-y-1.5 text-sm">
+                  <div className="flex items-center justify-between text-gray-600">
+                    <span>{t('privileged_actions.sc_summary_net')}</span>
+                    <span className="tabular-nums">{formatCurrency(!outbox.offline && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
+                  </div>
+                  {!outbox.offline && orderPreview && orderPreview.discount_amount > 0 && (
+                    <div className="flex items-center justify-between text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
                       <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
                     </div>
                   )}
-                  {orderPreview.tax_rows.map((taxRow, idx) => (
+                  {activeServiceChargeRule && estimatedServiceCharge > 0 && (
+                    <div className="flex items-center justify-between gap-2 text-gray-700">
+                      <span className="min-w-0 truncate">
+                        {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
+                        {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
+                      </span>
+                      <span className="shrink-0 tabular-nums font-medium">
+                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                      </span>
+                    </div>
+                  )}
+                  {!outbox.offline && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
                     <div
                       key={`${taxRow.description}-${idx}`}
-                      className="flex justify-between tabular-nums"
+                      className="flex items-center justify-between gap-2 text-gray-600 tabular-nums"
+                    >
+                      <span className="min-w-0 truncate">
+                        {formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'))}
+                      </span>
+                      <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between border-t border-gray-100 pt-1.5 font-semibold text-gray-900">
+                    <span>{t('cart.total')}</span>
+                    <span className="tabular-nums">{formatCurrency(displayTotal, activeCurrency)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Desktop summary breakdown */}
+            <div className="hidden lg:block space-y-1.5 mb-3">
+              {(!outbox.offline && orderPreview) || (activeServiceChargeRule && estimatedServiceCharge > 0) ? (
+                <>
+                  <div className="flex items-center justify-between text-xs text-gray-600 tabular-nums">
+                    <span>{!outbox.offline && orderPreview ? t('cart.net_total') : t('privileged_actions.sc_summary_net')}</span>
+                    <span>{formatCurrency(!outbox.offline && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
+                  </div>
+                  {!outbox.offline && orderPreview && orderPreview.discount_amount > 0 && (
+                    <div className="flex items-center justify-between text-xs text-emerald-700 tabular-nums">
+                      <span>{t('cart.discount')}</span>
+                      <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
+                    </div>
+                  )}
+                  {activeServiceChargeRule && estimatedServiceCharge > 0 && (
+                    <div
+                      data-testid="order-panel-sc-row"
+                      className="flex items-center justify-between gap-2 text-sm text-gray-700"
+                    >
+                      {orderId ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowServiceChargeDialog(true)}
+                          className="min-w-0 truncate text-start text-blue-700 hover:underline"
+                        >
+                          {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
+                          {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
+                        </button>
+                      ) : (
+                        <span className="min-w-0 truncate">
+                          {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
+                          {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
+                        </span>
+                      )}
+                      <span className="shrink-0 tabular-nums font-medium">
+                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                      </span>
+                    </div>
+                  )}
+                  {!outbox.offline && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
+                    <div
+                      key={`${taxRow.description}-${idx}`}
+                      className="flex justify-between text-xs text-gray-600 tabular-nums"
                     >
                       <span className="truncate pe-2">
                         {formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'))}
@@ -670,27 +861,29 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                       <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
                     </div>
                   ))}
-                </div>
-                {orderPreview.efris_warnings && orderPreview.efris_warnings.length > 0 && (
-                  <div
-                    data-testid="efris-readiness-alert"
-                    role="alert"
-                    className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
-                  >
-                    <div className="flex items-start gap-1.5">
-                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" aria-hidden />
-                      <div className="space-y-0.5">
-                        {orderPreview.efris_warnings.map((w, idx) => (
-                          <p key={`${w.item_code}-${idx}`}>{w.message}</p>
-                        ))}
-                      </div>
-                    </div>
+                </>
+              ) : !outbox.offline && previewLoading ? (
+                <p className="text-xs text-gray-400">{t('cart.tax_preview_loading')}</p>
+              ) : null}
+            </div>
+
+            {!outbox.offline && orderPreview?.efris_warnings && orderPreview.efris_warnings.length > 0 && (
+              <div
+                data-testid="efris-readiness-alert"
+                role="alert"
+                className="mb-3 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+              >
+                <div className="flex items-start gap-1.5">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" aria-hidden />
+                  <div className="space-y-0.5">
+                    {orderPreview.efris_warnings.map((w, idx) => (
+                      <p key={`${w.item_code}-${idx}`}>{w.message}</p>
+                    ))}
                   </div>
-                )}
+                </div>
               </div>
-            ) : previewLoading ? (
-              <p className="mb-2 text-xs text-gray-400">{t('cart.tax_preview_loading')}</p>
-            ) : null}
+            )}
+
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <Button
@@ -754,20 +947,33 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         initialComment={orderComment}
       />
 
+      {showServiceChargeDialog && orderId && posProfile && (
+        <CheckPrivilegedDialog
+          open
+          onOpenChange={setShowServiceChargeDialog}
+          initialTab="service_charge"
+          posProfile={posProfile.name}
+          company={posProfile.company || ''}
+          invoiceName={orderId}
+          currency={activeCurrency || undefined}
+          onSuccess={() => setShowServiceChargeDialog(false)}
+        />
+      )}
+
       {pendingSyncVoidApproval && orderId && posProfile && (
         <ManagerApproval
           open
           posProfile={posProfile.name}
-          privilege="void_sent_item"
-          title={t('manager_approval.void_sent_item_title')}
-          summaryLines={[
-            t('manager_approval.void_sent_order_summary', { count: pendingSyncVoidApproval.linesCount || 1 }),
-            t('manager_approval.amount_line', { amount: formatCurrency(pendingSyncVoidApproval.amount, activeCurrency) }),
-            t('manager_approval.check_line', { check: orderId }),
-          ]}
+          privilege={pendingSyncVoidApproval.privilege}
+          title={
+            pendingSyncVoidApproval.privilege === 'void_sent_item'
+              ? t('manager_approval.void_sent_item_title')
+              : t(`privileged_actions.${pendingSyncVoidApproval.privilege}`)
+          }
+          summaryLines={pendingSyncVoidApproval.summaryLines}
           reference={{ doctype: 'POS Invoice', name: orderId }}
           claim={pendingSyncVoidApproval.claim}
-          amount={pendingSyncVoidApproval.amount}
+          amount={pendingSyncVoidApproval.amount || undefined}
           onApproved={(res) => void handleSyncVoidApproved(res)}
           onCancel={() => setPendingSyncVoidApproval(null)}
         />

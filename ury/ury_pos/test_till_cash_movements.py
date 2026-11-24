@@ -65,8 +65,16 @@ class TestTillCashMovementsAPI(FrappeTestCase):
 			holder=till_fx.PURE_CASHIER,
 			custom_enable_cash_movements=1,
 		)
+		# Pure URY Cashier (zero Journal Entry DocPerms) cannot run Loan without cash_loan
+		# privilege/PIN; URY Manager records Pickup & Loan while Pure Cashier records
+		# below-threshold Paid Out & Tip Payout under app authority.
 		frappe.set_user(till_fx.PURE_CASHIER)
+		with self.assertRaisesRegex(frappe.PermissionError, r"\[POS-AUTH-REQUIRED\]"):
+			cash_movements.record_till_cash_movement(
+				pos_profile=till.name, movement_type="Loan", amount=200
+			)
 
+		frappe.set_user(till_fx.PURE_MANAGER)
 		pickup = cash_movements.record_till_cash_movement(
 			pos_profile=till.name, movement_type="Pickup", amount=300
 		)
@@ -78,6 +86,7 @@ class TestTillCashMovementsAPI(FrappeTestCase):
 		)
 		self.assertEqual(loan["docstatus"], 1)
 
+		frappe.set_user(till_fx.PURE_CASHIER)
 		paid_out = cash_movements.record_till_cash_movement(
 			pos_profile=till.name,
 			movement_type="Paid Out",
@@ -210,7 +219,7 @@ class TestTillCashMovementsAPI(FrappeTestCase):
 		self.assertFalse(frappe.db.exists("Journal Entry", pending["name"]))
 
 		submitted = cash_movements.record_till_cash_movement(
-			pos_profile=till.name, movement_type="Pickup", amount=100
+			pos_profile=till.name, movement_type="Paid Out", amount=100, reason="Ice delivery"
 		)
 		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-NOT-DRAFT\]"):
 			cash_movements.discard_till_cash_movement(submitted["name"])

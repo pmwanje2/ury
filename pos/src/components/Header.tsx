@@ -197,18 +197,18 @@ const Header = () => {
         )}
 
         {/* Right side actions */}
-        <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-4">
           {cashMovementsEnabled && (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="flex items-center gap-1.5 h-7"
+              className="flex shrink-0 items-center gap-1 sm:gap-1.5 h-7 px-1.5 sm:px-3"
               disabled={outbox.offline || outbox.replaying}
               onClick={() => setShowTillCash(true)}
             >
-              <Wallet className="w-4 h-4" />
-              <span>{t('header.till_cash')}</span>
+              <Wallet className="w-4 h-4 shrink-0" />
+              <span className="sr-only sm:not-sr-only text-xs sm:text-sm whitespace-nowrap">{t('header.till_cash')}</span>
             </Button>
           )}
           {/* Printer status (fail-closed when the watch app is absent) */}

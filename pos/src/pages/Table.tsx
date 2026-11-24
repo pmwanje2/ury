@@ -42,6 +42,8 @@ import { resolveTableServiceRequest, useOpenServiceRequestTables } from '../comp
 import MergeLinkConnector from '../components/MergeLinkConnector';
 import TableReservationDialog, { type ReservationFormData } from '../components/TableReservationDialog';
 import TableReservationWarningDialog from '../components/TableReservationWarningDialog';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 
 const TableView = () => {
   const navigate = useNavigate();
@@ -92,6 +94,14 @@ const TableView = () => {
   const [reservationTable, setReservationTable] = useState<Table | null>(null);
   const [heldReservation, setHeldReservation] = useState<{ reservation: TableReservation; tableName: string } | null>(null);
   const [seatLoading, setSeatLoading] = useState(false);
+  const [pendingTableApproval, setPendingTableApproval] = useState<{
+    privilege: 'transfer_check' | 'merge_checks';
+    title: string;
+    summaryLines: string[];
+    reference: { doctype: string; name: string };
+    claim: Record<string, unknown>;
+    retry: (res: ManagerApprovalResult) => Promise<void>;
+  } | null>(null);
 
   // Load branch reservation settings
   useEffect(() => {
@@ -444,19 +454,34 @@ const TableView = () => {
     }
   };
 
-  const handleMergeConfirm = async (targetNames: string[]) => {
+  const handleMergeConfirm = async (targetNames: string[], approval?: ManagerApprovalResult) => {
     if (!mergeSourceTable || targetNames.length === 0) return;
 
     const sourceName = mergeSourceTable.name;
 
     try {
-      await mergeTablesBatch(sourceName, targetNames);
+      await mergeTablesBatch(
+        sourceName,
+        targetNames,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
       if (selectedRoom) {
         await loadTables(selectedRoom, { useCache: false });
       }
       showToast.success(t('tables.merge_success'));
     } catch (error) {
-      showToast.error(error instanceof Error ? error.message : t('tables.merge_failed'));
+      if (!approval?.token && isAuthRequiredError(error)) {
+        setPendingTableApproval({
+          privilege: 'merge_checks',
+          title: t('privileged_actions.merge_checks'),
+          summaryLines: [`${sourceName} + ${targetNames.join(', ')}`],
+          reference: { doctype: 'URY Table', name: sourceName },
+          claim: { action: 'merge_tables', anchor_table: sourceName, tables: [...targetNames].sort() },
+          retry: (res) => handleMergeConfirm(targetNames, res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(error, 'tables.merge_failed'));
       throw error;
     }
   };
@@ -537,34 +562,68 @@ const TableView = () => {
     }
   };
 
-  const handleTableTransferConfirm = async (newTable: string) => {
+  const handleTableTransferConfirm = async (newTable: string, approval?: ManagerApprovalResult) => {
     if (!transferSourceTable || !transferInvoiceName) return;
+    const fromTable = transferSourceTable.name;
+    const invName = transferInvoiceName;
 
     try {
-      await tableTransfer(transferSourceTable.name, newTable, transferInvoiceName);
+      await tableTransfer(
+        fromTable,
+        newTable,
+        invName,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
       if (selectedRoom) {
         await loadTables(selectedRoom, { useCache: false });
       }
       showToast.success(t('tables.transfer_success'));
     } catch (error) {
-      showToast.error(error instanceof Error ? error.message : t('tables.transfer_failed'));
+      if (!approval?.token && isAuthRequiredError(error)) {
+        setPendingTableApproval({
+          privilege: 'transfer_check',
+          title: t('privileged_actions.transfer_check'),
+          summaryLines: [`${fromTable} → ${newTable}`, `${t('privileged_actions.check_ref')}: ${invName}`],
+          reference: { doctype: 'POS Invoice', name: invName },
+          claim: { action: 'table_transfer', from_table: fromTable, to_table: newTable, invoice: invName },
+          retry: (res) => handleTableTransferConfirm(newTable, res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(error, 'tables.transfer_failed'));
       throw error;
     }
   };
 
-  const handleCaptainTransferConfirm = async (newCaptain: string) => {
+  const handleCaptainTransferConfirm = async (newCaptain: string, approval?: ManagerApprovalResult) => {
     if (!captainTransferContext) return;
 
     const { currentCaptain, invoiceName } = captainTransferContext;
 
     try {
-      await captainTransfer(currentCaptain, newCaptain, invoiceName);
+      await captainTransfer(
+        currentCaptain,
+        newCaptain,
+        invoiceName,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
       if (selectedRoom) {
         await loadTables(selectedRoom, { useCache: false });
       }
       showToast.success(t('tables.captain_transfer_success'));
     } catch (error) {
-      showToast.error(error instanceof Error ? error.message : t('tables.transfer_failed'));
+      if (!approval?.token && isAuthRequiredError(error)) {
+        setPendingTableApproval({
+          privilege: 'transfer_check',
+          title: t('privileged_actions.transfer_check'),
+          summaryLines: [`${currentCaptain} → ${newCaptain}`, `${t('privileged_actions.check_ref')}: ${invoiceName}`],
+          reference: { doctype: 'POS Invoice', name: invoiceName },
+          claim: { action: 'captain_transfer', from_waiter: currentCaptain, to_waiter: newCaptain, invoice: invoiceName },
+          retry: (res) => handleCaptainTransferConfirm(newCaptain, res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(error, 'tables.transfer_failed'));
       throw error;
     }
   };
@@ -833,6 +892,24 @@ const TableView = () => {
         onSeat={() => void handleSeatHeldReservation()}
         seatLoading={seatLoading}
       />
+
+      {pendingTableApproval && posProfile && (
+        <ManagerApproval
+          open
+          posProfile={posProfile.name}
+          privilege={pendingTableApproval.privilege}
+          title={pendingTableApproval.title}
+          summaryLines={pendingTableApproval.summaryLines}
+          reference={pendingTableApproval.reference}
+          claim={pendingTableApproval.claim}
+          onApproved={(res) => {
+            const pending = pendingTableApproval;
+            setPendingTableApproval(null);
+            void pending.retry(res);
+          }}
+          onCancel={() => setPendingTableApproval(null)}
+        />
+      )}
 
       {/* Status Legend */}
       <div className="fixed bottom-[4.5rem] w-full p-4 bg-white border-t border-border">
