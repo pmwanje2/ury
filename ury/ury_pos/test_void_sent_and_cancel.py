@@ -825,7 +825,7 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
     def test_reduce_sent_item_requires_reason_before_mutation(self):
         self.h.frappe.session.user = "manager@example.test"
         inv = self.h.add_invoice()
-        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-REASON-REQUIRED"):
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-AUTH-REASON"):
             self.qty_mod.reduce_order_item_qty(inv.name, "ROW-1", 1, reason=None)
         self.assertEqual(inv.items[0].qty, 2)
         self.assertEqual(len(self.h.kots), 1)  # only original KOT
@@ -833,7 +833,7 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
     def test_reduce_sent_item_requires_note_when_pos_reason_requires_note(self):
         self.h.frappe.session.user = "manager@example.test"
         inv = self.h.add_invoice()
-        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-REASON-NOTE-REQUIRED"):
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, r"note.*POS-AUTH-REASON"):
             self.qty_mod.reduce_order_item_qty(inv.name, "ROW-1", 1, reason="OTHER", note="ab")
         self.assertEqual(inv.items[0].qty, 2)
 
@@ -982,9 +982,9 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
                 waiter="waiter1@example.test", pos_profile="Till A", last_modified_time=inv.modified,
                 table="T1", invoice=inv.name, order_type="Dine In", room="Main Hall",
             )
-        # Manager acting alone without reason -> refused with POS-REASON-REQUIRED even though remove_items == 1
+        # Manager acting alone without reason -> refused with POS-AUTH-REASON even though remove_items == 1
         self.h.frappe.session.user = "manager@example.test"
-        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-REASON-REQUIRED"):
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-AUTH-REASON"):
             self.order_mod.sync_order(
                 items=reduced_items, cashier="cashier@example.test", owner="waiter1@example.test",
                 mode_of_payment="Cash", customer="Walk-in", no_of_pax=2, last_invoice=inv.name,
@@ -1059,7 +1059,7 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
                 order_type="Dine In", room="Main Hall",
             )
         self.h.frappe.session.user = "manager@example.test"
-        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-REASON-REQUIRED"):
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-AUTH-REASON"):
             self.order_mod.sync_order(
                 items=[
                     {"item": "SOUP", "item_name": "Soup", "qty": 1, "rate": 15000, "ury_held": 0, "reservation_line_key": "line-4"},
@@ -1214,6 +1214,60 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
             self.order_mod.cancel_order(fiscal.name, "VOID-GUEST")
         with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-VOID-FISCALISED-USE-RETURN"):
             self.inv_hook.before_cancel(fiscal, "before_cancel")
+
+    def test_select_token_claim_uses_isolated_db_when_main_tx_snapshot_is_stale(self):
+        """Real MariaDB REPEATABLE READ keeps main frappe.db blind to isolated-DB Approved rows."""
+        import hashlib
+        import json
+        import types
+
+        from ury.ury_pos import void_return_reopen as vr
+
+        token = "tok-isolated-147-r2"
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        b5a_claim = {"invoice": "POS-ISO-1", "item_row_name": "ROW-1", "previous_qty": 2.0, "new_qty": 1.0}
+        b2a_claim = {
+            "action": "reduce_order_item_qty",
+            "item_row_name": "ROW-1",
+            "item_code": "STEAK",
+            "from_qty": 2.0,
+            "to_qty": 1.0,
+            "amount": 25.0,
+            "reason": "Guest changed mind",
+        }
+        stored_row = {
+            "privilege": "void_sent_item",
+            "claim_values": json.dumps(b2a_claim, sort_keys=True, separators=(",", ":")),
+        }
+
+        class FakeIsolatedDB:
+            def __init__(self):
+                self.queries = []
+
+            def sql(self, query, values=None, as_dict=False):
+                self.queries.append((query, values, as_dict))
+                if values and values[0] == token_hash:
+                    return [stored_row]
+                return []
+
+        iso_db = FakeIsolatedDB()
+        ov_stub = types.SimpleNamespace(
+            _token_digest=lambda t: hashlib.sha256(t.encode()).hexdigest(),
+            _has_real_isolated_db=lambda: True,
+            _with_isolated_db=lambda fn, commit=False: fn(iso_db),
+        )
+        # Main connection snapshot has no Approved row (simulates MariaDB REPEATABLE READ).
+        chosen_priv, chosen_claim = vr._select_token_claim_and_privilege(
+            ov_stub,
+            token,
+            "reduce_sent_qty",
+            b5a_claim,
+            ("void_sent_item",),
+            b2a_claim,
+        )
+        self.assertEqual(chosen_priv, "void_sent_item")
+        self.assertEqual(chosen_claim, b2a_claim)
+        self.assertEqual(len(iso_db.queries), 1)
 
 
 if __name__ == "__main__":
