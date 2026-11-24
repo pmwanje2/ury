@@ -311,6 +311,23 @@ class TestVoidReturnReopenIntegration(unittest.TestCase):
         })
         if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
             doc.room_number = room_number
+        if discount_amount and flt(discount_amount) > 0:
+            if not frappe.db.exists("POS Reason", {"code": "DISC-TEST"}):
+                frappe.get_doc({
+                    "doctype": "POS Reason",
+                    "code": "DISC-TEST",
+                    "description": "Test courtesy discount",
+                    "applies_to": "discount",
+                    "requires_note": 0,
+                    "disabled": 0,
+                }).insert(ignore_permissions=True)
+            if frappe.get_meta("POS Invoice").has_field("custom_discount_reason"):
+                doc.custom_discount_reason = "DISC-TEST"
+            gross = sum(flt(r["qty"]) * flt(r["rate"]) for r in rows) or 1.0
+            doc.flags.discount_approval = {
+                "approver": self.manager2,
+                "percent": round(flt(discount_amount) / gross * 100.0, 2),
+            }
         doc.insert(ignore_permissions=True)
         if submit:
             doc.submit()
@@ -663,3 +680,34 @@ class TestVoidReturnReopenIntegration(unittest.TestCase):
             self.assertEqual(flt(rep.change_amount), 0.0)
             tip_rows = [t for t in rep.taxes if t.account_head == tips_acct]
             self.assertEqual([flt(t.tax_amount) for t in tip_rows], [5000.0])
+
+            # Interop with #148: adjust_closed_check & reopen_closed_check on a discounted check must succeed!
+            disc_inv = self._make_pos_invoice(
+                items=[{"item_code": self.service_item, "item_name": "Steak Plate", "qty": 1, "rate": 35000.0}],
+                discount_amount=5000.0,
+                payments=[{"mode_of_payment": self.mop_cash, "amount": 30000.0}],
+                submit=True,
+            )
+            frappe.set_user(self.manager2)
+            disc_adj = adjust_closed_check(
+                disc_inv.name,
+                [{"mode_of_payment": self.mop_card, "amount": 30000.0}],
+                reason="REOPEN-TENDER",
+            )
+            disc_rep = frappe.get_doc("POS Invoice", disc_adj["replacement_invoice"])
+            self.assertEqual(disc_rep.docstatus, 1)
+            self.assertEqual(flt(disc_rep.discount_amount), 5000.0)
+            self.assertEqual(flt(disc_rep.grand_total), 30000.0)
+
+            disc_inv2 = self._make_pos_invoice(
+                items=[{"item_code": self.service_item, "item_name": "Steak Plate", "qty": 1, "rate": 35000.0}],
+                discount_amount=5000.0,
+                payments=[{"mode_of_payment": self.mop_cash, "amount": 30000.0}],
+                submit=True,
+            )
+            frappe.set_user(self.manager2)
+            from ury.ury_pos.void_return_reopen import reopen_closed_check
+            disc_reop = reopen_closed_check(disc_inv2.name, reason="REOPEN-SPLIT")
+            disc_draft = frappe.get_doc("POS Invoice", disc_reop["reopened_invoice"])
+            self.assertEqual(disc_draft.docstatus, 0)
+            self.assertEqual(flt(disc_draft.discount_amount), 5000.0)
