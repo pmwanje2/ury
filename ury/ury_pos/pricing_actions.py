@@ -349,15 +349,25 @@ def override_line_price(
     )
 
     # Preserve original released list price for audit/reporting; set price_list_rate = rate
-    # so subsequent bill/line discounts and native returns apply cleanly to the agreed rate.
+    # and clear any prior Pricing Rule / line discount so subsequent bill/line discounts
+    # and native returns apply cleanly to the manager-agreed rate without double-discounting.
     if not target_row.get("custom_original_price_list_rate"):
         target_row.custom_original_price_list_rate = original_rate
     target_row.rate = rate_val
     target_row.price_list_rate = rate_val
     target_row.base_rate = base_rate_val
     target_row.base_price_list_rate = base_rate_val
+    target_row.discount_percentage = 0
+    target_row.discount_amount = 0
+    target_row.margin_rate_or_amount = 0
+    target_row.pricing_rules = None
     target_row.ignore_pricing_rule = 1
     target_row.custom_price_overridden = 1
+    if isinstance(doc.get("pricing_rules"), list) and item_row_name:
+        doc.set(
+            "pricing_rules",
+            [pr for pr in doc.get("pricing_rules") if pr.get("child_docname") != item_row_name],
+        )
     target_row.custom_price_override_reason = (
         f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
     )

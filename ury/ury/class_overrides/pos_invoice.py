@@ -106,11 +106,140 @@ class CustomPOSInvoice(POSInvoice):
 					if not orig_spt:
 						self.set_posting_time = 1
 						temp_offline_spt = True
+
+		# Shield server-verified or persisted #152 overridden/open/comp rows from
+		# ERPNext's apply_pricing_rule() re-applying sales-time-pricing@1 discounts.
+		# Never shield unverified client-forged rows.
+		protected_rows = self._snapshot_authorized_pricing_rows()
 		try:
-			return super().validate()
+			res = super().validate()
+			if protected_rows:
+				self._restore_authorized_pricing_rows(protected_rows)
+			return res
 		finally:
 			if temp_offline_spt:
 				self.set_posting_time = 0
+
+	def _snapshot_authorized_pricing_rows(self):
+		if cint(self.get("is_return")):
+			return {}
+		flags = getattr(self, "flags", None)
+		privileged_verified = bool(getattr(flags, "ury_privileged_action_verified", False))
+		persisted_auth_names = set()
+		if not privileged_verified:
+			is_new_fn = getattr(self, "is_new", None)
+			is_new = bool(is_new_fn()) if callable(is_new_fn) else not bool(self.get("name"))
+			if not is_new:
+				prev = None
+				get_before = getattr(self, "get_doc_before_save", None)
+				if callable(get_before):
+					try:
+						prev = get_before()
+					except Exception:
+						prev = None
+				prev_items = (
+					(prev.get("items") if hasattr(prev, "get") else getattr(prev, "items", None))
+					if prev is not None
+					else None
+				)
+				if prev_items is None and self.get("name"):
+					try:
+						prev_items = frappe.get_all(
+							"POS Invoice Item",
+							filters={"parent": self.get("name")},
+							fields=[
+								"name",
+								"custom_price_overridden",
+								"custom_is_open_item",
+								"custom_is_complimentary",
+							],
+						)
+					except Exception:
+						prev_items = None
+				for prow in prev_items or []:
+					pname = prow.get("name") if hasattr(prow, "get") else getattr(prow, "name", None)
+					if not pname:
+						continue
+					if (
+						cint(prow.get("custom_price_overridden") if hasattr(prow, "get") else getattr(prow, "custom_price_overridden", 0)) == 1
+						or cint(prow.get("custom_is_open_item") if hasattr(prow, "get") else getattr(prow, "custom_is_open_item", 0)) == 1
+						or cint(prow.get("custom_is_complimentary") if hasattr(prow, "get") else getattr(prow, "custom_is_complimentary", 0)) == 1
+					):
+						persisted_auth_names.add(pname)
+
+		snaps = {}
+		for row in self.get("items") or []:
+			if cint(row.get("is_disposable") if hasattr(row, "get") else getattr(row, "is_disposable", 0)) == 1:
+				continue
+			has_flag = (
+				cint(row.get("custom_price_overridden") if hasattr(row, "get") else getattr(row, "custom_price_overridden", 0)) == 1
+				or cint(row.get("custom_is_open_item") if hasattr(row, "get") else getattr(row, "custom_is_open_item", 0)) == 1
+				or cint(row.get("custom_is_complimentary") if hasattr(row, "get") else getattr(row, "custom_is_complimentary", 0)) == 1
+			)
+			if not has_flag:
+				continue
+			rname = row.get("name") if hasattr(row, "get") else getattr(row, "name", None)
+			if not privileged_verified and (not rname or rname not in persisted_auth_names):
+				continue
+			snaps[id(row)] = {
+				"name": rname,
+				"price_list_rate": flt(row.get("price_list_rate") if hasattr(row, "get") else getattr(row, "price_list_rate", 0)),
+				"rate": flt(row.get("rate") if hasattr(row, "get") else getattr(row, "rate", 0)),
+				"base_price_list_rate": flt(row.get("base_price_list_rate") if hasattr(row, "get") else getattr(row, "base_price_list_rate", 0)),
+				"base_rate": flt(row.get("base_rate") if hasattr(row, "get") else getattr(row, "base_rate", 0)),
+				"discount_percentage": flt(row.get("discount_percentage") if hasattr(row, "get") else getattr(row, "discount_percentage", 0)),
+				"discount_amount": flt(row.get("discount_amount") if hasattr(row, "get") else getattr(row, "discount_amount", 0)),
+				"pricing_rules": row.get("pricing_rules") if hasattr(row, "get") else getattr(row, "pricing_rules", None),
+			}
+		return snaps
+
+	def _restore_authorized_pricing_rows(self, snaps):
+		restored_names = set()
+		changed = False
+		for row in self.get("items") or []:
+			snap = snaps.get(id(row))
+			if snap is None:
+				continue
+			curr_rate = flt(row.get("rate") if hasattr(row, "get") else getattr(row, "rate", 0))
+			curr_plr = flt(row.get("price_list_rate") if hasattr(row, "get") else getattr(row, "price_list_rate", 0))
+			curr_disc_pct = flt(row.get("discount_percentage") if hasattr(row, "get") else getattr(row, "discount_percentage", 0))
+			curr_pr = (row.get("pricing_rules") if hasattr(row, "get") else getattr(row, "pricing_rules", None)) or ""
+			snap_pr = snap["pricing_rules"] or ""
+			if (
+				abs(curr_rate - snap["rate"]) > 1e-6
+				or abs(curr_plr - snap["price_list_rate"]) > 1e-6
+				or abs(curr_disc_pct - snap["discount_percentage"]) > 1e-6
+				or curr_pr != snap_pr
+			):
+				for field in (
+					"price_list_rate",
+					"rate",
+					"base_price_list_rate",
+					"base_rate",
+					"discount_percentage",
+					"discount_amount",
+					"pricing_rules",
+				):
+					setattr(row, field, snap[field])
+				rname = (row.get("name") if hasattr(row, "get") else getattr(row, "name", None)) or snap["name"]
+				if rname:
+					restored_names.add(rname)
+				changed = True
+		if changed:
+			pr_rows = self.get("pricing_rules")
+			if isinstance(pr_rows, list) and restored_names:
+				kept = [
+					pr
+					for pr in pr_rows
+					if (pr.get("child_docname") if hasattr(pr, "get") else getattr(pr, "child_docname", None))
+					not in restored_names
+				]
+				if callable(getattr(self, "set", None)):
+					self.set("pricing_rules", kept)
+				else:
+					self.pricing_rules = kept
+			if callable(getattr(self, "calculate_taxes_and_totals", None)):
+				self.calculate_taxes_and_totals()
 
 	def set_taxes(self):
 		if getattr(self.flags, "ury_explicit_no_taxes", False):
