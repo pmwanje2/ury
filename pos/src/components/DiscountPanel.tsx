@@ -443,17 +443,19 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   if (!open) return null;
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next && !applyApprovalOpen && !removeApprovalOpen) onClose();
-      }}
-    >
-      <DialogContent
-        variant="xlarge"
-        showCloseButton={false}
-        className="fixed bottom-0 start-0 end-0 sm:static bg-white w-full max-w-4xl max-h-[92vh] rounded-t-2xl sm:rounded-xl flex flex-col p-0 overflow-hidden"
+    <>
+      <Dialog
+        open={open}
+        className="items-end sm:items-center p-0 sm:p-4"
+        onOpenChange={(next) => {
+          if (!next && !applyApprovalOpen && !removeApprovalOpen) onClose();
+        }}
       >
+        <DialogContent
+          variant="xlarge"
+          showCloseButton={false}
+          className="relative z-10 bg-white w-full max-w-4xl max-h-[92vh] rounded-t-2xl sm:rounded-xl flex flex-col p-0 overflow-hidden shadow-xl"
+        >
         {/* Top Header */}
         <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-5 py-4">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -992,43 +994,44 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
             </div>
           </div>
         </div>
+        </DialogContent>
+      </Dialog>
 
-        {/* Shared B2a ManagerApproval PIN Modal */}
-        <ManagerApproval
-          open={applyApprovalOpen && needsApproval && Boolean(preview) && !approved}
-          posProfile={posProfile}
-          privilege={preview?.privilege || 'discount'}
-          title={t('discount.manager_approval_title')}
-          summaryLines={approvalSummaryLines}
-          reference={{ doctype: 'POS Invoice', name: invoice }}
-          claim={(preview?.claim as unknown as Record<string, unknown>) || {}}
-          percent={preview?.effective_percent}
-          amount={preview?.discount_total}
-          requireReason={false}
-          onApproved={(res) => {
-            setApproved({ token: res.token, approverName: res.approverName });
-            setApplyApprovalOpen(false);
-          }}
-          onCancel={() => setApplyApprovalOpen(false)}
-        />
-        <ManagerApproval
-          open={removeApprovalOpen && Boolean(existingDiscounts)}
-          posProfile={posProfile}
-          privilege="discount_remove"
-          title={t('discount.remove_approval_title')}
-          summaryLines={
-            existingDiscounts
-              ? [`${t('discount.discount_line')}: −${formatMoney(existingDiscounts.discount_amount)}`]
-              : []
-          }
-          reference={{ doctype: 'POS Invoice', name: invoice }}
-          claim={existingDiscounts?.remove_claim || { action: 'remove', row: null }}
-          requireReason={false}
-          onApproved={({ token }) => executeRemove(token)}
-          onCancel={() => setRemoveApprovalOpen(false)}
-        />
-      </DialogContent>
-    </Dialog>
+      {/* Shared B2a ManagerApproval PIN Modal */}
+      <ManagerApproval
+        open={applyApprovalOpen && needsApproval && Boolean(preview) && !approved}
+        posProfile={posProfile}
+        privilege={preview?.privilege || 'discount'}
+        title={t('discount.manager_approval_title')}
+        summaryLines={approvalSummaryLines}
+        reference={{ doctype: 'POS Invoice', name: invoice }}
+        claim={(preview?.claim as unknown as Record<string, unknown>) || {}}
+        percent={preview?.effective_percent}
+        amount={preview?.discount_total}
+        requireReason={false}
+        onApproved={(res) => {
+          setApproved({ token: res.token, approverName: res.approverName });
+          setApplyApprovalOpen(false);
+        }}
+        onCancel={() => setApplyApprovalOpen(false)}
+      />
+      <ManagerApproval
+        open={removeApprovalOpen && Boolean(existingDiscounts)}
+        posProfile={posProfile}
+        privilege="discount_remove"
+        title={t('discount.remove_approval_title')}
+        summaryLines={
+          existingDiscounts
+            ? [`${t('discount.discount_line')}: −${formatMoney(existingDiscounts.discount_amount)}`]
+            : []
+        }
+        reference={{ doctype: 'POS Invoice', name: invoice }}
+        claim={existingDiscounts?.remove_claim || { action: 'remove', row: null }}
+        requireReason={false}
+        onApproved={({ token }) => executeRemove(token)}
+        onCancel={() => setRemoveApprovalOpen(false)}
+      />
+    </>
   );
 };
 
