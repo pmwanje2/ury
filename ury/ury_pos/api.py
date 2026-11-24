@@ -2,7 +2,7 @@ import frappe
 import json
 from frappe import _
 from datetime import date, datetime, timedelta
-from frappe.utils import cint, nestedset, validate_phone_number
+from frappe.utils import cint, flt, nestedset, validate_phone_number
 
 from ury.brand import coded_message
 from ury.ury_pos.default_customer import get_default_customer_config
