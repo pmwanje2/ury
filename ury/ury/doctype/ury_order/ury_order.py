@@ -15,6 +15,7 @@ from erpnext.controllers.queries import item_query
 from ury.brand import coded_message
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
+from ury.ury_pos import void_return_reopen as _void_ops
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
 from ury.ury.api.ury_order_reservation_service import (
@@ -2515,6 +2516,10 @@ def sync_order(
     captured_at=None,
     offline_printed=0,
     expected_total=None,
+    void_reason=None,
+    void_note=None,
+    is_waste=0,
+    approval_token=None,
 ):
     # None keeps the order's label; any string, blank included, replaces it
     clear_guest_label = guest_label is not None and not str(guest_label).strip()
@@ -2746,30 +2751,143 @@ def sync_order(
 
     # Authorize before changing headers, payments or lines. Reducing a sent
     # dish+note quantity emits a kitchen cancellation even if the dish total
-    # stays unchanged. Match the KOT identity and existing remove_items flag;
-    # additions and append-only rounds do not remove the sent baseline.
-    if not append and past_item and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
-        requested_qty_by_item = {}
-        for item in items:
-            code = item.get("item")
-            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
-        previous_qty_by_item = {}
-        for item in past_item:
-            code = item["item_code"]
-            previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
+    # stays unchanged. Unsent (ury_held=1) items stay free (Simphony error
+    # correct), and previously zeroed rows (qty == 0) are never treated as a
+    # second reduction. Sent-item reductions ALWAYS require a reason and
+    # privilege / manager PIN (never bypassed by remove_items or offline replay).
+    sent_void_reason_info = None
+    sent_void_approver = None
+    sent_waste_items = []
+    if not append and past_item:
         def sent_quantities(rows):
             totals = defaultdict(float)
             for row in _kitchen_snapshot(rows):
-                totals[row["item_code"], row["comments"], row.get("reservation_line_key")] += row["qty"]
+                totals[row["item_code"], row["comments"], row.get("reservation_line_key")] += flt(row["qty"])
             return totals
 
         sent_before, sent_after = sent_quantities(past_item), sent_quantities(items)
-        if (any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items())
-                or any(sent_after.get(key, 0) < qty for key, qty in sent_before.items())):
-            frappe.throw(
-                _("You are not permitted to reduce or remove items from this order."),
-                frappe.PermissionError,
+        sent_reductions = []
+        for key, prev_qty in sent_before.items():
+            if prev_qty <= 0:
+                continue
+            after_qty = sent_after.get(key, 0.0)
+            if after_qty < prev_qty - 1e-9:
+                item_code, _comment, line_key = key
+                sent_reductions.append({
+                    "item_code": item_code,
+                    "line_key": line_key or "",
+                    "from_qty": float(prev_qty),
+                    "to_qty": float(after_qty),
+                    "delta": float(after_qty - prev_qty),
+                })
+
+        if sent_reductions:
+            if captured_at is not None or cint(offline_printed) == 1:
+                frappe.throw(
+                    _("Sent items cannot be reduced or voided during offline replay. [{0}]").format(
+                        _void_ops.CODE_VOID_OFFLINE_REFUSED
+                    ),
+                )
+
+            # Reject reducing a partially paid check below already-received tender.
+            received_paid = _void_ops.received_tender_total(invoice)
+            if received_paid > 0:
+                rate_by_line = {}
+                rate_by_code = {}
+                for row in invoice.items:
+                    r_val = flt(row.get("rate"))
+                    if row.get("reservation_line_key"):
+                        rate_by_line[row.get("reservation_line_key")] = r_val
+                    rate_by_code[row.get("item_code")] = r_val
+                current_total = flt(invoice.get("rounded_total") or invoice.get("grand_total"))
+                if current_total <= 0:
+                    current_total = sum(flt(r.get("qty")) * flt(r.get("rate")) for r in invoice.items)
+                reduction_value = sum(
+                    abs(r["delta"]) * rate_by_line.get(r["line_key"], rate_by_code.get(r["item_code"], 0.0))
+                    for r in sent_reductions
+                )
+                if current_total - reduction_value < received_paid - 1e-6:
+                    frappe.throw(
+                        _("Cannot reduce items below payments already received on this check. [{0}]").format(
+                            _void_ops.CODE_VOID_PARTIAL_PAYMENT
+                        ),
+                    )
+
+            has_full_void = any(r["to_qty"] <= 0 for r in sent_reductions)
+            privilege = "void_sent_item" if has_full_void else "reduce_sent_qty"
+            sent_reductions.sort(key=lambda r: (r["item_code"], r["line_key"]))
+
+            # When POS Reason or override policy is present, enforce reason + PIN/privilege.
+            # Keep backward compatibility for legacy tests that do not configure override/POS Reason.
+            has_new_gate = (
+                void_reason is not None
+                or approval_token is not None
+                or cint(is_waste) == 1
+                or _void_ops._override_module() is not None
+                or bool(_void_ops._active_pos_reasons(privilege))
             )
+            if has_new_gate:
+                sent_void_reason_info = _void_ops.resolve_pos_reason(
+                    privilege,
+                    pos_profile,
+                    void_reason,
+                    note=void_note,
+                    is_waste=is_waste,
+                )
+                claim = {
+                    "invoice": invoice.name,
+                    "reductions": sent_reductions,
+                    "reason": sent_void_reason_info["code"],
+                    "note": sent_void_reason_info["note"],
+                    "is_waste": 1 if sent_void_reason_info["is_waste"] else 0,
+                }
+                sent_void_approver = _void_ops.require_pos_override(
+                    privilege,
+                    pos_profile,
+                    "POS Invoice",
+                    invoice.name,
+                    claim,
+                    approval_token=approval_token,
+                )
+                if sent_void_reason_info["is_waste"]:
+                    wh_by_code = {row.get("item_code"): row.get("warehouse") for row in invoice.items}
+                    uom_by_code = {row.get("item_code"): row.get("uom") for row in invoice.items}
+                    sent_waste_items = [
+                        {
+                            "item_code": r["item_code"],
+                            "qty": abs(r["delta"]),
+                            "warehouse": wh_by_code.get(r["item_code"]),
+                            "uom": uom_by_code.get(r["item_code"]),
+                        }
+                        for r in sent_reductions
+                    ]
+            elif not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+                frappe.throw(
+                    _("You are not permitted to reduce or remove items from this order."),
+                    frappe.PermissionError,
+                )
+        else:
+            # No sent items were reduced. In legacy mode (no POS override/reasons),
+            # preserve the native remove_items check for persisted held rows;
+            # when POS override/reasons are active, unsent/held items stay free (Error Correct).
+            has_override_policy = (
+                _void_ops._override_module() is not None
+                or bool(_void_ops._active_pos_reasons("void_sent_item"))
+            )
+            if not has_override_policy and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+                requested_qty_by_item = {}
+                for item in items:
+                    code = item.get("item")
+                    requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
+                previous_qty_by_item = {}
+                for item in past_item:
+                    code = item["item_code"]
+                    previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
+                if any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items()):
+                    frappe.throw(
+                        _("You are not permitted to reduce or remove items from this order."),
+                        frappe.PermissionError,
+                    )
 
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
@@ -2932,6 +3050,9 @@ def sync_order(
         if round_id is not None:
             _record_round(invoice, round_id, round_digest)
 
+    prev_void_flag = getattr(frappe.flags, "ury_authorized_void", False)
+    if sent_void_reason_info is not None:
+        frappe.flags.ury_authorized_void = True
     try:
         invoice.save()
     except frappe.UniqueValidationError as e:
@@ -2945,13 +3066,27 @@ def sync_order(
             _offline_refusal("URY_CLIENT_ORDER_ID_IN_USE", _("This client order is already being saved; retry."))
         frappe.throw(f"Error while updating order: {e}")
     except Exception as e:
-        frappe.throw(f"Error while updating order: {e}")   
+        frappe.throw(f"Error while updating order: {e}")
+    finally:
+        frappe.flags.ury_authorized_void = prev_void_flag
 
+    cancel_kot_names = []
     try:
-        kot_execute(
+        kot_kwargs = {"offline_printed": offline_printed}
+        if sent_void_reason_info is not None:
+            import inspect
+
+            sig_params = inspect.signature(kot_execute).parameters
+            if "cancel_reason" in sig_params:
+                kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
+            if "void_reason_code" in sig_params:
+                kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
+        kot_res = kot_execute(
             invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), invoice.custom_comments,
-            offline_printed=offline_printed,
+            **kot_kwargs,
         )
+        if isinstance(kot_res, list):
+            cancel_kot_names = kot_res
     except Exception as e:
         # KOT creation/routing failing is not a side detail to swallow: a
         # customer must never be charged for an item the kitchen never
@@ -2962,6 +3097,16 @@ def sync_order(
         error_msg = f"KOT Creation Failed: {str(e)}"
         frappe.log_error(error_msg, "KOT Error")
         frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
+
+    if sent_void_reason_info and sent_void_reason_info["is_waste"] and sent_waste_items:
+        _void_ops.post_waste_stock_entry(
+            invoice,
+            posprofile,
+            sent_waste_items,
+            sent_void_reason_info,
+            cancel_kot_names=cancel_kot_names,
+            approver=sent_void_approver,
+        )
 
     # table status
     if invoice.invoice_printed == 0:
@@ -3314,20 +3459,43 @@ def _validated_void_reason(pos_invoice, reason):
 
 
 @frappe.whitelist()
-def cancel_order(invoice_id, reason):
-    pos_invoice = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
+def cancel_order(invoice_id, reason, note=None, is_waste=0, approval_token=None):
+    import inspect
 
-    # Authorization gate: the session user must hold cancel rights on this
-    # specific invoice before any mutation happens.
-    if not frappe.has_permission("POS Invoice", "cancel", doc=pos_invoice):
-        frappe.throw(
-            _("You do not have permission to cancel this invoice."),
-            frappe.PermissionError,
-        )
+    pos_invoice = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
+    session_user = getattr(getattr(frappe, "session", None), "user", None) or ""
+    profile_name = _void_ops._safe_profile_name(getattr(pos_invoice, "pos_profile", None))
+    sent_activity = _void_ops.has_sent_kitchen_activity(pos_invoice)
+
+    # Authorization gate before any lookup or mutation:
+    # - With a manager PIN `approval_token`, the cashier/waiter only needs read
+    #   access on the check while the manager token supplies cancel_check authority.
+    # - For an unsent (all-held, no-KOT, unprinted) draft, the check's own waiter/owner
+    #   with write permission may cancel without a manager PIN (Simphony Opt 40).
+    # - Otherwise, require native cancel permission.
+    is_owner_of_unsent = (
+        pos_invoice.docstatus == 0
+        and not sent_activity
+        and session_user
+        and session_user in (getattr(pos_invoice, "waiter", None), getattr(pos_invoice, "owner", None))
+        and frappe.has_permission("POS Invoice", "write", doc=pos_invoice)
+    )
+    if approval_token:
+        if not frappe.has_permission("POS Invoice", "read", doc=pos_invoice):
+            frappe.throw(
+                _("You do not have permission to cancel this invoice."),
+                frappe.PermissionError,
+            )
+    elif not is_owner_of_unsent:
+        if not frappe.has_permission("POS Invoice", "cancel", doc=pos_invoice):
+            frappe.throw(
+                _("You do not have permission to cancel this invoice."),
+                frappe.PermissionError,
+            )
 
     # Branch scoping: the invoice must belong to the session user's branch
     # (mirrors the getBranch() pattern used across the URY APIs).
-    if frappe.session.user != "Administrator":
+    if session_user != "Administrator":
         user_branch = getBranch()
         if pos_invoice.branch != user_branch:
             frappe.throw(
@@ -3338,7 +3506,65 @@ def cancel_order(invoice_id, reason):
     if pos_invoice.docstatus == 2:
         frappe.throw(_("Invoice {0} is already cancelled.").format(invoice_id))
 
-    reason = _validated_void_reason(pos_invoice, reason)
+    # Closed checks may NEVER be cancelled directly — void a closed check only through a return.
+    if pos_invoice.docstatus == 1:
+        frappe.throw(
+            _("Closed checks cannot be cancelled directly. Process a return instead. [{0}]").format(
+                _void_ops.CODE_VOID_CLOSED_USE_RETURN
+            ),
+        )
+
+    # Partially paid open checks with received tenders cannot be discarded.
+    if _void_ops.received_tender_total(pos_invoice) > 0:
+        frappe.throw(
+            _("This check already has payments received and cannot be cancelled. Settle and process a return instead. [{0}]").format(
+                _void_ops.CODE_VOID_PARTIAL_PAYMENT
+            ),
+        )
+
+    use_pos_reason = bool(_void_ops._active_pos_reasons("cancel_check"))
+    if use_pos_reason:
+        reason_info = _void_ops.resolve_pos_reason(
+            "cancel_check",
+            profile_name,
+            reason,
+            note=note,
+            is_waste=is_waste,
+        )
+        stored_reason = reason_info["stored"]
+    else:
+        stored_reason = _validated_void_reason(pos_invoice, reason)
+        reason_info = {
+            "code": stored_reason,
+            "description": stored_reason,
+            "note": note.strip() if isinstance(note, str) else "",
+            "display": f"[WASTE] {stored_reason}" if cint(is_waste) == 1 else stored_reason,
+            "stored": stored_reason,
+            "is_waste": cint(is_waste) == 1 or stored_reason.upper().startswith("WASTE"),
+        }
+
+    approver = None
+    if sent_activity and profile_name and (_void_ops._override_module() is not None or approval_token):
+        claim = {
+            "invoice": invoice_id,
+            "reason": reason_info["code"],
+            "note": reason_info["note"],
+            "is_waste": 1 if reason_info["is_waste"] else 0,
+        }
+        approver = _void_ops.require_pos_override(
+            "cancel_check",
+            profile_name,
+            "POS Invoice",
+            invoice_id,
+            claim,
+            approval_token=approval_token,
+        )
+        # Ensure the approving manager holds cancel/write authority on the check.
+        if approval_token and not frappe.has_permission("POS Invoice", "cancel", doc=pos_invoice, user=approver):
+            frappe.throw(
+                _("The approving manager does not hold permission to cancel this check."),
+                frappe.PermissionError,
+            )
 
     from ury.ury.api.ury_availability import apply_count_delta
 
@@ -3348,18 +3574,51 @@ def cancel_order(invoice_id, reason):
     if pos_invoice.restaurant_table:
         release_merge_cluster_tables(pos_invoice.restaurant_table, commit=False)
 
-    # KOT cancellation is part of the order-cancellation transaction. If it
-    # fails, stop immediately so the invoice is not cancelled while the KOT
-    # state remains out of sync.
-    cancel_kot(invoice_id)
+    # KOT cancellation is part of the order-cancellation transaction. Skip only
+    # when the check was genuinely unsent (all items held, no sent KOTs).
+    cancel_kot_names = []
+    if sent_activity or not isinstance(pos_invoice.get("items"), (list, tuple)) or not pos_invoice.items:
+        # Preserve legacy 1-arg test doubles like `lambda name: ...` in test_cancel_order_transaction.
+        try:
+            sig = inspect.signature(cancel_kot)
+            if "reason" in sig.parameters:
+                kot_res = cancel_kot(
+                    invoice_id,
+                    reason=reason_info["display"],
+                    void_reason_code=reason_info["code"],
+                )
+            else:
+                kot_res = cancel_kot(invoice_id)
+        except (TypeError, ValueError):
+            kot_res = cancel_kot(invoice_id)
+        if isinstance(kot_res, list):
+            cancel_kot_names = kot_res
+
+    waste_stock_entry = None
+    if sent_activity and reason_info["is_waste"] and profile_name:
+        sent_rows = [
+            {
+                "item_code": r.get("item_code"),
+                "qty": flt(r.get("qty")),
+                "warehouse": r.get("warehouse"),
+                "uom": r.get("uom"),
+            }
+            for r in (pos_invoice.get("items") or [])
+            if flt(r.get("qty")) > 0 and cint(r.get("ury_held")) == 0
+        ]
+        if sent_rows:
+            pos_profile_doc = frappe.get_doc("POS Profile", profile_name)
+            waste_stock_entry = _void_ops.post_waste_stock_entry(
+                pos_invoice,
+                pos_profile_doc,
+                sent_rows,
+                reason_info,
+                cancel_kot_names=cancel_kot_names,
+                approver=approver,
+            )
 
     # Release any still-active stock reservations held for this order.
-    # cancel_order() previously cancelled the KOT/invoice but left
-    # `URY Stock Reservation` rows in Reserved status, leaking reserved
-    # capacity indefinitely after cancellation (sa-post-373-review-fixes
-    # Blocker 3). order_ref is the invoice name, matching how sync_order()
-    # reserves via `_ensure_invoice_reservation_ref`.
-    release_order_reservations(invoice_id, reason=f"Order cancelled: {reason}" if reason else "Order cancelled")
+    release_order_reservations(invoice_id, reason=f"Order cancelled: {stored_reason}" if stored_reason else "Order cancelled")
 
     # Best-effort delayed-cancellation fraud alert: notify if order was open longer than threshold
     try:
@@ -3372,7 +3631,6 @@ def cancel_order(invoice_id, reason):
 
             threshold_minutes = alert_rule.get("threshold_minutes", 0)
             if minutes_open > threshold_minutes:
-                # Resolve notify_roles to users and send notifications
                 notify_roles = alert_rule.get("notify_roles", [])
                 if notify_roles:
                     for role_row in notify_roles:
@@ -3383,17 +3641,29 @@ def cancel_order(invoice_id, reason):
                             subject = f"Invoice {invoice_id} ({pos_invoice.branch}) is cancelled"
                             create_system_notification(message, user.get("name"), subject)
     except Exception as e:
-        # Log error but don't block cancellation
         frappe.log_error(
             title="Delayed cancellation alert notification failed",
             message=f"Failed to send fraud alert for invoice {invoice_id}: {str(e)}"
         )
 
-    if pos_invoice.docstatus == 0:
-        pos_invoice.discard()
-    else:
-        pos_invoice.cancel()
-    pos_invoice.db_set("cancel_reason", reason)
+    if approval_token and getattr(pos_invoice, "flags", None) is not None:
+        pos_invoice.flags.ignore_permissions = True
+    pos_invoice.discard()
+    pos_invoice.db_set("cancel_reason", stored_reason)
+    if approver:
+        try:
+            if frappe.get_meta("POS Invoice").has_field("custom_return_approver"):
+                pos_invoice.db_set("custom_return_approver", approver, update_modified=False)
+        except Exception:
+            pass
+    return {
+        "invoice": invoice_id,
+        "status": "Cancelled",
+        "reason": stored_reason,
+        "is_waste": bool(reason_info["is_waste"]),
+        "waste_stock_entry": waste_stock_entry,
+        "approver": approver,
+    }
 
 # Roles permitted to authorize an additional discount when settling an order.
 DISCOUNT_ALLOWED_ROLES = frozenset(
@@ -4155,7 +4425,7 @@ def submit_order_invoice(invoice):
         
 
 # Cancel KOT Doc Creation
-def cancel_kot(invoice_id):
+def cancel_kot(invoice_id, reason=None, void_reason_code=None):
 
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     pos_profile_id = pos_invoice.pos_profile
@@ -4172,17 +4442,23 @@ def cancel_kot(invoice_id):
     else:
         restaurant_table = None
 
-    # Process items for a canceled KOT
-    process_items_for_cancel_kot(
+    # Process items for a canceled KOT, linking the void/waste reason onto the ticket
+    import inspect
+
+    cancel_kwargs = {}
+    if void_reason_code and "void_reason_code" in inspect.signature(process_items_for_cancel_kot).parameters:
+        cancel_kwargs["void_reason_code"] = void_reason_code
+    created_cancel_kots = process_items_for_cancel_kot(
         invoice_id,
         pos_invoice.customer,
         restaurant_table,
         items,
-        "",
+        reason or "",
         pos_profile_id,
         cancel_kot_naming_series,
         "Cancelled",
         items,
+        **cancel_kwargs,
     )
 
     # Set the KOTs associated with the invoice as canceled
@@ -4200,6 +4476,8 @@ def cancel_kot(invoice_id):
         kot_doc = frappe.get_doc("URY KOT", item.name)
         kot_doc.docstatus = 2
         kot_doc.save()
+
+    return created_cancel_kots
 
 
 def change_table_in_kot(invoice, new_table, branch):

@@ -281,6 +281,7 @@ doc_events = {
         ],
         "on_update": "ury.ury.hooks.ury_pos_invoice.on_update",
         "on_discard": "ury.ury.api.table_reservation.release_reservation_check_binding",
+        "before_cancel": "ury.ury.hooks.ury_pos_invoice.before_cancel",
         "on_cancel": [
             "ury.ury.hooks.ury_pos_invoice.on_trash",
             "ury.ury.api.table_reservation.release_reservation_check_binding",

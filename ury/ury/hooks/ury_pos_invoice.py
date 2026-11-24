@@ -343,6 +343,10 @@ def validate_invoice(doc, method):
         return
     if getattr(frappe.flags, "ury_qty_reduction", False):
         return
+    if getattr(frappe.flags, "ury_authorized_void", False):
+        return
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
     # A new document has no printed copy to compare against, and a return refunds a paid
     # check; neither is an edit of a printed bill.
     if doc.is_new() or doc.get("is_return"):
@@ -390,6 +394,62 @@ def validate_invoice(doc, method):
             frappe.throw(
                 ("Cannot modify items after invoice is printed.\n{0}")
                 .format("\n".join(error_msg))
+            )
+
+    # Mutation-level sent-item void gate: REST, Desk, and old clients cannot reduce
+    # or remove already-sent items (printed or KOT fired) without going through the
+    # authorized POS void/reduction flow (even when POS Profile.remove_items == 1).
+    if int(doc.get("docstatus") or 0) == 0:
+        from ury.ury_pos.void_return_reopen import CODE_AUTH_REQUIRED, has_sent_kot_for_invoice
+
+        is_sent_check = int(doc.get("invoice_printed") or 0) == 1 or has_sent_kot_for_invoice(doc.name)
+        if is_sent_check:
+            original_doc = frappe.get_doc("POS Invoice", doc.name)
+            orig_sent = {
+                _line_identity(item): flt(item.qty)
+                for item in (original_doc.items or [])
+                if flt(item.qty) > 0 and int(item.get("ury_held") or 0) == 0
+            }
+            cur_sent = {
+                _line_identity(item): flt(item.qty)
+                for item in (doc.items or [])
+                if int(item.get("ury_held") or 0) == 0
+            }
+            if any(cur_sent.get(line, 0.0) < qty - 1e-9 for line, qty in orig_sent.items()):
+                frappe.throw(
+                    frappe._(
+                        "Reducing or removing sent items requires a reason and manager approval through the POS."
+                    )
+                    + f" [{CODE_AUTH_REQUIRED}]",
+                    frappe.PermissionError,
+                )
+
+
+def before_cancel(doc, method=None):
+    """Refuse direct cancellation of closed / fiscalised POS checks (use Return instead)."""
+    from ury.ury_pos.void_return_reopen import (
+        CODE_VOID_CLOSED_USE_RETURN,
+        CODE_VOID_FISCALISED_USE_RETURN,
+        is_fiscalised_invoice,
+    )
+
+    if is_fiscalised_invoice(doc):
+        frappe.throw(
+            frappe._(
+                "This check was fiscalised and cannot be cancelled directly. Process a return / credit note instead."
+            )
+            + f" [{CODE_VOID_FISCALISED_USE_RETURN}]",
+            frappe.ValidationError,
+        )
+
+    if int(doc.get("docstatus") or 0) == 1 and not getattr(frappe.flags, "ury_allow_pos_cancel", False):
+        if getattr(getattr(frappe, "session", None), "user", None) != "Administrator":
+            frappe.throw(
+                frappe._(
+                    "Closed checks cannot be cancelled directly. Process a return instead."
+                )
+                + f" [{CODE_VOID_CLOSED_USE_RETURN}]",
+                frappe.ValidationError,
             )
 
 
