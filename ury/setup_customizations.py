@@ -268,6 +268,17 @@ def get_custom_fields():
 					"label": "Ordering Session",
 					"insert_after": "custom_ordering_device",
 					"read_only": 1,
+				},
+				{
+					"fieldname": "ury_discount_meta",
+					"fieldtype": "Small Text",
+					"label": "POS Discount Metadata",
+					"description": "Server-only discount reason and approval metadata when siteops discount custom fields are absent.",
+					"insert_after": "custom_ordering_session",
+					"read_only": 1,
+					"hidden": 1,
+					"no_copy": 1,
+					"print_hide": 1,
 				}
 				],
 
