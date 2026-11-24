@@ -136,6 +136,30 @@ class TestPrivilegedContractParity(TestPricingPrivilegedActions):
         self.assertTrue(pricing._is_room_charge_mode("Room Charge", "Test Co"))
         self.assertFalse(pricing._is_room_charge_mode("Cash", "Test Co"))
 
+    def test_get_pos_profile_full_exposes_privileged_fields_without_nameerror(self):
+        """getPosProfileFull must import flt cleanly and return Scope e+f profile fields."""
+        import importlib
+        import sys
+        import types
+
+        # Install minimal frappe.utils stubs needed by ury.ury_pos.api import
+        utils_mod = self.h.frappe.utils
+        utils_mod.nestedset = types.SimpleNamespace()
+        utils_mod.validate_phone_number = lambda v, throw=False: True
+        self.h.frappe.get_meta = lambda dt: types.SimpleNamespace(has_field=lambda fn: False)
+        sys.modules.pop("ury.ury_pos.api", None)
+        api_mod = importlib.import_module("ury.ury_pos.api")
+        orig_get_branch = api_mod.getBranch
+        api_mod.getBranch = lambda: "Main Branch"
+        try:
+            full = api_mod.getPosProfileFull("Main Till")
+        finally:
+            api_mod.getBranch = orig_get_branch
+            sys.modules.pop("ury.ury_pos.api", None)
+        self.assertEqual(full["allow_rate_change"], 1)
+        self.assertEqual(full["custom_service_charge_rate"], 10.0)
+        self.assertEqual(full["custom_tips_payable_account"], "Tips Payable - TC")
+
 
 if __name__ == "__main__":
     unittest.main()
