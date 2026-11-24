@@ -75,7 +75,7 @@ def fiscalised(**extra):
 
 
 def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Clearing - DR",
-           guest_name="Jane Guest", copy_log_max=None):
+           guest_name="Jane Guest", copy_log_max=None, fmt_money=None):
 	"""Render one shipped format; efris maps invoice name -> efris_receipt_data() result (None: app absent)."""
 	calls = []
 
@@ -110,7 +110,7 @@ def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Cle
 			),
 			db=SimpleNamespace(get_value=get_value),
 			utils=SimpleNamespace(formatdate=str, now=lambda: "2026-11-23 12:00",
-			                      fmt_money=lambda value, **kwargs: f"UGX {value}"),
+			                      fmt_money=fmt_money or (lambda value, **kwargs: f"UGX {value}")),
 		),
 	)
 	if efris is not None:
@@ -324,6 +324,46 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 	def test_the_standard_format_is_re_synced_on_migrate(self):
 		self.assertGreater(spec(COPY)["modified"], "2026-11-23 23:00:00.000000")
 		self.assertNotIn("max(copy_number)", spec(COPY)["html"])
+
+	def test_bill_copy_formats_ugx_amounts_with_currency_formatter_not_raw_floats(self):
+		"""R4 P2: URY Bill Copy must use currency formatting (fmt_money), never raw Python floats on UGX."""
+		def ugx_fmt(value, currency=None, **kwargs):
+			num = f"{round(float(value or 0)):,}"
+			return f"{currency} {num}" if currency else num
+
+		partner = bill(
+			name="POS-INV-0002",
+			currency="UGX",
+			items=[Doc(item_code="WATER", item_name="Mineral Water", qty=2.0, amount=10000.0)],
+			taxes=[Doc(description="Exempt", tax_amount=0.0)],
+			payments=[Doc(mode_of_payment="Cash", amount=10000.0, account="Cash - DR")],
+			grand_total=10000.0,
+			rounded_total=10000.0,
+			outstanding_amount=0.0,
+		)
+		doc = bill(
+			name="POS-INV-0001",
+			currency="UGX",
+			customer="Corporate Buyer",
+			items=[
+				Doc(item_code="ROLEX", item_name="Signature Rolex", qty=2.0, amount=30000.0),
+				Doc(item_code="SODA", item_name="Soda", qty=1.0, amount=5000.0),
+			],
+			taxes=[Doc(description="VAT 18%", tax_amount=5338.98)],
+			payments=[Doc(mode_of_payment="Cash", amount=23000.0, account="Cash - DR")],
+			grand_total=35000.0,
+			rounded_total=35000.0,
+			outstanding_amount=12000.0,
+			custom_merged_pos_invoice="POS-INV-0002",
+			ury_print_partner=partner,
+		)
+		flat = text(render(COPY, doc, fmt_money=ugx_fmt)[0])
+		for expected in ("UGX 30,000", "UGX 5,000", "UGX 5,339", "UGX 35,000", "UGX 23,000",
+		                 "UGX 12,000", "UGX 10,000", "UGX 45,000", "UGX 0"):
+			self.assertIn(expected, flat, f"Expected formatted currency {expected!r} in: {flat}")
+		for raw_float in ("30000.0", "5000.0", "5338.98", "35000.0", "23000.0", "12000.0", "10000.0", "45000.0", "0.0"):
+			self.assertNotIn(raw_float, flat, f"Raw float {raw_float!r} leaked into URY Bill Copy: {flat}")
+		self.assertGreater(spec(COPY)["modified"], "2026-11-24 00:30:00.000000")
 
 
 if __name__ == "__main__":

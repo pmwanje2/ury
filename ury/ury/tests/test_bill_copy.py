@@ -549,3 +549,142 @@ class BillCopy(unittest.TestCase):
         self.assertEqual(submit.call_count, 1, 'Different session user must not dispatch a duplicate COPY #2')
         self.assertEqual(len(records), 1)
         self.assertEqual(cron_res['print_job_id'], cashier_res['print_job_id'])
+
+    def test_print_bill_copy_retry_uses_savepoint_without_committing_or_wiping_caller_tx(self):
+        """R4 P1: Retry uses a savepoint and never commits or bare-rolls-back a caller's transaction."""
+        records = []
+        doc = frappe._dict(
+            name='INV-SP1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+        attempts = {'count': 0}
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+
+            def insert(_self, **kw):
+                attempts['count'] += 1
+                if attempts['count'] == 1:
+                    raise frappe.QueryDeadlockError('simulated 1213 deadlock')
+                records.append(rec)
+                return rec
+
+            return type('Row', (), {'insert': insert})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log' and isinstance(flt, dict):
+                if 'request_key' in flt:
+                    matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                    return matches[-1] if matches else None
+                if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                    nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                    return max(nums) if nums else None
+            return None
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=[]):
+            f.DuplicateEntryError = frappe.DuplicateEntryError
+            f.QueryDeadlockError = frappe.QueryDeadlockError
+            f.QueryTimeoutError = getattr(frappe, 'QueryTimeoutError', TimeoutError)
+            f.db.transaction_writes = 1  # External caller has uncommitted work in this transaction.
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'test-cashier'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.utils.now.return_value = '2026-11-24 06:30:00'
+            f.get_print.side_effect = lambda dt, name, print_format=None, doc=None, **kw: (
+                f'<article><h1>COPY #{doc.copy_number}</h1></article>'
+            )
+
+            res = api.print_bill_copy('INV-SP1', idempotency_key='sp-key', delivery='browser')
+
+        self.assertEqual(res['status'], 'COMPLETED')
+        self.assertEqual(res['copy_number'], 1)
+        f.db.savepoint.assert_called()
+        f.db.rollback.assert_called()
+        for call in f.db.rollback.call_args_list:
+            self.assertTrue(
+                call.kwargs.get('save_point'),
+                f'print_bill_copy must roll back only its savepoint, not caller transaction: {call}',
+            )
+        f.db.commit.assert_not_called()
+
+    def test_print_bill_copy_recognizes_legacy_r2_request_key_and_prevents_copy_2(self):
+        """R4 P2: Pre-upgrade R2 [owner, invoice, key] row must not be duplicated as COPY #2."""
+        from hashlib import sha256
+
+        legacy_key = sha256(json.dumps(['cashier@example.com', 'INV-UPG1', 'efris-auto-INV-UPG1']).encode()).hexdigest()
+        records = [
+            frappe._dict(
+                name=f'COPY-{legacy_key}-1',
+                print_job_id=f'COPY-{legacy_key}-1',
+                request_key=legacy_key,
+                copy_slot=None,
+                invoice='INV-UPG1',
+                job_owner='cashier@example.com',
+                printer='Bar Printer',
+                status='SUBMITTED',
+                failure_reason=None,
+                copy_number=1,
+                attempt=1,
+            ),
+        ]
+        pending_status = {'PENDING-EFRIS-INV-UPG1': 'AWAITING_FDN'}
+        doc = frappe._dict(
+            name='INV-UPG1', status='Paid', branch='West', pos_profile='Bar', docstatus=1,
+            restaurant_table='T1', currency='UGX', items=[], taxes=[], payments=[],
+            grand_total=5000, rounded_total=5000, outstanding_amount=0,
+        )
+
+        def get_doc(arg, *args, **kwargs):
+            if arg == 'POS Invoice':
+                return frappe._dict(doc)
+            rec = frappe._dict(arg)
+            return type('Row', (), {'insert': lambda _, **kw: records.append(rec) or rec})()
+
+        def get_value(dt, flt=None, fieldname=None, as_dict=False, order_by=None, for_update=False, **kw):
+            if dt == 'URY Bill Reprint Log':
+                if isinstance(flt, str):
+                    if flt == 'PENDING-EFRIS-INV-UPG1' and fieldname == 'job_owner':
+                        return 'cashier@example.com'
+                    return next((r for r in records if r.name == flt), None)
+                if isinstance(flt, dict):
+                    if 'request_key' in flt:
+                        matches = [r for r in records if r.get('request_key') == flt['request_key']]
+                        return matches[-1] if matches else None
+                    if flt.get('attempt') == 1 and fieldname == 'copy_number':
+                        nums = [r['copy_number'] for r in records if r.get('invoice') == flt.get('invoice') and r.get('attempt') == 1]
+                        return max(nums) if nums else None
+            return None
+
+        def set_value(dt, name, values, **kw):
+            if dt == 'URY Bill Reprint Log' and name in pending_status:
+                pending_status[name] = values.get('status', pending_status[name])
+
+        with patch.object(api, 'frappe') as f, patch.object(api, 'getBranch', return_value='West'), \
+             patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access'), \
+             patch('ury.ury.api.ury_print._bill_printers', return_value=['Bar Printer']), \
+             patch('ury.ury.printing.file_store.save_job', return_value=True), \
+             patch('ury.ury.printing.service.submit_and_monitor_print_job', return_value={'status': 'Success'}) as submit:
+            f.get_doc.side_effect = get_doc
+            f.get_roles.return_value = ['URY Cashier']
+            f.session.user = 'cashier@example.com'
+            f.has_permission.side_effect = lambda dt, perm, **kw: perm == 'read'
+            f.db.get_value.side_effect = get_value
+            f.db.set_value.side_effect = set_value
+            f.db.exists.side_effect = lambda dt, name: dt == 'URY Bill Reprint Log' and name in pending_status
+            f.utils.now.return_value = '2026-11-24 06:30:00'
+
+            res = api.print_bill_copy('INV-UPG1', idempotency_key='efris-auto-INV-UPG1', delivery='network')
+
+        self.assertEqual(res['status'], 'SUBMITTED')
+        self.assertEqual(res['copy_number'], 1)
+        self.assertEqual(res['print_job_id'], f'COPY-{legacy_key}-1')
+        submit.assert_not_called()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(pending_status['PENDING-EFRIS-INV-UPG1'], 'DISPATCHED')
