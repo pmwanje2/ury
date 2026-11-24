@@ -44,6 +44,12 @@ export {
 } from './format';
 export type { CurrencyInfo } from './format';
 export { initPrinting, loadQzPrinter, disconnectQzPrinter, printWithQz } from './print/qz';
+export {
+  MERGED_POS_INVOICE_PRINT_FORMAT,
+  UNSAFE_POS_INVOICE_PRINT_FORMATS,
+  resolveSafePosPrintFormat,
+  buildLetterheadParams,
+} from './print/format';
 export { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from './utils/defaultCustomer';
 export type {
   DefaultCustomerEntry,

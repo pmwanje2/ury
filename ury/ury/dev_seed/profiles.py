@@ -243,7 +243,7 @@ def _seed_pos_profile(company_name, branch_name, restaurant_name):
         "selling_price_list": selling_price_list,
         "customer": customer,
         "update_stock": 1,
-        "print_format": frappe.db.get_value("Print Format", {"doc_type": "POS Invoice"}, "name"),
+        "print_format": "Merged POS Invoice Format",
         "branch": branch_name,
         "restaurant": restaurant_name,
         "paid_limit": 50000,

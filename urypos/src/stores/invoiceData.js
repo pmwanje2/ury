@@ -37,6 +37,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
     grandTotal: null,
     modifiedTime: null,
     print_format: null,
+    letter_head: null,
     cancelReason: null,
     invoiceNumber: null,
     multipleCashier:null,
@@ -80,6 +81,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
           this.branch = this.invoiceDetails.branch;
           this.company = this.invoiceDetails.company;
           this.print_format = this.invoiceDetails.print_format;
+          this.letter_head = this.invoiceDetails.letter_head || null;
           this.qz_print = this.invoiceDetails.qz_print;
           this.qz_host = this.invoiceDetails.qz_host;
           this.print_type = this.invoiceDetails.print_type;
@@ -448,11 +450,29 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
         this.tableInvoiceNo ||
         this.invoiceNumber;
       try {
+        const unsafeFormats = new Set([
+          "POS Invoice Classic",
+          "POS Invoice Bordered",
+          "POS Invoice Modern",
+          "POS Invoice Modern with Images",
+          "POS Invoice",
+          "Return POS Invoice",
+          "EFRIS POS Receipt 80mm",
+          "POS EFRIS Invoice",
+        ]);
+        const rawFmt = (this.print_format || "").trim();
+        const safePrintFormat =
+          !rawFmt || unsafeFormats.has(rawFmt)
+            ? "Merged POS Invoice Format"
+            : rawFmt;
+        const configuredLetterHead = (this.letter_head || "").trim();
         if (this.print_type === "qz") {
           const printHTML = {
             doc: "POS Invoice",
             name: invoiceNo,
-            print_format: this.print_format,
+            print_format: safePrintFormat,
+            no_letterhead: configuredLetterHead ? 0 : 1,
+            letterhead: configuredLetterHead || "No Letterhead",
             _lang: "en",
           };
           const result = await this.call.get(
@@ -486,7 +506,7 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
               doctype: "POS Invoice",
               name: invoiceNo,
               printer_setting: this.printer,
-              print_format: this.print_format,
+              print_format: safePrintFormat,
             };
             const printingCall = async () => {
               const res = await this.call.post(
@@ -564,7 +584,10 @@ export const useInvoiceDataStore = defineStore("invoiceData", {
           }
         } else {
           // Socket printing using printview redirection
-          const url = `/printview?doctype=POS Invoice&name=${invoiceNo}&format=${this.print_format}&no_letterhead=1&settings={}&letterhead=No Letterhead&trigger_print=1&_lang=en`;
+          const letterheadParams = configuredLetterHead
+            ? `&no_letterhead=0&letterhead=${encodeURIComponent(configuredLetterHead)}`
+            : "&no_letterhead=1&letterhead=No%20Letterhead";
+          const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(invoiceNo)}&format=${encodeURIComponent(safePrintFormat)}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
           window.open(url, "_blank", "noopener,noreferrer");
           try {
             await this.call.post("ury.ury.api.ury_print.qz_print_update", {
