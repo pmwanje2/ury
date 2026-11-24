@@ -1,5 +1,6 @@
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call, printWithQz } from '@ury/core';
+import { buildLetterheadParams } from '@ury/core/print-format';
 import {
   getInvoicePrintHtml,
   networkPrint,
@@ -30,7 +31,7 @@ export interface PrintBillCopyResult {
 
 export interface PrintBillCopyParams {
   orderId: string;
-  posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host'>;
+  posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host' | 'letter_head'>;
   idempotencyKey: string;
 }
 
@@ -60,9 +61,10 @@ export async function printBillCopy({ orderId, posProfile, idempotencyKey }: Pri
     }
   } else if (delivery === 'browser') {
     const copyParam = result.copy_number ? `&copy_number=${result.copy_number}` : '';
+    const { queryString: letterheadParams } = buildLetterheadParams(posProfile.letter_head);
     const url =
       result.print_url ||
-      `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy&no_letterhead=1&trigger_print=1${copyParam}`;
+      `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy${letterheadParams}&trigger_print=1${copyParam}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   }
   return result;
@@ -77,7 +79,7 @@ export async function printOrder({ orderId, posProfile, printFormat, skipStatusU
     if (!qz_host) {
       throw new Error('QZ host is not set');
     }
-    const html = await getInvoicePrintHtml(orderId, format as string);
+    const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
     await printWithQz(qz_host, html);
     if (!skipStatusUpdate) {
       await updatePrintStatus(orderId);
@@ -96,10 +98,7 @@ export async function printOrder({ orderId, posProfile, printFormat, skipStatusU
   } else {
     // Redirect to printview page, respecting configured POS Profile letter_head
     const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
-    const configuredLetterHead = (letter_head || '').trim();
-    const letterheadParams = configuredLetterHead
-      ? `&no_letterhead=0&letterhead=${encodeURIComponent(configuredLetterHead)}`
-      : '&no_letterhead=1&letterhead=No%20Letterhead';
+    const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
     const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
     window.open(url, '_blank', 'noopener,noreferrer');
     if (!skipStatusUpdate) {

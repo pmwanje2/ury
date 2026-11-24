@@ -16,10 +16,8 @@ from frappe.www.printview import get_html_and_style
 
 from ury.ury.print_format.defaults import (
 	GUEST_CHECK_PRINT_FORMAT,
-	UNSAFE_POS_INVOICE_PRINT_FORMATS,
 	configure_pos_invoice_print_formats,
 )
-
 
 XSS_PAYLOAD = 'Grace & Co <script>window.__xss=1;alert(1)</script> <img src=x onerror="window.__img_xss=1">'
 
@@ -105,6 +103,13 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 		]
 		self.assertIn(GUEST_CHECK_PRINT_FORMAT, picker)
 
+		# 4. configure_pos_invoice_print_formats must not re-run on every migrate and clobber admin overrides
+		after_migrate_hooks = frappe.get_hooks("after_migrate") or []
+		self.assertNotIn(
+			"ury.ury.print_format.defaults.configure_pos_invoice_print_formats",
+			after_migrate_hooks,
+		)
+
 	def test_03_hospitality_invoice_refuses_classic_while_default_escapes_xss(self):
 		"""P1-4: Hospitality POS Invoice refuses POS Invoice Classic cleanly via guards & before_print."""
 		from ury.ury.print_format.guards import get_html_and_style as guarded_get_html_and_style
@@ -183,7 +188,11 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 					self.assertNotIn(raw, html, f"Exploitable raw XSS leaked: {raw}")
 
 	def test_05_server_pdf_with_local_logo_does_not_fail_wkhtmltopdf_network_error(self):
-		"""P1-5: Server PDF (wkhtmltopdf / CUPS path) with a local logo succeeds without ConnectionRefusedError."""
+		"""P1-5: Local logos inline as data URIs (never HTTP host URLs) and render cleanly via wkhtmltopdf."""
+		from unittest.mock import patch
+
+		from frappe.utils.pdf import get_pdf
+
 		from ury.ury.print_format.utils import resolve_bill_logo_src
 
 		pub_files = frappe.get_site_path("public", "files")
@@ -194,20 +203,60 @@ class TestPosPrintFormatSecurity(unittest.TestCase):
 		try:
 			src = resolve_bill_logo_src("/files/_test_maximus_logo.svg")
 			self.assertTrue(src.startswith("data:image/svg+xml;base64,"), src)
+			self.assertEqual(resolve_bill_logo_src("/files/../../etc/passwd"), "")
 
 			doc = self._make_in_memory_invoice(docstatus=0, hospitality=True)
 			doc.customer_name = "PDF Check Guest"
 			doc.items[0].item_name = "Grilled Tilapia"
 			doc.items[0].comment = "No salt"
-			pdf_bytes = frappe.get_print(
-				"POS Invoice",
-				doc.name,
-				GUEST_CHECK_PRINT_FORMAT,
-				doc=doc,
-				as_pdf=True,
-				no_letterhead=0,
-			)
-			self.assertTrue(pdf_bytes.startswith(b"%PDF"), "Expected valid PDF bytes from wkhtmltopdf")
+
+			real_get_value = frappe.db.get_value
+
+			def _get_value_with_logo(doctype, *args, **kwargs):
+				if doctype == "Company" and args and args[0] == doc.company:
+					fields = args[1] if len(args) >= 2 else kwargs.get("fieldname")
+					if fields == "company_logo":
+						return "/files/_test_maximus_logo.svg"
+					if isinstance(fields, (list, tuple)) and "company_logo" in fields:
+						return frappe._dict(
+							company_name=doc.company,
+							tax_id=None,
+							phone_no=None,
+							company_logo="/files/_test_maximus_logo.svg",
+						)
+				return real_get_value(doctype, *args, **kwargs)
+
+			from frappe.utils.jinja import get_jenv
+
+			jenv_db = get_jenv().globals["frappe"].db
+			with (
+				patch.object(frappe.db, "get_value", side_effect=_get_value_with_logo),
+				patch.dict(jenv_db, {"get_value": _get_value_with_logo}),
+			):
+				for fmt in (GUEST_CHECK_PRINT_FORMAT, "URY Bill Copy"):
+					with self.subTest(print_format=fmt):
+						out = get_html_and_style(
+							doc=json.dumps(doc.as_dict(), default=str),
+							print_format=fmt,
+							no_letterhead=0,
+						)
+						html = out.get("html") or ""
+						self.assertIn("data:image/svg+xml;base64,", html)
+						self.assertNotIn("/files/_test_maximus_logo.svg", html)
+						# Standalone HTML renders to valid PDF bytes via wkhtmltopdf with zero network fetches
+						pdf_bytes = get_pdf(html)
+						self.assertTrue(pdf_bytes.startswith(b"%PDF"), f"Expected valid PDF bytes for {fmt}")
+						# Full printview wrapper also receives the inlined data URI, never an HTTP logo URL
+						full_html = frappe.get_print(
+							"POS Invoice",
+							doc.name,
+							fmt,
+							doc=doc,
+							as_pdf=False,
+							no_letterhead=0,
+						)
+						self.assertIn("data:image/svg+xml;base64,", full_html)
+						self.assertNotIn("/files/_test_maximus_logo.svg", full_html)
 		finally:
 			if os.path.exists(logo_path):
 				os.remove(logo_path)

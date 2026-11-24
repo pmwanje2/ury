@@ -527,6 +527,7 @@ describe("PrinterConfigPage", () => {
 
     render(<PrinterConfigPage />);
     await screen.findByTestId("printer-section-pos-profile");
+    await waitFor(() => expect(document.getElementById("print_format")).toBeTruthy());
     expect(mockCall).toHaveBeenCalledWith(
       "frappe.client.get_list",
       expect.objectContaining({
@@ -534,9 +535,9 @@ describe("PrinterConfigPage", () => {
         filters: [["disabled", "=", 0]],
       })
     );
-    const selectTrigger = document.getElementById("print_format");
-    expect(selectTrigger).toBeTruthy();
-    await userEvent.click(selectTrigger!);
+    const selectTrigger = document.getElementById("print_format")!;
+    fireEvent.focus(selectTrigger);
+    fireEvent.click(selectTrigger);
     expect(await screen.findByText("Restaurant Receipt 80mm")).toBeInTheDocument();
     expect(screen.queryByText("POS Invoice Classic")).not.toBeInTheDocument();
     expect(screen.queryByText("POS EFRIS Invoice")).not.toBeInTheDocument();

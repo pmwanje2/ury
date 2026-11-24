@@ -17,6 +17,7 @@ import { Switch } from '../../components/ui/switch';
 import { SearchableSelect } from '../../components/common/SearchableSelect';
 import { useBranchContext } from '../../context/BranchContext';
 import { call } from '@ury/core';
+import { UNSAFE_POS_INVOICE_PRINT_FORMATS } from '@ury/core/print-format';
 import { __ } from '../../i18n';
 
 type SectionKey = 'pos_profile' | 'production_unit' | 'room';
@@ -223,9 +224,12 @@ export const PrinterConfigPage: React.FC = () => {
       call('frappe.client.get_list', { doctype: 'Print Heading', fields: ['name'] }),
       call('frappe.client.get_list', { doctype: 'Terms and Conditions', fields: ['name'] }),
     ]);
+    const safePrintFormats = (unwrap(printFormats) || []).filter(
+      (row: { name?: string }) => !UNSAFE_POS_INVOICE_PRINT_FORMATS.has((row?.name || '').trim())
+    );
     const next: OptionList = {
       ...EMPTY_OPTIONS,
-      printFormats: toOptions(unwrap(printFormats)),
+      printFormats: toOptions(safePrintFormats),
       letterHeads: toOptions(unwrap(letterHeads)),
       printHeadings: toOptions(unwrap(printHeadings)),
       terms: toOptions(unwrap(terms)),

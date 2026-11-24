@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 import frappe
 from frappe.utils import now_datetime
@@ -8,16 +7,16 @@ from frappe.www.printview import validate_print_permission
 from ury.ury.printing.print_job_monitor import register_print_job
 
 
-def is_print_status_tracking_disabled(pos_profile: Optional[str] = None) -> bool:
+def is_print_status_tracking_disabled(pos_profile: str | None = None) -> bool:
     """Check whether print status and printer monitoring are disabled for the given profile or globally."""
     if pos_profile:
         return bool(frappe.db.get_value("POS Profile", pos_profile, "custom_disable_print_status_tracking"))
-    
+
     # If no specific profile was given, check active user's pos_profile if available in session
     return False
 
 
-def _make_print_job_id(printer_name: str = "Printer", cups_job_id: Optional[int] = None) -> str:
+def _make_print_job_id(printer_name: str = "Printer", cups_job_id: int | None = None) -> str:
     """Generate a unique URY Print Job identity formatted as Printer Name + CUPS Job ID."""
     clean_printer = str(printer_name or "Printer").strip().replace(" ", "_")
     if cups_job_id is not None:
@@ -29,12 +28,13 @@ def submit_and_monitor_print_job(
     doctype: str,
     name: str,
     printer_setting: str,
-    print_format: Optional[str] = None,
+    print_format: str | None = None,
     doc=None,
     no_letterhead: int = 0,
     job_type: str = "BILL",
-    extra_metadata: Optional[dict] = None,
+    extra_metadata: dict | None = None,
     copies: int = 1,
+    letterhead: str | None = None,
 ) -> dict:
     """Submit a document to CUPS and register a URY Print Job for monitoring.
 
@@ -74,22 +74,44 @@ def submit_and_monitor_print_job(
         return {"status": "Failure", "message": f"Failed to connect to printer: {e}"}
 
     resolved_format = print_format
-    if not resolved_format and doctype == "POS Invoice":
-        from ury.ury.print_format.defaults import resolve_safe_pos_print_format
+    resolved_letterhead = letterhead
+    if doctype == "POS Invoice":
+        from ury.ury.print_format.defaults import (
+            resolve_safe_pos_print_format,
+            validate_pos_invoice_print_format,
+        )
 
         pos_profile = getattr(target_doc, "pos_profile", None) or frappe.db.get_value("POS Invoice", name, "pos_profile")
-        if pos_profile:
-            resolved_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
-        default_meta_fmt = frappe.get_meta("POS Invoice").default_print_format if hasattr(frappe, "get_meta") else None
-        resolved_format = resolve_safe_pos_print_format(resolved_format, default_format=default_meta_fmt)
+        if resolved_format:
+            validate_pos_invoice_print_format(target_doc, resolved_format)
+        else:
+            if pos_profile:
+                resolved_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
+            default_meta_fmt = frappe.get_meta("POS Invoice").default_print_format if hasattr(frappe, "get_meta") else None
+            resolved_format = resolve_safe_pos_print_format(resolved_format, default_format=default_meta_fmt)
+        if not no_letterhead and not resolved_letterhead:
+            doc_lh = getattr(target_doc, "letter_head", None)
+            if isinstance(doc_lh, str) and doc_lh.strip():
+                resolved_letterhead = doc_lh.strip()
+            elif isinstance(pos_profile, str) and pos_profile.strip():
+                prof_lh = frappe.db.get_value("POS Profile", pos_profile.strip(), "letter_head")
+                if isinstance(prof_lh, str) and prof_lh.strip():
+                    resolved_letterhead = prof_lh.strip()
 
+    get_print_kwargs = dict(doc=doc, no_letterhead=no_letterhead, as_pdf=True)
+    if doctype == "POS Invoice":
+        # Guest-check formats inline their CSS and local logos; ignore unreachable printview CSS assets on worker boxes.
+        get_print_kwargs["pdf_options"] = {
+            "load-error-handling": "ignore",
+            "load-media-error-handling": "ignore",
+        }
+    if resolved_letterhead:
+        get_print_kwargs["letterhead"] = resolved_letterhead
     pdf_content = frappe.get_print(
         doctype,
         name,
         resolved_format,
-        doc=doc,
-        no_letterhead=no_letterhead,
-        as_pdf=True,
+        **get_print_kwargs,
     )
 
     file_path = os.path.join("/", "tmp", f"frappe-pdf-{frappe.generate_hash()}.pdf")

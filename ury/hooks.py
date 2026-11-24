@@ -177,6 +177,7 @@ jinja = {
         "ury.ury.api.self_ordering.feedback_receipt_link",
         "ury.ury.api.self_ordering.feedback_receipt_qr",
         "ury.ury.print_format.utils.format_bill_money",
+        "ury.ury.print_format.utils.resolve_bill_logo_src",
     ],
 }
 
@@ -241,7 +242,6 @@ after_migrate = [
     # Role Permissions, User Permissions and Data Import, which site governance depends on.
     "ury.ury.desk_islands.after_migrate",
     "ury.ury.brief_admin.ensure_default",
-    "ury.ury.print_format.defaults.configure_pos_invoice_print_formats",
 ]
 
 # The "URY Sales Plan" Workflow fixture (ury/ury/workflow/ury_sales_plan/ury_sales_plan.json)
@@ -437,7 +437,9 @@ before_tests = "ury.install.before_tests"
 # ------------------------------
 #
 override_whitelisted_methods = {
-	"erpnext.setup.demo.clear_demo_data": "ury.setup.demo.clear_demo_data"
+	"erpnext.setup.demo.clear_demo_data": "ury.setup.demo.clear_demo_data",
+	"frappe.www.printview.get_html_and_style": "ury.ury.print_format.guards.get_html_and_style",
+	"frappe.utils.print_format.download_pdf": "ury.ury.print_format.guards.download_pdf",
 }
 #
 # each overriding function accepts a `data` argument;
