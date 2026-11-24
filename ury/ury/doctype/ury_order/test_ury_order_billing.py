@@ -791,10 +791,12 @@ class TestMakeInvoice(FrappeTestCase):
         )
 
     def test_zero_amount_placeholder_rows_are_replaced_but_positive_tenders_cannot_be_dropped(self):
-        """Zero-amount placeholders written by `sync_order`/`split_bill` are replaced on
-        settlement, whereas positive tenders already recorded on the check cannot be
+        """Unreceived draft/placeholder rows (including pre-upgrade non-zero placeholders)
+        are replaced on settlement, whereas server-marked received tenders cannot be
         silently dropped."""
-        placeholder_invoice = self._invoice(payments=[_FakeRow(mode_of_payment="Cash", amount=0)])
+        placeholder_invoice = self._invoice(
+            payments=[_FakeRow(mode_of_payment="Cash", amount=999, custom_tender_received=0)]
+        )
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
             self._run(placeholder_invoice, [{"mode_of_payment": "Card", "amount": 250}], stack)
@@ -802,7 +804,9 @@ class TestMakeInvoice(FrappeTestCase):
         self.assertEqual(placeholder_invoice.payments[0].mode_of_payment, "Card")
         self.assertEqual(placeholder_invoice.payments[0].amount, 250)
 
-        paid_invoice = self._invoice(payments=[_FakeRow(mode_of_payment="Cash", amount=999)])
+        paid_invoice = self._invoice(
+            payments=[_FakeRow(mode_of_payment="Cash", amount=999, custom_tender_received=1)]
+        )
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
             with self.assertRaises(frappe.ValidationError):
@@ -1097,3 +1101,29 @@ class TestSplitBillGuards(FrappeTestCase):
             stack.enter_context(patch(f"{MODULE}.frappe.generate_hash", return_value="SPLITGRP01"))
             split_bill("POS-INV-SRC", [{"name": "ITEM-ROW-A", "qty": 1}])
         self.assertEqual([(p.mode_of_payment, p.amount) for p in created.payments], [("Cash", 0)])
+
+    def test_split_bill_keeps_received_tender_on_source_without_copying_to_child(self):
+        source = self._source(
+            payments=[_FakeRow(mode_of_payment="Cash", amount=100, custom_tender_received=1)]
+        )
+        source.grand_total = source.rounded_total = 150
+        created = _FakeInvoice(items=[], payments=[], invoice_created=0)
+        with ExitStack() as stack:
+            stack.enter_context(patch(f"{MODULE}.frappe.has_permission", return_value=True))
+            stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=source))
+            stack.enter_context(patch(f"{MODULE}.frappe.new_doc", return_value=created))
+            stack.enter_context(patch(f"{MODULE}.getBranch", return_value="Test Branch"))
+            stack.enter_context(patch(f"{MODULE}._enforce_order_access"))
+            stack.enter_context(patch(f"{MODULE}.reconcile_order_reservations"))
+            stack.enter_context(patch(f"{MODULE}.frappe.db.set_value"))
+            stack.enter_context(patch(f"{MODULE}.frappe.get_all", return_value=[]))
+            stack.enter_context(patch(f"{MODULE}.frappe.generate_hash", return_value="SPLITGRP02"))
+            split_bill("POS-INV-SRC", [{"name": "ITEM-ROW-A", "qty": 1}])
+        self.assertEqual(
+            [(p.mode_of_payment, p.amount, int(p.get("custom_tender_received") or 0)) for p in source.payments],
+            [("Cash", 100, 1)],
+        )
+        self.assertEqual(
+            [(p.mode_of_payment, p.amount, int(p.get("custom_tender_received") or 0)) for p in created.payments],
+            [("Cash", 0, 0)],
+        )

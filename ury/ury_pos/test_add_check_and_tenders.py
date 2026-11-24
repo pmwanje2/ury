@@ -140,6 +140,7 @@ class TestTillTenderConfiguration(Loaded):
         self.enterContext(patch.object(self.api, "getBranch", return_value="Lakeside"))
         self.profile = Profile(
             name="Lakeside Till", branch="Lakeside", warehouse="Stores", company="Lakeside Hotel",
+            currency="UGX",
             table_attention_time=10, print_format="Receipt", paid_limit=50, custom_enable_discount=1,
             custom_enable_multiple_cashier=0, custom_edit_order_type=0, custom_enable_kot_reprint=0,
             custom_invoice_warning_time=0, qz_print=0, qz_host=None, printer_settings=[],
@@ -152,6 +153,7 @@ class TestTillTenderConfiguration(Loaded):
         self.frappe.get_single.return_value = SimpleNamespace(disable_rounded_total=0)
         self.accounts = {"Cash": "Cash - LH", "Mobile Money": "MoMo - LH", "Guest Folio": "Guest Ledger Clearing - LH"}
         self.clearing = "Guest Ledger Clearing - LH"
+        self.company_currency = "USD"
         self.has_clearing_field = True
         self.frappe.get_meta.side_effect = lambda doctype: SimpleNamespace(
             has_field=lambda field: doctype == "Company" and field == "custom_guest_ledger_clearing"
@@ -167,10 +169,17 @@ class TestTillTenderConfiguration(Loaded):
             return self.clearing
         if doctype == "Company" and fieldname == "country":
             return "Uganda"
+        if doctype == "Company" and fieldname == "default_currency":
+            return self.company_currency
         return None
 
     def test_the_default_tender_is_the_profiles_default_payment_row(self):
         self.assertEqual(self.api.getPosProfile()["default_payment_mode"], "Mobile Money")
+
+    def test_get_pos_profile_exposes_profile_currency_and_falls_back_to_company_default(self):
+        self.assertEqual(self.api.getPosProfile()["currency"], "UGX")
+        self.profile.currency = None
+        self.assertEqual(self.api.getPosProfile()["currency"], "USD")
 
     def test_room_charge_tenders_are_the_methods_posting_to_guest_ledger_clearing(self):
         self.assertEqual(self.api.getPosProfile()["room_charge_modes"], ["Guest Folio"])
@@ -210,10 +219,11 @@ class TestTillTenderConfiguration(Loaded):
 
 
 class TestGetPosInvoiceItemsPayments(Loaded):
-    def test_returns_existing_positive_tenders_with_references_and_skips_zero_placeholders(self):
+    def setUp(self):
+        super().setUp()
         self.enterContext(patch.object(self.api, "getBranch", return_value="Lakeside"))
         self.frappe.has_permission.return_value = True
-        check_access = MagicMock()
+        self.check_access = MagicMock()
         self.enterContext(
             patch.dict(
                 sys.modules,
@@ -221,11 +231,14 @@ class TestGetPosInvoiceItemsPayments(Loaded):
                     "ury.ury.doctype.ury_order.ury_order": _stub(
                         "ury.ury.doctype.ury_order.ury_order",
                         consolidate_checks=self.consolidate,
-                        check_split_target_access=check_access,
+                        check_split_target_access=self.check_access,
                     )
                 },
             )
         )
+        self.frappe.get_all.return_value = []
+
+    def test_returns_only_explicitly_received_tenders_and_skips_unreceived_draft_rows(self):
         invoice = SimpleNamespace(
             name="LKG-00061",
             branch="Lakeside",
@@ -233,9 +246,21 @@ class TestGetPosInvoiceItemsPayments(Loaded):
             items=[Row(name="i1", item_name="Chicken Curry", qty=1, rate=15.0, amount=15.0, is_disposable=0)],
             taxes=[Row(description="VAT 18%", tax_amount=2.7)],
             payments=[
-                Row(mode_of_payment="Cash", amount=0.0),
-                Row(mode_of_payment="Cash", amount=5.31),
-                Row(mode_of_payment="Card", amount=10.0, reference_no="AUTH-991", clearance_date="2026-11-24"),
+                Row(mode_of_payment="Cash", amount=0.0, custom_tender_received=0),
+                # Legacy non-zero placeholder, unconfirmed self-order Phone row, and failed-print row:
+                # all have custom_tender_received=0 and must NOT appear as Already received.
+                Row(mode_of_payment="Cash", amount=5.90, custom_tender_received=0),
+                Row(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72, custom_tender_received=0),
+                Row(mode_of_payment="Mobile Money", amount=5.90),
+                # Server-marked received tenders:
+                Row(mode_of_payment="Cash", amount=5.31, custom_tender_received=1),
+                Row(
+                    mode_of_payment="Card",
+                    amount=10.0,
+                    reference_no="AUTH-991",
+                    clearance_date="2026-11-24",
+                    custom_tender_received=1,
+                ),
             ],
             get=lambda k, default=None: getattr(invoice, k, default),
         )
@@ -257,6 +282,42 @@ class TestGetPosInvoiceItemsPayments(Loaded):
                     "clearance_date": "2026-11-24",
                 },
             ],
+        )
+
+    def test_returns_confirmed_paid_phone_payment_request_but_never_unconfirmed_phone_row(self):
+        invoice = SimpleNamespace(
+            name="LKG-00122",
+            branch="Lakeside",
+            company="Lakeside Hotel",
+            items=[Row(name="i1", item_name="Iced Tea", qty=1, rate=5.0, amount=5.0, is_disposable=0)],
+            taxes=[],
+            payments=[
+                Row(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72, custom_tender_received=0),
+            ],
+            get=lambda k, default=None: getattr(invoice, k, default),
+        )
+        self.frappe.get_doc.return_value = invoice
+
+        # No Paid Payment Request -> empty paymentDetails (no false "Already received").
+        self.frappe.get_all.return_value = []
+        _, _, payments = self.api.getPosInvoiceItems("LKG-00122")
+        self.assertEqual(payments, [])
+
+        # Paid Phone Payment Request -> surfaced as received with its Payment Request reference.
+        self.frappe.get_all.return_value = [
+            Row(
+                name="PR-00122",
+                mode_of_payment="Online Mobile Money",
+                payment_account="MoMo - LH",
+                grand_total=4.72,
+                outstanding_amount=0.0,
+                status="Paid",
+            )
+        ]
+        _, _, payments = self.api.getPosInvoiceItems("LKG-00122")
+        self.assertEqual(
+            payments,
+            [{"mode_of_payment": "Online Mobile Money", "amount": 4.72, "reference_no": "PR-00122"}],
         )
 
 

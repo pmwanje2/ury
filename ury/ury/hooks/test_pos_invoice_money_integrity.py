@@ -391,5 +391,208 @@ class TestReturnCopySafety(unittest.TestCase):
         framework.clear_cache.assert_called_with(doctype="POS Invoice")
 
 
+class TestTenderReceivedFieldAndPatch(unittest.TestCase):
+    """R4: explicit server-only custom_tender_received field on Sales Invoice Payment."""
+
+    REPO_URY = Path(__file__).resolve().parents[2]  # ury/
+    FIELD_NAME = "Sales Invoice Payment-custom_tender_received"
+
+    def _custom_fields(self):
+        import json
+
+        path = self.REPO_URY / "fixtures" / "custom_field.json"
+        return {row["name"]: row for row in json.loads(path.read_text(encoding="utf-8"))}
+
+    def test_custom_field_fixture_hooks_and_setup_define_server_only_no_copy_tender_received(self):
+        fields = self._custom_fields()
+        self.assertIn(self.FIELD_NAME, fields, f"{self.FIELD_NAME} missing from custom_field.json")
+        row = fields[self.FIELD_NAME]
+        self.assertEqual(row.get("dt"), "Sales Invoice Payment")
+        self.assertEqual(row.get("fieldname"), "custom_tender_received")
+        self.assertEqual(row.get("fieldtype"), "Check")
+        self.assertEqual(str(row.get("default")), "0")
+        self.assertEqual(row.get("no_copy"), 1)
+        self.assertEqual(row.get("read_only"), 1)
+        self.assertEqual(row.get("print_hide"), 1)
+
+        hooks_text = (self.REPO_URY / "hooks.py").read_text(encoding="utf-8")
+        self.assertIn(f'"{self.FIELD_NAME}"', hooks_text)
+        self.assertIn("mark_phone_payment_received", hooks_text)
+
+        setup_text = (self.REPO_URY / "setup_customizations.py").read_text(encoding="utf-8")
+        self.assertIn('"Sales Invoice Payment"', setup_text)
+        self.assertIn('"custom_tender_received"', setup_text)
+
+    def test_existing_site_patch_installs_field_idempotently_without_backfilling_existing_rows(self):
+        patch_entry = "ury.patches.v2_0.add_sales_invoice_payment_tender_received"
+        patches_txt = (self.REPO_URY / "patches.txt").read_text(encoding="utf-8").splitlines()
+        registered = [line.split("#", 1)[0].strip() for line in patches_txt]
+        self.assertIn(patch_entry, registered, "tender_received patch must be registered in ury/patches.txt")
+
+        patch_file = self.REPO_URY / "patches" / "v2_0" / "add_sales_invoice_payment_tender_received.py"
+        self.assertTrue(patch_file.exists(), f"missing patch file {patch_file}")
+
+        framework, modules = _framework()
+        created = []
+        stored = {}
+
+        def fake_create(definitions, **kw):
+            created.append(definitions)
+            for dt, field_defs in definitions.items():
+                for fd in field_defs:
+                    stored[f"{dt}-{fd['fieldname']}"] = dict(fd)
+
+        framework.db.exists.side_effect = lambda dt, name: dt == "Custom Field" and name in stored
+        framework.db.get_value.side_effect = lambda dt, name, fields, as_dict=False, *a, **k: (
+            Row(stored[name]) if dt == "Custom Field" and name in stored else None
+        )
+        modules["frappe.custom.doctype.custom_field.custom_field"] = _stub(
+            "frappe.custom.doctype.custom_field.custom_field",
+            create_custom_fields=fake_create,
+        )
+        modules["ury.setup_customizations"] = _stub(
+            "ury.setup_customizations",
+            get_custom_fields=lambda: {
+                "Sales Invoice Payment": [
+                    {
+                        "fieldname": "custom_tender_received",
+                        "fieldtype": "Check",
+                        "label": "Tender Received",
+                        "default": "0",
+                        "no_copy": 1,
+                        "read_only": 1,
+                        "print_hide": 1,
+                        "insert_after": "reference_no",
+                    }
+                ]
+            },
+        )
+
+        with patch.dict(sys.modules, modules):
+            spec = importlib.util.spec_from_file_location(patch_entry, patch_file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.execute()
+            self.assertEqual(len(created), 1)
+            self.assertIn(self.FIELD_NAME, stored)
+            self.assertEqual(stored[self.FIELD_NAME]["no_copy"], 1)
+            self.assertEqual(stored[self.FIELD_NAME]["read_only"], 1)
+            self.assertEqual(str(stored[self.FIELD_NAME]["default"]), "0")
+            # Second run must be a no-op (idempotent) and never backfill existing rows via SQL.
+            mod.execute()
+            self.assertEqual(len(created), 1)
+            framework.db.sql.assert_not_called()
+
+
+class TestConfirmedPhonePaymentsAndServerOnlyFlag(Loaded):
+    """R4: unconfirmed Phone Payment Requests never submit as paid, and clients cannot
+    forge custom_tender_received=1 on draft payment rows."""
+
+    def setUp(self):
+        super().setUp()
+        self.frappe.session = SimpleNamespace(user="cashier@example.com")
+        self.frappe.utils = _stub(
+            "frappe.utils",
+            cint=lambda value: int(value or 0),
+            flt=lambda value, precision=None: round(float(value or 0), precision) if precision is not None else float(value or 0),
+        )
+        self.phone_modes = {"Online Mobile Money": "Phone", "Cash": "Cash", "Mobile Money": "Bank"}
+        self.paid_requests = []
+        self.db_received_rows = []
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            self.phone_modes.get(name) if dt == "Mode of Payment" and field == "type" else None
+        )
+        self.frappe.get_all.side_effect = self._get_all
+
+    def _get_all(self, doctype, filters=None, fields=None, pluck=None, **kw):
+        if doctype == "Payment Request":
+            mode = (filters or {}).get("mode_of_payment")
+            return [
+                pr for pr in self.paid_requests
+                if (not mode or pr.get("mode_of_payment") == mode)
+            ]
+        if doctype == "Sales Invoice Payment":
+            return list(self.db_received_rows)
+        return []
+
+    def test_refuses_submitting_unconfirmed_phone_payment_even_when_split_across_rows(self):
+        fn = getattr(self.hooks, "validate_confirmed_phone_payments", None)
+        self.assertTrue(callable(fn), "validate_confirmed_phone_payments missing from ury_pos_invoice.py")
+        doc = Check(
+            name="LKG-00122",
+            payments=[
+                Row(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72),
+                Row(mode_of_payment="Online Mobile Money", type="Phone", amount=1.18),
+            ],
+        )
+        with self.assertRaisesRegex(Refused, "not been confirmed"):
+            fn(doc, "before_submit")
+
+    def test_refuses_submitting_phone_payment_when_amount_mismatches_confirmed_request(self):
+        fn = getattr(self.hooks, "validate_confirmed_phone_payments", None)
+        self.assertTrue(callable(fn), "validate_confirmed_phone_payments missing from ury_pos_invoice.py")
+        self.paid_requests = [
+            Row(name="PR-1", mode_of_payment="Online Mobile Money", grand_total=4.72, outstanding_amount=0.0)
+        ]
+        doc = Check(
+            name="LKG-00122",
+            payments=[Row(mode_of_payment="Online Mobile Money", type="Phone", amount=5.90)],
+        )
+        with self.assertRaisesRegex(Refused, "Confirmed payment"):
+            fn(doc, "before_submit")
+
+    def test_allows_submitting_confirmed_phone_payment_or_counter_cash_fallback(self):
+        fn = getattr(self.hooks, "validate_confirmed_phone_payments", None)
+        self.assertTrue(callable(fn), "validate_confirmed_phone_payments missing from ury_pos_invoice.py")
+        # Counter Cash on an invoice with no Paid Payment Request passes cleanly.
+        cash_doc = Check(name="LKG-00122", payments=[Row(mode_of_payment="Cash", type="Cash", amount=5.90)])
+        fn(cash_doc, "before_submit")
+
+        # Confirmed Phone payment + Cash balance passes cleanly.
+        self.paid_requests = [
+            Row(name="PR-1", mode_of_payment="Online Mobile Money", grand_total=4.72, outstanding_amount=0.0)
+        ]
+        confirmed_doc = Check(
+            name="LKG-00122",
+            payments=[
+                Row(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72),
+                Row(mode_of_payment="Cash", type="Cash", amount=1.18),
+            ],
+        )
+        fn(confirmed_doc, "before_submit")
+
+    def test_server_only_flag_blocks_client_forging_custom_tender_received(self):
+        fn = getattr(self.hooks, "validate_server_only_tender_received", None)
+        self.assertTrue(callable(fn), "validate_server_only_tender_received missing from ury_pos_invoice.py")
+        forged = Check(
+            name="LKG-FORGE",
+            payments=[Row(name="sip-1", mode_of_payment="Cash", amount=5.90, custom_tender_received=1)],
+        )
+        with self.assertRaisesRegex(Refused, "confirmed server payment"):
+            fn(forged, "validate")
+
+        # Unchanged already-received DB row is allowed on ordinary saves (e.g. adding items).
+        self.db_received_rows = [
+            Row(name="sip-1", mode_of_payment="Cash", amount=5.90, reference_no=None)
+        ]
+        fn(forged, "validate")
+
+        # Altering an existing received row's amount via client save is refused.
+        altered = Check(
+            name="LKG-FORGE",
+            payments=[Row(name="sip-1", mode_of_payment="Cash", amount=50.0, custom_tender_received=1)],
+        )
+        with self.assertRaisesRegex(Refused, "confirmed server payment"):
+            fn(altered, "validate")
+
+        # Trusted server context may write custom_tender_received=1.
+        self.db_received_rows = []
+        self.frappe.flags.ury_server_tender_received = True
+        try:
+            fn(forged, "validate")
+        finally:
+            self.frappe.flags.ury_server_tender_received = False
+
+
 if __name__ == "__main__":
     unittest.main()

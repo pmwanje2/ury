@@ -1416,6 +1416,88 @@ class TestCreatePaymentRequest(unittest.TestCase):
         self.assertNotIsInstance(ctx.exception, frappe.QueryDeadlockError)
         self.assertEqual(invoice_reads, [{"for_update": True}])
 
+    @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._resolve_session")
+    @patch(f"{MOD}.frappe.set_user")
+    def test_create_payment_request_marks_provisional_phone_row_not_received(
+        self, mock_set_user, mock_resolve_session, mock_get_doc, mock_make_pr,
+    ):
+        session = MagicMock()
+        session.invoice = "POS-INV-100"
+        session.ordering_profile = "Profile A"
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock()
+        profile.enable_customer_payment = 1
+        profile.enable_payment_link = 0
+        profile.pos_profile = "Till A"
+
+        phone_row = frappe._dict()
+        invoice = MagicMock()
+        invoice.docstatus = 0
+        invoice.name = "POS-INV-100"
+        invoice.company = "Lakeside"
+        invoice.currency = "USD"
+        invoice.payments = []
+        invoice.get.side_effect = lambda key, default=None: {"grand_total": 50.0, "rounded_total": 50.0}.get(key, default)
+        invoice.precision.return_value = 2
+        invoice.append.side_effect = lambda key, row: (invoice.payments.append(phone_row), phone_row)[1]
+
+        mock_get_doc.side_effect = lambda dt, name=None, **kw: profile if dt == "URY Self Ordering Profile" else invoice
+        pr = MagicMock(name="PR-UNCONFIRMED", grand_total=50.0, currency="USD", status="Requested")
+        pr.name = "PR-UNCONFIRMED"
+        pr.get_payment_url.return_value = "https://pay.example/PR-UNCONFIRMED"
+        mock_make_pr.return_value = pr
+
+        create_payment_request("session-token")
+        self.assertEqual(phone_row.type, "Phone")
+        self.assertEqual(phone_row.amount, 50.0)
+        self.assertEqual(phone_row.get("custom_tender_received"), 0)
+
+    def test_mark_phone_payment_received_marks_row_only_when_payment_request_is_paid(self):
+        from ury.ury.api import self_ordering
+
+        fn = getattr(self_ordering, "mark_phone_payment_received", None)
+        self.assertTrue(callable(fn), "mark_phone_payment_received missing from self_ordering.py")
+
+        phone_row = frappe._dict(
+            mode_of_payment="P2 Phone",
+            account="P2 Bank",
+            type="Phone",
+            amount=50.0,
+            custom_tender_received=0,
+        )
+        invoice = MagicMock()
+        invoice.docstatus = 0
+        invoice.name = "POS-INV-100"
+        invoice.payments = [phone_row]
+
+        unpaid_pr = frappe._dict(
+            name="PR-OPEN",
+            reference_doctype="POS Invoice",
+            reference_name="POS-INV-100",
+            payment_channel="Phone",
+            payment_request_type="Inward",
+            mode_of_payment="P2 Phone",
+            payment_account="P2 Bank",
+            grand_total=50.0,
+            docstatus=1,
+            status="Requested",
+        )
+        with patch(f"{MOD}.frappe.get_doc", return_value=invoice):
+            fn(unpaid_pr, "on_payment_authorized", "Completed")
+        self.assertEqual(phone_row.custom_tender_received, 0)
+        invoice.save.assert_not_called()
+
+        paid_pr = frappe._dict(unpaid_pr, name="PR-PAID", status="Paid", grand_total=50.0)
+        with patch(f"{MOD}.frappe.get_doc", return_value=invoice), patch(f"{MOD}.frappe.set_user"):
+            fn(paid_pr, "on_payment_authorized", "Completed")
+        self.assertEqual(phone_row.custom_tender_received, 1)
+        self.assertEqual(phone_row.reference_no, "PR-PAID")
+        self.assertEqual(phone_row.amount, 50.0)
+        invoice.save.assert_called_once()
+
 
 class TestSharePaymentLink(unittest.TestCase):
     def tearDown(self):

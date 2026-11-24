@@ -453,28 +453,49 @@ class TestAddCheckDiscountsAndTenders(Loaded):
         self.assertFalse([e for e in self.destination.events if e[0] == "save"])
 
     def test_source_tender_moves_onto_destination_as_one_tender_set(self):
-        self.source.payments = [PaymentRow(name="p2", parent="CHK-2", mode_of_payment="Cash", amount=5.90)]
-        self.order.consolidate_checks(self.destination, [self.source])
-        self.assertEqual(
-            [(row.mode_of_payment, round(float(row.amount), 2)) for row in self.destination.payments],
-            [("Cash", 5.90)],
-        )
-
-    def test_matching_tenders_on_destination_and_source_combine_without_duplicates(self):
-        self.destination.payments = [PaymentRow(mode_of_payment="Cash", amount=10.0)]
         self.source.payments = [
-            PaymentRow(mode_of_payment="Cash", amount=5.90),
-            PaymentRow(mode_of_payment="Mobile Money", amount=4.0),
+            PaymentRow(
+                name="p2",
+                parent="CHK-2",
+                mode_of_payment="Cash",
+                amount=5.90,
+                custom_tender_received=1,
+            )
         ]
         self.order.consolidate_checks(self.destination, [self.source])
         self.assertEqual(
-            [(row.mode_of_payment, round(float(row.amount), 2)) for row in self.destination.payments],
-            [("Cash", 15.90), ("Mobile Money", 4.0)],
+            [
+                (row.mode_of_payment, round(float(row.amount), 2), int(row.get("custom_tender_received") or 0))
+                for row in self.destination.payments
+            ],
+            [("Cash", 5.90, 1)],
+        )
+
+    def test_matching_tenders_on_destination_and_source_combine_without_duplicates(self):
+        self.destination.payments = [
+            PaymentRow(mode_of_payment="Cash", amount=10.0, custom_tender_received=1)
+        ]
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Cash", amount=5.90, custom_tender_received=1),
+            PaymentRow(mode_of_payment="Mobile Money", amount=4.0, custom_tender_received=1),
+        ]
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(
+            [
+                (row.mode_of_payment, round(float(row.amount), 2), int(row.get("custom_tender_received") or 0))
+                for row in self.destination.payments
+            ],
+            [("Cash", 15.90, 1), ("Mobile Money", 4.0, 1)],
         )
 
     def test_source_tender_with_external_reference_refuses_merge(self):
         self.source.payments = [
-            PaymentRow(mode_of_payment="Card", amount=5.90, reference_no="AUTH-991"),
+            PaymentRow(
+                mode_of_payment="Card",
+                amount=5.90,
+                reference_no="AUTH-991",
+                custom_tender_received=1,
+            ),
         ]
         with self.assertRaisesRegex(Refused, "external payment reference"):
             self.order.consolidate_checks(self.destination, [self.source])
@@ -483,10 +504,15 @@ class TestAddCheckDiscountsAndTenders(Loaded):
 
     def test_destination_tender_with_reference_no_refuses_merge(self):
         self.destination.payments = [
-            PaymentRow(mode_of_payment="Card", amount=10.0, reference_no="AUTH-DEST-1"),
+            PaymentRow(
+                mode_of_payment="Card",
+                amount=10.0,
+                reference_no="AUTH-DEST-1",
+                custom_tender_received=1,
+            ),
         ]
         self.source.payments = [
-            PaymentRow(mode_of_payment="Card", amount=5.0),
+            PaymentRow(mode_of_payment="Card", amount=5.0, custom_tender_received=1),
         ]
         with self.assertRaisesRegex(Refused, "external payment reference"):
             self.order.consolidate_checks(self.destination, [self.source])
@@ -496,7 +522,12 @@ class TestAddCheckDiscountsAndTenders(Loaded):
 
     def test_destination_tender_with_clearance_date_refuses_merge(self):
         self.destination.payments = [
-            PaymentRow(mode_of_payment="Card", amount=10.0, clearance_date="2026-11-24"),
+            PaymentRow(
+                mode_of_payment="Card",
+                amount=10.0,
+                clearance_date="2026-11-24",
+                custom_tender_received=1,
+            ),
         ]
         with self.assertRaisesRegex(Refused, "external payment reference"):
             self.order.consolidate_checks(self.destination, [self.source])
@@ -505,8 +536,78 @@ class TestAddCheckDiscountsAndTenders(Loaded):
 
     def test_source_tender_not_configured_on_destination_profile_refuses_merge(self):
         self.allowed_modes = ["Cash", "Mobile Money"]
-        self.source.payments = [PaymentRow(mode_of_payment="Voucher", amount=5.0)]
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Voucher", amount=5.0, custom_tender_received=1)
+        ]
         with self.assertRaisesRegex(Refused, "not configured on POS Profile"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_unreceived_positive_draft_rows_are_ignored_on_merge(self):
+        """Legacy non-zero placeholders, unconfirmed Phone rows, and failed-print rows
+        (custom_tender_received=0) are not received money and must neither move nor block merge."""
+        self.destination.payments = [
+            PaymentRow(mode_of_payment="Cash", amount=10.0, custom_tender_received=0),
+        ]
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72, custom_tender_received=0),
+            PaymentRow(mode_of_payment="Cash", amount=5.90, custom_tender_received=0),
+        ]
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 2)
+        # Unreceived rows from source must never be carried onto destination as received tenders.
+        self.assertFalse(
+            any(int(r.get("custom_tender_received") or 0) == 1 for r in self.destination.payments)
+        )
+        self.assertFalse(
+            any(r.get("mode_of_payment") == "Online Mobile Money" for r in self.destination.payments)
+        )
+
+    def test_moved_received_tender_discards_unreceived_destination_placeholder_and_handles_dict_rows(self):
+        class FrappeStyleDict(dict):
+            def __getattr__(self, key):
+                return self.get(key)
+
+        self.destination.payments = [
+            PaymentRow(mode_of_payment="Cash", amount=10.0, custom_tender_received=0),
+        ]
+        self.source.payments = [
+            FrappeStyleDict({"mode_of_payment": "Cash", "amount": 5.90, "custom_tender_received": 1}),
+        ]
+        self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(
+            [
+                (r.get("mode_of_payment"), round(float(r.get("amount")), 2), int(r.get("custom_tender_received") or 0))
+                for r in self.destination.payments
+            ],
+            [("Cash", 5.90, 1)],
+        )
+
+    def test_confirmed_paid_phone_payment_request_on_source_refuses_merge(self):
+        self.paid_requests = {
+            "CHK-2": [
+                Row(
+                    name="PR-PAID-1",
+                    mode_of_payment="Online Mobile Money",
+                    payment_account="MoMo - LH",
+                    grand_total=5.90,
+                    outstanding_amount=0.0,
+                    status="Paid",
+                )
+            ]
+        }
+
+        def get_all(doctype, filters=None, pluck=None, **kw):
+            if doctype == "Payment Request":
+                return list(self.paid_requests.get((filters or {}).get("reference_name"), []))
+            return self._get_all(doctype, filters=filters, pluck=pluck, **kw)
+
+        self.frappe.get_all.side_effect = get_all
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Online Mobile Money", type="Phone", amount=5.90, custom_tender_received=0),
+        ]
+        with self.assertRaisesRegex(Refused, "external payment reference"):
             self.order.consolidate_checks(self.destination, [self.source])
         self.assertEqual(self.source.docstatus, 0)
         self.assertFalse([e for e in self.destination.events if e[0] == "save"])
@@ -612,7 +713,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
             grand_total=23.01,
             rounded_total=23.01,
             discount_amount=0.59,
-            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31, custom_tender_received=1)],
         )
         with self.assertRaisesRegex(Refused, "Cash"):
             self._settle(check, [{"mode_of_payment": "Mobile Money", "amount": 23.01}])
@@ -624,7 +725,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
             "LKG-00061",
             grand_total=23.01,
             rounded_total=23.01,
-            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31, custom_tender_received=1)],
         )
         with self.assertRaisesRegex(Refused, "Cash"):
             self._settle(
@@ -652,6 +753,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
                     reference_date="2026-11-24",
                     clearance_date="2026-11-24",
                     account="Card - LH",
+                    custom_tender_received=1,
                 )
             ],
         )
@@ -668,13 +770,22 @@ class TestSettlementPreservesExistingTenders(Loaded):
         )
         self.assertEqual(check.payments[0].get("clearance_date"), "2026-11-24")
         self.assertEqual(check.payments[0].get("account"), "Card - LH")
+        self.assertEqual(int(check.payments[0].get("custom_tender_received") or 0), 1)
+        self.assertEqual(int(check.payments[1].get("custom_tender_received") or 0), 0)
 
     def test_refuses_altering_an_existing_tender_reference(self):
         check = Check(
             "LKG-00061",
             grand_total=23.01,
             rounded_total=23.01,
-            payments=[PaymentRow(mode_of_payment="Card", amount=10.0, reference_no="AUTH-991")],
+            payments=[
+                PaymentRow(
+                    mode_of_payment="Card",
+                    amount=10.0,
+                    reference_no="AUTH-991",
+                    custom_tender_received=1,
+                )
+            ],
         )
         with self.assertRaisesRegex(Refused, "Card"):
             self._settle(
@@ -691,7 +802,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
             "LKG-00061",
             grand_total=23.01,
             rounded_total=23.01,
-            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31, custom_tender_received=1)],
         )
         payload = [
             {"mode_of_payment": "Cash", "amount": 5.31},
@@ -708,13 +819,28 @@ class TestSettlementPreservesExistingTenders(Loaded):
             [(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments],
             [("Cash", 5.31), ("Mobile Money", 17.70)],
         )
+        # Switching the unreceived balance tender (Mobile Money -> Card) after print failure is allowed!
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "Cash", "amount": 5.31},
+                {"mode_of_payment": "Card", "amount": 17.70},
+            ],
+        )
+        self.assertEqual(
+            [
+                (r.mode_of_payment, round(float(r.amount), 2), int(r.get("custom_tender_received") or 0))
+                for r in check.payments
+            ],
+            [("Cash", 5.31, 1), ("Card", 17.70, 0)],
+        )
 
     def test_refuses_negative_payment_offsetting_existing_tender(self):
         check = Check(
             "LKG-00061",
             grand_total=23.01,
             rounded_total=23.01,
-            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31, custom_tender_received=1)],
         )
         with self.assertRaisesRegex(Refused, "Negative"):
             self._settle(
@@ -734,7 +860,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
             currency="UGX",
             grand_total=19057,
             rounded_total=19100,
-            payments=[PaymentRow(mode_of_payment="Cash", amount=19000)],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=19000, custom_tender_received=1)],
         )
         check.precision = lambda field: 0
         check.set_paid_amount = lambda: setattr(
@@ -763,7 +889,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
             grand_total=23.01,
             rounded_total=23.01,
             room_number="Room 204",
-            payments=[PaymentRow(mode_of_payment="Guest Folio", amount=5.31)],
+            payments=[PaymentRow(mode_of_payment="Guest Folio", amount=5.31, custom_tender_received=1)],
         )
         with self.assertRaisesRegex(Refused, "Room 204"):
             self._settle(
@@ -776,6 +902,176 @@ class TestSettlementPreservesExistingTenders(Loaded):
             )
         self.assertEqual(check.room_number, "Room 204")
         self.assertFalse([e for e in check.events if e[0] == "save"])
+
+    def test_whitespace_room_number_does_not_overwrite_stored_room_and_trims_valid_room(self):
+        self.frappe.get_meta.return_value = SimpleNamespace(has_field=lambda field: field == "room_number")
+        check = Check(
+            "LKG-ROOM-WS",
+            grand_total=23.01,
+            rounded_total=23.01,
+            room_number="Room 204",
+            payments=[PaymentRow(mode_of_payment="Guest Folio", amount=5.31, custom_tender_received=1)],
+        )
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "Guest Folio", "amount": 5.31},
+                {"mode_of_payment": "Cash", "amount": 17.70},
+            ],
+            room_number="   ",
+        )
+        self.assertEqual(check.room_number, "Room 204")
+
+        with self.assertRaisesRegex(Refused, "Room 204"):
+            self._settle(
+                check,
+                [
+                    {"mode_of_payment": "Guest Folio", "amount": 5.31},
+                    {"mode_of_payment": "Cash", "amount": 17.70},
+                ],
+                room_number="  Room 999  ",
+            )
+        self.assertEqual(check.room_number, "Room 204")
+
+        # On a check with no received tender (e.g. after print failure), room number can be corrected and is trimmed.
+        unreceived = Check(
+            "LKG-ROOM-UNRCV",
+            grand_total=5.90,
+            rounded_total=5.90,
+            room_number="Room 204",
+            payments=[PaymentRow(mode_of_payment="Guest Folio", amount=5.90, custom_tender_received=0)],
+        )
+        self._settle(
+            unreceived,
+            [{"mode_of_payment": "Guest Folio", "amount": 5.90}],
+            room_number="  Room 305  ",
+        )
+        self.assertEqual(unreceived.room_number, "Room 305")
+
+    def test_unreceived_positive_draft_rows_do_not_block_switching_payment_method(self):
+        """Legacy non-zero placeholder drafts, unconfirmed self-order Phone rows, and
+        failed Step-1 print rows (custom_tender_received=0) must never lock payment method."""
+        for label, row in (
+            ("legacy_placeholder", PaymentRow(mode_of_payment="Cash", amount=5.90, custom_tender_received=0)),
+            ("unconfirmed_phone", PaymentRow(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72, custom_tender_received=0)),
+            ("step1_print_fail", PaymentRow(mode_of_payment="Mobile Money", amount=5.90, custom_tender_received=0)),
+        ):
+            with self.subTest(case=label):
+                check = Check("LKG-SWITCH", grand_total=5.90, rounded_total=5.90, payments=[row])
+                self._settle(check, [{"mode_of_payment": "Card", "amount": 5.90}])
+                self.assertEqual(
+                    [(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments],
+                    [("Card", 5.90)],
+                )
+
+    def test_client_cannot_mark_tender_received_via_make_invoice_and_print_fail_allows_mode_switch(self):
+        check = Check("LKG-PRINT-FAIL", grand_total=5.90, rounded_total=5.90)
+        # Step 1 (submit_invoice=0) — even a hostile client passing custom_tender_received=1 cannot set it!
+        self._settle(
+            check,
+            [{"mode_of_payment": "Mobile Money", "amount": 5.90, "custom_tender_received": 1}],
+            submit_invoice=0,
+        )
+        self.assertEqual(int(check.payments[0].get("custom_tender_received") or 0), 0)
+
+        # Print fails -> cashier switches to Cash -> succeeds cleanly!
+        self._settle(check, [{"mode_of_payment": "Cash", "amount": 5.90}], submit_invoice=0)
+        self.assertEqual(
+            [(r.mode_of_payment, round(float(r.amount), 2), int(r.get("custom_tender_received") or 0)) for r in check.payments],
+            [("Cash", 5.90, 0)],
+        )
+
+    def test_make_invoice_refuses_unconfirmed_phone_payment_even_on_draft_save_but_allows_counter_cash(self):
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "Online Mobile Money" and field == "type" else 0
+        )
+        check = Check(
+            "LKG-00122",
+            grand_total=5.90,
+            rounded_total=5.90,
+            payments=[PaymentRow(mode_of_payment="Online Mobile Money", type="Phone", amount=4.72, custom_tender_received=0)],
+        )
+        with self.assertRaisesRegex(Refused, "not been confirmed"):
+            self._settle(check, [{"mode_of_payment": "Online Mobile Money", "amount": 5.90}], submit_invoice=0)
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+        # Counter Cash on the same abandoned self-order check succeeds cleanly.
+        self._settle(check, [{"mode_of_payment": "Cash", "amount": 5.90}], submit_invoice=0)
+        self.assertEqual([(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments], [("Cash", 5.90)])
+
+    def test_make_invoice_preserves_confirmed_paid_phone_request_and_allows_balance_in_cash(self):
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "P2 Phone" and field == "type" else 0
+        )
+        self.frappe.get_all.side_effect = lambda doctype, filters=None, **kw: (
+            [
+                Row(
+                    name="PR-PAID-9",
+                    mode_of_payment="P2 Phone",
+                    payment_account="MoMo - LH",
+                    grand_total=100.0,
+                    outstanding_amount=0.0,
+                    status="Paid",
+                )
+            ]
+            if doctype == "Payment Request"
+            else []
+        )
+        check = Check(
+            "LKG-PHONE-PAID",
+            grand_total=200.0,
+            rounded_total=200.0,
+            payments=[PaymentRow(mode_of_payment="P2 Phone", type="Phone", amount=100.0, custom_tender_received=0)],
+        )
+        # Dropping the confirmed Phone payment is refused.
+        with self.assertRaisesRegex(Refused, "P2 Phone"):
+            self._settle(check, [{"mode_of_payment": "Cash", "amount": 200.0}], submit_invoice=0)
+
+        # Settling confirmed Phone + Cash balance preserves reference_no and custom_tender_received=1.
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "P2 Phone", "amount": 100.0},
+                {"mode_of_payment": "Cash", "amount": 100.0},
+            ],
+            submit_invoice=0,
+        )
+        self.assertEqual(
+            [
+                (r.mode_of_payment, round(float(r.amount), 2), r.get("reference_no"), int(r.get("custom_tender_received") or 0))
+                for r in check.payments
+            ],
+            [("P2 Phone", 100.0, "PR-PAID-9", 1), ("Cash", 100.0, None, 0)],
+        )
+
+    def test_clearance_date_only_received_row_clears_clearance_on_surplus_remainder(self):
+        check = Check(
+            "LKG-CLEARANCE",
+            grand_total=15.0,
+            rounded_total=15.0,
+            payments=[
+                PaymentRow(
+                    mode_of_payment="Card",
+                    amount=10.0,
+                    clearance_date="2026-11-24",
+                    custom_tender_received=1,
+                )
+            ],
+        )
+        self._settle(
+            check,
+            [{"mode_of_payment": "Card", "amount": 15.0, "clearance_date": "2026-11-24"}],
+            submit_invoice=0,
+        )
+        self.assertEqual(len(check.payments), 2)
+        self.assertEqual(
+            (check.payments[0].mode_of_payment, round(float(check.payments[0].amount), 2), check.payments[0].get("clearance_date")),
+            ("Card", 10.0, "2026-11-24"),
+        )
+        self.assertEqual(
+            (check.payments[1].mode_of_payment, round(float(check.payments[1].amount), 2), check.payments[1].get("clearance_date")),
+            ("Card", 5.0, None),
+        )
 
     def test_preview_settlement_totals_at_zero_clears_saved_percentage_but_keeps_carried_fixed(self):
         saved_pct = Check(
@@ -828,7 +1124,7 @@ class TestSettlementPreservesExistingTenders(Loaded):
             "LKG-DICT",
             grand_total=100.0,
             rounded_total=100.0,
-            payments=[FrappeStyleDict({"mode_of_payment": "Cash", "amount": 40.0})],
+            payments=[FrappeStyleDict({"mode_of_payment": "Cash", "amount": 40.0, "custom_tender_received": 1})],
         )
         self._settle(
             check,
@@ -841,6 +1137,82 @@ class TestSettlementPreservesExistingTenders(Loaded):
             [(r.mode_of_payment, r.amount) for r in check.payments],
             [("Cash", 40.0), ("Mobile Money", 60.0)],
         )
+
+
+class TestSplitBillReceivedTenders(Loaded):
+    """R4: split_bill never loses or duplicates a row marked custom_tender_received=1."""
+
+    def setUp(self):
+        super().setUp()
+        self.frappe.has_permission.return_value = True
+        self.frappe.generate_hash.return_value = "SPLITGRP99"
+        self.enterContext(patch.object(self.order, "getBranch", return_value="Lakeside"))
+        self.enterContext(patch.object(self.order, "_enforce_order_access"))
+        self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))
+
+    def _split_check(self, name, items, payments=()):
+        check = Check(name, items=items, payments=list(payments))
+        check.set_missing_values = lambda *a, **k: None
+        check.run_method = lambda *a, **k: None
+        check.insert = lambda *a, **k: check.events.append(("insert",))
+        check.reload = lambda *a, **k: None
+        check.remove = lambda item: check.items.remove(item)
+
+        def calc():
+            total = sum(float(i.rate) * float(i.qty) for i in check.items)
+            check.grand_total = check.rounded_total = total
+
+        check.calculate_taxes_and_totals = calc
+        calc()
+        return check
+
+    def test_split_bill_keeps_received_tender_on_source_without_duplicating_on_child(self):
+        source = self._split_check(
+            "CHK-SRC",
+            items=[
+                dish("i1", "fish", 1, 10.0, "k1"),
+                dish("i2", "steak", 1, 10.0, "k2"),
+            ],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=10.0, custom_tender_received=1)],
+        )
+        child = self._split_check("CHK-CHILD", items=[], payments=[])
+        self.frappe.get_doc.return_value = source
+        self.frappe.new_doc.return_value = child
+
+        self.order.split_bill("CHK-SRC", [{"name": "i2", "qty": 1}])
+
+        self.assertEqual(
+            [
+                (r.get("mode_of_payment"), round(float(r.get("amount")), 2), int(r.get("custom_tender_received") or 0))
+                for r in source.payments
+            ],
+            [("Cash", 10.0, 1)],
+        )
+        self.assertEqual(
+            [
+                (r.get("mode_of_payment"), round(float(r.get("amount")), 2), int(r.get("custom_tender_received") or 0))
+                for r in child.payments
+            ],
+            [("Cash", 0.0, 0)],
+        )
+
+    def test_split_bill_refuses_reducing_source_below_received_tenders(self):
+        source = self._split_check(
+            "CHK-SRC",
+            items=[
+                dish("i1", "fish", 1, 10.0, "k1"),
+                dish("i2", "steak", 1, 10.0, "k2"),
+            ],
+            payments=[PaymentRow(mode_of_payment="Cash", amount=15.0, custom_tender_received=1)],
+        )
+        child = self._split_check("CHK-CHILD", items=[], payments=[])
+        self.frappe.get_doc.return_value = source
+        self.frappe.new_doc.return_value = child
+
+        with self.assertRaisesRegex(Refused, "less than tenders already received"):
+            self.order.split_bill("CHK-SRC", [{"name": "i2", "qty": 1}])
+        self.assertFalse([e for e in child.events if e[0] == "insert"])
+        self.assertFalse([e for e in source.events if e[0] == "save"])
 
 
 if __name__ == "__main__":

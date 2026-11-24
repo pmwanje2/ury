@@ -44,3 +44,8 @@ it('carries room_charge_unconfigured into the combined profile and defaults to f
   answer({ room_charge_modes: [] });
   expect((await getCombinedPosProfile()).room_charge_unconfigured).toBe(false);
 });
+
+it('falls back to getPosProfile currency when full profile currency is unset', async () => {
+  answer({ currency: 'UGX' });
+  expect((await getCombinedPosProfile()).currency).toBe('UGX');
+});

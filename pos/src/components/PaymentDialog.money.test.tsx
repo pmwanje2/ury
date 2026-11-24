@@ -1,7 +1,9 @@
+import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { call } from "@ury/core";
 import PaymentDialog from "./PaymentDialog";
+import { printOrder } from "../lib/print";
 
 // The till charges what the server computes and tenders what the POS Profile configures (G17, G21):
 // - the total is the server's rounded total (currency precision, smallest fraction and the
@@ -26,27 +28,41 @@ vi.mock("@ury/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@ury/core")>();
   return {
     ...actual,
-    formatCurrency: (amount: number) => `UGX ${Number(amount).toFixed(2)}`,
+    formatCurrency: vi.fn(
+      (amount: number, currency?: string | null) => `${currency || "USD"} ${Number(amount).toFixed(2)}`,
+    ),
     call: { get: vi.fn(), post: vi.fn().mockResolvedValue({ message: { name: "BILL-1" } }) },
   };
 });
 vi.mock("@ury/ui", () => ({
-  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
-  Input: ({ size: _size, ...props }: any) => <input {...props} />,
-  Dialog: ({ children, open }: any) => (open ? <div>{children}</div> : null),
-  DialogContent: ({ children }: any) => <div>{children}</div>,
+  Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) =>
+    React.createElement("button", props, children),
+  Input: (props: Omit<React.InputHTMLAttributes<HTMLInputElement>, "size"> & { size?: string | number }) => {
+    const rest = { ...props };
+    delete rest.size;
+    return React.createElement("input", rest);
+  },
+  Dialog: ({ children, open }: { children?: React.ReactNode; open?: boolean }) =>
+    open ? React.createElement("div", null, children) : null,
+  DialogContent: ({ children }: { children?: React.ReactNode }) => React.createElement("div", null, children),
   showToast: { success: vi.fn(), error: vi.fn() },
 }));
 vi.mock("../i18n", () => ({ t: (key: string) => key }));
 
 const PREVIEW = "ury.ury.doctype.ury_order.ury_order.preview_settlement_totals";
 const MAKE_INVOICE = "ury.ury.doctype.ury_order.ury_order.make_invoice";
+const SUBMIT_INVOICE = "ury.ury.doctype.ury_order.ury_order.submit_order_invoice";
 
-function setTill(paymentModes: string[], profile: Record<string, unknown> = {}) {
+function setTill(
+  paymentModes: string[],
+  profile: Record<string, unknown> = {},
+  extra: Record<string, unknown> = {},
+) {
   store.state = {
     paymentModes,
     fetchPaymentModes: vi.fn(),
     posProfile: { name: "Till A", enable_discount: 1, enable_payment_without_printing: 1, ...profile },
+    ...extra,
   };
 }
 
@@ -331,7 +347,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         order={{
           invoice_printed: 1,
           payments: [{ mode_of_payment: "Cash", amount: 5.31 }],
-        } as any}
+        }}
         onClose={vi.fn()}
         grandTotal={23.01}
         roundedTotal={23.01}
@@ -382,7 +398,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         order={{
           invoice_printed: 1,
           payments: [{ mode_of_payment: "Card", amount: 10, reference_no: "AUTH-991" }],
-        } as any}
+        }}
         onClose={vi.fn()}
         grandTotal={23.01}
         roundedTotal={23.01}
@@ -427,7 +443,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         order={{
           invoice_printed: 1,
           payments: [{ mode_of_payment: "Cash", amount: 23.01 }],
-        } as any}
+        }}
         onClose={vi.fn()}
         grandTotal={23.01}
         roundedTotal={23.01}
@@ -469,7 +485,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         order={{
           invoice_printed: 1,
           payments: [{ mode_of_payment: "Cash", amount: 19000 }],
-        } as any}
+        }}
         onClose={vi.fn()}
         grandTotal={19057}
         roundedTotal={19100}
@@ -504,6 +520,88 @@ describe("tenders already received on the check (Simphony parity)", () => {
       ),
     );
   });
+
+  it("ignores draft payment rows marked custom_tender_received=0 (unconfirmed Phone / placeholder)", async () => {
+    setTill(["Cash", "Mobile Money"], {
+      default_payment_mode: "Mobile Money",
+      enable_payment_without_printing: 0,
+      currency: "USD",
+    });
+    render(
+      <PaymentDialog
+        order={{
+          invoice_printed: 1,
+          payments: [
+            { mode_of_payment: "Online Mobile Money", amount: 5.9, custom_tender_received: 0 },
+          ],
+        }}
+        onClose={vi.fn()}
+        grandTotal={5.9}
+        roundedTotal={5.9}
+        invoice="LKG-UNCONFIRMED"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId("received-tenders")).toBeNull();
+    expect(screen.queryByTestId("balance-due")).toBeNull();
+    await waitFor(() => expect(tender(1).value).toBe("5.9"));
+
+    // Cashier switches to Cash at the counter.
+    fireEvent.change(tender(1), { target: { value: "" } });
+    fireEvent.focus(tender(0));
+    expect(tender(0).value).toBe("5.9");
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          payments: [{ mode_of_payment: "Cash", amount: 5.9 }],
+        }),
+      ),
+    );
+  });
+
+  it("allows changing payment method and retrying after Step-2 print failure", async () => {
+    vi.mocked(printOrder)
+      .mockRejectedValueOnce(new Error("Printer offline"))
+      .mockResolvedValueOnce("qz");
+    setTill(["Cash", "Mobile Money"], {
+      default_payment_mode: "Mobile Money",
+      enable_payment_without_printing: 1,
+      currency: "USD",
+    });
+    renderDialog(5.9, 5.9);
+    await waitFor(() => expect(tender(1).value).toBe("5.9"));
+
+    fireEvent.click(payButton());
+    await waitFor(() => expect(screen.getByText(/payment\.payment_not_processed/)).toBeInTheDocument());
+    expect(screen.queryByTestId("received-tenders")).toBeNull();
+    expect(vi.mocked(call.post)).not.toHaveBeenCalledWith(SUBMIT_INVOICE, expect.anything());
+
+    // Switch method to Cash and retry cleanly.
+    fireEvent.change(tender(1), { target: { value: "" } });
+    fireEvent.focus(tender(0));
+    expect(tender(0).value).toBe("5.9");
+    fireEvent.click(payButton());
+
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          payments: [{ mode_of_payment: "Cash", amount: 5.9 }],
+          submit_invoice: 0,
+        }),
+      ),
+    );
+    await waitFor(() => expect(call.post).toHaveBeenCalledWith(SUBMIT_INVOICE, { invoice: "BILL-1" }));
+  });
 });
 
 describe("getRemainingBalance uses the currency's rounding", () => {
@@ -529,5 +627,13 @@ describe("getRemainingBalance uses the currency's rounding", () => {
     fireEvent.change(tender(1), { target: { value: "5000.4" } });
     fireEvent.focus(tender(0));
     expect(tender(0).value).toBe("14100");
+  });
+
+  it("formats and rounds using POS Profile currency when site default currency differs", async () => {
+    setTill(["Cash", "Mobile Money"], { default_payment_mode: "Cash", currency: "UGX" }, { currency: "USD" });
+    renderDialog(19057, 19100);
+    await waitFor(() => expect(tender(0).value).toBe("19100"));
+    expect(document.body.textContent).toContain("UGX 19100.00");
+    expect(document.body.textContent).not.toContain("USD 19100.00");
   });
 });
