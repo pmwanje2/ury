@@ -93,7 +93,14 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
   // telling them to contact a manager.
   const [showClosingDialog, setShowClosingDialog] = useState(false);
 
-  const { posProfile, requiresOutletSelection, showVoluntaryClosing, setShowVoluntaryClosing } = usePOSStore();
+  const {
+    posProfile,
+    requiresOutletSelection,
+    showVoluntaryClosing,
+    setShowVoluntaryClosing,
+    fetchPosProfile,
+    fetchAvailableOutlets,
+  } = usePOSStore();
   const { user } = useRootStore();
   const location = useLocation();
   const settled = isSettledRoute(location.pathname);
@@ -271,15 +278,22 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
     }
   }, [posProfile, user?.name, clearBlockingState]);
 
+  const refreshOutletShiftMeta = useCallback(() => {
+    void fetchPosProfile?.();
+    void fetchAvailableOutlets?.();
+  }, [fetchPosProfile, fetchAvailableOutlets]);
+
   const handleOpeningSuccess = useCallback(() => {
     clearBlockingState();
     checkPOSStatus();
-  }, [clearBlockingState, checkPOSStatus]);
+    refreshOutletShiftMeta();
+  }, [clearBlockingState, checkPOSStatus, refreshOutletShiftMeta]);
 
   const handleClosingSuccess = useCallback(() => {
     clearBlockingState();
     checkPOSStatus();
-  }, [clearBlockingState, checkPOSStatus]);
+    refreshOutletShiftMeta();
+  }, [clearBlockingState, checkPOSStatus, refreshOutletShiftMeta]);
 
   useEffect(() => {
     if (posProfile && !settled) {
@@ -339,6 +353,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
             onClosingSubmitted={() => {
               setShowVoluntaryClosing(false);
               checkPOSStatus();
+              refreshOutletShiftMeta();
             }}
           />
         )}
@@ -383,7 +398,10 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
       <POSOpeningScreen
         onSuccess={handleOpeningSuccess}
         onError={handleScreenError}
-        onContinue={(entry) => checkPOSStatus(entry)}
+        onContinue={(entry) => {
+          checkPOSStatus(entry);
+          refreshOutletShiftMeta();
+        }}
       />
     );
   }
@@ -408,6 +426,7 @@ const POSOpeningProvider = ({ children }: POSOpeningProviderProps) => {
           onClosingSubmitted={() => {
             setShowVoluntaryClosing(false);
             checkPOSStatus();
+            refreshOutletShiftMeta();
           }}
         />
       )}
