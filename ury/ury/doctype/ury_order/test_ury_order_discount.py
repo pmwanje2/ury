@@ -2418,6 +2418,38 @@ class TestHydrogenR1Defects(DiscountBase):
         self.assertEqual(p_kwd["discount_total"], 1.234)
         self.assertEqual(p_kwd["after_total"], 14.141)
 
+    def test_p1_2_apply_check_discount_preserves_kwd_3_decimals_on_save(self):
+        """P1-2: apply_check_discount must preserve 3 decimals on KWD save() even when System Settings currency_precision=2."""
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 50",
+            discount_approver_role="URY Manager",
+        )
+        self.profile.currency = "KWD"
+        kwd_doc = self._register_check(
+            FakePOSInvoice("CHK-KWD-SAVE", currency="KWD", items=[_item("r1", "STEAK", 1, 15.375)])
+        )
+        kwd_doc.precision = lambda fieldname, parentfield=None: 2
+        orig_save = kwd_doc.save
+
+        def _real_erpnext_save(ignore_permissions=False):
+            # Mirror Frappe Document._validate -> calculate_taxes_and_totals + round_floats_in using doc.precision()
+            kwd_doc.calculate_taxes_and_totals()
+            p = kwd_doc.precision("grand_total")
+            kwd_doc.grand_total = round(kwd_doc.grand_total, p)
+            kwd_doc.rounded_total = round(kwd_doc.rounded_total, p)
+            return orig_save(ignore_permissions=ignore_permissions)
+
+        kwd_doc.save = _real_erpnext_save
+        self._patch_settlement_helpers(kwd_doc)
+        self.order.apply_check_discount(
+            invoice="CHK-KWD-SAVE",
+            pos_profile="Lakeside Till",
+            discount_amount=1.234,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(kwd_doc.grand_total, 14.141)
+
     def test_p1_3_item_scoped_coupon_refused_without_b1(self):
         """P1-3: Coupon linked to Pricing Rule with apply_on='Item Code' must NOT bleed across header without #8620."""
         self.has_approval_limit_doctype = False
