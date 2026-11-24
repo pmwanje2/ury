@@ -117,7 +117,14 @@
     "discount_not_applied": "Pulsa Aplicar para actualizar el total antes de pagar.",
     "already_received": "Ya recibido",
     "balance_due": "Saldo pendiente",
-    "reference_label": "Ref.: {{ref}}"
+    "reference_label": "Ref.: {{ref}}",
+    "room_limit": "Límite",
+    "room_balance": "Saldo",
+    "room_pick_guest": "Coinciden varios huéspedes. Selecciona la estancia del huésped:",
+    "room_over_limit": "El cargo supera el límite de cargo a habitación. Se requiere la aprobación de un encargado.",
+    "request_room_override": "Solicitar aprobación de encargado",
+    "override_approved_by": "Autorización aprobada por {{approver}}",
+    "account_over_limit_notice": "Este cargo supera el crédito disponible del cliente. Se requiere la aprobación de un encargado."
   },
   "pos": {
     "not_opened_title": "POS no abierto",
@@ -741,7 +748,17 @@
     "client_order": "Pedido del cliente",
     "captured": "Capturado",
     "no_fdn": "Captura sin conexión; sin número fiscal.",
-    "refused": "{{action}} no está permitido sin conexión. Vuelva a conectarse al servidor primero."
+    "refused": "{{action}} no está permitido sin conexión. Vuelva a conectarse al servidor primero.",
+    "settle_mode": "Cobrar con {{mode}}",
+    "tender_not_allowed": "{{mode}} no está habilitado para captura sin conexión en esta caja.",
+    "reference_required": "Introduce la referencia de pago para {{mode}}.",
+    "over_limit_error": "El importe supera el límite sin conexión de esta caja ({{limit}}). Se requiere aprobación con PIN de un encargado al reconectar.",
+    "over_limit_notice": "Supera el límite sin conexión ({{limit}}): se requerirá PIN de un encargado al volver en línea.",
+    "pending_manager_pin": "PIN de encargado requerido en línea",
+    "approve_and_replay": "Aprobar y sincronizar",
+    "approval_title": "Aprobar cobro sin conexión",
+    "approval_summary": "El cobro sin conexión {{mode}} de {{amount}} supera el límite de {{limit}}",
+    "approved_and_replayed": "Cobro sin conexión aprobado y sincronizado."
   },
   "manager_approval": {
     "title": "Se requiere autorización de encargado",

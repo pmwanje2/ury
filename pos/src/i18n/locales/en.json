@@ -169,7 +169,14 @@
     "discount_not_applied": "Press Apply to update the total before paying.",
     "already_received": "Already received",
     "balance_due": "Balance due",
-    "reference_label": "Ref: {{ref}}"
+    "reference_label": "Ref: {{ref}}",
+    "room_limit": "Limit",
+    "room_balance": "Balance",
+    "room_pick_guest": "Multiple guests match. Select the guest's stay:",
+    "room_over_limit": "Charge exceeds the room charge limit. Manager approval is required.",
+    "request_room_override": "Request manager approval",
+    "override_approved_by": "Override approved by {{approver}}",
+    "account_over_limit_notice": "This charge exceeds the customer's available credit. Manager approval is required."
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
@@ -970,7 +977,17 @@
     "client_order": "Client order",
     "captured": "Captured",
     "no_fdn": "Offline capture; no fiscal device number.",
-    "refused": "{{action}} is refused offline. Reconnect to the server first."
+    "refused": "{{action}} is refused offline. Reconnect to the server first.",
+    "settle_mode": "Settle {{mode}}",
+    "tender_not_allowed": "{{mode}} is not enabled for offline capture on this till.",
+    "reference_required": "Enter the payment reference for {{mode}}.",
+    "over_limit_error": "Amount exceeds this till's offline limit ({{limit}}). Manager PIN approval is required online.",
+    "over_limit_notice": "Exceeds offline limit ({{limit}}): manager PIN will be required once back online.",
+    "pending_manager_pin": "Manager PIN required online",
+    "approve_and_replay": "Approve & replay",
+    "approval_title": "Approve offline tender",
+    "approval_summary": "{{mode}} offline tender of {{amount}} exceeds limit {{limit}}",
+    "approved_and_replayed": "Offline tender approved and replayed."
   },
   "bill_requests": {
     "choose_check": "Choose an open check",

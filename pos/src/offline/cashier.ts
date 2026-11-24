@@ -1,7 +1,7 @@
 import { clearAppStorage, logout, purgeOfflineSession } from '@ury/core';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
-import { OfflineOutbox, canCaptureOffline, openTableRow, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import { OfflineOutbox, canCaptureOffline, openTableRow, resolveOfflineModeConfig, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
 import { gatewayStatusOf } from './gateway';
 import { readOpenTableCheck } from './open-table-checks';
 
@@ -79,10 +79,19 @@ async function openClientForTable(queue: OfflineOutbox, user: string, table: str
   return local?.client_order_id || readOpenTableCheck(user, table)?.clientOrderId;
 }
 
-function offlineCashOrMobile(mode: string, reference?: string): OfflineSettlement['kind'] | null {
-  if (/^cash$/i.test(mode)) return 'cash';
-  if (/mobile.?money|momo|m-?pesa/i.test(mode) && !!reference?.trim()) return 'mobile-money';
-  return null;
+export function resolveOfflineTender(
+  profile: OfflineProfile,
+  modeOfPayment: string,
+  amount: number,
+  reference?: string,
+): OfflineSettlement['kind'] | null {
+  const cfg = resolveOfflineModeConfig(profile, modeOfPayment);
+  if (!cfg) return null;
+  if (cfg.requires_reference && !reference?.trim()) return null;
+  const limit = Number(profile.offline_tender_limit || 0);
+  if (limit > 0 && amount > limit + 0.005) return null;
+  if (cfg.type === 'Cash') return 'cash';
+  return cfg.requires_reference ? 'mobile-money' : 'offline';
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
@@ -94,7 +103,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
 }) {
   const queue = cashierOutbox(profile, user);
   queue.assertSessionAllowed();
-  const kind = offlineCashOrMobile(modeOfPayment, reference);
+  const kind = resolveOfflineTender(profile, modeOfPayment, amount, reference);
   // A short named-account settlement (#44) leaves a balance owed. It is not a
   // cash settlement and stays online-only, so the tender must cover the bill.
   const paidInFull = Number.isFinite(due) && amount >= due - 0.005;

@@ -2,6 +2,13 @@ import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
 
+export interface OfflinePaymentMode {
+  mode_of_payment: string;
+  type?: string;
+  allow_offline: boolean;
+  requires_reference: boolean;
+}
+
 // Limited fields response
 export interface PosProfileLimited {
   pos_profile: string;
@@ -41,6 +48,10 @@ export interface PosProfileLimited {
   room_charge_modes?: string[];
   /** True when the site/profile expects room charge but Company.custom_guest_ledger_clearing is unmapped. */
   room_charge_unconfigured?: boolean;
+  /** Per-till maximum offline tender amount without online manager PIN approval (0 = no cap). */
+  offline_tender_limit?: number;
+  /** Mode of Payment offline eligibility flags from server configuration (never tender-name regex). */
+  offline_payment_modes?: OfflinePaymentMode[];
 }
 
 export interface PosProfileLimitedResponse {
@@ -100,6 +111,8 @@ export interface PosProfileFull {
   custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
+  offline_tender_limit?: number;
+  offline_payment_modes?: OfflinePaymentMode[];
 }
 
 // Combined POS Profile with both limited and full fields
@@ -132,6 +145,8 @@ export interface PosProfileCombined extends PosProfileFull {
   default_payment_mode?: string;
   room_charge_modes?: string[];
   room_charge_unconfigured?: boolean;
+  offline_tender_limit?: number;
+  offline_payment_modes?: OfflinePaymentMode[];
 }
 
 export interface Currency {
@@ -208,6 +223,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     default_payment_mode: limitedProfile.default_payment_mode ?? '',
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
+    offline_tender_limit: Number(limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0),
+    offline_payment_modes: limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
   };
 
   return combinedProfile;

@@ -139,6 +139,13 @@
     "settle_bill": "تسوية الفاتورة"
   },
   "payment": {
+    "account_amount": "على الحساب: {{amount}}",
+    "charge_account": "قيد على الحساب",
+    "account_balance": "الرصيد",
+    "account_limit": "حد الائتمان",
+    "account_available": "الائتمان المتاح",
+    "no_accounts": "لم يتم العثور على حسابات معتمدة.",
+    "account_search_failed": "تعذر البحث في حسابات الائتمان.",
     "title": "الدفع",
     "apply_discount": "تطبيق الخصم",
     "discount_placeholder": "أدخل نسبة %",
@@ -169,7 +176,14 @@
     "discount_not_applied": "اضغط على تطبيق لتحديث الإجمالي قبل الدفع.",
     "already_received": "تم استلامه مسبقاً",
     "balance_due": "الرصيد المتبقي",
-    "reference_label": "المرجع: {{ref}}"
+    "reference_label": "المرجع: {{ref}}",
+    "room_limit": "الحد",
+    "room_balance": "الرصيد",
+    "room_pick_guest": "تطابق عدة نزلاء. اختر إقامة النزيل:",
+    "room_over_limit": "يتجاوز المبلغ حد رسوم الغرفة. يلزم اعتماد المدير.",
+    "request_room_override": "طلب اعتماد المدير",
+    "override_approved_by": "تم اعتماد التجاوز بواسطة {{approver}}",
+    "account_over_limit_notice": "يتجاوز هذا المبلغ الرصيد الائتماني المتاح للعميل. يلزم اعتماد المدير."
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -200,6 +214,7 @@
     "failed_to_load": "تعذر تحميل نقطة البيع"
   },
   "pos_closing": {
+    "on_account": "على الحساب",
     "title": "إغلاق نقطة البيع",
     "description": "راجع مبيعات ورديتك وأدخل المبالغ الفعلية للإغلاق.",
     "loading": "جاري تحميل تفاصيل الإغلاق...",
@@ -329,6 +344,7 @@
     "order_moved_to_draft": "تم نقل الطلب إلى المسودات بعد الطباعة."
   },
   "orders": {
+    "settled_closed": "مُسوّاة / مغلقة",
     "no_orders_found": "لم يتم العثور على طلبات",
     "click_to_view": "انقر على أي بطاقة طلب لعرض تفاصيلها",
     "status_title": "حالة الطلب",
@@ -968,7 +984,17 @@
     "client_order": "طلب العميل",
     "captured": "وقت التسجيل",
     "no_fdn": "تسجيل دون اتصال؛ لا يوجد رقم فاتورة ضريبية.",
-    "refused": "{{action}} غير متاح دون اتصال. أعد الاتصال بالخادم أولاً."
+    "refused": "{{action}} غير متاح دون اتصال. أعد الاتصال بالخادم أولاً.",
+    "settle_mode": "تسوية عبر {{mode}}",
+    "tender_not_allowed": "طريقة {{mode}} غير مفعّلة للتسجيل دون اتصال على هذا الصندوق.",
+    "reference_required": "أدخل مرجع الدفع لـ {{mode}}.",
+    "over_limit_error": "يتجاوز المبلغ الحد المسموح به دون اتصال لهذا الصندوق ({{limit}}). يلزم اعتماد برقم PIN للمدير عند الاتصال.",
+    "over_limit_notice": "يتجاوز الحد المسموح دون اتصال ({{limit}}): سيلزم رقم PIN للمدير عند عودة الاتصال.",
+    "pending_manager_pin": "يلزم رقم PIN للمدير عند الاتصال",
+    "approve_and_replay": "اعتماد ومزامنة",
+    "approval_title": "اعتماد الدفع دون اتصال",
+    "approval_summary": "دفع {{mode}} دون اتصال بمبلغ {{amount}} يتجاوز الحد {{limit}}",
+    "approved_and_replayed": "تم اعتماد الدفع دون اتصال ومزامنته."
   },
   "bill_requests": {
     "choose_check": "Choose an open check",

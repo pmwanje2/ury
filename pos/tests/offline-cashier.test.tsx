@@ -30,7 +30,11 @@ beforeEach(async () => {
   document.cookie = 'user_id=cashier%40example.com';
   useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Cashier', roles: ['Cashier'] } });
   usePOSStore.setState({ posProfile: { name: 'Till A', ury_offline_capture: 1, default_payment_mode: 'Cash',
-    role_allowed_for_billing: [{ role: 'Cashier' }], cashier: 'cashier@example.com', owner: 'cashier@example.com' } as any });
+    role_allowed_for_billing: [{ role: 'Cashier' }], cashier: 'cashier@example.com', owner: 'cashier@example.com',
+    offline_payment_modes: [
+      { mode_of_payment: 'Cash', type: 'Cash', allow_offline: true, requires_reference: false },
+      { mode_of_payment: 'Mobile Money', type: 'Bank', allow_offline: true, requires_reference: true },
+    ] } as any });
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals();

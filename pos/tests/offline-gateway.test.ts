@@ -4,7 +4,15 @@ import { lazyModule } from './helpers/lazy';
 import { testLocks } from './offline-locks';
 import { initI18n } from '../src/i18n';
 
-const profile = { name: 'Till A', ury_offline_capture: 1, role_allowed_for_billing: [{ role: 'Cashier' }] };
+const profile = {
+  name: 'Till A',
+  ury_offline_capture: 1,
+  role_allowed_for_billing: [{ role: 'Cashier' }],
+  offline_payment_modes: [
+    { mode_of_payment: 'Cash', type: 'Cash', allow_offline: true, requires_reference: false },
+    { mode_of_payment: 'Mobile Money', type: 'Bank', allow_offline: true, requires_reference: true },
+  ],
+};
 const user = { name: 'cashier@example.com', roles: ['Cashier'] };
 const order = { pos_profile: 'Till A', customer: 'Walk In', cashier: user.name, owner: user.name, waiter: user.name,
   items: [{ item: 'Tea', item_name: 'Tea', qty: 1, rate: 100 }], no_of_pax: 1, invoice: null, last_invoice: null,
