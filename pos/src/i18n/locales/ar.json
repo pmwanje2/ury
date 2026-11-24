@@ -62,7 +62,8 @@
     "user_fallback": "مستخدم",
     "switch_waiter": "تبديل النادل",
     "pair_tablet": "إقران هذا الجهاز اللوحي",
-    "staff_pins": "أرقام PIN للموظفين"
+    "staff_pins": "أرقام PIN للموظفين",
+    "till_cash": "نقد الصندوق"
   },
   "menu": {
     "manage_availability": "إدارة التوفر",
@@ -164,7 +165,9 @@
     "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
     "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
     "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
-    "room_check_failed": "تعذر التحقق من هذه الغرفة"
+    "room_check_failed": "تعذر التحقق من هذه الغرفة",
+    "overtender_to_tip": "سيتم تسجيل الزيادة البالغة {{amount}} كإكرامية.",
+    "non_cash_overtender": "زيادة غير نقدية بقيمة {{amount}}: النقد فقط يعطي باقيًا."
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -224,7 +227,8 @@
     "opening": "الافتتاح",
     "expected": "المتوقع",
     "closing": "الإغلاق",
-    "difference": "الفرق"
+    "difference": "الفرق",
+    "pending_cash_movements": "يجب اعتماد أو إلغاء {{count}} من حركات نقد الصندوق المعلقة قبل الإغلاق."
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -981,5 +985,42 @@
     "title": "Bill requests",
     "unavailable": "Bill requests unavailable",
     "waiting": "Bill requests: {{count}} waiting"
+  },
+  "till_cash": {
+    "title": "حركات نقد الصندوق",
+    "description": "سجّل السحب إلى الخزنة، والتمويل، والمصروفات النقدية للوردية المفتوحة.",
+    "loading": "جارٍ تحميل حركات نقد الصندوق...",
+    "load_failed": "تعذر تحميل حركات نقد الصندوق.",
+    "disabled": "حركات نقد الصندوق غير مفعّلة لهذا الملف.",
+    "no_open_shift": "افتح وردية قبل تسجيل حركات نقد الصندوق.",
+    "pickup": "سحب للخزنة",
+    "loan": "تمويل عهدة",
+    "paid_out": "صرف نقدي",
+    "amount": "المبلغ",
+    "amount_placeholder": "أدخل المبلغ",
+    "paid_out_for": "فئة الصرف",
+    "reason": "السبب",
+    "reason_placeholder": "أدخل سبب الصرف",
+    "requires_second_person": "المصروفات فوق {{threshold}} تتطلب اعتماد شخص ثانٍ قبل الترحيل.",
+    "record_pickup": "تسجيل السحب",
+    "record_loan": "تسجيل التمويل",
+    "record_paid_out": "تسجيل الصرف",
+    "recording": "جارٍ التسجيل...",
+    "recorded_success": "تم تسجيل {{type}}.",
+    "saved_pending": "تم حفظ الصرف بانتظار اعتماد شخص ثانٍ.",
+    "record_failed": "تعذر تسجيل الحركة النقدية.",
+    "approved_success": "تم اعتماد وترحيل الحركة النقدية.",
+    "approve_failed": "تعذر اعتماد الحركة النقدية.",
+    "discarded_success": "تم إلغاء الحركة المعلقة.",
+    "discard_failed": "تعذر إلغاء الحركة المعلقة.",
+    "shift_movements": "حركات الوردية",
+    "net_drawer_movement": "صافي حركة الصندوق",
+    "pending_badge": "{{count}} بانتظار الاعتماد",
+    "refresh": "تحديث",
+    "empty": "لا توجد حركات نقدية مسجلة في هذه الوردية.",
+    "recorded_by": "سجّلها",
+    "approved_by": "اعتمدها",
+    "approve": "اعتماد",
+    "discard": "إلغاء"
   }
 }

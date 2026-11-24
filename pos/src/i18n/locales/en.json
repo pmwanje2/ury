@@ -55,7 +55,8 @@
     "user_fallback": "User",
     "switch_waiter": "Switch waiter",
     "pair_tablet": "Pair this tablet",
-    "staff_pins": "Staff PINs"
+    "staff_pins": "Staff PINs",
+    "till_cash": "Till Cash"
   },
   "menu": {
     "manage_availability": "Manage availability",
@@ -164,7 +165,9 @@
     "room_match": "Room {{room}} · {{guest}} · departs {{departure}}",
     "room_no_post": "This guest's bill is closed to room charges",
     "room_check_required": "Check the room before taking Room Charge",
-    "room_check_failed": "Could not check this room"
+    "room_check_failed": "Could not check this room",
+    "overtender_to_tip": "Over-tender of {{amount}} will post as a charged tip.",
+    "non_cash_overtender": "Non-cash over-tender of {{amount}}: only cash gives change."
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
@@ -225,7 +228,8 @@
     "opening": "Opening",
     "expected": "Expected",
     "closing": "Closing",
-    "difference": "Difference"
+    "difference": "Difference",
+    "pending_cash_movements": "{{count}} pending till cash movement(s) must be approved or discarded before closing."
   },
   "checklist": {
     "title_opening": "Opening Checklist",
@@ -983,5 +987,42 @@
     "title": "Bill requests",
     "unavailable": "Bill requests unavailable",
     "waiting": "Bill requests: {{count}} waiting"
+  },
+  "till_cash": {
+    "title": "Till Cash Movements",
+    "description": "Record safe pickups, float loans, and till paid-outs for the active shift.",
+    "loading": "Loading till cash movements...",
+    "load_failed": "Failed to load till cash movements.",
+    "disabled": "Till cash movements are not enabled for this POS Profile.",
+    "no_open_shift": "Open a shift before recording till cash movements.",
+    "pickup": "Pickup",
+    "loan": "Loan",
+    "paid_out": "Paid Out",
+    "amount": "Amount",
+    "amount_placeholder": "Enter amount",
+    "paid_out_for": "Paid-Out Category",
+    "reason": "Reason",
+    "reason_placeholder": "Enter reason for paid-out",
+    "requires_second_person": "Paid-outs above {{threshold}} require second-person approval before posting.",
+    "record_pickup": "Record Pickup",
+    "record_loan": "Record Loan",
+    "record_paid_out": "Record Paid Out",
+    "recording": "Recording...",
+    "recorded_success": "{{type}} recorded.",
+    "saved_pending": "Paid-out saved for second-person approval.",
+    "record_failed": "Failed to record cash movement.",
+    "approved_success": "Cash movement approved and posted.",
+    "approve_failed": "Failed to approve cash movement.",
+    "discarded_success": "Pending cash movement discarded.",
+    "discard_failed": "Failed to discard cash movement.",
+    "shift_movements": "Shift Movements",
+    "net_drawer_movement": "Net drawer change",
+    "pending_badge": "{{count}} pending approval",
+    "refresh": "Refresh",
+    "empty": "No cash movements recorded in this shift.",
+    "recorded_by": "Recorded by",
+    "approved_by": "Approved by",
+    "approve": "Approve",
+    "discard": "Discard"
   }
 }

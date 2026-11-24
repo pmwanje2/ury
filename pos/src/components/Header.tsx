@@ -10,6 +10,7 @@ import {
   LogOut,
   RefreshCw,
   Lock,
+  Wallet,
 } from 'lucide-react';
 import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
@@ -22,6 +23,7 @@ import { showToast } from '@ury/ui';
 import { PrinterStatusButton } from './PrinterWatch';
 import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
+import TillCashDialog from './TillCashDialog';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'Maximus POS', logo: '/assets/ury/Images/maximus-mark.svg' });
@@ -37,8 +39,10 @@ const Header = () => {
   const [orderSearchInput, setOrderSearchInput] = useState(orderSearchQuery);
   const [showStaffPins, setShowStaffPins] = useState(false);
   const [showPairTablet, setShowPairTablet] = useState(false);
+  const [showTillCash, setShowTillCash] = useState(false);
   const [canManagePins, setCanManagePins] = useState(false);
   const posProfileName = posProfile?.name;
+  const cashMovementsEnabled = Number(posProfile?.enable_cash_movements) === 1;
 
   // Floor tablet setup follows native POS Profile write permission; fail closed.
   useEffect(() => {
@@ -172,6 +176,19 @@ const Header = () => {
 
         {/* Right side actions */}
         <div className="flex items-center gap-4">
+          {cashMovementsEnabled && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="flex items-center gap-1.5 h-7"
+              disabled={outbox.offline || outbox.replaying}
+              onClick={() => setShowTillCash(true)}
+            >
+              <Wallet className="w-4 h-4" />
+              <span>{t('header.till_cash')}</span>
+            </Button>
+          )}
           {/* Printer status (fail-closed when the watch app is absent) */}
           {!printStatusDisabled && <PrinterStatusButton />}
           {/* User menu */}
@@ -257,6 +274,9 @@ const Header = () => {
         </div>
       </div>
     </header>
+    {cashMovementsEnabled && posProfileName && (
+      <TillCashDialog open={showTillCash} onOpenChange={setShowTillCash} />
+    )}
     {canManagePins && posProfileName && (
       <>
         <StaffPinsDialog open={showStaffPins} onOpenChange={setShowStaffPins} />
