@@ -884,30 +884,81 @@ def _is_privileged_clock_user():
     return False
 
 
-def _reset_items_for_authoritative_reprice(doc):
-    """Clear spoofed client item rates/pricing rules when selling_price_list is corrected."""
+def _set_item_fields(item, values):
+    set_fn = getattr(item, "set", None)
+    if callable(set_fn):
+        for k, v in values.items():
+            set_fn(k, v)
+    elif isinstance(item, dict):
+        for k, v in values.items():
+            item[k] = v
+    else:
+        for k, v in values.items():
+            setattr(item, k, v)
+
+
+def _lookup_authoritative_item_price(item_code, price_list, uom=None):
+    if not item_code or not price_list:
+        return None
+    try:
+        if uom:
+            val = frappe.db.get_value(
+                "Item Price",
+                {"item_code": item_code, "price_list": price_list, "selling": 1, "uom": uom},
+                "price_list_rate",
+            )
+            if val is not None:
+                return flt(val)
+        val = frappe.db.get_value(
+            "Item Price",
+            {"item_code": item_code, "price_list": price_list, "selling": 1},
+            "price_list_rate",
+        )
+        if val is not None:
+            return flt(val)
+    except Exception:
+        return None
+    return None
+
+
+def _reprice_items_from_authoritative_price_list(doc, price_list, force_all=False):
+    """Resolve authoritative selling Item Price rates before tender hooks run.
+
+    ``ury_pos_tender.before_validate`` calls ``calculate_taxes_and_totals()`` before
+    ERPNext's ``set_missing_item_details(for_validate=True)`` runs, which coerces
+    ``None`` rates to ``0.0`` and prevents ERPNext from backfilling ``Item Price``.
+    Resolving directly from the authoritative ``selling_price_list`` ensures spoofed
+    price-list overrides and rate-omitted direct REST writes always bill the real
+    selling price list rate (with active Pricing Rules evaluated by ERPNext next).
+    """
     for item in _doc_get(doc, "items") or []:
         if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
             continue
-        set_fn = getattr(item, "set", None)
-        if callable(set_fn):
-            set_fn("price_list_rate", 0)
-            set_fn("rate", 0)
-            set_fn("pricing_rules", None)
-            set_fn("discount_percentage", 0)
-            set_fn("discount_amount", 0)
-        elif isinstance(item, dict):
-            item["price_list_rate"] = 0
-            item["rate"] = 0
-            item["pricing_rules"] = None
-            item["discount_percentage"] = 0
-            item["discount_amount"] = 0
-        else:
-            item.price_list_rate = 0
-            item.rate = 0
-            item.pricing_rules = None
-            item.discount_percentage = 0
-            item.discount_amount = 0
+        needs_fill = force_all or (
+            _doc_get(item, "price_list_rate") is None and _doc_get(item, "rate") is None
+        )
+        if not needs_fill:
+            continue
+        item_code = _doc_get(item, "item_code")
+        uom = _doc_get(item, "uom")
+        auth_rate = _lookup_authoritative_item_price(item_code, price_list, uom=uom)
+        if auth_rate is not None:
+            updates = {"price_list_rate": auth_rate, "rate": auth_rate}
+            if force_all:
+                updates.update({
+                    "pricing_rules": None,
+                    "discount_percentage": 0,
+                    "discount_amount": 0,
+                })
+            _set_item_fields(item, updates)
+        elif force_all:
+            _set_item_fields(item, {
+                "price_list_rate": None,
+                "rate": None,
+                "pricing_rules": None,
+                "discount_percentage": 0,
+                "discount_amount": 0,
+            })
 
 
 def enforce_authoritative_outlet_time(doc, method=None):
@@ -1044,14 +1095,11 @@ def enforce_authoritative_outlet_time(doc, method=None):
     if _doc_get(doc, "restaurant"):
         validate_price_list(doc, method)
         resolved_pl = (_doc_get(doc, "selling_price_list") or "").strip()
-        if (
-            resolved_pl
-            and incoming_pl
-            and resolved_pl != incoming_pl
-            and not trusted_pricing
-            and not server_ot_change
-        ):
-            _reset_items_for_authoritative_reprice(doc)
+        if resolved_pl and not trusted_pricing and not server_ot_change:
+            pl_corrected = bool(incoming_pl and resolved_pl != incoming_pl)
+            _reprice_items_from_authoritative_price_list(
+                doc, resolved_pl, force_all=pl_corrected
+            )
 
 
 def validate_price_list(doc, method):
