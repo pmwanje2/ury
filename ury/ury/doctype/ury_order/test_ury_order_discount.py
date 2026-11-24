@@ -1537,6 +1537,76 @@ class TestSplitMergeAndOptions(DiscountBase):
         self.assertEqual(child.custom_discount_reason, "Complaint")
         self.assertEqual(child.custom_discount_approver, "manager@example.com")
 
+    def test_consolidate_checks_carries_ury_discount_meta_without_b1_fields_and_passes_validate(self):
+        """Real bench bug: merging a discounted check without B1 custom_discount_* fields
+        must carry reason/approver in ury_discount_meta and pass validate_pos_discount on save
+        and on subsequent settlement/print saves."""
+        self.enterContext(patch.object(self.order, "get_branch_stock_policy", return_value=Row(reservation_control_enabled=False)))
+        self.enterContext(patch.object(self.order, "_free_tables_if_no_open_invoices"))
+
+        # Simulate a site WITHOUT siteops sales-discount-control@3 (only ury_discount_meta exists)
+        orig_get_meta = self.frappe.get_meta
+        def _meta_without_b1(dt):
+            if dt == "POS Invoice":
+                return Row(has_field=lambda f: f == "ury_discount_meta")
+            return orig_get_meta(dt)
+        self.frappe.get_meta.side_effect = _meta_without_b1
+
+        src = self._register_check(
+            FakePOSInvoice(
+                "CHK-M-SRC",
+                currency="UGX",
+                items=[_item("s1", "FISH", 1, 20000)],
+                ury_discount_meta=json.dumps({
+                    "reason": "Complaint",
+                    "reason_description": "Complaint",
+                    "note": "Delayed dish",
+                    "approver": "manager@example.com",
+                    "approved_percent": 20.0,
+                    "line_reasons": {},
+                }),
+            )
+        )
+        src.discount_amount = 4000
+        src.calculate_taxes_and_totals()
+
+        dst = self._register_check(
+            FakePOSInvoice("CHK-M-DST", currency="UGX", items=[_item("d1", "STEAK", 1, 30000)])
+        )
+        dst.calculate_taxes_and_totals()
+        dst.set_paid_amount = lambda: None
+        dst.set_outstanding_amount = lambda: None
+        src.discard = lambda: None
+        src.db_set = lambda *a, **kw: None
+        # Add as_dict on source items to match Frappe Document rows
+        for row in src.items:
+            row.as_dict = lambda _r=row, **kw: dict(_r)
+        # Real Frappe runs validate_pos_discount during destination.save()
+        def _save_with_validate():
+            self.hook.validate_pos_discount(dst)
+        dst.save = _save_with_validate
+
+        self.order.consolidate_checks(dst, [src])
+
+        self.assertEqual(dst.discount_amount, 4000)
+        carried = self.discount._read_meta(dst)
+        self.assertEqual(carried.get("reason"), "Complaint")
+        self.assertEqual(carried.get("note"), "Delayed dish")
+        self.assertEqual(carried.get("approver"), "manager@example.com")
+        self.assertEqual(carried.get("approved_percent"), 20.0)
+
+        # Subsequent save (e.g. printing or settling after merge) must also pass validate_pos_discount
+        prev_snapshot = FakePOSInvoice(
+            "CHK-M-DST",
+            currency="UGX",
+            items=[_item("d1", "STEAK", 1, 30000), _item("s1", "FISH", 1, 20000)],
+            ury_discount_meta=dst.ury_discount_meta,
+        )
+        prev_snapshot.discount_amount = 4000
+        prev_snapshot.calculate_taxes_and_totals()
+        dst._doc_before_save = prev_snapshot
+        self.hook.validate_pos_discount(dst)
+
     def test_list_discount_options_orders_reasons_by_sort_order_and_filters_presets(self):
         self.approval_limits["Lakeside Hotel"] = Row(
             max_document_discount_percent="0",
