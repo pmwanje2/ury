@@ -987,12 +987,29 @@ def getPosProfile():
                 "overtender_rule": frappe.db.get_value(
                     "Mode of Payment", payment.mode_of_payment, "custom_overtender_rule"
                 ) or "Refuse",
+                "halo_max_amount": frappe.utils.flt(
+                    frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "custom_halo_max_amount")
+                ),
             }
             for payment in (pos_profiles.get("payments") or [])
         },
         "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
         "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
+        "over_short_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_tolerance")),
+        "cash_pull_threshold": frappe.utils.flt(pos_profiles.get("custom_cash_pull_threshold")),
+        "paid_out_approval_threshold": (
+            None
+            if pos_profiles.get("custom_paid_out_approval_threshold") is None
+            or (
+                isinstance(pos_profiles.get("custom_paid_out_approval_threshold"), str)
+                and not pos_profiles.get("custom_paid_out_approval_threshold").strip()
+            )
+            else frappe.utils.flt(pos_profiles.get("custom_paid_out_approval_threshold"))
+        ),
+        "paid_in_approval_threshold": frappe.utils.flt(pos_profiles.get("custom_paid_in_approval_threshold")),
+        "paid_in_enabled": bool(pos_profiles.get("custom_paid_in_account")),
+        "cash_drawer_id": (pos_profiles.get("custom_cash_drawer_id") or "").strip(),
         # the till's tenders come from configuration, never literals
         "default_payment_mode": next(
             (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),

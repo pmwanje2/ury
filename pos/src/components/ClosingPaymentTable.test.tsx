@@ -11,10 +11,13 @@ vi.mock("../i18n", () => ({
   t: (key: string) => key,
 }));
 
-vi.mock("@ury/ui", () => ({
-  Input: ({ ...props }: any) => <input {...props} />,
-  cn: (...args: any[]) => args.filter(Boolean).join(" "),
-}));
+vi.mock("@ury/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@ury/ui")>();
+  return {
+    ...actual,
+    cn: (...args: Array<string | false | null | undefined>) => args.filter(Boolean).join(" "),
+  };
+});
 
 describe("ClosingPaymentTable", () => {
   const mockRows = [
@@ -135,7 +138,7 @@ describe("ClosingPaymentTable", () => {
       />
     );
     
-    expect(screen.getByText("Payment Mode")).toBeInTheDocument();
+    expect(screen.getByText("pos_closing.payment_mode")).toBeInTheDocument();
   });
 
   it("masks the expected amount when hideExpected is set", () => {
