@@ -76,7 +76,7 @@ test.each(['40', '0', ''])('a named account can settle with tender %j and leave 
   expect(payButton().disabled).toBe(false);
   await act(async () => payButton().click());
   expect(post).toHaveBeenNthCalledWith(1, 'ury.ury.doctype.ury_order.ury_order.make_invoice', {
-    additionalDiscount: null, cashier: 'cashier@example.com', customer: 'House Account',
+    cashier: 'cashier@example.com', customer: 'House Account',
     invoice: 'BILL-1', owner: 'waiter@example.com',
     payments: [{ mode_of_payment: 'Cash', amount: amount === '40' ? 40 : 0 }],
     pos_profile: 'Till A', table: null, submit_invoice: 0,

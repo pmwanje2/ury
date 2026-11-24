@@ -4,6 +4,19 @@ from frappe.utils import now_datetime, get_time, now, flt, getdate, get_first_da
 from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
 from ury.ury.doctype.staff_discount_policy.staff_discount_policy import get_applicable_policy
 
+try:
+    from ury.ury_pos.discount import prorate_return_discount, validate_pos_discount
+except ImportError:  # pragma: no cover - partial frappe.utils stubs in unrelated unit tests
+    def prorate_return_discount(doc, method=None):
+        from ury.ury_pos.discount import prorate_return_discount as _prorate_return_discount
+
+        return _prorate_return_discount(doc, method)
+
+    def validate_pos_discount(doc, method=None):
+        from ury.ury_pos.discount import validate_pos_discount as _validate_pos_discount
+
+        return _validate_pos_discount(doc, method)
+
 
 def before_insert(doc, method):
     pos_invoice_naming(doc, method)
@@ -11,11 +24,16 @@ def before_insert(doc, method):
     restrict_existing_order(doc, method)
 
 
+def before_validate(doc, method=None):
+    prorate_return_discount(doc, method)
+
+
 def validate(doc, method):
     validate_invoice(doc, method)
     validate_customer(doc, method)
     validate_price_list(doc, method)
     validate_server_only_tender_received(doc, method)
+    validate_pos_discount(doc, method)
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)

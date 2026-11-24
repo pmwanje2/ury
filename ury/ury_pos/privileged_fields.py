@@ -132,20 +132,14 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
                 "label": "Default Exempt Item Tax Template",
                 "insert_after": "custom_tax_exempt_category",
             },
-            {
-                "fieldname": "custom_tips_payable_account",
-                "fieldtype": "Link",
-                "options": "Account",
-                "label": "Tips Payable Account",
-                "description": "Liability account for charged tips (aligned with #145 tip model).",
-                "insert_after": "custom_exempt_item_tax_template",
-            },
+            # Note: POS Profile-custom_tips_payable_account is canonically defined in
+            # ury/fixtures/custom_field.json (#145). Do not duplicate it here.
             {
                 "fieldname": "custom_max_tip_percent",
                 "fieldtype": "Percent",
                 "label": "Max Tip Percent Before PIN",
                 "default": "30",
-                "insert_after": "custom_tips_payable_account",
+                "insert_after": "custom_exempt_item_tax_template",
             },
             {
                 "fieldname": "custom_max_free_bill_prints",
@@ -313,24 +307,8 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
                 "print_hide": 1,
                 "insert_after": "custom_service_charge_reason",
             },
-            {
-                "fieldname": "custom_charged_tip",
-                "fieldtype": "Currency",
-                "label": "Charged Tip",
-                "default": "0",
-                "allow_on_submit": 1,
-                "no_copy": 1,
-                "insert_after": "custom_service_charge_approver",
-            },
-            {
-                "fieldname": "custom_tip_server",
-                "fieldtype": "Link",
-                "options": "User",
-                "label": "Tip Server",
-                "allow_on_submit": 1,
-                "no_copy": 1,
-                "insert_after": "custom_charged_tip",
-            },
+            # Note: POS Invoice-custom_charged_tip and POS Invoice-custom_tip_server are
+            # canonically defined in ury/fixtures/custom_field.json (#145). Do not duplicate them here.
             {
                 "fieldname": "custom_tip_adjustment_je",
                 "fieldtype": "Link",
@@ -340,7 +318,7 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
                 "allow_on_submit": 1,
                 "no_copy": 1,
                 "print_hide": 1,
-                "insert_after": "custom_tip_server",
+                "insert_after": "custom_service_charge_approver",
             },
             {
                 "fieldname": "custom_bill_print_count",

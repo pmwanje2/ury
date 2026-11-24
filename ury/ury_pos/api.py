@@ -835,6 +835,7 @@ def getPosProfile():
         print_format = pos_profiles.print_format
         paid_limit=pos_profiles.paid_limit
         enable_discount = pos_profiles.custom_enable_discount
+        allow_discount_change = cint(pos_profiles.get("allow_discount_change"))
         multiple_cashier = pos_profiles.custom_enable_multiple_cashier
         edit_order_type = pos_profiles.custom_edit_order_type
         enable_kot_reprint = pos_profiles.custom_enable_kot_reprint
@@ -932,6 +933,7 @@ def getPosProfile():
         "paid_limit":paid_limit,
         "disable_rounded_total":disable_rounded_total,
         "enable_discount":enable_discount,
+        "allow_discount_change":allow_discount_change,
         "multiple_cashier":multiple_cashier,
         "owner":owner,
         "edit_order_type":edit_order_type,
@@ -943,6 +945,18 @@ def getPosProfile():
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
         "payment_mode_accounts": payment_mode_accounts,
+        "payment_mode_meta": {
+            payment.mode_of_payment: {
+                "type": frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "type") or "",
+                "overtender_rule": frappe.db.get_value(
+                    "Mode of Payment", payment.mode_of_payment, "custom_overtender_rule"
+                ) or "Refuse",
+            }
+            for payment in (pos_profiles.get("payments") or [])
+        },
+        "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
+        "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
+        "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
         # the till's tenders come from configuration, never literals
         "default_payment_mode": next(
             (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),
@@ -1037,6 +1051,8 @@ def getPosProfileFull(pos_profile):
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
+        # native ERPNext open-discount switch (default 0); gates Open amount/percent keypad
+        "allow_discount_change": 1 if profile.get("allow_discount_change") else 0,
         "allow_rate_change": 1 if profile.get("allow_rate_change") else 0,
         "custom_max_free_bill_prints": cint(profile.get("custom_max_free_bill_prints")) if profile.get("custom_max_free_bill_prints") is not None else 1,
         "custom_max_free_closed_copies": cint(profile.get("custom_max_free_closed_copies") or 0),
@@ -1067,6 +1083,8 @@ def getPosProfileFull(pos_profile):
         "custom_tips_payable_account": profile.get("custom_tips_payable_account") or "",
         # one configured void reason per line; None on sites without the field
         "custom_void_reasons": profile.get("custom_void_reasons"),
+        "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
+        "over_short_reason_tolerance": frappe.utils.flt(profile.get("custom_over_short_reason_tolerance")),
         "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
         **get_default_customer_config(profile),
     }
@@ -1090,14 +1108,24 @@ def getPosInvoiceItems(invoice):
     check_split_target_access(orderdItems, "read")
     posItems = orderdItems.items
     for items in posItems:
+        max_disc = 0.0
+        if getattr(items, "item_code", None):
+            try:
+                max_disc = frappe.utils.flt(frappe.get_cached_value("Item", items.item_code, "max_discount"))
+            except Exception:
+                max_disc = 0.0
         itemDetails.append(
             {
                 "name": items.name,
-                "item_code": items.item_code,
+                "item_code": getattr(items, "item_code", None),
                 "item_name": items.item_name,
                 "qty": items.qty,
                 "rate": items.rate,
+                "price_list_rate": getattr(items, "price_list_rate", items.rate),
                 "amount": items.amount,
+                "discount_percentage": frappe.utils.flt(getattr(items, "discount_percentage", 0)),
+                "discount_amount": frappe.utils.flt(getattr(items, "discount_amount", 0)),
+                "max_discount": max_disc,
                 "is_disposable": items.is_disposable,
             }
         )
