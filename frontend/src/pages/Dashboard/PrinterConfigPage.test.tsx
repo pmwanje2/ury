@@ -506,4 +506,16 @@ describe("PrinterConfigPage", () => {
     );
     expect(screen.getByText("network down")).toBeInTheDocument();
   });
+
+  it("queries only enabled Print Formats so disabled unsafe ERPNext formats cannot be selected", async () => {
+    render(<PrinterConfigPage />);
+    await screen.findByTestId("printer-section-pos-profile");
+    expect(mockCall).toHaveBeenCalledWith(
+      "frappe.client.get_list",
+      expect.objectContaining({
+        doctype: "Print Format",
+        filters: [["disabled", "=", 0]],
+      })
+    );
+  });
 });

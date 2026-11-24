@@ -49,6 +49,7 @@ test('integration PRs and pushes run the locked, site-less POS suite', () => {
       'ury.ury.print_format.test_print_format_waiter_name',
       'ury.ury.print_format.test_print_format_escaping',
       'ury.ury.print_format.test_print_format_fiscal_receipt',
+      'ury.ury.print_format.test_print_format_layout',
       'ury.ury.doctype.ury_order.test_merged_bill_submit_efris',
       'ury.tests.unit.test_assistant_vendor_name',
     ].map(module => `PYTHONPATH=.. python3 -m unittest ${module}`).join('\n') + '\n',

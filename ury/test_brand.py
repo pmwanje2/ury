@@ -361,22 +361,28 @@ class TestSiteBrand(unittest.TestCase):
                 self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/public-release")
                 self.framework.conf.clear()
 
-    def test_merged_receipt_displays_invoice_identity_without_injecting_a_letterhead_or_footer(self):
+    def test_merged_receipt_honours_configured_letterhead_and_footer_and_no_letterhead_switch(self):
         from unittest.mock import MagicMock
 
         form = ROOT / "ury/ury/print_format/merged_pos_invoice_format/merged_pos_invoice_format.json"
         template = Environment().from_string(json.loads(form.read_text())["html"])
-        doc = MagicMock(restaurant="Signed outlet", branch="West branch", custom_merged_pos_invoice=None,
-                        custom_merged_total=0, grand_total=10, items=[], outstanding_amount=0, ury_print_partner=None)
+        doc = MagicMock(restaurant="Signed outlet", branch="West branch", company="Signed outlet",
+                        custom_merged_pos_invoice=None, custom_merged_total=0, grand_total=10, rounded_total=10,
+                        items=[], taxes=[], payments=[], outstanding_amount=0, ury_print_partner=None)
         configured = '<img src="/files/site-receipt.png" alt="Example site">'
-        for suppress in (False, True):
-            # Frappe renders print formats with `_` in the Jinja globals (frappe/utils/jinja.py).
-            html = template.render(doc=doc, frappe=MagicMock(), _=lambda text: text, letter_head=configured,
-                                   footer="Configured receipt footer", no_letterhead=suppress)
-            self.assertIn("Signed outlet", html)
-            self.assertIn("West branch", html)
-            self.assertNotIn(configured, html)
-            self.assertNotIn("Configured receipt footer", html)
+        shown = template.render(doc=doc, frappe=MagicMock(), _=lambda text: text, letter_head=configured,
+                                footer="Configured receipt footer", no_letterhead=False)
+        self.assertIn("Signed outlet", shown)
+        self.assertIn("West branch", shown)
+        self.assertIn(configured, shown)
+        self.assertIn("Configured receipt footer", shown)
+
+        suppressed = template.render(doc=doc, frappe=MagicMock(), _=lambda text: text, letter_head=configured,
+                                     footer="Configured receipt footer", no_letterhead=True)
+        self.assertIn("Signed outlet", suppressed)
+        self.assertIn("West branch", suppressed)
+        self.assertNotIn(configured, suppressed)
+        self.assertNotIn("Configured receipt footer", suppressed)
 
     def test_authenticated_pos_and_dev_boot_include_site_brand(self):
         self.set_brand()
