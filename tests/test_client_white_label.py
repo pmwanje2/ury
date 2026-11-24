@@ -167,7 +167,12 @@ process.stdout.write(JSON.stringify(out));
             "URY_LINE_KEY_REUSED",
             "URY_ALREADY_SENT",
             "URY_HOLD_REQUIRES_FIRE",
+            "URY_HELD_NOT_FIRED",
             "URY_SERVICE_REQUEST_OTHER_BRANCH",
+            "URY_SERVICE_REQUEST_ALREADY_RESOLVED",
+            "URY_SERVICE_REQUEST_STATUS_BACKWARD",
+            "URY_SERVICE_REQUEST_DELETE_REFUSED",
+            "URY_GUEST_RETRY",
         }
         for py in sorted((ROOT / "ury").rglob("*.py")):
             if py.name.startswith("test_") or "/tests/" in py.as_posix():

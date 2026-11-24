@@ -97,6 +97,10 @@ def _ensure_frappe_stub():
     cf_mod = types.ModuleType("frappe.custom.doctype.custom_field.custom_field")
     cf_mod.create_custom_fields = MagicMock()
     sys.modules["frappe.custom.doctype.custom_field.custom_field"] = cf_mod
+    if "click" not in sys.modules:
+        click_mod = types.ModuleType("click")
+        click_mod.secho = MagicMock()
+        sys.modules["click"] = click_mod
     return frappe_mod, True
 
 
@@ -853,7 +857,7 @@ class TestDirectRestFxInvoiceValidation(unittest.TestCase):
             # Legitimate 2: Overridden rate WITH matching consumed #147 POS Authorisation Log -> PASS
             self.frappe.get_all.return_value = [
                 _Dict(
-                    claim_json=json.dumps({
+                    claim_values=json.dumps({
                         "action": "pos_fx_rate_override",
                         "mode_of_payment": "USD Cash",
                         "from_currency": "USD",
