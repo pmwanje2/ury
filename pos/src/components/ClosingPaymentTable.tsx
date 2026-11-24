@@ -14,6 +14,7 @@ interface ClosingPaymentTableProps {
   hideExpected?: boolean;
   /** Blind cash count: omit the Expected and Difference columns entirely. */
   blindCashCount?: boolean;
+  currency?: string;
 }
 
 const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
@@ -22,6 +23,7 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
   onChange,
   hideExpected = false,
   blindCashCount = false,
+  currency,
 }) => {
   const handleClosingAmountChange = (modeOfPayment: string, value: string) => {
     const parsed = parseFloat(value);
@@ -111,11 +113,11 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                   {row.mode_of_payment}
                 </td>
                 <td className="py-3 px-4 text-end text-gray-700">
-                  {formatCurrency(row.opening_amount)}
+                  {formatCurrency(row.opening_amount, currency)}
                 </td>
                 {!blindCashCount && (
                 <td className="py-3 px-4 text-end text-gray-700">
-                  {hideExpected ? '—' : formatCurrency(row.expected_amount)}
+                  {hideExpected ? '—' : formatCurrency(row.expected_amount, currency)}
                 </td>
                 )}
                 <td className="py-3 px-4">
@@ -143,7 +145,7 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                         : 'text-green-600'
                   )}
                 >
-                  {hideExpected ? '—' : formatCurrency(difference)}
+                  {hideExpected ? '—' : formatCurrency(difference, currency)}
                 </td>
                 )}
               </tr>

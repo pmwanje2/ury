@@ -8,6 +8,10 @@ export interface OfflineProfile extends DefaultCustomerConfig {
   name: string;
   ury_offline_capture?: unknown;
   role_allowed_for_billing?: Array<{ role: string }>;
+  print_type?: string;
+  qz_host?: string | null;
+  print_format?: string | null;
+  efris_print_wait_seconds?: number;
 }
 export interface OfflineUser { name: string; roles: string[] }
 export interface OfflineRound {
@@ -29,7 +33,7 @@ export interface OfflineOrder {
   mode_of_payment?: string; order_type: string; table?: string; room?: string; comments?: string | null;
 }
 export interface OfflineSettlement {
-  kind: 'cash' | 'mobile-money'; mode_of_payment: string; amount: number; reference?: string;
+  kind: 'cash' | 'mobile-money'; mode_of_payment: string; amount: number; reference?: string; room_number?: string;
 }
 export interface OfflineEntry {
   sequence?: number; owner: string; profile: string; client_order_id: string; outage_id: string;
@@ -38,7 +42,8 @@ export interface OfflineEntry {
   phase: 'order' | 'print' | 'settle'; server_invoice?: string;
 }
 export type OfflinePrint = (entry: OfflineEntry, kind: 'kot' | 'bill') => boolean | Promise<boolean>;
-interface Options { profile: OfflineProfile; user: OfflineUser; request?: typeof fetch; print?: OfflinePrint }
+export type OfflineSettledHook = (settled: { invoice: string; entry: OfflineEntry }) => void | Promise<void>;
+interface Options { profile: OfflineProfile; user: OfflineUser; request?: typeof fetch; print?: OfflinePrint; onSettled?: OfflineSettledHook }
 
 const DB = 'ury-pos-offline-capture';
 const LOCK = 'ury-pos-offline-capture';
@@ -123,10 +128,12 @@ export class OfflineOutbox {
   private scope: string;
   private request: typeof fetch;
   private print: OfflinePrint;
+  private onSettled?: OfflineSettledHook;
   constructor(private options: Options) {
     this.scope = JSON.stringify([options.user.name, options.profile.name]);
     this.request = options.request || ((url, init) => fetch(url, init));
     this.print = options.print || (() => false);
+    this.onSettled = options.onSettled;
   }
   private get sessionBlockKey() { return `ury_offline_session_blocked:${this.options.user.name}`; }
   get sessionBlocked() { return sessionStorage.getItem(this.sessionBlockKey) !== null; }
@@ -376,11 +383,21 @@ export class OfflineOutbox {
             const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
               customer: entry.order.customer, cashier: entry.order.cashier, owner: entry.order.owner, table: entry.order.table || null,
               pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
-              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }] });
+              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }],
+              ...(entry.settlement.room_number ? { room_number: entry.settlement.room_number } : {}),
+            });
             // v16 make_invoice answers {name, status}; a settled retry answers the same.
             if (!reply || typeof reply !== 'object' || !('status' in reply) || reply.status !== 'Submitted') throw new NotReady('Settlement acknowledgement is incomplete');
+            const settledInvoice = ('name' in reply && typeof reply.name === 'string' && reply.name) || entry.server_invoice;
             forgetOpenTableCheck(entry.owner, entry.order.table);
             await remove(entry);
+            if (this.onSettled && settledInvoice) {
+              try {
+                await this.onSettled({ invoice: settledInvoice, entry });
+              } catch {
+                // Settlement already committed; post-replay fiscal print errors stay non-blocking.
+              }
+            }
           } catch (error) {
             if (!(error instanceof Refused)) { this.replayFailure(error); break; }
             if (error instanceof OrderPermission) {

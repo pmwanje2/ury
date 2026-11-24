@@ -47,6 +47,25 @@ async function updateMergedInvoicePrint(invoice) {
     });
 }
 
+const UNSAFE_POS_PRINT_FORMATS = new Set([
+    'POS Invoice Classic',
+    'POS Invoice Bordered',
+    'POS Invoice Modern',
+    'POS Invoice Modern with Images',
+    'POS Invoice',
+    'Return POS Invoice',
+    'EFRIS POS Receipt 80mm',
+    'POS EFRIS Invoice',
+]);
+
+function resolveSafePosPrintFormat(configured) {
+    const clean = (configured || '').trim();
+    if (!clean || UNSAFE_POS_PRINT_FORMATS.has(clean)) {
+        return 'Merged POS Invoice Format';
+    }
+    return clean;
+}
+
 frappe.ui.form.on('POS Invoice', {
 
     before_save: function (frm) {
@@ -69,6 +88,8 @@ frappe.ui.form.on('POS Invoice', {
             }
             frappe.dom.freeze(__('Printing Invoice'));
             frappe.db.get_doc('POS Profile', frm.doc.pos_profile).then(profile => {
+                const safePrintFormat = resolveSafePosPrintFormat(profile.print_format);
+                const configuredLetterHead = (profile.letter_head || '').trim();
 
                 if (profile.qz_print == 1) {
                     // To fetch qz_key from site config
@@ -92,7 +113,9 @@ frappe.ui.form.on('POS Invoice', {
                         args: {
                             doc: "POS Invoice",
                             name: invoice,
-                            print_format: profile.print_format,
+                            print_format: safePrintFormat,
+                            no_letterhead: configuredLetterHead ? 0 : 1,
+                            letterhead: configuredLetterHead || "No Letterhead",
                             _lang: 'en',
                         },
                         callback: function (r) {
@@ -170,7 +193,7 @@ frappe.ui.form.on('POS Invoice', {
                                 doctype: "POS Invoice",
                                 name: invoice,
                                 printer_setting: print.printer,
-                                print_format: profile.print_format
+                                print_format: safePrintFormat
                             },
                             callback: function (r) {
                                 if (r.message == "Success") {
@@ -204,7 +227,7 @@ frappe.ui.form.on('POS Invoice', {
                         args: {
                             doctype: "POS Invoice",
                             name: invoice,
-                            print_format: profile.print_format
+                            print_format: safePrintFormat
                         },
                         callback: function (r) {
                             $('.standard-actions').addClass('hidden-xs hidden-md');

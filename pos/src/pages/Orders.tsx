@@ -19,7 +19,7 @@ import BillMergeDialog from '../components/BillMergeDialog';
 import OrderActionsMenu from '../components/OrderActionsMenu';
 import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
-import { printOrder } from '../lib/print';
+import { printBillCopy, printOrder } from '../lib/print';
 import { call, getSessionUser } from '@ury/core';
 import { splitBill, cancelOrder } from '../lib/order-api';
 import {
@@ -509,14 +509,22 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     if (!selectedOrder || !posStore.posProfile) return;
     setIsPrinting(true);
     try {
-      await printOrder({
-        orderId: selectedOrder.name,
-        posProfile: posStore.posProfile,
-        printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
-      });
+      const isOpenBill = selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled';
+      if (isOpenBill) {
+        await printOrder({
+          orderId: selectedOrder.name,
+          posProfile: posStore.posProfile,
+          printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
+        });
+      } else {
+        await printBillCopy({
+          orderId: selectedOrder.name,
+          posProfile: posStore.posProfile,
+          idempotencyKey: crypto.randomUUID(),
+        });
+      }
       showToast.success(t('success.printed'));
-      // Locally update selectedOrder.invoice_printed to 1
-      if (selectedOrder && typeof selectedOrder === 'object') {
+      if (isOpenBill && selectedOrder && typeof selectedOrder === 'object') {
         const wasPrinted = Number(selectedOrder.invoice_printed) === 1;
         selectOrder({
           ...selectedOrder,
@@ -525,14 +533,14 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             ? selectedOrder.custom_printing_time ?? null
             : formatFrappeDatetime(new Date()),
         });
-      }
-      // If order was Unbilled, set to Draft and reload draft orders
-      if (selectedStatus === 'Outstanding') {
-        await fetchOrders();
-      } else if (selectedStatus === 'Unbilled') {
-        showToast.info(t('success.order_moved_to_draft'));
-        setSelectedStatus('Draft');
-        fetchOrders();
+        // If order was Unbilled, set to Draft and reload draft orders
+        if (selectedStatus === 'Outstanding') {
+          await fetchOrders();
+        } else if (selectedStatus === 'Unbilled') {
+          showToast.info(t('success.order_moved_to_draft'));
+          setSelectedStatus('Draft');
+          fetchOrders();
+        }
       }
     } catch (err: any) {
       showToast.error(t('errors.print_failed', { reason: err?.message || String(err) }));
@@ -941,11 +949,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
+                currency={selectedOrderCurrency}
                 onOpenInvoice={openRelatedInvoice}
               />
 
               <MergedBillPanel
                 order={selectedOrder}
+                currency={selectedOrderCurrency}
                 onOpenSecondary={openSecondaryInvoice}
               />
 
@@ -1280,6 +1290,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showMergeDialog}
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
+          currency={selectedOrderCurrency}
           onConfirm={handleMergeBill}
         />
       )}
@@ -1310,7 +1321,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               from: pendingVoidApproval.item.qty,
               to: pendingVoidApproval.newQty,
             }),
-            t('manager_approval.amount_line', { amount: formatCurrency(pendingVoidApproval.amount, selectedOrderCurrency) }),
+            t('manager_approval.amount_line', {
+              amount: formatCurrency(
+                pendingVoidApproval.amount,
+                pendingVoidApproval.order.currency || profileCurrency,
+              ),
+            }),
             t('manager_approval.check_line', { check: pendingVoidApproval.order.name }),
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}

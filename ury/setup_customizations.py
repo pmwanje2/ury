@@ -490,6 +490,15 @@ def get_custom_fields():
 				"description": "Minutes an approver PIN stays locked after too many wrong attempts (default 15).",
 				"insert_after": "custom_override_max_attempts",
 			},
+			{
+				"fieldname": "custom_efris_print_wait_seconds",
+				"fieldtype": "Int",
+				"label": "Fiscal Receipt Wait Timeout (Seconds)",
+				"default": "5",
+				"non_negative": 1,
+				"description": "Seconds the till waits for the EFRIS FDN before printing a pending receipt and queueing an automatic COPY reprint (default 5; 0 prints immediately; max 15).",
+				"insert_after": "custom_disable_print_status_tracking",
+			}
 		],
   
 		"POS Opening Entry": [

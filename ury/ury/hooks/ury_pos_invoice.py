@@ -464,6 +464,10 @@ def validate_invoice(doc, method):
 
     if getattr(frappe.flags, "ury_qty_reduction", False):
         return
+    # A new document has no printed copy to compare against, and a return refunds a paid
+    # check; neither is an edit of a printed bill.
+    if doc.is_new() or doc.get("is_return"):
+        return
     remove_items = frappe.db.get_value("POS Profile", doc.pos_profile, "remove_items")
 
     if doc.invoice_printed == 1 and remove_items == 0:
@@ -515,6 +519,9 @@ def validate_customer(doc, method):
         frappe.throw(_("Customer is required."))
 
 
+LIVE_PHONE_PAID_STATUSES = ["Paid", "Partially Paid", "Partially Refunded"]
+
+
 def _is_phone_payment_row(row):
     if row.get("type") == "Phone":
         return True
@@ -526,8 +533,9 @@ def _is_phone_payment_row(row):
 
 def _active_received_db_rows(doc, existing_rows):
     """Filter DB custom_tender_received=1 rows to those that are still genuinely received.
-    Phone rows whose Payment Request is no longer live Paid/Partially Paid are excluded so
-    cancelled/failed/expired/refunded Phone requests can be cleared or settled with Cash."""
+    Phone rows whose Payment Request is no longer live Paid/Partially Paid/Partially Refunded
+    with positive paid amount are excluded so cancelled/failed/expired/refunded Phone requests
+    can be cleared or settled with Cash."""
     if not existing_rows:
         return []
 
@@ -541,7 +549,7 @@ def _active_received_db_rows(doc, existing_rows):
                 "reference_doctype": "POS Invoice",
                 "reference_name": doc.name,
                 "docstatus": 1,
-                "status": ["in", ["Paid", "Partially Paid"]],
+                "status": ["in", LIVE_PHONE_PAID_STATUSES],
             },
             fields=["name", "mode_of_payment", "grand_total", "outstanding_amount"],
         )
@@ -575,17 +583,16 @@ def _active_received_db_rows(doc, existing_rows):
 
 def validate_server_only_tender_received(doc, method=None):
     """custom_tender_received on payment rows may only be set, modified, or cleared by
-    confirmed server flows. Always compares against DB rows so a raw REST PUT or client
-    save cannot drop, unflag, reduce, re-mode, or replace an already-received tender."""
-    if getattr(frappe.flags, "ury_server_tender_received", False):
-        return
+    confirmed server flows. Always compares against DB rows so a raw REST PUT, client
+    save, or background Data Import (even as Administrator) cannot drop, unflag, reduce,
+    re-mode, or replace an already-received tender."""
     if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
         return
     if doc.get("is_return") or int(doc.get("docstatus") or 0) == 2:
         return
     if (
-        getattr(getattr(frappe, "session", None), "user", None) == "Administrator"
-        and not getattr(frappe, "request", None)
+        getattr(frappe.flags, "ury_server_tender_received", False)
+        and not getattr(frappe.flags, "in_import", False)
     ):
         return
 
@@ -692,7 +699,7 @@ def validate_confirmed_phone_payments(doc, method=None):
                 "reference_name": doc.name,
                 "mode_of_payment": mode,
                 "docstatus": 1,
-                "status": ["in", ["Paid", "Partially Paid"]],
+                "status": ["in", LIVE_PHONE_PAID_STATUSES],
             },
             fields=["name", "grand_total", "outstanding_amount"],
         )

@@ -53,7 +53,7 @@
    "label": "Source Tool"
   },
   {
-   "description": "Reserved for future LLM narration. Empty until the HUF automation (PR-B) fills it in.",
+   "description": "Reserved for future LLM narration. Empty until the assistant automation fills it in.",
    "fieldname": "body",
    "fieldtype": "Long Text",
    "label": "Body"
@@ -75,7 +75,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-08-20 00:00:00.000000",
+ "modified": "2026-11-23 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Insight",
