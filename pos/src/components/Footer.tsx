@@ -73,8 +73,8 @@ const Footer = () => {
 
   return (
     <div className="bg-white border-t border-border py-1.5 relative">
-      <nav className="max-w-screen-xl mx-auto px-4">
-        <div className="flex justify-center items-center gap-1">
+      <nav className="max-w-screen-xl mx-auto px-1 sm:px-4 overflow-x-auto">
+        <div className="flex justify-between sm:justify-center items-center sm:gap-1">
           {navItems.map((item) => (
             <NavLink
               key={item.path}
@@ -83,7 +83,8 @@ const Footer = () => {
                 cn(
                   // Same rhythm as the Reports rail: a 28px icon chip carrying
                   // the active state, a 13px medium label, rounded-md hit area.
-                  'flex min-w-[4.5rem] flex-col items-center gap-1 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors',
+                  // Shrinks cleanly on phone widths so 390px never overflows.
+                  'flex flex-1 sm:flex-none min-w-0 sm:min-w-[4.5rem] flex-col items-center gap-0.5 sm:gap-1 rounded-md px-1 sm:px-3 py-1.5 text-[11px] sm:text-[13px] font-medium transition-colors',
                   isActive
                     ? 'text-primary font-semibold'
                     : 'text-gray-600 hover:bg-primary-50 hover:text-primary'
@@ -100,7 +101,7 @@ const Footer = () => {
                   >
                     <item.icon className="w-4 h-4 shrink-0" />
                   </span>
-                  <span>{item.label}</span>
+                  <span className="max-w-full truncate">{item.label}</span>
                 </>
               )}
             </NavLink>

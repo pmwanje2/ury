@@ -1101,6 +1101,36 @@ class TestSettlementPreservesExistingTenders(Loaded):
             [("P2 Phone", 100.0, "PR-PAID-9", 1), ("Cash", 100.0, None, 0)],
         )
 
+    def test_cancelled_or_failed_phone_request_releases_deadlock_and_allows_cash_settlement(self):
+        """P1 #1: even if a draft Phone payment row still carries custom_tender_received=1
+        in DB after its Payment Request was cancelled, failed, expired, or refunded,
+        _received_payment_rows must re-check live Payment Request status so Cash works."""
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "Online Mobile Money" and field == "type" else 0
+        )
+        # Live Paid Payment Request list is empty (PR-DEAD was cancelled/failed/expired/refunded).
+        self.frappe.get_all.side_effect = lambda doctype, filters=None, **kw: []
+        check = Check(
+            "LKG-DEADLOCK",
+            grand_total=5.90,
+            rounded_total=5.90,
+            payments=[
+                PaymentRow(
+                    mode_of_payment="Online Mobile Money",
+                    type="Phone",
+                    amount=5.90,
+                    reference_no="PR-DEAD",
+                    custom_tender_received=1,
+                )
+            ],
+        )
+        self.assertEqual(self.order._received_payment_rows(check), [])
+        self._settle(check, [{"mode_of_payment": "Cash", "amount": 5.90}], submit_invoice=0)
+        self.assertEqual(
+            [(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments],
+            [("Cash", 5.90)],
+        )
+
     def test_clearance_date_only_received_row_clears_clearance_on_surplus_remainder(self):
         check = Check(
             "LKG-CLEARANCE",

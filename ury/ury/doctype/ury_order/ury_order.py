@@ -2667,6 +2667,8 @@ def sync_order(
     captured_at=None,
     offline_printed=0,
     expected_total=None,
+    approval_token=None,
+    void_reason=None,
 ):
     # None keeps the order's label; any string, blank included, replaces it
     clear_guest_label = guest_label is not None and not str(guest_label).strip()
@@ -2898,9 +2900,10 @@ def sync_order(
 
     # Authorize before changing headers, payments or lines. Reducing a sent
     # dish+note quantity emits a kitchen cancellation even if the dish total
-    # stays unchanged. Match the KOT identity and existing remove_items flag;
-    # additions and append-only rounds do not remove the sent baseline.
-    if not append and past_item and not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+    # stays unchanged. When POS Privilege Rules are active for the company,
+    # enforce `void_sent_item` via manager PIN authorisation; otherwise keep
+    # the legacy remove_items / elevated-role fallback.
+    if not append and past_item:
         requested_qty_by_item = {}
         for item in items:
             code = item.get("item")
@@ -2909,19 +2912,78 @@ def sync_order(
         for item in past_item:
             code = item["item_code"]
             previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
+
         def sent_quantities(rows):
             totals = defaultdict(float)
             for row in _kitchen_snapshot(rows):
-                totals[row["item_code"], row["comments"], row.get("reservation_line_key")] += row["qty"]
+                totals[(row["item_code"], row["comments"], row.get("reservation_line_key") or "")] += row["qty"]
             return totals
 
         sent_before, sent_after = sent_quantities(past_item), sent_quantities(items)
-        if (any(requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items())
-                or any(sent_after.get(key, 0) < qty for key, qty in sent_before.items())):
-            frappe.throw(
-                _("You are not permitted to reduce or remove items from this order."),
-                frappe.PermissionError,
-            )
+        rate_by_key = {}
+        rate_by_item = {}
+        for inv_row in invoice.items or []:
+            if cint(inv_row.get("ury_held")):
+                continue
+            r_val = flt(inv_row.get("rate") or 0)
+            if inv_row.get("reservation_line_key"):
+                rate_by_key[inv_row.get("reservation_line_key")] = r_val
+            if inv_row.get("item_code") and inv_row.get("item_code") not in rate_by_item:
+                rate_by_item[inv_row.get("item_code")] = r_val
+
+        void_lines = []
+        voided_amount = 0.0
+        for key in sorted(sent_before.keys()):
+            before_qty = flt(sent_before[key])
+            after_qty = flt(sent_after.get(key, 0.0))
+            if after_qty < before_qty:
+                code, _note, line_key = key
+                delta_qty = before_qty - after_qty
+                unit_rate = rate_by_key.get(line_key, rate_by_item.get(code, 0.0))
+                voided_amount += unit_rate * delta_qty
+                void_lines.append({
+                    "item_code": code,
+                    "reservation_line_key": line_key,
+                    "from_qty": before_qty,
+                    "to_qty": after_qty,
+                    "delta": delta_qty,
+                })
+        voided_amount = round(voided_amount, 4)
+
+        any_total_reduced = any(
+            requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items()
+        )
+        if void_lines or any_total_reduced:
+            company = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
+            from ury.ury_pos import override
+
+            if void_lines and override.is_policy_active(company):
+                claim = {
+                    "action": "sync_order_void_sent_item",
+                    "lines": void_lines,
+                    "amount": voided_amount,
+                    "reason": (void_reason or "").strip(),
+                }
+                if approval_token:
+                    approval = override.consume(
+                        approval_token, "void_sent_item", pos_profile, invoice.name, claim
+                    )
+                    override.mark_verified_approval(invoice, "void_sent_item", approval)
+                elif override.may_perform(
+                    frappe.session.user, pos_profile, "void_sent_item", amount=voided_amount
+                ):
+                    override.mark_verified_approval(invoice, "void_sent_item")
+                else:
+                    frappe.throw(
+                        _("You are not permitted to reduce or remove items from this order without manager approval.")
+                        + " [POS-AUTH-REQUIRED]",
+                        frappe.PermissionError,
+                    )
+            elif not _can_remove_sent_items(posprofile, invoice=invoice, pos_profile_name=pos_profile):
+                frappe.throw(
+                    _("You are not permitted to reduce or remove items from this order."),
+                    frappe.PermissionError,
+                )
 
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
@@ -3837,25 +3899,47 @@ def _received_payment_rows(invoice):
 
     Only rows explicitly marked custom_tender_received=1 by a confirmed server flow, or
     backed by a confirmed Paid/Partially Paid Phone Payment Request, are received.
-    Draft/split placeholders, unconfirmed Phone requests, and Step-1 print-preview rows
-    have custom_tender_received=0 and are never treated as received.
+    Phone rows are always re-checked against live Payment Request status so cancelled,
+    failed, expired, or refunded requests never deadlock the check.
     """
+    confirmed_prs = _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company"))
+    live_pr_by_name = {pr.get("name"): pr for pr in confirmed_prs if pr.get("name")}
+    live_paid_by_mode = {}
+    for pr in confirmed_prs:
+        pr_mode = pr.get("mode_of_payment")
+        pr_paid = flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount"))
+        if pr_mode and pr_paid > 0:
+            live_paid_by_mode[pr_mode] = live_paid_by_mode.get(pr_mode, 0.0) + pr_paid
+
     rows = []
     matched_pr_names = set()
     matched_phone_modes = {}
 
     for row in invoice.get("payments") or []:
         amt = flt(row.get("amount"))
-        if amt > 0 and cint(row.get("custom_tender_received")) == 1:
-            rows.append(row)
-            ref = (row.get("reference_no") or "").strip()
+        if amt <= 0 or cint(row.get("custom_tender_received")) != 1:
+            continue
+        mode = row.get("mode_of_payment")
+        ref = (row.get("reference_no") or "").strip()
+        if _is_phone_mode(row):
             if ref:
+                if ref not in live_pr_by_name:
+                    continue
                 matched_pr_names.add(ref)
-            mode = row.get("mode_of_payment")
-            if row.get("type") == "Phone" and mode:
+            else:
+                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                    continue
+                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
+            if mode:
                 matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
+            rows.append(row)
+            continue
 
-    for pr in _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company")):
+        rows.append(row)
+        if ref:
+            matched_pr_names.add(ref)
+
+    for pr in confirmed_prs:
         pr_name = pr.get("name")
         if pr_name in matched_pr_names:
             continue

@@ -6,11 +6,14 @@ import { call } from '@ury/core';
 import { initI18n } from '../src/i18n';
 import { useRootStore } from '../src/store/root-store';
 import { usePOSStore } from '../src/store/pos-store';
-import type { POSInvoice } from '../src/lib/invoice-api';
+import { outstandingFields, type POSInvoice } from '../src/lib/invoice-api';
 import type { PosProfileCombined } from '../src/lib/pos-profile-api';
 import { printOrder } from '../src/lib/print';
 import PaymentDialog from '../src/components/PaymentDialog';
 import MergedBillPanel from '../src/components/MergedBillPanel';
+import Footer from '../src/components/Footer';
+import Header from '../src/components/Header';
+import { PrinterWatchProvider } from '../src/components/PrinterWatch';
 import Orders from '../src/pages/Orders';
 
 vi.mock('../src/lib/print', () => ({ printOrder: vi.fn().mockResolvedValue(undefined) }));
@@ -454,5 +457,86 @@ describe('POS-PR-2 R2 hermetic checks', () => {
       'ury.ury.doctype.ury_order.ury_order.submit_order_invoice',
       { invoice: 'CHK-PRINT' },
     );
+  });
+
+  it('Orders displays the order own currency (UGX) on cards, items, taxes, and sticky totals on a USD-default site', async () => {
+    vi.stubGlobal('frappe', { boot: { sysdefaults: { currency: 'USD' } } });
+    expect(outstandingFields).toContain('currency');
+
+    const ugxOrder: POSInvoice = {
+      name: 'KBG-00003',
+      status: 'Draft',
+      currency: 'UGX',
+      invoice_printed: 0,
+      grand_total: 19057,
+      rounded_total: 19100,
+      net_total: 16150,
+      total_taxes_and_charges: 2907,
+      restaurant_table: 'K-101',
+      cashier: 'cashier@example.com',
+      waiter: 'cashier@example.com',
+      customer: 'Walk-in Guest',
+      mobile_number: '',
+      posting_date: '2026-11-24',
+      posting_time: '11:54:00',
+      order_type: 'Dine In',
+    };
+
+    usePOSStore.setState({
+      currency: 'USD',
+      posProfile: makeProfile({ name: 'Kampala UGX Till', currency: 'UGX', branch: 'Kampala' }),
+    });
+    useRootStore.setState({
+      selectedStatus: 'Outstanding',
+      orders: [ugxOrder],
+      selectedOrder: ugxOrder,
+      selectedOrderItems: [
+        { name: 'row-1', item_name: 'Grilled Tilapia', qty: 1, rate: 16150, price_list_rate: 16150, amount: 16150 },
+      ],
+      selectedOrderTaxes: [{ description: 'VAT 18%', rate: 2907 }],
+    });
+
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/orders']}>
+          <Orders />
+        </MemoryRouter>,
+      ),
+    );
+
+    const text = container.textContent || '';
+    expect(text).toContain('UGX 19,100');
+    expect(text).toContain('UGX 16,150');
+    expect(text).toContain('UGX 2,907');
+    expect(text).not.toContain('USD 19,100');
+    expect(text).not.toContain('USD 16,150');
+    expect(text).not.toContain('USD 2,907');
+  });
+
+  it('Footer and Header use phone-safe flex sizing so /orders does not overflow at 390px', async () => {
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/orders']}>
+          <PrinterWatchProvider>
+            <Header />
+            <Footer />
+          </PrinterWatchProvider>
+        </MemoryRouter>,
+      ),
+    );
+
+    const footerLinks = Array.from(container.querySelectorAll('nav a'));
+    expect(footerLinks.length).toBeGreaterThanOrEqual(6);
+    for (const link of footerLinks) {
+      const classes = link.className.split(/\s+/);
+      expect(classes).not.toContain('min-w-[4.5rem]');
+      expect(classes).toContain('min-w-0');
+    }
+
+    const searchInput = container.querySelector('header input');
+    expect(searchInput).toBeTruthy();
+    const searchWrapperClasses = searchInput!.parentElement!.className.split(/\s+/);
+    expect(searchWrapperClasses).toContain('min-w-0');
+    expect(searchWrapperClasses).not.toContain('mx-8');
   });
 });

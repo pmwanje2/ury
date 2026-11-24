@@ -9,6 +9,7 @@ import { getCheckDiscounts, type CheckDiscountSummary } from '../../lib/discount
 
 export interface POSInvoice {
   branch?: string;
+  currency?: string;
   ury_client_order_id?: string | null;
   name: string;
   invoice_printed: number;

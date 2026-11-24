@@ -347,11 +347,68 @@ def validate_invoice(doc, method):
         doc.waiter = doc.modified_by
     if getattr(frappe.flags, "ury_bill_split", False):
         return
-    if getattr(frappe.flags, "ury_qty_reduction", False):
-        return
-    # A new document has no printed copy to compare against, and a return refunds a paid
-    # check; neither is an edit of a printed bill.
+    # A new document has no printed copy or sent baseline to compare against,
+    # and a return refunds a paid check; neither is an edit of a sent bill.
     if doc.is_new() or doc.get("is_return"):
+        return
+
+    # Mutation-level `void_sent_item` gate (Amendment 1 #7): catches direct REST,
+    # Desk, or ORM saves that reduce or remove already-sent (non-held) lines
+    # without a verified in-process approval or `may_perform` privilege.
+    if not getattr(frappe.flags, "in_patch", False) and not getattr(frappe.flags, "in_migrate", False):
+        company = doc.get("company")
+        pos_profile = doc.get("pos_profile")
+        if company and pos_profile:
+            from ury.ury_pos import override
+
+            if override.is_policy_active(company):
+                before_doc = doc.get_doc_before_save() or frappe.get_doc("POS Invoice", doc.name)
+                orig_sent = {}
+                orig_by_code = {}
+                for item in before_doc.get("items") or []:
+                    if int(item.get("ury_held") or 0) == 1:
+                        continue
+                    ident = _line_identity(item)
+                    orig_sent[ident] = {
+                        "qty": flt(item.qty),
+                        "rate": flt(item.get("rate") or 0),
+                        "item_code": item.item_code,
+                    }
+                    orig_by_code[item.item_code] = orig_by_code.get(item.item_code, 0.0) + flt(item.qty)
+
+                curr_sent = {}
+                curr_by_code = {}
+                for item in doc.get("items") or []:
+                    if int(item.get("ury_held") or 0) == 1:
+                        continue
+                    ident = _line_identity(item)
+                    curr_sent[ident] = flt(item.qty)
+                    curr_by_code[item.item_code] = curr_by_code.get(item.item_code, 0.0) + flt(item.qty)
+
+                voided_amount = 0.0
+                sent_reduced = False
+                for ident, info in orig_sent.items():
+                    new_qty = curr_sent.get(ident, 0.0)
+                    if new_qty < info["qty"]:
+                        sent_reduced = True
+                        voided_amount += info["rate"] * (info["qty"] - new_qty)
+                if not sent_reduced:
+                    for code, old_total in orig_by_code.items():
+                        if curr_by_code.get(code, 0.0) < old_total:
+                            sent_reduced = True
+                            break
+
+                if sent_reduced:
+                    if not override.has_verified_approval(doc, "void_sent_item") and not override.may_perform(
+                        frappe.session.user, pos_profile, "void_sent_item", amount=round(voided_amount, 4)
+                    ):
+                        frappe.throw(
+                            frappe._("Removing or reducing a sent item requires manager approval.")
+                            + " [POS-AUTH-REQUIRED]",
+                            frappe.PermissionError,
+                        )
+
+    if getattr(frappe.flags, "ury_qty_reduction", False):
         return
     remove_items = frappe.db.get_value("POS Profile", doc.pos_profile, "remove_items")
 
@@ -413,26 +470,81 @@ def _is_phone_payment_row(row):
     return frappe.db.get_value("Mode of Payment", mode, "type") == "Phone"
 
 
+def _active_received_db_rows(doc, existing_rows):
+    """Filter DB custom_tender_received=1 rows to those that are still genuinely received.
+    Phone rows whose Payment Request is no longer live Paid/Partially Paid are excluded so
+    cancelled/failed/expired/refunded Phone requests can be cleared or settled with Cash."""
+    if not existing_rows:
+        return []
+
+    has_phone = any(_is_phone_payment_row(r) for r in existing_rows)
+    live_pr_names = set()
+    live_paid_by_mode = {}
+    if has_phone:
+        paid_requests = frappe.get_all(
+            "Payment Request",
+            filters={
+                "reference_doctype": "POS Invoice",
+                "reference_name": doc.name,
+                "docstatus": 1,
+                "status": ["in", ["Paid", "Partially Paid"]],
+            },
+            fields=["name", "mode_of_payment", "grand_total", "outstanding_amount"],
+        )
+        if not isinstance(paid_requests, (list, tuple)):
+            paid_requests = []
+        for pr in paid_requests:
+            paid_amt = flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount"))
+            if paid_amt <= 0:
+                continue
+            if pr.get("name"):
+                live_pr_names.add(pr.get("name"))
+            pr_mode = pr.get("mode_of_payment")
+            if pr_mode:
+                live_paid_by_mode[pr_mode] = live_paid_by_mode.get(pr_mode, 0.0) + paid_amt
+
+    active = []
+    for stored in existing_rows:
+        if _is_phone_payment_row(stored):
+            ref = (stored.get("reference_no") or "").strip()
+            mode = stored.get("mode_of_payment")
+            if ref:
+                if ref not in live_pr_names:
+                    continue
+            else:
+                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                    continue
+                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - flt(stored.get("amount")))
+        active.append(stored)
+    return active
+
+
 def validate_server_only_tender_received(doc, method=None):
-    """custom_tender_received on payment rows may only be set by confirmed server flows."""
+    """custom_tender_received on payment rows may only be set, modified, or cleared by
+    confirmed server flows. Always compares against DB rows so a raw REST PUT or client
+    save cannot drop, unflag, reduce, re-mode, or replace an already-received tender."""
     if getattr(frappe.flags, "ury_server_tender_received", False):
         return
     if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
         return
-    if getattr(getattr(frappe, "session", None), "user", None) == "Administrator":
+    if doc.get("is_return") or int(doc.get("docstatus") or 0) == 2:
+        return
+    if (
+        getattr(getattr(frappe, "session", None), "user", None) == "Administrator"
+        and not getattr(frappe, "request", None)
+    ):
         return
 
-    flagged = [
-        row for row in (doc.get("payments") or []) if int(row.get("custom_tender_received") or 0) == 1
-    ]
-    if not flagged:
-        return
+    payments = doc.get("payments") or []
+    flagged = [row for row in payments if int(row.get("custom_tender_received") or 0) == 1]
 
     if doc.is_new():
-        frappe.throw(
-            frappe._("Only confirmed server payment flows can mark a tender as received."),
-            frappe.ValidationError,
-        )
+        if flagged:
+            frappe.throw(
+                frappe._("Only confirmed server payment flows can mark a tender as received."),
+                frappe.ValidationError,
+            )
+        return
 
     existing_rows = frappe.get_all(
         "Sales Invoice Payment",
@@ -441,18 +553,25 @@ def validate_server_only_tender_received(doc, method=None):
             "parenttype": "POS Invoice",
             "custom_tender_received": 1,
         },
-        fields=["name", "mode_of_payment", "amount", "reference_no"],
+        fields=["name", "mode_of_payment", "amount", "reference_no", "type"],
     )
     if not isinstance(existing_rows, (list, tuple)):
         existing_rows = []
-    by_name = {r.get("name"): r for r in existing_rows if r.get("name")}
+
+    if not flagged and not existing_rows:
+        return
+
+    all_by_name = {r.get("name"): r for r in existing_rows if r.get("name")}
+    active_existing = _active_received_db_rows(doc, existing_rows)
+    active_by_name = {r.get("name"): r for r in active_existing if r.get("name")}
 
     precision = doc.precision("paid_amount") if callable(getattr(doc, "precision", None)) else 2
     if not isinstance(precision, int) or isinstance(precision, bool):
         precision = 2
 
+    # 1. No client may forge or tamper with custom_tender_received=1 on any row.
     for row in flagged:
-        stored = by_name.get(row.get("name"))
+        stored = all_by_name.get(row.get("name"))
         if not stored:
             frappe.throw(
                 frappe._("Only confirmed server payment flows can mark a tender as received."),
@@ -465,6 +584,22 @@ def validate_server_only_tender_received(doc, method=None):
         ):
             frappe.throw(
                 frappe._("Only confirmed server payment flows can mark a tender as received."),
+                frappe.ValidationError,
+            )
+
+    # 2. No client may drop, unflag, reduce, re-mode, or replace any active received row.
+    current_by_name = {row.get("name"): row for row in payments if row.get("name")}
+    for row_name, stored in active_by_name.items():
+        current = current_by_name.get(row_name)
+        if (
+            not current
+            or int(current.get("custom_tender_received") or 0) != 1
+            or current.get("mode_of_payment") != stored.get("mode_of_payment")
+            or round(flt(current.get("amount")), precision) != round(flt(stored.get("amount")), precision)
+            or (current.get("reference_no") or "").strip() != (stored.get("reference_no") or "").strip()
+        ):
+            frappe.throw(
+                frappe._("Cannot drop, reduce, or alter a tender already received on this check."),
                 frappe.ValidationError,
             )
 
