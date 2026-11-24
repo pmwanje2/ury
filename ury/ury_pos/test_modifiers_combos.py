@@ -63,6 +63,21 @@ class Row(dict):
 	def __setattr__(self, key, value):
 		self[key] = value
 
+	def as_dict(self, no_default_fields=False, no_child_table_fields=False, no_private_properties=False):
+		skip = set()
+		if no_default_fields:
+			skip.update({"creation", "modified", "modified_by", "owner", "docstatus"})
+		if no_child_table_fields:
+			skip.update({"name", "parent", "parenttype", "parentfield", "idx", "doctype"})
+		out = {}
+		for k, v in self.items():
+			if k in skip:
+				continue
+			if no_private_properties and str(k).startswith("_"):
+				continue
+			out[k] = v
+		return out
+
 
 def _stub(name, **attrs):
 	module = ModuleType(name)
@@ -1584,6 +1599,646 @@ class TestSplitBillAtomicParentChildModifiers(unittest.TestCase):
 			self.assertEqual(new_inv.items[1].custom_modifier_prefix, "Extra")
 			# Remaining source has only COLA
 			self.assertEqual([r.item_code for r in src.items], ["COLA"])
+
+
+class TestR3PrivilegedModifiersAndAvailabilityRestore(unittest.TestCase):
+	"""R3 RED -> GREEN tests for all 3 Hydrogen R2 blocking P1 defects:
+	1. split_bill on overridden child modifier rows passes validate_pos_invoice_modifiers
+	   while carrying #152 privileged pricing fields and keeping tamper guards intact.
+	2. merge_bills / consolidate_checks on overridden child modifier rows passes
+	   validate_pos_invoice_modifiers safely from locked source docs without opening
+	   a client price-tampering hole.
+	3. M4 live restore (set_item_availability(..., status='Available') and first-time count)
+	   passes Frappe Dynamic Link validation on POS Authorisation Log without LinkValidationError.
+	"""
+
+	def _build_order_and_modifier_stack(self):
+		framework, modules = _make_frappe_double()
+		db = _FakeModifierDB()
+		db.add_item("RIBEYE", "Ribeye Steak", item_group="Steaks")
+		db.add_item("EXTRA-CHEESE", "Aged Cheddar", item_group="Sides")
+		db.add_item("EXTRA-BACON", "Smoked Bacon", item_group="Sides")
+		db.add_item("COLA", "Cola", item_group="Drinks")
+		db.add_price("RIBEYE", 45000, "Menu A")
+		db.add_price("EXTRA-CHEESE", 4000, "Menu A")
+		db.add_price("EXTRA-BACON", 5000, "Menu A")
+		db.add_price("COLA", 5000, "Menu A")
+		db.add_group("Meat Temperature", display_title="Meat Temperature", group_type="Prep", required=1, min_selections=1, max_selections=1)
+		db.add_option("Meat Temperature", option_code="MED-RARE", label="Medium Rare", price_mode="Unpriced Prep")
+		db.add_group("Steak Extras", display_title="Steak Extras", group_type="Add-on", max_selections=2, allowed_prefixes="Extra\nSide")
+		db.add_option("Steak Extras", item="EXTRA-CHEESE", option_code="EXTRA-CHEESE", label="Aged Cheddar", price_mode="Menu Item Price")
+		db.add_option("Steak Extras", item="EXTRA-BACON", option_code="EXTRA-BACON", label="Smoked Bacon", price_mode="Menu Item Price")
+		db.attach_group("Item", "RIBEYE", "Meat Temperature", override_required=1, min_override=1, max_override=1)
+		db.attach_group("Item", "RIBEYE", "Steak Extras", max_override=2)
+		db.wire(framework)
+
+		modules.update({
+			"ury.ury_pos.api": _stub(
+				"ury.ury_pos.api",
+				getBranch=MagicMock(return_value="Main"),
+				getBranchRoom=MagicMock(),
+				getRoom=MagicMock(return_value=[Row(name="Dining")]),
+				posOpening=MagicMock(),
+			),
+			"ury.ury_pos.default_customer": _stub(
+				"ury.ury_pos.default_customer",
+				get_default_customer_config=MagicMock(),
+				resolve_default_customer=MagicMock(),
+			),
+			"ury.ury.api.ury_kot_generate": _stub(
+				"ury.ury.api.ury_kot_generate",
+				_execute_kot=MagicMock(),
+				process_items_for_cancel_kot=MagicMock(),
+			),
+			"ury.ury.api.ury_order_reservation_service": _stub(
+				"ury.ury.api.ury_order_reservation_service",
+				_line_key=lambda item_code, row, occ: f"ref:{item_code}:{row.get('reservation_line_key') or occ}",
+				_line_ref=lambda row: row.get("reservation_line_key"),
+				reconcile_order_reservations=MagicMock(),
+				release_order_reservations=MagicMock(),
+				resolve_production_context=MagicMock(return_value=None),
+				_warehouse_for_context=MagicMock(),
+			),
+			"ury.ury.api.ury_stock_policy": _stub(
+				"ury.ury.api.ury_stock_policy",
+				get_branch_stock_policy=MagicMock(return_value=Row(reservation_control_enabled=False)),
+			),
+			"ury.ury.doctype.alert_settings.alert_settings": _stub(
+				"ury.ury.doctype.alert_settings.alert_settings", get_alert_rule=MagicMock()
+			),
+			"ury.ury.api.ury_kot_notification": _stub(
+				"ury.ury.api.ury_kot_notification",
+				create_system_notification=MagicMock(),
+				get_users_with_role=MagicMock(),
+			),
+			"ury.ury.hooks.ury_pos_tender": _stub("ury.ury.hooks.ury_pos_tender", sync_charged_tip=MagicMock()),
+		})
+		return framework, db, modules
+
+	def test_split_bill_carries_overridden_child_modifier_and_blocks_tampering(self):
+		"""R3 P1 #1 RED: split_bill with a #152 overridden child modifier must copy privileged
+		fields and pass validate_pos_invoice_modifiers on new_invoice.insert(), while blocking
+		unverified client-forged rates and post-split tampering."""
+		framework, db, modules = self._build_order_and_modifier_stack()
+		with patch.dict(sys.modules, modules):
+			_load_module("ury.brand", "brand.py")
+			_load_module("ury.ury.api.item_price", "ury/api/item_price.py")
+			_load_module("ury.ury.api.ury_bundle_resolver", "ury/api/ury_bundle_resolver.py")
+			mods = _load_module("ury.ury.api.ury_modifiers", "ury/api/ury_modifiers.py")
+			ury_order = _load_module("ury.ury.doctype.ury_order.ury_order", "ury/doctype/ury_order/ury_order.py")
+
+			parent1 = Row(
+				name="ROW-P1",
+				item_code="RIBEYE",
+				item_name="Ribeye Steak",
+				qty=1,
+				rate=45000,
+				price_list_rate=45000,
+				base_price_list_rate=45000,
+				cost_center="CC",
+				uom="Nos",
+				conversion_factor=1,
+				warehouse="WH",
+				reservation_line_key="key-p1",
+				custom_parent_line_key=None,
+				custom_is_modifier=0,
+				custom_line_role="Standard",
+				custom_modifiers_json=json.dumps([
+					{"group": "Meat Temperature", "option_code": "MED-RARE", "label": "Medium Rare"},
+				]),
+			)
+			overridden_child = Row(
+				name="ROW-C1",
+				item_code="EXTRA-CHEESE",
+				item_name="Aged Cheddar",
+				qty=1,
+				rate=1500,
+				price_list_rate=1500,
+				base_price_list_rate=1500,
+				ignore_pricing_rule=1,
+				custom_original_price_list_rate=4000,
+				custom_price_overridden=1,
+				custom_price_override_reason="PRICE-SPECIAL: VIP guest adjustment",
+				custom_price_override_approver="manager@maximus.test",
+				cost_center="CC",
+				uom="Nos",
+				conversion_factor=1,
+				warehouse="WH",
+				reservation_line_key="key-c1",
+				custom_parent_line_key="key-p1",
+				custom_is_modifier=1,
+				custom_line_role="Modifier",
+				custom_modifier_group="Steak Extras",
+				custom_modifier_option="EXTRA-CHEESE",
+				custom_modifier_prefix="Extra",
+				custom_inherit_parent_routing=1,
+			)
+			parent2 = Row(
+				name="ROW-P2",
+				item_code="COLA",
+				item_name="Cola",
+				qty=1,
+				rate=5000,
+				price_list_rate=5000,
+				base_price_list_rate=5000,
+				cost_center="CC",
+				uom="Nos",
+				conversion_factor=1,
+				warehouse="WH",
+				reservation_line_key="key-p2",
+				custom_parent_line_key=None,
+				custom_is_modifier=0,
+				custom_line_role="Standard",
+			)
+			src = Doc(
+				name="POS-SPLIT-001",
+				doctype="POS Invoice",
+				docstatus=0,
+				is_return=0,
+				branch="Main",
+				company="Maximus Hospitality",
+				pos_profile="Main POS",
+				selling_price_list="Menu A",
+				currency="UGX",
+				posting_date="2026-11-24",
+				waiter="waiter@maximus.test",
+				owner="waiter@maximus.test",
+				invoice_printed=0,
+				items=[parent1, overridden_child, parent2],
+				payments=[Row(mode_of_payment="Cash", amount=0, custom_tender_received=0)],
+				flags=SimpleNamespace(),
+			)
+			src.is_new = lambda: False
+			src.precision = lambda field=None: 0
+			src.remove = lambda row: src.items.remove(row)
+			src.set_missing_values = MagicMock()
+			src.run_method = MagicMock()
+			src.calculate_taxes_and_totals = MagicMock()
+			src.save = MagicMock()
+
+			profile = Doc(
+				name="Main POS",
+				company="Maximus Hospitality",
+				currency="UGX",
+				transfer_role_permissions=[Row(role="URY Cashier")],
+				role_allowed_for_billing=[Row(role="URY Cashier")],
+			)
+			saved_invoices = {"POS-SPLIT-001": src}
+			created = []
+
+			def new_doc(dt):
+				doc = Doc(
+					doctype=dt,
+					name="POS-SPLIT-002",
+					docstatus=0,
+					is_return=0,
+					branch="Main",
+					company="Maximus Hospitality",
+					pos_profile="Main POS",
+					selling_price_list="Menu A",
+					currency="UGX",
+					posting_date="2026-11-24",
+					items=[],
+					payments=[],
+					invoice_created=0,
+					flags=SimpleNamespace(),
+				)
+				doc.is_new = lambda: True
+				doc.precision = lambda field=None: 0
+
+				def _append(k, v):
+					r = Row(**v)
+					getattr(doc, k).append(r)
+					return r
+
+				doc.append = _append
+				doc.set_missing_values = MagicMock()
+				doc.run_method = MagicMock()
+				doc.calculate_taxes_and_totals = MagicMock()
+
+				def _insert(*a, **kw):
+					# Real POS Invoice.validate runs validate_pos_invoice_modifiers on new_invoice.insert()!
+					mods.validate_pos_invoice_modifiers(doc)
+					doc.is_new = lambda: False
+					saved_invoices[doc.name] = Doc(
+						**{k: (list(v) if k == "items" else v) for k, v in doc.__dict__.items()}
+					)
+					return doc
+
+				doc.insert = _insert
+				doc.reload = MagicMock()
+				created.append(doc)
+				return doc
+
+			orig_get_doc = framework.get_doc.side_effect
+			orig_exists = framework.db.exists.side_effect
+			orig_get_value = framework.db.get_value.side_effect
+
+			def custom_get_doc(dt, name=None, **kw):
+				if dt == "POS Invoice" and name in saved_invoices:
+					return saved_invoices[name]
+				if dt == "POS Profile" and name == "Main POS":
+					return profile
+				return orig_get_doc(dt, name)
+
+			def custom_exists(dt, name=None):
+				if dt == "POS Invoice":
+					return name in saved_invoices
+				if dt == "POS Profile":
+					return name == "Main POS"
+				if dt == "POS Privilege Rule":
+					return False
+				return orig_exists(dt, name)
+
+			orig_table_exists = framework.db.table_exists.side_effect
+			framework.db.table_exists.side_effect = lambda dt: (
+				False if dt in ("POS Privilege Rule", "POS Authorisation Log") else orig_table_exists(dt)
+			)
+
+			def custom_get_value(dt, filters=None, fieldname=None, as_dict=False, **kw):
+				if dt == "Branch" and fieldname == "company":
+					return "Maximus Hospitality"
+				return orig_get_value(dt, filters, fieldname, as_dict=as_dict)
+
+			framework.get_doc.side_effect = custom_get_doc
+			framework.db.exists.side_effect = custom_exists
+			framework.db.get_value.side_effect = custom_get_value
+			framework.new_doc.side_effect = new_doc
+
+			res = ury_order.split_bill("POS-SPLIT-001", [{"name": "ROW-P1", "qty": 1}])
+			self.assertEqual(res["new_invoice"], "POS-SPLIT-002")
+			new_inv = created[0]
+			self.assertEqual([r.item_code for r in new_inv.items], ["RIBEYE", "EXTRA-CHEESE"])
+			moved_mod = new_inv.items[1]
+			self.assertEqual(moved_mod.rate, 1500)
+			self.assertEqual(moved_mod.custom_price_overridden, 1)
+			self.assertEqual(moved_mod.custom_original_price_list_rate, 4000)
+			self.assertEqual(moved_mod.custom_price_override_reason, "PRICE-SPECIAL: VIP guest adjustment")
+			self.assertEqual(moved_mod.custom_price_override_approver, "manager@maximus.test")
+			self.assertEqual(moved_mod.ignore_pricing_rule, 1)
+			self.assertIsNone(getattr(new_inv.flags, "ury_verified_privileged_child_rates", None))
+
+			# Post-split normal save & before_submit at 1500 MUST pass, while tampering rate -> 100 MUST fail!
+			mods.validate_pos_invoice_modifiers(new_inv)
+			mods.validate_invoice_modifiers_before_submit(new_inv)
+			tampered_mod = Row(**moved_mod)
+			tampered_mod.rate = 100
+			tampered_inv = Doc(
+				**{**new_inv.__dict__, "items": [new_inv.items[0], tampered_mod], "flags": SimpleNamespace()}
+			)
+			tampered_inv.is_new = lambda: False
+			tampered_inv.precision = lambda field=None: 0
+			with self.assertRaises(framework.ValidationError) as ctx:
+				mods.validate_pos_invoice_modifiers(tampered_inv)
+			self.assertIn("[POS-MODIFIER-RATE-MISMATCH]", str(ctx.exception))
+
+	def test_consolidate_checks_carries_overridden_child_modifier_safely(self):
+		"""R3 P1 #2 RED: consolidate_checks / merge_bills must allow verified #152 overridden child
+		modifier rows copied from locked source checks while rejecting any unverified tampered row."""
+		framework, db, modules = self._build_order_and_modifier_stack()
+		with patch.dict(sys.modules, modules):
+			_load_module("ury.brand", "brand.py")
+			_load_module("ury.ury.api.item_price", "ury/api/item_price.py")
+			_load_module("ury.ury.api.ury_bundle_resolver", "ury/api/ury_bundle_resolver.py")
+			mods = _load_module("ury.ury.api.ury_modifiers", "ury/api/ury_modifiers.py")
+			ury_order = _load_module("ury.ury.doctype.ury_order.ury_order", "ury/doctype/ury_order/ury_order.py")
+
+			dest_cola = Row(
+				name="ROW-D1",
+				item_code="COLA",
+				item_name="Cola",
+				qty=1,
+				rate=5000,
+				price_list_rate=5000,
+				base_price_list_rate=5000,
+				reservation_line_key="key-d1",
+				custom_is_modifier=0,
+				custom_line_role="Standard",
+			)
+			destination = Doc(
+				name="POS-DEST-001",
+				doctype="POS Invoice",
+				docstatus=0,
+				is_return=0,
+				branch="Main",
+				company="Maximus Hospitality",
+				pos_profile="Main POS",
+				selling_price_list="Menu A",
+				currency="UGX",
+				posting_date="2026-11-24",
+				owner="waiter@maximus.test",
+				restaurant_table="T-1",
+				invoice_printed=0,
+				items=[dest_cola],
+				payments=[],
+				flags=SimpleNamespace(),
+			)
+			destination.is_new = lambda: False
+			destination.precision = lambda field=None: 0
+			destination.append = lambda k, v: (getattr(destination, k).append(Row(**v)) or getattr(destination, k)[-1])
+			destination.calculate_taxes_and_totals = MagicMock()
+			destination.set_paid_amount = MagicMock()
+			destination.set_outstanding_amount = MagicMock()
+
+			# Snapshot of destination in DB BEFORE merge (only COLA, no EXTRA-CHEESE)
+			dest_db_before = Doc(
+				name="POS-DEST-001",
+				doctype="POS Invoice",
+				docstatus=0,
+				is_return=0,
+				branch="Main",
+				company="Maximus Hospitality",
+				pos_profile="Main POS",
+				selling_price_list="Menu A",
+				currency="UGX",
+				posting_date="2026-11-24",
+				items=[Row(**dest_cola)],
+				flags=SimpleNamespace(),
+			)
+
+			src_parent = Row(
+				name="ROW-S1",
+				item_code="RIBEYE",
+				item_name="Ribeye Steak",
+				qty=1,
+				rate=45000,
+				price_list_rate=45000,
+				base_price_list_rate=45000,
+				reservation_line_key="key-s1",
+				custom_is_modifier=0,
+				custom_line_role="Standard",
+				custom_modifiers_json=json.dumps([
+					{"group": "Meat Temperature", "option_code": "MED-RARE", "label": "Medium Rare"},
+				]),
+			)
+			src_overridden_mod = Row(
+				name="ROW-S2",
+				item_code="EXTRA-CHEESE",
+				item_name="Aged Cheddar",
+				qty=1,
+				rate=2000,
+				price_list_rate=2000,
+				base_price_list_rate=2000,
+				ignore_pricing_rule=1,
+				custom_original_price_list_rate=4000,
+				custom_price_overridden=1,
+				custom_price_override_reason="PRICE-SPECIAL: Merged check VIP",
+				custom_price_override_approver="manager@maximus.test",
+				reservation_line_key="key-s2",
+				custom_parent_line_key="key-s1",
+				custom_is_modifier=1,
+				custom_line_role="Modifier",
+				custom_modifier_group="Steak Extras",
+				custom_modifier_option="EXTRA-CHEESE",
+				custom_modifier_prefix="Extra",
+			)
+			source = Doc(
+				name="POS-SRC-001",
+				doctype="POS Invoice",
+				docstatus=0,
+				is_return=0,
+				branch="Main",
+				company="Maximus Hospitality",
+				pos_profile="Main POS",
+				selling_price_list="Menu A",
+				currency="UGX",
+				posting_date="2026-11-24",
+				restaurant_table="T-2",
+				custom_merged_tables="",
+				items=[src_parent, src_overridden_mod],
+				payments=[],
+				flags=SimpleNamespace(),
+			)
+			source.discard = MagicMock()
+			source.db_set = MagicMock()
+
+			saved_invoices = {"POS-DEST-001": dest_db_before, "POS-SRC-001": source}
+			orig_get_doc = framework.get_doc.side_effect
+			orig_exists = framework.db.exists.side_effect
+
+			def custom_get_doc(dt, name=None, **kw):
+				if dt == "POS Invoice" and name in saved_invoices:
+					return saved_invoices[name]
+				return orig_get_doc(dt, name)
+
+			def custom_exists(dt, name=None):
+				if dt == "POS Invoice":
+					return name in saved_invoices
+				return orig_exists(dt, name)
+
+			framework.get_doc.side_effect = custom_get_doc
+			framework.db.exists.side_effect = custom_exists
+
+			def _save_dest(*a, **kw):
+				# Real POS Invoice.validate runs validate_pos_invoice_modifiers on destination.save()!
+				mods.validate_pos_invoice_modifiers(destination)
+				saved_invoices["POS-DEST-001"] = Doc(
+					**{k: (list(v) if k == "items" else v) for k, v in destination.__dict__.items()}
+				)
+				return destination
+
+			destination.save = _save_dest
+
+			ury_order.consolidate_checks(destination, [source])
+
+			self.assertEqual([r.item_code for r in destination.items], ["COLA", "RIBEYE", "EXTRA-CHEESE"])
+			merged_mod = destination.items[2]
+			self.assertEqual(merged_mod.rate, 2000)
+			self.assertEqual(merged_mod.custom_price_overridden, 1)
+			self.assertEqual(merged_mod.custom_original_price_list_rate, 4000)
+			self.assertEqual(merged_mod.custom_price_override_approver, "manager@maximus.test")
+			self.assertIsNone(getattr(destination.flags, "ury_verified_privileged_child_rates", None))
+
+			# Tampering an unverified child modifier row (not in saved_doc or verified map) MUST still fail!
+			forged_bacon = Row(
+				name="ROW-FORGED",
+				item_code="EXTRA-BACON",
+				item_name="Smoked Bacon",
+				qty=1,
+				rate=100,
+				price_list_rate=100,
+				custom_price_overridden=1,
+				reservation_line_key="key-forged-bacon",
+				custom_parent_line_key="key-s1",
+				custom_is_modifier=1,
+				custom_line_role="Modifier",
+				custom_modifier_group="Steak Extras",
+				custom_modifier_option="EXTRA-BACON",
+			)
+			tampered_dest = Doc(
+				**{**destination.__dict__, "items": [*destination.items, forged_bacon], "flags": SimpleNamespace()}
+			)
+			tampered_dest.is_new = lambda: False
+			tampered_dest.precision = lambda field=None: 0
+			with self.assertRaises(framework.ValidationError) as ctx:
+				mods.validate_pos_invoice_modifiers(tampered_dest)
+			self.assertIn("[POS-MODIFIER-RATE-MISMATCH]", str(ctx.exception))
+
+	def test_availability_restore_and_countdown_pass_authorisation_log_link_validation(self):
+		"""R3 P1 #3 RED: set_item_availability restore (Sold Out -> Available) on hash-named
+		URY Item Availability docs and first-time countdown on a brand-new item must pass
+		Frappe Dynamic Link validation on POS Authorisation Log without LinkValidationError."""
+		framework, modules = _make_frappe_double()
+		LinkValidationError = type("LinkValidationError", (Exception,), {})
+		framework.LinkValidationError = LinkValidationError
+		framework.exceptions = SimpleNamespace(LinkValidationError=LinkValidationError)
+		framework.session = Row(user="manager@maximus.test", sid="sid-mgr", data={})
+		framework.get_roles = lambda user=None: ["URY Manager", "URY Cashier"]
+		framework.publish_realtime = MagicMock()
+
+		availability_docs = {}  # hash_name -> Doc
+		auth_logs = []
+		hash_seq = iter(["53fv3cn3sk", "98ab7cd2ef"])
+
+		def db_table_exists(dt):
+			return dt in {"POS Authorisation Log", "POS Privilege Rule", "URY Item Availability", "POS Profile"}
+
+		def db_exists(dt, name=None):
+			if dt == "URY Item Availability":
+				return name in availability_docs
+			if dt == "Branch":
+				return name == "Main Branch"
+			if dt == "POS Profile":
+				return name == "Main Till"
+			return False
+
+		def db_get_value(dt, filters=None, fieldname=None, as_dict=False, **kw):
+			if dt == "Branch" and filters == "Main Branch" and fieldname == "company":
+				return "Maximus Hospitality"
+			if dt == "POS Profile":
+				return "Main Till"
+			if dt == "URY Item Availability" and isinstance(filters, dict):
+				for name, rec in availability_docs.items():
+					if rec.branch == filters.get("branch") and rec.item == filters.get("item"):
+						if fieldname == "name":
+							return name
+						if isinstance(fieldname, (list, tuple)):
+							return Row({k: rec.get(k) for k in fieldname})
+						return rec.get(fieldname)
+				return None
+			if dt == "POS Opening Entry":
+				return None
+			if dt == "Item" and fieldname == "disabled":
+				return 0
+			return None
+
+		def make_avail_doc(existing=None):
+			d = existing if existing is not None else Doc(
+				doctype="URY Item Availability",
+				name=None,
+				branch=None,
+				item=None,
+				status="Available",
+				countdown_enabled=0,
+				daily_limit=0,
+				remaining_qty=0,
+				auto_reset_on_open=0,
+				flags=SimpleNamespace(),
+			)
+
+			def _save(ignore_permissions=False):
+				if not d.name:
+					d.name = next(hash_seq)
+				availability_docs[d.name] = d
+				return d
+
+			d.save = _save
+			return d
+
+		def get_doc(arg1, arg2=None, **kw):
+			if isinstance(arg1, dict) and arg1.get("doctype") == "POS Authorisation Log":
+				log_doc = Doc(**arg1, flags=SimpleNamespace())
+
+				def _insert(ignore_permissions=False, ignore_links=None):
+					if ignore_links is not None:
+						log_doc.flags.ignore_links = ignore_links
+					# Enforce Frappe's real Document._validate_links() on Dynamic Link `reference_name`!
+					if not getattr(log_doc.flags, "ignore_links", False):
+						ref_dt = log_doc.get("reference_doctype")
+						ref_name = log_doc.get("reference_name")
+						if ref_dt and ref_name and not db_exists(ref_dt, ref_name):
+							raise LinkValidationError(f"Could not find Check: {ref_name}")
+					auth_logs.append(log_doc)
+					return log_doc
+
+				log_doc.insert = _insert
+				return log_doc
+			if arg1 == "URY Item Availability" and arg2 in availability_docs:
+				return availability_docs[arg2]
+			raise framework.DoesNotExistError(f"{arg1} {arg2}")
+
+		framework.db.table_exists = db_table_exists
+		framework.db.exists = db_exists
+		framework.db.get_value = db_get_value
+		framework.db.sql = MagicMock(return_value=[])
+		framework.get_all = MagicMock(return_value=[])
+		framework.get_doc = get_doc
+		framework.new_doc = lambda dt: make_avail_doc()
+
+		modules["frappe.utils"].today = lambda: "2026-11-24"
+		modules["frappe.utils"].nowdate = lambda: "2026-11-24"
+		modules["ury.ury.api.ury_bom_compiler"] = _stub(
+			"ury.ury.api.ury_bom_compiler",
+			compile_bom_vector=MagicMock(),
+			compile_shared_component_index=MagicMock(),
+		)
+		modules["ury.ury.api.ury_production_context"] = _stub(
+			"ury.ury.api.ury_production_context",
+			resolve_production_context=MagicMock(),
+		)
+		modules["ury.ury.api.ury_inventory_projection"] = _stub(
+			"ury.ury.api.ury_inventory_projection",
+			get_allocatable_qty=MagicMock(),
+			project_component_allocatable=MagicMock(),
+			project_fg_allocatable=MagicMock(),
+		)
+		modules["ury.ury.api.ury_projection_service"] = _stub(
+			"ury.ury.api.ury_projection_service",
+			project_mto_capacity=MagicMock(),
+		)
+		modules["ury.ury.api.ury_sales_plan_commit"] = _stub(
+			"ury.ury.api.ury_sales_plan_commit",
+			resolve_plan_item_rows=MagicMock(),
+		)
+		modules["ury.ury.api.ury_reservation_service"] = _stub("ury.ury.api.ury_reservation_service")
+		modules["ury.ury.api.ury_stock_policy"] = _stub(
+			"ury.ury.api.ury_stock_policy",
+			get_branch_stock_policy=MagicMock(return_value=Row(reservation_control_enabled=False)),
+		)
+
+		with patch.dict(sys.modules, modules):
+			sys.modules.pop("ury.ury_pos.override", None)
+			_load_module("ury.brand", "brand.py")
+			_load_module("ury.ury_pos.override", "ury_pos/override.py")
+			_load_module("ury.ury_pos.privileged_auth", "ury_pos/privileged_auth.py")
+			avail = _load_module("ury.ury.api.ury_availability", "ury/api/ury_availability.py")
+
+			with (
+				patch.object(avail, "_verify_branch_scope", return_value=None),
+				patch.object(avail, "_branch_company", return_value="Maximus Hospitality"),
+				patch.object(avail, "_branch_menu_items", return_value=[{"item": "RIBEYE"}]),
+				patch.object(avail, "_is_branch_modifier_item", side_effect=lambda b, code, m: code == "MOD-ONLY-BACON"),
+				patch.object(avail, "compute_item_availability", side_effect=lambda code, b, c: {"item_code": code, "sellable": True}),
+			):
+				# 1. Mark modifier-only item Sold Out -> creates hash-named URY Item Availability (`53fv3cn3sk`)
+				avail.set_item_availability("Main Branch", "MOD-ONLY-BACON", status="Sold Out")
+				self.assertIn("53fv3cn3sk", availability_docs)
+				self.assertEqual(availability_docs["53fv3cn3sk"].status, "Sold Out")
+
+				# 2. Restore Sold Out -> Available MUST NOT crash with LinkValidationError!
+				avail.set_item_availability("Main Branch", "MOD-ONLY-BACON", status="Available")
+				self.assertEqual(availability_docs["53fv3cn3sk"].status, "Available")
+				self.assertEqual(len(auth_logs), 1)
+				self.assertEqual(auth_logs[0].reference_doctype, "URY Item Availability")
+				self.assertEqual(auth_logs[0].reference_name, "53fv3cn3sk")
+
+				# 3. Setting a countdown on a brand-new item (no URY Item Availability doc yet)
+				#    MUST also pass Dynamic Link validation without LinkValidationError!
+				avail.set_item_availability("Main Branch", "RIBEYE", count=5)
+				self.assertIn("98ab7cd2ef", availability_docs)
+				self.assertEqual(availability_docs["98ab7cd2ef"].remaining_qty, 5)
+				self.assertEqual(len(auth_logs), 2)
+				self.assertTrue(getattr(auth_logs[1].flags, "ignore_links", False))
 
 
 if __name__ == "__main__":
