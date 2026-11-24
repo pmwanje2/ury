@@ -331,6 +331,7 @@ export interface PreviewTaxRow {
   item_rate_override?: boolean;
   tax_amount: number;
   account_head?: string;
+  custom_pos_charge_kind?: string;
 }
 
 export interface EfrisWarning {

@@ -22,6 +22,7 @@ export interface OrderDeltaLine {
   id: string;
   name: string;
   price: number;
+  originalPrice?: number;
   comment?: string;
   /** Quantity already sent/confirmed on the server for this line (0 if this round's addition). */
   baseQty: number;
@@ -193,11 +194,22 @@ export const useTableOrderContext = (table: string | undefined): UseTableOrderCo
       const baseQty = base?.quantity ?? 0;
       const curQty = cur?.quantity ?? 0;
       const source = cur ?? base!;
+      const hasPromo =
+        cur != null &&
+        !cur.selectedVariant &&
+        cur.promo_rate != null &&
+        Number.isFinite(cur.promo_rate) &&
+        cur.promo_rate < cur.price;
+      const addonsTotal = cur?.selectedAddons?.reduce((sum, addon) => sum + addon.price, 0) || 0;
+      const listUnit = (cur?.selectedVariant?.price || cur?.price) ?? base?.price ?? 0;
+      const baseListPrice = listUnit + addonsTotal;
+      const effectivePrice = (hasPromo ? cur!.promo_rate! : listUnit) + addonsTotal;
       deltaLines.push({
         uniqueId: uid,
         id: source.id,
         name: source.name,
-        price: cur?.price ?? base?.price ?? 0,
+        price: effectivePrice,
+        ...(hasPromo ? { originalPrice: baseListPrice } : {}),
         comment: cur?.comment ?? base?.comment,
         baseQty,
         curQty,

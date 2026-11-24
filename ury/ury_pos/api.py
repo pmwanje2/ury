@@ -3964,7 +3964,14 @@ def _apply_preview_selling_pricing_rules(doc):
         dict_cls = dict
 
     for item in doc.get("items") or []:
-        if cint(item.get("is_disposable")) == 1 or not item.get("item_code"):
+        if (
+            cint(item.get("is_disposable")) == 1
+            or not item.get("item_code")
+            or cint(item.get("ignore_pricing_rule")) == 1
+            or cint(item.get("custom_price_overridden")) == 1
+            or cint(item.get("custom_is_open_item")) == 1
+            or cint(item.get("custom_is_complimentary")) == 1
+        ):
             continue
         ctx = dict_cls(
             {
@@ -4095,6 +4102,7 @@ def _build_preview_tax_rows(doc, prec: int) -> list[dict]:
                 "item_rate_override": item_rate_override,
                 "tax_amount": flt(row.get("tax_amount"), prec),
                 "account_head": account_head,
+                "custom_pos_charge_kind": charge_kind,
             }
         )
     return result
@@ -4193,6 +4201,8 @@ def preview_order_totals(
         doc.tax_category = orig_invoice.get("tax_category") or ""
         doc.taxes_and_charges = orig_invoice.get("taxes_and_charges") or ""
     if orig_invoice:
+        if cint(orig_invoice.get("ignore_pricing_rule")) == 1:
+            doc.ignore_pricing_rule = 1
         for sc_field in (
             "custom_is_complimentary",
             "custom_service_charge_waived",
@@ -4240,27 +4250,61 @@ def preview_order_totals(
     )
     warehouse = profile.get("warehouse")
 
+    privileged_snapshots = {}
     if not items and orig_invoice is not None:
         for row in orig_invoice.get("items") or []:
             if cint(row.get("is_disposable")) == 1:
                 continue
+            is_privileged_row = (
+                cint(row.get("custom_price_overridden")) == 1
+                or cint(row.get("custom_is_open_item")) == 1
+                or cint(row.get("custom_is_complimentary")) == 1
+                or cint(row.get("ignore_pricing_rule")) == 1
+            )
+            raw_plr = row.get("price_list_rate")
+            plr = flt(raw_plr) if raw_plr is not None else flt(row.get("rate"))
+            raw_base_plr = row.get("base_price_list_rate")
+            base_plr = flt(raw_base_plr) if raw_base_plr is not None else plr
+            raw_base_rate = row.get("base_rate")
+            base_rate = flt(raw_base_rate) if raw_base_rate is not None else flt(row.get("rate"))
             item_entry = {
                 "item_code": row.get("item_code"),
                 "item_name": row.get("item_name") or row.get("item_code"),
                 "qty": flt(row.get("qty")),
                 "rate": flt(row.get("rate")),
-                "price_list_rate": flt(row.get("price_list_rate") or row.get("rate")),
-                "base_price_list_rate": flt(row.get("base_price_list_rate") or row.get("rate")),
+                "base_rate": base_rate,
+                "price_list_rate": plr,
+                "base_price_list_rate": base_plr,
                 "discount_percentage": flt(row.get("discount_percentage")),
                 "discount_amount": flt(row.get("discount_amount")),
+                "ignore_pricing_rule": 1 if is_privileged_row else cint(row.get("ignore_pricing_rule")),
+                "custom_price_overridden": cint(row.get("custom_price_overridden")),
+                "custom_is_open_item": cint(row.get("custom_is_open_item")),
+                "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
                 "uom": row.get("uom"),
                 "cost_center": row.get("cost_center") or cost_center,
                 "warehouse": row.get("warehouse") or warehouse,
             }
+            if row.get("pricing_rules") is not None:
+                item_entry["pricing_rules"] = row.get("pricing_rules")
             for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
                 if row.get(tax_field) is not None:
                     item_entry[tax_field] = row.get(tax_field)
-            doc.append("items", item_entry)
+            cloned_row = doc.append("items", item_entry)
+            if is_privileged_row and cloned_row is not None:
+                privileged_snapshots[id(cloned_row)] = {
+                    "price_list_rate": plr,
+                    "base_price_list_rate": base_plr,
+                    "rate": flt(row.get("rate")),
+                    "base_rate": base_rate,
+                    "discount_percentage": flt(row.get("discount_percentage")),
+                    "discount_amount": flt(row.get("discount_amount")),
+                    "pricing_rules": row.get("pricing_rules"),
+                    "ignore_pricing_rule": 1,
+                    "custom_price_overridden": cint(row.get("custom_price_overridden")),
+                    "custom_is_open_item": cint(row.get("custom_is_open_item")),
+                    "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
+                }
     else:
         release_field, released = (None, None)
         if price_list:
@@ -4338,7 +4382,38 @@ def preview_order_totals(
 
     try:
         apply_order_type_tax(doc, profile, customer_doc=customer_doc, posting_date=posting_date)
-        doc.set_missing_values(for_validate=True)
+        doc_flags = getattr(doc, "flags", None)
+        prev_priv_verified = bool(getattr(doc_flags, "ury_privileged_action_verified", False)) if doc_flags is not None else False
+        if privileged_snapshots and doc_flags is not None:
+            doc_flags.ury_privileged_action_verified = True
+        try:
+            doc.set_missing_values(for_validate=True)
+        finally:
+            if privileged_snapshots and doc_flags is not None:
+                doc_flags.ury_privileged_action_verified = prev_priv_verified
+        if privileged_snapshots:
+            restored_names = set()
+            for r in doc.get("items") or []:
+                snap = privileged_snapshots.get(id(r))
+                if snap is None:
+                    continue
+                for field, value in snap.items():
+                    setattr(r, field, value)
+                rname = r.get("name") if hasattr(r, "get") else getattr(r, "name", None)
+                if rname:
+                    restored_names.add(rname)
+            pr_rows = doc.get("pricing_rules")
+            if isinstance(pr_rows, list) and restored_names:
+                kept_pr = [
+                    pr
+                    for pr in pr_rows
+                    if (pr.get("child_docname") if hasattr(pr, "get") else getattr(pr, "child_docname", None))
+                    not in restored_names
+                ]
+                if callable(getattr(doc, "set", None)):
+                    doc.set("pricing_rules", kept_pr)
+                else:
+                    doc.pricing_rules = kept_pr
         if not orig_invoice:
             _apply_preview_selling_pricing_rules(doc)
         try:

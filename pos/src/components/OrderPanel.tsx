@@ -173,10 +173,31 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     room: selectedRoom,
     table: selectedTable,
   });
-  const displayTotal =
-    !outbox.offline && orderPreview
-      ? (orderPreview.rounded_total || orderPreview.grand_total)
-      : estimatedTotal;
+  const hasServerPreview = !outbox.offline && Boolean(orderPreview);
+  const isServiceChargePreviewRow = (row: { description?: string; custom_pos_charge_kind?: string }) => {
+    const kind = (row.custom_pos_charge_kind || '').trim();
+    if (kind) return kind === 'Service Charge';
+    const desc = (row.description || '').toLowerCase();
+    return (
+      desc.includes('service charge') &&
+      !desc.includes('on service charge') &&
+      !desc.includes('vat') &&
+      !desc.includes('tax')
+    );
+  };
+  const serverServiceChargeRows = useMemo(
+    () => (hasServerPreview && orderPreview ? orderPreview.tax_rows.filter(isServiceChargePreviewRow) : []),
+    [hasServerPreview, orderPreview],
+  );
+  const serverServiceChargeTotal = useMemo(
+    () => serverServiceChargeRows.reduce((sum, row) => sum + Number(row.tax_amount || 0), 0),
+    [serverServiceChargeRows],
+  );
+  const showClientServiceChargeEstimate =
+    !hasServerPreview && Boolean(activeServiceChargeRule) && estimatedServiceCharge > 0;
+  const displayTotal = hasServerPreview && orderPreview
+    ? (orderPreview.rounded_total || orderPreview.grand_total)
+    : estimatedTotal;
   const effectiveItemLineTotal = (item: typeof activeOrders[0], idx: number) => {
     const baseTotal = calculateItemTotal(item);
     const previewRow = !outbox.offline ? orderPreview?.item_taxes?.[idx] : undefined;
@@ -755,10 +776,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs text-gray-600">
-                    {t('privileged_actions.sc_summary_net')}: {formatCurrency(!outbox.offline && orderPreview ? orderPreview.net_total : total, activeCurrency)}
-                    {activeServiceChargeRule && estimatedServiceCharge > 0
-                      ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${formatCurrency(estimatedServiceCharge, activeCurrency)}`
-                      : ''}
+                    {t('privileged_actions.sc_summary_net')}: {formatCurrency(hasServerPreview && orderPreview ? orderPreview.net_total : total, activeCurrency)}
+                    {hasServerPreview
+                      ? serverServiceChargeTotal > 0
+                        ? ` · ${serverServiceChargeRows[0]?.description || t('privileged_actions.service_charge')}: ${formatCurrency(serverServiceChargeTotal, activeCurrency)}`
+                        : ''
+                      : activeServiceChargeRule && estimatedServiceCharge > 0
+                        ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${formatCurrency(estimatedServiceCharge, activeCurrency)}`
+                        : ''}
                   </div>
                   <div className="text-xs font-medium text-blue-700">
                     {t('privileged_actions.sc_summary_toggle')}
@@ -773,15 +798,15 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                 <div className="mt-2 rounded-md border border-gray-200 bg-white p-3 space-y-1.5 text-sm">
                   <div className="flex items-center justify-between text-gray-600">
                     <span>{t('privileged_actions.sc_summary_net')}</span>
-                    <span className="tabular-nums">{formatCurrency(!outbox.offline && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
+                    <span className="tabular-nums">{formatCurrency(hasServerPreview && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
                   </div>
-                  {!outbox.offline && orderPreview && orderPreview.discount_amount > 0 && (
+                  {hasServerPreview && orderPreview && orderPreview.discount_amount > 0 && (
                     <div className="flex items-center justify-between text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
                       <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
                     </div>
                   )}
-                  {activeServiceChargeRule && estimatedServiceCharge > 0 && (
+                  {showClientServiceChargeEstimate && activeServiceChargeRule && (
                     <div className="flex items-center justify-between gap-2 text-gray-700">
                       <span className="min-w-0 truncate">
                         {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
@@ -792,7 +817,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                       </span>
                     </div>
                   )}
-                  {!outbox.offline && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
+                  {hasServerPreview && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
                     <div
                       key={`${taxRow.description}-${idx}`}
                       className="flex items-center justify-between gap-2 text-gray-600 tabular-nums"
@@ -813,19 +838,19 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
 
             {/* Desktop summary breakdown */}
             <div className="hidden lg:block space-y-1.5 mb-3">
-              {(!outbox.offline && orderPreview) || (activeServiceChargeRule && estimatedServiceCharge > 0) ? (
+              {hasServerPreview || showClientServiceChargeEstimate ? (
                 <>
                   <div className="flex items-center justify-between text-xs text-gray-600 tabular-nums">
-                    <span>{!outbox.offline && orderPreview ? t('cart.net_total') : t('privileged_actions.sc_summary_net')}</span>
-                    <span>{formatCurrency(!outbox.offline && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
+                    <span>{hasServerPreview ? t('cart.net_total') : t('privileged_actions.sc_summary_net')}</span>
+                    <span>{formatCurrency(hasServerPreview && orderPreview ? orderPreview.net_total : total, activeCurrency)}</span>
                   </div>
-                  {!outbox.offline && orderPreview && orderPreview.discount_amount > 0 && (
+                  {hasServerPreview && orderPreview && orderPreview.discount_amount > 0 && (
                     <div className="flex items-center justify-between text-xs text-emerald-700 tabular-nums">
                       <span>{t('cart.discount')}</span>
                       <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
                     </div>
                   )}
-                  {activeServiceChargeRule && estimatedServiceCharge > 0 && (
+                  {showClientServiceChargeEstimate && activeServiceChargeRule && (
                     <div
                       data-testid="order-panel-sc-row"
                       className="flex items-center justify-between gap-2 text-sm text-gray-700"
@@ -850,17 +875,30 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                       </span>
                     </div>
                   )}
-                  {!outbox.offline && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => (
-                    <div
-                      key={`${taxRow.description}-${idx}`}
-                      className="flex justify-between text-xs text-gray-600 tabular-nums"
-                    >
-                      <span className="truncate pe-2">
-                        {formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'))}
-                      </span>
-                      <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
-                    </div>
-                  ))}
+                  {hasServerPreview && orderPreview && orderPreview.tax_rows.map((taxRow, idx) => {
+                    const isScRow = isServiceChargePreviewRow(taxRow);
+                    const rowLabel = formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'));
+                    return (
+                      <div
+                        key={`${taxRow.description}-${idx}`}
+                        data-testid={isScRow ? 'order-panel-sc-row' : undefined}
+                        className="flex justify-between text-xs text-gray-600 tabular-nums"
+                      >
+                        {isScRow && orderId ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowServiceChargeDialog(true)}
+                            className="min-w-0 truncate pe-2 text-start text-blue-700 hover:underline"
+                          >
+                            {rowLabel}
+                          </button>
+                        ) : (
+                          <span className="truncate pe-2">{rowLabel}</span>
+                        )}
+                        <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                      </div>
+                    );
+                  })}
                 </>
               ) : !outbox.offline && previewLoading ? (
                 <p className="text-xs text-gray-400">{t('cart.tax_preview_loading')}</p>

@@ -70,7 +70,14 @@ const CaptainOrderLine: React.FC<CaptainOrderLineProps> = ({
             {line.comment}
           </p>
         )}
-        <p className="text-xs text-gray-500 mt-0.5">{formatCurrency(line.price * displayQty, currency)}</p>
+        <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1.5 tabular-nums">
+          <span>{formatCurrency(line.price * displayQty, currency)}</span>
+          {line.originalPrice != null && line.originalPrice > line.price && (
+            <span className="text-gray-400 line-through">
+              {formatCurrency(line.originalPrice * displayQty, currency)}
+            </span>
+          )}
+        </p>
       </button>
 
       <div className="flex items-center gap-1 shrink-0">

@@ -107,6 +107,25 @@ class CustomPOSInvoice(POSInvoice):
 						self.set_posting_time = 1
 						temp_offline_spt = True
 
+		# Coexistence with sales-time-pricing@1 on same-second returns:
+		# `Sales Time Pricing - POS Invoice` (Before Validate) already enforced SALES-TIME-005
+		# and stamped whole-second `HH:MM:SS` (`.000000` microseconds) when `set_posting_time == 0`.
+		# Meanwhile the original submitted POS Invoice stores microsecond precision from ERPNext's
+		# `validate_posting_time()`, which runs AFTER `super(SalesInvoice, self).validate()` ->
+		# `validate_return_against()`. Restore current server `now_datetime()` microsecond precision
+		# right before `super().validate()` ONLY when `set_posting_time == 0` (never weakening
+		# SALES-TIME-005 or altering explicit privileged posting times).
+		if (
+			cint(self.get("is_return")) == 1
+			and not cint(self.get("set_posting_time"))
+			and not getattr(frappe.flags, "in_import", False)
+			and not getattr(flags, "from_restore", False)
+		):
+			now_dt = frappe.utils.now_datetime()
+			if hasattr(now_dt, "strftime"):
+				self.posting_date = now_dt.strftime("%Y-%m-%d")
+				self.posting_time = now_dt.strftime("%H:%M:%S.%f")
+
 		# Shield server-verified or persisted #152 overridden/open/comp rows from
 		# ERPNext's apply_pricing_rule() re-applying sales-time-pricing@1 discounts.
 		# Never shield unverified client-forged rows.
@@ -203,12 +222,14 @@ class CustomPOSInvoice(POSInvoice):
 			curr_rate = flt(row.get("rate") if hasattr(row, "get") else getattr(row, "rate", 0))
 			curr_plr = flt(row.get("price_list_rate") if hasattr(row, "get") else getattr(row, "price_list_rate", 0))
 			curr_disc_pct = flt(row.get("discount_percentage") if hasattr(row, "get") else getattr(row, "discount_percentage", 0))
+			curr_disc_amt = flt(row.get("discount_amount") if hasattr(row, "get") else getattr(row, "discount_amount", 0))
 			curr_pr = (row.get("pricing_rules") if hasattr(row, "get") else getattr(row, "pricing_rules", None)) or ""
 			snap_pr = snap["pricing_rules"] or ""
 			if (
 				abs(curr_rate - snap["rate"]) > 1e-6
 				or abs(curr_plr - snap["price_list_rate"]) > 1e-6
 				or abs(curr_disc_pct - snap["discount_percentage"]) > 1e-6
+				or abs(curr_disc_amt - snap["discount_amount"]) > 1e-6
 				or curr_pr != snap_pr
 			):
 				for field in (

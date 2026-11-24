@@ -1287,6 +1287,7 @@ def enforce_authoritative_outlet_time(doc, method=None):
         getattr(frappe.flags, "ury_bill_split", False)
         or getattr(frappe.flags, "in_bill_merge_sync", False)
         or getattr(frappe.flags, "ury_qty_reduction", False)
+        or getattr(frappe.flags, "ury_reopen_adjust_copy", False)
     )
     server_disc_write = bool(getattr(frappe.flags, "ury_server_discount_write", False))
     has_disc_approval = bool(
@@ -1481,7 +1482,8 @@ def enforce_authoritative_outlet_time(doc, method=None):
         except Exception:
             pass
     if resolved_pl and not (
-        trusted_pricing
+        is_super
+        or trusted_pricing
         or privileged_verified
         or server_ot_change
         or bill_split_or_merge
@@ -1506,6 +1508,7 @@ def enforce_authoritative_outlet_time(doc, method=None):
         or privileged_verified
         or server_ot_change
         or bill_split_or_merge
+        or (is_super and prev is None and bool(_doc_get(doc, "taxes")))
     ):
         prev_is_exempt = prev is not None and int(float(_doc_get(prev, "custom_tax_exempt") or 0)) == 1
         order_type_changed = (
