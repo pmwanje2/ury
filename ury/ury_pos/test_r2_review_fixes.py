@@ -796,6 +796,53 @@ class TestBlocker3ServiceChargeLifecycleAndMath(unittest.TestCase):
             self.assertEqual(sc_row["tax_amount"], -2500.0, "before_validate must prorate Actual SC before POSInvoice.validate_pos()")
             self.assertEqual(ret["grand_total"], -14750.0)
 
+    def test_partial_return_proration_ignores_stale_amount_after_qty_change(self):
+        """Live ERPNext make_sales_return leaves item.amount stale (-20000) when qty is changed from -2 to -1
+        before calculate_taxes_and_totals() runs; proration must use qty * rate (-10000) immediately."""
+        f, state, modules = _make_harness()
+        self._setup_sc_profile(state)
+        with patch.dict(sys.modules, modules):
+            for modname in ("ury.ury_pos.privileged_auth", "ury.ury_pos.pricing_actions"):
+                sys.modules.pop(modname, None)
+            pricing = _load_mod("ury.ury_pos.pricing_actions", "ury/ury_pos/pricing_actions.py")
+
+            orig = FakeInv({
+                "doctype": "POS Invoice",
+                "name": "INV-ORIG-STALE",
+                "company": "Maximus Hospitality Ltd",
+                "pos_profile": "Maximus Main Till",
+                "currency": "UGX",
+                "items": [FakeRow({"item_code": "GRILL", "qty": 2, "rate": 10000.0, "amount": 20000.0})],
+                "taxes": [
+                    FakeRow({"idx": 1, "charge_type": "On Net Total", "account_head": "VAT 18% - MHL", "rate": 18.0, "tax_amount": 3600.0, "description": "VAT 18%"}),
+                    FakeRow({"idx": 2, "charge_type": "Actual", "account_head": "Service Charge Collected - MHL", "tax_amount": 5000.0, "custom_pos_charge_kind": "Service Charge", "description": "Dine-In Service Charge"}),
+                    FakeRow({"idx": 3, "charge_type": "On Previous Row Amount", "row_id": "2", "account_head": "VAT 18% - MHL", "rate": 18.0, "tax_amount": 900.0, "custom_pos_charge_kind": "Service Charge Tax", "description": "VAT 18% on Dine-In Service Charge"}),
+                ],
+            })
+            state["docs"][("POS Invoice", "INV-ORIG-STALE")] = orig
+
+            # Exactly mirrors ERPNext make_sales_return(orig.name) followed by ret.items[0].qty = -1
+            # where amount is still -20000.0 prior to super().calculate_taxes_and_totals()!
+            ret = FakeInv({
+                "doctype": "POS Invoice",
+                "name": "INV-RET-STALE",
+                "is_return": 1,
+                "return_against": "INV-ORIG-STALE",
+                "company": "Maximus Hospitality Ltd",
+                "pos_profile": "Maximus Main Till",
+                "currency": "UGX",
+                "items": [FakeRow({"item_code": "GRILL", "qty": -1, "rate": 10000.0, "amount": -20000.0})],
+                "taxes": [
+                    FakeRow({"idx": 1, "charge_type": "On Net Total", "account_head": "VAT 18% - MHL", "rate": 18.0, "tax_amount": -3600.0, "description": "VAT 18%"}),
+                    FakeRow({"idx": 2, "charge_type": "Actual", "account_head": "Service Charge Collected - MHL", "tax_amount": -5000.0, "custom_pos_charge_kind": "Service Charge", "description": "Dine-In Service Charge"}),
+                    FakeRow({"idx": 3, "charge_type": "On Previous Row Amount", "row_id": "2", "account_head": "VAT 18% - MHL", "rate": 18.0, "tax_amount": -900.0, "custom_pos_charge_kind": "Service Charge Tax", "description": "VAT 18% on Dine-In Service Charge"}),
+                ],
+            })
+            pricing.calculate_taxes_and_totals_for_service_charge(ret, ret.calculate_taxes_and_totals)
+            sc_row = next(t for t in ret.taxes if t.get("custom_pos_charge_kind") == "Service Charge")
+            self.assertEqual(sc_row["tax_amount"], -2500.0)
+            self.assertEqual(ret["grand_total"], -14750.0)
+
     def test_get_service_charge_status_and_pre_discount_grand_total_isolation(self):
         f, state, modules = _make_harness()
         self._setup_sc_profile(state)
