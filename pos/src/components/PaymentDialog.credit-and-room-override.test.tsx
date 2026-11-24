@@ -292,6 +292,15 @@ describe("POS room charge lookup: surname/shared room, limit & balance, ManagerA
         }),
       ),
     );
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        "ury.ury.doctype.ury_order.ury_order.submit_order_invoice",
+        expect.objectContaining({
+          invoice: "BILL-1",
+          room_charge_approval: "rc-approved-tok",
+        }),
+      ),
+    );
   });
 });
 
@@ -388,6 +397,55 @@ describe("POS On-Account over-limit opens ManagerApproval (on_account_over_limit
           on_account_approval: "acct-approved-tok",
         }),
       ),
+    );
+  });
+
+  it("enforces 3-decimal KWD precision so 0.004 KWD over credit limit still requires ManagerApproval", async () => {
+    setProfile({ currency: "KWD", room_charge_modes: [], room_lookup_method: "" });
+    store.state = { ...store.state, currency: "KWD", paymentModes: ["Cash"] };
+
+    vi.mocked(call.get).mockImplementation(async (method: string) => {
+      if (method === "ury.ury_pos.api.credit_accounts") {
+        return {
+          message: [
+            {
+              name: "AC-KWD",
+              customer_name: "Kuwait Corp",
+              balance: 0,
+              limit: 100,
+              available: 100,
+              currency: "KWD",
+            },
+          ],
+        };
+      }
+      if (method === "ury.ury_pos.override.privilege_policy") {
+        return { message: { privilege: "on_account_over_limit", label: "On-account over limit", may_perform: false, requires_reason: true } };
+      }
+      if (method === "ury.ury_pos.override.list_approvers") {
+        return { message: [{ user: "fin@hotel.test", full_name: "Grace Finance" }] };
+      }
+      if (method === "ury.ury_pos.override.list_reasons") {
+        return { message: [{ code: "OTHER", description: "Other", requires_note: 1, applies_to: [] }] };
+      }
+      return { message: [] };
+    });
+
+    renderDialog({ grandTotal: 100.004, roundedTotal: 100.004 });
+    fireEvent.change(screen.getByRole("searchbox", { name: /charge to account/i }), {
+      target: { value: "Kuwait" },
+    });
+    const acctBtn = await screen.findByRole("button", { name: /AC-KWD/i });
+    fireEvent.click(acctBtn);
+
+    const cashInput = document.querySelector<HTMLInputElement>('input[type="number"]')!;
+    fireEvent.change(cashInput, { target: { value: "0" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
+    await screen.findByText(/manager authorisation required/i);
+    expect(call.post).not.toHaveBeenCalledWith(
+      "ury.ury.doctype.ury_order.ury_order.make_invoice",
+      expect.anything(),
     );
   });
 });

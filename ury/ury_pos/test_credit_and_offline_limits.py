@@ -321,6 +321,65 @@ class TestOnAccountOverLimitGate(unittest.TestCase):
                 )
         self.invoice.submit.assert_not_called()
 
+    def test_two_step_make_invoice_then_submit_order_invoice_consumes_token_once(self):
+        # Standard !offlineCapable tills call make_invoice(submit_invoice=0) then submit_order_invoice().
+        # The single-use token must be consumed ONCE (on submit), never burned on draft save.
+        used_tokens = set()
+
+        def single_use_consume(token, privilege, pos_profile, ref_name, claim):
+            if token in used_tokens:
+                raise ValueError("POS-AUTH-EXPIRED: already used")
+            used_tokens.add(token)
+            return frappe._dict(approver="mgr@example.com", amount=100.0, claim=claim)
+
+        self.enterContext(patch.object(order, "_check_held_before_settlement"))
+        with patch("ury.ury_pos.override.consume", side_effect=single_use_consume) as mock_consume:
+            draft = order.make_invoice(
+                "AC-1",
+                [{"mode_of_payment": "Cash", "amount": 0}],
+                "cashier@example.com",
+                "Till A",
+                "cashier@example.com",
+                invoice="INV-1",
+                submit_invoice=0,
+                on_account_approval="single-use-acct-tok",
+                on_account_reason="Two-step VIP",
+            )
+            self.assertEqual(draft["status"], "Draft")
+            self.assertEqual(mock_consume.call_count, 0)
+
+            submitted = order.submit_order_invoice(
+                "INV-1",
+                on_account_approval="single-use-acct-tok",
+                on_account_reason="Two-step VIP",
+            )
+        self.assertEqual(submitted["status"], "Submitted")
+        self.assertEqual(mock_consume.call_count, 1)
+        self.assertEqual(self.invoice.custom_override_approver, "mgr@example.com")
+
+    def test_three_decimal_currency_kwd_claim_preserves_fils_precision(self):
+        self.invoice = self._bill("INV-KWD", 12.345, currency="KWD", conversion_rate=1)
+        self.invoice.precision.return_value = 3
+        self.profile.currency = "KWD"
+        self.gl.return_value = 90.0
+        self.limit = 100.0
+        consumed = frappe._dict(approver="mgr@example.com", amount=12.345, claim={"reason": "KWD VIP"})
+        with patch.object(order, "get_order_invoice", return_value=self.invoice), \
+                patch("ury.ury_pos.override.consume", return_value=consumed) as mock_consume:
+            out = order.make_invoice(
+                "AC-1",
+                [{"mode_of_payment": "Cash", "amount": 0}],
+                "cashier@example.com",
+                "Till A",
+                "cashier@example.com",
+                invoice="INV-KWD",
+                submit_invoice=1,
+                on_account_approval="kwd-acct-tok",
+                on_account_reason="KWD VIP",
+            )
+        self.assertEqual(out["status"], "Submitted")
+        self.assertEqual(mock_consume.call_args.args[4]["proposed"], 12.345)
+
 
 class TestRoomChargeServerGate(unittest.TestCase):
     """Server-side room charge gate in make_invoice: calls configured verifier,
@@ -456,6 +515,88 @@ class TestRoomChargeServerGate(unittest.TestCase):
         with patch("ury.ury_pos.room_charge._resolve_verifier", return_value=MagicMock(side_effect=RuntimeError("boom"))):
             with self.assertRaises(ValueError):
                 self._pay()
+
+    def test_two_step_make_invoice_then_submit_order_invoice_consumes_room_charge_token_once(self):
+        verifier = MagicMock(return_value={
+            "ok": True,
+            "reservation": "RES-101",
+            "room_number": "101",
+            "guest_name": "Asha R.",
+            "posting_allowed": False,
+            "no_post": 0,
+            "limit": 1000,
+            "balance": 0,
+            "available": 1000,
+            "currency": "UGX",
+            "override_required": True,
+            "reason_code": "POS-RC-OVER-LIMIT",
+            "reason": "Charge exceeds room charge limit.",
+        })
+        used_tokens = set()
+
+        def single_use_consume(token, privilege, pos_profile, ref_name, claim):
+            if token in used_tokens:
+                raise ValueError("POS-AUTH-EXPIRED: already used")
+            used_tokens.add(token)
+            return frappe._dict(approver="duty@example.com", amount=1500.0, claim=claim)
+
+        self.f.get_doc.side_effect = lambda dt, name, **kw: self.profile if dt == "POS Profile" else self.invoice
+        with patch("ury.ury_pos.room_charge._resolve_verifier", return_value=verifier), \
+                patch("ury.ury_pos.override.consume", side_effect=single_use_consume) as mock_consume:
+            draft = self._pay(
+                submit_invoice=0,
+                room_charge_stay="RES-101",
+                room_charge_approval="rc-2step-tok",
+                room_charge_reason="VIP room dinner",
+            )
+            self.assertEqual(draft["status"], "Draft")
+            self.assertEqual(mock_consume.call_count, 0)
+
+            submitted = order.submit_order_invoice(
+                "INV-RC-1",
+                room_charge_approval="rc-2step-tok",
+                room_charge_reason="VIP room dinner",
+            )
+        self.assertEqual(submitted["status"], "Submitted")
+        self.assertEqual(mock_consume.call_count, 1)
+        self.assertEqual(self.invoice.custom_override_approver, "duty@example.com")
+
+    def test_three_decimal_kwd_room_charge_claim_preserves_fils_precision(self):
+        self.profile.currency = "KWD"
+        self.invoice.currency = "KWD"
+        self.invoice.rounded_total = self.invoice.grand_total = 12.345
+        verifier = MagicMock(return_value={
+            "ok": True,
+            "reservation": "RES-KWD",
+            "room_number": "101",
+            "guest_name": "Nadia K.",
+            "posting_allowed": False,
+            "no_post": 0,
+            "limit": 10.0,
+            "balance": 0.0,
+            "available": 10.0,
+            "currency": "KWD",
+            "override_required": True,
+            "reason_code": "POS-RC-OVER-LIMIT",
+            "reason": "Exceeds limit.",
+        })
+        consumed = frappe._dict(approver="duty@example.com", amount=12.345, claim={"reason": "KWD room"})
+        with patch("ury.ury_pos.room_charge._resolve_verifier", return_value=verifier), \
+                patch("ury.ury_pos.override.consume", return_value=consumed) as mock_consume:
+            out = order.make_invoice(
+                customer="Walk-in",
+                payments=[{"mode_of_payment": "Room Charge", "amount": 12.345}],
+                cashier="cashier@example.com",
+                pos_profile="Till A",
+                owner="cashier@example.com",
+                invoice="INV-RC-1",
+                room_number="101",
+                room_charge_stay="RES-KWD",
+                room_charge_approval="rc-kwd-tok",
+                room_charge_reason="KWD room",
+            )
+        self.assertEqual(out["status"], "Submitted")
+        self.assertEqual(mock_consume.call_args.args[4]["amount"], 12.345)
 
 
 class TestOfflineTenderReplayServerGate(unittest.TestCase):
@@ -606,6 +747,26 @@ class TestOfflineTenderReplayServerGate(unittest.TestCase):
         with patch("ury.ury_pos.offline_tenders.frappe", self.f):
             with self.assertRaisesRegex(ValueError, "POS-OFFLINE-TENDER-DISABLED"):
                 ury_pos_invoice.validate_offline_tenders_before_submit(doc)
+
+    def test_three_decimal_kwd_offline_limit_enforces_fils_and_preserves_claim_precision(self):
+        self.profile.currency = "KWD"
+        self.invoice.currency = "KWD"
+        self.profile.custom_offline_tender_limit = 100.0
+        # 100.004 KWD is 4 fils above 100.000 KWD — must NOT be rounded down to 100.00!
+        with self.assertRaisesRegex(PermissionError, "POS-AUTH-REQUIRED"):
+            self._replay(mode="Airtel Money", amount=100.004, ref="AIR-KWD")
+
+        consumed = frappe._dict(approver="mgr@example.com", amount=100.004, claim={"reason": "KWD outage"})
+        with patch("ury.ury_pos.override.consume", return_value=consumed) as mock_consume:
+            out = self._replay(
+                mode="Airtel Money",
+                amount=100.004,
+                ref="AIR-KWD",
+                offline_approval="off-kwd-tok",
+                offline_reason="KWD outage",
+            )
+        self.assertEqual(out["status"], "Submitted")
+        self.assertEqual(mock_consume.call_args.args[4]["amount"], 100.004)
 
 
 if __name__ == "__main__":

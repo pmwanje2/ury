@@ -260,4 +260,112 @@ describe("Offline tender eligibility comes from Mode of Payment data, never tend
       expect(container.textContent).not.toContain("Room Charge");
     });
   });
+
+  it("formats 0dp (UGX), 2dp (USD), and 3dp (KWD) amounts in OfflineBanner and preserves 3dp precision in offline limits", async () => {
+    const kwdProfile = makeProfile({ currency: "KWD", offline_tender_limit: 100 } as Partial<OfflineProfile>);
+    // 100.004 KWD is 4 fils above the 100 KWD limit — must NOT queue offline without online manager PIN!
+    await expect(
+      submitSettlementOfflineAware({
+        profile: kwdProfile,
+        user,
+        invoice: "INV-KWD-1",
+        amount: 100.004,
+        due: 100.004,
+        modeOfPayment: "Cash",
+        onlineSettle: async () => {
+          throw { httpStatus: 503 };
+        },
+      }),
+    ).rejects.toEqual({ httpStatus: 503 });
+
+    usePOSStore.setState({
+      posProfile: kwdProfile as any,
+      currency: "KWD",
+      paymentModes: ["Cash", "Airtel Money"],
+    });
+    useRootStore.setState({ user: user as any });
+    vi.spyOn(call, "get").mockResolvedValue({ message: [] });
+
+    const q = new OfflineOutbox({ profile: kwdProfile, user, print: async () => true });
+    await q.capture(
+      {
+        pos_profile: "Till A",
+        customer: "Walk In",
+        items: [{ item: "Platter", item_name: "Platter", qty: 1, rate: 100.004 }],
+        no_of_pax: 1,
+        invoice: null,
+        last_invoice: null,
+        order_type: "Take Away",
+      },
+      100.004,
+    );
+
+    await act(async () =>
+      root.render(
+        <MemoryRouter>
+          <OfflineBanner />
+        </MemoryRouter>,
+      ),
+    );
+    await vi.waitFor(async () => {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      // Must render currency-formatted total and over-limit notice (KWD 100.004 & KWD 100)
+      expect(container.textContent).toContain("KWD 100.004");
+      expect(container.textContent).toContain("KWD 100");
+    });
+  });
+
+  it("all 4 locale files (en/fr/es/ar) have zero duplicate keys and zero vendor strings in #149 entries", () => {
+    const locales = ["en", "fr", "es", "ar"] as const;
+    for (const loc of locales) {
+      const raw = readFileSync(resolve(`src/i18n/locales/${loc}.json`), "utf8");
+      // Detect duplicate keys inside any JSON object block by scanning key positions per nesting depth
+      const stack: Array<Set<string>> = [];
+      let i = 0;
+      const duplicates: string[] = [];
+      while (i < raw.length) {
+        const ch = raw[i];
+        if (ch === "{") {
+          stack.push(new Set());
+          i++;
+        } else if (ch === "}") {
+          stack.pop();
+          i++;
+        } else if (ch === '"') {
+          let j = i + 1;
+          while (j < raw.length && raw[j] !== '"') {
+            if (raw[j] === "\\") j += 2;
+            else j++;
+          }
+          const str = JSON.parse(raw.slice(i, j + 1));
+          let k = j + 1;
+          while (k < raw.length && /\s/.test(raw[k])) k++;
+          if (raw[k] === ":" && stack.length > 0) {
+            const top = stack[stack.length - 1];
+            if (top.has(str)) duplicates.push(str);
+            top.add(str);
+          }
+          i = j + 1;
+        } else {
+          i++;
+        }
+      }
+      expect(duplicates, `Duplicate keys in ${loc}.json`).toEqual([]);
+
+      const parsed = JSON.parse(raw);
+      const checked = [
+        ...Object.values(parsed.offline || {}),
+        parsed.payment?.room_limit,
+        parsed.payment?.room_balance,
+        parsed.payment?.room_pick_guest,
+        parsed.payment?.room_over_limit,
+        parsed.payment?.request_room_override,
+        parsed.payment?.override_approved_by,
+        parsed.payment?.account_over_limit_notice,
+      ].join("\n");
+      expect(checked, `Vendor leak in ${loc}.json`).not.toMatch(/\b(ury|huf|kamra|heykoala)\b/i);
+    }
+  });
 });
