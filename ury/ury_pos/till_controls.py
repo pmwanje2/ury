@@ -1571,12 +1571,19 @@ def reopen_till(
 		"token_consumed": bool(approval),
 	}
 	closing_doc.flags.ignore_permissions = True
-	prev_ignore = bool(getattr(frappe.flags, "ignore_permissions", False))
+	orig_user = frappe.session.user
+	set_user_fn = getattr(frappe, "set_user", None)
 	try:
-		frappe.flags.ignore_permissions = True
+		if callable(set_user_fn):
+			set_user_fn("Administrator")
+		if frappe.session.user != "Administrator":
+			frappe.session.user = "Administrator"
 		closing_doc.cancel()
 	finally:
-		frappe.flags.ignore_permissions = prev_ignore
+		if callable(set_user_fn):
+			set_user_fn(orig_user)
+		if frappe.session.user != orig_user:
+			frappe.session.user = orig_user
 
 	ev = _insert_drawer_event(
 		event_type="Till Reopen",
