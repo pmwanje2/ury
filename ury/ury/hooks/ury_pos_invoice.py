@@ -456,8 +456,13 @@ def validate_invoice(doc, method):
 
                 if sent_reduced:
                     rounded_amt = round(voided_amount, 4)
-                    has_verified = override.has_verified_approval(doc, "void_sent_item") or (
-                        not has_full_void and override.has_verified_approval(doc, "reduce_sent_qty")
+                    has_verified_fn = getattr(override, "has_verified_approval", None)
+                    has_verified = bool(
+                        callable(has_verified_fn)
+                        and (
+                            has_verified_fn(doc, "void_sent_item")
+                            or (not has_full_void and has_verified_fn(doc, "reduce_sent_qty"))
+                        )
                     )
                     may_act = override.may_perform(
                         frappe.session.user, orig_pos_profile, "void_sent_item", amount=rounded_amt

@@ -4,6 +4,9 @@ import { call, parseFrappeError, printWithQz } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
 import { usePOSStore } from '../store/pos-store';
+import { printOrder } from '../lib/print';
+import { resolvePrintFormat } from '../lib/invoice-api';
+import { formatMoneyAmount } from '../lib/void-return-api';
 import ReturnCheckDialog from '../components/ReturnCheckDialog';
 import ReopenAdjustCheckDialog from '../components/ReopenAdjustCheckDialog';
 
@@ -309,14 +312,27 @@ export default function SettledBills() {
         <ReturnCheckDialog
           open={showReturnDialog}
           invoiceId={bill.name}
-          onCompleted={(res) => {
+          onCompleted={async (res) => {
             setShowReturnDialog(false);
             setMessage(
               t('void_return.return_success', {
                 return_invoice: res.return_invoice,
-                amount: `${res.currency} ${res.refund_total}`,
+                amount: formatMoneyAmount(res.refund_total, res.currency),
               }),
             );
+            const profile = usePOSStore.getState().posProfile;
+            if (profile && res.return_invoice) {
+              try {
+                await printOrder({
+                  orderId: res.return_invoice,
+                  posProfile: profile,
+                  printFormat: resolvePrintFormat({}, profile.print_format),
+                  skipStatusUpdate: true,
+                });
+              } catch {
+                // Best-effort print; return is already posted and displayed above.
+              }
+            }
             void search(filtersUsed, start);
           }}
           onClose={() => setShowReturnDialog(false)}

@@ -2856,6 +2856,7 @@ def sync_order(
                 void_reason,
                 note=void_note,
                 is_waste=is_waste,
+                fallback_privileges=fallback_privs,
             )
             claim = {
                 "invoice": invoice.name,

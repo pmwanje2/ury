@@ -135,6 +135,8 @@ class ContractOverrideStub(ModuleType):
         if not profile or user in ("Administrator", "Guest", None, ""):
             return False
         roles = set(self._h.user_roles.get(user, []))
+        if not self.is_policy_active(profile.get("company")):
+            return bool(roles & {"URY Manager", "URY Admin", "Accounts Manager"})
         for rule in self._h.privilege_rules:
             if (
                 rule.get("company") == profile.get("company")
@@ -144,6 +146,10 @@ class ContractOverrideStub(ModuleType):
             ):
                 return True
         return False
+
+    def has_verified_approval(self, doc, privilege):
+        proof = getattr(getattr(doc, "flags", None), f"pos_override_verified_{privilege}", None)
+        return bool(proof and getattr(proof, "privilege", None) == privilege)
 
     def mint_token(self, requester, approver, pos_profile, privilege, reference_name, claim):
         token = f"tok-{len(self._tokens) + 1}"

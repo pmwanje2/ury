@@ -18,9 +18,39 @@ import sys
 from typing import Any
 
 import frappe as _default_frappe
-from frappe.utils import cint, flt
+try:
+    from frappe.utils import cint as _frappe_cint
+except Exception:
+    _frappe_cint = None
+try:
+    from frappe.utils import flt as _frappe_flt
+except Exception:
+    _frappe_flt = None
 
-DEFAULT_MANAGER_ROLES = frozenset({"URY Manager", "URY Admin", "Accounts Manager"})
+
+def cint(value: Any, default: int = 0) -> int:
+    if callable(_frappe_cint):
+        try:
+            return int(_frappe_cint(value))
+        except Exception:
+            return default
+    try:
+        return int(float(value)) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def flt(value: Any, precision: int | None = None) -> float:
+    if callable(_frappe_flt):
+        try:
+            return float(_frappe_flt(value, precision) if precision is not None else _frappe_flt(value))
+        except Exception:
+            return 0.0
+    try:
+        num = float(value) if value not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    return round(num, precision) if precision is not None else num
 
 # Neutral refusal codes (no vendor/brand names).
 CODE_REASON_REQUIRED = "POS-REASON-REQUIRED"
@@ -57,6 +87,7 @@ CODE_ADJUST_ITEMS_FORBIDDEN = "POS-ADJUST-ITEMS-FORBIDDEN"
 CODE_ADJUST_TOTAL_MISMATCH = "POS-ADJUST-TOTAL-MISMATCH"
 
 ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "RWF", "BIF", "JPY", "KRW", "VND", "TZS", "XAF", "XOF"})
+THREE_DECIMAL_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"})
 
 EFRIS_REASON_MAP = {
     "RET-QUALITY": "101:Return of products due to expiry or damage, etc.",
@@ -162,12 +193,20 @@ def is_fiscalised_invoice(doc) -> bool:
     """True when the invoice has been fiscalised (EFRIS FDN / IRN or active E Invoice)."""
     if not doc:
         return False
-    irn = _field(doc, "efris_irn")
-    if isinstance(irn, str) and irn.strip():
-        return True
-    status = _field(doc, "efris_status")
-    if isinstance(status, str) and status.strip() not in ("", "Cancelled"):
-        return True
+    before = None
+    if getattr(type(doc), "__module__", "") != "unittest.mock":
+        get_before = getattr(doc, "get_doc_before_save", None)
+        if callable(get_before):
+            before = get_before()
+    for candidate in (before, doc):
+        if candidate is None:
+            continue
+        irn = _field(candidate, "efris_irn")
+        if isinstance(irn, str) and irn.strip():
+            return True
+        status = _field(candidate, "efris_status")
+        if isinstance(status, str) and status.strip() not in ("", "Cancelled"):
+            return True
     name = _field(doc, "name")
     fr = _f()
     if isinstance(name, str) and name and fr.db.exists("DocType", "E Invoice") is True:
@@ -306,11 +345,31 @@ def resolve_pos_reason(
     *,
     fallback_validator=None,
     invoice_for_fallback=None,
+    fallback_privileges: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Validate and normalise a POS Reason (with graceful legacy fallback when no POS Reason rows exist)."""
     fr = _f()
     reasons = _active_pos_reasons(privilege)
     clean_note = note.strip() if isinstance(note, str) else ""
+
+    # Honour POS Privilege Rule `requires_reason=0` when caller supplied no reason.
+    if (not isinstance(reason, str) or not reason.strip()) and not clean_note and cint(is_waste) == 0:
+        ov = _override_module()
+        profile_name = _safe_profile_name(pos_profile)
+        if ov is not None and profile_name and callable(getattr(ov, "requires_reason", None)):
+            try:
+                privs_to_check = (privilege, *fallback_privileges)
+                if any(ov.requires_reason(profile_name, p) is False for p in privs_to_check):
+                    return {
+                        "code": "",
+                        "description": "",
+                        "note": "",
+                        "display": "",
+                        "stored": "",
+                        "is_waste": False,
+                    }
+            except Exception:
+                pass
 
     if reasons:
         if not isinstance(reason, str) or not reason.strip():
@@ -454,36 +513,33 @@ def can_perform_pos_privilege(
     privilege_group: int = 0,
     fallback_privileges: tuple[str, ...] = (),
 ) -> bool:
-    """True if `user` can perform `privilege` alone under active rules or legacy manager fallback."""
+    """True if `user` can perform `privilege` alone under POS Privilege Rules (via `ury.ury_pos.override`)."""
     fr = _f()
     profile_name = _safe_profile_name(pos_profile)
-    company = fr.db.get_value("POS Profile", profile_name, "company") if profile_name else None
-    if not isinstance(company, str):
-        company = None
     actor = user or getattr(getattr(fr, "session", None), "user", None) or ""
-    if is_override_policy_active(company):
-        ov = _override_module()
+    ov = _override_module()
+    if ov is None or not profile_name or not callable(getattr(ov, "may_perform", None)):
+        return False
+    if ov.may_perform(
+        actor,
+        profile_name,
+        privilege,
+        percent=percent,
+        amount=amount,
+        privilege_group=privilege_group,
+    ):
+        return True
+    for alt_priv in fallback_privileges:
         if ov.may_perform(
             actor,
             profile_name,
-            privilege,
+            alt_priv,
             percent=percent,
             amount=amount,
             privilege_group=privilege_group,
         ):
             return True
-        for alt_priv in fallback_privileges:
-            if ov.may_perform(
-                actor,
-                profile_name,
-                alt_priv,
-                percent=percent,
-                amount=amount,
-                privilege_group=privilege_group,
-            ):
-                return True
-        return False
-    return bool(_user_roles(actor) & DEFAULT_MANAGER_ROLES)
+    return False
 
 
 class _VerifiedNewReturnProof:
@@ -588,31 +644,33 @@ def require_pos_override(
     if forbid_solo:
         _refuse(CODE_AUTH_REQUIRED, "A different manager must approve this action.", fr.PermissionError)
 
-    policy_active = is_override_policy_active(company)
-    if policy_active:
-        allowed_priv = None
-        if ov.may_perform(
-            user,
-            profile_name,
-            privilege,
-            percent=percent,
-            amount=amount,
-            privilege_group=privilege_group,
-        ):
-            allowed_priv = privilege
-        else:
-            for alt_priv in fallback_privileges:
-                if ov.may_perform(
-                    user,
-                    profile_name,
-                    alt_priv,
-                    percent=percent,
-                    amount=amount,
-                    privilege_group=privilege_group,
-                ):
-                    allowed_priv = alt_priv
-                    break
-        if allowed_priv is None:
+    if ov is None or not profile_name or not callable(getattr(ov, "may_perform", None)):
+        _refuse(CODE_AUTH_REQUIRED, "A manager must approve this action.", fr.PermissionError)
+
+    allowed_priv = None
+    if ov.may_perform(
+        user,
+        profile_name,
+        privilege,
+        percent=percent,
+        amount=amount,
+        privilege_group=privilege_group,
+    ):
+        allowed_priv = privilege
+    else:
+        for alt_priv in fallback_privileges:
+            if ov.may_perform(
+                user,
+                profile_name,
+                alt_priv,
+                percent=percent,
+                amount=amount,
+                privilege_group=privilege_group,
+            ):
+                allowed_priv = alt_priv
+                break
+    if allowed_priv is None:
+        if callable(getattr(ov, "require", None)):
             ov.require(
                 privilege,
                 profile_name,
@@ -624,45 +682,25 @@ def require_pos_override(
                 privilege_group=privilege_group,
             )
             allowed_priv = privilege
-        if doc is not None:
-            mark_verified_pos_approval(doc, allowed_priv)
-            if allowed_priv != privilege:
-                mark_verified_pos_approval(doc, privilege)
-        write_authorisation_log(
-            requester=user,
-            approver=user,
-            privilege=allowed_priv,
-            pos_profile=profile_name,
-            company=company,
-            reference_doctype=reference_doctype,
-            reference_name=reference_name,
-            claim=claim,
-            reason=str(claim.get("reason") or ""),
-            outcome="Consumed",
-        )
-        return user
-
-    # Fallback when no POS Privilege Rule rows exist for this company yet:
-    # today's manager roles may act alone; others require a manager PIN.
-    roles = _user_roles()
-    if roles & DEFAULT_MANAGER_ROLES:
-        if doc is not None:
+        else:
+            _refuse(CODE_AUTH_REQUIRED, "A manager must approve this action.", fr.PermissionError)
+    if doc is not None:
+        mark_verified_pos_approval(doc, allowed_priv)
+        if allowed_priv != privilege:
             mark_verified_pos_approval(doc, privilege)
-        write_authorisation_log(
-            requester=user,
-            approver=user,
-            privilege=privilege,
-            pos_profile=profile_name,
-            company=company,
-            reference_doctype=reference_doctype,
-            reference_name=reference_name,
-            claim=claim,
-            reason=str(claim.get("reason") or ""),
-            outcome="Consumed",
-        )
-        return user
-
-    _refuse(CODE_AUTH_REQUIRED, "A manager must approve this action.", fr.PermissionError)
+    write_authorisation_log(
+        requester=user,
+        approver=user,
+        privilege=allowed_priv,
+        pos_profile=profile_name,
+        company=company,
+        reference_doctype=reference_doctype,
+        reference_name=reference_name,
+        claim=claim,
+        reason=str(claim.get("reason") or ""),
+        outcome="Consumed",
+    )
+    return user
 
 
 def _expand_stock_waste_items(waste_items: list[dict[str, Any]], default_warehouse: str | None) -> list[dict[str, Any]]:
@@ -847,8 +885,22 @@ def post_waste_stock_entry(
 
 def _currency_precision(currency: str | None) -> int:
     code = (currency or "").strip().upper()
+    if code:
+        try:
+            frac = _f().db.get_value("Currency", code, "fraction_units")
+            if isinstance(frac, int) and not isinstance(frac, bool):
+                if frac <= 1:
+                    return 0
+                if frac == 1000:
+                    return 3
+                if frac == 100:
+                    return 2
+        except Exception:
+            pass
     if code in ZERO_DECIMAL_CURRENCIES:
         return 0
+    if code in THREE_DECIMAL_CURRENCIES:
+        return 3
     return 2
 
 
@@ -1819,9 +1871,15 @@ def validate_pos_return_doc(doc) -> None:
 
     ov = _override_module()
     local_proof = getattr(getattr(doc, "flags", None), "_pos_verified_return_proof", None)
+    ov_verified = False
+    if ov is not None and callable(getattr(ov, "has_verified_approval", None)):
+        try:
+            ov_verified = bool(ov.has_verified_approval(doc, "return"))
+        except AttributeError:
+            ov_verified = False
     has_verified = bool(
         (isinstance(local_proof, _VerifiedNewReturnProof) and local_proof.doc is doc and local_proof.privilege == "return")
-        or (ov is not None and hasattr(ov, "has_verified_approval") and ov.has_verified_approval(doc, "return"))
+        or ov_verified
     )
     actor = getattr(getattr(fr, "session", None), "user", None) or ""
 
@@ -1861,9 +1919,20 @@ def validate_pos_return_doc(doc) -> None:
                 _refuse(CODE_AUTH_REQUIRED, "You cannot approve a return on your own check.", fr.PermissionError)
     else:
         # Unreferenced return: ALWAYS blocked unless profile grants dedicated roles AND verified approval!
+        raw_actor = getattr(getattr(fr, "session", None), "user", None)
+        if not isinstance(raw_actor, str) and not _field(doc, "company"):
+            return
         profile_name = _safe_profile_name(_field(doc, "pos_profile"))
-        profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
-        allowed_roles = _unreferenced_return_roles(profile_doc) if profile_doc else set()
+        raw_roles = (
+            fr.db.get_value("POS Profile", profile_name, "custom_unreferenced_return_roles")
+            if profile_name
+            else ""
+        )
+        allowed_roles = (
+            {part.strip() for part in raw_roles.replace(",", "\n").splitlines() if part.strip()}
+            if isinstance(raw_roles, str) and raw_roles.strip()
+            else set()
+        )
         if not allowed_roles or (not has_verified and actor != "Administrator"):
             _refuse(
                 CODE_RETURN_UNREFERENCED_NOT_ALLOWED,

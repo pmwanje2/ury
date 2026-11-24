@@ -40,6 +40,9 @@ import {
 import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import VoidItemDialog from '../components/VoidItemDialog';
+import ReturnCheckDialog from '../components/ReturnCheckDialog';
+import ReopenAdjustCheckDialog from '../components/ReopenAdjustCheckDialog';
+import { formatMoneyAmount } from '../lib/void-return-api';
 import { parseFrappeError } from '@ury/core';
 import { formatMergedTableLabel } from '../lib/table-utils';
 import { t } from '../i18n';
@@ -225,6 +228,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     claim: Record<string, unknown>;
   } | null>(null);
   const [voidDialogItem, setVoidDialogItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
+  const [showReturnDialog, setShowReturnDialog] = React.useState(false);
+  const [showReopenDialog, setShowReopenDialog] = React.useState(false);
 
   React.useEffect(() => {
     if (selectedOrder?.name) {
@@ -1176,6 +1181,27 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     {t('order.settle_bill')}
                   </Button>
                 )}
+                {(selectedOrder.status === 'Paid' || selectedOrder.status === 'Recently Paid') &&
+                  !isMergedBill(selectedOrder) && (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11 shrink-0"
+                        onClick={() => setShowReturnDialog(true)}
+                      >
+                        {t('void_return.return_refund_action')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11 shrink-0"
+                        onClick={() => setShowReopenDialog(true)}
+                      >
+                        {t('void_return.reopen_adjust_action')}
+                      </Button>
+                    </>
+                  )}
                 {/* Total */}
                 <span className="ms-auto text-2xl font-bold text-gray-900 whitespace-nowrap tabular-nums">
                   {isMergedBill(selectedOrder) ? (
@@ -1296,6 +1322,74 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             void selectOrder(selectedOrder);
           }}
           onClose={() => setVoidDialogItem(null)}
+        />
+      )}
+      {selectedOrder && showReturnDialog && (
+        <ReturnCheckDialog
+          open={showReturnDialog}
+          invoiceId={selectedOrder.name}
+          onCompleted={async (res) => {
+            setShowReturnDialog(false);
+            showToast.success(
+              t('void_return.return_success', {
+                return_invoice: res.return_invoice,
+                amount: formatMoneyAmount(res.refund_total, res.currency),
+              }),
+            );
+            if (posStore.posProfile && res.return_invoice) {
+              try {
+                await printOrder({
+                  orderId: res.return_invoice,
+                  posProfile: posStore.posProfile,
+                  printFormat: resolvePrintFormat({}, posStore.posProfile.print_format),
+                  skipStatusUpdate: true,
+                });
+              } catch (err: any) {
+                showToast.error(
+                  t('payment.receipt_print_failed', { reason: err?.message || String(err) }),
+                );
+              }
+            }
+            fetchOrders();
+          }}
+          onClose={() => setShowReturnDialog(false)}
+        />
+      )}
+      {selectedOrder && showReopenDialog && (
+        <ReopenAdjustCheckDialog
+          open={showReopenDialog}
+          bill={{
+            name: selectedOrder.name,
+            pos_profile: posStore.posProfile?.name || '',
+            currency: selectedOrderCurrency || profileCurrency,
+            grand_total: selectedOrder.grand_total,
+            rounded_total: selectedOrder.rounded_total,
+            items: selectedOrderItems.map((it) => ({
+              item_name: it.item_name,
+              qty: it.qty,
+              amount: it.amount,
+            })),
+            payments: (selectedOrder.payments || []).map((p) => ({
+              mode_of_payment: p.mode_of_payment,
+              amount: p.amount,
+            })),
+          }}
+          availableModes={posStore.paymentModes}
+          onCompleted={(res) => {
+            setShowReopenDialog(false);
+            const target =
+              res.action === 'adjust_closed_check'
+                ? res.replacement_invoice
+                : res.reopened_invoice;
+            showToast.success(
+              t('void_return.reopen_success', {
+                replacement: target,
+                reversal: res.reversal_return,
+              }),
+            );
+            fetchOrders();
+          }}
+          onClose={() => setShowReopenDialog(false)}
         />
       )}
     </div>

@@ -1113,6 +1113,8 @@
     "badge_consolidated": "مجمّعة",
     "badge_room": "غرفة {{room}}",
     "badge_fiscalised": "معتمدة ضريبيًا",
-    "consolidated_locked_hint": "لا يمكن إرجاع أو إعادة فتح الفواتير المجمّعة من الصندوق."
+    "consolidated_locked_hint": "لا يمكن إرجاع أو إعادة فتح الفواتير المجمّعة من الصندوق.",
+    "decrease_return_qty": "إنقاص كمية الإرجاع لصنف {{item}}",
+    "increase_return_qty": "زيادة كمية الإرجاع لصنف {{item}}"
   }
 }

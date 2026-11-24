@@ -861,6 +861,8 @@
     "badge_consolidated": "Consolidada",
     "badge_room": "Habitación {{room}}",
     "badge_fiscalised": "Fiscalizada",
-    "consolidated_locked_hint": "Las cuentas consolidadas no se pueden devolver ni reabrir en caja."
+    "consolidated_locked_hint": "Las cuentas consolidadas no se pueden devolver ni reabrir en caja.",
+    "decrease_return_qty": "Disminuir cantidad a devolver de {{item}}",
+    "increase_return_qty": "Aumentar cantidad a devolver de {{item}}"
   }
 }

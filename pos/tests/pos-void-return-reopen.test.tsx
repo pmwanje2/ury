@@ -201,9 +201,11 @@ describe('POS Orders screen — settled single & Add Check return/reopen and rec
 
     // Execute a partial return of the Add-Check second line (Fresh Juice) with manager PIN
     fireEvent.click(returnBtn);
-    await screen.findByText(/Fresh Juice/);
+    const dialog = await screen.findByRole('dialog', { name: /return \/ refund check/i });
+    await screen.findAllByText(/Fresh Juice/);
     fireEvent.click(screen.getByRole('button', { name: /increase.*Fresh Juice/i }));
-    await screen.findByText(/15,000/);
+    await screen.findByText(/refund total/i);
+    expect(dialog.textContent).toMatch(/15,000/);
 
     fireEvent.change(screen.getByLabelText(/return reason/i), { target: { value: 'RET-QUALITY' } });
     fireEvent.click(screen.getByRole('button', { name: /process return/i }));

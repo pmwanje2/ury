@@ -12,9 +12,11 @@ import {
 import {
   adjustClosedCheck,
   formatMoneyAmount,
+  getReturnableCheck,
   reopenClosedCheck,
   type AdjustClosedCheckResponse,
   type ReopenClosedCheckResponse,
+  type ReturnableCheckResponse,
 } from '../lib/void-return-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
@@ -60,14 +62,21 @@ export default function ReopenAdjustCheckDialog({
     amount: number;
   } | null>(null);
 
+  const [hydratedCheck, setHydratedCheck] = useState<ReturnableCheckResponse | null>(null);
+
   const isFiscalised = Boolean(
-    (bill.efris_irn && bill.efris_irn.trim()) ||
+    hydratedCheck?.is_fiscalised ||
+      (bill.efris_irn && bill.efris_irn.trim()) ||
       (bill.efris_status && !['', 'Cancelled'].includes(bill.efris_status.trim())),
   );
 
+  const effectiveProfile = hydratedCheck?.pos_profile || bill.pos_profile;
+  const effectiveCurrency = hydratedCheck?.currency || bill.currency;
+  const effectivePrecision = hydratedCheck?.precision;
+
   const tenderModes = useMemo(() => {
-    const set = new Set<string>(availableModes || []);
-    for (const p of bill.payments || []) {
+    const set = new Set<string>(hydratedCheck?.available_modes || availableModes || []);
+    for (const p of hydratedCheck?.original_payments || bill.payments || []) {
       if (p.mode_of_payment) set.add(p.mode_of_payment);
     }
     if (set.size === 0) {
@@ -75,7 +84,7 @@ export default function ReopenAdjustCheckDialog({
       set.add('Card');
     }
     return Array.from(set);
-  }, [availableModes, bill.payments]);
+  }, [availableModes, bill.payments, hydratedCheck]);
 
   useEffect(() => {
     if (!open) return;
@@ -87,8 +96,30 @@ export default function ReopenAdjustCheckDialog({
     setConfirmCreditAndRebill(false);
     setError(null);
     setPendingApproval(null);
-    setSelectedTender(bill.payments?.[0]?.mode_of_payment || tenderModes[0] || 'Cash');
+    setHydratedCheck(null);
+    setSelectedTender(bill.payments?.[0]?.mode_of_payment || availableModes?.[0] || 'Cash');
 
+    if (!bill.payments || bill.payments.length === 0) {
+      getReturnableCheck(bill.name)
+        .then((res) => {
+          if (!active) return;
+          setHydratedCheck(res);
+          const firstMode = res.original_payments?.[0]?.mode_of_payment || res.available_modes?.[0];
+          if (firstMode) setSelectedTender(firstMode);
+        })
+        .catch(() => {
+          // Best-effort hydration; server re-validates on submit.
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [open, bill.name]);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setSelectedReasonCode('');
     const priv = mode === 'adjust' ? 'adjust_closed_check' : 'reopen_check';
     listReasons(priv)
       .then((rows) => {
@@ -100,7 +131,7 @@ export default function ReopenAdjustCheckDialog({
     return () => {
       active = false;
     };
-  }, [open, bill.name]);
+  }, [open, bill.name, mode]);
 
   const selectedReason = useMemo(
     () => reasons.find((r) => r.code === selectedReasonCode) ?? null,
@@ -287,7 +318,7 @@ export default function ReopenAdjustCheckDialog({
                 </div>
                 <div className="flex justify-between text-sm font-semibold text-gray-900 pt-1 border-t border-gray-200">
                   <span>{t('void_return.adjusted_total_label')}</span>
-                  <span>{formatMoneyAmount(adjustedTotal, bill.currency)}</span>
+                  <span>{formatMoneyAmount(adjustedTotal, effectiveCurrency, effectivePrecision)}</span>
                 </div>
               </div>
             ) : (
@@ -390,7 +421,7 @@ export default function ReopenAdjustCheckDialog({
       {pendingApproval && (
         <ManagerApproval
           open
-          posProfile={bill.pos_profile}
+          posProfile={effectiveProfile}
           privilege={pendingApproval.privilege}
           title={
             pendingApproval.privilege === 'adjust_closed_check'
@@ -398,7 +429,7 @@ export default function ReopenAdjustCheckDialog({
               : t('void_return.mode_reopen_check')
           }
           summaryLines={[
-            `${bill.name} · ${formatMoneyAmount(pendingApproval.amount, bill.currency)}`,
+            `${bill.name} · ${formatMoneyAmount(pendingApproval.amount, effectiveCurrency, effectivePrecision)}`,
             `${t('void_return.reason_label')}: ${selectedReason?.description || selectedReasonCode}`,
           ]}
           reference={{ doctype: 'POS Invoice', name: bill.name }}

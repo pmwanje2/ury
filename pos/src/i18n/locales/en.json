@@ -1106,6 +1106,8 @@
     "badge_consolidated": "Consolidated",
     "badge_room": "Room {{room}}",
     "badge_fiscalised": "Fiscalised",
-    "consolidated_locked_hint": "Consolidated checks cannot be returned or reopened at the till. Issue a credit note from accounting."
+    "consolidated_locked_hint": "Consolidated checks cannot be returned or reopened at the till. Issue a credit note from accounting.",
+    "decrease_return_qty": "Decrease return quantity for {{item}}",
+    "increase_return_qty": "Increase return quantity for {{item}}"
   }
 }

@@ -1,4 +1,4 @@
-import { call } from '@ury/core';
+import { call, currencyFractionDigits } from '@ury/core';
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import type { OverrideReason } from './override-api';
 
@@ -276,11 +276,9 @@ export async function reopenClosedCheck(params: {
 }
 
 export function formatMoneyAmount(amount: number, currency: string, precision?: number): string {
-  const zeroDec = ['UGX', 'RWF', 'BIF', 'JPY', 'KRW', 'VND', 'TZS', 'XAF', 'XOF'].includes(
-    (currency || '').toUpperCase(),
-  );
-  const digits = precision !== undefined ? precision : zeroDec ? 0 : 2;
-  const formatted = Number(amount || 0).toLocaleString(undefined, {
+  const code = (currency || '').trim().toUpperCase();
+  const digits = precision !== undefined ? precision : code ? currencyFractionDigits(code) : 2;
+  const formatted = Number(amount || 0).toLocaleString('en', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });

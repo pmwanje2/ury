@@ -910,6 +910,8 @@
     "badge_consolidated": "Consolidée",
     "badge_room": "Chambre {{room}}",
     "badge_fiscalised": "Fiscalisée",
-    "consolidated_locked_hint": "Les additions consolidées ne peuvent pas être retournées ou rouvertes en caisse."
+    "consolidated_locked_hint": "Les additions consolidées ne peuvent pas être retournées ou rouvertes en caisse.",
+    "decrease_return_qty": "Diminuer la quantité retournée pour {{item}}",
+    "increase_return_qty": "Augmenter la quantité retournée pour {{item}}"
   }
 }

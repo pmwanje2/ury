@@ -306,7 +306,7 @@ export default function ReturnCheckDialog({
                         <div className="flex items-center gap-2 shrink-0">
                           <button
                             type="button"
-                            aria-label={`Decrease return quantity for ${row.item_name}`}
+                            aria-label={t('void_return.decrease_return_qty', { item: row.item_name })}
                             disabled={chosen <= 0 || submitting}
                             onClick={() =>
                               setQtyByRow((prev) => ({
@@ -323,7 +323,7 @@ export default function ReturnCheckDialog({
                           </span>
                           <button
                             type="button"
-                            aria-label={`Increase return quantity for ${row.item_name}`}
+                            aria-label={t('void_return.increase_return_qty', { item: row.item_name })}
                             disabled={chosen >= row.remaining_qty || submitting}
                             onClick={() =>
                               setQtyByRow((prev) => ({
