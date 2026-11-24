@@ -113,36 +113,38 @@ describe('guest feedback route', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     first.unmount()
 
-    feedbackError = new Error('[URY-FEEDBACK-RETRY] try again')
+    feedbackError = new Error('[POS-FEEDBACK-RETRY] try again')
     render(<App />)
     expect(await screen.findByText('Another request is finishing. Please try again.')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('URY-FEEDBACK-')
+    expect(document.body.textContent).not.toContain('FEEDBACK-')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
-  it('maps every stable refusal id to guest copy and never shows the raw id', async () => {
+  it('maps every stable refusal id to guest copy regardless of prefix and never shows the raw id', async () => {
     const cases: [string, string][] = [
-      ['[URY-FEEDBACK-DISABLED]', 'Feedback is not available right now.'],
-      ['[URY-FEEDBACK-TEMPLATE]', 'Feedback is not available right now.'],
-      ['[URY-FEEDBACK-BILL-LINK-MISSING]', 'Feedback is not available right now.'],
+      ['[POS-FEEDBACK-DISABLED]', 'Feedback is not available right now.'],
+      ['[POS-FEEDBACK-TEMPLATE]', 'Feedback is not available right now.'],
+      ['[POS-FEEDBACK-BILL-LINK-MISSING]', 'Feedback is not available right now.'],
+      ['[POS-FEEDBACK-NOT-ELIGIBLE]', 'Feedback is not available for this bill.'],
+      ['[POS-FEEDBACK-LINK-INVALID]', 'This feedback link is not valid.'],
+      ['[MAX-FEEDBACK-DISABLED]', 'Feedback is not available right now.'],
       ['[URY-FEEDBACK-NOT-ELIGIBLE]', 'Feedback is not available for this bill.'],
-      ['[URY-FEEDBACK-LINK-INVALID]', 'This feedback link is not valid.'],
     ]
     for (const [code, expected] of cases) {
       feedbackError = new Error(code)
       const view = render(<App />)
       expect(await screen.findByText(expected), code).toBeInTheDocument()
-      expect(document.body.textContent, code).not.toContain('URY-FEEDBACK-')
+      expect(document.body.textContent, code).not.toContain('FEEDBACK-')
       expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
       view.unmount()
     }
   })
 
   it('asks for the ratings again on the stable ratings refusal and reloads the form on retry', async () => {
-    feedbackError = new Error('[URY-FEEDBACK-RATINGS]')
+    feedbackError = new Error('[POS-FEEDBACK-RATINGS]')
     render(<App />)
     expect(await screen.findByText('Please rate every question again.')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('URY-FEEDBACK-')
+    expect(document.body.textContent).not.toContain('FEEDBACK-')
     const loads = postCalls.filter(entry => entry.path.endsWith('get_feedback_form')).length
     feedbackError = null
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
@@ -151,10 +153,10 @@ describe('guest feedback route', () => {
   })
 
   it('tells the guest to wait on the stable rate-limit refusal and offers no retry', async () => {
-    feedbackError = new Error('[URY-FEEDBACK-RATE-LIMITED] Too many attempts.')
+    feedbackError = new Error('[POS-FEEDBACK-RATE-LIMITED] Too many attempts.')
     render(<App />)
     expect(await screen.findByText('Too many attempts. Please wait a few minutes and try again.')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('URY-FEEDBACK-')
+    expect(document.body.textContent).not.toContain('FEEDBACK-')
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
@@ -229,7 +231,7 @@ describe('guest feedback in the guest language (T6d review B2)', () => {
 
   it('a Swahili refusal and its Retry follow the guest language', async () => {
     await useLanguage('sw')
-    feedbackError = new Error('[URY-FEEDBACK-RETRY] try again')
+    feedbackError = new Error('[MAX-FEEDBACK-RETRY] try again')
     render(<App />)
     expect(await screen.findByText('Ombi lingine linamalizika. Tafadhali jaribu tena.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Jaribu tena' })).toBeInTheDocument()

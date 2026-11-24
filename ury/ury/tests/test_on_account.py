@@ -150,7 +150,7 @@ class Credit(unittest.TestCase):
         ]:
             with self.subTest(customer=customer, disabled=disabled, limit=limit):
                 self.disabled, self.limit = disabled, limit
-                with self.assertRaisesRegex(ValueError, "URY-CREDIT-" + code):
+                with self.assertRaisesRegex(ValueError, rf"\[POS-CREDIT-{code}\]"):
                     self.settle(customer)
                 self.invoice.save.assert_not_called()
 
@@ -181,7 +181,7 @@ class Credit(unittest.TestCase):
                 ),
             )
         self.limit = 139  # GL 20 + pending 70 - return 10 + this shortfall 60 = 140
-        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+        with self.assertRaisesRegex(ValueError, r"\[POS-CREDIT-004\]"):
             self.settle(cash=40)
         self.limit = 140
         self.assertEqual(self.settle(cash=40)["status"], "Submitted")
@@ -194,7 +194,7 @@ class Credit(unittest.TestCase):
         self.invoice.custom_merged_pos_invoice = "B2"
         self.target.customer = "Walk-in"
         self.limit = 159  # 20 GL + 180 combined less 40 cash
-        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+        with self.assertRaisesRegex(ValueError, r"\[POS-CREDIT-004\]"):
             self.settle(cash=40)
         self.assertFalse(any(e.startswith("save") for e in self.events))
         self.events.clear()
@@ -211,7 +211,7 @@ class Credit(unittest.TestCase):
         self.gl.return_value = 0.1
         self.invoice.rounded_total = self.invoice.grand_total = 0.2
         self.limit = 0.29
-        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+        with self.assertRaisesRegex(ValueError, r"\[POS-CREDIT-004\]"):
             self.settle()
         self.limit = 0.3
         self.assertEqual(self.settle()["status"], "Submitted")
@@ -269,7 +269,7 @@ class Credit(unittest.TestCase):
         self.assertEqual(self.invoice.docstatus, 1)
 
     def test_direct_merged_submit_rechecks_repriced_partner_from_update_hook(self):
-        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+        with self.assertRaisesRegex(ValueError, r"\[POS-CREDIT-004\]"):
             self.direct_merged_with_update_hook(81)
         self.target.submit.assert_not_called()
         self.invoice.submit.assert_not_called()
@@ -277,7 +277,7 @@ class Credit(unittest.TestCase):
     def test_print_then_submit_rechecks_exposure(self):
         self.assertEqual(self.settle(submit=0)["status"], "Draft")
         self.limit = 119
-        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+        with self.assertRaisesRegex(ValueError, r"\[POS-CREDIT-004\]"):
             order.submit_order_invoice("B1")
         self.invoice.submit.assert_not_called()
 
@@ -332,6 +332,6 @@ class Credit(unittest.TestCase):
         self.invoice.save.side_effect = lambda: setattr(
             self.invoice, "rounded_total", 200
         )
-        with self.assertRaisesRegex(ValueError, "URY-CREDIT-004"):
+        with self.assertRaisesRegex(ValueError, r"\[POS-CREDIT-004\]"):
             self.settle()
         self.invoice.submit.assert_not_called()

@@ -143,7 +143,51 @@ class TestSiteBrand(unittest.TestCase):
         for surface in ("site", "staff", "guest"):
             self.hooks = {"name": ["Powered by URY"]}
             ctx = self.brand_module().get_brand_context(surface)
-            self.assertNotRegex(ctx["brand_json"], r"(?i)frappe|erpnext|kamra|\bury\b")
+            self.assertNotRegex(ctx["brand_json"], r"(?i)frappe|erpnext|kamra|huf|tridz|heykoala|\bury\b")
+        for vendor, asset_app in (("HUF", "huf"), ("Tridz", "tridz"), ("HeyKoala", "heykoala")):
+            for surface in ("site", "staff", "guest"):
+                with self.subTest(vendor=vendor, surface=surface):
+                    self.settings.app_name = f"Powered by {vendor}"
+                    self.settings.app_logo = f"/assets/{asset_app}/logo.svg"
+                    self.settings.favicon = f"/assets/{asset_app}/favicon.ico"
+                    self.hooks = {"name": [f"{vendor} POS"], "logo": [f"/assets/{asset_app}/mark.svg"]}
+                    ctx = self.brand_module().get_brand_context(surface)
+                    self.assertNotRegex(ctx["brand_json"], r"(?i)frappe|erpnext|kamra|huf|tridz|heykoala|\bury\b")
+
+    def test_refusal_code_shows_a_neutral_prefix_before_the_stable_key(self):
+        brand = self.brand_module()
+        self.assertEqual(brand.coded_message("CLOSE-LATE-INVOICE", "Close the till later."),
+                         "[POS-CLOSE-LATE-INVOICE] Close the till later.")
+        self.assertEqual(brand.coded_message("FEEDBACK-DISABLED"), "[POS-FEEDBACK-DISABLED]")
+        self.assertEqual(brand.coded_message("FEEDBACK-DISABLED", ""), "[POS-FEEDBACK-DISABLED]")
+        self.framework.conf["ury_message_code_prefix"] = "MAX"
+        self.assertEqual(brand.coded_message("CLOSE-LATE-INVOICE", "Close the till later."),
+                         "[MAX-CLOSE-LATE-INVOICE] Close the till later.")
+        self.assertEqual(brand.coded_message("FEEDBACK-DISABLED"), "[MAX-FEEDBACK-DISABLED]")
+
+    def test_refusal_code_prefix_never_names_the_engine_or_breaks_the_code(self):
+        brand = self.brand_module()
+        for prefix in ("URY", "ury", "Kamra", "ERPNEXT", "Frappe", "XURY",
+                       "HUF", "huf", "HUF1", "MYHUF", "TRIDZ", "Tridz", "XTRIDZ",
+                       "HEYKOALA", "HeyKoala", "", "P S", "<b>", "max",
+                       "ABCDEFGHIJK", 7, None):
+            with self.subTest(prefix=prefix):
+                self.framework.conf["ury_message_code_prefix"] = prefix
+                self.assertEqual(brand.coded_message("TILL-NOT-HOLDER", "Not permitted"),
+                                 "[POS-TILL-NOT-HOLDER] Not permitted")
+
+    def test_coded_message_falls_back_cleanly_when_site_conf_is_unavailable(self):
+        brand = self.brand_module()
+
+        class _UnboundConf:
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError("object is not bound")
+
+        self.framework.conf = _UnboundConf()
+        self.assertEqual(brand.coded_message("FEEDBACK-DISABLED"), "[POS-FEEDBACK-DISABLED]")
+        del self.framework.conf
+        self.assertEqual(brand.coded_message("FEEDBACK-DISABLED", "Disabled."),
+                         "[POS-FEEDBACK-DISABLED] Disabled.")
 
     def test_white_label_asset_and_outlet_image_survive_the_legacy_asset_filter(self):
         for path in ("/assets/ury/Images/maximus-mark.svg", "/assets/ury/custom/outlet.svg"):
@@ -360,6 +404,59 @@ class TestSiteBrand(unittest.TestCase):
                 parsed = PageParser(self.render(page, self.context(page)))
                 self.assertEqual(parsed.source, "https://github.com/pmwanje2/ury/tree/public-release")
                 self.framework.conf.clear()
+
+    def test_every_spa_offers_neutral_agpl_source_link(self):
+        class _AttrDict(dict):
+            def __getattr__(self, key):
+                return self.get(key)
+
+            def __setattr__(self, key, value):
+                self[key] = value
+
+        class _Headers:
+            def __init__(self):
+                self.values = {}
+
+            def set(self, key, value):
+                self.values[key] = value
+
+        self.framework.local.site = "test.localhost"
+        self.framework.local.response_headers = _Headers()
+        self.framework.PageDoesNotExistError = type("PageDoesNotExistError", (Exception,), {})
+        spas = (
+            ("pos", "ury.www.pos", ROOT / "pos/index.html", "Maximus POS", "/pos", "Guest"),
+            ("order", "ury.www.order", ROOT / "self-order/index.html", "Maximus Order", "/order", "Guest"),
+            ("ury", "ury.www.ury", ROOT / "frontend/index.html", "Maximus", "/ury", "manager@example.com"),
+            ("serve", "ury.www.serve", ROOT / "serve/index.html", "Maximus Serve", "/ury/serve", "Guest"),
+            ("mosaic", "ury.www.mosaic", ROOT / "mosaic/index.html", "Maximus Kitchen", "/mosaic", "Guest"),
+            ("urypos", "ury.www.urypos", ROOT / "urypos/index.html", "Maximus POS", "/urypos", "Guest"),
+            ("brief_app", "ury.www.brief_app.index", ROOT / "ury/www/brief_app/index.html", "Maximus Brief", "/ury/brief/", "owner@example.com"),
+            ("brief_app_go", "ury.www.brief_app.index", ROOT / "ury/www/brief_app/index.html", "Maximus Brief", "/ury/brief/go", "Guest"),
+        )
+        for label, module_name, template_path, default_name, path, user in spas:
+            with self.subTest(spa=label):
+                sys.modules.pop(module_name, None)
+                self.framework.session.user = user
+                self.framework.local.request = SimpleNamespace(path=path)
+                self.settings.app_name = self.settings.app_logo = self.settings.favicon = None
+                self.framework.conf.clear()
+                controller = importlib.import_module(module_name)
+                template = Environment(autoescape=False, loader=FileSystemLoader(ROOT / "ury")).from_string(template_path.read_text())
+
+                default_ctx = controller.get_context(_AttrDict())
+                default_html = template.render(**default_ctx, app_name="", frappe=SimpleNamespace(lang="en", session=self.framework.session))
+                default_parsed = PageParser(default_html)
+                self.assertIn(f"{default_name} · AGPL-3.0 · Source", " ".join(default_parsed.footer.split()))
+                self.assertEqual(default_parsed.source, "https://github.com/pmwanje2/ury/tree/maximus/v16-integration")
+
+                self.set_brand()
+                self.framework.conf["ury_source_url"] = "https://github.com/pmwanje2/ury/tree/public-release"
+                branded_ctx = controller.get_context(_AttrDict())
+                branded_html = template.render(**branded_ctx, app_name=self.settings.app_name, frappe=SimpleNamespace(lang="en", session=self.framework.session))
+                branded_parsed = PageParser(branded_html)
+                self.assertIn(SITE_BRAND["name"] + " · AGPL-3.0 · Source", " ".join(branded_parsed.footer.split()))
+                self.assertEqual(branded_parsed.source, "https://github.com/pmwanje2/ury/tree/public-release")
+                self.assertNotRegex(branded_parsed.footer, r"(?i)\b(?:ury|frappe|erpnext|kamra|huf|tridz|heykoala)\b")
 
     def test_merged_receipt_honours_configured_letterhead_and_footer_and_no_letterhead_switch(self):
         from unittest.mock import MagicMock

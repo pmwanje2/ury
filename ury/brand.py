@@ -7,6 +7,7 @@ from urllib.parse import quote_plus
 import frappe
 
 DEFAULT_SOURCE_URL = "https://github.com/pmwanje2/ury/tree/maximus/v16-integration"
+DEFAULT_MESSAGE_CODE_PREFIX = "POS"
 
 
 def get_theme():
@@ -175,10 +176,10 @@ def get_brand(surface="site"):
             if isinstance(values, list) and values and isinstance(values[-1], str) and values[-1].strip():
                 brand[key] = values[-1]
     # Installed upstream defaults and older staff hooks are not site identity.
-    if brand["name"] and re.search(r"\b(?:ury|frappe|erpnext|kamra)\b", brand["name"], re.I):
+    if brand["name"] and re.search(r"\b(?:ury|frappe|erpnext|kamra|huf|tridz|heykoala)\b", brand["name"], re.I):
         brand["name"] = None
     for key in ("logo", "favicon"):
-        if brand[key] and re.search(r"/assets/(?:erpnext|frappe|kamra)/", brand[key], re.I):
+        if brand[key] and re.search(r"/assets/(?:erpnext|frappe|kamra|huf|tridz|heykoala)/", brand[key], re.I):
             brand[key] = None
     return brand if any(brand.values()) else None
 
@@ -200,3 +201,21 @@ def get_brand_context(surface="site"):
         "brand_json": json_for_script(brand),
         "brand_source_url": frappe.conf.get("ury_source_url") or DEFAULT_SOURCE_URL,
     }
+
+
+def coded_message(key, message=""):
+    """Show a refusal under a brand-free code; tests and logs match the stable KEY.
+
+    The ``ury_message_code_prefix`` site config sets the prefix. A value that is
+    malformed or names the engine falls back to the default.
+    """
+    try:
+        conf = getattr(frappe, "conf", None)
+        prefix = conf.get("ury_message_code_prefix") if callable(getattr(conf, "get", None)) else None
+    except Exception:
+        prefix = None
+    if not (isinstance(prefix, str) and re.fullmatch(r"[A-Z][A-Z0-9]{1,9}", prefix)) or re.search(
+        r"ury|frappe|erpnext|kamra|huf|tridz|heykoala", prefix, re.I
+    ):
+        prefix = DEFAULT_MESSAGE_CODE_PREFIX
+    return f"[{prefix}-{key}] {message}" if message else f"[{prefix}-{key}]"

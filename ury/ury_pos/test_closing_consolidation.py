@@ -234,7 +234,7 @@ class TestClosingConsolidation(unittest.TestCase):
             with self.subTest(stamp=stamp):
                 self.invoices = []
                 self._invoice("LATE", stamp=stamp)
-                with self.assertRaisesRegex(frappe.ValidationError, r"\[URY-CLOSE-LATE-INVOICE\]"):
+                with self.assertRaisesRegex(frappe.ValidationError, r"^\[POS-CLOSE-LATE-INVOICE\] "):
                     self._submit()
                 self.assertEqual(self.doc.pos_invoices, [])
         self.get_taxes.assert_not_called()
@@ -246,7 +246,7 @@ class TestClosingConsolidation(unittest.TestCase):
             with self.subTest(stamp=stamp):
                 self.invoices = []
                 self._invoice("ORPHAN", stamp=stamp)
-                with self.assertRaisesRegex(frappe.ValidationError, r"\[URY-CLOSE-ORPHAN-INVOICE\]"):
+                with self.assertRaisesRegex(frappe.ValidationError, r"^\[POS-CLOSE-ORPHAN-INVOICE\] "):
                     self._submit()
                 self.assertEqual(self.doc.pos_invoices, [])
         self.get_taxes.assert_not_called()
@@ -255,7 +255,7 @@ class TestClosingConsolidation(unittest.TestCase):
         self._invoice("VISIBLE")
         self._invoice("HIDDEN")
         self.hidden_invoices.add("HIDDEN")
-        with self.assertRaisesRegex(frappe.ValidationError, r"\[URY-CLOSE-UNREADABLE-INVOICE\]"):
+        with self.assertRaisesRegex(frappe.ValidationError, r"^\[POS-CLOSE-UNREADABLE-INVOICE\] "):
             self._submit()
         self.assertEqual(self.doc.pos_invoices, [])
         self.get_taxes.assert_not_called()
@@ -643,7 +643,7 @@ class TestClosingConsolidation(unittest.TestCase):
 
         with self.assertRaisesRegex(
             frappe.ValidationError,
-            r"\[URY-CLOSE-CHANGE-NO-TILL-MODE\]",
+            r"^\[POS-CLOSE-CHANGE-NO-TILL-MODE\] ",
         ):
             self._validate()
 
@@ -664,7 +664,7 @@ class TestClosingConsolidation(unittest.TestCase):
 
         with self.assertRaisesRegex(
             frappe.ValidationError,
-            r"\[URY-CLOSE-CHANGE-NO-TILL-MODE\]",
+            r"^\[POS-CLOSE-CHANGE-NO-TILL-MODE\] ",
         ):
             self._validate()
 

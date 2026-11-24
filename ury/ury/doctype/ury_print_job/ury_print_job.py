@@ -4,6 +4,7 @@
 import frappe
 from frappe.model.document import Document
 
+from ury.brand import coded_message
 from ury.ury.printing.file_store import delete_job, get_job, list_all_jobs, save_job
 
 
@@ -316,4 +317,4 @@ def _matches_filters(doc, filters):
 
 def _guard_copy(name, data, existing):
     if str(name).startswith('COPY-') or 'BILL_COPY' in (existing.get('job_type'), data.get('job_type')):
-        frappe.throw('URY-COPY-001: Copy jobs are managed by the print worker.', frappe.PermissionError)
+        frappe.throw(coded_message('COPY-001', 'Copy jobs are managed by the print worker.'), frappe.PermissionError)

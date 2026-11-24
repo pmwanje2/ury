@@ -100,25 +100,25 @@ class TestKitchenActions(unittest.TestCase):
 
     def test_recall_rejects_an_expired_window_despite_a_recent_edit(self):
         self.now += timedelta(minutes=5, seconds=1)
-        with self.assertRaisesRegex(frappe.ValidationError, r"\[URY-KOT-RECALL-WINDOW-CLOSED\] .*15 minutes"):
+        with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-KOT-RECALL-WINDOW-CLOSED\] .*15 minutes"):
             self.recall()
         self.assert_no_write()
 
     def test_recall_rejects_wrong_status(self):
         self.doc.order_status = "Ready For Prepare"
-        with self.assertRaisesRegex(frappe.ValidationError, r"\[URY-KOT-RECALL-NOT-SERVED\] .*Served"):
+        with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-KOT-RECALL-NOT-SERVED\] .*Served"):
             self.recall()
         self.assert_no_write()
 
     def test_recall_rejects_missing_write_permission(self):
         self.permission.return_value = False
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-KOT-RECALL-NOT-PERMITTED\]"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"\[POS-KOT-RECALL-NOT-PERMITTED\]"):
             self.recall()
         self.assert_no_write()
 
     def test_recall_rejects_another_branch(self):
         self.doc.branch = "Branch B"
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-KOT-RECALL-OTHER-BRANCH\] .*other branches"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"\[POS-KOT-RECALL-OTHER-BRANCH\] .*other branches"):
             self.recall()
         self.assert_no_write()
 
@@ -188,13 +188,13 @@ class TestKitchenActions(unittest.TestCase):
         for value in (None, "", "bad", "nan", "inf", "-1"):
             with self.subTest(value=value):
                 self.doc.production_time = value
-                with self.assertRaisesRegex(frappe.ValidationError, r"\[URY-KOT-RECALL-NO-SERVE-TIME\]"):
+                with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-KOT-RECALL-NO-SERVE-TIME\]"):
                     self.recall()
                 self.assert_no_write()
 
     def test_recall_rejects_get(self):
         frappe.request.method = "GET"
-        with self.assertRaisesRegex(frappe.PermissionError, r"\[URY-KOT-RECALL-POST-ONLY\]"):
+        with self.assertRaisesRegex(frappe.PermissionError, r"\[POS-KOT-RECALL-POST-ONLY\]"):
             self.recall()
         self.assert_no_write()
 

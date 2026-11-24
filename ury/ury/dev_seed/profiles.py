@@ -248,7 +248,7 @@ def _seed_pos_profile(company_name, branch_name, restaurant_name):
         "restaurant": restaurant_name,
         "paid_limit": 50000,
         "table_attention_time": 30,
-        "custom_kot_naming_series": "KOT-URY-",
+        "custom_kot_naming_series": "KOT-",
         "custom_enable_discount": 1,
         "custom_enable_multiple_cashier": 0,
         "custom_enable_kot_reprint": 1,

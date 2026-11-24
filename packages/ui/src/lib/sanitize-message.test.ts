@@ -45,3 +45,8 @@ it('shows the actionable refusal, preserving the reference and similar words', (
   expect(messageToPlainText('[URY-CLOSE-LATE-INVOICE] Review INV-93 in ERPNext before closing the Luxury Room.'))
     .toBe('Review INV-93 in Maximus before closing the Luxury Room.');
 });
+
+it('scrubs HUF, Tridz and HeyKoala case-insensitively while keeping neutral POS codes', () => {
+  expect(messageToPlainText('[POS-CLOSE-LATE-INVOICE] HUF, Tridz and HeyKoala are internal; huf/tridz/heykoala too.'))
+    .toBe('[POS-CLOSE-LATE-INVOICE] Maximus, Maximus and Maximus are internal; Maximus/Maximus/Maximus too.');
+});

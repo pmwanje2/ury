@@ -457,10 +457,10 @@ class TestGuestRequestLimits(unittest.TestCase):
 	def test_refusals_carry_stable_ids_and_stay_validation_errors(self):
 		# Closed, append-only refusal ids; a refusal is a validation error, never an authorization denial.
 		cases = [
-			("request_assistance", "capability", "[URY-GUEST-ASSISTANCE-DISABLED]"),
-			("request_bill", "capability", "[URY-GUEST-BILL-DISABLED]"),
-			("request_assistance", "order", "[URY-GUEST-NO-ACTIVE-ORDER]"),
-			("request_bill", "order", "[URY-GUEST-NO-ACTIVE-ORDER]"),
+			("request_assistance", "capability", "[POS-GUEST-ASSISTANCE-DISABLED]"),
+			("request_bill", "capability", "[POS-GUEST-BILL-DISABLED]"),
+			("request_assistance", "order", "[POS-GUEST-NO-ACTIVE-ORDER]"),
+			("request_bill", "order", "[POS-GUEST-NO-ACTIVE-ORDER]"),
 		]
 		for name, cause, refusal_id in cases:
 			with self.subTest(name=name, cause=cause):

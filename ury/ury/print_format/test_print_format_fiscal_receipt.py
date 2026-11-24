@@ -62,7 +62,7 @@ def bill(name="POS-INV-0001", docstatus=1, **fields):
 		           discount_amount=0, distributed_discount_amount=0, rate=1000, amount=1000)],
 		payments=[Doc(mode_of_payment="Cash", amount=1000, account="Cash - DR")], taxes=[], custom_merged_pos_invoice=None,
 		ury_print_partner=None, outstanding_amount=0, total_qty=1, net_total=847.46, grand_total=1000,
-		rounded_total=1000, paid_amount=1000, change_amount=0, tax_id=None, efris_e_invoice=None,
+		rounded_total=fields.get("grand_total", 1000), paid_amount=1000, change_amount=0, tax_id=None, efris_e_invoice=None,
 		kamra_ref=None, room_number=None,
 		copy_number=1, copy_timestamp="2026-11-23 12:34",
 	)
@@ -75,7 +75,7 @@ def fiscalised(**extra):
 
 
 def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Clearing - DR",
-           guest_name="Jane Guest", copy_log_max=None):
+           guest_name="Jane Guest", copy_log_max=None, fmt_money=None, format_bill_money=None):
 	"""Render one shipped format; efris maps invoice name -> efris_receipt_data() result (None: app absent)."""
 	calls = []
 
@@ -110,9 +110,11 @@ def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Cle
 			),
 			db=SimpleNamespace(get_value=get_value),
 			utils=SimpleNamespace(formatdate=str, now=lambda: "2026-11-23 12:00",
-			                      fmt_money=lambda value, **kwargs: f"UGX {value}"),
+			                      fmt_money=fmt_money or (lambda value, **kwargs: f"UGX {value}")),
 		),
 	)
+	if format_bill_money is not None:
+		env.globals["format_bill_money"] = format_bill_money
 	if efris is not None:
 		def efris_receipt_data(target):
 			calls.append(target.name)
@@ -258,6 +260,45 @@ class MergedFormatFiscalReceipt(unittest.TestCase):
 		# Frappe re-imports a standard Print Format from its JSON only when `modified` advances.
 		self.assertGreater(spec(MERGED)["modified"], "2026-11-23 22:00:00.000000")
 
+	def test_room_charge_voucher_prints_guest_fallback_and_currency_aware_amounts(self):
+		"""R5 P2 + G21 parity: Merged format shows guest fallback without Kamra Folio and formats USD cents without rounding."""
+		def multi_money(value, currency=None):
+			num = float(value or 0)
+			if currency == "USD":
+				return f"$ {num:,.2f}"
+			return f"UGX {round(num):,}"
+
+		rc = bill(
+			currency="USD",
+			room_number="101",
+			custom_guest_label=f"Ada {XSS}",
+			custom_merged_pos_invoice="POS-INV-0002",
+			custom_merged_pos_invoice_details=[],
+			custom_merged_total=7.50,
+			grand_total=12.35,
+			payments=[Doc(mode_of_payment="Room Charge", amount=12.35, account="Guest Ledger Clearing - DR")],
+			efris_e_invoice="EINV-USD",
+		)
+		einv = SimpleNamespace(taxes=[SimpleNamespace(tax_category_code="01:A: Standard (18%)", net_amount=10.47, tax_amount=1.88)])
+		html, _calls = render(
+			MERGED,
+			rc,
+			{rc.name: fiscalised()},
+			{"EINV-USD": einv},
+			format_bill_money=multi_money,
+		)
+		flat = text(html)
+		self.assertIn("ROOM CHARGE", flat)
+		self.assertIn("Room : 101", flat)
+		self.assertIn("Guest : Ada", flat)
+		self.assertIn("Charged to room : $ 12.35", flat)
+		self.assertIn("$ 7.50", flat)
+		self.assertIn("$ 19.85", flat)
+		self.assertIn("$ 10.47", flat)
+		self.assertIn("$ 1.88", flat)
+		self.assertNotIn(XSS, html)
+		self.assertGreater(spec(MERGED)["modified"], "2026-11-23 23:00:00.000000")
+
 
 class BillCopyFiscalReceipt(unittest.TestCase):
 	def test_a_copy_of_a_fiscalised_bill_repeats_its_fdn_code_and_qr(self):
@@ -324,6 +365,136 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 	def test_the_standard_format_is_re_synced_on_migrate(self):
 		self.assertGreater(spec(COPY)["modified"], "2026-11-23 23:00:00.000000")
 		self.assertNotIn("max(copy_number)", spec(COPY)["html"])
+
+	def test_bill_copy_formats_ugx_amounts_with_currency_formatter_not_raw_floats(self):
+		"""R4 P2: URY Bill Copy must use currency formatting (fmt_money), never raw Python floats on UGX."""
+		def ugx_fmt(value, currency=None, **kwargs):
+			num = f"{round(float(value or 0)):,}"
+			return f"{currency} {num}" if currency else num
+
+		partner = bill(
+			name="POS-INV-0002",
+			currency="UGX",
+			items=[Doc(item_code="WATER", item_name="Mineral Water", qty=2.0, amount=10000.0)],
+			taxes=[Doc(description="Exempt", tax_amount=0.0)],
+			payments=[Doc(mode_of_payment="Cash", amount=10000.0, account="Cash - DR")],
+			grand_total=10000.0,
+			rounded_total=10000.0,
+			outstanding_amount=0.0,
+		)
+		doc = bill(
+			name="POS-INV-0001",
+			currency="UGX",
+			customer="Corporate Buyer",
+			items=[
+				Doc(item_code="ROLEX", item_name="Signature Rolex", qty=2.0, amount=30000.0),
+				Doc(item_code="SODA", item_name="Soda", qty=1.0, amount=5000.0),
+			],
+			taxes=[Doc(description="VAT 18%", tax_amount=5338.98)],
+			payments=[Doc(mode_of_payment="Cash", amount=23000.0, account="Cash - DR")],
+			grand_total=35000.0,
+			rounded_total=35000.0,
+			outstanding_amount=12000.0,
+			custom_merged_pos_invoice="POS-INV-0002",
+			ury_print_partner=partner,
+		)
+		flat = text(render(COPY, doc, fmt_money=ugx_fmt)[0])
+		for expected in ("UGX 30,000", "UGX 5,000", "UGX 5,339", "UGX 35,000", "UGX 23,000",
+		                 "UGX 12,000", "UGX 10,000", "UGX 45,000", "UGX 0"):
+			self.assertIn(expected, flat, f"Expected formatted currency {expected!r} in: {flat}")
+		for raw_float in ("30000.0", "5000.0", "5338.98", "35000.0", "23000.0", "12000.0", "10000.0", "45000.0", "0.0"):
+			self.assertNotIn(raw_float, flat, f"Raw float {raw_float!r} leaked into URY Bill Copy: {flat}")
+		self.assertGreater(spec(COPY)["modified"], "2026-11-24 00:30:00.000000")
+
+	def test_bill_copy_uses_format_bill_money_hook_for_ugx_and_usd_on_same_site(self):
+		"""R5 P2: URY Bill Copy uses format_bill_money so UGX whole shillings and USD cents coexist on one site."""
+		def multi_money(value, currency=None):
+			num = float(value or 0)
+			if currency == "USD":
+				return f"$ {num:,.2f}"
+			return f"UGX {round(num):,}"
+
+		ugx_doc = bill(
+			name="POS-INV-UGX",
+			currency="UGX",
+			items=[Doc(item_code="ROLEX", item_name="Rolex", qty=2.0, amount=35000.0)],
+			taxes=[Doc(description="VAT 18%", tax_amount=5338.98)],
+			payments=[Doc(mode_of_payment="Cash", amount=35000.0, account="Cash - DR")],
+			grand_total=35000.0,
+			rounded_total=35000.0,
+			outstanding_amount=0.0,
+		)
+		usd_doc = bill(
+			name="POS-INV-USD",
+			currency="USD",
+			items=[Doc(item_code="GRILL", item_name="USD Grill Plate", qty=1.0, amount=12.50)],
+			taxes=[Doc(description="VAT 18%", tax_amount=1.91)],
+			payments=[Doc(mode_of_payment="Cash", amount=15.00, account="Cash - DR")],
+			grand_total=12.50,
+			rounded_total=12.50,
+			outstanding_amount=0.0,
+			efris_e_invoice="EINV-USD",
+		)
+		einv_usd = SimpleNamespace(taxes=[SimpleNamespace(tax_category_code="01:A: Standard (18%)", net_amount=10.59, tax_amount=1.91)])
+
+		ugx_flat = text(render(COPY, ugx_doc, format_bill_money=multi_money)[0])
+		usd_flat = text(render(COPY, usd_doc, {usd_doc.name: fiscalised()}, {"EINV-USD": einv_usd}, format_bill_money=multi_money)[0])
+
+		for expected in ("UGX 35,000", "UGX 5,339", "UGX 0"):
+			self.assertIn(expected, ugx_flat, ugx_flat)
+		for expected in ("$ 12.50", "$ 1.91", "$ 15.00", "$ 10.59", "$ 0.00"):
+			self.assertIn(expected, usd_flat, usd_flat)
+		self.assertGreater(spec(COPY)["modified"], "2026-11-24 04:30:00.000000")
+
+	def test_bill_copy_prints_room_charge_signature_block_and_escapes_values(self):
+		"""R5 G21 parity: URY Bill Copy prints the room-charge signature block (room, guest, amount, signature lines) and omits it for cash/returns."""
+		def multi_money(value, currency=None):
+			return f"UGX {round(float(value or 0)):,}"
+
+		# 1) Room charge with split payment + custom_guest_label + XSS
+		rc_doc = bill(
+			room_number=f"101 {XSS}",
+			custom_guest_label=f"Ada {XSS}",
+			payments=[
+				Doc(mode_of_payment="Cash", amount=5000, account="Cash - DR"),
+				Doc(mode_of_payment="Room Charge", amount=8000, account="Guest Ledger Clearing - DR"),
+			],
+			grand_total=13000,
+			rounded_total=13000,
+		)
+		rc_html = render(COPY, rc_doc, format_bill_money=multi_money)[0]
+		rc_flat = text(rc_html)
+		for needle in ("ROOM CHARGE", "Room : 101", "Guest : Ada", "Charged to room : UGX 8,000", "Guest signature", "Name (print)"):
+			self.assertIn(needle, rc_flat, rc_flat)
+		self.assertNotIn(XSS, rc_html)
+		self.assertIn("&lt;img src=x onerror=alert(1)&gt;", rc_html)
+
+		# 2) Kamra Folio room charge resolves room 204 and Jane Guest
+		folio_doc = bill(
+			kamra_ref="FOL-1",
+			room_number=None,
+			payments=[Doc(mode_of_payment="Guest Folio", amount=10000, account="Guest Ledger Clearing - DR")],
+			grand_total=10000,
+			rounded_total=10000,
+		)
+		folio_flat = text(render(COPY, folio_doc, format_bill_money=multi_money)[0])
+		for needle in ("ROOM CHARGE", "Room : 204", "Guest : Jane Guest", "Charged to room : UGX 10,000", "Guest signature"):
+			self.assertIn(needle, folio_flat, folio_flat)
+
+		# 3) Cash-only bill must NOT print ROOM CHARGE even with room_number/kamra_ref
+		cash_flat = text(render(COPY, bill(room_number="101", kamra_ref="FOL-1"), format_bill_money=multi_money)[0])
+		self.assertNotIn("ROOM CHARGE", cash_flat)
+		self.assertNotIn("Guest signature", cash_flat)
+
+		# 4) Return / credit note must NOT print ROOM CHARGE
+		ret_doc = bill(
+			is_return=1,
+			room_number="101",
+			payments=[Doc(mode_of_payment="Room Charge", amount=8000, account="Guest Ledger Clearing - DR")],
+		)
+		ret_flat = text(render(COPY, ret_doc, format_bill_money=multi_money)[0])
+		self.assertNotIn("ROOM CHARGE", ret_flat)
+		self.assertNotIn("Guest signature", ret_flat)
 
 
 if __name__ == "__main__":

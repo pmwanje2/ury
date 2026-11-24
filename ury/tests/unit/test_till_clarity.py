@@ -28,7 +28,7 @@ from ury.ury.hooks import ury_pos_profile
 from ury.ury_pos import api
 
 ROOT = Path(__file__).resolve().parents[2]
-ROOM_LOOKUP_INVALID = "[URY-ROOM-LOOKUP-METHOD-INVALID]"
+ROOM_LOOKUP_INVALID = "[POS-ROOM-LOOKUP-METHOD-INVALID]"
 
 
 def _raise(message, exc=frappe.ValidationError, *args, **kwargs):
@@ -550,7 +550,7 @@ class TestGuestLabelOnSplitBill(unittest.TestCase):
             with self.assertRaises(frappe.ValidationError) as caught:
                 self._split(guest_label="x" * 41)
         self.assertNotIsInstance(caught.exception, frappe.PermissionError)
-        self.assertIn("[URY-GUEST-LABEL-TOO-LONG]", str(caught.exception))
+        self.assertIn("[POS-GUEST-LABEL-TOO-LONG]", str(caught.exception))
         self.assertIsNone(self.new_invoice.name)
 
 
@@ -642,7 +642,7 @@ class TestGuestLabelOnSyncOrder(unittest.TestCase):
             with self.assertRaises(frappe.ValidationError) as caught:
                 self.send(guest_label="x" * 41)
         self.assertNotIsInstance(caught.exception, frappe.PermissionError)
-        self.assertIn("[URY-GUEST-LABEL-TOO-LONG]", str(caught.exception))
+        self.assertIn("[POS-GUEST-LABEL-TOO-LONG]", str(caught.exception))
         self.invoice.save.assert_not_called()
 
 

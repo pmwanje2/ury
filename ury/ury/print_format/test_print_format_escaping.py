@@ -65,7 +65,7 @@ class Doc:
 def merged_bill(text):
 	partner = Doc(
 		name=text("partner.name"), docstatus=1, is_return=0, company="Demo Restaurant",
-		room_number=None, kamra_ref="FOL-1",
+		room_number=None, kamra_ref="FOL-1", custom_guest_label=None, customer_name=None,
 		customer=text("partner.customer"), currency=text("partner.currency"),
 		taxes=[
 			Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=12, included_in_print_rate=0),
@@ -108,15 +108,18 @@ def merged_bill(text):
 
 def bill_copy(text):
 	partner = Doc(
-		name=text("partner.name"), docstatus=1, is_return=0, currency=text("partner.currency"), customer=text("partner.customer"),
+		name=text("partner.name"), docstatus=1, is_return=0, company="Demo Restaurant",
+		room_number=None, kamra_ref=None, custom_guest_label=None, customer_name=None,
+		currency=text("partner.currency"), customer=text("partner.customer"),
 		items=[Doc(item_name=text("partner.item_name"), comment=text("partner.item_comment"), qty=1, amount=50)],
 		taxes=[Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=9, included_in_print_rate=0)],
 		discount_amount=0, grand_total=59, rounded_total=59, outstanding_amount=0, change_amount=0,
-		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59)],
+		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59, account=None)],
 		tax_id=text("partner.tax_id"), efris_e_invoice=None,
 	)
 	return Doc(
 		name=text("doc.name"), docstatus=1, is_return=0, company="Demo Restaurant", company_address="ADDR-1", pos_profile="POS-1",
+		room_number=text("doc.room_number"), custom_guest_label=text("doc.custom_guest_label"), kamra_ref=None,
 		restaurant=text("doc.restaurant"), branch=text("doc.branch"),
 		copy_number=2, copy_timestamp="2026-11-24 20:15:00", posting_date="2026-11-24", posting_time="13:15:00",
 		order_type=text("doc.order_type"), restaurant_table=text("doc.restaurant_table"),
@@ -124,7 +127,10 @@ def bill_copy(text):
 		items=[Doc(item_name=text("item.item_name"), comment=text("item.comment"), qty=2, amount=100)],
 		taxes=[Doc(description=text("tax.description"), account_head="VAT", rate=18, tax_amount=18, included_in_print_rate=0)],
 		discount_amount=0, grand_total=118, rounded_total=118, outstanding_amount=60, change_amount=0,
-		payments=[Doc(mode_of_payment=text("payment.mode_of_payment"), amount=58)],
+		payments=[
+			Doc(mode_of_payment=text("payment.mode_of_payment"), amount=38, account=None),
+			Doc(mode_of_payment="Room Charge", amount=20, account=None),
+		],
 		tax_id=text("doc.tax_id"), efris_e_invoice="EINV-1", ury_print_partner=partner,
 	)
 
@@ -162,6 +168,7 @@ FORMATS = {
 	"ury_bill_copy": (bill_copy, (
 		"company.name", "address.line1", "address.city", "company.phone", "company.tax_id",
 		"doc.restaurant", "doc.branch", "doc.name", "doc.customer_name", "doc.currency",
+		"doc.room_number", "doc.custom_guest_label",
 		"item.item_name", "item.comment", "tax.description", "payment.mode_of_payment", "doc.customer", "doc.tax_id",
 		"partner.name", "partner.item_name", "partner.item_comment", "partner.tax_description", "partner.mode_of_payment",
 		"efris.fdn", "efris.verification_code", "efris.device_no", "efris.issued",
@@ -245,7 +252,7 @@ def render(name, doc, text, *, with_efris=True):
 				format_date=lambda d, fmt=None: str(d or ""),
 				format_time=lambda t, fmt=None: str(t or "")[:5],
 				get_url=lambda p="": str(p or ""),
-				fmt_money=lambda value, **kwargs: str(value),
+				fmt_money=lambda value, currency=None, **kwargs: f"{value} {currency}" if currency else str(value),
 				now=lambda: "2026-11-24 20:15:00",
 			),
 		),
@@ -347,7 +354,8 @@ class TestRecordValuesPrintAsText(unittest.TestCase):
 
 		blank_copy = {
 			"doc.restaurant", "doc.branch", "doc.order_type", "doc.restaurant_table", "doc.customer_name",
-			"doc.tax_id", "item.comment", "company.tax_id", "company.phone", "company.logo", "address.line1", "address.line2", "address.city",
+			"doc.tax_id", "doc.room_number", "doc.custom_guest_label", "item.comment", "company.tax_id",
+			"company.phone", "company.logo", "address.line1", "address.line2", "address.city",
 		}
 		c_doc = bill_copy(lambda field: None if field in blank_copy else plain(field))
 		c_doc.posting_date = None

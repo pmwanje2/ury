@@ -6,6 +6,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
+from ury.brand import coded_message
 from ury.ury.api.item_price import item_price_rejected_states, item_price_release_states, price_valid_on
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
@@ -158,7 +159,10 @@ class URYMenu(Document):
             return
         if release_field and row.get(release_field) in released:
             frappe.throw(
-                _("[URY-PRICE-RELEASED-TODAY] {0} already has a price released from {1}. Propose the change as a new Item Price with a later valid from date.").format(item_code, today),
+                coded_message(
+                    "PRICE-RELEASED-TODAY",
+                    _("{0} already has a price released from {1}. Propose the change as a new Item Price with a later valid from date.").format(item_code, today),
+                ),
                 frappe.ValidationError,
             )
         item_price = frappe.get_doc("Item Price", row.name)

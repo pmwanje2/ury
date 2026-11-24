@@ -1,6 +1,7 @@
 import frappe
 from frappe import _, msgprint
 
+from ury.brand import coded_message
 from ury.ury_pos.default_customer import validate_order_type_customers
 
 
@@ -53,7 +54,10 @@ def validate_room_lookup_method(doc, method=None):
         fn = None
     if fn is None or fn not in frappe.whitelisted:
         frappe.throw(
-            _("[URY-ROOM-LOOKUP-METHOD-INVALID] Room lookup method {0} is not a whitelisted method or an enabled API Server Script.").format(path),
+            coded_message(
+                "ROOM-LOOKUP-METHOD-INVALID",
+                _("Room lookup method {0} is not a whitelisted method or an enabled API Server Script.").format(path),
+            ),
             frappe.ValidationError,
         )
 
