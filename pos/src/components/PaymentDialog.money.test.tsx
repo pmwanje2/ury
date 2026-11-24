@@ -279,4 +279,255 @@ describe("unapplied typed discount is never sent on Pay", () => {
       ),
     );
   });
+
+  it("clearing an applied percentage discount to blank flags unapplied change and resets to 0 on Apply", async () => {
+    vi.mocked(call.get)
+      .mockResolvedValueOnce({ message: { grand_total: 31.86, rounded_total: 31.86 } })
+      .mockResolvedValueOnce({ message: { grand_total: 35.4, rounded_total: 35.4 } });
+    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0, currency: "USD" });
+    renderDialog(35.4, 35.4);
+    await waitFor(() => expect(tender(0).value).toBe("35.4"));
+
+    fireEvent.change(discountInput(), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
+    await waitFor(() => expect(tender(0).value).toBe("31.86"));
+
+    fireEvent.change(discountInput(), { target: { value: "" } });
+    expect(screen.getByRole("status")).toHaveTextContent("payment.discount_not_applied");
+
+    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
+    await waitFor(() =>
+      expect(call.get).toHaveBeenLastCalledWith(PREVIEW, {
+        invoice: "BILL-1",
+        pos_profile: "Till A",
+        additionalDiscount: 0,
+      }),
+    );
+    await waitFor(() => expect(tender(0).value).toBe("35.4"));
+    expect(screen.queryByText("payment.discount_not_applied")).toBeNull();
+
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          additionalDiscount: null,
+          payments: [{ mode_of_payment: "Cash", amount: 35.4 }],
+        }),
+      ),
+    );
+  });
+});
+
+describe("tenders already received on the check (Simphony parity)", () => {
+  it("shows already-received tenders, prefills only balance due, and settles keeping earlier plus new tender", async () => {
+    setTill(["Cash", "Mobile Money"], {
+      default_payment_mode: "Mobile Money",
+      enable_payment_without_printing: 0,
+      currency: "USD",
+    });
+    render(
+      <PaymentDialog
+        order={{
+          invoice_printed: 1,
+          payments: [{ mode_of_payment: "Cash", amount: 5.31 }],
+        } as any}
+        onClose={vi.fn()}
+        grandTotal={23.01}
+        roundedTotal={23.01}
+        invoice="LKG-00061"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={0}
+        discountAmount={0.59}
+      />,
+    );
+
+    const received = screen.getByTestId("received-tenders");
+    expect(received).toHaveTextContent("Cash");
+    expect(received).toHaveTextContent("5.31");
+    expect(screen.getByTestId("balance-due")).toHaveTextContent("17.70");
+    await waitFor(() => expect(tender(1).value).toBe("17.7"));
+    expect(tender(0).value).toBe("");
+
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          invoice: "LKG-00061",
+          additionalDiscount: null,
+          payments: [
+            { mode_of_payment: "Cash", amount: 5.31 },
+            { mode_of_payment: "Mobile Money", amount: 17.7 },
+          ],
+        }),
+      ),
+    );
+  });
+
+  it("preserves external payment reference on earlier tender when settling remaining balance", async () => {
+    setTill(["Cash", "Card"], {
+      default_payment_mode: "Cash",
+      enable_payment_without_printing: 0,
+      currency: "USD",
+    });
+    render(
+      <PaymentDialog
+        order={{
+          invoice_printed: 1,
+          payments: [{ mode_of_payment: "Card", amount: 10, reference_no: "AUTH-991" }],
+        } as any}
+        onClose={vi.fn()}
+        grandTotal={23.01}
+        roundedTotal={23.01}
+        invoice="BILL-REF"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+      />,
+    );
+
+    const received = screen.getByTestId("received-tenders");
+    expect(received).toHaveTextContent("Card");
+    expect(received).toHaveTextContent("10.00");
+    await waitFor(() => expect(tender(0).value).toBe("13.01"));
+
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          payments: [
+            { mode_of_payment: "Card", amount: 10, reference_no: "AUTH-991" },
+            { mode_of_payment: "Cash", amount: 13.01 },
+          ],
+        }),
+      ),
+    );
+  });
+
+  it("allows settling with no new tender when already-received tenders cover the total", async () => {
+    setTill(["Cash", "Mobile Money"], {
+      default_payment_mode: "Mobile Money",
+      enable_payment_without_printing: 0,
+      currency: "USD",
+    });
+    render(
+      <PaymentDialog
+        order={{
+          invoice_printed: 1,
+          payments: [{ mode_of_payment: "Cash", amount: 23.01 }],
+        } as any}
+        onClose={vi.fn()}
+        grandTotal={23.01}
+        roundedTotal={23.01}
+        invoice="BILL-PAID"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("balance-due")).toHaveTextContent("0.00");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tender(1).value).toBe("");
+    expect(payButton().disabled).toBe(false);
+
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          payments: [{ mode_of_payment: "Cash", amount: 23.01 }],
+        }),
+      ),
+    );
+  });
+
+  it("computes UGX 100-unit over-tender change (19,100 / 20,000 / 900) with a prior partial tender", async () => {
+    setTill(["Cash", "Mobile Money"], {
+      default_payment_mode: "Cash",
+      enable_payment_without_printing: 0,
+      currency: "UGX",
+    });
+    render(
+      <PaymentDialog
+        order={{
+          invoice_printed: 1,
+          payments: [{ mode_of_payment: "Cash", amount: 19000 }],
+        } as any}
+        onClose={vi.fn()}
+        grandTotal={19057}
+        roundedTotal={19100}
+        invoice="KBG-00003"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("balance-due")).toHaveTextContent("100.00");
+    await waitFor(() => expect(tender(0).value).toBe("100"));
+
+    fireEvent.change(tender(0), { target: { value: "1000" } });
+    expect(screen.getByText("payment.change_due")).toBeInTheDocument();
+    expect(document.body.textContent).toContain("900.00");
+
+    fireEvent.click(payButton());
+    await waitFor(() =>
+      expect(call.post).toHaveBeenCalledWith(
+        MAKE_INVOICE,
+        expect.objectContaining({
+          payments: [
+            { mode_of_payment: "Cash", amount: 19000 },
+            { mode_of_payment: "Cash", amount: 1000 },
+          ],
+        }),
+      ),
+    );
+  });
+});
+
+describe("getRemainingBalance uses the currency's rounding", () => {
+  it("rounds USD focus autofill to 2 decimals without IEEE-754 noise (17.7 - 10 = 7.7)", async () => {
+    setTill(["Cash", "Mobile Money"], { default_payment_mode: "", currency: "USD" });
+    renderDialog(17.7, 17.7);
+    fireEvent.change(tender(1), { target: { value: "10" } });
+    fireEvent.focus(tender(0));
+    expect(tender(0).value).toBe("7.7");
+  });
+
+  it("preserves 3 decimal places for 3-decimal currencies without float noise (OMR: 10.3 - 3.125 = 7.175)", async () => {
+    setTill(["Cash", "Card"], { default_payment_mode: "", currency: "OMR" });
+    renderDialog(10.3, 10.3);
+    fireEvent.change(tender(1), { target: { value: "3.125" } });
+    fireEvent.focus(tender(0));
+    expect(tender(0).value).toBe("7.175");
+  });
+
+  it("rounds 0-decimal currencies to whole units (UGX: 19100 - 5000.4 = 14100)", async () => {
+    setTill(["Cash", "Mobile Money"], { default_payment_mode: "", currency: "UGX" });
+    renderDialog(19100, 19100);
+    fireEvent.change(tender(1), { target: { value: "5000.4" } });
+    fireEvent.focus(tender(0));
+    expect(tender(0).value).toBe("14100");
+  });
 });

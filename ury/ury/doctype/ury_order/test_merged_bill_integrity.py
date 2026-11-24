@@ -481,6 +481,28 @@ class TestAddCheckDiscountsAndTenders(Loaded):
         self.assertEqual(self.source.docstatus, 0)
         self.assertFalse([e for e in self.destination.events if e[0] == "save"])
 
+    def test_destination_tender_with_reference_no_refuses_merge(self):
+        self.destination.payments = [
+            PaymentRow(mode_of_payment="Card", amount=10.0, reference_no="AUTH-DEST-1"),
+        ]
+        self.source.payments = [
+            PaymentRow(mode_of_payment="Card", amount=5.0),
+        ]
+        with self.assertRaisesRegex(Refused, "external payment reference"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertAlmostEqual(float(self.destination.payments[0].amount), 10.0, places=2)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
+    def test_destination_tender_with_clearance_date_refuses_merge(self):
+        self.destination.payments = [
+            PaymentRow(mode_of_payment="Card", amount=10.0, clearance_date="2026-11-24"),
+        ]
+        with self.assertRaisesRegex(Refused, "external payment reference"):
+            self.order.consolidate_checks(self.destination, [self.source])
+        self.assertEqual(self.source.docstatus, 0)
+        self.assertFalse([e for e in self.destination.events if e[0] == "save"])
+
     def test_source_tender_not_configured_on_destination_profile_refuses_merge(self):
         self.allowed_modes = ["Cash", "Mobile Money"]
         self.source.payments = [PaymentRow(mode_of_payment="Voucher", amount=5.0)]
@@ -538,6 +560,264 @@ class TestAddCheckDiscountsAndTenders(Loaded):
             )
         self.assertEqual(stale.additional_discount_percentage, 0)
         self.assertEqual(stale.discount_amount, 0)
+
+
+class TestSettlementPreservesExistingTenders(Loaded):
+    """P1: make_invoice must keep every earlier tender (mode, amount, reference) plus new tenders,
+    never silently dropping or reducing a tender already recorded on the check."""
+
+    def setUp(self):
+        super().setUp()
+        self.profile = Row(
+            name="Lakeside Till",
+            company="Lakeside Hotel",
+            currency="USD",
+            customer="Walk-in",
+            custom_enable_discount=1,
+            allow_discount_change=1,
+        )
+        self.frappe.get_cached_doc.return_value = self.profile
+        self.frappe.get_value.return_value = "Dine In"
+        self.frappe.db.get_value.return_value = 0
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        for helper in (
+            "_validate_client_ids",
+            "_lock_settlement_customer",
+            "_client_order_invoice",
+            "_check_held_before_settlement",
+            "_refuse_client_order_rebind",
+            "_set_settlement_customer",
+            "_enforce_on_account",
+        ):
+            self.enterContext(patch.object(self.order, helper, return_value=None))
+        self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=0))
+
+    def _settle(self, check, payments, submit_invoice=0, room_number=None):
+        with patch.object(self.order, "get_order_invoice", return_value=check):
+            return self.order.make_invoice(
+                customer="Walk-in",
+                payments=payments,
+                cashier="cashier",
+                pos_profile=self.profile.name,
+                owner="cashier",
+                additionalDiscount=None,
+                invoice=check.name,
+                submit_invoice=submit_invoice,
+                room_number=room_number,
+            )
+
+    def test_refuses_dropping_an_existing_tender_on_settle(self):
+        check = Check(
+            "LKG-00061",
+            grand_total=23.01,
+            rounded_total=23.01,
+            discount_amount=0.59,
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+        )
+        with self.assertRaisesRegex(Refused, "Cash"):
+            self._settle(check, [{"mode_of_payment": "Mobile Money", "amount": 23.01}])
+        self.assertEqual([(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments], [("Cash", 5.31)])
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+    def test_refuses_reducing_an_existing_tender_on_settle(self):
+        check = Check(
+            "LKG-00061",
+            grand_total=23.01,
+            rounded_total=23.01,
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+        )
+        with self.assertRaisesRegex(Refused, "Cash"):
+            self._settle(
+                check,
+                [
+                    {"mode_of_payment": "Cash", "amount": 2.00},
+                    {"mode_of_payment": "Mobile Money", "amount": 21.01},
+                ],
+            )
+        self.assertEqual([(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments], [("Cash", 5.31)])
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+    def test_keeps_earlier_tender_with_reference_plus_new_tender(self):
+        check = Check(
+            "LKG-00061",
+            grand_total=23.01,
+            rounded_total=23.01,
+            payments=[
+                PaymentRow(
+                    name="pay-1",
+                    parent="LKG-00061",
+                    mode_of_payment="Card",
+                    amount=10.0,
+                    reference_no="AUTH-991",
+                    reference_date="2026-11-24",
+                    clearance_date="2026-11-24",
+                    account="Card - LH",
+                )
+            ],
+        )
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "Card", "amount": 10.0, "reference_no": "AUTH-991"},
+                {"mode_of_payment": "Cash", "amount": 13.01},
+            ],
+        )
+        self.assertEqual(
+            [(r.mode_of_payment, round(float(r.amount), 2), r.get("reference_no")) for r in check.payments],
+            [("Card", 10.0, "AUTH-991"), ("Cash", 13.01, None)],
+        )
+        self.assertEqual(check.payments[0].get("clearance_date"), "2026-11-24")
+        self.assertEqual(check.payments[0].get("account"), "Card - LH")
+
+    def test_refuses_altering_an_existing_tender_reference(self):
+        check = Check(
+            "LKG-00061",
+            grand_total=23.01,
+            rounded_total=23.01,
+            payments=[PaymentRow(mode_of_payment="Card", amount=10.0, reference_no="AUTH-991")],
+        )
+        with self.assertRaisesRegex(Refused, "Card"):
+            self._settle(
+                check,
+                [
+                    {"mode_of_payment": "Card", "amount": 10.0, "reference_no": "TAMPERED"},
+                    {"mode_of_payment": "Cash", "amount": 13.01},
+                ],
+            )
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+    def test_keeps_earlier_and_new_tenders_and_is_idempotent_on_retry(self):
+        check = Check(
+            "LKG-00061",
+            grand_total=23.01,
+            rounded_total=23.01,
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+        )
+        payload = [
+            {"mode_of_payment": "Cash", "amount": 5.31},
+            {"mode_of_payment": "Mobile Money", "amount": 17.70},
+        ]
+        self._settle(check, payload)
+        self.assertEqual(
+            [(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments],
+            [("Cash", 5.31), ("Mobile Money", 17.70)],
+        )
+        # Re-submitting the same full tender list (e.g. after a failed print) must not double tenders.
+        self._settle(check, payload)
+        self.assertEqual(
+            [(r.mode_of_payment, round(float(r.amount), 2)) for r in check.payments],
+            [("Cash", 5.31), ("Mobile Money", 17.70)],
+        )
+
+    def test_refuses_negative_payment_offsetting_existing_tender(self):
+        check = Check(
+            "LKG-00061",
+            grand_total=23.01,
+            rounded_total=23.01,
+            payments=[PaymentRow(mode_of_payment="Cash", amount=5.31)],
+        )
+        with self.assertRaisesRegex(Refused, "Negative"):
+            self._settle(
+                check,
+                [
+                    {"mode_of_payment": "Cash", "amount": 5.31},
+                    {"mode_of_payment": "Cash", "amount": -5.31},
+                    {"mode_of_payment": "Mobile Money", "amount": 23.01},
+                ],
+            )
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+    def test_ugx_100_unit_rounding_over_tender_and_change_with_prior_tender(self):
+        self.profile.currency = "UGX"
+        check = Check(
+            "KBG-00003",
+            currency="UGX",
+            grand_total=19057,
+            rounded_total=19100,
+            payments=[PaymentRow(mode_of_payment="Cash", amount=19000)],
+        )
+        check.precision = lambda field: 0
+        check.set_paid_amount = lambda: setattr(
+            check, "paid_amount", sum(float(r.amount) for r in check.payments)
+        )
+        check.set_outstanding_amount = lambda: (
+            setattr(check, "change_amount", max(0, check.paid_amount - check.rounded_total)),
+            setattr(check, "outstanding_amount", max(0, check.rounded_total - check.paid_amount)),
+        )
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "Cash", "amount": 19000},
+                {"mode_of_payment": "Cash", "amount": 1000},
+            ],
+        )
+        self.assertEqual([(r.mode_of_payment, int(r.amount)) for r in check.payments], [("Cash", 19000), ("Cash", 1000)])
+        self.assertEqual(check.paid_amount, 20000)
+        self.assertEqual(check.change_amount, 900)
+        self.assertEqual(check.outstanding_amount, 0)
+
+    def test_refuses_changing_existing_room_reference_after_tender_recorded(self):
+        self.frappe.get_meta.return_value = SimpleNamespace(has_field=lambda field: field == "room_number")
+        check = Check(
+            "LKG-ROOM",
+            grand_total=23.01,
+            rounded_total=23.01,
+            room_number="Room 204",
+            payments=[PaymentRow(mode_of_payment="Guest Folio", amount=5.31)],
+        )
+        with self.assertRaisesRegex(Refused, "Room 204"):
+            self._settle(
+                check,
+                [
+                    {"mode_of_payment": "Guest Folio", "amount": 5.31},
+                    {"mode_of_payment": "Cash", "amount": 17.70},
+                ],
+                room_number="Room 999",
+            )
+        self.assertEqual(check.room_number, "Room 204")
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+    def test_preview_settlement_totals_at_zero_clears_saved_percentage_but_keeps_carried_fixed(self):
+        saved_pct = Check(
+            "CHK-PCT",
+            additional_discount_percentage=10,
+            discount_amount=3.54,
+            grand_total=31.86,
+            rounded_total=31.86,
+        )
+        carried_fixed = Check(
+            "CHK-FIXED",
+            additional_discount_percentage=0,
+            discount_amount=0.59,
+            grand_total=23.01,
+            rounded_total=23.01,
+        )
+
+        def calc(bill, gross):
+            def _calc():
+                disc = float(bill.discount_amount or 0)
+                if bill.additional_discount_percentage:
+                    disc = round(gross * bill.additional_discount_percentage / 100.0, 2)
+                    bill.discount_amount = disc
+                bill.grand_total = bill.rounded_total = round(gross - disc, 2)
+            return _calc
+
+        saved_pct.calculate_taxes_and_totals = calc(saved_pct, 35.40)
+        carried_fixed.calculate_taxes_and_totals = calc(carried_fixed, 23.60)
+        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: {
+            "CHK-PCT": saved_pct,
+            "CHK-FIXED": carried_fixed,
+        }[name]
+        self.enterContext(patch.object(self.order, "_enforce_order_access"))
+
+        self.assertEqual(
+            self.order.preview_settlement_totals("CHK-PCT", "Lakeside Till", additionalDiscount=0),
+            {"grand_total": 35.40, "rounded_total": 35.40},
+        )
+        self.assertEqual(
+            self.order.preview_settlement_totals("CHK-FIXED", "Lakeside Till", additionalDiscount=0),
+            {"grand_total": 23.01, "rounded_total": 23.01},
+        )
 
 
 if __name__ == "__main__":

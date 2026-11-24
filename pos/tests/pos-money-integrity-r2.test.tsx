@@ -218,4 +218,108 @@ describe('POS-PR-2 R2 hermetic checks', () => {
     expect(container.textContent).toContain('7.5');
     expect(container.textContent).not.toMatch(/₹\s*8\b|\$\s*8\b/);
   });
+
+  it('hydrates existing draft tenders from getPosInvoiceItems and settles balance due keeping earlier tenders', async () => {
+    vi.mocked(call.get).mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.api.getPosInvoiceItems') {
+        return {
+          message: [
+            [{ name: 'ROW-1', item_name: 'Chicken Curry', qty: 1, rate: 15, amount: 15 }],
+            [],
+            [{ mode_of_payment: 'Cash', amount: 5.31, reference_no: 'RCV-01' }],
+          ],
+        };
+      }
+      if (method === 'ury.ury_pos.api.get_split_group') {
+        return { message: { invoices: [], current: 'LKG-00061', group: null } };
+      }
+      return { message: {} };
+    });
+    const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { name: 'LKG-00061', status: 'Submitted' } });
+
+    useRootStore.setState(initialRoot, true);
+    useRootStore.setState({
+      user: { name: 'cashier@example.com', full_name: 'Cashier', roles: ['URY Cashier'] },
+      ordersOwner: 'cashier@example.com',
+      ordersBranch: 'Lakeside',
+    } as any);
+    usePOSStore.setState({
+      paymentModes: ['Cash', 'Mobile Money'],
+      fetchPaymentModes: vi.fn(async () => {}),
+      currency: 'USD',
+      posProfile: {
+        name: 'Till A',
+        currency: 'USD',
+        default_payment_mode: 'Mobile Money',
+        enable_discount: 1,
+        enable_payment_without_printing: 0,
+        room_charge_modes: [],
+        room_charge_unconfigured: false,
+      } as any,
+    });
+
+    await act(async () => {
+      await useRootStore.getState().selectOrder({
+        name: 'LKG-00061',
+        status: 'Draft',
+        invoice_printed: 1,
+        grand_total: 23.01,
+        rounded_total: 23.01,
+        net_total: 20,
+        total_taxes_and_charges: 3.6,
+        discount_amount: 0.59,
+        additional_discount_percentage: 0,
+        restaurant_table: 'T-101',
+        cashier: 'cashier@example.com',
+        waiter: 'Waiter',
+        customer: 'Walk-in Guest',
+        mobile_number: '',
+        posting_date: '2026-11-24',
+        posting_time: '10:00:00',
+        order_type: 'Dine In',
+      } as any);
+    });
+
+    const selected = useRootStore.getState().selectedOrder!;
+    expect((selected as any).payments).toEqual([{ mode_of_payment: 'Cash', amount: 5.31, reference_no: 'RCV-01' }]);
+
+    await act(async () =>
+      root.render(
+        <PaymentDialog
+          order={selected}
+          onClose={vi.fn()}
+          grandTotal={23.01}
+          roundedTotal={23.01}
+          invoice="LKG-00061"
+          customer="Walk-in Guest"
+          posProfile="Till A"
+          table="T-101"
+          cashier="cashier@example.com"
+          owner="cashier@example.com"
+          fetchOrders={vi.fn(async () => {})}
+          clearSelectedOrder={vi.fn()}
+          discountPercentage={0}
+          discountAmount={0.59}
+        />,
+      ),
+    );
+
+    expect(container.textContent).toContain('Already received');
+    expect(container.textContent).toContain('RCV-01');
+    expect(container.textContent).toContain('Balance due');
+    const momoInput = container.querySelectorAll<HTMLInputElement>('input[type="number"][step="0.01"]')[1];
+    expect(momoInput.value).toBe('17.7');
+
+    await act(async () => button(/^Pay /).click());
+    expect(post).toHaveBeenCalledWith(
+      'ury.ury.doctype.ury_order.ury_order.make_invoice',
+      expect.objectContaining({
+        invoice: 'LKG-00061',
+        payments: [
+          { mode_of_payment: 'Cash', amount: 5.31, reference_no: 'RCV-01' },
+          { mode_of_payment: 'Mobile Money', amount: 17.7 },
+        ],
+      }),
+    );
+  });
 });

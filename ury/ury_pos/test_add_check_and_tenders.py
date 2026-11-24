@@ -209,5 +209,56 @@ class TestTillTenderConfiguration(Loaded):
         self.assertFalse(profile["room_charge_unconfigured"])
 
 
+class TestGetPosInvoiceItemsPayments(Loaded):
+    def test_returns_existing_positive_tenders_with_references_and_skips_zero_placeholders(self):
+        self.enterContext(patch.object(self.api, "getBranch", return_value="Lakeside"))
+        self.frappe.has_permission.return_value = True
+        check_access = MagicMock()
+        self.enterContext(
+            patch.dict(
+                sys.modules,
+                {
+                    "ury.ury.doctype.ury_order.ury_order": _stub(
+                        "ury.ury.doctype.ury_order.ury_order",
+                        consolidate_checks=self.consolidate,
+                        check_split_target_access=check_access,
+                    )
+                },
+            )
+        )
+        invoice = SimpleNamespace(
+            name="LKG-00061",
+            branch="Lakeside",
+            company="Lakeside Hotel",
+            items=[Row(name="i1", item_name="Chicken Curry", qty=1, rate=15.0, amount=15.0, is_disposable=0)],
+            taxes=[Row(description="VAT 18%", tax_amount=2.7)],
+            payments=[
+                Row(mode_of_payment="Cash", amount=0.0),
+                Row(mode_of_payment="Cash", amount=5.31),
+                Row(mode_of_payment="Card", amount=10.0, reference_no="AUTH-991", clearance_date="2026-11-24"),
+            ],
+            get=lambda k, default=None: getattr(invoice, k, default),
+        )
+        self.frappe.get_doc.return_value = invoice
+
+        result = self.api.getPosInvoiceItems("LKG-00061")
+        self.assertEqual(len(result), 3)
+        items, taxes, payments = result
+        self.assertEqual(len(items), 1)
+        self.assertEqual(len(taxes), 1)
+        self.assertEqual(
+            payments,
+            [
+                {"mode_of_payment": "Cash", "amount": 5.31},
+                {
+                    "mode_of_payment": "Card",
+                    "amount": 10.0,
+                    "reference_no": "AUTH-991",
+                    "clearance_date": "2026-11-24",
+                },
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
