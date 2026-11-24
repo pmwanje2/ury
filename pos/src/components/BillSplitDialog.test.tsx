@@ -16,9 +16,13 @@ vi.mock("@ury/ui", () => ({
   showToast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("@ury/core", () => ({
-  formatCurrency: (amount) => `Rs. ${amount}`,
-}));
+vi.mock("@ury/core", async () => {
+  const actual = await vi.importActual<typeof import("@ury/core")>("@ury/core");
+  return {
+    ...actual,
+    formatCurrency: (amount: number, currency?: string) => `${currency || "Rs."} ${amount}`,
+  };
+});
 
 vi.mock("../i18n", () => ({
   t: (key) => key,
@@ -236,5 +240,39 @@ describe("BillSplitDialog", () => {
       await user.click(cancelButton);
       expect(onOpenChangeMock).toHaveBeenCalledWith(false);
     }
+  });
+
+  it("shows the server refusal message from a Frappe SDK error object instead of generic fallback", async () => {
+    const user = userEvent.setup();
+    const serverMessage =
+      "Cannot split check LKG-00114: remaining total (5.9) is less than tenders already received (10.0).";
+    const frappeError = {
+      httpStatus: 417,
+      exc_type: "ValidationError",
+      _server_messages: JSON.stringify([JSON.stringify({ message: serverMessage })]),
+    };
+    const onConfirmMock = vi.fn().mockRejectedValueOnce(frappeError);
+
+    render(
+      <BillSplitDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        invoiceName="LKG-00114"
+        items={mockItems}
+        onConfirm={onConfirmMock}
+      />
+    );
+
+    await user.click(screen.getByText("Chicken Biryani"));
+    const confirmButton = screen.getAllByRole("button").find((btn) =>
+      btn.textContent?.includes("bill_split.split_confirm")
+    );
+    expect(confirmButton).toBeTruthy();
+    await user.click(confirmButton!);
+
+    await waitFor(() => {
+      expect(screen.getByText(serverMessage)).toBeInTheDocument();
+    });
+    expect(screen.queryByText("bill_split.split_failed")).not.toBeInTheDocument();
   });
 });

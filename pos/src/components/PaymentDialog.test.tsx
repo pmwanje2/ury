@@ -47,7 +47,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash", "Card"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 0 },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 0 },
     });
   });
 
@@ -157,7 +157,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash", "Card"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 0 },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 0 },
     });
 
     render(
@@ -224,7 +224,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash", "Card"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 1 },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 1 },
     });
 
     render(
@@ -253,7 +253,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash", "Card"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 0 },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 0 },
     });
 
     render(
@@ -282,7 +282,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
     });
 
     render(
@@ -329,7 +329,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
     });
 
     vi.mocked(printOrder).mockRejectedValueOnce(new Error("Printer is offline"));
@@ -373,7 +373,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
     });
 
     render(
@@ -415,7 +415,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 0, print_format: "Standard" },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 0, print_format: "Standard" },
     });
 
     render(
@@ -460,7 +460,7 @@ describe("PaymentDialog", () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
-      posProfile: { enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
+      posProfile: { default_payment_mode: "Cash", enable_discount: 1, enable_payment_without_printing: 1, print_format: "Standard" },
     });
 
     render(

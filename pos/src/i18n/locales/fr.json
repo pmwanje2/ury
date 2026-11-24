@@ -147,7 +147,12 @@
     "fiscal_reprint_printed": "Reçu fiscal COPIE #{{copy}} imprimé pour {{invoice}} (FDN {{fdn}}).",
     "room_check_failed": "Impossible de vérifier cette chambre",
     "overtender_to_tip": "L’excédent de {{amount}} sera comptabilisé en pourboire.",
-    "non_cash_overtender": "Excédent hors espèces de {{amount}} : seules les espèces rendent la monnaie."
+    "non_cash_overtender": "Excédent hors espèces de {{amount}} : seules les espèces rendent la monnaie.",
+    "room_charge_not_configured": "L'imputation en chambre n'est pas configurée pour cette société. La finance associe le compte de compensation du folio client.",
+    "discount_not_applied": "Appuyez sur Appliquer pour mettre à jour le total avant de payer.",
+    "already_received": "Déjà reçu",
+    "balance_due": "Solde dû",
+    "reference_label": "Réf. : {{ref}}"
   },
   "pos": {
     "not_opened_title": "PDV non ouvert",

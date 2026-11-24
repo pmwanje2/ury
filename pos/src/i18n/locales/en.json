@@ -169,7 +169,12 @@
     "fiscal_reprint_printed": "Fiscal receipt COPY #{{copy}} printed for {{invoice}} (FDN {{fdn}}).",
     "room_check_failed": "Could not check this room",
     "overtender_to_tip": "Over-tender of {{amount}} will post as a charged tip.",
-    "non_cash_overtender": "Non-cash over-tender of {{amount}}: only cash gives change."
+    "non_cash_overtender": "Non-cash over-tender of {{amount}}: only cash gives change.",
+    "room_charge_not_configured": "Room charge isn't set up for this company. Finance maps the guest ledger clearing account.",
+    "discount_not_applied": "Press Apply to update the total before paying.",
+    "already_received": "Already received",
+    "balance_due": "Balance due",
+    "reference_label": "Ref: {{ref}}"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",

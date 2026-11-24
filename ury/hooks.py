@@ -390,6 +390,13 @@ doc_events = {
     "Production Plan": {
         "before_cancel": "ury.ury.api.ury_production_plan_cancel_hooks.before_cancel",
     },
+    "Payment Request": {
+        "on_payment_authorized": "ury.ury.api.self_ordering.mark_phone_payment_received",
+        "on_cancel": "ury.ury.api.self_ordering.clear_phone_payment_received",
+        "on_update_after_submit": "ury.ury.api.self_ordering.sync_phone_payment_received",
+        "set_failed": "ury.ury.api.self_ordering.clear_phone_payment_received",
+        "on_discard": "ury.ury.api.self_ordering.clear_phone_payment_received",
+    },
 }
 
 # Scheduled Tasks
@@ -828,7 +835,8 @@ fixtures = [
                     "POS Profile-custom_disable_print_status_tracking",
                     "POS Profile-custom_service_request_sound",
                     "POS Profile-custom_service_request_escalate_minutes",
-                    "Network Printer Settings-custom_printer_queue_name"
+                    "Network Printer Settings-custom_printer_queue_name",
+                    "Sales Invoice Payment-custom_tender_received"
                 },
             ]
         ],

@@ -22,6 +22,42 @@ def _ensure_masters():
                 frappe.scrub("parent " + doctype): root}).insert()
 
 
+def _ensure_company_fiscal_year(company, today):
+    """Ensure `company` belongs to an active Fiscal Year covering `today`, even on a
+    populated multi-company site whose active Fiscal Year lists only other companies."""
+    active_fys = frappe.get_all(
+        "Fiscal Year",
+        filters={
+            "year_start_date": ["<=", today],
+            "year_end_date": [">=", today],
+            "disabled": 0,
+        },
+        pluck="name",
+    )
+    for fy_name in active_fys or []:
+        fy_companies = frappe.get_all(
+            "Fiscal Year Company",
+            filters={"parent": fy_name, "parenttype": "Fiscal Year"},
+            pluck="company",
+        )
+        if not fy_companies or company in fy_companies:
+            return
+    if active_fys:
+        fy = frappe.get_doc("Fiscal Year", active_fys[0])
+        fy.append("companies", {"company": company})
+        fy.save(ignore_permissions=True)
+    else:
+        frappe.get_doc(
+            {
+                "doctype": "Fiscal Year",
+                "year": f"Offline FY {today.year}",
+                "year_start_date": today.replace(month=1, day=1),
+                "year_end_date": today.replace(month=12, day=31),
+                "companies": [{"company": company}],
+            }
+        ).insert()
+
+
 def make_offline_pos():
     frappe.set_user("Administrator")
     _ensure_masters()
@@ -36,11 +72,7 @@ def make_offline_pos():
             "country": "India", "default_currency": "INR",
         }).insert()
     today = now_datetime().date()
-    if not frappe.db.exists("Fiscal Year", {"year_start_date": ["<=", today],
-            "year_end_date": [">=", today], "disabled": 0}):
-        frappe.get_doc({"doctype": "Fiscal Year", "year": f"Offline FY {today.year}",
-            "year_start_date": today.replace(month=1, day=1),
-            "year_end_date": today.replace(month=12, day=31)}).insert()
+    _ensure_company_fiscal_year(company, today)
     user = frappe.get_doc({
         "doctype": "User", "email": f"offline-{suffix}@example.com",
         "first_name": "Offline Test Cashier", "send_welcome_email": 0,

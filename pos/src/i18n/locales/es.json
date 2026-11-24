@@ -117,7 +117,12 @@
     "fiscal_reprint_printed": "Recibo fiscal COPIA #{{copy}} impreso para {{invoice}} (FDN {{fdn}}).",
     "room_check_failed": "No se pudo verificar esta habitación",
     "overtender_to_tip": "El excedente de {{amount}} se registrará como propina.",
-    "non_cash_overtender": "Excedente no en efectivo de {{amount}}: solo el efectivo devuelve cambio."
+    "non_cash_overtender": "Excedente no en efectivo de {{amount}}: solo el efectivo devuelve cambio.",
+    "room_charge_not_configured": "El cargo a habitación no está configurado para esta empresa. Finanzas asigna la cuenta puente del folio de huéspedes.",
+    "discount_not_applied": "Pulsa Aplicar para actualizar el total antes de pagar.",
+    "already_received": "Ya recibido",
+    "balance_due": "Saldo pendiente",
+    "reference_label": "Ref.: {{ref}}"
   },
   "pos": {
     "not_opened_title": "POS no abierto",

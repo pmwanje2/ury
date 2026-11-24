@@ -753,21 +753,55 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         source.remove(item)
 
     payment_mode = source.payments[0].mode_of_payment if source.payments else None
+    source_received = _received_payment_rows(source)
+    received_total = sum(flt(row.get("amount")) for row in source_received)
 
     frappe.flags.ury_bill_split = True
+    prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     try:
         source.set_missing_values()
         source.run_method("set_missing_values")
         source.calculate_taxes_and_totals()
 
+        if source_received:
+            precision = source.precision("paid_amount") if callable(getattr(source, "precision", None)) else 2
+            if not isinstance(precision, int) or isinstance(precision, bool):
+                precision = 2
+            remaining_total = flt(source.rounded_total or source.grand_total)
+            if flt(received_total, precision) > flt(remaining_total, precision):
+                frappe.throw(
+                    _(
+                        "Cannot split check {0}: remaining total ({1}) is less than tenders already received ({2})."
+                    ).format(source.name, flt(remaining_total, precision), flt(received_total, precision))
+                )
+            # Keep every received row on the source check (never lost).
+            current_received = [
+                row for row in (source.get("payments") or [])
+                if flt(row.get("amount")) > 0 and cint(row.get("custom_tender_received")) == 1
+            ]
+            if len(current_received) < len(source_received):
+                source.set("payments", [])
+                for row in source_received:
+                    data = _copy_payment_row(row)
+                    data["custom_tender_received"] = 1
+                    source.append("payments", data)
+            if callable(getattr(source, "set_paid_amount", None)):
+                source.set_paid_amount()
+            if callable(getattr(source, "set_outstanding_amount", None)):
+                source.set_outstanding_amount()
+
         new_invoice.set_missing_values()
         new_invoice.run_method("set_missing_values")
         new_invoice.calculate_taxes_and_totals()
 
-        if payment_mode and new_invoice.invoice_created == 0:
+        # Never copy received tenders onto the split child check.
+        for row in new_invoice.get("payments") or []:
+            row.amount = 0
+            row.custom_tender_received = 0
+        if payment_mode and new_invoice.invoice_created == 0 and not (new_invoice.get("payments") or []):
             new_invoice.append(
                 "payments",
-                dict(mode_of_payment=payment_mode, amount=new_invoice.rounded_total),
+                dict(mode_of_payment=payment_mode, amount=0, custom_tender_received=0),
             )
             new_invoice.invoice_created = 1
 
@@ -782,6 +816,8 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             },
             update_modified=False,
         )
+        if source_received:
+            frappe.flags.ury_server_tender_received = True
         source.save()
 
         # Reconcile reservations for both sides of the split, reusing the
@@ -835,6 +871,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         for ticket in movable_kots:
             frappe.db.set_value("URY KOT", ticket, "invoice", new_invoice.name, update_modified=False)
     finally:
+        frappe.flags.ury_server_tender_received = prev_tender_flag
         frappe.flags.ury_bill_split = False
 
     return {
@@ -842,6 +879,237 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         "new_invoice": new_invoice.name,
     }
 
+
+
+def _reservation_lines(rows):
+    return [
+        {
+            "reservation_line_key": row.get("reservation_line_key") or row.name,
+            "item_code": row.item_code,
+            "item_name": row.item_name,
+            "qty": row.qty,
+        }
+        for row in rows
+    ]
+
+
+def _prepare_consolidated_discount(destination, sources):
+    """Resolve ONE bill-level discount for the consolidated check (Simphony Add Check).
+
+    Matching percentages keep that percentage; differing discounts (such as merging a 0%
+    check with a 10%-discounted check) sum their exact discount amounts on the shared
+    apply_discount_on basis so neither an overcharge nor an unintended discount expansion
+    occurs. Conflicting apply_discount_on bases (Net Total vs Grand Total) are refused.
+    """
+    all_bills = [destination, *sources]
+    discounted = []
+    for bill in all_bills:
+        pct = flt(bill.get("additional_discount_percentage"))
+        amt = flt(bill.get("discount_amount"))
+        if pct > 0 and amt <= 0:
+            bill.calculate_taxes_and_totals()
+            amt = flt(bill.get("discount_amount"))
+        if pct > 0 or amt > 0:
+            discounted.append((bill, pct, amt))
+
+    if not discounted:
+        return None
+
+    bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _, _ in discounted}
+    if len(bases) > 1:
+        frappe.throw(
+            _("Cannot merge checks with bill discounts applied on different bases ({0}).").format(
+                ", ".join(sorted(bases))
+            )
+        )
+    basis = next(iter(bases))
+
+    all_pcts = [flt(bill.get("additional_discount_percentage")) for bill in all_bills]
+    if all(p > 0 for p in all_pcts) and len({round(p, 6) for p in all_pcts}) == 1:
+        return {"apply_discount_on": basis, "additional_discount_percentage": all_pcts[0], "discount_amount": None}
+
+    return {
+        "apply_discount_on": basis,
+        "additional_discount_percentage": 0,
+        "discount_amount": sum(amt for _, _, amt in discounted),
+    }
+
+
+def _validate_and_collect_source_tenders(destination, sources):
+    """Validate and collect source tenders that move onto the destination check.
+
+    Refuses before mutating anything if a source carries a negative tender, an external
+    payment reference, a payment mode not configured on destination's POS Profile, or a
+    conflicting room-charge reference.
+    """
+    rooms = {
+        str(bill.get("room_number")).strip()
+        for bill in [destination, *sources]
+        if bill.get("room_number") and str(bill.get("room_number")).strip()
+    }
+    if len(rooms) > 1:
+        frappe.throw(
+            _("Cannot merge checks with different room-charge references ({0}).").format(
+                ", ".join(sorted(rooms))
+            )
+        )
+
+    allowed_modes = (
+        set(
+            frappe.get_all(
+                "POS Payment Method",
+                filters={"parent": destination.pos_profile},
+                pluck="mode_of_payment",
+            )
+        )
+        if destination.get("pos_profile")
+        else set()
+    )
+
+    for row in destination.get("payments") or []:
+        if flt(row.get("amount")) < 0:
+            frappe.throw(
+                _("Cannot merge check {0}: negative tender ({1}) cannot be merged.").format(
+                    destination.name, row.get("mode_of_payment")
+                )
+            )
+    for row in _received_payment_rows(destination):
+        mode = row.get("mode_of_payment")
+        if row.get("reference_no") or row.get("clearance_date"):
+            frappe.throw(
+                _(
+                    "Cannot merge check {0}: tender {1} carries an external payment reference and cannot be merged."
+                ).format(destination.name, mode)
+            )
+
+    movable = []
+    for source in sources:
+        for row in source.get("payments") or []:
+            if flt(row.get("amount")) < 0:
+                frappe.throw(
+                    _("Cannot merge check {0}: negative tender ({1}) cannot be moved.").format(
+                        source.name, row.get("mode_of_payment")
+                    )
+                )
+        for row in _received_payment_rows(source):
+            amt = flt(row.get("amount"))
+            mode = row.get("mode_of_payment")
+            if row.get("reference_no") or row.get("clearance_date"):
+                frappe.throw(
+                    _(
+                        "Cannot merge check {0}: tender {1} carries an external payment reference and cannot be moved."
+                    ).format(source.name, mode)
+                )
+            if allowed_modes and mode not in allowed_modes:
+                frappe.throw(
+                    _(
+                        "Cannot merge check {0}: tender {1} is not configured on POS Profile {2}."
+                    ).format(source.name, mode, destination.pos_profile)
+                )
+            movable.append((row, amt))
+
+    carried_room = next(iter(rooms)) if len(rooms) == 1 else None
+    return movable, carried_room
+
+
+def consolidate_checks(destination, sources):
+    """Add Check (Oracle Simphony Add/Transfer Check): move every line, bill-level discount
+    and movable received tender of the source checks onto the destination check, so the guest
+    has one POS Invoice: one tax calculation, one discount set, one tender set, one fiscal
+    receipt and a native return. No merge link is written.
+
+    Each line keeps its rate, line identity and attribution. The kitchen tickets and stock
+    reservations follow the lines. The destination must be printed again, since its printed
+    bill no longer shows what the guest owes. Each source check is discarded with an audit
+    note (firing POS Invoice on_discard hooks such as release_reservation_check_binding), and
+    its table is freed once no open check remains on it. The caller validates the checks and
+    commits.
+    """
+    discount_plan = _prepare_consolidated_discount(destination, sources)
+    source_tenders, carried_room = _validate_and_collect_source_tenders(destination, sources)
+
+    company = destination.company or frappe.db.get_value("Branch", destination.branch, "company")
+    reservations_enabled = get_branch_stock_policy(
+        branch=destination.branch, company=company
+    ).reservation_control_enabled
+    destination_before = _reservation_lines(destination.items)
+
+    for source in sources:
+        for row in source.items:
+            destination.append(
+                "items",
+                row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True),
+            )
+
+    if discount_plan is not None:
+        destination.apply_discount_on = discount_plan["apply_discount_on"]
+        destination.additional_discount_percentage = discount_plan["additional_discount_percentage"]
+        if discount_plan["discount_amount"] is not None:
+            destination.discount_amount = discount_plan["discount_amount"]
+
+    if source_tenders:
+        by_mode = {}
+        kept_rows = []
+        for row in _received_payment_rows(destination):
+            mode = row.get("mode_of_payment")
+            if not row.get("reference_no") and not row.get("clearance_date"):
+                by_mode[mode] = row
+            kept_rows.append(row)
+        destination.set("payments", kept_rows)
+        for row, amt in source_tenders:
+            mode = row.get("mode_of_payment")
+            if mode in by_mode:
+                by_mode[mode].amount = flt(by_mode[mode].amount) + amt
+            else:
+                data = _copy_payment_row(row)
+                data["mode_of_payment"] = mode
+                data["amount"] = amt
+                data["custom_tender_received"] = 1
+                destination.append("payments", data)
+                by_mode[mode] = destination.payments[-1]
+
+    if carried_room and not destination.get("room_number"):
+        destination.room_number = carried_room
+
+    destination.invoice_printed = 0
+    destination.calculate_taxes_and_totals()
+    destination.set_paid_amount()
+    destination.set_outstanding_amount()
+    prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+    frappe.flags.ury_server_tender_received = True
+    try:
+        destination.save()
+    finally:
+        frappe.flags.ury_server_tender_received = prev_tender_flag
+
+    for source in sources:
+        for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
+            frappe.db.set_value("URY KOT", ticket, "invoice", destination.name, update_modified=False)
+        if reservations_enabled:
+            reconcile_order_reservations(
+                order_ref=source.name,
+                previous_items=_reservation_lines(source.items),
+                accepted_items=[],
+                branch=destination.branch,
+                company=company,
+                actor=frappe.session.user,
+            )
+        source.discard()
+        source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
+
+    if reservations_enabled:
+        reconcile_order_reservations(
+            order_ref=destination.name,
+            previous_items=destination_before,
+            accepted_items=_reservation_lines(destination.items),
+            branch=destination.branch,
+            company=company,
+            actor=frappe.session.user,
+        )
+
+    for source in sources:
+        if source.restaurant_table and source.restaurant_table != destination.restaurant_table:
+            _free_tables_if_no_open_invoices(source.restaurant_table, source.custom_merged_tables)
 
 
 def _resolve_pos_invoice_naming_series(restaurant):
@@ -2605,7 +2873,7 @@ def sync_order(
     if invoice.invoice_created == 0:
         invoice.append(
             "payments",
-            dict(mode_of_payment=mode_of_payment, amount=invoice.grand_total),
+            dict(mode_of_payment=mode_of_payment, amount=0, custom_tender_received=0),
         )
         invoice.invoice_created = 1
 
@@ -3236,6 +3504,407 @@ def _enforce_on_account(invoice, profile, customer_disabled, target=None):
     return True
 
 
+@frappe.whitelist()
+def preview_settlement_totals(invoice, pos_profile, additionalDiscount=None):
+    """The totals make_invoice charges for this check at this discount, computed by the native
+    controller (currency precision, smallest currency fraction, system rounding, the profile's
+    rounded-total setting), so the till never rounds money itself. Nothing is saved."""
+    discount = _validate_additional_discount(additionalDiscount, pos_profile)
+    bill = frappe.get_doc("POS Invoice", invoice)
+    bill.check_permission("read")
+    _enforce_order_access(bill)
+    if bill.pos_profile and bill.pos_profile != pos_profile:
+        frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
+
+    bills = [bill]
+    if bill.custom_merged_pos_invoice:
+        bills.append(frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice))
+
+    totals = {"grand_total": 0, "rounded_total": 0}
+    for row in bills:
+        if discount:
+            row.additional_discount_percentage = discount
+            row.discount_amount = 0
+        elif flt(row.get("additional_discount_percentage")):
+            row.additional_discount_percentage = 0
+            row.discount_amount = 0
+        else:
+            row.additional_discount_percentage = 0
+        row.calculate_taxes_and_totals()
+        totals["grand_total"] += flt(row.grand_total)
+        totals["rounded_total"] += flt(row.rounded_total)
+    return totals
+
+
+def _confirmed_phone_payment_requests(invoice_name, company=None):
+    if not invoice_name:
+        return []
+    filters = {
+        "reference_doctype": "POS Invoice",
+        "reference_name": invoice_name,
+        "docstatus": 1,
+        "payment_channel": "Phone",
+        "payment_request_type": "Inward",
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
+    }
+    if company:
+        filters["company"] = company
+    rows = frappe.get_all(
+        "Payment Request",
+        filters=filters,
+        fields=["name", "mode_of_payment", "payment_account", "grand_total", "outstanding_amount", "status"],
+        order_by="creation asc",
+    )
+    if not isinstance(rows, (list, tuple)):
+        return []
+    return [
+        pr
+        for pr in rows
+        if (flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount"))) > 0
+    ]
+
+
+def _received_payment_rows(invoice):
+    """Return payment rows that represent money genuinely received on an open check.
+
+    Only rows explicitly marked custom_tender_received=1 by a confirmed server flow, or
+    backed by a confirmed Paid/Partially Paid/Partially Refunded Phone Payment Request,
+    are received. Phone rows are always re-checked and capped against live Payment Request
+    paid amounts so cancelled, failed, expired, or partially/fully refunded requests never
+    deadlock the check.
+    """
+    confirmed_prs = _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company"))
+    live_pr_by_name = {pr.get("name"): pr for pr in confirmed_prs if pr.get("name")}
+    live_paid_by_mode = {}
+    for pr in confirmed_prs:
+        pr_mode = pr.get("mode_of_payment")
+        pr_paid = flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount"))
+        if pr_mode and pr_paid > 0:
+            live_paid_by_mode[pr_mode] = live_paid_by_mode.get(pr_mode, 0.0) + pr_paid
+
+    rows = []
+    matched_pr_names = set()
+    matched_unreferenced_phone_modes = {}
+
+    for row in invoice.get("payments") or []:
+        amt = flt(row.get("amount"))
+        if amt <= 0 or cint(row.get("custom_tender_received")) != 1:
+            continue
+        mode = row.get("mode_of_payment")
+        ref = (row.get("reference_no") or "").strip()
+        if _is_phone_mode(row):
+            if ref:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                live_amt = round(flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")), 9)
+                if live_amt <= 0:
+                    continue
+                matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                copied = _copy_payment_row(row)
+                copied["amount"] = live_amt
+                rows.append(copied)
+            else:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
+                    continue
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                copied = _copy_payment_row(row)
+                copied["amount"] = used
+                rows.append(copied)
+            continue
+
+        rows.append(row)
+        if ref:
+            matched_pr_names.add(ref)
+
+    for pr in confirmed_prs:
+        pr_name = pr.get("name")
+        if pr_name in matched_pr_names:
+            continue
+        paid_amt = flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount"))
+        mode = pr.get("mode_of_payment")
+        if not mode or paid_amt <= 0:
+            continue
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
+            continue
+        rows.append(
+            {
+                "mode_of_payment": mode,
+                "amount": paid_amt,
+                "account": pr.get("payment_account"),
+                "type": "Phone",
+                "reference_no": pr_name,
+                "custom_tender_received": 1,
+            }
+        )
+
+    return rows
+
+
+def _is_phone_mode(row):
+    if row.get("type") == "Phone":
+        return True
+    mode = row.get("mode_of_payment")
+    if not mode:
+        return False
+    return frappe.db.get_value("Mode of Payment", mode, "type") == "Phone"
+
+
+def _validate_confirmed_phone_payments(invoice, payment_rows):
+    """Refuse staging or settling a Phone payment row without a confirmed Paid Payment Request."""
+    if invoice.get("is_return"):
+        return
+
+    phone_totals = {}
+    for row in payment_rows or []:
+        amt = flt(row.get("amount"))
+        if amt <= 0:
+            continue
+        if not _is_phone_mode(row):
+            continue
+        mode = row.get("mode_of_payment")
+        phone_totals[mode] = phone_totals.get(mode, 0.0) + amt
+
+    if not phone_totals:
+        return
+
+    precision = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
+    if not isinstance(precision, int) or isinstance(precision, bool):
+        precision = 2
+
+    for mode, requested_total in phone_totals.items():
+        paid_requests = frappe.get_all(
+            "Payment Request",
+            filters={
+                "reference_doctype": "POS Invoice",
+                "reference_name": invoice.name,
+                "mode_of_payment": mode,
+                "docstatus": 1,
+                "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
+            },
+            fields=["name", "grand_total", "outstanding_amount"],
+        )
+        if not isinstance(paid_requests, (list, tuple)):
+            paid_requests = []
+        paid_total = sum(
+            max(0.0, flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")))
+            for pr in paid_requests
+        )
+        if flt(paid_total, precision) <= 0:
+            frappe.throw(
+                _(
+                    "Payment for {0} has not been confirmed yet. Confirm the payment or choose another payment method."
+                ).format(mode),
+                frappe.ValidationError,
+            )
+        if flt(requested_total, precision) != flt(paid_total, precision):
+            frappe.throw(
+                _("Confirmed payment for {0} is {1}, not {2}.").format(
+                    mode, flt(paid_total, precision), flt(requested_total, precision)
+                ),
+                frappe.ValidationError,
+            )
+
+
+def _copy_payment_row(row):
+    as_dict = getattr(row, "as_dict", None)
+    if callable(as_dict):
+        data = as_dict(
+            no_default_fields=True,
+            no_child_table_fields=True,
+            no_private_properties=True,
+        )
+    else:
+        data = {
+            k: row.get(k)
+            for k in (
+                "mode_of_payment",
+                "amount",
+                "reference_no",
+                "reference_date",
+                "clearance_date",
+                "account",
+                "type",
+                "default",
+                "custom_tender_received",
+            )
+            if row.get(k) is not None
+        }
+    data["mode_of_payment"] = row.get("mode_of_payment")
+    data["amount"] = flt(row.get("amount"))
+    if cint(row.get("custom_tender_received")):
+        data["custom_tender_received"] = 1
+    return data
+
+
+def _incoming_payment_dict(d):
+    # Never copy client-supplied custom_tender_received; Sales Invoice Payment defaults to 0
+    # and only server confirmation flows may mark a row received.
+    entry = {
+        "mode_of_payment": d["mode_of_payment"],
+        "amount": flt(d["amount"]),
+    }
+    for field in ("reference_no", "reference_date", "clearance_date"):
+        if d.get(field):
+            entry[field] = d[field]
+    return entry
+
+
+def _reconcile_settlement_payments(invoice, incoming_payments):
+    """Preserve every server-confirmed received tender and replace unreceived draft rows freely.
+
+    Unreceived rows (custom_tender_received=0: placeholders, unconfirmed Phone requests,
+    and provisional Step-1 print rows) are cleanly replaced by incoming_payments. Any row
+    explicitly marked custom_tender_received=1 (or backed by a Paid Phone Payment Request)
+    keeps its mode, amount, and reference; dropping, reducing, or altering it is refused.
+    """
+    precision = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
+    if not isinstance(precision, int) or isinstance(precision, bool):
+        precision = 2
+
+    existing_rows = _received_payment_rows(invoice)
+    if not existing_rows:
+        return [_incoming_payment_dict(d) for d in (incoming_payments or [])]
+
+    working = []
+    for d in incoming_payments or []:
+        amt = flt(d.get("amount"))
+        if amt <= 0:
+            continue
+        working.append(
+            {
+                "mode_of_payment": d.get("mode_of_payment"),
+                "amount": amt,
+                "reference_no": (d.get("reference_no") or "").strip(),
+                "reference_date": d.get("reference_date"),
+                "clearance_date": d.get("clearance_date"),
+            }
+        )
+
+    indexed = list(enumerate(existing_rows))
+    referenced_first = sorted(
+        indexed,
+        key=lambda pair: (
+            0 if (pair[1].get("reference_no") or pair[1].get("clearance_date")) else 1,
+            pair[0],
+        ),
+    )
+
+    preserved_by_idx = {}
+    for orig_idx, row in referenced_first:
+        mode = row.get("mode_of_payment")
+        ex_amt = flt(row.get("amount"))
+        ex_ref = (row.get("reference_no") or "").strip()
+        ex_clearance = row.get("clearance_date")
+
+        if ex_ref or ex_clearance:
+            def _matches_ref(entry):
+                if entry["mode_of_payment"] != mode:
+                    return False
+                if ex_ref and entry["reference_no"] and entry["reference_no"] != ex_ref:
+                    return False
+                if (
+                    ex_clearance
+                    and entry["clearance_date"]
+                    and str(entry["clearance_date"]) != str(ex_clearance)
+                ):
+                    return False
+                return flt(entry["amount"], precision) >= flt(ex_amt, precision)
+
+            candidates = [entry for entry in working if _matches_ref(entry)]
+            candidates.sort(
+                key=lambda e: (
+                    0
+                    if (
+                        (ex_ref and e["reference_no"] == ex_ref)
+                        or (
+                            ex_clearance
+                            and e["clearance_date"]
+                            and str(e["clearance_date"]) == str(ex_clearance)
+                        )
+                    )
+                    else 1,
+                    0 if flt(e["amount"], precision) == flt(ex_amt, precision) else 1,
+                )
+            )
+            if not candidates:
+                ref_hint = f" (ref {ex_ref})" if ex_ref else ""
+                frappe.throw(
+                    _(
+                        "Cannot drop, reduce, or alter tender already recorded on check {0} ({1}: {2}{3})."
+                    ).format(invoice.name, mode, ex_amt, ref_hint)
+                )
+            chosen = candidates[0]
+            chosen["amount"] = flt(chosen["amount"] - ex_amt, precision)
+            if chosen["amount"] <= 0:
+                chosen["amount"] = 0
+            else:
+                if ex_ref and chosen["reference_no"] == ex_ref:
+                    chosen["reference_no"] = ""
+                    chosen["reference_date"] = None
+                if (
+                    ex_clearance
+                    and chosen["clearance_date"]
+                    and str(chosen["clearance_date"]) == str(ex_clearance)
+                ):
+                    chosen["clearance_date"] = None
+            copied = _copy_payment_row(row)
+            copied["custom_tender_received"] = 1
+            preserved_by_idx[orig_idx] = copied
+        else:
+            same_mode = [
+                entry
+                for entry in working
+                if entry["mode_of_payment"] == mode
+                and not entry["reference_no"]
+                and not entry["clearance_date"]
+                and flt(entry["amount"], precision) > 0
+            ]
+            available = flt(sum(entry["amount"] for entry in same_mode), precision)
+            if available < flt(ex_amt, precision):
+                frappe.throw(
+                    _(
+                        "Cannot drop or reduce tender already recorded on check {0} ({1}: {2})."
+                    ).format(invoice.name, mode, ex_amt)
+                )
+            exact = next(
+                (e for e in same_mode if flt(e["amount"], precision) == flt(ex_amt, precision)),
+                None,
+            )
+            if exact is not None:
+                exact["amount"] = 0
+            else:
+                need = ex_amt
+                for entry in same_mode:
+                    take = min(entry["amount"], need)
+                    entry["amount"] = flt(entry["amount"] - take, precision)
+                    need = flt(need - take, precision)
+                    if need <= 0:
+                        break
+            copied = _copy_payment_row(row)
+            copied["custom_tender_received"] = 1
+            preserved_by_idx[orig_idx] = copied
+
+    result = [preserved_by_idx[i] for i in range(len(existing_rows))]
+    for entry in working:
+        if flt(entry["amount"], precision) > 0:
+            row_dict = {
+                "mode_of_payment": entry["mode_of_payment"],
+                "amount": entry["amount"],
+            }
+            for field in ("reference_no", "reference_date", "clearance_date"):
+                if entry.get(field):
+                    row_dict[field] = entry[field]
+            result.append(row_dict)
+    return result
+
+
 # Method for URY POS
 @frappe.whitelist()
 def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDiscount=None, table=None, invoice=None, submit_invoice=1, room_number=None, client_order_id=None, round_id=None, tip=None, tip_server=None):
@@ -3281,10 +3950,32 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     # The settling operator, not the client-sent or originally assigned cashier.
     invoice.cashier = frappe.session.user
 
+    if isinstance(payments, str):
+        payments = frappe.parse_json(payments) or []
+
+    if not invoice.get("is_return"):
+        for d in payments or []:
+            if flt(d.get("amount")) < 0:
+                frappe.throw(
+                    _("Negative payment amount for {0} is not allowed.").format(
+                        d.get("mode_of_payment") or _("tender")
+                    )
+                )
+
+    existing_received_tenders = _received_payment_rows(invoice)
+
     # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
     # POS Invoice.room_number; set before payments so its hooks can read it.
-    if room_number and frappe.get_meta("POS Invoice").has_field("room_number"):
-        invoice.room_number = room_number
+    incoming_room = str(room_number).strip() if room_number is not None else ""
+    if incoming_room and frappe.get_meta("POS Invoice").has_field("room_number"):
+        existing_room = (invoice.get("room_number") or "").strip()
+        if existing_received_tenders and existing_room and existing_room != incoming_room:
+            frappe.throw(
+                _(
+                    "Cannot change room-charge reference on check {0} from {1} to {2} after a tender is already recorded."
+                ).format(invoice.name, existing_room, incoming_room)
+            )
+        invoice.room_number = incoming_room
     
     invoice.company = pos_prof.company
     invoice.currency = pos_prof.currency
@@ -3303,8 +3994,13 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
             frappe.throw(_("Not permitted to apply discounts"), frappe.PermissionError)
 
         invoice.additional_discount_percentage = discount_val
+        invoice.discount_amount = 0
     else:
-        invoice.additional_discount_percentage = 0
+        if flt(invoice.get("additional_discount_percentage")):
+            invoice.additional_discount_percentage = 0
+            invoice.discount_amount = 0
+        else:
+            invoice.additional_discount_percentage = 0
 
     # The cashier's tip (cash, or charged on a card or room-charge tender):
     # its Tips Payable line is on the bill before the totals the tenders are
@@ -3315,20 +4011,47 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     invoice.calculate_taxes_and_totals()
 
-    invoice.set("payments", [])
-
     target = None
     if invoice.custom_merged_pos_invoice:
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
         target.cashier = frappe.session.user
+        # One guest bill, one discount: a bill linked before Add Check consolidated lines
+        # takes the bill's discount on both halves.
+        target.additional_discount_percentage = invoice.additional_discount_percentage
         target.calculate_taxes_and_totals()
-        
-        doc_req = invoice.rounded_total or invoice.grand_total
-        target_req = target.rounded_total or target.grand_total
-        
-        target.set("payments", [])
-        
-        for d in payments:
+
+        doc_existing = _received_payment_rows(invoice)
+        target_existing = _received_payment_rows(target)
+        if doc_existing or target_existing:
+            combined_existing_check = frappe._dict(
+                name=invoice.name,
+                company=invoice.get("company"),
+                payments=doc_existing + target_existing,
+                precision=getattr(invoice, "precision", None),
+            )
+            reconciled_all = _reconcile_settlement_payments(combined_existing_check, payments)
+            new_rows = reconciled_all[len(doc_existing) + len(target_existing):]
+            invoice.set("payments", [])
+            target.set("payments", [])
+            for row in doc_existing:
+                copied = _copy_payment_row(row)
+                copied["custom_tender_received"] = 1
+                invoice.append("payments", copied)
+            for row in target_existing:
+                copied = _copy_payment_row(row)
+                copied["custom_tender_received"] = 1
+                target.append("payments", copied)
+            doc_req = max(0, flt(invoice.rounded_total or invoice.grand_total) - sum(flt(r.amount) for r in invoice.payments))
+            target_req = max(0, flt(target.rounded_total or target.grand_total) - sum(flt(r.amount) for r in target.payments))
+            alloc_rows = new_rows
+        else:
+            invoice.set("payments", [])
+            target.set("payments", [])
+            doc_req = invoice.rounded_total or invoice.grand_total
+            target_req = target.rounded_total or target.grand_total
+            alloc_rows = payments
+
+        for d in alloc_rows:
             amt = float(d["amount"])
             mode = d["mode_of_payment"]
             
@@ -3359,6 +4082,8 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
                 
         if not target.payments and payments:
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
+        _validate_confirmed_phone_payments(invoice, invoice.payments)
+        _validate_confirmed_phone_payments(target, target.payments)
         if _enforce_on_account(invoice, pos_prof, customer_disabled, target):
             if target.company != invoice.company or target.pos_profile != invoice.pos_profile or target.docstatus != 0:
                 frappe.throw(_('Merged credit bills must be open on the same till.'))
@@ -3368,17 +4093,22 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
         target.flags.ignore_payment_sync = True
         
         frappe.flags.in_bill_merge_sync = True
+        prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        if target_existing:
+            frappe.flags.ury_server_tender_received = True
         try:
             target.save(ignore_permissions=True)
         finally:
+            frappe.flags.ury_server_tender_received = prev_tender_flag
             frappe.flags.in_bill_merge_sync = False
             
         invoice.flags.ignore_payment_sync = True
     else:
-        for d in payments:
-            invoice.append(
-                "payments", dict(mode_of_payment=d["mode_of_payment"], amount=d["amount"])
-            )
+        reconciled_payments = _reconcile_settlement_payments(invoice, payments)
+        _validate_confirmed_phone_payments(invoice, reconciled_payments)
+        invoice.set("payments", [])
+        for row_dict in reconciled_payments:
+            invoice.append("payments", row_dict)
 
     invoice.set_paid_amount()
     if not target:
@@ -3389,7 +4119,13 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
         if round_id is not None:
             _record_round(invoice, round_id)
     # invoice.owner = owner
-    invoice.save()
+    prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+    if existing_received_tenders:
+        frappe.flags.ury_server_tender_received = True
+    try:
+        invoice.save()
+    finally:
+        frappe.flags.ury_server_tender_received = prev_tender_flag
 
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}

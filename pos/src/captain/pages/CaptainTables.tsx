@@ -12,6 +12,7 @@ import { getTableOrderContext } from '../../lib/table-order-context-api';
 import { getTableOrder } from '../../lib/order-api';
 import { getMergeGroupMembers, sortTablesByMergeGroups, formatReservationTime, isReservationLockWindowActive } from '../../lib/table-utils';
 import { t } from '../../i18n';
+import { usePOSStore } from '../../store/pos-store';
 import {
   getActiveTableOrders,
   getUpcomingBookings,
@@ -43,6 +44,7 @@ export default function CaptainTables() {
     error: contextError,
   } = useCaptainContext();
 
+  const tillCurrency = usePOSStore((s) => s.posProfile?.currency || s.currency);
   const currentUser = context?.user ?? null;
   const canAccessOtherCaptainsTables = Boolean(capabilities?.canAccessOtherCaptainsTables);
 
@@ -396,6 +398,7 @@ export default function CaptainTables() {
 
               return (
                 <CaptainTableCard
+                  currency={tillCurrency}
                   key={table.name}
                   table={table}
                   order={order}

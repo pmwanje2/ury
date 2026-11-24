@@ -127,7 +127,8 @@ export default function Dashboard() {
 }
 
 function DashboardContent({ recipient }: { recipient?: string }) {
-  const { posProfile } = usePOSStore();
+  const { posProfile, currency } = usePOSStore();
+  const tillCurrency = posProfile?.currency || currency;
   const [stats, setStats] = useState<any[]>([]);
   const [serviceLine, setServiceLine] = useState<any[]>([]);
   const [shiftMetrics, setShiftMetrics] = useState<any>(null);
@@ -168,7 +169,7 @@ function DashboardContent({ recipient }: { recipient?: string }) {
         setStats([
           {
             label: t('dashboard.stat_todays_sales'),
-            value: formatCurrency(statsData.todays_sales)
+            value: formatCurrency(statsData.todays_sales, statsData.currency || tillCurrency)
           },
           {
             label: t('dashboard.stat_orders_today'),
@@ -176,7 +177,7 @@ function DashboardContent({ recipient }: { recipient?: string }) {
           },
           {
             label: t('dashboard.stat_avg_order_value'),
-            value: formatCurrency(statsData.avg_order_value)
+            value: formatCurrency(statsData.avg_order_value, statsData.currency || tillCurrency)
           },
           {
             label: t('dashboard.stat_active_tables'),
@@ -285,7 +286,7 @@ function DashboardContent({ recipient }: { recipient?: string }) {
     };
 
     fetchDashboardData();
-  }, [posProfile?.branch, recipient]);
+  }, [posProfile?.branch, recipient, tillCurrency]);
 
   // Fetch open sessions
   useEffect(() => {
@@ -493,13 +494,13 @@ function DashboardContent({ recipient }: { recipient?: string }) {
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   <MetricTile
                     label={t('dashboard.metric_sales')}
-                    value={formatCurrency(shiftMetrics.sales)}
+                    value={formatCurrency(shiftMetrics.sales, tillCurrency)}
                     delta={
                       baseline.sample_days > 0 && baseline.median_sales
                         ? {
                             up: shiftMetrics.sales >= baseline.median_sales,
                             text: `${shiftMetrics.sales >= baseline.median_sales ? '+' : ''}${(((shiftMetrics.sales - baseline.median_sales) / baseline.median_sales) * 100).toFixed(0)}%`,
-                            against: formatCurrency(baseline.median_sales),
+                            against: formatCurrency(baseline.median_sales, tillCurrency),
                           }
                         : undefined
                     }
@@ -517,7 +518,7 @@ function DashboardContent({ recipient }: { recipient?: string }) {
                         : undefined
                     }
                   />
-                  <MetricTile label={t('dashboard.metric_avg_per_cover')} value={formatCurrency(shiftMetrics.avg_per_cover)} />
+                  <MetricTile label={t('dashboard.metric_avg_per_cover')} value={formatCurrency(shiftMetrics.avg_per_cover, tillCurrency)} />
                   <MetricTile
                     label={t('dashboard.metric_avg_ticket')}
                     value={shiftMetrics.avg_ticket_minutes !== null ? t('dashboard.minutes_short', { n: shiftMetrics.avg_ticket_minutes }) : '—'}

@@ -382,6 +382,7 @@ def get_split_group(invoice):
     split_fields = [
         "name",
         "ury_client_order_id",
+        "currency",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",
@@ -576,7 +577,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -599,7 +600,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -621,7 +622,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -641,7 +642,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -702,6 +703,7 @@ def searchPosInvoice(query,status):
         ],
         fields=[
             "name",
+            "currency",
             "customer",
             "customer_name",
             "no_of_pax",
@@ -890,10 +892,25 @@ def getPosProfile():
         else:
             print_type = "socket"
 
+    payment_mode_accounts = {
+        payment.mode_of_payment: frappe.db.get_value(
+            "Mode of Payment Account",
+            {"parent": payment.mode_of_payment, "company": company},
+            "default_account",
+        )
+        for payment in (pos_profiles.get("payments") or [])
+    }
+
+    room_lookup_method = (pos_profiles.get("custom_room_lookup_method") or "").strip()
+    room_charge_modes, room_charge_unconfigured = _room_charge_config(
+        payment_mode_accounts, company, room_lookup_method
+    )
+
     invoice_details = {
         "pos_profile": pos_profile_name,
         "branch": branch,
         "company": company,
+        "currency": pos_profiles.get("currency") or frappe.db.get_value("Company", company, "default_currency"),
         "country": getattr(pos_profiles, "country", None) or frappe.db.get_value("Company", company, "country"),
         "waiter": waiter,
         "warehouse": warehouse,
@@ -917,14 +934,7 @@ def getPosProfile():
         "floor_idle_signout_seconds": pos_profiles.get("custom_floor_idle_signout_seconds") or 0,
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
-        "payment_mode_accounts": {
-            payment.mode_of_payment: frappe.db.get_value(
-                "Mode of Payment Account",
-                {"parent": payment.mode_of_payment, "company": company},
-                "default_account",
-            )
-            for payment in (pos_profiles.get("payments") or [])
-        },
+        "payment_mode_accounts": payment_mode_accounts,
         "payment_mode_meta": {
             payment.mode_of_payment: {
                 "type": frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "type") or "",
@@ -937,13 +947,48 @@ def getPosProfile():
         "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
         "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
+        # the till's tenders come from configuration, never literals
+        "default_payment_mode": next(
+            (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),
+            None,
+        ),
+        "room_charge_modes": room_charge_modes,
+        "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
-        "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
+        "room_lookup_method": room_lookup_method,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **get_default_customer_config(pos_profiles),
     }
 
     return invoice_details
+
+
+def _room_charge_config(payment_mode_accounts, company, room_lookup_method=""):
+    """Room-charge tenders and setup status from Company.custom_guest_ledger_clearing.
+
+    The hotel bridge posts exactly the payment methods whose company account equals
+    Company.custom_guest_ledger_clearing. When a site carries that field or configures a
+    room lookup method without mapping the clearing account on this Company, report
+    room_charge_unconfigured=True so the till informs staff instead of silently hiding
+    the room prompt.
+    """
+    has_clearing_field = frappe.get_meta("Company").has_field("custom_guest_ledger_clearing")
+    clearing = (
+        frappe.db.get_value("Company", company, "custom_guest_ledger_clearing")
+        if has_clearing_field
+        else None
+    )
+    if clearing:
+        return [mode for mode, account in payment_mode_accounts.items() if account == clearing], False
+    return [], bool(has_clearing_field or room_lookup_method)
+
+
+def _room_charge_modes(payment_mode_accounts, company):
+    """The payment methods whose company account is the Company's Guest Ledger Clearing
+    account. The hotel bridge posts exactly those to a guest folio, so the till asks for the
+    room on them; a site without the hotel bridge has none."""
+    modes, _ = _room_charge_config(payment_mode_accounts, company)
+    return modes
 
 
 @frappe.whitelist()
@@ -1042,7 +1087,153 @@ def getPosInvoiceItems(invoice):
                 "rate": rate,
             }
         )
-    return itemDetails, taxDetails
+    paymentDetails = []
+    room_number = orderdItems.get("room_number")
+    room_modes = None
+    pr_filters = {
+        "reference_doctype": "POS Invoice",
+        "reference_name": orderdItems.name,
+        "docstatus": 1,
+        "payment_channel": "Phone",
+        "payment_request_type": "Inward",
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
+    }
+    if orderdItems.get("company"):
+        pr_filters["company"] = orderdItems.get("company")
+    paid_requests = frappe.get_all(
+        "Payment Request",
+        filters=pr_filters,
+        fields=["name", "mode_of_payment", "payment_account", "grand_total", "outstanding_amount", "status"],
+        order_by="creation asc",
+    )
+    if not isinstance(paid_requests, (list, tuple)):
+        paid_requests = []
+    live_prs = [
+        pr
+        for pr in paid_requests
+        if (frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))) > 0
+    ]
+    live_pr_by_name = {pr.get("name"): pr for pr in live_prs if pr.get("name")}
+    live_paid_by_mode = {}
+    for pr in live_prs:
+        pr_mode = pr.get("mode_of_payment")
+        pr_paid = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
+        if pr_mode and pr_paid > 0:
+            live_paid_by_mode[pr_mode] = live_paid_by_mode.get(pr_mode, 0.0) + pr_paid
+
+    received_rows = []
+    matched_pr_names = set()
+    matched_unreferenced_phone_modes = {}
+    for payment in orderdItems.get("payments") or []:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
+            continue
+        mode = payment.get("mode_of_payment")
+        ref = (payment.get("reference_no") or "").strip()
+        is_phone = (
+            payment.get("type") == "Phone"
+            or (bool(mode) and frappe.db.get_value("Mode of Payment", mode, "type") == "Phone")
+        )
+        if is_phone:
+            if ref:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                # Rounded so binary float noise (5.9 - 2.0) never reaches the payment screen.
+                live_amt = round(
+                    frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount")), 9
+                )
+                if live_amt <= 0:
+                    continue
+                matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": live_amt,
+                        "reference_no": ref,
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
+            else:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
+                    continue
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": used,
+                        "reference_no": payment.get("reference_no"),
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
+            continue
+
+        received_rows.append(payment)
+        if ref:
+            matched_pr_names.add(ref)
+
+    for pr in live_prs:
+        pr_name = pr.get("name")
+        if pr_name in matched_pr_names:
+            continue
+        paid_amt = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
+        mode = pr.get("mode_of_payment")
+        if not mode or paid_amt <= 0:
+            continue
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
+            continue
+        received_rows.append(
+            {
+                "mode_of_payment": mode,
+                "amount": paid_amt,
+                "reference_no": pr_name,
+                "type": "Phone",
+                "custom_tender_received": 1,
+            }
+        )
+
+    for payment in received_rows:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0:
+            continue
+        entry = {
+            "mode_of_payment": payment.get("mode_of_payment"),
+            "amount": amt,
+        }
+        if payment.get("reference_no"):
+            entry["reference_no"] = payment.get("reference_no")
+        if payment.get("reference_date"):
+            entry["reference_date"] = str(payment.get("reference_date"))
+        if payment.get("clearance_date"):
+            entry["clearance_date"] = str(payment.get("clearance_date"))
+        if room_number:
+            if room_modes is None:
+                payment_mode_accounts = {
+                    row.get("mode_of_payment"): frappe.db.get_value(
+                        "Mode of Payment Account",
+                        {"parent": row.get("mode_of_payment"), "company": orderdItems.company},
+                        "default_account",
+                    )
+                    for row in received_rows
+                    if row.get("mode_of_payment")
+                }
+                room_modes = set(_room_charge_modes(payment_mode_accounts, orderdItems.company))
+            if payment.get("mode_of_payment") in room_modes:
+                entry["room_number"] = room_number
+        paymentDetails.append(entry)
+    return itemDetails, taxDetails, paymentDetails
 
 
 @frappe.whitelist()
@@ -1564,10 +1755,28 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     """
     user = frappe.session.user
 
-    # Company resolution: user default first, then global default.
-    company = frappe.defaults.get_user_default("Company")
+    # Resolve the cashier's branch-assigned POS Profile first so multi-company
+    # tills (e.g. a UGX branch on a USD-default site, or a cashier without a
+    # User Default Company) bind to their own profile's company and currency.
+    branch_profile_data = None
+    try:
+        branch_profile_data = getPosProfile()
+    except Exception:
+        branch_profile_data = None
+
+    branch_company = (
+        branch_profile_data.get("company")
+        if isinstance(branch_profile_data, dict)
+        else None
+    )
+
+    # Company resolution: assigned branch POS Profile company first, then user
+    # default, then global default (Frappe stores Global Defaults under "company").
+    company = branch_company
     if not company:
-        company = frappe.db.get_default("Company")
+        company = frappe.defaults.get_user_default("Company")
+    if not company:
+        company = frappe.db.get_default("Company") or frappe.db.get_default("company")
 
     allowed_profiles = _get_allowed_pos_profiles(company, user)
 
@@ -1582,38 +1791,51 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
                 frappe.PermissionError,
             )
         pos_profile_name = pos_profile
-    else:
-        try:
-            pos_profile_data = getPosProfile()
-            pos_profile_name = pos_profile_data.get("pos_profile")
-        except Exception:
-            pos_profile_data = None
-            pos_profile_name = None
+        if (
+            isinstance(branch_profile_data, dict)
+            and branch_profile_data.get("pos_profile") == pos_profile
+        ):
+            pos_profile_data = branch_profile_data
+    elif isinstance(branch_profile_data, dict):
+        pos_profile_data = branch_profile_data
+        pos_profile_name = branch_profile_data.get("pos_profile")
 
     if not pos_profile_name and allowed_profiles:
         pos_profile_name = allowed_profiles[0]["name"]
 
-    if pos_profile_name and not pos_profile_data:
-        try:
-            pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
-            pos_profile_data = {
-                "pos_profile": pos_profile_doc.name,
-                "branch": pos_profile_doc.branch,
-                "company": pos_profile_doc.company,
-                "restaurant": pos_profile_doc.restaurant,
-                "warehouse": pos_profile_doc.warehouse,
-                "cashier": user,
-                "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
-                "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
-            }
-        except Exception:
-            pos_profile_data = None
-
-    # Payment modes with opening_amount default 0.
-    payment_modes = []
+    pos_profile_doc = None
     if pos_profile_name:
         try:
             pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+        except Exception:
+            pos_profile_doc = None
+
+    if pos_profile_name and not pos_profile_data and pos_profile_doc is not None:
+        pos_profile_data = {
+            "pos_profile": pos_profile_doc.name,
+            "branch": pos_profile_doc.branch,
+            "company": pos_profile_doc.company,
+            "currency": (
+                pos_profile_doc.get("currency")
+                if callable(getattr(pos_profile_doc, "get", None))
+                else getattr(pos_profile_doc, "currency", None)
+            ),
+            "restaurant": pos_profile_doc.restaurant,
+            "warehouse": pos_profile_doc.warehouse,
+            "cashier": user,
+            "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
+            "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
+        }
+
+    doc_company = getattr(pos_profile_doc, "company", None) if pos_profile_doc is not None else None
+    if not company and isinstance(doc_company, str) and doc_company:
+        company = doc_company
+        allowed_profiles = _get_allowed_pos_profiles(company, user)
+
+    # Payment modes with opening_amount default 0.
+    payment_modes = []
+    if pos_profile_doc is not None:
+        try:
             payment_modes = [
                 {"mode_of_payment": mop.mode_of_payment, "opening_amount": 0.0}
                 for mop in pos_profile_doc.payments
@@ -1657,10 +1879,33 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
 
     occupied_entry = _occupied_entry(pos_profile_name, allowed_profiles, multi_cashier, user)
 
-    # Currency information for display.
+    # Currency information for display: prefer the selected POS Profile's own
+    # currency, falling back to the resolved Company's default currency.
     company_currency = None
     currency_symbol = None
-    if company:
+    profile_currency = None
+    if pos_profile_doc is not None:
+        candidate = (
+            pos_profile_doc.get("currency")
+            if callable(getattr(pos_profile_doc, "get", None))
+            else getattr(pos_profile_doc, "currency", None)
+        )
+        if isinstance(candidate, str) and candidate:
+            profile_currency = candidate
+    if not profile_currency and isinstance(pos_profile_data, dict):
+        candidate = pos_profile_data.get("currency")
+        if isinstance(candidate, str) and candidate:
+            profile_currency = candidate
+
+    if profile_currency:
+        company_currency = profile_currency
+        try:
+            currency_symbol = frappe.db.get_value(
+                "Currency", company_currency, "symbol"
+            )
+        except Exception:
+            currency_symbol = None
+    elif company:
         try:
             company_doc = frappe.get_doc("Company", company)
             company_currency = company_doc.default_currency
@@ -2382,108 +2627,76 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
     }
 
 
+def _merge_sources(secondary_invoice):
+    """One check name, or a JSON list of check names, in the order given."""
+    if isinstance(secondary_invoice, str) and secondary_invoice.strip().startswith("["):
+        secondary_invoice = json.loads(secondary_invoice)
+    names = [secondary_invoice] if isinstance(secondary_invoice, str) else list(secondary_invoice or [])
+    return list(dict.fromkeys(name for name in names if name))
+
+
 @frappe.whitelist()
 
 def merge_bills(primary_invoice, secondary_invoice):
+    """Add Check (Oracle Simphony Add/Transfer Check): move every line of the selected open
+    check(s) onto the primary check, which stays the guest's one POS Invoice.
+
+    `secondary_invoice` is one check name or a JSON list of names. The checks must be drafts of
+    one branch and one order type that the caller may write.
+    """
 
     try:
 
-        if primary_invoice == secondary_invoice:
+        secondaries = _merge_sources(secondary_invoice)
+
+        if not secondaries or primary_invoice in secondaries:
             frappe.throw("Cannot merge an invoice with itself.")
 
         primary_doc = frappe.get_doc("POS Invoice", primary_invoice)
-        secondary_doc = frappe.get_doc("POS Invoice", secondary_invoice)
+        secondary_docs = [frappe.get_doc("POS Invoice", name) for name in secondaries]
 
-        # Authorization: caller must have write permission on both invoices
+        # Authorization: caller must have write permission on every invoice
         if not frappe.has_permission("POS Invoice", "write", doc=primary_doc):
             frappe.throw(
                 "You do not have permission to merge this bill.",
                 frappe.PermissionError,
             )
 
-        if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
-            frappe.throw(
-                "You do not have permission to merge the selected bill.",
-                frappe.PermissionError,
-            )
+        for secondary_doc in secondary_docs:
 
-          # Prevent cross-branch merging
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw(
-                "Cannot merge bills from different branches.",
-                frappe.PermissionError,
-            )
-
-        # Validation
-        if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
-            frappe.throw("Both invoices must be in Draft state to merge.")
-
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw("Cannot merge bills from different branches.")
-
-        if primary_doc.custom_merged_pos_invoice:
-            frappe.throw("This bill already includes a merged bill.")
-
-        if secondary_doc.custom_merged_pos_invoice:
-            frappe.throw("The selected bill already includes another bill.")
-
-        if not secondary_doc.items:
-            frappe.throw("The selected bill has no items to merge.")
-
-
-        def update_merge_details(target_invoice,source_invoice,):
-
-            doc = frappe.get_doc("POS Invoice",target_invoice,)
-
-            # clear old rows
-            doc.set("custom_merged_pos_invoice_details",[],)
-
-            # only linked invoice items
-            for item in source_invoice.items:
-
-                doc.append(
-                    "custom_merged_pos_invoice_details",
-                    {
-                        "item_code": item.item_code,
-                        "item_name": item.item_name,
-                        "qty": item.qty,
-                        "rate": item.rate,
-                        "amount": item.amount,
-                    },
+            if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
+                frappe.throw(
+                    "You do not have permission to merge the selected bill.",
+                    frappe.PermissionError,
                 )
 
-            doc.custom_merged_total = source_invoice.rounded_total
+            # Prevent cross-branch merging
+            if primary_doc.branch != secondary_doc.branch:
+                frappe.throw(
+                    "Cannot merge bills from different branches.",
+                    frappe.PermissionError,
+                )
 
-            doc.flags.ignore_version = True
+            # Validation
+            if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
+                frappe.throw("Both invoices must be in Draft state to merge.")
 
-            doc.save(
-                ignore_version=True,
-            )
+            # Bills linked before Add Check consolidated lines settle as their pair.
+            if primary_doc.custom_merged_pos_invoice:
+                frappe.throw("This bill already includes a merged bill.")
 
+            if secondary_doc.custom_merged_pos_invoice:
+                frappe.throw("The selected bill already includes another bill.")
 
-        # Update merge references directly
-        frappe.db.set_value(
-            "POS Invoice",
-            primary_doc.name,
-            "custom_merged_pos_invoice",
-            secondary_doc.name,
-            update_modified=False,
-        )
+            if not secondary_doc.items:
+                frappe.throw("The selected bill has no items to merge.")
 
-        frappe.db.set_value(
-            "POS Invoice",
-            secondary_doc.name,
-            "custom_merged_pos_invoice",
-            primary_doc.name,
-            update_modified=False,
-        )
+            if primary_doc.order_type != secondary_doc.order_type:
+                frappe.throw(_("Only bills of the same order type can be merged."))
 
+        from ury.ury.doctype.ury_order.ury_order import consolidate_checks
 
-        # Build detail table
-        update_merge_details(primary_doc.name,secondary_doc,)
-
-        update_merge_details(secondary_doc.name,primary_doc,)
-
+        consolidate_checks(primary_doc, secondary_docs)
 
         frappe.db.commit()
 

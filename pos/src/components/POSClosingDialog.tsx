@@ -327,7 +327,8 @@ function buildRows(
 }
 
 const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosingDialogProps) => {
-  const { posProfile, paymentModes = NO_PAYMENT_MODES } = usePOSStore();
+  const { posProfile, currency, paymentModes = NO_PAYMENT_MODES } = usePOSStore();
+  const tillCurrency = posProfile?.currency || currency;
   const { user } = useRootStore();
   const blindCashCount = isBlindCashCount(posProfile);
   // Roles configured on the POS Profile do not see totals/expected amounts (display only).
@@ -760,18 +761,18 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
               <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.on_account')}</p>
-                  <p>{maskAmounts ? MASKED : formatCurrency(totals.onAccount, posProfile?.currency)}</p>
+                  <p>{maskAmounts ? MASKED : formatCurrency(totals.onAccount, tillCurrency)}</p>
                 </div>
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.grand_total')}</p>
                   <p className="text-lg font-semibold text-gray-900">
-                    {maskAmounts ? MASKED : formatCurrency(totals.grandTotal, posProfile?.currency)}
+                    {maskAmounts ? MASKED : formatCurrency(totals.grandTotal, tillCurrency)}
                   </p>
                 </div>
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.net_total')}</p>
                   <p className="text-lg font-semibold text-gray-900">
-                    {maskAmounts ? MASKED : formatCurrency(totals.netTotal, posProfile?.currency)}
+                    {maskAmounts ? MASKED : formatCurrency(totals.netTotal, tillCurrency)}
                   </p>
                 </div>
                 <div className="rounded-lg border border-border p-3">
@@ -787,12 +788,12 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
 
               {hasRows ? (
                 <ClosingPaymentTable
+                  currency={tillCurrency}
                   rows={rows}
                   touchedModes={touchedModes}
                   onChange={handleRowChange}
                   hideExpected={maskAmounts}
                   blindCashCount={blindCashCount}
-                  currency={posProfile?.currency}
                 />
               ) : (
                 <p className="py-8 text-center text-sm text-gray-500">

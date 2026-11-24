@@ -13,7 +13,8 @@ const Spotlight = () => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { menuItems, setSelectedItem } = usePOSStore();
+  const { menuItems, setSelectedItem, posProfile, currency } = usePOSStore();
+  const tillCurrency = posProfile?.currency || currency;
 
   const filteredItems = menuItems.filter(item =>
     item.name.toLowerCase().includes(query.toLowerCase()) ||
@@ -107,7 +108,7 @@ const Spotlight = () => {
                   <div className="text-sm text-gray-500">{item.category}</div>
                 </div>
                 <div className="text-end">
-                  <div className="font-medium">{formatCurrency(item.price)}</div>
+                  <div className="font-medium">{formatCurrency(item.price, tillCurrency)}</div>
                 </div>
               </Button>
             ))
