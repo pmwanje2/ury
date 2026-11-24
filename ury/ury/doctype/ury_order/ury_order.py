@@ -3573,7 +3573,9 @@ def sync_order(
 
     # Privilege gates for changing order type (`order_type_change`) and guest count
     # (`guest_count_change`) on an existing open check (Simphony Opt 7 & Opt 33).
-    if invoice.name:
+    # Offline Merge Rounds collision reconciliation appends items onto an occupied check
+    # without altering its existing order_type or no_of_pax, so skip these mutation gates.
+    if invoice.name and not collision_merge:
         DEFAULT_MANAGER_ROLES = _PA_DEFAULT_MANAGER_ROLES
         _is_valid_str = _pa_is_valid_str
         assert_not_offline_replay = _pa_assert_not_offline_replay
@@ -3649,7 +3651,7 @@ def sync_order(
                     allow_fallback_predicate=True,
                 )
 
-    if order_type:
+    if order_type and not collision_merge:
         invoice.order_type = order_type
 
     # role_restricted_for_table_order blocks the Dine-In/table-order path
@@ -3671,8 +3673,9 @@ def sync_order(
         invoice.custom_guest_label = ""
     elif guest_label:
         invoice.custom_guest_label = guest_label
-    effective_order_type = order_type or invoice.order_type
-    invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
+    effective_order_type = invoice.order_type if collision_merge else (order_type or invoice.order_type)
+    if not collision_merge:
+        invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
     invoice.pos_profile = pos_profile
     invoice.company = posprofile.company
     invoice.currency = posprofile.currency

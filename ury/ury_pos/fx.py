@@ -529,6 +529,10 @@ def _has_verified_fx_override(
             ):
                 return True
 
+    is_new_fn = getattr(doc, "is_new", None)
+    if cint(doc.get("__islocal")) == 1 or (callable(is_new_fn) and is_new_fn()):
+        return False
+
     pos_profile = doc.get("pos_profile")
     if not docname or not pos_profile:
         return False
@@ -542,14 +546,20 @@ def _has_verified_fx_override(
                 "reference_name": docname,
                 "outcome": "Consumed",
             },
-            fields=["claim_values"],
+            fields=["claim_values", "creation"],
             order_by="creation desc",
             limit_page_length=20,
         )
     except Exception:
         return False
 
+    doc_creation = doc.get("creation")
+    doc_creation_str = str(doc_creation)[:19] if doc_creation else ""
+
     for entry in logs or []:
+        if doc_creation_str and entry.get("creation"):
+            if str(entry.get("creation"))[:19] < doc_creation_str:
+                continue
         raw_claim = entry.get("claim_values") or entry.get("claim_json")
         if not raw_claim:
             continue
