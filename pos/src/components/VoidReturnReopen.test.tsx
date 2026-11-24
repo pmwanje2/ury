@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { act } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
@@ -453,5 +453,214 @@ describe('ReopenAdjustCheckDialog & SettledBills integration', () => {
     await screen.findByText(/Poisson/);
     expect(screen.queryByRole('button', { name: /Increase return quantity for Poisson/i })).toBeNull();
     expect(screen.getAllByRole('button', { name: /Poisson/i }).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('rounds decimal/KWD tip adjustments to currency precision before signing manager claim and posting adjust_closed_check (2.1 + 0.2 -> 2.3, 2.125 + 0.25 -> 2.375)', async () => {
+    const runKwdCase = async (opts: {
+      invoice: string;
+      precision: number;
+      grandTotal: number;
+      chargedTip: number;
+      newTipInput: string;
+      expectedTotal: number;
+      expectedTotalStr: string;
+      expectedTip: number;
+    }) => {
+      const authoriseClaims: Array<Record<string, unknown>> = [];
+      const adjustPayloads: Array<Record<string, unknown>> = [];
+
+      const getSpy = vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+        if (method === 'ury.ury_pos.void_return_reopen.get_returnable_check') {
+          return {
+            message: {
+              invoice: opts.invoice,
+              pos_profile: 'Till KWD',
+              branch: 'Branch A',
+              customer: 'Walk-in',
+              currency: 'KWD',
+              precision: opts.precision,
+              grand_total: opts.grandTotal,
+              discount_amount: 0,
+              total_taxes_and_charges: 0,
+              charged_tip: opts.chargedTip,
+              net_paid_amount: opts.grandTotal,
+              already_refunded_amount: 0,
+              remaining_refundable_amount: opts.grandTotal,
+              original_payments: [{ mode_of_payment: 'Card', amount: opts.grandTotal }],
+              available_modes: ['Cash', 'Card'],
+              is_room_charge: false,
+              is_fiscalised: false,
+              items: [
+                {
+                  item_row_name: 'KWD-R1',
+                  item_code: 'COFFEE',
+                  item_name: 'Coffee',
+                  sold_qty: 1,
+                  returned_qty: 0,
+                  remaining_qty: 1,
+                  rate: opts.grandTotal - opts.chargedTip,
+                  amount: opts.grandTotal - opts.chargedTip,
+                },
+              ],
+              reasons: [],
+            },
+          };
+        }
+        if (method === 'ury.ury_pos.override.list_reasons') {
+          return {
+            message: [
+              {
+                code: 'REOPEN-TENDER',
+                description: 'Wrong payment method',
+                requires_note: 0,
+                applies_to: ['adjust_closed_check', 'reopen_check'],
+              },
+            ],
+          };
+        }
+        if (method === 'ury.ury_pos.override.list_approvers') {
+          return { message: [{ user: 'mgr2@example.com', full_name: 'Manager Two' }] };
+        }
+        if (method === 'ury.ury_pos.override.privilege_policy') {
+          return {
+            message: {
+              privilege: 'adjust_closed_check',
+              label: 'Adjust Closed Check',
+              may_perform: false,
+              requires_reason: false,
+            },
+          };
+        }
+        return { message: [] };
+      });
+
+      vi.spyOn(call, 'post').mockImplementation(async (method: string, payload?: unknown) => {
+        const body = (payload || {}) as Record<string, unknown>;
+        if (method === 'ury.ury_pos.void_return_reopen.adjust_closed_check') {
+          adjustPayloads.push(body);
+          if (!body.approval_token) {
+            throw new Error('A manager must approve this action. [POS-AUTH-REQUIRED]');
+          }
+          return {
+            message: {
+              action: 'adjust_closed_check',
+              original_invoice: opts.invoice,
+              reversal_return: `${opts.invoice}-REV`,
+              replacement_invoice: `${opts.invoice}-REP`,
+              approver: 'mgr2@example.com',
+              credit_and_rebill: false,
+            },
+          };
+        }
+        if (method === 'ury.ury_pos.override.authorise') {
+          const parsedClaim =
+            typeof body.claim === 'string'
+              ? (JSON.parse(body.claim) as Record<string, unknown>)
+              : ((body.claim || {}) as Record<string, unknown>);
+          authoriseClaims.push(parsedClaim);
+          return {
+            message: {
+              token: `tok-${opts.invoice}`,
+              approver: 'mgr2@example.com',
+              approver_name: 'Manager Two',
+              expires_in: 120,
+            },
+          };
+        }
+        return { message: null };
+      });
+
+      const onCompleted = vi.fn();
+      render(
+        <ReopenAdjustCheckDialog
+          open
+          bill={{
+            name: opts.invoice,
+            pos_profile: 'Till KWD',
+            currency: 'KWD',
+            grand_total: opts.grandTotal,
+            rounded_total: opts.grandTotal,
+            items: [{ item_name: 'Coffee', qty: 1, amount: opts.grandTotal }],
+            payments: [{ mode_of_payment: 'Card', amount: opts.grandTotal }],
+          }}
+          availableModes={['Cash', 'Card']}
+          onCompleted={onCompleted}
+          onClose={vi.fn()}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(getSpy).toHaveBeenCalledWith('ury.ury_pos.void_return_reopen.get_returnable_check', {
+          invoice_id: opts.invoice,
+        }),
+      );
+      const tipField = screen.getByLabelText(/tip/i) as HTMLInputElement;
+      if (opts.chargedTip > 0) {
+        await waitFor(() => expect(tipField.value).toBe(String(opts.chargedTip)));
+      }
+      fireEvent.change(tipField, { target: { value: opts.newTipInput } });
+
+      const reasonSel = await screen.findByLabelText(/reason/i);
+      fireEvent.change(reasonSel, { target: { value: 'REOPEN-TENDER' } });
+      fireEvent.click(screen.getByRole('button', { name: /apply adjustment/i }));
+
+      await screen.findByText(/Manager Two/);
+      for (const digit of ['8', '5', '2', '3']) {
+        fireEvent.click(screen.getByRole('button', { name: digit }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() => expect(onCompleted).toHaveBeenCalledTimes(1));
+
+      expect(authoriseClaims).toHaveLength(1);
+      const signedPayments = authoriseClaims[0].payments as Array<{ mode_of_payment: string; amount: number }>;
+      expect(signedPayments).toEqual([{ mode_of_payment: 'Card', amount: opts.expectedTotal }]);
+      expect(String(signedPayments[0].amount)).toBe(opts.expectedTotalStr);
+      expect(authoriseClaims[0].tip_amount).toBe(opts.expectedTip);
+
+      const finalAdjust = adjustPayloads.at(-1);
+      expect(finalAdjust?.payments).toEqual([{ mode_of_payment: 'Card', amount: opts.expectedTotal }]);
+      expect(String((finalAdjust?.payments as Array<{ amount: number }>)[0].amount)).toBe(opts.expectedTotalStr);
+      expect(finalAdjust?.tip_amount).toBe(opts.expectedTip);
+
+      cleanup();
+      vi.restoreAllMocks();
+    };
+
+    // Case 1: 2dp KWD (2.1 + 0.2 === 2.3000000000000003 in raw IEEE-754 -> must round to exact 2.3)
+    await runKwdCase({
+      invoice: 'KWD-2DP-1',
+      precision: 2,
+      grandTotal: 2.1,
+      chargedTip: 0,
+      newTipInput: '0.2',
+      expectedTotal: 2.3,
+      expectedTotalStr: '2.3',
+      expectedTip: 0.2,
+    });
+
+    // Case 2: 3dp KWD (2.125 + 0.25 -> exact 2.375)
+    await runKwdCase({
+      invoice: 'KWD-3DP-1',
+      precision: 3,
+      grandTotal: 2.125,
+      chargedTip: 0,
+      newTipInput: '0.25',
+      expectedTotal: 2.375,
+      expectedTotalStr: '2.375',
+      expectedTip: 0.25,
+    });
+
+    // Case 3: Existing tip subtraction drift (2.3 - 0.2 = 2.0999999999999996; + 0.1 = 2.1999999999999997 -> exact 2.2)
+    await runKwdCase({
+      invoice: 'KWD-3DP-SUB',
+      precision: 3,
+      grandTotal: 2.3,
+      chargedTip: 0.2,
+      newTipInput: '0.1',
+      expectedTotal: 2.2,
+      expectedTotalStr: '2.2',
+      expectedTip: 0.1,
+    });
   });
 });

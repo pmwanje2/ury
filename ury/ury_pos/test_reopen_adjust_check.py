@@ -756,6 +756,98 @@ class TestReopenAndAdjustClosedCheck(unittest.TestCase):
         self.assertEqual(res2["before"]["tip_amount"], 5000.0)
         self.assertEqual(res2["after"]["tip_amount"], 7000.0)
 
+    def test_r3_p1_reopen_preserves_percentage_check_discount_and_line_level_discount_metadata(self):
+        """R3 Finding 2 (P1 #148 interop): reopen preserves additional_discount_percentage, line discount fields, and #148 meta."""
+        for fname in (
+            "ury_discount_meta",
+            "custom_discount_reason",
+            "custom_discount_note",
+            "custom_discount_approver",
+            "custom_discount_approved_percent",
+        ):
+            self.h.custom_fields_present.add(("POS Invoice", fname))
+
+        self.h.frappe.session.user = "manager2@example.test"
+
+        # Case A: 10% percentage check discount (additional_discount_percentage=10.0, discount_amount=3500.0)
+        meta_pct = json.dumps({
+            "approver": "manager2@example.test",
+            "approved_percent": 10.0,
+            "reason": "Corporate rate",
+            "reason_description": "Corporate rate",
+            "line_reasons": {},
+        }, sort_keys=True)
+        inv_pct = self.h.add_closed_check("POS-REOP-PCT", payments=[{"mode_of_payment": "Cash", "amount": 31500.0}])
+        inv_pct.items = [
+            Doc(
+                name="ROW-PCT-1", item_code="STEAK", item_name="Steak", qty=1.0,
+                price_list_rate=35000.0, discount_percentage=0.0, discount_amount=0.0,
+                rate=35000.0, amount=35000.0, uom="Nos",
+                warehouse="Kitchen - HC", income_account="Sales - HC", cost_center="Restaurant - HC", ury_held=0,
+            )
+        ]
+        inv_pct.apply_discount_on = "Grand Total"
+        inv_pct.additional_discount_percentage = 10.0
+        inv_pct.discount_amount = 3500.0
+        inv_pct.grand_total = 31500.0
+        inv_pct.rounded_total = 31500.0
+        inv_pct.ury_discount_meta = meta_pct
+        inv_pct.custom_discount_reason = "Corporate rate"
+        inv_pct.custom_discount_approver = "manager2@example.test"
+        inv_pct.custom_discount_approved_percent = 10.0
+
+        res_pct = self.mod.reopen_closed_check(inv_pct.name, reason="REOPEN-SPLIT")
+        draft_pct = self.h.invoices[res_pct["reopened_invoice"]]
+        self.assertEqual(draft_pct.get("additional_discount_percentage"), 10.0)
+        self.assertEqual(draft_pct.get("apply_discount_on"), "Grand Total")
+        self.assertEqual(draft_pct.get("discount_amount"), 3500.0)
+        self.assertEqual(draft_pct.get("ury_discount_meta"), meta_pct)
+        self.assertEqual(draft_pct.get("custom_discount_reason"), "Corporate rate")
+        self.assertEqual(draft_pct.get("custom_discount_approver"), "manager2@example.test")
+        self.assertEqual(draft_pct.get("custom_discount_approved_percent"), 10.0)
+        self.assertEqual(draft_pct.items[0].get("price_list_rate"), 35000.0)
+
+        # Case B: 10% line-level discount ONLY (header discount_amount == 0.0, additional_discount_percentage == 0.0)
+        meta_line = json.dumps({
+            "approver": "manager2@example.test",
+            "approved_percent": 10.0,
+            "reason": "Corporate rate",
+            "reason_description": "Corporate rate",
+            "line_reasons": {"ROW-LINE-1": "Corporate rate"},
+        }, sort_keys=True)
+        inv_line = self.h.add_closed_check("POS-REOP-LINE", payments=[{"mode_of_payment": "Cash", "amount": 31500.0}])
+        inv_line.items = [
+            Doc(
+                name="ROW-LINE-1", item_code="STEAK", item_name="Steak", qty=1.0,
+                price_list_rate=35000.0, discount_percentage=10.0, discount_amount=3500.0,
+                margin_type="Amount", margin_rate_or_amount=0.0,
+                rate=31500.0, amount=31500.0, uom="Nos",
+                warehouse="Kitchen - HC", income_account="Sales - HC", cost_center="Restaurant - HC", ury_held=0,
+            )
+        ]
+        inv_line.apply_discount_on = "Grand Total"
+        inv_line.additional_discount_percentage = 0.0
+        inv_line.discount_amount = 0.0
+        inv_line.grand_total = 31500.0
+        inv_line.rounded_total = 31500.0
+        inv_line.ury_discount_meta = meta_line
+        inv_line.custom_discount_reason = "Corporate rate"
+        inv_line.custom_discount_approver = "manager2@example.test"
+        inv_line.custom_discount_approved_percent = 10.0
+
+        res_line = self.mod.reopen_closed_check(inv_line.name, reason="REOPEN-SPLIT")
+        draft_line = self.h.invoices[res_line["reopened_invoice"]]
+        self.assertEqual(draft_line.items[0].get("price_list_rate"), 35000.0)
+        self.assertEqual(draft_line.items[0].get("discount_percentage"), 10.0)
+        self.assertEqual(draft_line.items[0].get("discount_amount"), 3500.0)
+        self.assertEqual(draft_line.items[0].get("margin_type"), "Amount")
+        self.assertEqual(draft_line.items[0].get("margin_rate_or_amount"), 0.0)
+        self.assertEqual(draft_line.items[0].get("rate"), 31500.0)
+        self.assertEqual(draft_line.get("ury_discount_meta"), meta_line)
+        self.assertEqual(draft_line.get("custom_discount_reason"), "Corporate rate")
+        self.assertEqual(draft_line.get("custom_discount_approver"), "manager2@example.test")
+        self.assertEqual(draft_line.get("custom_discount_approved_percent"), 10.0)
+
 
 if __name__ == "__main__":
     unittest.main()

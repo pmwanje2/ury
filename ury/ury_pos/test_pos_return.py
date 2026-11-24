@@ -1306,6 +1306,61 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         self.assertEqual(ret.get("price_list_currency"), "KWD")
         self.assertEqual(ret.get("plc_conversion_rate"), 12000.0)
 
+    def test_r3_p2_validate_pos_return_doc_blocks_direct_rest_cash_payout_on_room_charge(self):
+        """R3 Finding 3 (P2): direct REST/Desk return against a Room Charge invoice refuses Cash/Card even for a manager."""
+        orig = self.h.add_closed_check(
+            "POS-ROOM-REST",
+            room_number="501",
+            owner="waiter1@example.test",
+            cashier="cashier@example.test",
+            waiter="waiter1@example.test",
+            payments=[{"mode_of_payment": "Room Charge", "amount": 30000.0}],
+        )
+        # Independent manager who holds `return` privilege and supplies a valid reason
+        self.h.frappe.session.user = "manager2@example.test"
+
+        rest_cash = Doc(
+            doctype="POS Invoice", name="POS-RET-ROOM-CASH", _is_new=False, is_return=1, return_against=orig.name,
+            pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            restaurant_table=None, invoice_printed=0, order_type="Dine In", no_of_pax=0,
+            cashier="manager2@example.test", waiter="manager2@example.test", modified_by="manager2@example.test",
+            cancel_reason="RET-QUALITY",
+            grand_total=-10000.0, rounded_total=-10000.0,
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0, owner="manager2@example.test")],
+            payments=[Doc(mode_of_payment="Cash", amount=-10000.0)],
+        )
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-RETURN-ROOM-CHARGE"):
+            self.inv_hook.validate_invoice(rest_cash, "validate")
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-RETURN-ROOM-CHARGE"):
+            self.inv_hook.before_submit(rest_cash, "before_submit")
+
+        rest_card = Doc(
+            doctype="POS Invoice", name="POS-RET-ROOM-CARD", _is_new=False, is_return=1, return_against=orig.name,
+            pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            restaurant_table=None, invoice_printed=0, order_type="Dine In", no_of_pax=0,
+            cashier="manager2@example.test", waiter="manager2@example.test", modified_by="manager2@example.test",
+            cancel_reason="RET-QUALITY",
+            grand_total=-10000.0, rounded_total=-10000.0,
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0, owner="manager2@example.test")],
+            payments=[Doc(mode_of_payment="Card", amount=-10000.0)],
+        )
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-RETURN-ROOM-CHARGE"):
+            self.inv_hook.validate_invoice(rest_card, "validate")
+
+        # Direct REST return back to Room Charge folio succeeds cleanly
+        rest_folio = Doc(
+            doctype="POS Invoice", name="POS-RET-ROOM-FOLIO", _is_new=False, is_return=1, return_against=orig.name,
+            pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            restaurant_table=None, invoice_printed=0, order_type="Dine In", no_of_pax=0,
+            cashier="manager2@example.test", waiter="manager2@example.test", modified_by="manager2@example.test",
+            cancel_reason="RET-QUALITY",
+            grand_total=-10000.0, rounded_total=-10000.0,
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0, owner="manager2@example.test")],
+            payments=[Doc(mode_of_payment="Room Charge", amount=-10000.0)],
+        )
+        self.inv_hook.validate_invoice(rest_folio, "validate")
+        self.inv_hook.before_submit(rest_folio, "before_submit")
+
 
 if __name__ == "__main__":
     unittest.main()

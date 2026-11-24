@@ -711,3 +711,281 @@ class TestVoidReturnReopenIntegration(unittest.TestCase):
             disc_draft = frappe.get_doc("POS Invoice", disc_reop["reopened_invoice"])
             self.assertEqual(disc_draft.docstatus, 0)
             self.assertEqual(flt(disc_draft.discount_amount), 5000.0)
+
+    def test_r3_p1_hash148_real_apply_check_discount_reopen_edit_and_settle_live(self):
+        """R3 Finding 2 (P1 #148 interop): real apply_check_discount (10% check + 10% line) -> reopen -> edit + save + settle."""
+        import json as _json
+
+        from ury.ury.doctype.ury_order.ury_order import apply_check_discount
+        from ury.ury_pos import override
+        from ury.ury_pos.discount import canonical_discount_claim
+        from ury.ury_pos.void_return_reopen import reopen_closed_check
+
+        frappe.set_user("Administrator")
+        prev_allow_disc = frappe.db.get_value("POS Profile", self.profile, "allow_discount_change")
+        frappe.db.set_value("POS Profile", self.profile, "allow_discount_change", 1, update_modified=False)
+        frappe.db.commit()
+
+        def _make_cashier_draft():
+            inv = self._make_pos_invoice(
+                items=[{"item_code": self.service_item, "item_name": "Steak Plate", "qty": 1, "rate": 35000.0}],
+                payments=[{"mode_of_payment": self.mop_cash, "amount": 0.0}],
+                submit=False,
+                waiter=self.cashier,
+                cashier=self.cashier,
+            )
+            frappe.db.set_value("POS Invoice", inv.name, "owner", self.cashier, update_modified=False)
+            frappe.db.commit()
+            return frappe.get_doc("POS Invoice", inv.name)
+
+        def _append_burger(doc):
+            doc.append("items", {
+                "item_code": self.stock_item,
+                "item_name": "Beef Burger",
+                "qty": 1,
+                "rate": 10000.0,
+                "price_list_rate": 10000.0,
+                "base_price_list_rate": 10000.0,
+                "uom": "Nos",
+                "conversion_factor": 1.0,
+                "income_account": self.income_account,
+                "expense_account": self.expense_account,
+                "cost_center": self.cost_center,
+                "warehouse": self.warehouse,
+                "ury_held": 0,
+            })
+
+        try:
+            with patch("ury.ury_pos.api.getBranch", return_value=self.branch):
+                # --- Part A: Real #148 10% percentage check discount -> reopen -> cashier edits + settles ---
+                inv_pct = _make_cashier_draft()
+                frappe.set_user(self.cashier)
+                claim_pct = canonical_discount_claim(percent=10, reason="Corporate rate", precision=0)
+                tok_pct = override.authorise(
+                    self.profile, "discount", self.manager2, "8523", "POS Invoice", inv_pct.name, claim_pct
+                )["token"]
+                apply_check_discount(
+                    invoice=inv_pct.name,
+                    pos_profile=self.profile,
+                    discount_percent=10,
+                    discount_reason="Corporate rate",
+                    approval=tok_pct,
+                )
+                inv_pct.reload()
+                self.assertEqual(flt(inv_pct.additional_discount_percentage), 10.0)
+                self.assertEqual(flt(inv_pct.discount_amount), 3500.0)
+                inv_pct.payments[0].amount = 31500.0
+                inv_pct.save(ignore_permissions=True)
+                inv_pct.submit()
+                frappe.db.commit()
+
+                # Reopen as manager2; verify ury_reopen_adjust_copy is False afterwards
+                frappe.set_user(self.manager2)
+                reop_pct = reopen_closed_check(inv_pct.name, reason="REOPEN-SPLIT")
+                self.assertFalse(getattr(frappe.flags, "ury_reopen_adjust_copy", False))
+
+                draft_pct = frappe.get_doc("POS Invoice", reop_pct["reopened_invoice"])
+                self.assertEqual(draft_pct.docstatus, 0)
+                self.assertEqual(flt(draft_pct.additional_discount_percentage), 10.0)
+                self.assertEqual(flt(draft_pct.discount_amount), 3500.0)
+                self.assertEqual(flt(draft_pct.items[0].price_list_rate), 35000.0)
+                self.assertTrue(draft_pct.get("ury_discount_meta"))
+
+                # Cashier adds an item + saves + settles the reopened percentage-discounted draft!
+                frappe.set_user(self.cashier)
+                draft_pct = frappe.get_doc("POS Invoice", reop_pct["reopened_invoice"])
+                _append_burger(draft_pct)
+                draft_pct.save(ignore_permissions=True)
+                self.assertEqual(flt(draft_pct.additional_discount_percentage), 10.0)
+                self.assertEqual(flt(draft_pct.discount_amount), 4500.0)
+                self.assertEqual(flt(draft_pct.grand_total), 40500.0)
+                draft_pct.invoice_printed = 1
+                draft_pct.payments[0].amount = 40500.0
+                draft_pct.save(ignore_permissions=True)
+                draft_pct.submit()
+                self.assertEqual(draft_pct.docstatus, 1)
+
+                # Manager also adds an item + saves + settles a reopened percentage-discounted draft!
+                inv_pct_mgr = _make_cashier_draft()
+                frappe.set_user(self.cashier)
+                tok_pct_mgr = override.authorise(
+                    self.profile, "discount", self.manager2, "8523", "POS Invoice", inv_pct_mgr.name, claim_pct
+                )["token"]
+                apply_check_discount(
+                    invoice=inv_pct_mgr.name,
+                    pos_profile=self.profile,
+                    discount_percent=10,
+                    discount_reason="Corporate rate",
+                    approval=tok_pct_mgr,
+                )
+                inv_pct_mgr.reload()
+                inv_pct_mgr.payments[0].amount = 31500.0
+                inv_pct_mgr.save(ignore_permissions=True)
+                inv_pct_mgr.submit()
+                frappe.db.commit()
+
+                frappe.set_user(self.manager2)
+                reop_pct_mgr = reopen_closed_check(inv_pct_mgr.name, reason="REOPEN-SPLIT")
+                self.assertFalse(getattr(frappe.flags, "ury_reopen_adjust_copy", False))
+                draft_mgr = frappe.get_doc("POS Invoice", reop_pct_mgr["reopened_invoice"])
+                _append_burger(draft_mgr)
+                draft_mgr.save(ignore_permissions=True)
+                self.assertEqual(flt(draft_mgr.discount_amount), 4500.0)
+                draft_mgr.invoice_printed = 1
+                draft_mgr.payments[0].amount = 40500.0
+                draft_mgr.save(ignore_permissions=True)
+                draft_mgr.submit()
+                self.assertEqual(draft_mgr.docstatus, 1)
+
+                # Negative security check: cashier STILL cannot raise 10% -> 25% directly on reopened draft!
+                inv_pct_sec = _make_cashier_draft()
+                frappe.set_user(self.cashier)
+                tok_pct_sec = override.authorise(
+                    self.profile, "discount", self.manager2, "8523", "POS Invoice", inv_pct_sec.name, claim_pct
+                )["token"]
+                apply_check_discount(
+                    invoice=inv_pct_sec.name,
+                    pos_profile=self.profile,
+                    discount_percent=10,
+                    discount_reason="Corporate rate",
+                    approval=tok_pct_sec,
+                )
+                inv_pct_sec.reload()
+                inv_pct_sec.payments[0].amount = 31500.0
+                inv_pct_sec.save(ignore_permissions=True)
+                inv_pct_sec.submit()
+                frappe.db.commit()
+
+                frappe.set_user(self.manager2)
+                reop_sec = reopen_closed_check(inv_pct_sec.name, reason="REOPEN-SPLIT")
+                frappe.set_user(self.cashier)
+                draft_sec = frappe.get_doc("POS Invoice", reop_sec["reopened_invoice"])
+                draft_sec.additional_discount_percentage = 25.0
+                with self.assertRaises(frappe.PermissionError):
+                    draft_sec.save(ignore_permissions=True)
+
+                # --- Part B: Real #148 10% line-level discount -> reopen -> preserves fields + cashier edits + settles ---
+                inv_line = _make_cashier_draft()
+                line_row_name = inv_line.items[0].name
+                frappe.set_user(self.cashier)
+                claim_line = canonical_discount_claim(
+                    lines=[{"row": line_row_name, "percent": 10}],
+                    reason="Corporate rate",
+                    precision=0,
+                )
+                tok_line = override.authorise(
+                    self.profile, "discount", self.manager2, "8523", "POS Invoice", inv_line.name, claim_line
+                )["token"]
+                apply_check_discount(
+                    invoice=inv_line.name,
+                    pos_profile=self.profile,
+                    line_discounts=[{"row": line_row_name, "percent": 10}],
+                    discount_reason="Corporate rate",
+                    approval=tok_line,
+                )
+                inv_line.reload()
+                self.assertEqual(flt(inv_line.discount_amount), 0.0)
+                self.assertEqual(flt(inv_line.items[0].price_list_rate), 35000.0)
+                self.assertEqual(flt(inv_line.items[0].discount_percentage), 10.0)
+                self.assertEqual(flt(inv_line.items[0].rate), 31500.0)
+                inv_line.payments[0].amount = 31500.0
+                inv_line.save(ignore_permissions=True)
+                inv_line.submit()
+                frappe.db.commit()
+
+                frappe.set_user(self.manager2)
+                reop_line = reopen_closed_check(inv_line.name, reason="REOPEN-SPLIT")
+                self.assertFalse(getattr(frappe.flags, "ury_reopen_adjust_copy", False))
+                draft_line = frappe.get_doc("POS Invoice", reop_line["reopened_invoice"])
+                self.assertEqual(flt(draft_line.items[0].price_list_rate), 35000.0)
+                self.assertEqual(flt(draft_line.items[0].discount_percentage), 10.0)
+                self.assertEqual(flt(draft_line.items[0].rate), 31500.0)
+                self.assertTrue(draft_line.get("ury_discount_meta"))
+                parsed_meta = _json.loads(draft_line.get("ury_discount_meta"))
+                self.assertEqual(parsed_meta.get("approver"), self.manager2)
+                self.assertEqual(flt(parsed_meta.get("approved_percent")), 10.0)
+
+                # Cashier adds an item + saves + settles the reopened line-discounted draft!
+                frappe.set_user(self.cashier)
+                draft_line = frappe.get_doc("POS Invoice", reop_line["reopened_invoice"])
+                _append_burger(draft_line)
+                draft_line.save(ignore_permissions=True)
+                self.assertEqual(flt(draft_line.grand_total), 41500.0)
+                draft_line.invoice_printed = 1
+                draft_line.payments[0].amount = 41500.0
+                draft_line.save(ignore_permissions=True)
+                draft_line.submit()
+                self.assertEqual(draft_line.docstatus, 1)
+        finally:
+            frappe.set_user("Administrator")
+            frappe.db.set_value("POS Profile", self.profile, "allow_discount_change", prev_allow_disc, update_modified=False)
+            frappe.db.commit()
+
+    def test_r3_p2_direct_rest_room_charge_cash_return_refused_live(self):
+        """R3 Finding 3 (P2): direct REST POS Invoice return against a Room Charge check refuses Cash even for a manager."""
+        room_inv = self._make_pos_invoice(
+            items=[{"item_code": self.service_item, "item_name": "Steak Plate", "qty": 1, "rate": 35000.0}],
+            payments=[{"mode_of_payment": self.mop_room, "amount": 35000.0}],
+            submit=True,
+            waiter=self.cashier,
+            cashier=self.cashier,
+            room_number="515",
+        )
+
+        frappe.set_user(self.manager2)
+        with patch("ury.ury_pos.api.getBranch", return_value=self.branch):
+            bad_cash_ret = frappe.get_doc({
+                "doctype": "POS Invoice",
+                "is_return": 1,
+                "return_against": room_inv.name,
+                "company": self.company,
+                "branch": self.branch,
+                "pos_profile": self.profile,
+                "customer": self.customer,
+                "currency": "UGX",
+                "selling_price_list": self.price_list,
+                "posting_date": nowdate(),
+                "cancel_reason": "RET-QUALITY",
+                "items": [{
+                    "item_code": self.service_item,
+                    "qty": -1,
+                    "rate": 35000.0,
+                    "uom": "Nos",
+                    "income_account": self.income_account,
+                    "cost_center": self.cost_center,
+                    "warehouse": self.warehouse,
+                    "pos_invoice_item": room_inv.items[0].name,
+                }],
+                "payments": [{"mode_of_payment": self.mop_cash, "amount": -35000.0}],
+            })
+            with self.assertRaisesRegex(frappe.ValidationError, "POS-RETURN-ROOM-CHARGE"):
+                bad_cash_ret.insert(ignore_permissions=True)
+
+            # Direct REST return back to the Room Charge folio succeeds cleanly!
+            ok_folio_ret = frappe.get_doc({
+                "doctype": "POS Invoice",
+                "is_return": 1,
+                "return_against": room_inv.name,
+                "company": self.company,
+                "branch": self.branch,
+                "pos_profile": self.profile,
+                "customer": self.customer,
+                "currency": "UGX",
+                "selling_price_list": self.price_list,
+                "posting_date": nowdate(),
+                "cancel_reason": "RET-QUALITY",
+                "items": [{
+                    "item_code": self.service_item,
+                    "qty": -1,
+                    "rate": 35000.0,
+                    "uom": "Nos",
+                    "income_account": self.income_account,
+                    "cost_center": self.cost_center,
+                    "warehouse": self.warehouse,
+                    "pos_invoice_item": room_inv.items[0].name,
+                }],
+                "payments": [{"mode_of_payment": self.mop_room, "amount": -35000.0}],
+            })
+            ok_folio_ret.insert(ignore_permissions=True)
+            ok_folio_ret.submit()
+            self.assertEqual(ok_folio_ret.docstatus, 1)
