@@ -3,6 +3,10 @@ import { Link } from 'react-router-dom';
 import { call, parseFrappeError, printWithQz } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
+import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
+import TipAdjustDialog from '../components/TipAdjustDialog';
 import { usePOSStore } from '../store/pos-store';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat } from '../lib/invoice-api';
@@ -30,6 +34,8 @@ type Bill = {
   rounded_total: number;
   outstanding_amount: number;
   total_taxes_and_charges: number;
+  custom_charged_tip?: number;
+  waiter?: string;
   items: { name?: string; item_code?: string; item_name: string; qty: number; rate?: number; amount: number }[];
   taxes: { description: string; tax_amount: number }[];
   payments: { mode_of_payment: string; amount: number }[];
@@ -57,6 +63,12 @@ export default function SettledBills() {
   const [outcome, setOutcome] = useState('');
   const [showReturnDialog, setShowReturnDialog] = useState(false);
   const [showReopenDialog, setShowReopenDialog] = useState(false);
+  const [pendingCopyApproval, setPendingCopyApproval] = useState<{
+    bill: Bill;
+    idempotencyKey: string;
+    claim: Record<string, unknown>;
+  } | null>(null);
+  const [showTipDialog, setShowTipDialog] = useState(false);
 
   async function search(params: Record<string, string>, offset: number) {
     setFilters(params);
@@ -79,13 +91,17 @@ export default function SettledBills() {
     }
   }
 
-  async function print() {
-    if (!bill || busy) return;
-    const key = keys.get(bill.name) || crypto.randomUUID();
-    keys.set(bill.name, key);
+  async function print(approval?: ManagerApprovalResult, overrideKey?: string) {
+    const targetBill = pendingCopyApproval?.bill ?? bill;
+    if (!targetBill || busy) return;
+    const key = overrideKey || keys.get(targetBill.name) || crypto.randomUUID();
+    keys.set(targetBill.name, key);
     setBusy(true);
     setMessage('');
     try {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
+      }
       const { message: result } = await call.post<{
         message: {
           status: string;
@@ -95,7 +111,13 @@ export default function SettledBills() {
           print_url?: string;
           copy_number?: number;
         };
-      }>(method + 'print_bill_copy', { invoice: bill.name, idempotency_key: key });
+      }>(method + 'print_bill_copy', {
+        invoice: targetBill.name,
+        idempotency_key: key,
+        ...(approval?.token ? { approval_token: approval.token } : {}),
+        ...(approval?.reason ? { reason: approval.reason } : {}),
+        ...(approval?.note ? { reason_note: approval.note } : {}),
+      });
       if (result.delivery === 'qz' && result.html) {
         const qzHost = usePOSStore.getState().posProfile?.qz_host;
         if (qzHost) await printWithQz(qzHost, result.html);
@@ -108,10 +130,23 @@ export default function SettledBills() {
           .filter(Boolean)
           .join(' · '),
       );
-      if (result.status === 'COMPLETED') keys.delete(bill.name);
+      if (result.status === 'COMPLETED') keys.delete(targetBill.name);
     } catch (error) {
+      if (!approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
+        const challenge = extractAuthChallenge(error);
+        setPendingCopyApproval({
+          bill: targetBill,
+          idempotencyKey: key,
+          claim: challenge?.claim ?? {
+            action: 'print_bill_copy',
+            invoice: targetBill.name,
+            copy_number: 1,
+          },
+        });
+        return;
+      }
       setOutcome('ERROR');
-      setMessage(parseFrappeError(error));
+      setMessage(overrideErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -276,7 +311,7 @@ export default function SettledBills() {
             {bill.outstanding_amount > 0 && ` · ${bill.customer}`}
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-2">
-            <Button disabled={busy} onClick={print}>
+            <Button disabled={busy} className="min-h-11" onClick={() => void print()}>
               {tData(
                 ['FAILED', 'CANCELED', 'ERROR'].includes(outcome)
                   ? 'Retry copy'
@@ -289,6 +324,16 @@ export default function SettledBills() {
               type="button"
               variant="outline"
               disabled={busy || !canModifyClosed}
+              className="min-h-11"
+              onClick={() => setShowTipDialog(true)}
+            >
+              {t('privileged_actions.tip_adjust')}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy || !canModifyClosed}
+              className="min-h-11"
               onClick={() => setShowReturnDialog(true)}
             >
               {t('void_return.return_refund_action')}
@@ -297,6 +342,7 @@ export default function SettledBills() {
               type="button"
               variant="outline"
               disabled={busy || !canModifyClosed}
+              className="min-h-11"
               onClick={() => setShowReopenDialog(true)}
             >
               {t('void_return.reopen_adjust_action')}
@@ -358,6 +404,42 @@ export default function SettledBills() {
             void search(filtersUsed, start);
           }}
           onClose={() => setShowReopenDialog(false)}
+        />
+      )}
+
+      {pendingCopyApproval && (
+        <ManagerApproval
+          open
+          posProfile={pendingCopyApproval.bill.pos_profile}
+          privilege="reprint_bill"
+          title={t('privileged_actions.reprint_bill')}
+          summaryLines={[
+            `${t('privileged_actions.check_ref')}: ${pendingCopyApproval.bill.name}`,
+            `${pendingCopyApproval.bill.currency} ${pendingCopyApproval.bill.grand_total}`,
+          ]}
+          reference={{ doctype: 'POS Invoice', name: pendingCopyApproval.bill.name }}
+          claim={pendingCopyApproval.claim}
+          requireReason
+          onApproved={(res) => {
+            const pending = pendingCopyApproval;
+            setPendingCopyApproval(null);
+            void print(res, pending.idempotencyKey);
+          }}
+          onCancel={() => setPendingCopyApproval(null)}
+        />
+      )}
+
+      {bill && (
+        <TipAdjustDialog
+          open={showTipDialog}
+          onOpenChange={setShowTipDialog}
+          posProfile={bill.pos_profile}
+          invoiceName={bill.name}
+          currentTip={bill.custom_charged_tip ?? 0}
+          tipServer={bill.waiter}
+          modeOfPayment={bill.payments.find((p) => p.amount > 0)?.mode_of_payment}
+          currency={bill.currency}
+          onSuccess={() => search(filtersUsed, start)}
         />
       )}
     </main>

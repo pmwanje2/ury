@@ -1,0 +1,140 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-11-24 12:15:00.000000",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "order_type",
+  "enabled",
+  "charge_mode",
+  "rate",
+  "fixed_amount",
+  "min_amount_floor",
+  "min_pax",
+  "calculation_basis",
+  "taxable",
+  "account_head",
+  "description",
+  "efris_item_code"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "default": "Dine In",
+   "fieldname": "order_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Order Type",
+   "options": "Dine In\nTake Away\nDelivery\nRoom Service\nAggregators\n*",
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "columns": 2,
+   "default": "Percentage",
+   "fieldname": "charge_mode",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Charge Mode",
+   "options": "Percentage\nFixed Amount",
+   "reqd": 1
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "depends_on": "eval:doc.charge_mode=='Percentage'",
+   "fieldname": "rate",
+   "fieldtype": "Percent",
+   "in_list_view": 1,
+   "label": "Rate (%)"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "depends_on": "eval:doc.charge_mode=='Fixed Amount'",
+   "fieldname": "fixed_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Fixed Amount",
+   "options": "currency"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.charge_mode=='Percentage'",
+   "description": "Minimum automatic service charge amount for non-empty checks.",
+   "fieldname": "min_amount_floor",
+   "fieldtype": "Currency",
+   "label": "Minimum Charge Floor",
+   "options": "currency"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "fieldname": "min_pax",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Min Covers (Pax)",
+   "non_negative": 1
+  },
+  {
+   "default": "Post-Discount Subtotal",
+   "depends_on": "eval:doc.charge_mode=='Percentage'",
+   "fieldname": "calculation_basis",
+   "fieldtype": "Select",
+   "label": "Calculation Basis",
+   "options": "Post-Discount Subtotal\nPre-Discount Subtotal"
+  },
+  {
+   "columns": 1,
+   "default": "0",
+   "fieldname": "taxable",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Taxable"
+  },
+  {
+   "columns": 2,
+   "fieldname": "account_head",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Account Head",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "default": "Service Charge",
+   "fieldname": "description",
+   "fieldtype": "Data",
+   "label": "Description"
+  },
+  {
+   "description": "Optional non-stock service Item mapped to an EFRIS commodity code for EFRIS-enabled companies.",
+   "fieldname": "efris_item_code",
+   "fieldtype": "Link",
+   "label": "EFRIS Service Item",
+   "options": "Item"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-24 12:15:00.000000",
+ "modified_by": "Administrator",
+ "module": "URY POS",
+ "name": "POS Service Charge Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

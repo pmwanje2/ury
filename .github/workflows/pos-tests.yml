@@ -71,3 +71,6 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury.hooks.test_pos_invoice_money_integrity
           PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_order.test_merged_bill_integrity
           PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_add_check_and_tenders
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_till_cash_controls
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_till_close_controls
+          PYTHONPATH=.. python3 -m unittest ury.ury_pos.test_tender_halo

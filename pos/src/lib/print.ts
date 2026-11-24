@@ -14,6 +14,9 @@ interface PrintOrderParams {
   orderId: string;
   posProfile: PosProfileCombined;
   printFormat?: string | null;
+  approvalToken?: string;
+  reason?: string;
+  reasonNote?: string;
   /** Skip calling qz_print_update (already-submitted fiscal receipts must not write invoice_printed). */
   skipStatusUpdate?: boolean;
 }
@@ -33,9 +36,19 @@ export interface PrintBillCopyParams {
   orderId: string;
   posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host' | 'letter_head'>;
   idempotencyKey: string;
+  approvalToken?: string;
+  reason?: string;
+  reasonNote?: string;
 }
 
-export async function printBillCopy({ orderId, posProfile, idempotencyKey }: PrintBillCopyParams): Promise<PrintBillCopyResult> {
+export async function printBillCopy({
+  orderId,
+  posProfile,
+  idempotencyKey,
+  approvalToken,
+  reason,
+  reasonNote,
+}: PrintBillCopyParams): Promise<PrintBillCopyResult> {
   await assertOfflineActionAllowed('fiscal print');
   const delivery: 'network' | 'qz' | 'browser' =
     posProfile.print_type === 'network'
@@ -47,6 +60,9 @@ export async function printBillCopy({ orderId, posProfile, idempotencyKey }: Pri
     invoice: orderId,
     idempotency_key: idempotencyKey,
     delivery,
+    ...(approvalToken ? { approval_token: approvalToken } : {}),
+    ...(reason ? { reason } : {}),
+    ...(reasonNote ? { reason_note: reasonNote } : {}),
   });
   const result: PrintBillCopyResult = response?.message ?? { status: 'COMPLETED', delivery };
   if (result.status === 'FAILED') {
@@ -70,10 +86,19 @@ export async function printBillCopy({ orderId, posProfile, idempotencyKey }: Pri
   return result;
 }
 
-export async function printOrder({ orderId, posProfile, printFormat, skipStatusUpdate }: PrintOrderParams): Promise<'qz' | 'network' | 'socket'> {
+export async function printOrder({
+  orderId,
+  posProfile,
+  printFormat,
+  approvalToken,
+  reason,
+  reasonNote,
+  skipStatusUpdate,
+}: PrintOrderParams): Promise<'qz' | 'network' | 'socket'> {
   await assertOfflineActionAllowed('fiscal print');
   const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier, letter_head } = posProfile;
   const format = resolvePrintFormat({ custom_merged_pos_invoice: null }, printFormat || print_format);
+  const auth = approvalToken || reason || reasonNote ? { approvalToken, reason, reasonNote } : undefined;
 
   if (print_type === 'qz') {
     if (!qz_host) {
@@ -82,28 +107,29 @@ export async function printOrder({ orderId, posProfile, printFormat, skipStatusU
     const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
     await printWithQz(qz_host, html);
     if (!skipStatusUpdate) {
-      await updatePrintStatus(orderId);
+      await updatePrintStatus(orderId, auth);
     }
     return 'qz';
   } else if (print_type === 'network') {
     if (cashier && !multiple_cashier) {
-      await networkPrint(orderId, printer as string, format as string);
+      await networkPrint(orderId, printer as string, format as string, auth);
     } else {
-      await selectNetworkPrinter(orderId, name, format);
+      await selectNetworkPrinter(orderId, name, format, auth);
     }
     if (!skipStatusUpdate) {
       await updatePrintStatus(orderId);
     }
     return 'network';
   } else {
+    // Authorize and record bill print before opening the browser printview tab.
+    if (!skipStatusUpdate) {
+      await updatePrintStatus(orderId, auth);
+    }
     // Redirect to printview page, respecting configured POS Profile letter_head
     const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
     const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
     const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
     window.open(url, '_blank', 'noopener,noreferrer');
-    if (!skipStatusUpdate) {
-      await updatePrintStatus(orderId);
-    }
     return 'socket';
   }
 }
