@@ -85,12 +85,24 @@ def network_printing(
     if doctype == "POS Invoice":
         restaurant_table = frappe.db.get_value("POS Invoice", name, "restaurant_table")
 
-    if not print_format and doctype == "POS Invoice":
-        pos_profile = getattr(doc, "pos_profile", None) or frappe.db.get_value("POS Invoice", name, "pos_profile")
-        if pos_profile:
-            print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
-        if not print_format:
-            print_format = "POS Invoice"
+    if doctype == "POS Invoice":
+        from ury.ury.print_format.defaults import (
+            resolve_safe_pos_print_format,
+            validate_pos_invoice_print_format,
+        )
+
+        if print_format:
+            validate_pos_invoice_print_format(target, print_format)
+        else:
+            pos_profile = getattr(doc, "pos_profile", None) or frappe.db.get_value("POS Invoice", name, "pos_profile")
+            if pos_profile:
+                print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
+            default_meta_fmt = (
+                getattr(frappe.get_meta("POS Invoice"), "default_print_format", None)
+                if hasattr(frappe, "get_meta")
+                else None
+            )
+            print_format = resolve_safe_pos_print_format(print_format, default_format=default_meta_fmt)
 
     extra_metadata = {
         "invoice": name,
@@ -186,10 +198,22 @@ def select_network_printer(
     )
 
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
-    if not print_format and pos_profile:
-        print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
-    if not print_format:
-        print_format = "POS Invoice"
+    from ury.ury.print_format.defaults import (
+        resolve_safe_pos_print_format,
+        validate_pos_invoice_print_format,
+    )
+
+    if print_format:
+        validate_pos_invoice_print_format(invoice_doc, print_format)
+    else:
+        if pos_profile:
+            print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
+        default_meta_fmt = (
+            getattr(frappe.get_meta("POS Invoice"), "default_print_format", None)
+            if hasattr(frappe, "get_meta")
+            else None
+        )
+        print_format = resolve_safe_pos_print_format(print_format, default_format=default_meta_fmt)
 
     print_jobs = []
     bill_printers = _bill_printers(pos_profile, table)
@@ -287,7 +311,21 @@ def print_pos_page(doctype, name, print_format, approval_token=None, reason=None
 
     reprint_meta = None
     if doctype == "POS Invoice":
+        from ury.ury.print_format.defaults import (
+            resolve_safe_pos_print_format,
+            validate_pos_invoice_print_format,
+        )
+
         check_split_target_access(doc_to_check, "write")
+        if print_format:
+            validate_pos_invoice_print_format(doc_to_check, print_format)
+        else:
+            default_meta_fmt = (
+                getattr(frappe.get_meta("POS Invoice"), "default_print_format", None)
+                if hasattr(frappe, "get_meta")
+                else None
+            )
+            print_format = resolve_safe_pos_print_format(None, default_format=default_meta_fmt)
         from ury.ury_pos.floor_actions import authorize_and_count_bill_print
 
         reprint_meta = authorize_and_count_bill_print(

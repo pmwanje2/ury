@@ -17,6 +17,10 @@
     "./availability": {
       "types": "./src/availability.ts",
       "import": "./src/availability.ts"
+    },
+    "./print-format": {
+      "types": "./src/print/format.ts",
+      "import": "./src/print/format.ts"
     }
   },
   "scripts": {

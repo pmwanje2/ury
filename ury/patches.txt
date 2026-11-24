@@ -48,10 +48,12 @@ ury.patches.v3_39.set_pos_invoice_default_print_format
 ury.patches.v3_43.add_network_printer_settings_queue_name
 ury.patches.v3_44.backfill_wastage_datetime
 ury.patches.v2_0.kds_display_window_field
-ury.patches.v2_0.fix_waiter_order_slip_print_format #2026-11-23 escaped record values
+ury.patches.v2_0.fix_waiter_order_slip_print_format #2026-11-24 optional none guard
 ury.patches.v2_0.hold_fire_fields
 ury.patches.v2_0.unique_item_availability
 ury.patches.v2_0.no_copy_merge_split_fields
 ury.patches.v2_0.add_sales_invoice_payment_tender_received
+ury.patches.v3_45.configure_pos_invoice_guest_check_print_format
 ury.patches.v2_0.setup_pos_manager_authorisation
+ury.patches.v2_0.migrate_override_pin_out_of_user
 ury.patches.v2_0.setup_pos_privileged_actions

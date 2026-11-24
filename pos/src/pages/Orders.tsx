@@ -18,7 +18,7 @@ import BillMergeDialog from '../components/BillMergeDialog';
 import OrderActionsMenu from '../components/OrderActionsMenu';
 import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
-import { printOrder } from '../lib/print';
+import { printBillCopy, printOrder } from '../lib/print';
 import { call, getSessionUser } from '@ury/core';
 import { splitBill, cancelOrder, reprintKot } from '../lib/order-api';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
@@ -523,17 +523,28 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     if (!selectedOrder || !posStore.posProfile) return;
     setIsPrinting(true);
     try {
-      await printOrder({
-        orderId: selectedOrder.name,
-        posProfile: posStore.posProfile,
-        printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
-        approvalToken: approval?.token,
-        reason: approval?.reason,
-        reasonNote: approval?.note,
-      });
+      const isOpenBill = selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled';
+      if (isOpenBill) {
+        await printOrder({
+          orderId: selectedOrder.name,
+          posProfile: posStore.posProfile,
+          printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
+          approvalToken: approval?.token,
+          reason: approval?.reason,
+          reasonNote: approval?.note,
+        });
+      } else {
+        await printBillCopy({
+          orderId: selectedOrder.name,
+          posProfile: posStore.posProfile,
+          idempotencyKey: crypto.randomUUID(),
+          approvalToken: approval?.token,
+          reason: approval?.reason,
+          reasonNote: approval?.note,
+        });
+      }
       showToast.success(t('success.printed'));
-      // Locally update selectedOrder.invoice_printed to 1
-      if (selectedOrder && typeof selectedOrder === 'object') {
+      if (isOpenBill && selectedOrder && typeof selectedOrder === 'object') {
         const wasPrinted = Number(selectedOrder.invoice_printed) === 1;
         selectOrder({
           ...selectedOrder,
@@ -542,14 +553,14 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             ? selectedOrder.custom_printing_time ?? null
             : formatFrappeDatetime(new Date()),
         });
-      }
-      // If order was Unbilled, set to Draft and reload draft orders
-      if (selectedStatus === 'Outstanding') {
-        await fetchOrders();
-      } else if (selectedStatus === 'Unbilled') {
-        showToast.info(t('success.order_moved_to_draft'));
-        setSelectedStatus('Draft');
-        fetchOrders();
+        // If order was Unbilled, set to Draft and reload draft orders
+        if (selectedStatus === 'Outstanding') {
+          await fetchOrders();
+        } else if (selectedStatus === 'Unbilled') {
+          showToast.info(t('success.order_moved_to_draft'));
+          setSelectedStatus('Draft');
+          fetchOrders();
+        }
       }
     } catch (err: any) {
       if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
@@ -1037,11 +1048,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
+                currency={selectedOrderCurrency}
                 onOpenInvoice={openRelatedInvoice}
               />
 
               <MergedBillPanel
                 order={selectedOrder}
+                currency={selectedOrderCurrency}
                 onOpenSecondary={openSecondaryInvoice}
               />
 
@@ -1127,7 +1140,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                 type="button"
                                 onClick={() => handleReduceItemQty(item)}
                                 disabled={isReducingThisItem}
-                                aria-label={`Reduce quantity of ${item.item_name}`}
+                                aria-label={t('orders.reduce_item_qty', { item: item.item_name })}
                                 className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 {isReducingThisItem ? (
@@ -1261,6 +1274,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
           posProfile={posStore.posProfile?.name || selectedOrder.pos_profile || ''}
+          currency={selectedOrderCurrency}
           onConfirm={handleMergeBill}
         />
       )}
@@ -1291,7 +1305,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               from: pendingVoidApproval.item.qty,
               to: pendingVoidApproval.newQty,
             }),
-            t('manager_approval.amount_line', { amount: formatCurrency(pendingVoidApproval.amount) }),
+            t('manager_approval.amount_line', {
+              amount: formatCurrency(
+                pendingVoidApproval.amount,
+                pendingVoidApproval.order.currency || profileCurrency,
+              ),
+            }),
             t('manager_approval.check_line', { check: pendingVoidApproval.order.name }),
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}

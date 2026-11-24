@@ -4,6 +4,7 @@ import {
   getInvoicePrintHtml,
   networkPrint,
   printPosPage,
+  resolvePrintFormat,
   selectNetworkPrinter,
   updatePrintStatus,
 } from './invoice-api'
@@ -20,18 +21,15 @@ export async function printOrder({
   posProfile,
   printFormat,
 }: PrintOrderParams): Promise<'qz' | 'network' | 'socket'> {
-  const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier } =
+  const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier, letter_head } =
     posProfile
-  const format = printFormat || print_format
+  const format = resolvePrintFormat({ custom_merged_pos_invoice: null }, printFormat || print_format)
 
   if (print_type === 'qz') {
     if (!qz_host) {
       throw new Error('QZ host is not set')
     }
-    if (!format) {
-      throw new Error('Print format is not set')
-    }
-    const html = await getInvoicePrintHtml(orderId, format as string)
+    const html = await getInvoicePrintHtml(orderId, format as string, letter_head)
     try {
       await printWithQz(qz_host, html)
     } catch (error) {

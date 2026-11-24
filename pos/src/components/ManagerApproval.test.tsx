@@ -83,16 +83,23 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
       />,
     );
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('Approve sent item void')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAttribute('aria-labelledby');
+    const headingId = dialog.getAttribute('aria-labelledby')!;
+    expect(document.getElementById(headingId)?.textContent).toBe('Approve sent item void');
+
     expect(screen.getByText('Void Grilled Fish (2 -> 1)')).toBeInTheDocument();
     expect(screen.getByText('Amount: $25.00')).toBeInTheDocument();
     expect(screen.getByText('Requested by Grace K.')).toBeInTheDocument();
 
-    const select = await screen.findByLabelText(/manager/i);
+    const select = await screen.findByRole('combobox', { name: /manager/i });
+    const aliceChip = screen.getByRole('button', { name: 'Alice Manager' });
+    expect(aliceChip).toHaveAttribute('aria-pressed', 'false');
     await user.selectOptions(select, 'mgr.a@example.com');
+    expect(aliceChip).toHaveAttribute('aria-pressed', 'true');
 
-    // Touch keypad keys have >= 48px height classes (min-h-12 or h-14)
+    // Touch keypad keys have >= 48px height classes (min-h-12 or h-12 or h-14)
     const key4 = screen.getByRole('button', { name: '4' });
     expect(key4.className).toMatch(/min-h-12|h-12|h-14/);
 
@@ -101,10 +108,13 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     await user.click(screen.getByRole('button', { name: '2' }));
     await user.click(screen.getByRole('button', { name: '6' }));
 
-    // PIN must be masked (4 bullets) and raw PIN digits never leaked in text
+    // PIN must be masked (4 bullets), accessible live region announces count, and raw PIN digits never leaked
     const display = screen.getByTestId('manager-pin-display');
-    expect(display.textContent).toBe('••••');
-    expect(screen.getByRole('dialog').textContent).not.toContain('4826');
+    expect(display).toHaveAttribute('role', 'status');
+    expect(display).toHaveAttribute('aria-live', 'polite');
+    expect(display).toHaveAttribute('aria-label', expect.stringMatching(/4/));
+    expect(display.textContent).toContain('••••');
+    expect(dialog.textContent).not.toContain('4826');
 
     await user.click(screen.getByRole('button', { name: /approve/i }));
 
@@ -127,28 +137,43 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it('supports hardware keyboard digits, Backspace, Enter, and Escape', async () => {
+  it('supports hardware keyboard digits, Backspace, Enter, Escape, and traps Tab focus inside the dialog', async () => {
     mockServer({ approvers: [APPROVERS[0]], requiresReason: false });
     const onApproved = vi.fn();
     const onCancel = vi.fn();
 
     render(
-      <ManagerApproval
-        open
-        posProfile="Main Till"
-        privilege="void_sent_item"
-        summaryLines={['Void item']}
-        reference={{ doctype: 'POS Invoice', name: 'POS-INV-002' }}
-        claim={{ amount: 10 }}
-        onApproved={onApproved}
-        onCancel={onCancel}
-      />,
+      <>
+        <button type="button">Outside Background Button</button>
+        <ManagerApproval
+          open
+          posProfile="Main Till"
+          privilege="void_sent_item"
+          summaryLines={['Void item']}
+          reference={{ doctype: 'POS Invoice', name: 'POS-INV-002' }}
+          claim={{ amount: 10 }}
+          onApproved={onApproved}
+          onCancel={onCancel}
+        />
+      </>,
     );
 
     // Single approver auto-selected
     await waitFor(() => {
-      expect((screen.getByLabelText(/manager/i) as HTMLSelectElement).value).toBe('mgr.a@example.com');
+      expect((screen.getByRole('combobox', { name: /manager/i }) as HTMLSelectElement).value).toBe('mgr.a@example.com');
     });
+
+    // Focus trap: Shift+Tab on first focusable element wraps to last focusable inside dialog
+    const dialog = screen.getByRole('dialog');
+    const focusables = Array.from(
+      dialog.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled])'),
+    );
+    expect(focusables.length).toBeGreaterThan(2);
+    focusables[0].focus();
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(focusables[focusables.length - 1]);
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: false });
+    expect(document.activeElement).toBe(focusables[0]);
 
     fireEvent.keyDown(window, { key: '1' });
     fireEvent.keyDown(window, { key: '2' });
@@ -156,7 +181,7 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     fireEvent.keyDown(window, { key: '9' });
     fireEvent.keyDown(window, { key: 'Backspace' });
     fireEvent.keyDown(window, { key: '4' });
-    expect(screen.getByTestId('manager-pin-display').textContent).toBe('••••');
+    expect(screen.getByTestId('manager-pin-display').textContent).toContain('••••');
 
     fireEvent.keyDown(window, { key: 'Enter' });
 
@@ -193,10 +218,8 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     await user.click(screen.getByRole('button', { name: '5' }));
     await user.click(screen.getByRole('button', { name: '7' }));
 
-    // Disabled until reason is picked
     expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
 
-    // Pick OTHER (requires_note=1)
     await user.selectOptions(reasonSelect, 'OTHER');
     const noteBox = await screen.findByLabelText(/note/i);
     expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
@@ -270,7 +293,7 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     );
 
     await waitFor(() => {
-      expect((screen.getByLabelText(/manager/i) as HTMLSelectElement).value).toBe('mgr.a@example.com');
+      expect((screen.getByRole('combobox', { name: /manager/i }) as HTMLSelectElement).value).toBe('mgr.a@example.com');
     });
 
     for (const d of ['9', '9', '9', '9']) await user.click(screen.getByRole('button', { name: d }));
@@ -279,7 +302,6 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     const wrongAlert = await screen.findByRole('alert');
     expect(wrongAlert.textContent).toMatch(/PIN/i);
     expect(wrongAlert.textContent).not.toMatch(/URY|HUF|Kamra/i);
-    // PIN cleared automatically after wrong PIN
     expect(screen.getByTestId('manager-pin-display').textContent).toBe('');
 
     for (const d of ['9', '9', '9', '9']) await user.click(screen.getByRole('button', { name: d }));
@@ -315,7 +337,29 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['en', 'fr', 'es', 'ar'] as const)('renders cleanly in locale %s without vendor names', async (lang) => {
+  it('uses compact landscape two-column layout at lg so all 4 keypad rows fit at 1280x720 without scrolling', async () => {
+    mockServer({ approvers: APPROVERS, requiresReason: true });
+
+    render(
+      <ManagerApproval
+        open
+        posProfile="Main Till"
+        privilege="void_sent_item"
+        summaryLines={['Void Grilled Fish (2 -> 1)', 'Amount: $25.00']}
+        reference="POS-INV-008"
+        claim={{ amount: 25 }}
+        onApproved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('combobox', { name: /manager/i });
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.innerHTML).toMatch(/lg:max-w-2xl/);
+    expect(dialog.innerHTML).toMatch(/lg:grid-cols-2/);
+  });
+
+  it.each(['en', 'fr', 'es', 'ar'] as const)('renders cleanly in locale %s without vendor names or English dismiss fallback', async (lang) => {
     await initI18n(lang);
     mockServer({ approvers: [APPROVERS[0]] });
 
@@ -332,8 +376,11 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
       />,
     );
 
-    await screen.findByLabelText(/.+/);
+    await screen.findByRole('combobox');
     const text = screen.getByRole('dialog').textContent || '';
     expect(text).not.toMatch(/URY|HUF|Kamra|manager_approval\./i);
+    if (lang !== 'en') {
+      expect(text).not.toContain('Dismiss');
+    }
   });
 });

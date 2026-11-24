@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { call, parseFrappeError } from '@ury/core';
+import { call, parseFrappeError, printWithQz } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
 import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
 import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import TipAdjustDialog from '../components/TipAdjustDialog';
+import { usePOSStore } from '../store/pos-store';
 
 type Bill = {
   name: string; customer: string; status: string; posting_date: string; posting_time: string; currency: string;
@@ -55,7 +56,7 @@ export default function SettledBills() {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) {
         throw new Error(t('offline.refused', { action: 'closed receipt copy' }));
       }
-      const {message: result} = await call.post<{message: {status: string; failure_reason?: string}}>(
+      const {message: result} = await call.post<{message: {status: string; failure_reason?: string; delivery?: string; html?: string; print_url?: string; copy_number?: number}}>(
         method + 'print_bill_copy', {
           invoice: targetBill.name,
           idempotency_key: key,
@@ -63,8 +64,14 @@ export default function SettledBills() {
           ...(approval?.reason ? { reason: approval.reason } : {}),
           ...(approval?.note ? { reason_note: approval.note } : {}),
         });
+      if (result.delivery === 'qz' && result.html) {
+        const qzHost = usePOSStore.getState().posProfile?.qz_host;
+        if (qzHost) await printWithQz(qzHost, result.html);
+      } else if (result.delivery === 'browser' && result.print_url) {
+        window.open(result.print_url, '_blank', 'noopener,noreferrer');
+      }
       setOutcome(result.status);
-      setMessage([tData('Copy'), result.status, result.failure_reason].filter(Boolean).join(' · '));
+      setMessage([tData('Copy'), result.copy_number ? `#${result.copy_number}` : '', result.status, result.failure_reason].filter(Boolean).join(' · '));
       if (result.status === 'COMPLETED') keys.delete(targetBill.name);
     } catch (error) {
       if (!approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {

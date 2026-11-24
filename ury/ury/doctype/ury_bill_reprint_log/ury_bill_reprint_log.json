@@ -14,7 +14,8 @@
   "copy_number",
   "attempt",
   "retry_of",
-  "request_key"
+  "request_key",
+  "copy_slot"
  ],
  "fields": [
   {
@@ -87,6 +88,14 @@
    "fieldtype": "Data",
    "read_only": 1,
    "search_index": 1
+  },
+  {
+   "fieldname": "copy_slot",
+   "label": "Copy Slot",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "unique": 1,
+   "hidden": 1
   }
  ],
  "permissions": [

@@ -164,12 +164,21 @@
     "room_match": "الغرفة {{room}} · {{guest}} · المغادرة {{departure}}",
     "room_no_post": "حساب هذا النزيل مغلق أمام رسوم الغرفة",
     "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
+    "receipt_print_failed": "تم تسجيل الدفع، لكن الإيصال لم يُطبع: {{reason}}. أعد طباعته من الطلبات.",
+    "fiscal_reprint_printed": "تمت طباعة النسخة المالية #{{copy}} للفاتورة {{invoice}} (FDN {{fdn}}).",
     "room_check_failed": "تعذر التحقق من هذه الغرفة",
     "room_charge_not_configured": "لم يتم إعداد رسوم الغرفة لهذه الشركة. يتولى قسم المالية ربط حساب تسوية دفتر النزلاء.",
     "discount_not_applied": "اضغط على تطبيق لتحديث الإجمالي قبل الدفع.",
     "already_received": "تم استلامه مسبقاً",
     "balance_due": "الرصيد المتبقي",
-    "reference_label": "المرجع: {{ref}}"
+    "reference_label": "المرجع: {{ref}}",
+    "account_amount": "على الحساب: {{amount}}",
+    "charge_account": "قيد على الحساب",
+    "account_balance": "الرصيد",
+    "account_limit": "حد الائتمان",
+    "account_available": "الائتمان المتاح",
+    "no_accounts": "لم يتم العثور على حسابات معتمدة.",
+    "account_search_failed": "تعذّر البحث في حسابات الائتمان."
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -229,7 +238,8 @@
     "opening": "الافتتاح",
     "expected": "المتوقع",
     "closing": "الإغلاق",
-    "difference": "الفرق"
+    "difference": "الفرق",
+    "on_account": "على الحساب"
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -343,7 +353,9 @@
     "failed_to_load_details": "تعذر تحميل تفاصيل الطلب",
     "edit_order": "تعديل الطلب",
     "cancel_order": "إلغاء الطلب",
-    "qty_label": "الكمية: {{qty}}"
+    "qty_label": "الكمية: {{qty}}",
+    "settled_closed": "مُسوّاة / مغلقة",
+    "reduce_item_qty": "تقليل كمية {{item}}"
   },
   "tables": {
     "layout_view": "عرض المخطط",
@@ -1014,7 +1026,9 @@
     "error_expired": "انتهت صلاحية هذه الموافقة أو تم استخدامها بالفعل. اطلب من المدير الاعتماد مجددًا.",
     "error_changed": "تغيرت الفاتورة أو القيم بعد الموافقة. اطلب من المدير الاعتماد مجددًا.",
     "error_required": "يجب أن يوافق المدير على هذا الإجراء.",
-    "error_generic": "تعذر إتمام الموافقة. حاول مرة أخرى."
+    "error_generic": "تعذر إتمام الموافقة. حاول مرة أخرى.",
+    "pin_entered_count": "تم إدخال {{count}} أرقام",
+    "error_reason": "اختر سببًا نشطًا (وأضف ملاحظة قصيرة إذا كانت مطلوبة)."
   },
   "approval_pin": {
     "title": "تعيين رقم PIN للموافقة",
@@ -1039,7 +1053,8 @@
     "clear_policy_note": "يمكن للمديرين مسح رقم PIN للموافقة الخاص بموظف ليتمكن من تعيين رقم جديد. لا يمكن لأي شخص قراءة أو تعيين رقم PIN لشخص آخر.",
     "clear_pin": "مسح PIN",
     "cleared": "تم مسح رقم PIN للموافقة لـ {{name}}.",
-    "clear_failed": "تعذر مسح رقم PIN للموافقة هذا."
+    "clear_failed": "تعذر مسح رقم PIN للموافقة هذا.",
+    "error_wrong_password": "كلمة المرور الحالية غير مطابقة. تبقى جلسة الصندوق الخاصة بك نشطة."
   },
   "privileged_actions": {
     "price_override": "تعديل السعر",

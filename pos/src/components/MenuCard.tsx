@@ -22,6 +22,7 @@ interface MenuCardProps {
   /** The count could not be re-read (offline or a failed refresh). */
   availabilityStale?: boolean;
   availabilityActions?: AvailabilityActions;
+  currency?: string;
 }
 
 const MenuCard: FC<MenuCardProps> = ({
@@ -34,6 +35,7 @@ const MenuCard: FC<MenuCardProps> = ({
   availability,
   availabilityStale = false,
   availabilityActions,
+  currency,
 }) => {
   const unavailable = isUnavailable(availability);
   const unavailableMessage = unavailable
@@ -83,7 +85,7 @@ const MenuCard: FC<MenuCardProps> = ({
   const card = (
     <MenuItemCard
       name={name}
-      priceLabel={formatCurrency(price)}
+      priceLabel={formatCurrency(price, currency)}
       imageUrl={item_image}
       course={course}
       onClick={onClick}

@@ -69,17 +69,22 @@ async function enter(amount: string, index = 0) {
 }
 
 test.each(['40', '0', ''])('a named account can settle with tender %j and leave the rest owed', async (amount) => {
+  vi.spyOn(call, 'get').mockResolvedValue({ message: { efris_status: null, fdn: null } });
   const post = vi.spyOn(call, 'post').mockResolvedValue({ message: { docstatus: 1 } });
   await render();
   await enter(amount);
   expect(payButton().disabled).toBe(false);
   await act(async () => payButton().click());
-  expect(post).toHaveBeenCalledExactlyOnceWith('ury.ury.doctype.ury_order.ury_order.make_invoice', {
+  expect(post).toHaveBeenNthCalledWith(1, 'ury.ury.doctype.ury_order.ury_order.make_invoice', {
     additionalDiscount: null, cashier: 'cashier@example.com', customer: 'House Account',
     invoice: 'BILL-1', owner: 'waiter@example.com',
     payments: [{ mode_of_payment: 'Cash', amount: amount === '40' ? 40 : 0 }],
-    pos_profile: 'Till A', table: null, submit_invoice: 1,
+    pos_profile: 'Till A', table: null, submit_invoice: 0,
   });
+  expect(post).toHaveBeenNthCalledWith(2, 'ury.ury.doctype.ury_order.ury_order.submit_order_invoice', {
+    invoice: 'BILL-1',
+  });
+  expect(post).toHaveBeenCalledTimes(2);
   expect(onClose).toHaveBeenCalledOnce();
   expect(clearSelectedOrder).toHaveBeenCalledOnce();
   expect(fetchOrders).toHaveBeenCalledOnce();

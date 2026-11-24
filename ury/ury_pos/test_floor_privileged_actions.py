@@ -702,10 +702,13 @@ class FloorHarness:
             return []
 
         db.sql = sql
+        db.savepoint = lambda name: None
+        db.rollback = lambda **kwargs: None
         f.db = db
         f.get_meta = lambda dt_name: SimpleNamespace(
             has_field=lambda fld: True,
             get_field=lambda fld: SimpleNamespace(length=140),
+            default_print_format=None,
         )
         return f
 

@@ -42,7 +42,7 @@ def _code(code: str, message: str) -> str:
 
 try:
     from ury.ury_pos import override as _IMPORTED_OVERRIDE
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     _IMPORTED_OVERRIDE = None
 
 
@@ -54,7 +54,7 @@ def _get_override_module():
         return _IMPORTED_OVERRIDE
     try:
         return importlib.import_module("ury.ury_pos.override")
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         return None
 
 

@@ -224,30 +224,28 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 	if not held:
 		from ury.ury_pos import override
 
-		company = pos_invoice.get("company") or pos_profile.get("company")
-		if override.is_policy_active(company):
-			voided_qty = flt(current_qty) - flt(new_qty)
-			voided_amount = round(flt(item_row.get("rate") or 0) * voided_qty, 4)
-			claim = {
-				"action": "reduce_order_item_qty",
-				"item_row_name": item_row_name,
-				"item_code": item_code,
-				"from_qty": flt(current_qty),
-				"to_qty": flt(new_qty),
-				"amount": voided_amount,
-				"reason": (reason or "").strip(),
-			}
-			approval = override.require(
-				"void_sent_item",
-				pos_profile.name,
-				pos_invoice.name,
-				claim,
-				token=approval_token,
-				amount=voided_amount,
-			)
-			override.mark_verified_approval(pos_invoice, "void_sent_item", approval)
-			if approval:
-				approved_by = approval.approver
+		voided_qty = flt(current_qty) - flt(new_qty)
+		voided_amount = round(flt(item_row.get("rate") or 0) * voided_qty, 4)
+		claim = {
+			"action": "reduce_order_item_qty",
+			"item_row_name": item_row_name,
+			"item_code": item_code,
+			"from_qty": flt(current_qty),
+			"to_qty": flt(new_qty),
+			"amount": voided_amount,
+			"reason": (reason or "").strip(),
+		}
+		approval = override.require(
+			"void_sent_item",
+			pos_profile.name,
+			pos_invoice.name,
+			claim,
+			token=approval_token,
+			amount=voided_amount,
+		)
+		override.mark_verified_approval(pos_invoice, "void_sent_item", approval)
+		if approval:
+			approved_by = approval.approver
 
 	from ury.ury.api.ury_availability import apply_count_delta
 
