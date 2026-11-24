@@ -475,6 +475,7 @@ describe('Scope e+f Privileged POS Actions UI & Contracts (B5e+f)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('mock-manager-approval')).toBeInTheDocument();
     });
-    expect(lastManagerApprovalProps.claim).toEqual(serverClaim);
+    const lastCall = managerApprovalPropsSpy.mock.calls[managerApprovalPropsSpy.mock.calls.length - 1]?.[0];
+    expect(lastCall?.claim).toEqual(serverClaim);
   });
 });

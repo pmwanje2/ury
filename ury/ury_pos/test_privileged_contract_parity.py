@@ -116,7 +116,7 @@ class TestPrivilegedContractParity(TestPricingPrivilegedActions):
             invoice="POS-INV-100",
             mode="override",
             rate=5.0,
-            reason="PRICE-MATCH",
+            reason="Other: VIP dining rate",
         )
         self.assertEqual(res["action"], "change")
 
