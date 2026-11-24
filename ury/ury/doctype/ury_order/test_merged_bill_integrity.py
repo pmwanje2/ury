@@ -1074,6 +1074,145 @@ class TestSettlementPreservesExistingTenders(Loaded):
             [("Cash", 5.90)],
         )
 
+    def test_partially_refunded_phone_request_caps_received_amount_and_settles_cash_remainder(self):
+        """R6 P1 #2: when a Paid Phone Payment Request drops to Partially Paid or Partially
+        Refunded (live paid 3.90 on a 5.90 row), _received_payment_rows must return 3.90
+        so paying the remaining 2.00 in Cash settles cleanly with zero deadlock."""
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "Online Mobile Money" and field == "type" else 0
+        )
+        for pr_status in ("Partially Paid", "Partially Refunded"):
+            with self.subTest(pr_status=pr_status):
+                live_pr = Row(
+                    name="ACC-PRQ-PART-1",
+                    mode_of_payment="Online Mobile Money",
+                    payment_account="MoMo - LH",
+                    grand_total=5.90,
+                    outstanding_amount=2.00,
+                    status=pr_status,
+                )
+
+                def get_all_filtered(doctype, filters=None, **kw):
+                    if doctype != "Payment Request":
+                        return []
+                    f = filters or {}
+                    allowed = set(f["status"][1]) if isinstance(f.get("status"), list) else None
+                    if allowed is not None and live_pr["status"] not in allowed:
+                        return []
+                    return [live_pr]
+
+                self.frappe.get_all.side_effect = get_all_filtered
+                check = Check(
+                    "LKG-PART-DEADLOCK",
+                    grand_total=5.90,
+                    rounded_total=5.90,
+                    payments=[
+                        PaymentRow(
+                            mode_of_payment="Online Mobile Money",
+                            type="Phone",
+                            amount=5.90,
+                            reference_no="ACC-PRQ-PART-1",
+                            custom_tender_received=1,
+                        )
+                    ],
+                )
+                received = self.order._received_payment_rows(check)
+                self.assertEqual(len(received), 1)
+                self.assertAlmostEqual(float(received[0].get("amount")), 3.90, places=2)
+                self.assertEqual(received[0].get("reference_no"), "ACC-PRQ-PART-1")
+
+                # Dropping the remaining 3.90 confirmed phone payment must still be refused.
+                with self.assertRaisesRegex(Refused, "Online Mobile Money"):
+                    self._settle(check, [{"mode_of_payment": "Cash", "amount": 5.90}], submit_invoice=0)
+
+                # Settling live paid 3.90 + Cash 2.00 succeeds cleanly with no deadlock.
+                self._settle(
+                    check,
+                    [
+                        {
+                            "mode_of_payment": "Online Mobile Money",
+                            "amount": 3.90,
+                            "reference_no": "ACC-PRQ-PART-1",
+                        },
+                        {"mode_of_payment": "Cash", "amount": 2.00},
+                    ],
+                    submit_invoice=0,
+                )
+                self.assertEqual(
+                    [
+                        (
+                            r.mode_of_payment,
+                            round(float(r.amount), 2),
+                            r.get("reference_no"),
+                            int(r.get("custom_tender_received") or 0),
+                        )
+                        for r in check.payments
+                    ],
+                    [
+                        ("Online Mobile Money", 3.90, "ACC-PRQ-PART-1", 1),
+                        ("Cash", 2.00, None, 0),
+                    ],
+                )
+
+    def test_two_paid_phone_requests_same_mode_and_amount_are_both_returned_and_settled(self):
+        """R6 P1 #2: matching PR-1 by reference_no must not mask a second paid PR-2 of the
+        same mode and amount on a grown check."""
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "Online Mobile Money" and field == "type" else 0
+        )
+        prs = [
+            Row(
+                name="PR-1",
+                mode_of_payment="Online Mobile Money",
+                payment_account="MoMo - LH",
+                grand_total=5.90,
+                outstanding_amount=0.0,
+                status="Paid",
+            ),
+            Row(
+                name="PR-2",
+                mode_of_payment="Online Mobile Money",
+                payment_account="MoMo - LH",
+                grand_total=5.90,
+                outstanding_amount=0.0,
+                status="Paid",
+            ),
+        ]
+        self.frappe.get_all.side_effect = lambda doctype, filters=None, **kw: (
+            list(prs) if doctype == "Payment Request" else []
+        )
+        check = Check(
+            "LKG-TWO-PRS",
+            grand_total=11.80,
+            rounded_total=11.80,
+            payments=[
+                PaymentRow(
+                    mode_of_payment="Online Mobile Money",
+                    type="Phone",
+                    amount=5.90,
+                    reference_no="PR-1",
+                    custom_tender_received=1,
+                )
+            ],
+        )
+        received = self.order._received_payment_rows(check)
+        self.assertEqual(
+            [(r.get("reference_no"), round(float(r.get("amount")), 2)) for r in received],
+            [("PR-1", 5.90), ("PR-2", 5.90)],
+        )
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "Online Mobile Money", "amount": 5.90, "reference_no": "PR-1"},
+                {"mode_of_payment": "Online Mobile Money", "amount": 5.90, "reference_no": "PR-2"},
+            ],
+            submit_invoice=0,
+        )
+        self.assertEqual(
+            [(r.get("reference_no"), round(float(r.amount), 2)) for r in check.payments],
+            [("PR-1", 5.90), ("PR-2", 5.90)],
+        )
+
     def test_clearance_date_only_received_row_clears_clearance_on_surplus_remainder(self):
         check = Check(
             "LKG-CLEARANCE",

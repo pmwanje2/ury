@@ -111,11 +111,15 @@ describe("Room Charge without a room lookup method", () => {
     await waitFor(() => expect(call.post).toHaveBeenCalledWith(
       "ury.ury.doctype.ury_order.ury_order.make_invoice",
       expect.objectContaining({
-        invoice: "BILL-1", room_number: "  ROOM-101  ", submit_invoice: 1,
+        invoice: "BILL-1", room_number: "  ROOM-101  ", submit_invoice: 0,
         payments: [{ mode_of_payment: "Room Charge", amount: 100 }],
       }),
     ));
-    expect(call.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(call.post).toHaveBeenCalledWith(
+      "ury.ury.doctype.ury_order.ury_order.submit_order_invoice",
+      { invoice: "BILL-1" },
+    ));
+    expect(call.get).not.toHaveBeenCalledWith(METHOD, expect.anything());
   });
 
   it("a settlement without Room Charge sends no room_number", async () => {

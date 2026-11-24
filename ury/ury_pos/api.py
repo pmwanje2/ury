@@ -4,9 +4,21 @@ from frappe import _
 from datetime import date, datetime, timedelta
 from frappe.utils import cint, nestedset, validate_phone_number
 
+from urllib.parse import quote
+
 from ury.brand import coded_message
 from ury.ury_pos.default_customer import get_default_customer_config
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
+
+_DEFAULT_EFRIS_PRINT_WAIT_SECONDS = 5
+_MAX_EFRIS_PRINT_WAIT_SECONDS = 15
+
+
+def _efris_print_wait_seconds(profile):
+    raw = profile.get("custom_efris_print_wait_seconds")
+    if raw is None or raw == "":
+        return _DEFAULT_EFRIS_PRINT_WAIT_SECONDS
+    return max(0, min(cint(raw), _MAX_EFRIS_PRINT_WAIT_SECONDS))
 
 
 #GetTable  decripted temporarily
@@ -904,6 +916,7 @@ def getPosProfile():
         "warehouse": warehouse,
         "cashier": cashier,
         "print_format": print_format,
+        "letter_head": pos_profiles.get("letter_head"),
         "qz_print": qz_print,
         "qz_host": qz_host,
         "printer": printer,
@@ -951,6 +964,7 @@ def getPosProfile():
         "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": room_lookup_method,
+        "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **get_default_customer_config(pos_profiles),
     }
 
@@ -1028,6 +1042,7 @@ def getPosProfileFull(pos_profile):
         "view_all_status": profile.get("view_all_status"),
         "custom_daily_pos_close": profile.get("custom_daily_pos_close"),
         "print_format": profile.print_format,
+        "letter_head": profile.get("letter_head"),
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
@@ -1036,6 +1051,7 @@ def getPosProfileFull(pos_profile):
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # one configured void reason per line; None on sites without the field
         "custom_void_reasons": profile.get("custom_void_reasons"),
+        "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
         **get_default_customer_config(profile),
     }
 
@@ -1088,7 +1104,7 @@ def getPosInvoiceItems(invoice):
         "docstatus": 1,
         "payment_channel": "Phone",
         "payment_request_type": "Inward",
-        "status": ["in", ["Paid", "Partially Paid"]],
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
     }
     if orderdItems.get("company"):
         pr_filters["company"] = orderdItems.get("company")
@@ -1115,7 +1131,7 @@ def getPosInvoiceItems(invoice):
 
     received_rows = []
     matched_pr_names = set()
-    matched_phone_modes = {}
+    matched_unreferenced_phone_modes = {}
     for payment in orderdItems.get("payments") or []:
         amt = frappe.utils.flt(payment.get("amount"))
         if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
@@ -1128,16 +1144,47 @@ def getPosInvoiceItems(invoice):
         )
         if is_phone:
             if ref:
-                if ref not in live_pr_by_name:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                # Rounded so binary float noise (5.9 - 2.0) never reaches the payment screen.
+                live_amt = round(
+                    frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount")), 9
+                )
+                if live_amt <= 0:
                     continue
                 matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": live_amt,
+                        "reference_no": ref,
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
             else:
-                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
                     continue
-                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
-            if mode:
-                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-            received_rows.append(payment)
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": used,
+                        "reference_no": payment.get("reference_no"),
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
             continue
 
         received_rows.append(payment)
@@ -1152,8 +1199,8 @@ def getPosInvoiceItems(invoice):
         mode = pr.get("mode_of_payment")
         if not mode or paid_amt <= 0:
             continue
-        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-            matched_phone_modes[mode] -= paid_amt
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
             continue
         received_rows.append(
             {
@@ -1716,10 +1763,28 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     """
     user = frappe.session.user
 
-    # Company resolution: user default first, then global default.
-    company = frappe.defaults.get_user_default("Company")
+    # Resolve the cashier's branch-assigned POS Profile first so multi-company
+    # tills (e.g. a UGX branch on a USD-default site, or a cashier without a
+    # User Default Company) bind to their own profile's company and currency.
+    branch_profile_data = None
+    try:
+        branch_profile_data = getPosProfile()
+    except Exception:
+        branch_profile_data = None
+
+    branch_company = (
+        branch_profile_data.get("company")
+        if isinstance(branch_profile_data, dict)
+        else None
+    )
+
+    # Company resolution: assigned branch POS Profile company first, then user
+    # default, then global default (Frappe stores Global Defaults under "company").
+    company = branch_company
     if not company:
-        company = frappe.db.get_default("Company")
+        company = frappe.defaults.get_user_default("Company")
+    if not company:
+        company = frappe.db.get_default("Company") or frappe.db.get_default("company")
 
     allowed_profiles = _get_allowed_pos_profiles(company, user)
 
@@ -1734,38 +1799,51 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
                 frappe.PermissionError,
             )
         pos_profile_name = pos_profile
-    else:
-        try:
-            pos_profile_data = getPosProfile()
-            pos_profile_name = pos_profile_data.get("pos_profile")
-        except Exception:
-            pos_profile_data = None
-            pos_profile_name = None
+        if (
+            isinstance(branch_profile_data, dict)
+            and branch_profile_data.get("pos_profile") == pos_profile
+        ):
+            pos_profile_data = branch_profile_data
+    elif isinstance(branch_profile_data, dict):
+        pos_profile_data = branch_profile_data
+        pos_profile_name = branch_profile_data.get("pos_profile")
 
     if not pos_profile_name and allowed_profiles:
         pos_profile_name = allowed_profiles[0]["name"]
 
-    if pos_profile_name and not pos_profile_data:
-        try:
-            pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
-            pos_profile_data = {
-                "pos_profile": pos_profile_doc.name,
-                "branch": pos_profile_doc.branch,
-                "company": pos_profile_doc.company,
-                "restaurant": pos_profile_doc.restaurant,
-                "warehouse": pos_profile_doc.warehouse,
-                "cashier": user,
-                "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
-                "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
-            }
-        except Exception:
-            pos_profile_data = None
-
-    # Payment modes with opening_amount default 0.
-    payment_modes = []
+    pos_profile_doc = None
     if pos_profile_name:
         try:
             pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+        except Exception:
+            pos_profile_doc = None
+
+    if pos_profile_name and not pos_profile_data and pos_profile_doc is not None:
+        pos_profile_data = {
+            "pos_profile": pos_profile_doc.name,
+            "branch": pos_profile_doc.branch,
+            "company": pos_profile_doc.company,
+            "currency": (
+                pos_profile_doc.get("currency")
+                if callable(getattr(pos_profile_doc, "get", None))
+                else getattr(pos_profile_doc, "currency", None)
+            ),
+            "restaurant": pos_profile_doc.restaurant,
+            "warehouse": pos_profile_doc.warehouse,
+            "cashier": user,
+            "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
+            "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
+        }
+
+    doc_company = getattr(pos_profile_doc, "company", None) if pos_profile_doc is not None else None
+    if not company and isinstance(doc_company, str) and doc_company:
+        company = doc_company
+        allowed_profiles = _get_allowed_pos_profiles(company, user)
+
+    # Payment modes with opening_amount default 0.
+    payment_modes = []
+    if pos_profile_doc is not None:
+        try:
             payment_modes = [
                 {"mode_of_payment": mop.mode_of_payment, "opening_amount": 0.0}
                 for mop in pos_profile_doc.payments
@@ -1809,10 +1887,33 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
 
     occupied_entry = _occupied_entry(pos_profile_name, allowed_profiles, multi_cashier, user)
 
-    # Currency information for display.
+    # Currency information for display: prefer the selected POS Profile's own
+    # currency, falling back to the resolved Company's default currency.
     company_currency = None
     currency_symbol = None
-    if company:
+    profile_currency = None
+    if pos_profile_doc is not None:
+        candidate = (
+            pos_profile_doc.get("currency")
+            if callable(getattr(pos_profile_doc, "get", None))
+            else getattr(pos_profile_doc, "currency", None)
+        )
+        if isinstance(candidate, str) and candidate:
+            profile_currency = candidate
+    if not profile_currency and isinstance(pos_profile_data, dict):
+        candidate = pos_profile_data.get("currency")
+        if isinstance(candidate, str) and candidate:
+            profile_currency = candidate
+
+    if profile_currency:
+        company_currency = profile_currency
+        try:
+            currency_symbol = frappe.db.get_value(
+                "Currency", company_currency, "symbol"
+            )
+        except Exception:
+            currency_symbol = None
+    elif company:
         try:
             company_doc = frappe.get_doc("Company", company)
             company_currency = company_doc.default_currency
@@ -2739,56 +2840,429 @@ def search_settled_bills(branch: str | None = None, pos_profile: str | None = No
     return rows
 
 
-def _copy_result(job):
-    return {key: job.get(key) for key in ('status', 'failure_reason', 'print_job_id')}
+def _resolve_invoice_letter_head(doc) -> str | None:
+    if doc is None:
+        return None
+    lh = doc.get('letter_head') if hasattr(doc, 'get') else getattr(doc, 'letter_head', None)
+    if isinstance(lh, str) and lh.strip():
+        return lh.strip()
+    pos_profile = doc.get('pos_profile') if hasattr(doc, 'get') else getattr(doc, 'pos_profile', None)
+    if isinstance(pos_profile, str) and pos_profile.strip():
+        prof_lh = frappe.db.get_value('POS Profile', pos_profile.strip(), 'letter_head')
+        if isinstance(prof_lh, str) and prof_lh.strip():
+            return prof_lh.strip()
+    return None
+
+
+def _copy_print_url(invoice: str, copy_number: int, letter_head: str | None = None) -> str:
+    clean_lh = letter_head.strip() if isinstance(letter_head, str) and letter_head.strip() else None
+    lh_params = (
+        f'&no_letterhead=0&letterhead={quote(clean_lh, safe="")}'
+        if clean_lh
+        else '&no_letterhead=1'
+    )
+    return (
+        f'/printview?doctype=POS%20Invoice&name={quote(invoice, safe="")}'
+        f'&format=URY%20Bill%20Copy{lh_params}&trigger_print=1&copy_number={copy_number}'
+    )
+
+
+def _render_copy_html(doc, invoice: str, copy_number: int) -> tuple[str, str]:
+    from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
+
+    doc.copy_timestamp = frappe.utils.now()
+    doc.copy_number = copy_number
+    doc._ury_copy_render = _COPY_RENDER_MARKER
+    letter_head = _resolve_invoice_letter_head(doc)
+    kwargs = {'print_format': 'URY Bill Copy', 'doc': doc, 'no_letterhead': 0 if letter_head else 1}
+    if letter_head:
+        kwargs['letterhead'] = letter_head
+    rendered = frappe.get_print('POS Invoice', invoice, **kwargs)
+    html = rendered.decode('utf-8') if isinstance(rendered, bytes) else (rendered or '')
+    return html, doc.copy_timestamp
+
+
+def _copy_result(job, *, doc=None, delivery=None):
+    result = {key: job.get(key) for key in ('status', 'failure_reason', 'print_job_id')}
+    copy_number = cint(job.get('copy_number'))
+    if copy_number:
+        result['copy_number'] = copy_number
+    if job.get('status') == 'COMPLETED':
+        resolved_delivery = delivery
+        if not resolved_delivery:
+            if job.get('printer'):
+                resolved_delivery = 'network'
+            elif doc is not None:
+                resolved_delivery = (
+                    'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
+                )
+            else:
+                resolved_delivery = 'browser'
+        result['delivery'] = resolved_delivery
+        invoice = job.get('invoice') or (doc.name if doc is not None else None)
+        if doc is not None and invoice and copy_number:
+            html, copy_timestamp = _render_copy_html(doc, invoice, copy_number)
+            result['copy_timestamp'] = copy_timestamp
+            result['html'] = html
+            result['print_url'] = _copy_print_url(
+                invoice, copy_number, letter_head=_resolve_invoice_letter_head(doc)
+            )
+    return result
+
+
+def _copy_race_errno(exc: BaseException) -> int | None:
+    """Extract MariaDB/MySQL numeric errno across Frappe wrappers, nested args, and __cause__/__context__."""
+    queue = [exc]
+    seen: set[int] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur is None or id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        errno = getattr(cur, 'errno', None)
+        if isinstance(errno, int) and not isinstance(errno, bool):
+            return errno
+        if isinstance(cur, BaseException):
+            args = getattr(cur, 'args', None) or ()
+            if args and isinstance(args[0], int) and not isinstance(args[0], bool):
+                return args[0]
+            for arg in args:
+                if isinstance(arg, (BaseException, tuple, list)):
+                    queue.append(arg)
+            if cur.__cause__ is not None:
+                queue.append(cur.__cause__)
+            if cur.__context__ is not None:
+                queue.append(cur.__context__)
+        elif isinstance(cur, (tuple, list)) and cur:
+            if isinstance(cur[0], int) and not isinstance(cur[0], bool):
+                return cur[0]
+    return None
+
+
+def _open_isolated_copy_db():
+    """Open a short-lived independent DB connection for URY Bill Reprint Log isolation."""
+    try:
+        from frappe.database import get_db
+        from frappe.database.database import Database
+    except Exception:
+        return None
+    current_db = getattr(frappe, 'db', None)
+    if not isinstance(current_db, Database):
+        return None
+    if getattr(current_db, '_conn', None) is None:
+        return None
+    conf = getattr(getattr(frappe, 'local', None), 'conf', None)
+    db_name = getattr(conf, 'db_name', None) if conf else None
+    if not db_name:
+        return None
+    isolated = get_db(
+        socket=getattr(conf, 'db_socket', None),
+        host=getattr(conf, 'db_host', None),
+        port=getattr(conf, 'db_port', None),
+        user=getattr(conf, 'db_user', None) or db_name,
+        password=getattr(conf, 'db_password', None),
+        cur_db_name=db_name,
+    )
+    isolated.connect()
+    return isolated
+
+
+class _IsolatedCopyLogDB:
+    """Run URY Bill Reprint Log claiming/updates in an isolated short DB transaction.
+
+    Prevents MariaDB 11.8 innodb_snapshot_isolation (errno 1020) from leaking or
+    invalidating a caller's uncommitted transaction when concurrent bill copies race.
+    """
+
+    def __init__(self, invoice: str | None = None):
+        self.invoice = invoice
+        self.isolated = None
+        self._prev_db = None
+        self._swapped_local = False
+        self._lock_name = None
+
+    def __enter__(self):
+        from hashlib import sha256
+
+        isolated = _open_isolated_copy_db()
+        if isolated is None:
+            return None
+        self.isolated = isolated
+        try:
+            current_db = getattr(frappe, 'db', None)
+            if type(current_db).__name__ == 'LocalProxy':
+                self._prev_db = frappe.local.db
+                frappe.local.db = isolated
+                self._swapped_local = True
+            else:
+                self._prev_db = current_db
+                frappe.db = isolated
+                self._swapped_local = False
+
+            if self.invoice:
+                db_name = getattr(isolated, 'cur_db_name', None) or ''
+                digest = sha256(f'{db_name}:{self.invoice}'.encode()).hexdigest()[:48]
+                lock_name = f'ury_copy_{digest}'
+                lock_rows = isolated.sql('SELECT GET_LOCK(%s, 10)', (lock_name,))
+                acquired = bool(lock_rows and lock_rows[0] and cint(lock_rows[0][0]) == 1)
+                if not acquired:
+                    timeout_exc = getattr(frappe, 'QueryTimeoutError', TimeoutError)
+                    raise timeout_exc('Timed out waiting for bill copy numbering lock.')
+                self._lock_name = lock_name
+                # Start the InnoDB ReadView strictly after acquiring the advisory lock.
+                isolated.rollback()
+            return isolated
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.isolated is None:
+            return False
+        try:
+            if exc_type is not None:
+                try:
+                    self.isolated.rollback()
+                except Exception:
+                    pass
+            if self._lock_name:
+                try:
+                    self.isolated.sql('SELECT RELEASE_LOCK(%s)', (self._lock_name,))
+                except Exception:
+                    pass
+        finally:
+            if self._swapped_local:
+                frappe.local.db = self._prev_db
+            else:
+                frappe.db = self._prev_db
+            try:
+                self.isolated.close()
+            except Exception:
+                pass
+            self.isolated = None
+            self._lock_name = None
+        return False
+
+
+def _is_retryable_copy_race_error(exc: Exception) -> bool:
+    retryable = tuple(
+        cls for cls in (
+            getattr(frappe, 'DuplicateEntryError', None),
+            getattr(frappe, 'QueryDeadlockError', None),
+            getattr(frappe, 'QueryTimeoutError', None),
+        )
+        if isinstance(cls, type) and issubclass(cls, BaseException)
+    )
+    if retryable and isinstance(exc, retryable):
+        return True
+    errno = _copy_race_errno(exc)
+    return errno in (1020, 1062, 1205, 1213)
+
+
+_COPY_LOG_LOOKUP_FIELDS = [
+    'name', 'print_job_id', 'invoice', 'status', 'failure_reason', 'attempt', 'copy_number', 'printer',
+]
+_DISABLED_REPRINT_OWNER_REASON = 'Requester account is disabled; reprint from Settled Bills.'
+
+
+def _find_previous_copy_log(invoice: str, key: str, owner: str, idempotency_key: str, is_auto_fiscal: bool):
+    from hashlib import sha256
+
+    previous = frappe.db.get_value(
+        _COPY_LOG,
+        {'request_key': key},
+        _COPY_LOG_LOOKUP_FIELDS,
+        as_dict=True,
+        order_by='attempt desc',
+        for_update=True,
+    )
+    if previous:
+        return previous
+
+    # Accept pre-upgrade [owner, invoice, idempotency_key] hashes so reprints queued
+    # before the user-independent key format never print a duplicate COPY #2.
+    legacy_owners = []
+    if owner:
+        legacy_owners.append(owner)
+    if is_auto_fiscal:
+        pending_owner = frappe.db.get_value(_COPY_LOG, f'PENDING-EFRIS-{invoice}', 'job_owner')
+        if isinstance(pending_owner, str) and pending_owner and pending_owner not in legacy_owners:
+            legacy_owners.append(pending_owner)
+        existing_rows = frappe.get_all(
+            _COPY_LOG,
+            filters={'invoice': invoice, 'attempt': ['>', 0]},
+            fields=['job_owner'],
+        ) or []
+        for existing in existing_rows:
+            existing_owner = (
+                existing.get('job_owner') if isinstance(existing, dict) else getattr(existing, 'job_owner', None)
+            )
+            if isinstance(existing_owner, str) and existing_owner and existing_owner not in legacy_owners:
+                legacy_owners.append(existing_owner)
+
+    for legacy_owner in legacy_owners:
+        legacy_key = sha256(json.dumps([legacy_owner, invoice, idempotency_key]).encode()).hexdigest()
+        if legacy_key == key:
+            continue
+        previous = frappe.db.get_value(
+            _COPY_LOG,
+            {'request_key': legacy_key},
+            _COPY_LOG_LOOKUP_FIELDS,
+            as_dict=True,
+            order_by='attempt desc',
+            for_update=True,
+        )
+        if previous:
+            return previous
+    return None
+
+
+def _mark_pending_fiscal_reprint_dispatched(invoice: str):
+    pending_id = f'PENDING-EFRIS-{invoice}'
+    if frappe.db.exists(_COPY_LOG, pending_id):
+        frappe.db.set_value(_COPY_LOG, pending_id, {'status': 'DISPATCHED'})
 
 
 @frappe.whitelist(methods=['POST'])
-def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = None):
+def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = None, delivery: str | None = None):
     from hashlib import sha256
-    from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
+
     from ury.ury.api.ury_print import _bill_printers
+    from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
     from ury.ury.printing.file_store import save_job
     from ury.ury.printing.service import submit_and_monitor_print_job
 
     if not idempotency_key or len(idempotency_key) > 128:
         frappe.throw('A copy request key is required (maximum 128 characters).')
     branch = _closed_branch()
-    # Serializes copy numbering and retries, including competing cashier sessions.
-    doc = _closed_invoice(invoice, branch, for_update=True)
     owner = frappe.session.user
-    key = sha256(json.dumps([owner, invoice, idempotency_key]).encode()).hexdigest()
-    previous = frappe.db.get_value(_COPY_LOG, {'request_key': key},
-        ['name', 'print_job_id', 'status', 'failure_reason', 'attempt', 'copy_number'], as_dict=True,
-        order_by='attempt desc', for_update=True)
-    if previous and previous.status not in ('FAILED', 'CANCELED'):
-        return _copy_result(previous)
-    printers = _bill_printers(doc.pos_profile, doc.restaurant_table)
-    if not printers or (printer and printer not in printers):
-        frappe.throw('Select a configured bill printer for this outlet.')
-    printer = printer or printers[0]
-    attempt = previous.attempt + 1 if previous else 1
-    number = previous.copy_number if previous else frappe.db.count(_COPY_LOG, {'invoice': invoice, 'attempt': 1}) + 1
-    job_id = f'COPY-{key}-{attempt}'
-    record = {'doctype': _COPY_LOG, 'name': job_id, 'print_job_id': job_id, 'request_key': key,
-              'invoice': invoice, 'printer': printer, 'job_owner': owner, 'attempt': attempt,
-              'copy_number': number, 'retry_of': previous.name if previous else None, 'status': 'SUBMITTING'}
-    frappe.get_doc(record).insert(ignore_permissions=True)
-    # Claim durably before external I/O. A crash at handoff requires reconciliation;
-    # replaying SUBMITTING/UNKNOWN must never print another physical copy.
-    frappe.db.commit()
+    # Idempotent per invoice and copy key, whoever dispatches (cashier till or scheduler).
+    key = sha256(json.dumps([invoice, idempotency_key]).encode()).hexdigest()
+    requested_delivery = (delivery or '').strip().lower() or None
+    is_auto_fiscal = idempotency_key == f'efris-auto-{invoice}'
+
+    doc = _closed_invoice(invoice, branch)
+    transport = None
+    record = None
+    replayed = None
+    number = 0
+    job_id = ''
+    chosen_printer = printer
+    caller_has_writes = getattr(frappe.db, 'transaction_writes', None) != 0
+    with _IsolatedCopyLogDB(invoice) as claim_db:
+        for race_attempt in range(5):
+            savepoint = None
+            if claim_db is None:
+                savepoint = f'ury_print_bill_copy_{race_attempt}'
+                frappe.db.savepoint(savepoint)
+            try:
+                previous = _find_previous_copy_log(invoice, key, owner, idempotency_key, is_auto_fiscal)
+                if previous and previous.status not in ('FAILED', 'CANCELED'):
+                    if is_auto_fiscal and previous.status in ('SUBMITTED', 'COMPLETED'):
+                        _mark_pending_fiscal_reprint_dispatched(invoice)
+                        if claim_db is not None:
+                            claim_db.commit()
+                    replayed = previous
+                    break
+
+                printers = _bill_printers(doc.pos_profile, doc.restaurant_table)
+                if requested_delivery in ('browser', 'qz'):
+                    transport = requested_delivery
+                    chosen_printer = None
+                elif requested_delivery is None and not printer and not printers:
+                    transport = 'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
+                    chosen_printer = None
+                else:
+                    transport = 'network'
+                    if not printers or (printer and printer not in printers):
+                        frappe.throw('Select a configured bill printer for this outlet.')
+                    chosen_printer = printer or printers[0]
+
+                attempt = previous.attempt + 1 if previous else 1
+                if previous:
+                    number = previous.copy_number
+                else:
+                    # Locking read prevents MariaDB 11.8 innodb_snapshot_isolation stale-count races.
+                    latest_copy = frappe.db.get_value(
+                        _COPY_LOG,
+                        {'invoice': invoice, 'attempt': 1},
+                        'copy_number',
+                        order_by='copy_number desc',
+                        for_update=True,
+                    )
+                    number = cint(latest_copy) + 1
+                job_id = f'COPY-{key}-{attempt}'
+                copy_slot = f'{invoice}:{number}:{attempt}'
+
+                record = {
+                    'doctype': _COPY_LOG,
+                    'name': job_id,
+                    'print_job_id': job_id,
+                    'request_key': key,
+                    'copy_slot': copy_slot,
+                    'invoice': invoice,
+                    'printer': None if transport in ('browser', 'qz') else chosen_printer,
+                    'job_owner': owner,
+                    'attempt': attempt,
+                    'copy_number': number,
+                    'retry_of': previous.name if previous else None,
+                    'status': 'COMPLETED' if transport in ('browser', 'qz') else 'SUBMITTING',
+                }
+                frappe.get_doc(record).insert(ignore_permissions=True)
+                if transport in ('browser', 'qz') and is_auto_fiscal:
+                    _mark_pending_fiscal_reprint_dispatched(invoice)
+                if claim_db is not None:
+                    claim_db.commit()
+                break
+            except Exception as exc:
+                if race_attempt < 4 and _is_retryable_copy_race_error(exc):
+                    if claim_db is not None:
+                        claim_db.rollback()
+                    elif not caller_has_writes and _copy_race_errno(exc) == 1020:
+                        # MariaDB 11.8 innodb_snapshot_isolation pins ReadView across savepoints.
+                        # Resetting the transaction is only safe when the caller had zero prior writes.
+                        frappe.db.rollback()
+                    else:
+                        try:
+                            frappe.db.rollback(save_point=savepoint)
+                        except Exception as rb_exc:
+                            if not caller_has_writes and _copy_race_errno(rb_exc) == 1305:
+                                frappe.db.rollback()
+                            else:
+                                raise exc from rb_exc
+                    continue
+                raise
+
+    if replayed is not None:
+        return _copy_result(replayed, doc=doc, delivery=requested_delivery)
+
+    if transport in ('browser', 'qz'):
+        return _copy_result(record, doc=doc, delivery=transport)
+
     doc.copy_timestamp = frappe.utils.now()
     doc.copy_number = number
     doc._ury_copy_render = _COPY_RENDER_MARKER
     meta = {'print_job_id': job_id, 'invoice': invoice, 'job_owner': owner, 'retry_of': record['retry_of'],
             'job_type': 'BILL_COPY', 'reference_doctype': 'POS Invoice', 'reference_name': invoice,
-            'created_at': doc.copy_timestamp, 'printer': printer, 'status': 'SUBMITTING'}
+            'created_at': doc.copy_timestamp, 'printer': chosen_printer, 'status': 'SUBMITTING'}
     if not save_job(job_id, meta):
         result = {'status': 'Failure', 'message': 'Could not create the print job.'}
     else:
         try:
-            result = submit_and_monitor_print_job(doctype='POS Invoice', name=invoice, printer_setting=printer,
-                print_format='URY Bill Copy', doc=doc, job_type='BILL_COPY', extra_metadata={k:v for k,v in meta.items() if k != 'status'})
+            copy_lh = _resolve_invoice_letter_head(doc)
+            submit_kwargs = dict(
+                doctype='POS Invoice',
+                name=invoice,
+                printer_setting=chosen_printer,
+                print_format='URY Bill Copy',
+                doc=doc,
+                job_type='BILL_COPY',
+                extra_metadata={k: v for k, v in meta.items() if k != 'status'},
+            )
+            if copy_lh:
+                submit_kwargs['no_letterhead'] = 0
+                submit_kwargs['letterhead'] = copy_lh
+            result = submit_and_monitor_print_job(**submit_kwargs)
         except Exception:
             frappe.log_error(title='Bill copy dispatch failed')
             result = {'status': 'Unknown', 'message': 'Copy outcome unknown. Check the printer.'}
@@ -2797,11 +3271,117 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
     if status != 'SUBMITTED':
         save_job(job_id, {**meta, **update})
     # A fast polling worker can already have recorded the terminal outcome.
-    current = frappe.db.get_value(_COPY_LOG, job_id, ['status', 'print_job_id', 'failure_reason'], as_dict=True, for_update=True)
-    if current and current.status != 'SUBMITTING':
-        return _copy_result(current)
-    frappe.db.set_value(_COPY_LOG, job_id, update)
-    return _copy_result({**record, **update})
+    final_record = {**record, **update}
+    with _IsolatedCopyLogDB() as update_db:
+        current = frappe.db.get_value(
+            _COPY_LOG,
+            job_id,
+            ['status', 'print_job_id', 'failure_reason', 'copy_number', 'invoice', 'printer'],
+            as_dict=True,
+            for_update=True,
+        )
+        if current and current.status != 'SUBMITTING':
+            if is_auto_fiscal and current.status in ('SUBMITTED', 'COMPLETED'):
+                _mark_pending_fiscal_reprint_dispatched(invoice)
+            if update_db is not None:
+                update_db.commit()
+            final_record = current
+        else:
+            frappe.db.set_value(_COPY_LOG, job_id, update)
+            if is_auto_fiscal and status in ('SUBMITTED', 'COMPLETED'):
+                _mark_pending_fiscal_reprint_dispatched(invoice)
+            if update_db is not None:
+                update_db.commit()
+    return _copy_result(final_record, doc=doc, delivery='network')
+
+
+@frappe.whitelist(methods=['POST'])
+def queue_fiscal_reprint(invoice: str, delivery: str | None = None):
+    """Queue an automatic COPY #n reprint once URA EFRIS issues the FDN."""
+    branch = _closed_branch()
+    _closed_invoice(invoice, branch)
+    job_id = f'PENDING-EFRIS-{invoice}'
+    if not frappe.db.exists(_COPY_LOG, job_id):
+        record = {
+            'doctype': _COPY_LOG,
+            'name': job_id,
+            'print_job_id': job_id,
+            'request_key': f'efris-auto:{invoice}',
+            'copy_slot': f'{invoice}:0:0',
+            'invoice': invoice,
+            'printer': None,
+            'job_owner': frappe.session.user,
+            'attempt': 0,
+            'copy_number': 0,
+            'retry_of': None,
+            'status': 'AWAITING_FDN',
+            'failure_reason': (delivery or '').strip().lower() or None,
+        }
+        try:
+            frappe.get_doc(record).insert(ignore_permissions=True)
+        except Exception as exc:
+            if not _is_retryable_copy_race_error(exc):
+                raise
+    return {'status': 'AWAITING_FDN', 'print_job_id': job_id, 'invoice': invoice}
+
+
+def process_pending_fiscal_reprints():
+    """Scheduled worker: dispatch queued COPY #n reprints on network printers once FDN arrives."""
+    try:
+        from uganda_compliance.efris.efris_queue import get_efris_status
+    except ImportError:
+        return
+    from ury.ury.api.ury_print import _bill_printers
+
+    pending = frappe.get_all(
+        _COPY_LOG,
+        filters={'status': 'AWAITING_FDN'},
+        fields=['name', 'invoice', 'job_owner'],
+    )
+    for row in pending:
+        try:
+            efris = get_efris_status('POS Invoice', row.invoice) or {}
+            if not efris.get('fdn'):
+                continue
+            inv = frappe.get_doc('POS Invoice', row.invoice)
+            if inv.custom_merged_pos_invoice:
+                partner_efris = get_efris_status('POS Invoice', inv.custom_merged_pos_invoice) or {}
+                if partner_efris.get('efris_status') and not partner_efris.get('fdn'):
+                    continue
+            if cint(frappe.db.get_value('POS Profile', inv.pos_profile, 'qz_print')):
+                continue
+            if not _bill_printers(inv.pos_profile, inv.restaurant_table):
+                continue
+            if not row.job_owner or not cint(frappe.db.get_value('User', row.job_owner, 'enabled')):
+                frappe.db.set_value(
+                    _COPY_LOG,
+                    row.name,
+                    {'status': 'FAILED', 'failure_reason': _DISABLED_REPRINT_OWNER_REASON},
+                )
+                frappe.log_error(
+                    title='Pending Fiscal Reprint Skipped',
+                    message=f'{row.name} ({row.invoice}): {_DISABLED_REPRINT_OWNER_REASON} (job_owner={row.job_owner!r})',
+                )
+                frappe.db.commit()
+                continue
+            prev_user = frappe.session.user
+            try:
+                frappe.set_user(row.job_owner)
+                outcome = print_bill_copy(
+                    invoice=row.invoice,
+                    idempotency_key=f'efris-auto-{row.invoice}',
+                    delivery='network',
+                )
+            finally:
+                frappe.set_user(prev_user)
+            if outcome.get('status') in ('SUBMITTED', 'COMPLETED'):
+                frappe.db.set_value(_COPY_LOG, row.name, {'status': 'DISPATCHED'})
+            # Persist each dispatched queue row in its own transaction before the next row runs.
+            frappe.db.commit()
+        except Exception:
+            frappe.db.rollback()
+            frappe.log_error(title='Pending Fiscal Reprint Dispatch Failed')
+            frappe.db.commit()
 
 
 @frappe.whitelist(methods=['GET'])

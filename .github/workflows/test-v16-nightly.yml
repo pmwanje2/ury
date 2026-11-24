@@ -260,6 +260,8 @@ jobs:
               ury.ury.services.test_bom_cost_resolver
               ury.ury.services.test_production_unit_department_migration
               ury.ury.services.test_yield_check_reminders
+              ury.ury.tests.test_bill_copy
+              ury.ury.tests.test_pos_print_format_security
               ury.ury_pos.test_api
               ury.ury_pos.test_e2e_p0_p1_flow
 

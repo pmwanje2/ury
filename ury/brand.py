@@ -215,7 +215,7 @@ def coded_message(key, message=""):
     except Exception:
         prefix = None
     if not (isinstance(prefix, str) and re.fullmatch(r"[A-Z][A-Z0-9]{1,9}", prefix)) or re.search(
-        r"URY|FRAPPE|ERPNEXT|KAMRA|HUF|TRIDZ|HEYKOALA", prefix, re.I
+        r"ury|frappe|erpnext|kamra|huf|tridz|heykoala", prefix, re.I
     ):
         prefix = DEFAULT_MESSAGE_CODE_PREFIX
     return f"[{prefix}-{key}] {message}" if message else f"[{prefix}-{key}]"

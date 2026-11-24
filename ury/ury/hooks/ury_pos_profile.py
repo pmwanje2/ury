@@ -11,6 +11,7 @@ def validate(doc, method):
     validate_order_type_customers(doc, method)
     validate_room_lookup_method(doc, method)
     validate_till_cash_thresholds(doc, method)
+    validate_print_format(doc, method)
 
 
 def validate_till_cash_thresholds(doc, method=None):
@@ -27,6 +28,43 @@ def validate_till_cash_thresholds(doc, method=None):
                 coded_message("PROFILE-TOLERANCE", _("{0} cannot be negative.").format(_(label))),
                 frappe.ValidationError,
             )
+
+
+def validate_print_format(doc, method=None):
+    """Default blank hospitality POS Profile print_format to the guest-check format and
+    refuse disabled or XSS-vulnerable standard formats on hospitality profiles.
+
+    Non-hospitality retail POS Profiles (no restaurant or branch) are left free to
+    configure or revert to any enabled retail format.
+    """
+    from ury.ury.print_format.defaults import (
+        GUEST_CHECK_PRINT_FORMAT,
+        _active_db,
+        is_hospitality_pos_profile,
+        is_print_format_disabled,
+        is_unsafe_pos_invoice_format,
+    )
+
+    pf = (doc.get("print_format") or "").strip()
+    is_hosp = is_hospitality_pos_profile(doc)
+    if not pf:
+        if is_hosp:
+            db = _active_db()
+            if db is not None and db.sql("SELECT 1 FROM `tabPrint Format` WHERE name=%s LIMIT 1", (GUEST_CHECK_PRINT_FORMAT,)):
+                doc.print_format = GUEST_CHECK_PRINT_FORMAT
+        return
+    if is_print_format_disabled(pf):
+        frappe.throw(
+            _("Print Format {0} is disabled. Choose an enabled print format.").format(pf),
+            frappe.ValidationError,
+        )
+    if is_hosp and is_unsafe_pos_invoice_format(pf):
+        frappe.throw(
+            _("Print Format {0} is unsafe for hospitality POS Invoice printing. Choose an enabled guest-check format such as {1}.").format(
+                pf, GUEST_CHECK_PRINT_FORMAT
+            ),
+            frappe.ValidationError,
+        )
 
 
 def validate_room_lookup_method(doc, method=None):
@@ -64,6 +102,7 @@ def validate_bill_check(doc, method):
                             "Either Bill is not enabled / Printer is not selected in Printer Settings."
                         )
                     )
-            
+
+
 def validate_cost_center(doc, method):
     pass

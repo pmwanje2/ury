@@ -60,7 +60,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Outcome",
-   "options": "Approved\nConsumed\nRefused\nFailed PIN\nLocked\nExpired\nChanged",
+   "options": "Approved\nConsumed\nRefused\nFailed PIN\nFailed Password\nLocked\nExpired\nChanged\nPIN Reset",
    "read_only": 1,
    "search_index": 1
   },

@@ -244,18 +244,19 @@ class TestGuestPhonePayment(unittest.TestCase):
         invoice.save()
         frappe.set_user("Guest")
 
-    def test_order_growth_after_paid_request_returns_counter_balance_without_new_request(self):
+    def test_order_growth_after_paid_request_creates_new_request_for_remaining_amount(self):
         first = self.request()
         self.mark_paid(first["payment_request"])
         self.grow_order()
 
         remainder = self.request()
-        self.assertEqual(remainder["payment_request"], first["payment_request"])
+        self.assertNotEqual(remainder["payment_request"], first["payment_request"])
         self.assertEqual((remainder["amount"], remainder["paid_amount"], remainder["remaining_amount"]),
             (100, 100, 100))
-        self.assertEqual((remainder["status"], remainder["payment_url"]), ("Paid", None))
+        self.assertEqual(remainder["status"], "Requested")
+        self.assertTrue(remainder["payment_url"])
         self.assertEqual(self.request(), remainder)
-        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 2)
         self.assertEqual(frappe.session.user, "Guest")
 
     def test_unpaid_growth_cancels_stale_request_and_replaces_full_amount(self):
@@ -275,8 +276,9 @@ class TestGuestPhonePayment(unittest.TestCase):
         first = self.request()
         self.mark_paid(first["payment_request"])
         self.grow_order()
-        self.request()
-        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 1)
+        second = self.request()
+        self.assertNotEqual(second["payment_request"], first["payment_request"])
+        self.assertEqual(frappe.db.count("Payment Request", {"reference_name": self.invoice_name}), 2)
         frappe.set_user(self.pos.user.name)
         settle_order(self.pos, self.invoice_name, payments=[
             {"mode_of_payment": "P2 Phone", "amount": 100},
@@ -286,6 +288,29 @@ class TestGuestPhonePayment(unittest.TestCase):
         self.assertEqual((saved.docstatus, saved.outstanding_amount), (1, 0))
         self.assertEqual([(p.mode_of_payment, p.amount) for p in saved.payments],
             [("P2 Phone", 100), ("Cash", 100)])
+
+    def test_phone_paid_then_growth_second_phone_paid_settles_both_phone_requests(self):
+        first = self.request()
+        self.mark_paid(first["payment_request"])
+        self.grow_order()
+        second = self.request()
+        self.assertNotEqual(second["payment_request"], first["payment_request"])
+        self.assertEqual(second["amount"], 100)
+        self.mark_paid(second["payment_request"])
+        frappe.set_user(self.pos.user.name)
+        settle_order(self.pos, self.invoice_name, payments=[
+            {"mode_of_payment": "P2 Phone", "amount": 100, "reference_no": first["payment_request"]},
+            {"mode_of_payment": "P2 Phone", "amount": 100, "reference_no": second["payment_request"]},
+        ])
+        saved = frappe.get_doc("POS Invoice", self.invoice_name)
+        self.assertEqual((saved.docstatus, saved.outstanding_amount), (1, 0))
+        self.assertEqual(
+            sorted((p.mode_of_payment, p.amount, p.reference_no) for p in saved.payments),
+            sorted([
+                ("P2 Phone", 100, first["payment_request"]),
+                ("P2 Phone", 100, second["payment_request"]),
+            ]),
+        )
 
     def integration(self, request, status):
         frappe.set_user("Administrator")

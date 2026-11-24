@@ -1,19 +1,42 @@
-"""POS manager PIN authorisation core (Oracle Simphony / SAP POS parity + Amendment 1, B2a).
+"""POS manager PIN authorisation core (Oracle Simphony / SAP POS parity + Amendment 1 + R2 hardening).
 
 Model (Simphony): each role has explicit `may_perform` (act alone) and
 `may_authorise` (approve for another operator with their personal PIN) rules in
 `POS Privilege Rule`, plus `allow_self_approval`, `require_clocked_in`, and
 `privilege_group` (0-3). Native Frappe DocPerms remain the hard ceiling.
 
+Storage & Security Invariants (R2):
+- Approval PINs live exclusively in Frappe's `__Auth` table via
+  `frappe.utils.password.update_password` / `check_password`
+  (`doctype="POS Override PIN"`, `fieldname="pin_hash"`), never on `User`.
+- Password re-entry in `set_my_pin` catches `frappe.AuthenticationError` and
+  refuses with `frappe.ValidationError` (`[POS-AUTH-PASSWORD]` / `[POS-AUTH-LOCKED]`)
+  so a typo never clears session cookies or kills the live till session.
+- Impersonated (`impersonated_by`), non-System-User, API-key, Bearer, and AI
+  agent sessions are refused everywhere (authorise, consume, may_perform,
+  list_approvers, enrolment).
+- Zero-rules companies fail closed to manager roles only (`_MGR_ROLES`), never
+  "everyone". Explicit `max_percent=0` on a discount rule is 0%, never fallback.
+- `consume()` re-checks both approver and requester (enabled, outlet, roles,
+  rules, caps, clock-in, check-owner) and records consumption in an isolated
+  committed DB connection so caller rollbacks can never replay a spent token
+  and caller business writes are never leaked.
+- `requires_reason` is enforced server-side against active `POS Reason` rows
+  (with mandatory note when `requires_note=1`).
+- Lockout is DB-backed (`POS Authorisation Log`) + Redis-accelerated, scoped
+  per `(approver, pos_profile)`, with a per-session rate limit at the till.
+
 Refusal codes (plain sentence first, neutral wording):
 - POS-AUTH-REQUIRED      (PermissionError): action needs manager approval
 - POS-AUTH-SELF          (PermissionError): requester or check owner cannot self-approve
-- POS-AUTH-NOT-ELIGIBLE  (PermissionError): approver disabled, wrong outlet/company,
+- POS-AUTH-NOT-ELIGIBLE  (PermissionError): approver/requester disabled, wrong outlet/company,
                          not clocked in, lacks rule/limit/group, Administrator/Guest,
-                         or non-interactive/AI session
+                         or impersonated / non-interactive / AI session
 - POS-AUTH-PIN           (ValidationError): wrong approval PIN
-- POS-AUTH-LOCKED        (ValidationError): approver PIN locked out after failed attempts
+- POS-AUTH-PASSWORD      (ValidationError): wrong current account password during PIN enrolment
+- POS-AUTH-LOCKED        (ValidationError): approver PIN, password enrolment, or till session locked
 - POS-AUTH-NO-PIN        (ValidationError): approver has not enrolled an approval PIN
+- POS-AUTH-REASON        (ValidationError): missing, inactive, wrong-privilege, or incomplete reason
 - POS-AUTH-EXPIRED       (ValidationError): token missing, expired (>120s), or already used
 - POS-AUTH-CHANGED       (ValidationError): claim, check, privilege, till, or session changed
 """
@@ -31,16 +54,57 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
 import frappe
-from frappe.auth import LoginAttemptTracker
-from frappe.core.doctype.activity_log.activity_log import add_authentication_log
-from frappe.core.doctype.user_permission.user_permission import get_user_permissions
-from frappe.utils import cint, flt, get_datetime, get_fullname, now_datetime
-from frappe.utils.password import check_password, get_encryption_key
+from frappe.utils import cint, flt, get_datetime, now_datetime
+
+
+def _get_fullname(user: str) -> str:
+    try:
+        from frappe.utils import get_fullname
+
+        return get_fullname(user) or user
+    except ImportError:
+        return user
+
+
+def _get_login_attempt_tracker_cls():
+    from frappe.auth import LoginAttemptTracker
+
+    return LoginAttemptTracker
+
+
+def _add_authentication_log(subject: str, user: str) -> None:
+    from frappe.core.doctype.activity_log.activity_log import add_authentication_log
+
+    add_authentication_log(subject, user)
+
+
+def _get_user_permissions(user: str):
+    from frappe.core.doctype.user_permission.user_permission import get_user_permissions
+
+    return get_user_permissions(user)
+
+
+def _check_password(user: str, pwd: str, **kwargs):
+    from frappe.utils.password import check_password
+
+    return check_password(user, pwd, **kwargs)
+
+
+def _update_password(user: str, pwd: str, **kwargs):
+    from frappe.utils.password import update_password
+
+    return update_password(user, pwd, **kwargs)
 
 TOKEN_TTL_SECONDS = 120
 DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_LOCK_MINUTES = 15
+DEFAULT_PASSWORD_MAX_ATTEMPTS = 5
+DEFAULT_PASSWORD_LOCK_MINUTES = 15
+MIN_REASON_NOTE_LENGTH = 4
 PIN_PATTERN = re.compile(r"^[0-9]{4,8}$")
+
+PIN_AUTH_DOCTYPE = "POS Override PIN"
+PIN_AUTH_FIELDNAME = "pin_hash"
 
 AGENT_ROLES = frozenset({"Kamra Agent", "AI Agent", "HUF Agent"})
 SECRET_FORM_KEYS = ("pin", "password", "current_password", "new_pin", "confirm_pin")
@@ -110,16 +174,6 @@ def _refuse(code: str, message: str, exc=None) -> None:
     frappe.throw(f"{frappe._(message)} [{code}]", exc or frappe.PermissionError)
 
 
-def _key(purpose: str) -> bytes:
-    return hmac.digest(get_encryption_key().encode(), purpose.encode(), "sha256")
-
-
-def _pin_digest(user: str, pin: str) -> str:
-    """Per-user keyed HMAC-SHA256 so shared PINs produce distinct hashes."""
-    payload = f"{user.casefold()}:{pin}"
-    return hmac.new(_key("pos-override-pin-v1"), payload.encode(), hashlib.sha256).hexdigest()
-
-
 def _token_digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -130,8 +184,43 @@ def _validate_privilege(privilege: str) -> PrivilegeSpec:
     return PRIVILEGES[privilege]
 
 
+def _is_impersonated_session() -> bool:
+    """True when the active Frappe session is impersonating another user (sudo)."""
+    flags = getattr(frappe, "flags", None)
+    if flags and getattr(flags, "impersonated_by", None):
+        return True
+
+    session = getattr(frappe, "session", None)
+    if session is not None:
+        if getattr(session, "impersonated_by", None):
+            return True
+        sdata = getattr(session, "data", None)
+        if isinstance(sdata, dict):
+            if sdata.get("impersonated_by") or sdata.get("impersonator") or sdata.get("is_impersonated"):
+                return True
+            user_type = sdata.get("user_type")
+            if user_type and str(user_type) != "System User":
+                return True
+
+    local = getattr(frappe, "local", None)
+    session_obj = getattr(local, "session_obj", None) if local is not None else None
+    if session_obj is not None:
+        obj_data = getattr(session_obj, "data", None)
+        if isinstance(obj_data, dict):
+            if obj_data.get("impersonated_by") or obj_data.get("impersonator") or obj_data.get("is_impersonated"):
+                return True
+            user_type = obj_data.get("user_type")
+            if user_type and str(user_type) != "System User":
+                return True
+
+    return False
+
+
 def _is_non_interactive_or_agent_session(user: str | None = None) -> bool:
-    """True for AI agent calls, MCP, or non-interactive API-key / OAuth sessions."""
+    """True for AI agent calls, MCP, impersonated (sudo), or non-interactive API-key / OAuth sessions."""
+    if _is_impersonated_session():
+        return True
+
     flags = getattr(frappe, "flags", None)
     if flags:
         for flag_name in ("kamra_agent_call", "ury_agent_call", "mcp_call", "in_mcp", "api_key_auth"):
@@ -159,6 +248,72 @@ def _is_non_interactive_or_agent_session(user: str | None = None) -> bool:
             return True
 
     return False
+
+
+def _has_real_isolated_db() -> bool:
+    conf = getattr(frappe, "conf", None)
+    if not conf or not callable(getattr(conf, "get", None)):
+        return False
+    return bool(conf.get("db_name"))
+
+
+def _with_isolated_db(fn, *, commit: bool = False):
+    """Run `fn(db)` on an independent DB connection so writes/reads neither leak nor depend on caller's tx."""
+    if not _has_real_isolated_db():
+        return fn(frappe.db)
+
+    from frappe.database import get_db
+
+    conf = frappe.local.conf
+    aux = get_db(
+        socket=conf.get("db_socket"),
+        host=conf.get("db_host"),
+        user=conf.get("db_user"),
+        password=conf.get("db_password"),
+        port=conf.get("db_port"),
+        cur_db_name=conf.get("db_name"),
+    )
+    try:
+        result = fn(aux)
+        if commit:
+            aux.commit()
+        return result
+    except Exception:
+        try:
+            aux.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            aux.close()
+        except Exception:
+            pass
+
+
+def _has_override_pin(user: str) -> bool:
+    if not user or user in ("Administrator", "Guest"):
+        return False
+    rows = frappe.db.sql(
+        "SELECT name FROM `__Auth` WHERE doctype = %s AND name = %s AND fieldname = %s AND encrypted = 0 LIMIT 1",
+        (PIN_AUTH_DOCTYPE, user, PIN_AUTH_FIELDNAME),
+    )
+    return bool(rows)
+
+
+def _users_with_override_pin() -> set[str]:
+    rows = frappe.db.sql(
+        "SELECT name FROM `__Auth` WHERE doctype = %s AND fieldname = %s AND encrypted = 0",
+        (PIN_AUTH_DOCTYPE, PIN_AUTH_FIELDNAME),
+    )
+    return {str(row[0]).casefold() for row in (rows or ()) if row and row[0]}
+
+
+def _clear_override_pin(user: str) -> None:
+    frappe.db.sql(
+        "DELETE FROM `__Auth` WHERE doctype = %s AND name = %s AND fieldname = %s",
+        (PIN_AUTH_DOCTYPE, user, PIN_AUTH_FIELDNAME),
+    )
 
 
 def _canonicalize_value(value: Any) -> Any:
@@ -247,14 +402,131 @@ def _pin_policy(profile) -> tuple[int, int]:
     )
 
 
-def _pin_tracker(approver: str, profile) -> tuple[LoginAttemptTracker, int, int]:
+def _session_rate_limit(max_attempts: int) -> int:
+    conf = getattr(frappe, "conf", None)
+    configured = cint(conf.get("pos_override_session_max_attempts")) if callable(getattr(conf, "get", None)) else 0
+    if configured > 0:
+        return configured
+    return max(max_attempts * 2, 10)
+
+
+def _pin_tracker(approver: str, profile) -> tuple[Any, int, int]:
     max_attempts, lock_minutes = _pin_policy(profile)
-    tracker = LoginAttemptTracker(
-        f"pos-override-pin:{approver.casefold()}",
+    scope = (profile.name if profile else "").casefold()
+    tracker = _get_login_attempt_tracker_cls()(
+        f"pos-override-pin:{approver.casefold()}:{scope}",
         max_consecutive_login_attempts=max(0, max_attempts - 1),
         lock_interval=lock_minutes * 60,
     )
     return tracker, max_attempts, lock_minutes
+
+
+def _session_tracker(requester: str, profile, max_attempts: int, lock_minutes: int) -> tuple[Any, int]:
+    session_cap = _session_rate_limit(max_attempts)
+    scope = (profile.name if profile else "").casefold()
+    tracker = _get_login_attempt_tracker_cls()(
+        f"pos-override-session:{requester.casefold()}:{scope}",
+        max_consecutive_login_attempts=max(0, session_cap - 1),
+        lock_interval=lock_minutes * 60,
+    )
+    return tracker, session_cap
+
+
+def _password_tracker(user: str) -> tuple[Any, int, int]:
+    max_attempts = DEFAULT_PASSWORD_MAX_ATTEMPTS
+    lock_minutes = DEFAULT_PASSWORD_LOCK_MINUTES
+    tracker = _get_login_attempt_tracker_cls()(
+        f"pos-override-pw:{user.casefold()}",
+        max_consecutive_login_attempts=max(0, max_attempts - 1),
+        lock_interval=lock_minutes * 60,
+    )
+    return tracker, max_attempts, lock_minutes
+
+
+def _db_failed_pin_count(approver: str, pos_profile: str, lock_minutes: int) -> int:
+    """Count recent Failed PIN attempts for `(approver, pos_profile)` in MariaDB since last reset."""
+    window_start = now_datetime() - timedelta(minutes=lock_minutes)
+
+    def _query(db):
+        reset_rows = db.sql(
+            """
+            SELECT MAX(event_time)
+            FROM `tabPOS Authorisation Log`
+            WHERE approver = %s
+              AND ((outcome = 'Approved' AND pos_profile = %s) OR outcome IN ('PIN Reset'))
+              AND event_time >= %s
+            """,
+            (approver, pos_profile, window_start),
+        )
+        last_reset = reset_rows[0][0] if reset_rows and reset_rows[0] else None
+        since = max(window_start, get_datetime(last_reset)) if last_reset else window_start
+        cnt_rows = db.sql(
+            """
+            SELECT COUNT(*)
+            FROM `tabPOS Authorisation Log`
+            WHERE approver = %s
+              AND pos_profile = %s
+              AND outcome = 'Failed PIN'
+              AND event_time > %s
+            """,
+            (approver, pos_profile, since),
+        )
+        return cint(cnt_rows[0][0]) if cnt_rows and cnt_rows[0] else 0
+
+    return _with_isolated_db(_query, commit=False)
+
+
+def _db_session_failed_pin_count(requester: str, pos_profile: str, lock_minutes: int) -> int:
+    """Count recent Failed PIN attempts from `(requester, pos_profile)` across all approvers."""
+    window_start = now_datetime() - timedelta(minutes=lock_minutes)
+
+    def _query(db):
+        cnt_rows = db.sql(
+            """
+            SELECT COUNT(*)
+            FROM `tabPOS Authorisation Log`
+            WHERE requester = %s
+              AND pos_profile = %s
+              AND outcome = 'Failed PIN'
+              AND event_time > %s
+            """,
+            (requester, pos_profile, window_start),
+        )
+        return cint(cnt_rows[0][0]) if cnt_rows and cnt_rows[0] else 0
+
+    return _with_isolated_db(_query, commit=False)
+
+
+def _db_failed_password_count(user: str, lock_minutes: int) -> int:
+    """Count recent Failed Password attempts for `set_my_pin` since last PIN Reset."""
+    window_start = now_datetime() - timedelta(minutes=lock_minutes)
+
+    def _query(db):
+        reset_rows = db.sql(
+            """
+            SELECT MAX(event_time)
+            FROM `tabPOS Authorisation Log`
+            WHERE approver = %s
+              AND outcome = 'PIN Reset'
+              AND event_time >= %s
+            """,
+            (user, window_start),
+        )
+        last_reset = reset_rows[0][0] if reset_rows and reset_rows[0] else None
+        since = max(window_start, get_datetime(last_reset)) if last_reset else window_start
+        cnt_rows = db.sql(
+            """
+            SELECT COUNT(*)
+            FROM `tabPOS Authorisation Log`
+            WHERE approver = %s
+              AND outcome = 'Failed Password'
+              AND event_time > %s
+            """,
+            (user, since),
+        )
+        return cint(cnt_rows[0][0]) if cnt_rows and cnt_rows[0] else 0
+
+    return _with_isolated_db(_query, commit=False)
 
 
 def _external_pin_verifier():
@@ -274,7 +546,7 @@ def _is_outlet_member(user: str, profile) -> bool:
     if cint(frappe.db.get_value("User", user, "enabled")) != 1:
         return False
 
-    perms = get_user_permissions(user) or {}
+    perms = _get_user_permissions(user) or {}
     company_perms = {p.get("doc") for p in perms.get("Company", []) if p.get("doc")}
     if company_perms and profile.company not in company_perms:
         return False
@@ -423,7 +695,6 @@ def _discount_limit_for_user(company: str, user_roles: set[str]) -> tuple[float,
 def _rule_matches_group_and_clock(rule, user: str, company: str, privilege_group: int = 0) -> bool:
     req_pg = cint(privilege_group)
     rule_pg = cint(rule.get("privilege_group"))
-    # 0 = unrestricted; 1..3 = role restricted to that Simphony Privilege Group.
     if req_pg > 0 and rule_pg > 0 and rule_pg != req_pg:
         return False
     if cint(rule.get("require_clocked_in")) == 1 and not _is_clocked_in_if_attendance_active(user, company):
@@ -441,15 +712,25 @@ def _rule_covers_limits(rule, percent: float | None, amount: float | None) -> bo
     return True
 
 
-def _check_owners(reference_doctype: str | None, reference_name: str | None) -> set[str]:
+def _check_owners(
+    reference_doctype: str | None,
+    reference_name: str | None,
+    *,
+    profile=None,
+) -> set[str]:
     if not reference_name:
         return set()
     dt = reference_doctype or "POS Invoice"
     owners: set[str] = set()
-    fields = ["owner", "waiter"] if dt == "POS Invoice" else ["owner"]
+    fields = ["owner", "waiter", "company", "branch", "pos_profile"] if dt == "POS Invoice" else ["owner"]
     row = frappe.db.get_value(dt, reference_name, fields, as_dict=True)
     if isinstance(row, dict):
-        for field in fields:
+        if profile is not None and dt == "POS Invoice":
+            if row.get("company") and row.get("company") != profile.company:
+                return set()
+            if profile.get("branch") and row.get("branch") and row.get("branch") != profile.get("branch"):
+                return set()
+        for field in ("owner", "waiter"):
             val = (row.get(field) or "").strip()
             if val:
                 owners.add(val.casefold())
@@ -459,10 +740,30 @@ def _check_owners(reference_doctype: str | None, reference_name: str | None) -> 
 
 
 def is_policy_active(company: str | None) -> bool:
-    """True once a company has POS Privilege Rule rows (seeded or configured)."""
+    """True when `company` has at least one POS Privilege Rule row.
+
+    NOTE (P1 #5): Consumers must NOT skip authorisation when this returns False;
+    `may_perform`/`require` fail closed to manager roles only when no rules exist.
+    """
     if not isinstance(company, str) or not company.strip():
         return False
     return bool(frappe.db.exists("POS Privilege Rule", {"company": company}))
+
+
+def on_company_after_insert(doc, method=None) -> None:
+    """Auto-seed POS Privilege Rules and POS Reasons when a new Company is created (P1 #5)."""
+    if getattr(frappe.flags, "in_install", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if not doc or not getattr(doc, "name", None):
+        return
+    try:
+        from ury.patches.v2_0 import setup_pos_manager_authorisation
+
+        setup_pos_manager_authorisation.seed_default_rules(company=doc.name)
+        setup_pos_manager_authorisation.seed_default_reasons()
+    except Exception:
+        # Never block Company creation if POS tables aren't synced yet during bootstrap.
+        pass
 
 
 class _VerifiedApprovalProof:
@@ -517,6 +818,85 @@ def requires_reason(pos_profile: str, privilege: str) -> bool:
     return any(cint(r.get("requires_reason")) == 1 for r in target_rows)
 
 
+def _validate_reason(pos_profile: str, privilege: str, parsed_claim: dict[str, Any]) -> str:
+    """Enforce `requires_reason` server-side against active `POS Reason` rows (P1 #7)."""
+    raw_reason = str(parsed_claim.get("reason") or "").strip()
+    raw_code = str(parsed_claim.get("reason_code") or "").strip()
+    raw_note = str(parsed_claim.get("note") or "").strip()
+
+    if not requires_reason(pos_profile, privilege):
+        return raw_reason or raw_code
+
+    # Discounts use siteops Discount Reason (Amendment 1 #4), not POS Reason.
+    if privilege == "discount":
+        candidate = raw_reason or raw_code
+        if not candidate:
+            _refuse("POS-AUTH-REASON", "Select a reason for this discount.", frappe.ValidationError)
+        return candidate
+
+    active_reasons = list_reasons(privilege)
+    if not active_reasons:
+        candidate = raw_reason or raw_code
+        if len(candidate) < MIN_REASON_NOTE_LENGTH:
+            _refuse(
+                "POS-AUTH-REASON",
+                "Enter a reason (at least 4 characters) for this action.",
+                frappe.ValidationError,
+            )
+        return candidate
+
+    matched = None
+    extracted_note = raw_note
+
+    if raw_code:
+        code_cf = raw_code.casefold()
+        for row in active_reasons:
+            if str(row.get("code") or "").casefold() == code_cf:
+                matched = row
+                break
+        if matched and not extracted_note and raw_reason:
+            desc_prefix = f"{matched.get('description') or ''}:"
+            code_prefix = f"{matched.get('code') or ''}:"
+            if raw_reason.casefold().startswith(desc_prefix.casefold()):
+                extracted_note = raw_reason[len(desc_prefix):].strip()
+            elif raw_reason.casefold().startswith(code_prefix.casefold()):
+                extracted_note = raw_reason[len(code_prefix):].strip()
+
+    if matched is None and raw_reason:
+        reason_cf = raw_reason.casefold()
+        for row in active_reasons:
+            code_s = str(row.get("code") or "").strip()
+            desc_s = str(row.get("description") or "").strip()
+            if (code_s and reason_cf == code_s.casefold()) or (desc_s and reason_cf == desc_s.casefold()):
+                matched = row
+                break
+            for prefix in (code_s, desc_s):
+                if prefix and reason_cf.startswith(f"{prefix.casefold()}:"):
+                    matched = row
+                    tail = raw_reason[len(prefix) + 1:].strip()
+                    if tail and not extracted_note:
+                        extracted_note = tail
+                    break
+            if matched is not None:
+                break
+
+    if matched is None:
+        _refuse(
+            "POS-AUTH-REASON",
+            "Choose an active reason for this action.",
+            frappe.ValidationError,
+        )
+
+    if cint(matched.get("requires_note")) == 1 and len(extracted_note.strip()) < MIN_REASON_NOTE_LENGTH:
+        _refuse(
+            "POS-AUTH-REASON",
+            "Add a short note (at least 4 characters) explaining the reason.",
+            frappe.ValidationError,
+        )
+
+    return raw_reason or str(matched.get("description") or matched.get("code") or "")
+
+
 def may_perform(
     user: str,
     pos_profile: str,
@@ -528,6 +908,9 @@ def may_perform(
     """True when `user` may perform `privilege` alone at `pos_profile`."""
     _validate_privilege(privilege)
     if not user or user in ("Administrator", "Guest"):
+        return False
+    # P0 #3: impersonated / agent / non-interactive sessions cannot perform privileged overrides.
+    if _is_non_interactive_or_agent_session(user):
         return False
     profile = _get_profile(pos_profile)
     if not profile or not _is_outlet_member(user, profile):
@@ -546,16 +929,22 @@ def may_perform(
     if not roles:
         return False
 
+    # P1 #5: Fail closed when a company has zero rules configured:
+    # ONLY today's manager roles may act alone (never cashiers, never "everyone");
+    # discounts remain 0% alone without explicit rules + Approval Limit.
+    if not is_policy_active(profile.company):
+        if privilege == "discount":
+            return pct is not None and pct <= 0.0
+        return bool(roles & set(_MGR_ROLES))
+
     effective = _effective_rules_for_roles(profile.company, profile.name, privilege, roles)
 
     if privilege == "discount":
-        # Amendment 1 #3: every role starts at 0% alone; min(Approval Limit, rule) wins!
+        # Amendment 1 #3 + P1 #5: every role starts at 0% alone; explicit 0% rule is 0%,
+        # NEVER falls back to Approval Limit! min(Approval Limit, rule) wins.
         al_limit, _approver_role, has_al = _discount_limit_for_user(profile.company, roles)
         if not has_al:
-            # Blank Approval Limit = 0% at the till for every role.
             return pct is not None and pct <= 0.0
-        # If POS Privilege Rule rows exist for this user's roles, check perform + tighter cap;
-        # if no rule exists for any of the user's roles and company has discount rules, deny.
         matching_perform_rules = [
             rule
             for rule in effective.values()
@@ -566,8 +955,9 @@ def may_perform(
             return False
         best_effective_pct = 0.0
         for rule in matching_perform_rules:
-            rule_cap = flt(rule.get("max_percent"))
-            cap = min(al_limit, rule_cap) if rule_cap > 0 else al_limit
+            raw_rule_pct = rule.get("max_percent")
+            rule_cap = max(0.0, flt(raw_rule_pct)) if raw_rule_pct is not None else 0.0
+            cap = min(al_limit, rule_cap)
             if amt is not None and flt(rule.get("max_amount")) > 0 and amt > flt(rule.get("max_amount")) + 1e-9:
                 continue
             if cap > best_effective_pct:
@@ -599,11 +989,18 @@ def _matching_authorise_rules(
         return []
 
     roles = set(frappe.get_roles(approver))
-    if not roles:
+    if not roles or (AGENT_ROLES & roles):
         return []
 
     pct = _parse_optional_number(percent)
     amt = _parse_optional_number(amount)
+
+    # P1 #5: Zero-rules company fallback allows ONLY manager roles to authorise via PIN.
+    if not is_policy_active(profile.company):
+        if roles & set(_MGR_ROLES):
+            return [frappe._dict(allow_self_approval=0, max_percent=0, max_amount=0)]
+        return []
+
     effective = _effective_rules_for_roles(profile.company, profile.name, privilege, roles)
 
     if privilege == "discount":
@@ -621,8 +1018,8 @@ def _matching_authorise_rules(
                 if is_top_approver:
                     matched.append(rule)
                     continue
-                rule_cap = flt(rule.get("max_percent"))
-                cap = min(al_limit, rule_cap) if rule_cap > 0 else al_limit
+                rule_cap = max(0.0, flt(rule.get("max_percent")))
+                cap = min(al_limit, rule_cap)
                 if pct is not None:
                     if cap >= pct - 1e-9 and cap > 0.0:
                         matched.append(rule)
@@ -631,8 +1028,6 @@ def _matching_authorise_rules(
             else:
                 if _rule_covers_limits(rule, pct, amt):
                     matched.append(rule)
-        # If Approval Limit explicitly names a discount_approver_role that the user holds
-        # (even if no explicit POS Privilege Rule was added for that custom role), honour it.
         if not matched and has_al and approver_role and approver_role in roles:
             matched.append(frappe._dict(allow_self_approval=0))
         return matched
@@ -671,8 +1066,48 @@ def _write_log(
     consumed_token_hash: str | None = None,
     claim_hash: str | None = None,
     expires_at=None,
-    commit: bool = False,
+    isolated: bool = True,
 ):
+    """Write an insert-only POS Authorisation Log row.
+
+    When `isolated=True` (default), writes and commits on an independent MariaDB
+    connection so failed attempts, lockouts, and token consumptions survive caller
+    rollbacks WITHOUT prematurely committing the caller's uncommitted business work.
+    """
+    now_ts = now_datetime()
+    clean_reason = (reason or "").strip()[:500]
+    actor = getattr(getattr(frappe, "session", None), "user", None) or requester or "Administrator"
+
+    if isolated and _has_real_isolated_db():
+        log_name = frappe.generate_hash(length=10)
+
+        def _insert(db):
+            db.sql(
+                """
+                INSERT INTO `tabPOS Authorisation Log` (
+                    `name`, `creation`, `modified`, `modified_by`, `owner`, `docstatus`, `idx`,
+                    `requester`, `approver`, `privilege`, `outcome`, `refusal_code`, `event_time`,
+                    `pos_profile`, `company`, `reference_doctype`, `reference_name`, `reason`,
+                    `claim_values`, `token_hash`, `consumed_token_hash`, `claim_hash`, `expires_at`
+                ) VALUES (
+                    %s, %s, %s, %s, %s, 0, 0,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    log_name, now_ts, now_ts, actor, actor,
+                    requester, approver, privilege, outcome, refusal_code, now_ts,
+                    pos_profile, company, reference_doctype or None, reference_name or None, clean_reason,
+                    claim_json, token_hash, consumed_token_hash, claim_hash, expires_at,
+                ),
+            )
+            return log_name
+
+        _with_isolated_db(_insert, commit=True)
+        return frappe._dict(name=log_name, outcome=outcome)
+
     doc = frappe.get_doc(
         {
             "doctype": "POS Authorisation Log",
@@ -684,10 +1119,10 @@ def _write_log(
             "reference_doctype": reference_doctype or None,
             "reference_name": reference_name or None,
             "claim_values": claim_json,
-            "reason": (reason or "").strip()[:500],
+            "reason": clean_reason,
             "outcome": outcome,
             "refusal_code": refusal_code,
-            "event_time": now_datetime(),
+            "event_time": now_ts,
             "token_hash": token_hash,
             "consumed_token_hash": consumed_token_hash,
             "claim_hash": claim_hash,
@@ -695,9 +1130,11 @@ def _write_log(
         }
     )
     doc.flags.pos_override_server_insert = True
-    doc.insert(ignore_permissions=True, ignore_links=True)
-    if commit:
-        frappe.db.commit()
+    if isolated and hasattr(doc, "_store"):
+        doc.flags.ignore_permissions = True
+        doc._store.insert_doc(doc, isolated=True)
+    else:
+        doc.insert(ignore_permissions=True, ignore_links=True)
     return doc
 
 
@@ -759,27 +1196,38 @@ def list_approvers(
     amount: float | None = None,
     privilege_group: int = 0,
 ) -> list[dict[str, str]]:
-    """List eligible approvers for this till/privilege as [{user, full_name}] only."""
-    _validate_privilege(privilege)
-    if _is_non_interactive_or_agent_session():
-        return []
-    profile = _get_profile(pos_profile)
-    if not profile:
-        return []
+    """List eligible approvers for this till/privilege as [{user, full_name}] only.
 
-    requester = (frappe.session.user or "").casefold()
-    hard_excluded = {requester, "administrator", "guest"}
-    owners = _check_owners("POS Invoice", reference_name)
+    P1 #9: refuses callers who are not active members of `pos_profile`'s outlet/company
+    (and impersonated/non-interactive sessions), preventing cross-company enumeration.
+    """
+    _validate_privilege(privilege)
+    requester = frappe.session.user
+    if not requester or requester in ("Administrator", "Guest") or _is_non_interactive_or_agent_session(requester):
+        _refuse(
+            "POS-AUTH-NOT-ELIGIBLE",
+            "Manager approval is only available in an active interactive till session.",
+            frappe.PermissionError,
+        )
+
+    profile = _get_profile(pos_profile)
+    if not profile or not _is_outlet_member(requester, profile):
+        _refuse(
+            "POS-AUTH-NOT-ELIGIBLE",
+            "You are not assigned to this till profile.",
+            frappe.PermissionError,
+        )
+
+    hard_excluded = {requester.casefold(), "administrator", "guest"}
+    owners = _check_owners("POS Invoice", reference_name, profile=profile)
     pct = _parse_optional_number(percent)
 
     use_external = _external_pin_verifier() is not None
-    user_filters: dict[str, Any] = {"enabled": 1, "user_type": "System User"}
-    if not use_external:
-        user_filters["custom_override_pin_hash"] = ["is", "set"]
+    enrolled_users = None if use_external else _users_with_override_pin()
 
     candidates = frappe.get_all(
         "User",
-        filters=user_filters,
+        filters={"enabled": 1, "user_type": "System User"},
         fields=["name", "full_name"],
         order_by="full_name asc",
     )
@@ -789,6 +1237,8 @@ def list_approvers(
         uid = row.get("name")
         if not uid or uid.casefold() in hard_excluded:
             continue
+        if enrolled_users is not None and uid.casefold() not in enrolled_users:
+            continue
         rules = _matching_authorise_rules(
             uid, profile, privilege, percent=percent, amount=amount, privilege_group=privilege_group
         )
@@ -796,7 +1246,7 @@ def list_approvers(
             continue
         if uid.casefold() in owners and not _allows_check_owner_self_approval(privilege, rules, pct):
             continue
-        result.append({"user": uid, "full_name": row.get("full_name") or get_fullname(uid) or uid})
+        result.append({"user": uid, "full_name": row.get("full_name") or _get_fullname(uid) or uid})
     return result
 
 
@@ -809,9 +1259,18 @@ def _verify_approver_pin(approver: str, pin: Any, profile) -> tuple[bool, str | 
             outcome = verifier(approver, pin, profile.name)
         except Exception as err:
             text = str(err)
-            if "POS-AUTH-LOCKED" in text or "PIN_LOCKED" in text:
+            for code in (
+                "POS-AUTH-LOCKED",
+                "POS-AUTH-NO-PIN",
+                "POS-AUTH-NOT-ELIGIBLE",
+                "POS-AUTH-SELF",
+                "POS-AUTH-PIN",
+            ):
+                if code in text:
+                    return False, code
+            if "PIN_LOCKED" in text:
                 return False, "POS-AUTH-LOCKED"
-            if "POS-AUTH-NO-PIN" in text or "PIN_NOT_SET" in text or "PIN_MUST_RESET" in text:
+            if "PIN_NOT_SET" in text or "PIN_MUST_RESET" in text:
                 return False, "POS-AUTH-NO-PIN"
             return False, "POS-AUTH-PIN"
         if isinstance(outcome, dict):
@@ -820,14 +1279,21 @@ def _verify_approver_pin(approver: str, pin: Any, profile) -> tuple[bool, str | 
             return False, outcome.get("code") or "POS-AUTH-PIN"
         return (True, None) if bool(outcome) else (False, "POS-AUTH-PIN")
 
-    stored = frappe.db.get_value("User", approver, "custom_override_pin_hash")
-    if not stored:
+    if not _has_override_pin(approver):
         return False, "POS-AUTH-NO-PIN"
     if not isinstance(pin, str) or not PIN_PATTERN.fullmatch(pin):
         return False, "POS-AUTH-PIN"
-    if hmac.compare_digest(str(stored), _pin_digest(approver, pin)):
+    try:
+        _check_password(
+            approver,
+            pin,
+            doctype=PIN_AUTH_DOCTYPE,
+            fieldname=PIN_AUTH_FIELDNAME,
+            delete_tracker_cache=False,
+        )
         return True, None
-    return False, "POS-AUTH-PIN"
+    except frappe.AuthenticationError:
+        return False, "POS-AUTH-PIN"
 
 
 @frappe.whitelist(methods=["POST"])
@@ -847,7 +1313,6 @@ def authorise(
     parsed_claim = _parse_claim(claim)
     claim_json = _canonical_claim_json(parsed_claim)
     claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
-    reason = str(parsed_claim.get("reason") or "")
     pct = _parse_optional_number(parsed_claim.get("percent"))
     amt = _parse_optional_number(parsed_claim.get("amount"))
     pg = cint(parsed_claim.get("privilege_group") or 0)
@@ -864,12 +1329,15 @@ def authorise(
         )
 
     profile = _get_profile(pos_profile)
-    if not profile:
+    if not profile or not _is_outlet_member(requester, profile):
         _refuse(
             "POS-AUTH-NOT-ELIGIBLE",
             "This till profile is unavailable for manager approval.",
             frappe.PermissionError,
         )
+
+    # P1 #7: Enforce server-side reason validation BEFORE verifying PIN or minting tokens.
+    reason = _validate_reason(profile.name, privilege, parsed_claim)
 
     approver_input = (approver or "").strip()
     canonical = frappe.db.exists("User", approver_input) if approver_input else None
@@ -888,7 +1356,7 @@ def authorise(
             pos_profile=profile.name, company=profile.company,
             reference_doctype=reference_doctype, reference_name=reference_name,
             claim_json=claim_json, reason=reason, outcome="Refused",
-            refusal_code="POS-AUTH-SELF", commit=True,
+            refusal_code="POS-AUTH-SELF", isolated=True,
         )
         _refuse(
             "POS-AUTH-SELF",
@@ -900,14 +1368,14 @@ def authorise(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
     )
 
-    if approver_user.casefold() in _check_owners(reference_doctype, reference_name):
+    if approver_user.casefold() in _check_owners(reference_doctype, reference_name, profile=profile):
         if not matching_rules or not _allows_check_owner_self_approval(privilege, matching_rules, pct):
             _write_log(
                 requester=requester, approver=approver_user, privilege=privilege,
                 pos_profile=profile.name, company=profile.company,
                 reference_doctype=reference_doctype, reference_name=reference_name,
                 claim_json=claim_json, reason=reason, outcome="Refused",
-                refusal_code="POS-AUTH-SELF", commit=True,
+                refusal_code="POS-AUTH-SELF", isolated=True,
             )
             _refuse(
                 "POS-AUTH-SELF",
@@ -921,7 +1389,7 @@ def authorise(
             pos_profile=profile.name, company=profile.company,
             reference_doctype=reference_doctype, reference_name=reference_name,
             claim_json=claim_json, reason=reason, outcome="Refused",
-            refusal_code="POS-AUTH-NOT-ELIGIBLE", commit=True,
+            refusal_code="POS-AUTH-NOT-ELIGIBLE", isolated=True,
         )
         _refuse(
             "POS-AUTH-NOT-ELIGIBLE",
@@ -929,14 +1397,31 @@ def authorise(
             frappe.PermissionError,
         )
 
-    tracker, _max_attempts, lock_minutes = _pin_tracker(approver_user, profile)
-    if not tracker.is_user_allowed():
+    # P1 #8: Per-session rate limit checked FIRST so a rogue cashier cannot lock out other managers.
+    tracker, max_attempts, lock_minutes = _pin_tracker(approver_user, profile)
+    sess_tracker, session_cap = _session_tracker(requester, profile, max_attempts, lock_minutes)
+    if not sess_tracker.is_user_allowed() or _db_session_failed_pin_count(requester, profile.name, lock_minutes) >= session_cap:
         _write_log(
             requester=requester, approver=approver_user, privilege=privilege,
             pos_profile=profile.name, company=profile.company,
             reference_doctype=reference_doctype, reference_name=reference_name,
             claim_json=claim_json, reason=reason, outcome="Locked",
-            refusal_code="POS-AUTH-LOCKED", commit=True,
+            refusal_code="POS-AUTH-LOCKED", isolated=True,
+        )
+        _refuse(
+            "POS-AUTH-LOCKED",
+            f"Too many failed approval attempts from this till session. Try again in {lock_minutes} minutes.",
+            frappe.ValidationError,
+        )
+
+    # P1 #8: Per-(approver, pos_profile) lockout checked in BOTH Redis AND MariaDB.
+    if not tracker.is_user_allowed() or _db_failed_pin_count(approver_user, profile.name, lock_minutes) >= max_attempts:
+        _write_log(
+            requester=requester, approver=approver_user, privilege=privilege,
+            pos_profile=profile.name, company=profile.company,
+            reference_doctype=reference_doctype, reference_name=reference_name,
+            claim_json=claim_json, reason=reason, outcome="Locked",
+            refusal_code="POS-AUTH-LOCKED", isolated=True,
         )
         _refuse(
             "POS-AUTH-LOCKED",
@@ -952,7 +1437,7 @@ def authorise(
                 pos_profile=profile.name, company=profile.company,
                 reference_doctype=reference_doctype, reference_name=reference_name,
                 claim_json=claim_json, reason=reason, outcome="Refused",
-                refusal_code="POS-AUTH-NO-PIN", commit=True,
+                refusal_code="POS-AUTH-NO-PIN", isolated=True,
             )
             _refuse(
                 "POS-AUTH-NO-PIN",
@@ -960,14 +1445,42 @@ def authorise(
                 frappe.ValidationError,
             )
 
-        tracker.add_failure_attempt()
-        if code == "POS-AUTH-LOCKED" or not tracker.is_user_allowed():
+        # P1 #9 (Hydrogen #11): Pass external verifier non-PIN refusal codes through without a PIN strike!
+        if code == "POS-AUTH-NOT-ELIGIBLE":
+            _write_log(
+                requester=requester, approver=approver_user, privilege=privilege,
+                pos_profile=profile.name, company=profile.company,
+                reference_doctype=reference_doctype, reference_name=reference_name,
+                claim_json=claim_json, reason=reason, outcome="Refused",
+                refusal_code="POS-AUTH-NOT-ELIGIBLE", isolated=True,
+            )
+            _refuse(
+                "POS-AUTH-NOT-ELIGIBLE",
+                "This person cannot approve this action at this till.",
+                frappe.PermissionError,
+            )
+
+        if code == "POS-AUTH-SELF":
+            _write_log(
+                requester=requester, approver=approver_user, privilege=privilege,
+                pos_profile=profile.name, company=profile.company,
+                reference_doctype=reference_doctype, reference_name=reference_name,
+                claim_json=claim_json, reason=reason, outcome="Refused",
+                refusal_code="POS-AUTH-SELF", isolated=True,
+            )
+            _refuse(
+                "POS-AUTH-SELF",
+                "You cannot approve this action yourself. Ask another manager.",
+                frappe.PermissionError,
+            )
+
+        if code == "POS-AUTH-LOCKED":
             _write_log(
                 requester=requester, approver=approver_user, privilege=privilege,
                 pos_profile=profile.name, company=profile.company,
                 reference_doctype=reference_doctype, reference_name=reference_name,
                 claim_json=claim_json, reason=reason, outcome="Locked",
-                refusal_code="POS-AUTH-LOCKED", commit=True,
+                refusal_code="POS-AUTH-LOCKED", isolated=True,
             )
             _refuse(
                 "POS-AUTH-LOCKED",
@@ -975,13 +1488,45 @@ def authorise(
                 frappe.ValidationError,
             )
 
+        if code and code != "POS-AUTH-PIN":
+            _write_log(
+                requester=requester, approver=approver_user, privilege=privilege,
+                pos_profile=profile.name, company=profile.company,
+                reference_doctype=reference_doctype, reference_name=reference_name,
+                claim_json=claim_json, reason=reason, outcome="Refused",
+                refusal_code=code, isolated=True,
+            )
+            _refuse(code, "Manager approval could not be verified.", frappe.ValidationError)
+
+        # Genuine wrong PIN -> record Failed PIN durably first, then check both DB + Redis lockouts.
         _write_log(
             requester=requester, approver=approver_user, privilege=privilege,
             pos_profile=profile.name, company=profile.company,
             reference_doctype=reference_doctype, reference_name=reference_name,
             claim_json=claim_json, reason=reason, outcome="Failed PIN",
-            refusal_code="POS-AUTH-PIN", commit=True,
+            refusal_code="POS-AUTH-PIN", isolated=True,
         )
+        tracker.add_failure_attempt()
+        sess_tracker.add_failure_attempt()
+
+        approver_locked = (
+            not tracker.is_user_allowed()
+            or _db_failed_pin_count(approver_user, profile.name, lock_minutes) >= max_attempts
+        )
+        if approver_locked:
+            _write_log(
+                requester=requester, approver=approver_user, privilege=privilege,
+                pos_profile=profile.name, company=profile.company,
+                reference_doctype=reference_doctype, reference_name=reference_name,
+                claim_json=claim_json, reason=reason, outcome="Locked",
+                refusal_code="POS-AUTH-LOCKED", isolated=True,
+            )
+            _refuse(
+                "POS-AUTH-LOCKED",
+                f"Approval PIN is locked after too many wrong attempts. Try again in {lock_minutes} minutes.",
+                frappe.ValidationError,
+            )
+
         _refuse(
             "POS-AUTH-PIN",
             "That approval PIN did not match.",
@@ -1008,15 +1553,54 @@ def authorise(
         token_hash=token_hash,
         claim_hash=claim_hash,
         expires_at=expires_at,
-        commit=False,
+        isolated=True,
     )
 
     return {
         "token": token,
         "approver": approver_user,
-        "approver_name": get_fullname(approver_user) or approver_user,
+        "approver_name": _get_fullname(approver_user) or approver_user,
         "expires_in": TOKEN_TTL_SECONDS,
     }
+
+
+def _read_approved_and_consumed(token_hash: str) -> tuple[Any, bool]:
+    """Read Approved and Consumed log state from a fresh isolated DB snapshot."""
+    if not _has_real_isolated_db():
+        approved = frappe.db.get_value(
+            "POS Authorisation Log",
+            {"token_hash": token_hash, "outcome": "Approved"},
+            [
+                "name", "requester", "approver", "privilege", "pos_profile", "company",
+                "reference_doctype", "reference_name", "claim_hash", "expires_at", "reason",
+            ],
+            as_dict=True,
+        )
+        already_consumed = bool(
+            frappe.db.get_value("POS Authorisation Log", {"consumed_token_hash": token_hash}, "name")
+        )
+        return approved, already_consumed
+
+    def _query(db):
+        rows = db.sql(
+            """
+            SELECT `name`, `requester`, `approver`, `privilege`, `pos_profile`, `company`,
+                   `reference_doctype`, `reference_name`, `claim_hash`, `expires_at`, `reason`
+            FROM `tabPOS Authorisation Log`
+            WHERE `token_hash` = %s AND `outcome` = 'Approved'
+            LIMIT 1
+            """,
+            (token_hash,),
+            as_dict=True,
+        )
+        approved_row = frappe._dict(rows[0]) if rows else None
+        consumed_rows = db.sql(
+            "SELECT `name` FROM `tabPOS Authorisation Log` WHERE `consumed_token_hash` = %s LIMIT 1",
+            (token_hash,),
+        )
+        return approved_row, bool(consumed_rows)
+
+    return _with_isolated_db(_query, commit=False)
 
 
 def consume(
@@ -1026,12 +1610,18 @@ def consume(
     reference_name: str,
     claim: dict[str, Any] | str,
 ):
-    """Atomically consume a single-use approval token bound to session, check, and claim."""
+    """Atomically consume a single-use approval token bound to session, check, and claim.
+
+    Re-checks both approver and requester eligibility (enabled, outlet, role, rule, caps,
+    clock-in, check-owner) at consumption time and commits the Consumed log row on an
+    isolated DB connection so caller rollbacks never allow replay and caller work is never leaked.
+    """
     _validate_privilege(privilege)
-    if _is_non_interactive_or_agent_session():
+    current_user = frappe.session.user or ""
+    if not current_user or current_user == "Guest" or _is_non_interactive_or_agent_session(current_user):
         _refuse(
             "POS-AUTH-NOT-ELIGIBLE",
-            "Manager PIN approval cannot be used from a non-interactive or API session.",
+            "Manager PIN approval cannot be used from a non-interactive, impersonated, or API session.",
             frappe.PermissionError,
         )
 
@@ -1046,20 +1636,11 @@ def consume(
     parsed_claim = _parse_claim(claim)
     claim_json = _canonical_claim_json(parsed_claim)
     expected_claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
+    pct = _parse_optional_number(parsed_claim.get("percent"))
+    amt = _parse_optional_number(parsed_claim.get("amount"))
+    pg = cint(parsed_claim.get("privilege_group") or 0)
 
-    # Non-locking MVCC reads of immutable insert-only log rows avoid InnoDB
-    # next-key gap-lock deadlocks (1213); atomicity across concurrent
-    # REPEATABLE-READ transactions is enforced by the UNIQUE index on
-    # `consumed_token_hash` during the Consumed-row INSERT below.
-    approved = frappe.db.get_value(
-        "POS Authorisation Log",
-        {"token_hash": token_hash, "outcome": "Approved"},
-        [
-            "name", "requester", "approver", "privilege", "pos_profile", "company",
-            "reference_doctype", "reference_name", "claim_hash", "expires_at", "reason",
-        ],
-        as_dict=True,
-    )
+    approved, already_consumed = _read_approved_and_consumed(token_hash)
     if not approved:
         _refuse(
             "POS-AUTH-EXPIRED",
@@ -1067,11 +1648,6 @@ def consume(
             frappe.ValidationError,
         )
 
-    already_consumed = frappe.db.get_value(
-        "POS Authorisation Log",
-        {"consumed_token_hash": token_hash},
-        "name",
-    )
     if already_consumed:
         _refuse(
             "POS-AUTH-EXPIRED",
@@ -1086,7 +1662,6 @@ def consume(
             frappe.ValidationError,
         )
 
-    current_user = frappe.session.user or ""
     if (approved.get("requester") or "").casefold() != current_user.casefold():
         _refuse(
             "POS-AUTH-CHANGED",
@@ -1112,13 +1687,44 @@ def consume(
             frappe.ValidationError,
         )
 
-    approver_user = approved.get("approver")
-    if not approver_user or cint(frappe.db.get_value("User", approver_user, "enabled")) != 1:
+    # P1 #6: Re-check profile, requester, AND approver (enabled, outlet, roles, rules, caps, clock-in, owner) NOW!
+    profile = _get_profile(pos_profile)
+    if not profile or not _is_outlet_member(current_user, profile):
         _refuse(
             "POS-AUTH-NOT-ELIGIBLE",
-            "The approving manager account is no longer active.",
+            "Your till session is no longer eligible to apply this approval.",
             frappe.PermissionError,
         )
+
+    approver_user = approved.get("approver")
+    if not approver_user or approver_user.casefold() == current_user.casefold():
+        _refuse(
+            "POS-AUTH-SELF",
+            "You cannot approve your own request. Ask another manager.",
+            frappe.PermissionError,
+        )
+
+    matching_rules = _matching_authorise_rules(
+        approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
+    )
+    if not matching_rules:
+        _refuse(
+            "POS-AUTH-NOT-ELIGIBLE",
+            "The approving manager is no longer eligible for this action at this till.",
+            frappe.PermissionError,
+        )
+
+    ref_doctype = approved.get("reference_doctype") or "POS Invoice"
+    if approver_user.casefold() in _check_owners(ref_doctype, reference_name, profile=profile):
+        if not _allows_check_owner_self_approval(privilege, matching_rules, pct):
+            _refuse(
+                "POS-AUTH-SELF",
+                "The approving manager cannot approve an override on their own check.",
+                frappe.PermissionError,
+            )
+
+    # P1 #7: Re-validate reason at consumption time.
+    validated_reason = _validate_reason(profile.name, privilege, parsed_claim)
 
     duplicate_exc = getattr(frappe, "DuplicateEntryError", None)
     try:
@@ -1127,16 +1733,16 @@ def consume(
             approver=approver_user,
             privilege=privilege,
             pos_profile=pos_profile,
-            company=approved.get("company"),
-            reference_doctype=approved.get("reference_doctype"),
+            company=approved.get("company") or profile.company,
+            reference_doctype=ref_doctype,
             reference_name=reference_name,
             claim_json=claim_json,
-            reason=str(parsed_claim.get("reason") or approved.get("reason") or ""),
+            reason=validated_reason or str(approved.get("reason") or ""),
             outcome="Consumed",
             token_hash=None,
             consumed_token_hash=token_hash,
             claim_hash=expected_claim_hash,
-            commit=False,
+            isolated=True,
         )
     except Exception as err:
         is_dup = (
@@ -1155,8 +1761,8 @@ def consume(
 
     return frappe._dict(
         approver=approver_user,
-        percent=_parse_optional_number(parsed_claim.get("percent")),
-        amount=_parse_optional_number(parsed_claim.get("amount")),
+        percent=pct,
+        amount=amt,
         claim=parsed_claim,
     )
 
@@ -1185,6 +1791,8 @@ def require(
         frappe.session.user, pos_profile, privilege,
         percent=eff_pct, amount=eff_amt, privilege_group=eff_pg,
     ):
+        # P1 #7: Even when a manager acts alone, enforce server-side reason validation.
+        _validate_reason(pos_profile, privilege, parsed_claim)
         return None
 
     _refuse(
@@ -1200,16 +1808,20 @@ def require(
 @frappe.whitelist(methods=["GET"])
 def my_pin_status() -> dict[str, bool]:
     user = frappe.session.user
-    if not user or user in ("Administrator", "Guest"):
-        _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts only.", frappe.PermissionError)
+    if not user or user in ("Administrator", "Guest") or _is_non_interactive_or_agent_session(user):
+        _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts in interactive sessions.", frappe.PermissionError)
     external = _external_pin_verifier() is not None
-    has_pin = bool(frappe.db.get_value("User", user, "custom_override_pin_hash")) if not external else True
+    has_pin = _has_override_pin(user) if not external else True
     return {"has_pin": has_pin, "external_verifier": external}
 
 
 @frappe.whitelist(methods=["POST"])
 def set_my_pin(password: str, pin: str) -> dict[str, Any]:
-    """Enrol or update the signed-in user's own approval PIN after verifying their password."""
+    """Enrol or update the signed-in user's own approval PIN in Frappe `__Auth` after password re-entry.
+
+    P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
+    counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
+    """
     _scrub_form_secrets()
     user = frappe.session.user
     if not user or user in ("Administrator", "Guest"):
@@ -1229,7 +1841,44 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
         )
     if not isinstance(password, str) or not password:
         frappe.throw(frappe._("Enter your account password to confirm."), frappe.ValidationError)
-    check_password(user, password)
+
+    pw_tracker, pw_max, pw_lock_min = _password_tracker(user)
+    if not pw_tracker.is_user_allowed() or _db_failed_password_count(user, pw_lock_min) >= pw_max:
+        _refuse(
+            "POS-AUTH-LOCKED",
+            f"Too many wrong password attempts. Try again in {pw_lock_min} minutes.",
+            frappe.ValidationError,
+        )
+
+    try:
+        _check_password(user, password, delete_tracker_cache=False)
+    except frappe.AuthenticationError:
+        _write_log(
+            requester=user,
+            approver=user,
+            privilege="pin_enrolment",
+            pos_profile=None,
+            company=None,
+            reference_doctype="User",
+            reference_name=user,
+            claim_json="{}",
+            reason="",
+            outcome="Failed Password",
+            refusal_code="POS-AUTH-PASSWORD",
+            isolated=True,
+        )
+        pw_tracker.add_failure_attempt()
+        if not pw_tracker.is_user_allowed() or _db_failed_password_count(user, pw_lock_min) >= pw_max:
+            _refuse(
+                "POS-AUTH-LOCKED",
+                f"Too many wrong password attempts. Try again in {pw_lock_min} minutes.",
+                frappe.ValidationError,
+            )
+        _refuse(
+            "POS-AUTH-PASSWORD",
+            "Your current password did not match.",
+            frappe.ValidationError,
+        )
 
     if not isinstance(pin, str) or not PIN_PATTERN.fullmatch(pin):
         frappe.throw(
@@ -1237,11 +1886,34 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
             frappe.ValidationError,
         )
 
-    digest = _pin_digest(user, pin)
-    frappe.db.set_value("User", user, "custom_override_pin_hash", digest, update_modified=False)
-    tracker = LoginAttemptTracker(f"pos-override-pin:{user.casefold()}")
-    tracker.add_success_attempt()
-    add_authentication_log(f"Approval PIN updated for {user}", user)
+    had_pin_or_failures = (
+        _has_override_pin(user)
+        or _db_failed_password_count(user, pw_lock_min) > 0
+        or bool(frappe.db.exists("POS Authorisation Log", {"approver": user, "outcome": "Failed PIN"}))
+    )
+    _update_password(
+        user,
+        pin,
+        doctype=PIN_AUTH_DOCTYPE,
+        fieldname=PIN_AUTH_FIELDNAME,
+        logout_all_sessions=False,
+    )
+    pw_tracker.add_success_attempt()
+    if had_pin_or_failures:
+        _write_log(
+            requester=user,
+            approver=user,
+            privilege="pin_enrolment",
+            pos_profile=None,
+            company=None,
+            reference_doctype="User",
+            reference_name=user,
+            claim_json="{}",
+            reason="",
+            outcome="PIN Reset",
+            isolated=True,
+        )
+    _add_authentication_log(f"Approval PIN updated for {user}", user)
     return {"ok": True, "has_pin": True}
 
 
@@ -1281,16 +1953,41 @@ def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
             frappe.PermissionError,
         )
 
-    frappe.db.set_value("User", target, "custom_override_pin_hash", None, update_modified=False)
-    tracker = LoginAttemptTracker(f"pos-override-pin:{target.casefold()}")
-    tracker.add_success_attempt()
-    add_authentication_log(f"Approval PIN cleared for {target} by {caller}", caller)
+    _clear_override_pin(target)
+    if pos_profile:
+        profile = _get_profile(pos_profile)
+        if profile:
+            tracker, _, _ = _pin_tracker(target, profile)
+            tracker.add_success_attempt()
+    pw_tracker, _, _ = _password_tracker(target)
+    pw_tracker.add_success_attempt()
+    _write_log(
+        requester=caller,
+        approver=target,
+        privilege="pin_enrolment",
+        pos_profile=pos_profile or None,
+        company=None,
+        reference_doctype="User",
+        reference_name=target,
+        claim_json="{}",
+        reason="",
+        outcome="PIN Reset",
+        isolated=True,
+    )
+    _add_authentication_log(f"Approval PIN cleared for {target} by {caller}", caller)
     return {"ok": True, "user": target, "has_pin": False}
 
 
 @frappe.whitelist(methods=["GET"])
 def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
     """List outlet staff and whether each has an approval PIN set (for manager clear UI)."""
+    caller = frappe.session.user
+    if not caller or caller == "Guest" or _is_non_interactive_or_agent_session(caller):
+        _refuse(
+            "POS-AUTH-NOT-ELIGIBLE",
+            "PIN management requires an interactive session.",
+            frappe.PermissionError,
+        )
     profile = _get_profile(pos_profile)
     if not profile or not frappe.has_permission("POS Profile", "write", profile):
         _refuse(
@@ -1298,10 +1995,11 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
             "Only a manager for this till can view staff approval PIN status.",
             frappe.PermissionError,
         )
+    enrolled_users = _users_with_override_pin()
     users = frappe.get_all(
         "User",
         filters={"enabled": 1, "user_type": "System User"},
-        fields=["name", "full_name", "custom_override_pin_hash"],
+        fields=["name", "full_name"],
         order_by="full_name asc",
     )
     out = []
@@ -1312,24 +2010,7 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
         if _is_outlet_member(uid, profile):
             out.append({
                 "user": uid,
-                "full_name": row.get("full_name") or get_fullname(uid) or uid,
-                "has_pin": bool(row.get("custom_override_pin_hash")),
+                "full_name": row.get("full_name") or _get_fullname(uid) or uid,
+                "has_pin": uid.casefold() in enrolled_users,
             })
     return out
-
-
-def guard_user_override_pin_hash(doc, method=None) -> None:
-    """Prevent modifying custom_override_pin_hash through User form or REST saves."""
-    if doc.is_new():
-        if doc.get("custom_override_pin_hash"):
-            doc.custom_override_pin_hash = None
-        return
-    before = doc.get_doc_before_save()
-    if before is None:
-        return
-    if (doc.get("custom_override_pin_hash") or "") != (before.get("custom_override_pin_hash") or ""):
-        frappe.throw(
-            frappe._("Approval PIN hashes can only be changed through the approval PIN flow.")
-            + " [POS-AUTH-NOT-ELIGIBLE]",
-            frappe.PermissionError,
-        )

@@ -832,12 +832,27 @@ frappe.ui.form.on('URY Order', {
 									}
 								});
 
+								const unsafePosFormats = new Set([
+									'POS Invoice Classic',
+									'POS Invoice Bordered',
+									'POS Invoice Modern',
+									'POS Invoice Modern with Images',
+									'POS Invoice',
+									'Return POS Invoice',
+									'EFRIS POS Receipt 80mm',
+									'POS EFRIS Invoice',
+								]);
+								const rawFmt = (profile.print_format || '').trim();
+								const safeFmt = (!rawFmt || unsafePosFormats.has(rawFmt)) ? 'Merged POS Invoice Format' : rawFmt;
+								const configuredLetterHead = (profile.letter_head || '').trim();
 								frappe.call({
 									method: "frappe.www.printview.get_html_and_style",
 									args: {
 										doc: "POS Invoice",
 										name: invoice,
-										print_format: profile.print_format,
+										print_format: safeFmt,
+										no_letterhead: configuredLetterHead ? 0 : 1,
+										letterhead: configuredLetterHead || "No Letterhead",
 										_lang: 'en',
 									},
 									callback: function (r) {
@@ -946,12 +961,24 @@ frappe.ui.form.on('URY Order', {
 
 							}
 							else {
+								const unsafePosFormats = new Set([
+									'POS Invoice Classic',
+									'POS Invoice Bordered',
+									'POS Invoice Modern',
+									'POS Invoice Modern with Images',
+									'POS Invoice',
+									'Return POS Invoice',
+									'EFRIS POS Receipt 80mm',
+									'POS EFRIS Invoice',
+								]);
+								const rawFmt = (profile.print_format || '').trim();
+								const safeFmt = (!rawFmt || unsafePosFormats.has(rawFmt)) ? 'Merged POS Invoice Format' : rawFmt;
 								frappe.call({
 									method: `ury.ury.api.ury_print.print_pos_page`,
 									args: {
 										doctype: "POS Invoice",
 										name: invoice,
-										print_format: profile.print_format
+										print_format: safeFmt
 									},
 									callback: function (r) {
 										$('.standard-actions').addClass('hidden-xs hidden-md');
