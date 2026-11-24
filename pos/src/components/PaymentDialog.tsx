@@ -339,6 +339,34 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       );
       const trimmedRoomNumber = roomChargeAmount > 0 ? roomNumber.trim() : undefined;
 
+      const dispatchPaymentSettled = () => {
+        if (typeof window === 'undefined') return;
+        window.dispatchEvent(
+          new CustomEvent('pos:payment-settled', {
+            detail: {
+              invoice,
+              posProfile,
+              modes: newPayments.map((p) => p.mode_of_payment),
+              payments: newPayments,
+              changeAmount: cashChangeDue,
+              reason: 'Payment Settlement',
+              ...(storePosProfile?.drawer_opening_modes !== undefined
+                ? { drawerModes: storePosProfile.drawer_opening_modes }
+                : {}),
+              ...(storePosProfile?.custom_auto_kick_on_cash_tender !== undefined
+                ? { autoKickEnabled: storePosProfile.custom_auto_kick_on_cash_tender }
+                : {}),
+              ...(storePosProfile?.custom_drawer_pin !== undefined
+                ? { pin: storePosProfile.custom_drawer_pin }
+                : {}),
+              ...(storePosProfile?.custom_drawer_kick_hex
+                ? { hex: storePosProfile.custom_drawer_kick_hex }
+                : {}),
+            },
+          }),
+        );
+      };
+
       if (effectivePrintInvoice && !offlineCapable) {
         // Step 1: Save draft invoice with payment modes without submitting (saved check discount is preserved server-side)
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
@@ -382,12 +410,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           }),
         });
         if (settlement.offline) {
+          dispatchPaymentSettled();
           showToast.success(t('offline.saved'));
           onClose();
           clearSelectedOrder();
           return;
         }
       }
+      dispatchPaymentSettled();
       // Step 3: Wait boundedly for the EFRIS FDN (default 5s, configurable 0-15s),
       // print the fiscal receipt, and on timeout queue an automatic COPY #n reprint.
       if (effectivePrintInvoice && storePosProfile) {

@@ -368,3 +368,335 @@ def get_print_job_status(print_job_id):
         )
         return {"status": "Failure", "message": str(e)}
 
+
+def _assert_drawer_profile_access(pos_profile: str):
+    """Fail-closed authorization and branch isolation check for cash drawer endpoints."""
+    from ury.brand import coded_message
+
+    user = getattr(getattr(frappe, "session", None), "user", None)
+    if not user or user == "Guest":
+        frappe.throw(
+            coded_message("DRAWER-KICK-NOT-PERMITTED", _("Sign in to operate the cash drawer.")),
+            frappe.PermissionError,
+        )
+
+    if not pos_profile:
+        frappe.throw(
+            coded_message("DRAWER-KICK-PROFILE-REQUIRED", _("A POS Profile is required.")),
+            frappe.ValidationError,
+        )
+
+    profile_doc = frappe.get_doc("POS Profile", pos_profile)
+    roles = set(frappe.get_roles() or [])
+    is_admin = user == "Administrator" or "System Manager" in roles or "URY Admin" in roles
+
+    if not is_admin:
+        if not frappe.has_permission("POS Profile", "read", doc=profile_doc):
+            frappe.throw(
+                coded_message(
+                    "DRAWER-KICK-NOT-PERMITTED",
+                    _("You are not permitted to operate the cash drawer for this POS Profile."),
+                ),
+                frappe.PermissionError,
+            )
+
+        assigned_users = [
+            row.user
+            for row in (getattr(profile_doc, "applicable_for_users", None) or [])
+            if getattr(row, "user", None)
+        ]
+        if assigned_users and user not in assigned_users:
+            frappe.throw(
+                coded_message(
+                    "DRAWER-KICK-NOT-ASSIGNED",
+                    _("You are not assigned to this POS Profile."),
+                ),
+                frappe.PermissionError,
+            )
+
+        profile_branch = (
+            profile_doc.get("branch")
+            if hasattr(profile_doc, "get")
+            else getattr(profile_doc, "branch", None)
+        )
+        if profile_branch:
+            from ury.ury_pos.api import getBranch
+
+            try:
+                user_branch = getBranch()
+            except Exception:
+                frappe.throw(
+                    coded_message(
+                        "DRAWER-KICK-BRANCH-REQUIRED",
+                        _("Your user account is not assigned to a branch for this POS Profile."),
+                    ),
+                    frappe.PermissionError,
+                )
+            if user_branch and user_branch != profile_branch:
+                frappe.throw(
+                    coded_message(
+                        "DRAWER-KICK-OTHER-BRANCH",
+                        _("You are not permitted to operate a cash drawer in another branch."),
+                    ),
+                    frappe.PermissionError,
+                )
+
+    return profile_doc
+
+
+def mode_of_payment_opens_drawer(mode_of_payment: str) -> bool:
+    """Return True strictly when `Mode of Payment.custom_open_cash_drawer` is enabled.
+
+    Never hardcodes tender names such as "Cash".
+    """
+    from frappe.utils import cint
+
+    if not mode_of_payment or not str(mode_of_payment).strip():
+        return False
+    val = frappe.db.get_value(
+        "Mode of Payment", str(mode_of_payment).strip(), "custom_open_cash_drawer"
+    )
+    return bool(cint(val))
+
+
+def get_drawer_opening_modes(pos_profile: str) -> list[str]:
+    """Return all Mode of Payment names on `pos_profile` configured to open the cash drawer."""
+    profile_doc = frappe.get_doc("POS Profile", pos_profile)
+    modes = []
+    for row in getattr(profile_doc, "payments", None) or []:
+        mop = getattr(row, "mode_of_payment", None)
+        if mop and mode_of_payment_opens_drawer(mop) and mop not in modes:
+            modes.append(mop)
+    return modes
+
+
+@frappe.whitelist()
+def get_drawer_kick_config(pos_profile):
+    """Return cash drawer hardware pin/hex and configured drawer-opening payment methods."""
+    from frappe.utils import cint
+    from ury.ury.printing.service import build_drawer_kick_bytes
+
+    profile_doc = _assert_drawer_profile_access(pos_profile)
+    raw_pin = (
+        profile_doc.get("custom_drawer_pin")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "custom_drawer_pin", None)
+    )
+    raw_hex = (
+        profile_doc.get("custom_drawer_kick_hex")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "custom_drawer_kick_hex", None)
+    )
+    auto_kick = (
+        profile_doc.get("custom_auto_kick_on_cash_tender")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "custom_auto_kick_on_cash_tender", 1)
+    )
+    resolved_pin = cint(raw_pin) if raw_pin not in (None, "") else 2
+    if resolved_pin not in (2, 5):
+        resolved_pin = 2
+    _, normalized_hex = build_drawer_kick_bytes(
+        drawer_pin=resolved_pin, hex_command=raw_hex or None
+    )
+    return {
+        "pos_profile": pos_profile,
+        "drawer_pin": resolved_pin,
+        "hex": normalized_hex,
+        "auto_kick_on_cash_tender": 1 if auto_kick is None else cint(auto_kick),
+        "drawer_opening_modes": get_drawer_opening_modes(pos_profile),
+    }
+
+
+def _allowed_drawer_printers(pos_profile: str, profile_doc) -> set[str]:
+    """Return bill printers configured on `pos_profile` or rooms in `profile_doc.branch`."""
+    allowed: set[str] = set()
+    for printer in _bill_printers(pos_profile, None) or []:
+        if isinstance(printer, str) and printer.strip():
+            allowed.add(printer.strip())
+
+    for row in getattr(profile_doc, "printer_settings", None) or []:
+        printer = getattr(row, "printer", None)
+        if getattr(row, "bill", 0) and isinstance(printer, str) and printer.strip():
+            allowed.add(printer.strip())
+
+    profile_branch = (
+        profile_doc.get("branch")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "branch", None)
+    )
+    if isinstance(profile_branch, str) and profile_branch.strip():
+        rooms = frappe.get_all(
+            "URY Room",
+            filters={"branch": profile_branch.strip()},
+            pluck="name",
+        ) or []
+        room_names = [r for r in rooms if isinstance(r, str) and r.strip()]
+        if room_names:
+            room_printers = frappe.get_all(
+                "URY Printer Settings",
+                filters={
+                    "parent": ["in", room_names],
+                    "parenttype": "URY Room",
+                    "bill": 1,
+                },
+                pluck="printer",
+            ) or []
+            for printer in room_printers:
+                if isinstance(printer, str) and printer.strip():
+                    allowed.add(printer.strip())
+
+    return allowed
+
+
+def _update_drawer_event_delivery(drawer_event: str | None, delivery_status: str) -> None:
+    if not drawer_event:
+        return
+    try:
+        if not frappe.db.exists("DocType", "POS Drawer Event"):
+            return
+        if not frappe.db.exists("POS Drawer Event", drawer_event):
+            return
+        updates = {"drawer_kick_sent": 1 if delivery_status == "Sent" else 0}
+        meta = frappe.get_meta("POS Drawer Event")
+        if meta and hasattr(meta, "has_field") and meta.has_field("custom_kick_delivery_status"):
+            updates["custom_kick_delivery_status"] = delivery_status
+        frappe.db.set_value("POS Drawer Event", drawer_event, updates, update_modified=False)
+    except Exception:
+        frappe.logger("printing").warning(
+            {"event": "drawer_event_status_update_failed", "drawer_event": drawer_event},
+            exc_info=True,
+        )
+
+
+@frappe.whitelist(methods=["POST"])
+def kick_cash_drawer(
+    pos_profile,
+    drawer_pin=None,
+    reason=None,
+    hex_command=None,
+    drawer_event=None,
+    printer_setting=None,
+):
+    """Send an ESC/POS cash drawer kick pulse to the profile's network/CUPS thermal printer.
+
+    Gracefully returns `Not Configured` or `Failed` when no hardware printer is
+    attached or reachable — never crashes checkout or till workflows.
+    """
+    from frappe.utils import cint
+    from ury.brand import coded_message
+    from ury.ury.printing.service import build_drawer_kick_bytes, send_raw_escpos
+
+    if frappe.request and getattr(frappe.request, "method", None) != "POST":
+        frappe.throw(
+            coded_message("DRAWER-KICK-POST-ONLY", _("POST requests only")),
+            frappe.PermissionError,
+        )
+
+    profile_doc = _assert_drawer_profile_access(pos_profile)
+
+    profile_pin = (
+        profile_doc.get("custom_drawer_pin")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "custom_drawer_pin", None)
+    )
+    profile_hex = (
+        profile_doc.get("custom_drawer_kick_hex")
+        if hasattr(profile_doc, "get")
+        else getattr(profile_doc, "custom_drawer_kick_hex", None)
+    )
+
+    resolved_pin_raw = drawer_pin if drawer_pin not in (None, "") else (profile_pin or 2)
+    resolved_hex_raw = hex_command if (hex_command is not None and str(hex_command).strip()) else (profile_hex or None)
+    try:
+        resolved_pin = cint(resolved_pin_raw) if resolved_pin_raw not in (None, "") else 2
+        raw_bytes, normalized_hex = build_drawer_kick_bytes(
+            drawer_pin=resolved_pin,
+            hex_command=resolved_hex_raw,
+        )
+    except ValueError as exc:
+        frappe.throw(
+            coded_message("DRAWER-KICK-INVALID-COMMAND", str(exc)),
+            frappe.ValidationError,
+        )
+
+    target_printer_setting = (
+        str(printer_setting).strip()
+        if printer_setting is not None and str(printer_setting).strip()
+        else None
+    )
+    if target_printer_setting:
+        allowed_printers = _allowed_drawer_printers(pos_profile, profile_doc)
+        if target_printer_setting not in allowed_printers:
+            frappe.throw(
+                coded_message(
+                    "DRAWER-OTHER-BRANCH",
+                    _("Selected printer is not configured for this POS Profile or branch."),
+                ),
+                frappe.PermissionError,
+            )
+    else:
+        printers = _bill_printers(pos_profile, None)
+        if printers:
+            target_printer_setting = printers[0]
+
+    delivery = {
+        "status": "Not Configured",
+        "transport": "none",
+        "message": "No hardware printer is attached to this POS Profile.",
+    }
+    if target_printer_setting:
+        try:
+            printer_doc = frappe.get_doc("Network Printer Settings", target_printer_setting)
+            raw_host = (
+                printer_doc.get("custom_raw_escpos_host")
+                if hasattr(printer_doc, "get")
+                else getattr(printer_doc, "custom_raw_escpos_host", None)
+            )
+            raw_port = (
+                printer_doc.get("custom_raw_escpos_port")
+                if hasattr(printer_doc, "get")
+                else getattr(printer_doc, "custom_raw_escpos_port", 9100)
+            )
+            delivery = send_raw_escpos(
+                raw_bytes,
+                host=raw_host or None,
+                port=cint(raw_port) or 9100,
+                cups_server_ip=getattr(printer_doc, "server_ip", None),
+                cups_port=cint(getattr(printer_doc, "port", 631)) or 631,
+                cups_printer_name=getattr(printer_doc, "printer_name", None),
+            )
+        except Exception as exc:
+            delivery = {
+                "status": "Failed",
+                "transport": "none",
+                "message": str(exc),
+            }
+
+    _update_drawer_event_delivery(drawer_event, delivery["status"])
+
+    frappe.logger("printing").info(
+        {
+            "event": "cash_drawer_kick",
+            "pos_profile": pos_profile,
+            "user": getattr(getattr(frappe, "session", None), "user", None),
+            "drawer_pin": resolved_pin,
+            "hex": normalized_hex,
+            "reason": reason or "",
+            "status": delivery["status"],
+            "transport": delivery["transport"],
+            "printer_setting": target_printer_setting,
+        }
+    )
+
+    return {
+        "status": delivery["status"],
+        "transport": delivery["transport"],
+        "drawer_pin": resolved_pin,
+        "hex": normalized_hex,
+        "bytes_length": len(raw_bytes),
+        "pos_profile": pos_profile,
+        "reason": reason or "",
+        "message": delivery.get("message") or "",
+    }
+
+

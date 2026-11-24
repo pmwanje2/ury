@@ -17,6 +17,28 @@ class URYKOT(Document):
 
     def before_submit(self):
         self.userSetting()
+        self._sync_invoice_priority_flags()
+
+    def _sync_invoice_priority_flags(self):
+        if not self.get("invoice"):
+            return
+        try:
+            meta = frappe.get_meta("URY KOT")
+            if not (meta.has_field("custom_is_rush") or meta.has_field("custom_is_vip")):
+                return
+            flags = frappe.db.get_value(
+                "POS Invoice",
+                self.invoice,
+                ["custom_is_rush", "custom_is_vip"],
+                as_dict=True,
+            )
+            if isinstance(flags, dict):
+                if meta.has_field("custom_is_rush") and not self.get("custom_is_rush"):
+                    self.custom_is_rush = int(flags.get("custom_is_rush") or 0)
+                if meta.has_field("custom_is_vip") and not self.get("custom_is_vip"):
+                    self.custom_is_vip = int(flags.get("custom_is_vip") or 0)
+        except Exception:
+            pass
 
     # Function for printing multiple KOTs.
     def multi_print_kot(self):
@@ -124,6 +146,23 @@ class URYKOT(Document):
             {"kot": kotjson, "audio_file": audio_file, "last_kot_time": time},
             after_commit=True,
         )
+        # Also notify any Expo display units in the same branch so unified Expo boards stay live.
+        if currentBranch:
+            try:
+                expo_units = frappe.get_all(
+                    "URY Production Unit",
+                    filters={"branch": currentBranch, "custom_is_expo": 1, "enabled": 1},
+                    pluck="name",
+                )
+                for expo_unit in expo_units or []:
+                    if expo_unit and expo_unit != production:
+                        frappe.publish_realtime(
+                            "{}_{}_{}".format("kot_update", currentBranch, expo_unit),
+                            {"kot": kotjson, "audio_file": audio_file, "last_kot_time": time},
+                            after_commit=True,
+                        )
+            except Exception:
+                pass
         frappe.cache().set_value(cache_key, self.time)
 
     def userSetting(self):

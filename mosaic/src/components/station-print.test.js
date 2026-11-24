@@ -656,3 +656,20 @@ test("the HTML raw element asks QZ for double-density ESC/POS images so an 80 mm
   assert.equal(qz.calls.prints[0].data[0].format, "html");
   assert.equal(qz.calls.prints[0].data[0].options.dotDensity, "double");
 });
+
+test("G28: hydrateFromServer never merges remote backupHost onto a local backupPrinter, and settings dialog exposes backup host/port", async () => {
+  const device = storage({
+    "ury:mosaic:station-print:Kitchen:settings": JSON.stringify(settings({ backupPrinter: "LOCAL-BAK", backupHost: "" })),
+  });
+  const { printer } = await makePrinter({ storage: device });
+  const hydrated = printer.hydrateFromServer({ backupPrinter: "", backupHost: "192.0.2.55", backupPort: 9100 });
+  assert.equal(hydrated.backupPrinter, "LOCAL-BAK");
+  assert.equal(hydrated.backupHost, "");
+
+  const htmlWithNetBackup = await renderSettings(
+    settings({ printer: "KITCHEN-RAW", host: "", backupPrinter: "", backupHost: "192.0.2.55", backupPort: 9101 }),
+    ["KITCHEN-RAW"],
+  );
+  assert.match(htmlWithNetBackup, /Backup printer host/);
+  assert.match(htmlWithNetBackup, /Backup printer port/);
+});

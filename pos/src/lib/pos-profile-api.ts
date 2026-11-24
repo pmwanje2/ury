@@ -71,6 +71,10 @@ export interface PosProfileLimited {
   active_business_date?: string | null;
   shift_report_available?: boolean;
   shift_z_print_format_available?: boolean;
+  custom_drawer_pin?: number | string | null;
+  custom_drawer_kick_hex?: string | null;
+  custom_auto_kick_on_cash_tender?: number | boolean | null;
+  drawer_opening_modes?: string[];
 }
 
 export interface PosProfileLimitedResponse {
@@ -140,10 +144,15 @@ export interface PosProfileFull {
   active_business_date?: string | null;
   shift_report_available?: boolean;
   shift_z_print_format_available?: boolean;
+  custom_drawer_pin?: number | string | null;
+  custom_drawer_kick_hex?: string | null;
+  custom_auto_kick_on_cash_tender?: number | boolean | null;
+  drawer_opening_modes?: string[];
 }
 
 // Combined POS Profile with both limited and full fields
 export interface PosProfileCombined extends PosProfileFull {
+  pos_profile?: string;
   ury_offline_capture?: number | string | boolean;
   // Add limited fields that don't exist in full profile
   waiter: string;
@@ -235,6 +244,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
   // Merge both profiles
   const combinedProfile: PosProfileCombined = {
     ...fullProfile,
+    pos_profile: limitedProfile.pos_profile || fullProfile.name,
     currency: fullProfile.currency || limitedProfile.currency || '',
     country: fullProfile.country || limitedProfile.country || '',
     owner: limitedProfile.owner,
@@ -278,6 +288,14 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     active_business_date: limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
     shift_report_available: Boolean(limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false),
     shift_z_print_format_available: Boolean(limitedProfile.shift_z_print_format_available ?? fullProfile.shift_z_print_format_available ?? false),
+    custom_drawer_pin: limitedProfile.custom_drawer_pin ?? fullProfile.custom_drawer_pin ?? 2,
+    custom_drawer_kick_hex: limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
+    custom_auto_kick_on_cash_tender: Number(
+      limitedProfile.custom_auto_kick_on_cash_tender ??
+      fullProfile.custom_auto_kick_on_cash_tender ??
+      1
+    ),
+    drawer_opening_modes: limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
   };
 
   return combinedProfile;
@@ -351,6 +369,14 @@ export async function getPosProfileOrSelection(): Promise<PosProfileBootstrapRes
     active_business_date: limitedProfile.active_business_date ?? fullProfile.active_business_date ?? null,
     shift_report_available: Boolean(limitedProfile.shift_report_available ?? fullProfile.shift_report_available ?? false),
     shift_z_print_format_available: Boolean(limitedProfile.shift_z_print_format_available ?? fullProfile.shift_z_print_format_available ?? false),
+    custom_drawer_pin: limitedProfile.custom_drawer_pin ?? fullProfile.custom_drawer_pin ?? 2,
+    custom_drawer_kick_hex: limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
+    custom_auto_kick_on_cash_tender: Number(
+      limitedProfile.custom_auto_kick_on_cash_tender ??
+      fullProfile.custom_auto_kick_on_cash_tender ??
+      1
+    ),
+    drawer_opening_modes: limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
   };
   return {
     requiresOutletSelection: false,
