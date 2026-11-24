@@ -1,5 +1,70 @@
 import { call } from '@ury/core';
+import { listReasons, type OverrideReason } from './override-api';
 import type { CashMovementType } from './till-cash-api';
+
+const MIN_POS_REASON_NOTE_LEN = 4;
+
+/**
+ * Align a free-text operator reason with active server-configured `POS Reason` rows
+ * so #147 R2's server-side `_validate_reason` passes without hardcoding reason strings.
+ */
+export function resolvePosReasonForClaim(
+  rawReason: string,
+  activeReasons: OverrideReason[],
+): { claimReason: string; needsPicker: boolean } {
+  const trimmed = rawReason.trim();
+  if (!trimmed) {
+    return { claimReason: '', needsPicker: false };
+  }
+  if (!activeReasons.length) {
+    return { claimReason: trimmed, needsPicker: false };
+  }
+  const lowered = trimmed.toLowerCase();
+  for (const row of activeReasons) {
+    const code = (row.code || '').trim();
+    const desc = (row.description || '').trim();
+    const needsNote = Number(row.requires_note) === 1;
+    if ((code && lowered === code.toLowerCase()) || (desc && lowered === desc.toLowerCase())) {
+      if (!needsNote) {
+        return { claimReason: trimmed, needsPicker: false };
+      }
+      return { claimReason: '', needsPicker: true };
+    }
+    for (const prefix of [code, desc]) {
+      if (prefix && lowered.startsWith(`${prefix.toLowerCase()}:`)) {
+        const note = trimmed.slice(prefix.length + 1).trim();
+        if (!needsNote || note.length >= MIN_POS_REASON_NOTE_LEN) {
+          return { claimReason: trimmed, needsPicker: false };
+        }
+        return { claimReason: '', needsPicker: true };
+      }
+    }
+  }
+  if (trimmed.length >= MIN_POS_REASON_NOTE_LEN) {
+    const catchAll = activeReasons.find(
+      (row) => (!row.applies_to || row.applies_to.length === 0) && Number(row.requires_note) === 1,
+    );
+    if (catchAll) {
+      const label = (catchAll.description || catchAll.code || '').trim();
+      if (label) {
+        return { claimReason: `${label}: ${trimmed}`, needsPicker: false };
+      }
+    }
+  }
+  return { claimReason: '', needsPicker: true };
+}
+
+export async function loadActivePosReasonForClaim(
+  privilege: string,
+  rawReason: string,
+): Promise<{ claimReason: string; needsPicker: boolean }> {
+  const trimmed = rawReason.trim();
+  if (!trimmed) {
+    return { claimReason: '', needsPicker: false };
+  }
+  const activeReasons = await listReasons(privilege).catch(() => []);
+  return resolvePosReasonForClaim(trimmed, activeReasons);
+}
 
 export interface TillDrawerStatus {
   pos_profile: string;
@@ -250,6 +315,7 @@ export async function closeTillWithControls(payload: {
   over_short_reason?: string;
   over_short_approval_token?: string;
   close_other_approval_token?: string;
+  close_other_reason?: string;
   period_end_date?: string;
 }): Promise<{ name: string; docstatus: number }> {
   const body: Record<string, unknown> = {
@@ -260,6 +326,7 @@ export async function closeTillWithControls(payload: {
   if (payload.over_short_reason) body.over_short_reason = payload.over_short_reason;
   if (payload.over_short_approval_token) body.over_short_approval_token = payload.over_short_approval_token;
   if (payload.close_other_approval_token) body.close_other_approval_token = payload.close_other_approval_token;
+  if (payload.close_other_reason) body.close_other_reason = payload.close_other_reason;
   if (payload.period_end_date) body.period_end_date = payload.period_end_date;
   const res = await call.post<{ message: { name: string; docstatus: number } }>(
     'ury.ury_pos.till_controls.close_till_with_controls',

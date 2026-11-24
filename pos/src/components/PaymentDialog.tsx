@@ -383,12 +383,15 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     });
   };
 
-  const executePayment = async (haloApprovalToken?: string) => {
+  const executePayment = async (haloApprovalToken?: string, haloApprovalReason?: string) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
     setIsProcessing(true);
     setError(null);
-    const haloFields = haloApprovalToken ? { halo_approval_token: haloApprovalToken } : {};
+    const haloFields = {
+      ...(haloApprovalToken ? { halo_approval_token: haloApprovalToken } : {}),
+      ...(haloApprovalReason ? { halo_approval_reason: haloApprovalReason } : {}),
+    };
     try {
       await assertOfflineActionAllowed('online invoice settlement');
       const wasAlreadyPrinted = order ? String(order.invoice_printed) !== '0' : false;
@@ -509,7 +512,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
 
   const handleHaloApproved = (result: ManagerApprovalResult) => {
     setShowHaloApproval(false);
-    void executePayment(result.token);
+    void executePayment(result.token, result.reason);
   };
 
   return (
@@ -784,7 +787,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               {tipAmount > 0 && (
                 <div className="flex justify-between">
                   <span className="text-gray-600">{t('payment.tip')}</span>
-                  <span>{formatCurrency(tipAmount)}</span>
+                  <span>{formatMoney(tipAmount)}</span>
                 </div>
               )}
               {/* Final Total (including tip) */}
@@ -870,7 +873,6 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               amount: row.amount,
             })),
           }}
-          requireReason={false}
           onApproved={handleHaloApproved}
           onCancel={() => setShowHaloApproval(false)}
         />

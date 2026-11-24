@@ -19,7 +19,23 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, get_datetime, get_time, now_datetime, nowdate
+from frappe.utils import cint, flt
+
+
+def now_datetime():
+	return frappe.utils.now_datetime()
+
+
+def nowdate():
+	return frappe.utils.nowdate()
+
+
+def get_datetime(val=None):
+	return frappe.utils.get_datetime(val)
+
+
+def get_time(val=None):
+	return frappe.utils.get_time(val)
 
 from ury.brand import coded_message
 from ury.ury.hooks.ury_cash_movement import (
@@ -37,6 +53,7 @@ LEGACY_MANAGER_ROLES = frozenset({"URY Manager", "URY Admin", "Accounts Manager"
 ZERO_DECIMAL_CURRENCIES = frozenset(
 	{"BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"}
 )
+THREE_DECIMAL_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"})
 DRAWER_KICK_HEX = "1b700019fa"
 DRAWER_KICK_COMMAND = "\x1b\x70\x00\x19\xfa"
 
@@ -87,6 +104,9 @@ def _may_perform_till_privilege(
 	if not user or user == "Guest":
 		return False
 	override_mod = _load_override_module()
+	is_non_interactive = getattr(override_mod, "_is_non_interactive_or_agent_session", None) if override_mod else None
+	if callable(is_non_interactive) and is_non_interactive(user):
+		return False
 	if override_mod and _has_configured_rules(profile.company, privilege):
 		code = _resolve_privilege_code(override_mod, privilege, fallback_privilege)
 		return bool(override_mod.may_perform(user, profile.name, code, amount=amount))
@@ -174,6 +194,8 @@ def currency_precision(currency: str | None) -> int:
 				return 2
 		if code in ZERO_DECIMAL_CURRENCIES:
 			return 0
+		if code in THREE_DECIMAL_CURRENCIES:
+			return 3
 	return cint(frappe.get_precision("POS Closing Entry Detail", "expected_amount")) or 2
 
 
@@ -968,6 +990,9 @@ def _can_perform_over_short_solo(user: str, profile, opening_user: str | None, m
 	if not user or user == "Guest":
 		return False
 	override_mod = _load_override_module()
+	is_non_interactive = getattr(override_mod, "_is_non_interactive_or_agent_session", None) if override_mod else None
+	if callable(is_non_interactive) and is_non_interactive(user):
+		return False
 	if override_mod and _has_configured_rules(profile.company, "over_short_close"):
 		code = _resolve_privilege_code(override_mod, "over_short_close")
 		if not override_mod.may_perform(user, profile.name, code, amount=max_abs_diff):
@@ -1332,6 +1357,7 @@ def close_till_with_controls(
 	over_short_reason: str | None = None,
 	over_short_approval_token: str | None = None,
 	close_other_approval_token: str | None = None,
+	close_other_reason: str | None = None,
 	period_end_date: str | None = None,
 ) -> dict[str, Any]:
 	"""Close an open till through native POS Closing Entry with Over/Short tolerance PIN,
@@ -1363,6 +1389,9 @@ def close_till_with_controls(
 			"pos_opening_entry": opening.name,
 			"opening_user": opening.user,
 		}
+		clean_other_reason = (close_other_reason or "").strip()
+		if clean_other_reason:
+			other_claim["reason"] = clean_other_reason
 		close_other_approval = _require_till_privilege(
 			profile,
 			"close_other_till",
@@ -1864,7 +1893,7 @@ def over_halo_tenders_for_invoice(doc) -> list[dict[str, Any]]:
 	return exceeded
 
 
-def apply_halo_approval_token(doc, approval_token: str | None):
+def apply_halo_approval_token(doc, approval_token: str | None, reason: str | None = None):
 	"""Consume a single-use `over_halo_tender` Manager PIN token and stamp server-only
 	``doc.flags.over_halo_approval`` so ``ury_pos_tender.before_validate`` permits the tenders."""
 	if not approval_token:
@@ -1883,6 +1912,9 @@ def apply_halo_approval_token(doc, approval_token: str | None):
 		"pos_profile": profile.name,
 		"tenders": claim_tenders,
 	}
+	clean_reason = (reason or "").strip()
+	if clean_reason:
+		claim["reason"] = clean_reason
 	approval = _require_till_privilege(
 		profile,
 		"over_halo_tender",

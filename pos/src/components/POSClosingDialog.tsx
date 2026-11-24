@@ -26,6 +26,7 @@ import {
   forceCloseTill,
   getTillClosePreview,
   listOpenTills,
+  loadActivePosReasonForClaim,
   type OpenTillRow,
   type TillClosePreview,
 } from '../lib/till-controls-api';
@@ -363,9 +364,12 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [forceCloseReason, setForceCloseReason] = useState('');
   const [discardPendingOnForce, setDiscardPendingOnForce] = useState(false);
   const [closeOtherToken, setCloseOtherToken] = useState<string | null>(null);
-  const [pendingCloseApproval, setPendingCloseApproval] = useState<
-    null | 'over_short_close' | 'close_other_till' | 'force_close'
-  >(null);
+  const [closeOtherReason, setCloseOtherReason] = useState<string | null>(null);
+  const [pendingCloseApproval, setPendingCloseApproval] = useState<null | {
+    kind: 'over_short_close' | 'close_other_till' | 'force_close';
+    claimReason: string;
+    needsPicker: boolean;
+  }>(null);
   // Set once the close submission (Sub POS Closing / POS Closing Entry) has
   // succeeded. Per plan decision D8, the Closing checklist gate hangs off
   // this success -- not off validatePOSClose() -- so it renders in place of
@@ -398,6 +402,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setOpeningEntry(selectedEntry);
       setBlindVarianceMessage(null);
       setCloseOtherToken(null);
+      setCloseOtherReason(null);
       setOverShortReason('');
       setShowForceClose(false);
       setForceCloseReason('');
@@ -612,11 +617,28 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     return { isValid: true, blockingMessage: null as string | null, warningMessage };
   }, [rows, touchedModes, blindCashCount]);
 
+  const openCloseApproval = async (
+    kind: 'close_other_till' | 'over_short_close' | 'force_close',
+  ) => {
+    if (kind === 'close_other_till') {
+      setPendingCloseApproval({ kind, claimReason: '', needsPicker: false });
+      return;
+    }
+    const privilege = kind === 'over_short_close' ? 'over_short_close' : 'reopen_till';
+    const raw = kind === 'over_short_close' ? overShortReason.trim() : forceCloseReason.trim();
+    const resolved = await loadActivePosReasonForClaim(privilege, raw);
+    setPendingCloseApproval({
+      kind,
+      claimReason: resolved.claimReason,
+      needsPicker: resolved.needsPicker,
+    });
+  };
+
   const handleRequestSubmit = () => {
     if (!validation.isValid) return;
     setSubmitError(null);
     if (isClosingOther && !closeOtherToken) {
-      setPendingCloseApproval('close_other_till');
+      void openCloseApproval('close_other_till');
       return;
     }
     if (cashVarianceInfo.exceeds) {
@@ -624,7 +646,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         setSubmitError(t('pos_closing.over_short_reason_required'));
         return;
       }
-      setPendingCloseApproval('over_short_close');
+      void openCloseApproval('over_short_close');
       return;
     }
     setShowConfirm(true);
@@ -632,7 +654,9 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
 
   const executeControlledClose = async (tokens?: {
     overShortToken?: string;
+    overShortReasonOverride?: string;
     closeOtherToken?: string;
+    closeOtherReasonOverride?: string;
   }) => {
     if (!openingEntry || !posProfile || !user) return;
     if (posProfile.name) {
@@ -661,13 +685,15 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         pos_profile: posProfile.name,
         pos_opening_entry: openingEntry.name,
         counted_payments: countedPaymentsPayload,
-        over_short_reason: overShortReason.trim() || undefined,
+        over_short_reason: tokens?.overShortReasonOverride || overShortReason.trim() || undefined,
         over_short_approval_token: tokens?.overShortToken,
         close_other_approval_token: tokens?.closeOtherToken ?? closeOtherToken ?? undefined,
+        close_other_reason: tokens?.closeOtherReasonOverride ?? closeOtherReason ?? undefined,
         period_end_date: formatDateTime(periodEndDate),
       });
       setPendingCloseDoc(null);
       setCloseOtherToken(null);
+      setCloseOtherReason(null);
 
       if (posProfile?.name) {
         try {
@@ -855,30 +881,37 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   };
 
   const handleManagerApprovedClose = async (result: ManagerApprovalResult) => {
-    const kind = pendingCloseApproval;
+    const pending = pendingCloseApproval;
     setPendingCloseApproval(null);
-    if (!kind || !openingEntry || !posProfile) return;
+    if (!pending || !openingEntry || !posProfile) return;
 
-    if (kind === 'close_other_till') {
+    if (pending.kind === 'close_other_till') {
       if (cashVarianceInfo.exceeds) {
         setCloseOtherToken(result.token);
+        setCloseOtherReason(result.reason || null);
         if (!overShortReason.trim()) {
           setSubmitError(t('pos_closing.over_short_reason_required'));
           return;
         }
-        setPendingCloseApproval('over_short_close');
+        await openCloseApproval('over_short_close');
         return;
       }
-      await executeControlledClose({ closeOtherToken: result.token });
+      await executeControlledClose({
+        closeOtherToken: result.token,
+        closeOtherReasonOverride: result.reason,
+      });
       return;
     }
 
-    if (kind === 'over_short_close') {
-      await executeControlledClose({ overShortToken: result.token });
+    if (pending.kind === 'over_short_close') {
+      await executeControlledClose({
+        overShortToken: result.token,
+        overShortReasonOverride: result.reason || pending.claimReason || overShortReason.trim(),
+      });
       return;
     }
 
-    if (kind === 'force_close') {
+    if (pending.kind === 'force_close') {
       setIsSubmitting(true);
       setSubmitError(null);
       try {
@@ -886,7 +919,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           pos_profile: posProfile.name,
           pos_opening_entry: openingEntry.name,
           counted_payments: countedPaymentsPayload,
-          reason: forceCloseReason.trim(),
+          reason: result.reason || pending.claimReason || forceCloseReason.trim(),
           discard_pending_movements: discardPendingOnForce,
           approval_token: result.token,
           over_short_reason: overShortReason.trim() || undefined,
@@ -905,10 +938,11 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
 
   const closeApprovalProps = useMemo(() => {
     if (!pendingCloseApproval || !openingEntry || !posProfile) return null;
-    if (pendingCloseApproval === 'close_other_till') {
+    if (pendingCloseApproval.kind === 'close_other_till') {
       return {
         privilege: 'close_other_till',
         reference: { doctype: 'POS Opening Entry', name: openingEntry.name },
+        requireReason: pendingCloseApproval.needsPicker ? true : undefined,
         summaryLines: [
           t('pos_closing.other_till_notice', {
             cashier: openingEntry.user_name || openingEntry.user,
@@ -923,36 +957,40 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         },
       };
     }
-    if (pendingCloseApproval === 'over_short_close') {
+    if (pendingCloseApproval.kind === 'over_short_close') {
+      const effectiveReason = pendingCloseApproval.claimReason;
       return {
         privilege: 'over_short_close',
         reference: { doctype: 'POS Opening Entry', name: openingEntry.name },
         amount: cashVarianceInfo.maxAbsDiff || undefined,
+        requireReason: pendingCloseApproval.needsPicker ? true : undefined,
         summaryLines: [
           t('pos_closing.blind_variance_title'),
-          `${t('pos_closing.over_short_reason')}: ${overShortReason.trim()}`,
+          `${t('pos_closing.over_short_reason')}: ${effectiveReason || overShortReason.trim()}`,
         ],
         claim: {
           action: 'over_short_close',
           pos_profile: posProfile.name,
           pos_opening_entry: openingEntry.name,
           counted_payments: countedPaymentsPayload,
-          reason: overShortReason.trim(),
+          reason: effectiveReason,
         },
       };
     }
+    const effectiveForceReason = pendingCloseApproval.claimReason;
     return {
       privilege: 'reopen_till',
       reference: { doctype: 'POS Opening Entry', name: openingEntry.name },
+      requireReason: pendingCloseApproval.needsPicker ? true : undefined,
       summaryLines: [
         t('pos_closing.force_close_title'),
-        `${t('pos_closing.force_close_reason')}: ${forceCloseReason.trim()}`,
+        `${t('pos_closing.force_close_reason')}: ${effectiveForceReason || forceCloseReason.trim()}`,
       ],
       claim: {
         action: 'force_close',
         pos_profile: posProfile.name,
         pos_opening_entry: openingEntry.name,
-        reason: forceCloseReason.trim(),
+        reason: effectiveForceReason,
         discard_pending_movements: discardPendingOnForce,
       },
     };
@@ -1191,7 +1229,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                       size="sm"
                       className="min-h-11"
                       disabled={!overShortReason.trim() || isSubmitting}
-                      onClick={() => setPendingCloseApproval('over_short_close')}
+                      onClick={() => void openCloseApproval('over_short_close')}
                     >
                       {t('pos_closing.approve_variance_pin')}
                     </Button>
@@ -1260,7 +1298,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                       size="sm"
                       className="min-h-11"
                       disabled={!forceCloseReason.trim() || isSubmitting}
-                      onClick={() => setPendingCloseApproval('force_close')}
+                      onClick={() => void openCloseApproval('force_close')}
                     >
                       {t('pos_closing.approve_force_close')}
                     </Button>
@@ -1308,7 +1346,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           reference={closeApprovalProps.reference}
           claim={closeApprovalProps.claim}
           amount={'amount' in closeApprovalProps ? closeApprovalProps.amount : undefined}
-          requireReason={false}
+          requireReason={closeApprovalProps.requireReason}
           onApproved={(res) => void handleManagerApprovedClose(res)}
           onCancel={() => setPendingCloseApproval(null)}
         />

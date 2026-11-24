@@ -40,6 +40,7 @@ import {
   getShiftXReport,
   getTillDrawerStatus,
   listClosedTills,
+  loadActivePosReasonForClaim,
   logCashPullException,
   recordCashMovementWithControl,
   reopenTill,
@@ -67,10 +68,26 @@ const MENU_TABS: TillMenuTab[] = [
 ];
 
 type PendingApprovalKind =
-  | { kind: 'cash_movement'; movementType: CashMovementType; amount: number; reason: string; reference: string; target: 'expense' | 'tips' }
-  | { kind: 'threshold_exception'; reason: string }
-  | { kind: 'no_sale'; reason: string; note: string }
-  | { kind: 'reopen_till'; closingName: string; openingName: string; reason: string };
+  | {
+      kind: 'cash_movement';
+      movementType: CashMovementType;
+      amount: number;
+      reason: string;
+      reference: string;
+      target: 'expense' | 'tips';
+      claimReason: string;
+      needsPicker: boolean;
+    }
+  | { kind: 'threshold_exception'; reason: string; claimReason: string; needsPicker: boolean }
+  | { kind: 'no_sale'; reason: string; note: string; claimReason: string; needsPicker: boolean }
+  | {
+      kind: 'reopen_till';
+      closingName: string;
+      openingName: string;
+      reason: string;
+      claimReason: string;
+      needsPicker: boolean;
+    };
 
 const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
   const { posProfile } = usePOSStore();
@@ -191,17 +208,44 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
     (!requiresInPlacePin || reference.trim().length > 0) &&
     !submitting;
 
-  const submitCashMovement = async (approvalToken?: string) => {
+  const openCashMovementApproval = async (
+    mType: CashMovementType,
+    amt: number,
+    rawReason: string,
+    rawRef: string,
+    target: 'expense' | 'tips',
+  ) => {
+    const privilege =
+      mType === 'Paid Out' || mType === 'Paid In'
+        ? 'paid_out'
+        : mType === 'Loan'
+          ? 'cash_loan'
+          : 'cash_pickup';
+    const resolved = await loadActivePosReasonForClaim(privilege, rawReason);
+    setPendingApproval({
+      kind: 'cash_movement',
+      movementType: mType,
+      amount: amt,
+      reason: rawReason,
+      reference: rawRef,
+      target,
+      claimReason: resolved.claimReason,
+      needsPicker: resolved.needsPicker,
+    });
+  };
+
+  const submitCashMovement = async (approvalToken?: string, approvedReason?: string) => {
     if (!posProfileName || !state?.opening_entry) return;
     setSubmitting(true);
     setError(null);
+    const effectiveReason = (approvedReason ?? reason).trim();
     try {
       if (approvalToken || isPaidIn) {
         const created = await recordCashMovementWithControl({
           pos_profile: posProfileName,
           movement_type: movementType,
           amount: parsedAmount,
-          reason: reason.trim() || undefined,
+          reason: effectiveReason || undefined,
           reference: reference.trim() || undefined,
           ...(isPaidOut ? { paid_out_target: paidOutTarget } : {}),
           pos_opening_entry: state.opening_entry,
@@ -220,7 +264,7 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
           pos_profile: posProfileName,
           movement_type: movementType,
           amount: parsedAmount,
-          ...(isPaidOut ? { reason: reason.trim(), paid_out_target: paidOutTarget } : {}),
+          ...(isPaidOut ? { reason: effectiveReason, paid_out_target: paidOutTarget } : {}),
           ...(reference.trim() ? { reference: reference.trim() } : {}),
         });
         setAmountInput('');
@@ -235,14 +279,13 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
       await loadState();
     } catch (err) {
       if (!approvalToken && isAuthRequiredError(err)) {
-        setPendingApproval({
-          kind: 'cash_movement',
+        await openCashMovementApproval(
           movementType,
-          amount: parsedAmount,
-          reason: reason.trim(),
-          reference: reference.trim(),
-          target: paidOutTarget,
-        });
+          parsedAmount,
+          reason.trim(),
+          reference.trim(),
+          paidOutTarget,
+        );
       } else {
         setError(parseFrappeError(err, t('till_cash.record_failed')));
       }
@@ -254,27 +297,27 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
   const handleRecord = () => {
     if (!posProfileName || !canSubmitMovement) return;
     if (requiresInPlacePin) {
-      setPendingApproval({
-        kind: 'cash_movement',
+      void openCashMovementApproval(
         movementType,
-        amount: parsedAmount,
-        reason: reason.trim(),
-        reference: reference.trim(),
-        target: paidOutTarget,
-      });
+        parsedAmount,
+        reason.trim(),
+        reference.trim(),
+        paidOutTarget,
+      );
       return;
     }
     void submitCashMovement();
   };
 
-  const submitNoSale = async (approvalToken?: string) => {
-    if (!posProfileName || !noSaleReason.trim()) return;
+  const submitNoSale = async (approvalToken?: string, approvedReason?: string) => {
+    const effectiveReason = (approvedReason ?? noSaleReason).trim();
+    if (!posProfileName || !effectiveReason) return;
     setSubmitting(true);
     setError(null);
     try {
       const res = await triggerNoSale({
         pos_profile: posProfileName,
-        reason: noSaleReason.trim(),
+        reason: effectiveReason,
         note: noSaleNote.trim() || undefined,
         pos_opening_entry: state?.opening_entry || undefined,
         approval_token: approvalToken,
@@ -292,10 +335,13 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
       await loadState();
     } catch (err) {
       if (!approvalToken && isAuthRequiredError(err)) {
+        const resolved = await loadActivePosReasonForClaim('no_sale', noSaleReason.trim());
         setPendingApproval({
           kind: 'no_sale',
           reason: noSaleReason.trim(),
           note: noSaleNote.trim(),
+          claimReason: resolved.claimReason,
+          needsPicker: resolved.needsPicker,
         });
       } else {
         setError(parseFrappeError(err, t('till_cash.record_failed')));
@@ -308,10 +354,14 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
   const handleTriggerNoSale = () => {
     if (!noSaleReason.trim() || !state?.opening_entry) return;
     if (!state.can_approve) {
-      setPendingApproval({
-        kind: 'no_sale',
-        reason: noSaleReason.trim(),
-        note: noSaleNote.trim(),
+      void loadActivePosReasonForClaim('no_sale', noSaleReason.trim()).then((resolved) => {
+        setPendingApproval({
+          kind: 'no_sale',
+          reason: noSaleReason.trim(),
+          note: noSaleNote.trim(),
+          claimReason: resolved.claimReason,
+          needsPicker: resolved.needsPicker,
+        });
       });
       return;
     }
@@ -320,20 +370,28 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
 
   const handleRequestExceptionApproval = () => {
     if (!exceptionReason.trim() || !state?.opening_entry) return;
-    setPendingApproval({
-      kind: 'threshold_exception',
-      reason: exceptionReason.trim(),
+    void loadActivePosReasonForClaim('cash_pickup', exceptionReason.trim()).then((resolved) => {
+      setPendingApproval({
+        kind: 'threshold_exception',
+        reason: exceptionReason.trim(),
+        claimReason: resolved.claimReason,
+        needsPicker: resolved.needsPicker,
+      });
     });
   };
 
   const handleRequestReopenApproval = () => {
     const row = closedTills.find((c) => c.name === selectedClosing);
     if (!row || !reopenReason.trim()) return;
-    setPendingApproval({
-      kind: 'reopen_till',
-      closingName: row.name,
-      openingName: row.pos_opening_entry,
-      reason: reopenReason.trim(),
+    void loadActivePosReasonForClaim('reopen_till', reopenReason.trim()).then((resolved) => {
+      setPendingApproval({
+        kind: 'reopen_till',
+        closingName: row.name,
+        openingName: row.pos_opening_entry,
+        reason: reopenReason.trim(),
+        claimReason: resolved.claimReason,
+        needsPicker: resolved.needsPicker,
+      });
     });
   };
 
@@ -342,8 +400,9 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
     setPendingApproval(null);
     if (!action || !posProfileName) return;
 
+    const effectiveReason = result.reason || action.claimReason || action.reason;
     if (action.kind === 'cash_movement') {
-      await submitCashMovement(result.token);
+      await submitCashMovement(result.token, effectiveReason);
       return;
     }
 
@@ -353,7 +412,7 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
       if (action.kind === 'threshold_exception') {
         await logCashPullException({
           pos_profile: posProfileName,
-          reason: action.reason,
+          reason: effectiveReason,
           pos_opening_entry: state?.opening_entry || undefined,
           approval_token: result.token,
         });
@@ -362,11 +421,11 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
         showToast.success(t('till_cash.exception_logged'));
         await loadState();
       } else if (action.kind === 'no_sale') {
-        await submitNoSale(result.token);
+        await submitNoSale(result.token, effectiveReason);
       } else if (action.kind === 'reopen_till') {
         await reopenTill({
           pos_closing_entry: action.closingName,
-          reason: action.reason,
+          reason: effectiveReason,
           approval_token: result.token,
         });
         setReopenReason('');
@@ -442,16 +501,19 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
         privilege,
         reference: { doctype: 'POS Opening Entry', name: state?.opening_entry || '' },
         amount: pendingApproval.amount,
+        requireReason: pendingApproval.needsPicker ? true : undefined,
         summaryLines: [
           `${pendingApproval.movementType}: ${formatCurrency(pendingApproval.amount, state?.currency || '')}`,
-          ...(pendingApproval.reason ? [`${t('till_cash.reason')}: ${pendingApproval.reason}`] : []),
+          ...(pendingApproval.claimReason || pendingApproval.reason
+            ? [`${t('till_cash.reason')}: ${pendingApproval.claimReason || pendingApproval.reason}`]
+            : []),
           ...(pendingApproval.reference ? [`${t('till_cash.reference')}: ${pendingApproval.reference}`] : []),
         ],
         claim: {
           action: actionKey,
           movement_type: pendingApproval.movementType,
           amount: pendingApproval.amount,
-          reason: pendingApproval.reason,
+          reason: pendingApproval.claimReason,
           reference: pendingApproval.reference,
           paid_out_target: pendingApproval.target,
           pos_opening_entry: state?.opening_entry || '',
@@ -462,16 +524,17 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
       return {
         privilege: 'cash_pickup',
         reference: { doctype: 'POS Opening Entry', name: state?.opening_entry || '' },
+        requireReason: pendingApproval.needsPicker ? true : undefined,
         summaryLines: [
           t('till_cash.log_exception'),
-          `${t('till_cash.exception_reason')}: ${pendingApproval.reason}`,
+          `${t('till_cash.exception_reason')}: ${pendingApproval.claimReason || pendingApproval.reason}`,
         ],
         claim: {
           action: 'threshold_exception',
           pos_profile: posProfileName,
           pos_opening_entry: state?.opening_entry || '',
           threshold_amount: Number(drawerStatus?.cash_pull_threshold ?? state?.cash_pull_threshold ?? 0),
-          reason: pendingApproval.reason,
+          reason: pendingApproval.claimReason,
         },
       };
     }
@@ -479,15 +542,16 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
       return {
         privilege: 'no_sale',
         reference: { doctype: 'POS Opening Entry', name: state?.opening_entry || '' },
+        requireReason: pendingApproval.needsPicker ? true : undefined,
         summaryLines: [
           t('till_cash.no_sale_heading'),
-          `${t('till_cash.no_sale_reason')}: ${pendingApproval.reason}`,
+          `${t('till_cash.no_sale_reason')}: ${pendingApproval.claimReason || pendingApproval.reason}`,
         ],
         claim: {
           action: 'no_sale',
           pos_profile: posProfileName,
           pos_opening_entry: state?.opening_entry || '',
-          reason: pendingApproval.reason,
+          reason: pendingApproval.claimReason,
           note: pendingApproval.note,
         },
       };
@@ -495,16 +559,17 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
     return {
       privilege: 'reopen_till',
       reference: { doctype: 'POS Closing Entry', name: pendingApproval.closingName },
+      requireReason: pendingApproval.needsPicker ? true : undefined,
       summaryLines: [
         `${t('till_cash.reopen_till')}: ${pendingApproval.closingName}`,
-        `${t('till_cash.reopen_reason')}: ${pendingApproval.reason}`,
+        `${t('till_cash.reopen_reason')}: ${pendingApproval.claimReason || pendingApproval.reason}`,
       ],
       claim: {
         action: 'reopen_till',
         pos_profile: posProfileName,
         pos_closing_entry: pendingApproval.closingName,
         pos_opening_entry: pendingApproval.openingName,
-        reason: pendingApproval.reason,
+        reason: pendingApproval.claimReason,
       },
     };
   })();
@@ -1119,7 +1184,7 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
           reference={approvalConfig.reference}
           claim={approvalConfig.claim}
           amount={'amount' in approvalConfig ? approvalConfig.amount : undefined}
-          requireReason={false}
+          requireReason={approvalConfig.requireReason}
           onApproved={(res) => void handleManagerApproved(res)}
           onCancel={() => setPendingApproval(null)}
         />

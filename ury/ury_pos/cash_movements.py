@@ -354,7 +354,7 @@ def record_till_cash_movement(
 
 
 @frappe.whitelist()
-def approve_till_cash_movement(journal_entry, approval_token=None):
+def approve_till_cash_movement(journal_entry, approval_token=None, approval_reason=None):
 	"""Approve and submit a pending Paid Out / Paid In — either as a signed-in manager or
 	in place with a Manager PIN token while the cashier stays signed in."""
 	if not frappe.db.exists("Journal Entry", journal_entry):
@@ -383,6 +383,9 @@ def approve_till_cash_movement(journal_entry, approval_token=None):
 			"amount": flt(entry.total_debit),
 			"pos_opening_entry": entry.custom_pos_opening_entry,
 		}
+		clean_reason = (approval_reason or entry.get("custom_cash_movement_reason") or "").strip()
+		if clean_reason:
+			claim["reason"] = clean_reason
 		approval = _require_till_privilege(
 			profile,
 			"paid_out",

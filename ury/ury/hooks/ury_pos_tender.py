@@ -67,13 +67,12 @@ def _enforce_tender_sanity_and_halo(doc):
 					_("Negative payment amount for {0} is not allowed.").format(row.get("mode_of_payment") or _("tender")),
 				)
 			)
-		if amt > 0 and precision == 0 and abs(amt - flt(amt, 0)) > 1e-6:
-			frappe.throw(
-				coded_message(
-					"CASH-PRECISION",
-					_("{0} tender amounts must be whole numbers without decimals.").format(currency or _("Currency")),
-				)
-			)
+		if amt > 0 and abs(amt - flt(amt, precision)) > 1e-6:
+			if precision == 0:
+				msg = _("{0} tender amounts must be whole numbers without decimals.").format(currency or _("Currency"))
+			else:
+				msg = _("{0} tender amounts allow at most {1} decimal places.").format(currency or _("Currency"), precision)
+			frappe.throw(coded_message("CASH-PRECISION", msg))
 
 	exceeded = over_halo_tenders_for_invoice(doc)
 	if not exceeded:
