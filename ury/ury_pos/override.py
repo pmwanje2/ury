@@ -846,6 +846,9 @@ def _validate_reason(pos_profile: str, privilege: str, parsed_claim: dict[str, A
     if privilege == "discount_remove":
         return raw_reason or raw_code or "Remove discount"
 
+    if privilege == "service_charge_waive" and str(parsed_claim.get("sc_action") or "").strip().casefold() == "restore":
+        return raw_reason or raw_code or "Restore automatic service charge"
+
     active_reasons = list_reasons(privilege)
     if not active_reasons:
         candidate = raw_reason or raw_code

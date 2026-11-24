@@ -21,7 +21,11 @@ import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
 import { printBillCopy, printOrder } from '../lib/print';
 import { call, getSessionUser } from '@ury/core';
-import { splitBill, cancelOrder } from '../lib/order-api';
+import { splitBill, cancelOrder, reprintKot } from '../lib/order-api';
+import PriceOverrideDialog from '../components/PriceOverrideDialog';
+import CheckPrivilegedDialog, { type CheckPrivilegedTab } from '../components/CheckPrivilegedDialog';
+import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
+import { classifyInvoiceTaxes } from '../lib/service-charge';
 import {
   getOrdersTabForInvoice,
   getOpenCheckCounts,
@@ -221,6 +225,33 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     amount: number;
     claim: Record<string, unknown>;
   } | null>(null);
+  const [priceOverrideItem, setPriceOverrideItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
+  const [openItemDialogOpen, setOpenItemDialogOpen] = React.useState(false);
+  const openMenuItems = React.useMemo(
+    () =>
+      (posStore.menuItems || [])
+        .filter(
+          (item) =>
+            Number((item as { custom_is_open_priced?: number }).custom_is_open_priced || 0) === 1 ||
+            Number((item as { custom_allow_zero_price?: number }).custom_allow_zero_price || 0) === 1,
+        )
+        .map((item) => ({
+          item: item.item || item.id,
+          item_name: item.item_name || item.name,
+          rate: item.price,
+        })),
+    [posStore.menuItems],
+  );
+  const [checkPrivTab, setCheckPrivTab] = React.useState<CheckPrivilegedTab | null>(null);
+  const [pendingOrderApproval, setPendingOrderApproval] = React.useState<{
+    privilege: 'reprint_bill' | 'reprint_kot' | 'split_check';
+    title: string;
+    summaryLines: string[];
+    referenceName: string;
+    claim: Record<string, unknown>;
+    requireReason?: boolean;
+    retry: (res: ManagerApprovalResult) => Promise<void>;
+  } | null>(null);
 
   React.useEffect(() => {
     if (selectedOrder?.name) {
@@ -405,6 +436,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       }
       posStore.setSelectedCustomer({ id: order.customer, name: order.customer_name, phone: order.mobile_number });
       posStore.setGuestLabel(order.custom_guest_label || '');
+      if (order.no_of_pax != null && Number(order.no_of_pax) > 0) {
+        posStore.setNoOfPax(Number(order.no_of_pax));
+      }
       // Fill cart
       const items = (order.items || []).map((item: any) => ({
         id: item.item_code,
@@ -505,7 +539,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     });
   }
 
-  async function handlePrintOrder() {
+  async function handlePrintOrder(approval?: ManagerApprovalResult) {
     if (!selectedOrder || !posStore.posProfile) return;
     setIsPrinting(true);
     try {
@@ -515,12 +549,18 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           orderId: selectedOrder.name,
           posProfile: posStore.posProfile,
           printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
+          approvalToken: approval?.token,
+          reason: approval?.reason,
+          reasonNote: approval?.note,
         });
       } else {
         await printBillCopy({
           orderId: selectedOrder.name,
           posProfile: posStore.posProfile,
           idempotencyKey: crypto.randomUUID(),
+          approvalToken: approval?.token,
+          reason: approval?.reason,
+          reasonNote: approval?.note,
         });
       }
       showToast.success(t('success.printed'));
@@ -543,19 +583,90 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         }
       }
     } catch (err: any) {
-      showToast.error(t('errors.print_failed', { reason: err?.message || String(err) }));
+      if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        const orderName = selectedOrder.name;
+        const challenge = extractAuthChallenge(err);
+        setPendingOrderApproval({
+          privilege: 'reprint_bill',
+          title: t('privileged_actions.reprint_bill'),
+          summaryLines: [`${t('privileged_actions.check_ref')}: ${orderName}`],
+          referenceName: orderName,
+          claim: challenge?.claim ?? { action: 'reprint_open_bill', invoice: orderName },
+          requireReason: true,
+          retry: (res) => handlePrintOrder(res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(err) || t('errors.print_failed', { reason: err?.message || String(err) }));
     } finally {
       setIsPrinting(false);
     }
   }
 
-  async function handleSplitBill(payload: {
-    itemsToMove: Array<{ name: string; qty: number }>;
-    customer?: string;
-    guestLabel?: string;
-  }) {
+  async function handleRefireKot(approval?: ManagerApprovalResult) {
     if (!selectedOrder) return;
-    const result = await splitBill(selectedOrder.name, payload.itemsToMove, payload.customer, payload.guestLabel);
+    const orderName = selectedOrder.name;
+    try {
+      await reprintKot(
+        orderName,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
+      showToast.success(t('privileged_actions.kot_refired'));
+    } catch (err) {
+      if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        const challenge = extractAuthChallenge(err);
+        setPendingOrderApproval({
+          privilege: 'reprint_kot',
+          title: t('privileged_actions.reprint_kot'),
+          summaryLines: [`${t('privileged_actions.check_ref')}: ${orderName}`],
+          referenceName: orderName,
+          claim: challenge?.claim ?? { action: 'reprint_kot', invoice: orderName },
+          requireReason: true,
+          retry: (res) => handleRefireKot(res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(err));
+    }
+  }
+
+  async function handleSplitBill(
+    payload: {
+      itemsToMove: Array<{ name: string; qty: number }>;
+      customer?: string;
+      guestLabel?: string;
+    },
+    approval?: ManagerApprovalResult,
+  ) {
+    if (!selectedOrder) return;
+    const sourceName = selectedOrder.name;
+    let result;
+    try {
+      result = await splitBill(
+        sourceName,
+        payload.itemsToMove,
+        payload.customer,
+        payload.guestLabel,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
+    } catch (err) {
+      if (!approval?.token && isAuthRequiredError(err)) {
+        const challenge = extractAuthChallenge(err);
+        const sortedMoves = [...payload.itemsToMove]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((row) => [row.name, Math.round(row.qty * 10000) / 10000]);
+        setPendingOrderApproval({
+          privilege: 'split_check',
+          title: t('privileged_actions.split_check'),
+          summaryLines: [`${t('privileged_actions.check_ref')}: ${sourceName}`],
+          referenceName: sourceName,
+          claim: challenge?.claim ?? { action: 'split_bill', source_invoice: sourceName, move_items: sortedMoves },
+          retry: (res) => handleSplitBill(payload, res),
+        });
+        return;
+      }
+      throw err;
+    }
     showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
 
     const childOnUnbilledTab =
@@ -840,7 +951,25 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         onMergeBill={() => setShowMergeDialog(true)}
                         showSplitBill={canSplitBill}
                         onSplitBill={() => setShowSplitDialog(true)}
+                        showComplimentary={selectedOrderItems.length > 0}
+                        onComplimentary={() => setCheckPrivTab('complimentary')}
+                        showTaxExempt={selectedOrderItems.length > 0}
+                        onTaxExempt={() => setCheckPrivTab('tax_exempt')}
+                        showServiceCharge={selectedOrderItems.length > 0}
+                        onServiceCharge={() => setCheckPrivTab('service_charge')}
+                        showRefireKot={selectedOrderItems.length > 0}
+                        onRefireKot={() => void handleRefireKot()}
                       />
+                      {openMenuItems.length > 0 && (
+                        <button
+                          type="button"
+                          data-testid="orders-open-item-btn"
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          onClick={() => setOpenItemDialogOpen(true)}
+                        >
+                          {t('privileged_actions.open_item')}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="inline-flex items-center justify-center rounded-md p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1068,6 +1197,15 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                             <p className="text-sm font-semibold text-gray-900">
                               {formatCurrency(item.amount, selectedOrderCurrency)}
                             </p>
+                            {isOrderEditable(selectedOrder.status) && !isMergedBill(selectedOrder) && (
+                              <button
+                                type="button"
+                                onClick={() => setPriceOverrideItem(item)}
+                                className="mt-0.5 text-xs font-medium text-blue-600 hover:underline"
+                              >
+                                {t('privileged_actions.price_override')}
+                              </button>
+                            )}
                           </div>
                         </div>
                         {lineDiscountTotal > 0 && (
@@ -1138,22 +1276,110 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 </div>
               )}
 
-              {/* Taxes */}
-              {selectedOrderTaxes.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('order.taxes_charges')}</h3>
-                  <div className="space-y-2">
-                    {selectedOrderTaxes.map((tax, index) => (
-                      <div key={index} className="flex justify-between items-center py-1">
-                        <span className="text-sm text-gray-600">{tax.description}</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          {formatCurrency(tax.rate, selectedOrderCurrency)}
+              {/* Structured Financial Breakdown: Net -> Discount -> Service Charge -> Tax -> Total */}
+              {(() => {
+                const { serviceChargeRows, taxRows, tipRows } = classifyInvoiceTaxes(selectedOrderTaxes);
+                const subtotalVal = selectedOrder.total || selectedOrder.net_total || 0;
+                const discountVal = Number(selectedOrder.discount_amount || 0);
+                const isScWaived = Number(selectedOrder.custom_service_charge_waived || 0) === 1;
+                const editable = isOrderEditable(selectedOrder.status);
+                const hasBreakdown =
+                  subtotalVal > 0 ||
+                  discountVal > 0 ||
+                  serviceChargeRows.length > 0 ||
+                  taxRows.length > 0 ||
+                  tipRows.length > 0 ||
+                  isScWaived;
+                if (!hasBreakdown) return null;
+                return (
+                  <div className="mb-6 rounded-lg border border-gray-200 bg-gray-50/70 p-3.5 space-y-2">
+                    <h3 className="text-sm font-semibold text-gray-900">{t('order.taxes_charges')}</h3>
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex items-center justify-between gap-2 text-gray-700">
+                        <span>{t('privileged_actions.sc_summary_net')}</span>
+                        <span className="tabular-nums font-medium">
+                          {formatCurrency(subtotalVal, selectedOrderCurrency)}
                         </span>
                       </div>
-                    ))}
+                      {discountVal > 0 && (
+                        <div className="flex items-center justify-between gap-2 text-emerald-700">
+                          <span>
+                            {t('privileged_actions.sc_summary_discount')}
+                            {Number(selectedOrder.additional_discount_percentage || 0) > 0
+                              ? ` (${selectedOrder.additional_discount_percentage}%)`
+                              : ''}
+                          </span>
+                          <span className="tabular-nums font-medium">
+                            -{formatCurrency(discountVal, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      )}
+                      {serviceChargeRows.map((sc, index) => (
+                        <div key={`sc-${index}`} className="flex items-center justify-between gap-2">
+                          {editable ? (
+                            <button
+                              type="button"
+                              onClick={() => setCheckPrivTab('service_charge')}
+                              className="min-h-11 inline-flex items-center gap-1.5 text-start text-sm font-medium text-blue-700 hover:underline"
+                            >
+                              <span>{sc.description}</span>
+                              {Number(sc.tax_rate || 0) > 0 && !String(sc.description || '').includes('%') && (
+                                <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+                                  {sc.tax_rate}%
+                                </span>
+                              )}
+                            </button>
+                          ) : (
+                            <span className="text-gray-700">{sc.description}</span>
+                          )}
+                          <span className="tabular-nums font-medium text-gray-900">
+                            {formatCurrency(sc.tax_amount ?? sc.rate, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                      {isScWaived && serviceChargeRows.length === 0 && (
+                        <div className="flex items-center justify-between gap-2">
+                          {editable ? (
+                            <button
+                              type="button"
+                              onClick={() => setCheckPrivTab('service_charge')}
+                              className="min-h-11 inline-flex items-center gap-1.5 text-start text-sm text-rose-700 hover:underline"
+                            >
+                              <span>{t('privileged_actions.service_charge')}</span>
+                              <span className="rounded bg-rose-50 px-1.5 py-0.5 text-xs font-medium text-rose-700">
+                                {t('privileged_actions.sc_waived_badge')}
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="text-rose-700">
+                              {t('privileged_actions.service_charge')} ({t('privileged_actions.sc_waived_badge')})
+                            </span>
+                          )}
+                          <span className="tabular-nums text-gray-500">
+                            {formatCurrency(0, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      )}
+                      {taxRows.map((tax, index) => (
+                        <div key={`tax-${index}`} className="flex items-center justify-between gap-2 text-gray-600">
+                          <span className="min-w-0 break-words">{tax.description}</span>
+                          <span className="shrink-0 tabular-nums font-medium text-gray-900">
+                            {formatCurrency(tax.tax_amount ?? tax.rate, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                      {tipRows.map((tip, index) => (
+                        <div key={`tip-${index}`} className="flex items-center justify-between gap-2 text-gray-600">
+                          <span className="min-w-0 break-words">{tip.description}</span>
+                          <span className="shrink-0 tabular-nums font-medium text-gray-900">
+                            {formatCurrency(tip.tax_amount ?? tip.rate, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
 
             {/* Sticky Bottom Section: Print | Split | Settle | Total */}
@@ -1163,7 +1389,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 <Button
                   variant="outline"
                   className="min-h-11 shrink-0 gap-2"
-                  onClick={handlePrintOrder}
+                  onClick={() => void handlePrintOrder()}
                   disabled={isPrinting}
                 >
                   {isPrinting ? <Spinner className="w-5 h-5" hideMessage  message={t('common.loading')} /> : <Printer className="w-5 h-5" />}
@@ -1290,6 +1516,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showMergeDialog}
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
+          posProfile={posStore.posProfile?.name || selectedOrder.pos_profile || ''}
           currency={selectedOrderCurrency}
           onConfirm={handleMergeBill}
         />
@@ -1334,6 +1561,76 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           amount={pendingVoidApproval.amount}
           onApproved={(res) => void handleVoidApprovalGranted(res)}
           onCancel={() => setPendingVoidApproval(null)}
+        />
+      )}
+      {selectedOrder && priceOverrideItem && (
+        <PriceOverrideDialog
+          open
+          onOpenChange={(next) => !next && setPriceOverrideItem(null)}
+          mode="override"
+          posProfile={posStore.posProfile?.name || ''}
+          invoiceName={selectedOrder.name}
+          itemRowName={priceOverrideItem.name}
+          itemName={priceOverrideItem.item_name}
+          currentRate={priceOverrideItem.rate}
+          currency={selectedOrderCurrency}
+          onSuccess={async () => {
+            await fetchOrders();
+            await selectOrder(selectedOrder);
+          }}
+        />
+      )}
+      {selectedOrder && openItemDialogOpen && openMenuItems.length > 0 && (
+        <PriceOverrideDialog
+          open
+          onOpenChange={setOpenItemDialogOpen}
+          mode="open_item"
+          posProfile={posStore.posProfile?.name || ''}
+          invoiceName={selectedOrder.name}
+          itemCode={openMenuItems[0].item}
+          itemName={openMenuItems[0].item_name}
+          currentRate={0}
+          currency={selectedOrderCurrency}
+          openItems={openMenuItems}
+          onSuccess={async () => {
+            await fetchOrders();
+            await selectOrder(selectedOrder);
+          }}
+        />
+      )}
+      {selectedOrder && checkPrivTab && (
+        <CheckPrivilegedDialog
+          open
+          onOpenChange={(next) => !next && setCheckPrivTab(null)}
+          initialTab={checkPrivTab}
+          posProfile={posStore.posProfile?.name || ''}
+          company={posStore.posProfile?.company || ''}
+          invoiceName={selectedOrder.name}
+          currency={selectedOrderCurrency}
+          isTaxExempt={Number(selectedOrder.custom_tax_exempt || 0) === 1}
+          isServiceChargeWaived={Number(selectedOrder.custom_service_charge_waived || 0) === 1}
+          onSuccess={async () => {
+            await fetchOrders();
+            await selectOrder(selectedOrder);
+          }}
+        />
+      )}
+      {pendingOrderApproval && (
+        <ManagerApproval
+          open
+          posProfile={posStore.posProfile?.name || ''}
+          privilege={pendingOrderApproval.privilege}
+          title={pendingOrderApproval.title}
+          summaryLines={pendingOrderApproval.summaryLines}
+          reference={{ doctype: 'POS Invoice', name: pendingOrderApproval.referenceName }}
+          claim={pendingOrderApproval.claim}
+          requireReason={pendingOrderApproval.requireReason}
+          onApproved={(res) => {
+            const pending = pendingOrderApproval;
+            setPendingOrderApproval(null);
+            void pending.retry(res);
+          }}
+          onCancel={() => setPendingOrderApproval(null)}
         />
       )}
     </div>

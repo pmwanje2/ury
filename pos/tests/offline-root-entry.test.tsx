@@ -28,6 +28,9 @@ const profile = {
   branch: '',
   paid_limit: 20,
   role_allowed_for_billing: [{ role: 'URY Cashier' }],
+  offline_payment_modes: [
+    { mode_of_payment: 'Cash', type: 'Cash', allow_offline: true, requires_reference: false },
+  ],
 };
 const gatewayStatuses = [502, 504] as const;
 

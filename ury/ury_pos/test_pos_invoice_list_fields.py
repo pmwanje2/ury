@@ -30,7 +30,7 @@ ROW = {
 	"custom_split_from": None, "custom_guest_label": "Rm 408", "custom_merged_pos_invoice": None,
 	"custom_merged_total": None, "additional_discount_percentage": 0, "discount_amount": 0,
 	"ury_client_order_id": None, "no_of_pax": 3, "creation": "2026-10-02 10:00:00", "branch": "Branch A",
-	"currency": "USD",
+	"currency": "USD", "conversion_rate": 3700.0,
 }
 
 
@@ -104,6 +104,7 @@ class TestPosInvoiceListFields(unittest.TestCase):
 				self.assertEqual(rows[0].get("customer_name"), "Dr. Elena Rostova")
 				self.assertEqual(rows[0].get("no_of_pax"), 3)
 				self.assertEqual(rows[0].get("currency"), "USD")
+				self.assertEqual(rows[0].get("conversion_rate"), 3700.0)
 
 	def test_open_check_lists_carry_when_the_check_was_opened(self):
 		for status in ("Draft", "Unbilled"):

@@ -478,7 +478,7 @@ class TestTillCashMovements(FrappeTestCase):
 		_profile, opening = _open_usd_till(profile_name, holder, opening_amount=100)
 		inv = _make_usd_invoice(profile_name, USD_CUSTOMER, rate=50)
 
-		frappe.set_user(holder)
+		frappe.set_user(till_fx.PURE_MANAGER)
 		try:
 			pickup = cash_movements.record_till_cash_movement(
 				pos_profile=profile_name, movement_type="Pickup", amount=20, pos_opening_entry=opening.name
@@ -486,6 +486,11 @@ class TestTillCashMovements(FrappeTestCase):
 			loan = cash_movements.record_till_cash_movement(
 				pos_profile=profile_name, movement_type="Loan", amount=30, pos_opening_entry=opening.name
 			)
+		finally:
+			frappe.set_user("Administrator")
+
+		frappe.set_user(holder)
+		try:
 			# $10 <= $20 threshold (even though 800 INR > 20): must self-submit!
 			small_po = cash_movements.record_till_cash_movement(
 				pos_profile=profile_name,

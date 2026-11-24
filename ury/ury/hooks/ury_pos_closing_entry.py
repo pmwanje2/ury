@@ -5,6 +5,7 @@ from datetime import datetime
 
 from ury.brand import coded_message
 from ury.ury.hooks.ury_cash_movement import till_cash_movements, validate_closing_cash
+from ury.ury_pos.till_controls import validate_closing_cancel, validate_closing_controls
 from ury.ury_pos.api import (
 	_goal_submitted_since,
 	_phase_dependent_rows,
@@ -23,8 +24,9 @@ def before_validate(doc, method):
 
 
 def before_submit(doc, method):
-    # Either invoice mode: the shift's cash movements are decided and a cash
-    # difference has the till's Over/Short account.
+    # Either invoice mode: lock opening entry, enforce double-close, close-other,
+    # over/short tolerance & blind-close gates, and verify cash movements/Over-Short account.
+    validate_closing_controls(doc)
     validate_closing_cash(doc)
     # G38: validate server tip declarations (zero impact on cash drawer variance).
     from ury.ury_pos.tips_declaration import validate_tip_declarations
@@ -170,8 +172,12 @@ def _set_expected_amounts(doc):
         expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) + amount, precision)
     for mode, change_amount in fallback_changes.items():
         expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) - change_amount, precision)
-    # Pickups, loans and paid-outs of the shift move the cash tender's drawer.
-    for account, amount in till_cash_movements(doc.pos_opening_entry).items():
+    # Pickups, loans, paid-outs and paid-ins of the shift move the cash tender's drawer.
+    try:
+        shift_movements = till_cash_movements(doc.pos_opening_entry, currency=profile.get("currency"))
+    except TypeError:
+        shift_movements = till_cash_movements(doc.pos_opening_entry)
+    for account, amount in shift_movements.items():
         modes = [
             mode for mode in till_modes_by_account.get(account, [])
             if frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
@@ -227,6 +233,11 @@ def _currency_flt(value, precision):
     return flt(value, precision)
 
 
+def before_cancel(doc, method=None):
+    """Gate cancelling a submitted POS Closing Entry (reopening a till) behind `reopen_till`."""
+    validate_closing_cancel(doc)
+
+
 def before_save(doc, method):
     sub_pos_close_check(doc, method)
 
@@ -273,6 +284,8 @@ def populate_draft_stock_correction(doc):
             frappe.msgprint("No draft stock correction found for this shift.", title="Stock Correction Missing", indicator="orange")
 
 def validate_ported_checks(doc, method):
+    if getattr(getattr(doc, "flags", None), "pos_force_close", False):
+        return
     pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
     branch = pos_profile.branch
     warehouse = pos_profile.warehouse
@@ -462,6 +475,8 @@ def validate_daily_checklists(doc, method):
 	created since the shift opened). Role-level: one submission per role
 	suffices no matter how many users hold it. A submitted checklist may
 	contain FAIL objectives -- valid response, not a blocker."""
+	if getattr(getattr(doc, "flags", None), "pos_force_close", False):
+		return
 	pos_profile = frappe.get_doc("POS Profile", doc.pos_profile)
 	branch = pos_profile.branch
 

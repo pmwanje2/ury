@@ -144,7 +144,7 @@ def _load():
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-    return framework, module
+    return framework, module, modules
 
 
 class Check:
@@ -218,7 +218,10 @@ def dish(name, item_code, qty, rate, key, employee="EMP-WAITER", **extra):
 
 class Loaded(unittest.TestCase):
     def setUp(self):
-        self.frappe, self.order = _load()
+        self.frappe, self.order, self._stub_modules = _load()
+        self.enterContext(patch.dict(sys.modules, self._stub_modules))
+        for mod_name in ("ury.ury_pos.privileged_auth", "ury.ury_pos.pricing_actions"):
+            sys.modules.pop(mod_name, None)
         self.policy = SimpleNamespace(reservation_control_enabled=False)
         self.enterContext(patch.object(self.order, "get_branch_stock_policy", return_value=self.policy))
         self.reconcile = self.enterContext(patch.object(self.order, "reconcile_order_reservations"))
