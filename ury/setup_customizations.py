@@ -806,22 +806,6 @@ def get_custom_fields():
 			},
 		],
 
-		"User": [
-			{
-				"fieldname": "custom_override_pin_hash",
-				"fieldtype": "Data",
-				"label": "Approval PIN Hash",
-				"insert_after": "custom_floor_pin_hash",
-				"hidden": 1,
-				"read_only": 1,
-				"no_copy": 1,
-				"print_hide": 1,
-				"report_hide": 1,
-				"unique": 0,
-				"translatable": 0,
-			},
-		],
-
 		"URY Sales Plan": [
 			{
 				"fieldname": "custom_ury_production_plan",

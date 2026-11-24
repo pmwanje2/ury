@@ -21,7 +21,8 @@
     "cancelling": "Cancelando...",
     "confirm_cancel": "Confirmar cancelación",
     "loading_ury_pos": "Cargando {{name}}...",
-    "please_wait_setup": "Espera mientras configuramos todo"
+    "please_wait_setup": "Espera mientras configuramos todo",
+    "dismiss": "Cerrar"
   },
   "header": {
     "search_placeholder_default": "Buscar pedidos, menú o clientes...",
@@ -282,7 +283,8 @@
       "previous": "Anterior",
       "next": "Siguiente",
       "page": "Página {{number}}"
-    }
+    },
+    "reduce_item_qty": "Reducir cantidad de {{item}}"
   },
   "tables": {
     "layout_view": "Vista de plano",
@@ -770,7 +772,9 @@
     "error_expired": "Esta aprobación expiró o ya fue utilizada. Solicita una nueva aprobación.",
     "error_changed": "La cuenta o los valores cambiaron tras la aprobación. Solicita una nueva aprobación.",
     "error_required": "Un encargado debe aprobar esta acción.",
-    "error_generic": "No se pudo completar la aprobación. Inténtalo de nuevo."
+    "error_generic": "No se pudo completar la aprobación. Inténtalo de nuevo.",
+    "pin_entered_count": "{{count}} dígitos introducidos",
+    "error_reason": "Elige un motivo activo (y añade una nota breve si es obligatoria)."
   },
   "approval_pin": {
     "title": "Configurar mi PIN de aprobación",
@@ -795,6 +799,7 @@
     "clear_policy_note": "Los encargados pueden borrar el PIN de un empleado para que configure uno nuevo. Nadie puede leer ni establecer el PIN de otra persona.",
     "clear_pin": "Borrar PIN",
     "cleared": "Se borró el PIN de aprobación de {{name}}.",
-    "clear_failed": "No se pudo borrar este PIN de aprobación."
+    "clear_failed": "No se pudo borrar este PIN de aprobación.",
+    "error_wrong_password": "Tu contraseña actual no coincide. Tu sesión de caja sigue activa."
   }
 }

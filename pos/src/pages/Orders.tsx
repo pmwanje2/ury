@@ -1028,7 +1028,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                                 type="button"
                                 onClick={() => handleReduceItemQty(item)}
                                 disabled={isReducingThisItem}
-                                aria-label={`Reduce quantity of ${item.item_name}`}
+                                aria-label={t('orders.reduce_item_qty', { item: item.item_name })}
                                 className="flex items-center justify-center w-5 h-5 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 {isReducingThisItem ? (

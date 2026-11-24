@@ -2748,16 +2748,15 @@ def sync_order(
 
     # Authorize before changing headers, payments or lines. Reducing a sent
     # dish+note quantity emits a kitchen cancellation even if the dish total
-    # stays unchanged. When POS Privilege Rules are active for the company,
-    # enforce `void_sent_item` via manager PIN authorisation; otherwise keep
-    # the legacy remove_items / elevated-role fallback.
+    # stays unchanged. Unsent held items (`ury_held=1`) are always freely
+    # editable/removable even when `remove_items=0` (Amendment 1 + R2 P1 #9).
     if not append and past_item:
         requested_qty_by_item = {}
-        for item in items:
-            code = item.get("item")
-            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
+        for item in _kitchen_snapshot(items):
+            code = item["item_code"]
+            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item["qty"])
         previous_qty_by_item = {}
-        for item in past_item:
+        for item in _kitchen_snapshot(past_item):
             code = item["item_code"]
             previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
 
@@ -2802,10 +2801,9 @@ def sync_order(
             requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items()
         )
         if void_lines or any_total_reduced:
-            company = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
             from ury.ury_pos import override
 
-            if void_lines and override.is_policy_active(company):
+            if void_lines:
                 claim = {
                     "action": "sync_order_void_sent_item",
                     "lines": void_lines,
@@ -2820,6 +2818,7 @@ def sync_order(
                 elif override.may_perform(
                     frappe.session.user, pos_profile, "void_sent_item", amount=voided_amount
                 ):
+                    override._validate_reason(pos_profile, "void_sent_item", claim)
                     override.mark_verified_approval(invoice, "void_sent_item")
                 else:
                     frappe.throw(
@@ -3009,21 +3008,29 @@ def sync_order(
     except Exception as e:
         frappe.throw(f"Error while updating order: {e}")   
 
-    try:
-        kot_execute(
-            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), invoice.custom_comments,
-            offline_printed=offline_printed,
-        )
-    except Exception as e:
-        # KOT creation/routing failing is not a side detail to swallow: a
-        # customer must never be charged for an item the kitchen never
-        # receives. Log for diagnostics, then re-raise so the whole request
-        # (including the invoice.save() above) rolls back and the caller
-        # sees a real failure instead of a silently accepted order.
-        # See sa-post-373-review-fixes Blocker 2.
-        error_msg = f"KOT Creation Failed: {str(e)}"
-        frappe.log_error(error_msg, "KOT Error")
-        frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
+    current_kitchen = _kitchen_snapshot(items)
+    previous_kitchen = [] if append else _kitchen_snapshot(past_item)
+    held_only_edit = (
+        not append
+        and current_kitchen == previous_kitchen
+        and (any(cint(row.get("ury_held")) for row in past_item) or any(cint(row.get("ury_held")) for row in items))
+    )
+    if not held_only_edit:
+        try:
+            kot_execute(
+                invoice.name, customer, table, current_kitchen, previous_kitchen, invoice.custom_comments,
+                offline_printed=offline_printed,
+            )
+        except Exception as e:
+            # KOT creation/routing failing is not a side detail to swallow: a
+            # customer must never be charged for an item the kitchen never
+            # receives. Log for diagnostics, then re-raise so the whole request
+            # (including the invoice.save() above) rolls back and the caller
+            # sees a real failure instead of a silently accepted order.
+            # See sa-post-373-review-fixes Blocker 2.
+            error_msg = f"KOT Creation Failed: {str(e)}"
+            frappe.log_error(error_msg, "KOT Error")
+            frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
 
     # table status
     if invoice.invoice_printed == 0:

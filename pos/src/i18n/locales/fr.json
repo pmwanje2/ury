@@ -38,7 +38,8 @@
     "confirm_cancel": "Confirmer l'annulation",
     "loading_ury_pos": "Chargement de {{name}}...",
     "please_wait_setup": "Veuillez patienter pendant que nous préparons tout",
-    "reserved": "Réservé"
+    "reserved": "Réservé",
+    "dismiss": "Fermer"
   },
   "header": {
     "search_placeholder_default": "Rechercher commandes, articles ou clients...",
@@ -260,7 +261,8 @@
       "previous": "Précédent",
       "next": "Suivant",
       "page": "Page {{number}}"
-    }
+    },
+    "reduce_item_qty": "Réduire la quantité de {{item}}"
   },
   "tables": {
     "layout_view": "Vue de mise en page",
@@ -819,7 +821,9 @@
     "error_expired": "Cette approbation a expiré ou a déjà été utilisée. Demandez une nouvelle approbation.",
     "error_changed": "L'addition ou les montants ont changé après l'approbation. Demandez une nouvelle approbation.",
     "error_required": "Un responsable doit approuver cette action.",
-    "error_generic": "L'approbation n'a pas pu être effectuée. Réessayez."
+    "error_generic": "L'approbation n'a pas pu être effectuée. Réessayez.",
+    "pin_entered_count": "{{count}} chiffres saisis",
+    "error_reason": "Choisissez un motif actif (et ajoutez une note si nécessaire)."
   },
   "approval_pin": {
     "title": "Définir mon PIN d'approbation",
@@ -844,6 +848,7 @@
     "clear_policy_note": "Les responsables peuvent effacer le PIN d'un employé afin qu'il en choisisse un nouveau. Un PIN n'est jamais lisible ni définissable par un tiers.",
     "clear_pin": "Effacer le PIN",
     "cleared": "PIN d'approbation effacé pour {{name}}.",
-    "clear_failed": "Impossible d'effacer ce PIN d'approbation."
+    "clear_failed": "Impossible d'effacer ce PIN d'approbation.",
+    "error_wrong_password": "Votre mot de passe actuel ne correspond pas. Votre session de caisse reste ouverte."
   }
 }

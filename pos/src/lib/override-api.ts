@@ -6,8 +6,10 @@ export type AuthRefusalCode =
   | 'POS-AUTH-SELF'
   | 'POS-AUTH-NOT-ELIGIBLE'
   | 'POS-AUTH-PIN'
+  | 'POS-AUTH-PASSWORD'
   | 'POS-AUTH-LOCKED'
   | 'POS-AUTH-NO-PIN'
+  | 'POS-AUTH-REASON'
   | 'POS-AUTH-EXPIRED'
   | 'POS-AUTH-CHANGED';
 
@@ -53,8 +55,10 @@ const REFUSAL_CODES: readonly AuthRefusalCode[] = [
   'POS-AUTH-SELF',
   'POS-AUTH-NOT-ELIGIBLE',
   'POS-AUTH-PIN',
+  'POS-AUTH-PASSWORD',
   'POS-AUTH-LOCKED',
   'POS-AUTH-NO-PIN',
+  'POS-AUTH-REASON',
   'POS-AUTH-EXPIRED',
   'POS-AUTH-CHANGED',
 ];
@@ -80,10 +84,14 @@ export function overrideErrorMessage(error: unknown, fallbackKey = 'manager_appr
   switch (code) {
     case 'POS-AUTH-PIN':
       return t('manager_approval.error_wrong_pin');
+    case 'POS-AUTH-PASSWORD':
+      return t('approval_pin.error_wrong_password');
     case 'POS-AUTH-LOCKED':
       return t('manager_approval.error_locked');
     case 'POS-AUTH-NO-PIN':
       return t('manager_approval.error_no_pin');
+    case 'POS-AUTH-REASON':
+      return t('manager_approval.error_reason');
     case 'POS-AUTH-SELF':
       return t('manager_approval.error_self_approval');
     case 'POS-AUTH-NOT-ELIGIBLE':
