@@ -3998,24 +3998,31 @@ def _build_preview_tax_rows(doc, prec: int) -> list[dict]:
         raw_desc = row.get("description") or account_head or ""
         tax_row_name = row.get("name")
 
-        applied_rates: list[float] = []
-        if tax_row_name and item_wise_rows:
-            for iwd in item_wise_rows:
-                if iwd.get("tax_row") == tax_row_name and flt(iwd.get("taxable_amount")) > 0:
-                    applied_rates.append(round(flt(iwd.get("rate")), 4))
+        charge_kind = (row.get("custom_pos_charge_kind") or "").strip()
+        charge_type = (row.get("charge_type") or "").strip()
+        is_special_charge_row = bool(charge_kind) or (
+            bool(charge_type) and charge_type != "On Net Total"
+        )
 
-        if not applied_rates and account_head and items:
-            for item in items:
-                raw_map = item.get("item_tax_rate")
-                item_rate = header_rate
-                if raw_map:
-                    try:
-                        parsed = json.loads(raw_map) if isinstance(raw_map, str) else raw_map
-                        if isinstance(parsed, dict) and account_head in parsed:
-                            item_rate = flt(parsed[account_head])
-                    except Exception:
-                        pass
-                applied_rates.append(round(item_rate, 4))
+        applied_rates: list[float] = []
+        if not is_special_charge_row:
+            if tax_row_name and item_wise_rows:
+                for iwd in item_wise_rows:
+                    if iwd.get("tax_row") == tax_row_name and flt(iwd.get("taxable_amount")) > 0:
+                        applied_rates.append(round(flt(iwd.get("rate")), 4))
+
+            if not applied_rates and account_head and items:
+                for item in items:
+                    raw_map = item.get("item_tax_rate")
+                    item_rate = header_rate
+                    if raw_map:
+                        try:
+                            parsed = json.loads(raw_map) if isinstance(raw_map, str) else raw_map
+                            if isinstance(parsed, dict) and account_head in parsed:
+                                item_rate = flt(parsed[account_head])
+                        except Exception:
+                            pass
+                    applied_rates.append(round(item_rate, 4))
 
         distinct_rates = sorted(set(applied_rates))
         non_zero_rates = sorted({r for r in distinct_rates if r > 0})
@@ -4146,6 +4153,16 @@ def preview_order_totals(
         doc.custom_tax_exempt = 1
         doc.tax_category = orig_invoice.get("tax_category") or ""
         doc.taxes_and_charges = orig_invoice.get("taxes_and_charges") or ""
+    if orig_invoice:
+        for sc_field in (
+            "custom_is_complimentary",
+            "custom_service_charge_waived",
+            "custom_service_charge_override_rate",
+            "custom_service_charge_override_amount",
+        ):
+            val = orig_invoice.get(sc_field)
+            if val is not None:
+                setattr(doc, sc_field, val)
 
     if orig_invoice and orig_invoice.get("custom_serving_period"):
         doc.custom_serving_period = orig_invoice.get("custom_serving_period")
@@ -4285,6 +4302,12 @@ def preview_order_totals(
         doc.set_missing_values(for_validate=True)
         if not orig_invoice:
             _apply_preview_selling_pricing_rules(doc)
+        try:
+            from ury.ury_pos.pricing_actions import sync_service_charge
+
+            sync_service_charge(doc, profile)
+        except ImportError:
+            pass
         doc.calculate_taxes_and_totals()
 
         prec = doc.precision("grand_total") if callable(getattr(doc, "precision", None)) else 2
