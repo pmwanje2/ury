@@ -1380,9 +1380,9 @@ def close_till_with_controls(
 	# Native ERPNext rule: closing.user MUST equal opening.user (till holder)
 	closing.user = opening.user
 	closing.period_start_date = opening.period_start_date
-	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S.%f")
 	closing.posting_date = end_dt.strftime("%Y-%m-%d")
-	closing.posting_time = end_dt.strftime("%H:%M:%S")
+	closing.posting_time = end_dt.strftime("%H:%M:%S.%f")
 	for row in parsed_counts:
 		closing.append(
 			"payment_reconciliation",
@@ -1659,9 +1659,9 @@ def force_close_till(
 	closing.company = profile.company
 	closing.user = opening.user
 	closing.period_start_date = opening.period_start_date
-	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S.%f")
 	closing.posting_date = end_dt.strftime("%Y-%m-%d")
-	closing.posting_time = end_dt.strftime("%H:%M:%S")
+	closing.posting_time = end_dt.strftime("%H:%M:%S.%f")
 	closing.custom_force_closed = 1
 	closing.custom_force_close_reason = clean_reason
 	closing.custom_close_approver = approver or frappe.session.user
