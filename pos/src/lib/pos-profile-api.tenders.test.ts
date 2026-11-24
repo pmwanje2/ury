@@ -49,3 +49,18 @@ it('falls back to getPosProfile currency when full profile currency is unset', a
   answer({ currency: 'UGX' });
   expect((await getCombinedPosProfile()).currency).toBe('UGX');
 });
+
+it('carries pos_profile and G23 cash drawer fields into the combined profile', async () => {
+  answer({
+    custom_drawer_pin: 5,
+    custom_drawer_kick_hex: '1b700119fa',
+    custom_auto_kick_on_cash_tender: 1,
+    drawer_opening_modes: ['R1 Register Notes'],
+  });
+  const profile = await getCombinedPosProfile();
+  expect(profile.pos_profile).toBe('Till A');
+  expect(profile.custom_drawer_pin).toBe(5);
+  expect(profile.custom_drawer_kick_hex).toBe('1b700119fa');
+  expect(profile.custom_auto_kick_on_cash_tender).toBe(1);
+  expect(profile.drawer_opening_modes).toEqual(['R1 Register Notes']);
+});

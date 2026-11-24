@@ -101,4 +101,64 @@ describe('POS cash drawer kick event listener & config-driven auto-kick', () => 
       }),
     ).toBe(false);
   });
+
+  it('forwards profile pin, custom hex, auto-kick flag and drawer_opening_modes from App profile wiring', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const appSource = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
+    expect(appSource).toContain('custom_drawer_pin');
+    expect(appSource).toContain('custom_drawer_kick_hex');
+    expect(appSource).toContain('custom_auto_kick_on_cash_tender');
+    expect(appSource).toContain('drawer_opening_modes');
+
+    const mod = await loadDrawerKick();
+    const callServer = vi.fn(async () => ({ status: 'Sent' as const, transport: 'tcp' as const, hex: '1b700119fa' }));
+    const results: unknown[] = [];
+
+    const detach = mod.installDrawerKickListener({
+      getProfile: () => ({
+        pos_profile: 'R1 Till A',
+        print_type: 'network',
+        qz_host: null,
+        printer: 'R1-NP-A-PRI',
+        custom_drawer_pin: 5,
+        custom_drawer_kick_hex: '1b700119fa',
+        custom_auto_kick_on_cash_tender: 1,
+        drawer_opening_modes: ['R1 Register Notes'],
+      }),
+      onResult: (res) => results.push(res),
+      deps: { callServer },
+    });
+
+    try {
+      // Unconfigured "Cash" tender does NOT kick.
+      window.dispatchEvent(
+        new CustomEvent('pos:payment-settled', {
+          detail: { payments: [{ mode_of_payment: 'Cash', amount: 10000 }], posProfile: 'R1 Till A' },
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      expect(callServer).not.toHaveBeenCalled();
+
+      // Configured drawer-opening tender auto-kicks using profile Pin 5 + custom hex.
+      window.dispatchEvent(
+        new CustomEvent('pos:payment-settled', {
+          detail: { payments: [{ mode_of_payment: 'R1 Register Notes', amount: 10000 }], posProfile: 'R1 Till A' },
+        }),
+      );
+      await vi.waitFor(() => expect(results).toHaveLength(1));
+      expect(callServer).toHaveBeenCalledWith(
+        expect.objectContaining({ pos_profile: 'R1 Till A', drawer_pin: 5, hex_command: '1b700119fa' }),
+      );
+
+      // pos:drawer-kick with empty detail also uses profile Pin 5 + custom hex (not Pin 2 fallback).
+      window.dispatchEvent(new CustomEvent('pos:drawer-kick', { detail: { reason: 'No Sale' } }));
+      await vi.waitFor(() => expect(results).toHaveLength(2));
+      expect(callServer).toHaveBeenLastCalledWith(
+        expect.objectContaining({ pos_profile: 'R1 Till A', drawer_pin: 5, hex_command: '1b700119fa', reason: 'No Sale' }),
+      );
+    } finally {
+      detach();
+    }
+  });
 });

@@ -505,6 +505,184 @@ class TestKdsExpoPriorityAllDayAndRecallWindow(unittest.TestCase):
         self.assertIsNone(result["Branch"])
         self.assertEqual(result["recall_window_minutes"], 30)
 
+    def test_kot_list_rejects_cross_branch_production_unit_before_leaking_config(self):
+        # Branch B cashier requests Branch A's Hot Kitchen -> MUST 403 before returning station_device_config or recall window.
+        self.frappe.session.user = "cashier_b@example.com"
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.has_permission.return_value = True
+        self.modules["ury.ury_pos.api"].getBranch.return_value = "Branch B"
+
+        unit_a = Row(name="R1 Hot Kitchen", branch="Branch A", pos_profile="R1 Till A", custom_is_expo=0)
+        self.frappe.get_doc.side_effect = lambda dt, name: unit_a if dt == "URY Production Unit" else MagicMock()
+        self.frappe.get_list.return_value = []
+        self.frappe.get_all.return_value = []
+
+        def _get_value(dt, filters, field=None, as_dict=False):
+            if dt == "URY Production Unit" and filters == "R1 Hot Kitchen":
+                if as_dict:
+                    return {
+                        "custom_is_expo": 0,
+                        "custom_device_mode": "KDS + Auto Print",
+                        "custom_printer_transport": "QZ Tray",
+                        "custom_primary_printer": "10.0.0.5:9100",
+                        "custom_backup_printer": "R1-NP-A-BAK",
+                    }
+                if field == "branch":
+                    return "Branch A"
+                if field == "pos_profile":
+                    return "R1 Till A"
+            if (dt, filters, field) == ("POS Profile", "R1 Till A", "custom_kds_recall_window_minutes"):
+                return 30
+            return None
+
+        self.frappe.db.get_value.side_effect = _get_value
+
+        with self.assertRaises(self.frappe.PermissionError):
+            self.display.kot_list(production_unit="R1 Hot Kitchen")
+
+        # Also recent_served_kots must refuse cross-branch production_unit.
+        with self.assertRaises(self.frappe.PermissionError):
+            self.display.recent_served_kots(production="R1 Hot Kitchen")
+
+        # Plain Employee without URY Production Unit read permission on same branch MUST also get 403.
+        self.modules["ury.ury_pos.api"].getBranch.return_value = "Branch A"
+        self.frappe.get_roles.return_value = ["Employee"]
+        self.frappe.has_permission.return_value = False
+        with self.assertRaises(self.frappe.PermissionError):
+            self.display.kot_list(production_unit="R1 Hot Kitchen")
+
+    def test_heartbeat_and_device_config_require_production_unit_permission(self):
+        # Plain same-branch Employee without URY Production Unit / URY KOT permissions MUST get 403 on both endpoints.
+        self.frappe.session.user = "emp_a@example.com"
+        self.frappe.get_roles.return_value = ["Employee"]
+        self.frappe.has_permission.return_value = False
+        self.modules["ury.ury_pos.api"].getBranch.return_value = "Main Branch"
+
+        unit_doc = Row(name="R1 Hot Kitchen", branch="Main Branch")
+        self.frappe.get_doc.side_effect = lambda dt, name: unit_doc
+
+        with self.assertRaises(self.frappe.PermissionError):
+            self.display.get_station_device_config("R1 Hot Kitchen")
+
+        with self.assertRaises(self.frappe.PermissionError):
+            self.display.record_station_heartbeat("R1 Hot Kitchen")
+        self.frappe.db.set_value.assert_not_called()
+
+        # Authorized KDS operator on same branch (read URY Production Unit + write URY KOT) succeeds on both.
+        def _has_perm(dt, ptype="read", doc=None, **kwargs):
+            if dt == "URY Production Unit" and ptype == "read":
+                return True
+            if dt == "URY KOT" and ptype == "write":
+                return True
+            return False
+
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.has_permission.side_effect = _has_perm
+        self.frappe.db.get_value.return_value = {
+            "custom_is_expo": 0,
+            "custom_device_mode": "KDS Display",
+            "custom_printer_transport": "None",
+            "custom_primary_printer": "",
+            "custom_backup_printer": "",
+        }
+        cfg = self.display.get_station_device_config("R1 Hot Kitchen")
+        self.assertEqual(cfg["production_unit"], "R1 Hot Kitchen")
+        hb = self.display.record_station_heartbeat("R1 Hot Kitchen")
+        self.assertEqual(hb["production_unit"], "R1 Hot Kitchen")
+        self.frappe.db.set_value.assert_called_once()
+
+    def test_expo_bump_order_rejects_cross_branch_invoice_with_permission_error(self):
+        # Branch B cashier calling expo_bump_order for a Branch A invoice MUST get 403 [POS-KOT-EXPO-OTHER-BRANCH],
+        # NEVER silent HTTP 200 {"served_kots": []}.
+        self.frappe.session.user = "cashier_b@example.com"
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.has_permission.return_value = True
+        self.modules["ury.ury_pos.api"].getBranch.return_value = "Branch B"
+
+        all_kots = [Row(name="KOT-A1", invoice="ACC-PSINV-A1", branch="Branch A", order_status="Ready For Prepare")]
+
+        def _get_all(dt, filters=None, **kwargs):
+            if dt != "URY KOT":
+                return []
+            filters = filters or {}
+            # Simulate real SQL filtering by branch if caller passed filters["branch"].
+            return [
+                k for k in all_kots
+                if (not filters.get("branch") or k["branch"] == filters["branch"])
+                and (not filters.get("invoice") or k["invoice"] == filters["invoice"])
+            ]
+
+        self.frappe.get_all.side_effect = _get_all
+        self.frappe.get_doc.side_effect = lambda dt, name: Row(
+            name=name, branch="Branch A", creation=NOW - timedelta(minutes=2), db_set=MagicMock()
+        )
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None: (
+            "Branch A" if (dt, name, field) == ("POS Invoice", "ACC-PSINV-A1", "branch") else None
+        )
+
+        with self.assertRaisesRegex(self.frappe.PermissionError, r"\[POS-KOT-EXPO-OTHER-BRANCH\]"):
+            self.display.expo_bump_order("ACC-PSINV-A1")
+
+        # Even if active KOTs are empty (already served), cross-branch invoice MUST still raise 403.
+        all_kots.clear()
+        with self.assertRaisesRegex(self.frappe.PermissionError, r"\[POS-KOT-EXPO-OTHER-BRANCH\]"):
+            self.display.expo_bump_order("ACC-PSINV-A1")
+
+    def test_process_items_for_cancel_kot_forwards_pos_profile_order_type_and_room(self):
+        # G27 parity: cancelling a Patio-routed item must forward pos_profile, order_type, and room
+        # to resolve_production_units so Cancel KOT routes to Patio Grill (not Hot Kitchen).
+        ctx_mod = ModuleType("ury.ury.api.ury_production_context")
+        ctx_mod.resolve_production_context = MagicMock(return_value=None)
+        res_mod = ModuleType("ury.ury.api.ury_order_reservation_service")
+        res_mod._line_context = MagicMock(return_value={})
+        res_mod._line_key = MagicMock(return_value="k1")
+        res_mod._line_ref = MagicMock(return_value=None)
+
+        extra = {
+            "ury.ury.api.ury_production_context": ctx_mod,
+            "ury.ury.api.ury_order_reservation_service": res_mod,
+        }
+        with patch.dict(sys.modules, extra):
+            sys.modules.pop("ury.ury.api.ury_kot_generate", None)
+            kot_gen = importlib.import_module("ury.ury.api.ury_kot_generate")
+
+            pos_profile = Row(name="R1 Till A", branch="Branch A", company="Maximus Co")
+            pos_invoice = Row(name="ACC-PSINV-PATIO", company="Maximus Co", order_type="Dine In", restaurant_table="R1-T4")
+            self.frappe.get_doc.side_effect = lambda dt, name: pos_profile if dt == "POS Profile" else pos_invoice
+            self.frappe.db.get_value.side_effect = lambda dt, name, field=None: (
+                "Patio" if (dt, name, field) == ("URY Table", "R1-T4", "restaurant_room") else None
+            )
+
+            def _resolve(**kw):
+                if kw.get("room") == "Patio" and kw.get("pos_profile") == "R1 Till A" and kw.get("order_type") == "Dine In":
+                    return ["R1 Patio Grill"]
+                return ["R1 Hot Kitchen"]
+
+            with patch.object(kot_gen, "resolve_production_units", side_effect=_resolve) as mock_resolve, \
+                 patch.object(kot_gen, "create_cancel_kot_doc", return_value="CNCL-KOT-1") as mock_create_cancel:
+                kot_gen.process_items_for_cancel_kot(
+                    invoice_id="ACC-PSINV-PATIO",
+                    customer="Walk In",
+                    restaurant_table="R1-T4",
+                    items=[{"item_code": "R1-SOUP", "item_name": "Tomato Soup", "qty": -1, "comments": ""}],
+                    comments="Guest changed mind",
+                    pos_profile_id="R1 Till A",
+                    cancel_kot_naming_series="CNCL-KOT-",
+                    kot_type="Partially cancelled",
+                    invoiceItems=[{"item_code": "R1-SOUP", "qty": 3, "comments": ""}],
+                )
+
+            mock_resolve.assert_called_once_with(
+                item_code="R1-SOUP",
+                company="Maximus Co",
+                branch="Branch A",
+                production_policy=None,
+                pos_profile="R1 Till A",
+                order_type="Dine In",
+                room="Patio",
+            )
+            self.assertEqual(mock_create_cancel.call_args.args[-1], "R1 Patio Grill")
+
 
 if __name__ == "__main__":
     unittest.main()

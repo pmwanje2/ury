@@ -14,7 +14,9 @@ const server = vi.hoisted(() => ({
   recallWindowMinutes: 15,
   expoOrders: [],
   allDaySummary: [],
+  stationDeviceConfig: null,
   posts: [],
+  kotListCalls: 0,
 }));
 
 const socket = vi.hoisted(() => {
@@ -41,6 +43,7 @@ vi.mock("frappe-js-sdk", () => ({
         },
         get: async (method) => {
           if (method === "ury.ury.api.ury_kot_display.kot_list") {
+            server.kotListCalls += 1;
             return {
               message: {
                 Branch: "Branch A",
@@ -52,9 +55,13 @@ vi.mock("frappe-js-sdk", () => ({
                 is_expo: server.isExpo,
                 expo_orders: structuredClone(server.expoOrders),
                 all_day_summary: structuredClone(server.allDaySummary),
+                station_device_config: server.stationDeviceConfig ? structuredClone(server.stationDeviceConfig) : null,
                 KOT: structuredClone(server.kots),
               },
             };
+          }
+          if (method === "ury.ury.doctype.ury_order.ury_order.get_captain_context") {
+            return { message: { roles: ["URY Manager"] } };
           }
           return { message: [] };
         },
@@ -111,7 +118,9 @@ beforeEach(() => {
   server.recallWindowMinutes = 15;
   server.expoOrders = [];
   server.allDaySummary = [];
+  server.stationDeviceConfig = null;
   server.posts.length = 0;
+  server.kotListCalls = 0;
   socket.handlers.clear();
 });
 
@@ -204,6 +213,87 @@ describe("G26: KDS Expo Mode, All-Day Summary, Rush/VIP, Course Grouping & Confi
     await bumpBtn.trigger("click");
     await flushPromises();
     expect(server.posts.some(p => p.method === "ury.ury.api.ury_kot_display.expo_bump_order" && p.args.invoice === "POS-INV-200")).toBe(true);
+  });
+
+  it("G26/G27: starts live station heartbeat interval on mount, cleans up on unmount, and subscribes to kot_priority realtime events", async () => {
+    server.kots = [makeKot({ name: "KOT-1", production: "Kitchen", custom_is_rush: 0 })];
+    await mountBoard("Kitchen");
+
+    const heartbeats = () => server.posts.filter(p => p.method === "ury.ury.api.ury_kot_display.record_station_heartbeat");
+    // Immediate heartbeat on mount
+    expect(heartbeats().length).toBe(1);
+    expect(heartbeats()[0].args).toEqual({ production_unit: "Kitchen" });
+
+    // Periodic 30s heartbeat
+    vi.advanceTimersByTime(30000);
+    await flushPromises();
+    expect(heartbeats().length).toBe(2);
+
+    // Realtime priority subscription for station board
+    const stationPrioHandlers = socket.handlers.get("kot_priority_Branch A_Kitchen") ?? [];
+    expect(stationPrioHandlers.length).toBeGreaterThan(0);
+
+    const callsBefore = server.kotListCalls;
+    server.kots = [makeKot({ name: "KOT-1", production: "Kitchen", custom_is_rush: 1, custom_is_vip: 1 })];
+    stationPrioHandlers[0]({ invoice: "POS-INV-100", kot: "KOT-1", custom_is_rush: 1, custom_is_vip: 1 });
+    for (let i = 0; i < 4; i++) await flushPromises();
+    expect(server.kotListCalls).toBeGreaterThan(callsBefore);
+    expect(wrapper.find('[data-testid="kot-rush-badge"]').exists()).toBe(true);
+
+    // Cleanup on unmount stops heartbeats
+    const countBeforeUnmount = heartbeats().length;
+    wrapper.unmount();
+    vi.advanceTimersByTime(60000);
+    await flushPromises();
+    expect(heartbeats().length).toBe(countBeforeUnmount);
+
+    // Expo board also subscribes to branch-wide kot_priority_{branch}
+    socket.handlers.clear();
+    server.isExpo = true;
+    server.kots = [makeKot({ name: "KOT-HOT", production: "Hot Kitchen" })];
+    await mountBoard("Expo");
+    expect((socket.handlers.get("kot_priority_Branch A") ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("G28: displays editable backup network host/port hydrated from server and saves a backup queue name without conflict", async () => {
+    localStorage.clear();
+    server.stationDeviceConfig = {
+      production_unit: "Kitchen",
+      enabled: true,
+      printer: "",
+      host: "192.0.2.10",
+      port: 9100,
+      backupPrinter: "",
+      backupHost: "192.0.2.20",
+      backupPort: 9101,
+      printFormat: "Restaurant Kitchen Ticket 80mm",
+      pageWidth: 576,
+      commandMode: "standard",
+    };
+    server.kots = [makeKot()];
+    await mountBoard("Kitchen");
+
+    await wrapper.vm.openPrintSettings();
+    await flushPromises();
+
+    // Backup host & port inputs MUST be visible and populated from server config
+    const backupHostInput = wrapper.find('[data-testid="backup-host-input"]');
+    const backupPortInput = wrapper.find('[data-testid="backup-port-input"]');
+    expect(backupHostInput.exists(), "Backup printer host input missing").toBe(true);
+    expect(backupPortInput.exists(), "Backup printer port input missing").toBe(true);
+    expect(backupHostInput.element.value).toBe("192.0.2.20");
+    expect(backupPortInput.element.value).toBe("9101");
+
+    // Switching to a backup printer queue name must clear backupHost and save cleanly without conflict
+    const backupPrinterInput = wrapper.find('[data-testid="backup-printer-input"]');
+    expect(backupPrinterInput.exists()).toBe(true);
+    await backupPrinterInput.setValue("KITCHEN-BAK");
+    await wrapper.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(wrapper.vm.stationSettingsError).toBe("");
+    expect(wrapper.vm.stationSettings.backupPrinter).toBe("KITCHEN-BAK");
+    expect(wrapper.vm.stationSettings.backupHost).toBe("");
   });
 });
 
