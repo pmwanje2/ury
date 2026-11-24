@@ -1,3 +1,4 @@
+import { assertOfflineActionAllowed } from '../offline/cashier';
 import { DOCTYPES } from '../data/doctypes';
 import { db, call } from '@ury/core';
 
@@ -190,10 +191,18 @@ export async function updateTableLayout(name: string, data: Partial<Table>) {
   return db.updateDoc(DOCTYPES.URY_TABLE, name, data);
 }
 
-export async function mergeTablesBatch(anchor: string, tables: string[]) {
+export async function mergeTablesBatch(
+  anchor: string,
+  tables: string[],
+  auth?: { approvalToken?: string; reason?: string; reasonNote?: string },
+) {
+  await assertOfflineActionAllowed('merge tables');
   return call.post('ury.ury.doctype.ury_order.ury_order.merge_tables_batch', {
     anchor_table: anchor,
     tables,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
 }
 
@@ -282,8 +291,12 @@ export async function updateTableReservationStatus(
   reservationName: string,
   status: string,
   posInvoice?: string,
-  cancelReason?: string
+  cancelReason?: string,
+  auth?: { approvalToken?: string; reasonNote?: string; posProfile?: string },
 ) {
+  if (status === 'Cancelled' || status === 'No Show') {
+    await assertOfflineActionAllowed('reservation status');
+  }
   const { call } = await import('@ury/core');
 
   const response = await call.post(
@@ -293,6 +306,9 @@ export async function updateTableReservationStatus(
       status,
       pos_invoice: posInvoice,
       cancel_reason: cancelReason,
+      ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+      ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
+      ...(auth?.posProfile ? { pos_profile: auth.posProfile } : {}),
     }
   );
 

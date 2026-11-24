@@ -57,4 +57,7 @@ ury.patches.v3_45.configure_pos_invoice_guest_check_print_format
 ury.patches.v2_0.setup_pos_manager_authorisation
 ury.patches.v2_0.migrate_override_pin_out_of_user
 ury.patches.v2_0.setup_kds_expo_routing_drawer
+ury.patches.v2_0.setup_pos_privileged_actions
+ury.patches.v2_0.setup_pos_service_charge_rules
+ury.patches.v2_0.setup_credit_and_offline_limits
 ury.patches.v2_0.setup_pos_modifiers_and_combos

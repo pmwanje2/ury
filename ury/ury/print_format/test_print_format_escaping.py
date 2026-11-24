@@ -68,7 +68,7 @@ def merged_bill(text):
 		room_number=None, kamra_ref="FOL-1", custom_guest_label=None, customer_name=None,
 		customer=text("partner.customer"), currency=text("partner.currency"),
 		taxes=[
-			Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=12, included_in_print_rate=0),
+			Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=12, included_in_print_rate=0, custom_pos_charge_kind=""),
 		],
 		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=20, account=None)],
 		paid_amount=20, change_amount=0, outstanding_amount=60,
@@ -98,8 +98,8 @@ def merged_bill(text):
 			),
 		],
 		taxes=[
-			Doc(description=text("service.description"), account_head="Service Charge - DR", rate=10, tax_amount=10, included_in_print_rate=0),
-			Doc(description=text("tax.description"), account_head="Output VAT 18% - DR", rate=18, tax_amount=18, included_in_print_rate=0),
+			Doc(description=text("service.description"), account_head="Service Charge - DR", rate=10, tax_amount=10, included_in_print_rate=0, custom_pos_charge_kind="Service Charge"),
+			Doc(description=text("tax.description"), account_head="Output VAT 18% - DR", rate=18, tax_amount=18, included_in_print_rate=0, custom_pos_charge_kind=""),
 		],
 		total_qty=2, total=100, net_total=100, discount_amount=5, additional_discount_percentage=5,
 		rounding_adjustment=0, grand_total=123, rounded_total=123,
@@ -123,7 +123,7 @@ def bill_copy(text):
 			item_name=text("partner.item_name"), comment=text("partner.item_comment"), qty=1, rate=50, amount=50,
 			custom_is_modifier=0, custom_modifier_prefix="",
 		)],
-		taxes=[Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=9, included_in_print_rate=0)],
+		taxes=[Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=9, included_in_print_rate=0, custom_pos_charge_kind="")],
 		total=50, net_total=50, discount_amount=0, additional_discount_percentage=0, rounding_adjustment=0,
 		grand_total=59, rounded_total=59, outstanding_amount=0, change_amount=0,
 		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59, account=None)],
@@ -146,7 +146,7 @@ def bill_copy(text):
 				custom_is_modifier=1, custom_modifier_prefix=text("mod.prefix"),
 			),
 		],
-		taxes=[Doc(description=text("tax.description"), account_head="VAT", rate=18, tax_amount=18, included_in_print_rate=0)],
+		taxes=[Doc(description=text("tax.description"), account_head="VAT", rate=18, tax_amount=18, included_in_print_rate=0, custom_pos_charge_kind="")],
 		total=100, net_total=100, discount_amount=0, additional_discount_percentage=0, rounding_adjustment=0,
 		grand_total=118, rounded_total=118, outstanding_amount=60, change_amount=0,
 		payments=[

@@ -138,6 +138,11 @@ export interface SyncOrderRequest {
   room?: string;
   approval_token?: string;
   void_reason?: string;
+  pickup_approval_token?: string;
+  guest_count_approval_token?: string;
+  order_type_approval_token?: string;
+  privilege_reason?: string;
+  privilege_reason_note?: string;
 }
 
 /**
@@ -168,11 +173,18 @@ export interface SplitBillResponse {
   new_invoice: string;
 }
 
+export interface OrderActionAuth {
+  approvalToken?: string;
+  reason?: string;
+  reasonNote?: string;
+}
+
 export async function splitBill(
   sourceInvoice: string,
   itemsToMove: SplitBillItemMove[],
   customer?: string | null,
-  guestLabel?: string | null
+  guestLabel?: string | null,
+  auth?: OrderActionAuth
 ): Promise<SplitBillResponse> {
   await assertOfflineActionAllowed('split');
   const res = await call.post('ury.ury.doctype.ury_order.ury_order.split_bill', {
@@ -180,6 +192,9 @@ export async function splitBill(
     items_to_move: itemsToMove,
     customer: customer || undefined,
     ...(guestLabel && guestLabel.trim() ? { guest_label: guestLabel.trim() } : {}),
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
   return res.message as SplitBillResponse;
 }
@@ -187,13 +202,17 @@ export async function splitBill(
 export async function tableTransfer(
   table: string,
   newTable: string,
-  invoice: string
+  invoice: string,
+  auth?: OrderActionAuth
 ): Promise<void> {
   await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.table_transfer', {
     table,
     newTable,
     invoice,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
 }
 
@@ -207,25 +226,31 @@ export async function getCaptainTransferCandidates(invoice: string) {
 export async function captainTransfer(
   currentCaptain: string,
   newCaptain: string,
-  invoice: string
+  invoice: string,
+  auth?: OrderActionAuth
 ): Promise<void> {
   await assertOfflineActionAllowed('transfer');
   await call.post('ury.ury.doctype.ury_order.ury_order.captain_transfer', {
     currentCaptain,
     newCaptain,
     invoice,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
 }
 
 /**
- * Reprints the KOT for an invoice via the hardened `reprint_kot` endpoint
- * (`ury/ury/api/ury_kot_reprint.py`), which already enforces branch and
- * Captain-ownership/elevated-access authorization server-side — this is a
- * thin wrapper only, no reprint logic lives on the frontend.
+ * Reprints / re-fires the KOT for an invoice via `reprint_kot`,
+ * supporting `reprint_kot` privilege rules, reason, and Manager PIN in place.
  */
-export async function reprintKot(invoiceNumber: string): Promise<void> {
+export async function reprintKot(invoiceNumber: string, auth?: OrderActionAuth): Promise<void> {
+  await assertOfflineActionAllowed('kitchen re-fire');
   await call.post('ury.ury.api.ury_kot_reprint.reprint_kot', {
     invoice_number: invoiceNumber,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
 }
 

@@ -19,6 +19,7 @@ export interface POSInvoice {
   ury_client_order_id?: string | null;
   name: string;
   currency?: string;
+  conversion_rate?: number | null;
   invoice_printed: number;
   custom_printing_time?: string | null;
   grand_total: number;
@@ -29,8 +30,11 @@ export interface POSInvoice {
   /** the waiter's full name, when the server resolves it; not read from POS Invoice */
   waiter_name?: string | null;
   net_total: number;
+  total?: number;
   posting_time: string;
   total_taxes_and_charges: number;
+  custom_service_charge_waived?: number;
+  custom_tax_exempt?: number;
   customer: string;
   customer_name?: string;
   /** a short name for this check (Susan, Seat 2); not a Customer */
@@ -112,6 +116,11 @@ export interface POSInvoiceItem {
 export interface POSInvoiceTax {
   description: string;
   rate: number;
+  tax_amount?: number;
+  tax_rate?: number;
+  charge_type?: string;
+  custom_pos_charge_kind?: string;
+  account_head?: string;
 }
 
 interface GetPOSInvoicesResponse {
@@ -382,20 +391,37 @@ export async function getInvoicePrintHtml(
   }
 }
 
-export async function networkPrint(orderId: string, printer: string, printFormat: string) {
+export interface InvoicePrintAuth {
+  approvalToken?: string;
+  reason?: string;
+  reasonNote?: string;
+}
+
+export async function networkPrint(orderId: string, printer: string, printFormat: string, auth?: InvoicePrintAuth) {
   await call.post('ury.ury.api.ury_print.network_printing', {
     doctype: 'POS Invoice',
     name: orderId,
     printer_setting: printer,
     print_format: printFormat,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
 }
 
-export async function selectNetworkPrinter(orderId: string, posProfile: string, printFormat?: string | null) {
+export async function selectNetworkPrinter(
+  orderId: string,
+  posProfile: string,
+  printFormat?: string | null,
+  auth?: InvoicePrintAuth,
+) {
   const res = await call.post('ury.ury.api.ury_print.select_network_printer', {
     invoice_id: orderId,
     pos_profile: posProfile,
     print_format: printFormat,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
   });
   if (res?.message === null || res?.message === undefined) {
     throw new Error('No bill printer configured for this order. Please configure a bill printer in POS Profile or Room.');
@@ -406,8 +432,13 @@ export async function selectNetworkPrinter(orderId: string, posProfile: string, 
 }
 
 
-export async function updatePrintStatus(orderId: string) {
-  await call.post('ury.ury.api.ury_print.qz_print_update', { invoice: orderId });
+export async function updatePrintStatus(orderId: string, auth?: InvoicePrintAuth) {
+  await call.post('ury.ury.api.ury_print.qz_print_update', {
+    invoice: orderId,
+    ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+    ...(auth?.reason ? { reason: auth.reason } : {}),
+    ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
+  });
 }
 
 export const MERGED_POS_INVOICE_PRINT_FORMAT = CORE_MERGED_FORMAT;
@@ -578,7 +609,8 @@ export async function getMergeBillCandidates({
 
 export async function mergeBills(
   primaryInvoice: string,
-  secondaryInvoice: string
+  secondaryInvoice: string,
+  auth?: InvoicePrintAuth,
 ): Promise<MergeBillsResponse> {
   await assertOfflineActionAllowed('merge');
   const response = await call.post<{ message: MergeBillsResponse }>(
@@ -586,6 +618,9 @@ export async function mergeBills(
     {
       primary_invoice: primaryInvoice,
       secondary_invoice: secondaryInvoice,
+      ...(auth?.approvalToken ? { approval_token: auth.approvalToken } : {}),
+      ...(auth?.reason ? { reason: auth.reason } : {}),
+      ...(auth?.reasonNote ? { reason_note: auth.reasonNote } : {}),
     }
   );
   const result = response.message;

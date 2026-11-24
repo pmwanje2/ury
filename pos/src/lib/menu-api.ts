@@ -74,6 +74,8 @@ export interface MenuItem {
   has_required_modifiers?: boolean;
   prompt_on_add?: boolean;
   modifier_groups?: ModifierGroup[];
+  custom_is_open_priced?: number;
+  custom_allow_zero_price?: number;
 }
 
 export interface GetMenuResponse {

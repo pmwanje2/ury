@@ -108,11 +108,17 @@ class URYTableReservation(Document):
         }
 
         # Completing, cancelling or marking No Show by hand needs the user's own
-        # privilege, whatever the save path; only a system transition does not.
+        # privilege (or a verified in-process Manager PIN approval), whatever
+        # the save path; only a system transition does not.
         transition = (old_status, new_status)
-        if not (transition in SYSTEM_TRANSITIONS and self.flags.system_transition == transition):
+        if not (transition in SYSTEM_TRANSITIONS and getattr(self.flags, "system_transition", None) == transition):
             from ury.ury.api.table_reservation import is_user_authorized_to_set_status
-            if not is_user_authorized_to_set_status(self, new_status):
+            from ury.ury_pos.privileged_auth import has_verified_approval
+
+            pin_approved = new_status in ("Cancelled", "No Show") and has_verified_approval(
+                self, "reservation_cancel"
+            )
+            if not pin_approved and not is_user_authorized_to_set_status(self, new_status):
                 frappe.throw(
                     _("Not permitted to change reservation status to {0}.").format(new_status),
                     frappe.PermissionError,

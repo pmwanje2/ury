@@ -13,6 +13,7 @@ import { queuePendingFiscalReprint, resolveEfrisPrintWaitSeconds, waitForEfrisFd
 import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
+import { isAuthRequiredError } from '../lib/override-api';
 
 
 const currencyDigitsCache = new Map<string, number>();
@@ -39,10 +40,61 @@ function roundToCurrency(amount: number, code?: string | null): number {
   return Object.is(rounded, -0) ? 0 : rounded;
 }
 
-type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
+type CreditAccount = {
+  name: string;
+  customer_name: string;
+  balance: number;
+  limit: number;
+  available: number;
+  currency: string;
+  conversion_rate?: number | null;
+};
+
+interface RoomMatchCandidate {
+  ok?: boolean;
+  reservation?: string;
+  room_number?: string;
+  guest_name?: string;
+  departure?: string;
+  posting_allowed?: boolean;
+  no_post?: unknown;
+  limit?: number;
+  balance?: number;
+  available?: number | null;
+  currency?: string;
+  charge_amount?: number | null;
+  override_required?: boolean;
+  reason_code?: string | null;
+  reason?: string | null;
+}
+
+interface RoomCheckState {
+  room: string;
+  roomNumber?: string;
+  reservation?: string;
+  guestName?: string;
+  departure?: string;
+  label?: string;
+  ok: boolean;
+  error?: string;
+  overrideRequired?: boolean;
+  noPost?: boolean;
+  limit?: number;
+  balance?: number;
+  available?: number | null;
+  currency?: string;
+  chargeAmount?: number | null;
+  reason?: string | null;
+}
+
+interface ApprovalGrant {
+  token: string;
+  approverName: string;
+  reason: string;
+}
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'custom_charged_tip' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'currency' | 'conversion_rate' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'custom_charged_tip' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
   existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
@@ -142,10 +194,12 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // Optional room lookup from this till's POS Profile. Blank: free-text room
   // box. Set: Pay waits for a verified match of the room as typed now.
   const roomLookupMethod = (storePosProfile?.name === posProfile && storePosProfile?.room_lookup_method) || '';
-  const [roomCheck, setRoomCheck] = useState<{
-    room: string; label?: string; ok: boolean; error?: string;
-  } | null>(null);
+  const [roomCheck, setRoomCheck] = useState<RoomCheckState | null>(null);
+  const [roomMatches, setRoomMatches] = useState<RoomMatchCandidate[]>([]);
   const [checkingRoom, setCheckingRoom] = useState(false);
+  const [roomApproval, setRoomApproval] = useState<ApprovalGrant | null>(null);
+  const [onAccountApproval, setOnAccountApproval] = useState<ApprovalGrant | null>(null);
+  const [activeApproval, setActiveApproval] = useState<'room_charge_over_limit' | 'on_account_over_limit' | null>(null);
 
   useEffect(() => {
     fetchPaymentModes();
@@ -238,12 +292,21 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const roomChargeUnconfigured = Boolean(storePosProfile?.room_charge_unconfigured) && roomChargeModes.length === 0;
   const roomChargeAmount = roomChargeModes
     .reduce((sum: number, mode: string) => sum + (parseFloat(paymentInputs[mode] || '') || 0), 0);
+  const roomMatchActive = !!roomCheck && roomCheck.room === roomNumber.trim();
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
-    || (!!roomCheck?.ok && roomCheck.room === roomNumber.trim());
-  const roomFields = roomChargeAmount > 0 ? { room_number: roomNumber } : {};
+    || (roomMatchActive && (roomCheck.ok || (Boolean(roomCheck.overrideRequired) && Boolean(roomApproval))));
+  const effectiveRoomValue = (roomMatchActive && roomCheck?.roomNumber) ? roomCheck.roomNumber : roomNumber;
+  const roomFields = roomChargeAmount > 0
+    ? {
+        room_number: effectiveRoomValue,
+        ...(roomMatchActive && roomCheck?.reservation ? { room_charge_stay: roomCheck.reservation } : {}),
+        ...(roomApproval ? { room_charge_approval: roomApproval.token, room_charge_reason: roomApproval.reason } : {}),
+      }
+    : {};
+  const minorTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(currencyCode));
   const rawShortfall = amountDue - rawTotalTendered;
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
-  const isShort = rawShortfall > 0.005;
+  const isShort = rawShortfall > minorTolerance;
   // The POS Profile payment row marked Default is prefilled with the remaining balance due
   // and used as the zero-amount tender row when settling a 100% comped check (Simphony/SAP).
   const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
@@ -262,6 +325,27 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
+  const accountCurrency = account?.currency || currencyCode;
+  const isFxAccount = Boolean(
+    accountCurrency && currencyCode && accountCurrency.toUpperCase() !== currencyCode.toUpperCase(),
+  );
+  const accountConversionRate = isFxAccount
+    ? Number(order?.conversion_rate || account?.conversion_rate || 0)
+    : 1;
+  const proposedInAccountCurrency = isFxAccount && accountConversionRate > 0
+    ? roundToCurrency(shortfall * accountConversionRate, accountCurrency)
+    : roundToCurrency(shortfall, accountCurrency);
+  const accountTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(accountCurrency));
+  const onAccountOverLimit = canPayOnAccount && !!account && proposedInAccountCurrency > Number(account.available) + accountTolerance;
+
+  useEffect(() => {
+    setRoomApproval(null);
+  }, [roomNumber, roomChargeAmount]);
+
+  useEffect(() => {
+    setOnAccountApproval(null);
+  }, [customer, shortfall]);
+
   // A verified 0-balance check (100% comped or already fully covered by received tenders)
   // can settle cleanly without entering a positive payment amount (Simphony/SAP 100% comp close).
   const isZeroBalanceSettlement = balanceDue <= 0 && !isShort
@@ -275,25 +359,146 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     ? [{ mode_of_payment: zeroSettlementMode, amount: 0 }]
     : combinedPayments;
 
+  const applyRoomCandidate = (match: RoomMatchCandidate, queryKey: string) => {
+    setRoomApproval(null);
+    setRoomMatches([]);
+    const matchCurrency = match.currency || currencyCode;
+    const isNoPost = Boolean(match.no_post && Number(match.no_post) !== 0);
+    if (match.ok === false || (!match.guest_name && !match.reservation)) {
+      setRoomCheck({
+        room: queryKey,
+        ok: false,
+        overrideRequired: false,
+        limit: match.limit,
+        balance: match.balance,
+        available: match.available,
+        currency: matchCurrency,
+        error: match.reason || t('payment.room_check_failed'),
+      });
+      return;
+    }
+    if (match.override_required) {
+      const reasonMsg = match.reason || (isNoPost ? t('payment.room_no_post') : t('payment.room_over_limit'));
+      setRoomCheck({
+        room: queryKey,
+        roomNumber: match.room_number || queryKey,
+        reservation: match.reservation,
+        guestName: match.guest_name,
+        departure: match.departure,
+        ok: false,
+        overrideRequired: true,
+        noPost: isNoPost,
+        limit: match.limit,
+        balance: match.balance,
+        available: match.available,
+        currency: matchCurrency,
+        chargeAmount: match.charge_amount ?? null,
+        reason: reasonMsg,
+        error: reasonMsg,
+      });
+      return;
+    }
+    if (isNoPost) {
+      setRoomCheck({
+        room: queryKey,
+        ok: false,
+        overrideRequired: false,
+        noPost: true,
+        limit: match.limit,
+        balance: match.balance,
+        available: match.available,
+        currency: matchCurrency,
+        chargeAmount: match.charge_amount ?? null,
+        error: t('payment.room_no_post'),
+      });
+      return;
+    }
+    if (match.posting_allowed === false) {
+      setRoomCheck({
+        room: queryKey,
+        roomNumber: match.room_number || queryKey,
+        reservation: match.reservation,
+        guestName: match.guest_name,
+        departure: match.departure,
+        ok: false,
+        overrideRequired: false,
+        limit: match.limit,
+        balance: match.balance,
+        available: match.available,
+        currency: matchCurrency,
+        chargeAmount: match.charge_amount ?? null,
+        error: match.reason || t('payment.room_check_failed'),
+      });
+      return;
+    }
+    setRoomCheck({
+      room: queryKey,
+      roomNumber: match.room_number || queryKey,
+      reservation: match.reservation,
+      guestName: match.guest_name,
+      departure: match.departure,
+      ok: true,
+      overrideRequired: false,
+      noPost: false,
+      limit: match.limit,
+      balance: match.balance,
+      available: match.available,
+      currency: matchCurrency,
+      chargeAmount: match.charge_amount ?? null,
+      label: t('payment.room_match', {
+        room: match.room_number || queryKey,
+        guest: match.guest_name || '',
+        departure: match.departure || '',
+      }),
+    });
+  };
+
   const handleCheckRoom = async () => {
-    const room = roomNumber.trim();
-    if (!room || !roomLookupMethod) return;
+    const queryText = roomNumber.trim();
+    if (!queryText || !roomLookupMethod) return;
     setCheckingRoom(true);
     setRoomCheck(null);
+    setRoomMatches([]);
+    setRoomApproval(null);
     try {
-      const res = await call.get(roomLookupMethod, { pos_profile: posProfile, room });
-      const match = (res as { message?: { room_number?: string; guest_name?: string; departure?: string; no_post?: unknown } } | null)?.message;
-      if (!match || !match.guest_name) {
-        setRoomCheck({ room, ok: false, error: t('payment.room_check_failed') });
-      } else if (match.no_post && Number(match.no_post) !== 0) {
-        setRoomCheck({ room, ok: false, error: t('payment.room_no_post') });
-      } else {
-        setRoomCheck({ room, ok: true, label: t('payment.room_match', {
-          room: match.room_number || room, guest: match.guest_name, departure: match.departure || '',
-        }) });
+      const looksLikeSurname = /^[a-zA-Z\u00C0-\u024F\u0600-\u06FF\s'-]{2,}$/.test(queryText);
+      const isRichVerifier = roomLookupMethod.includes('verify_room_charge');
+      const params: Record<string, unknown> = looksLikeSurname
+        ? {
+            pos_profile: posProfile,
+            surname: queryText,
+            ...(roomChargeAmount > 0 ? { amount: roomChargeAmount, currency: currencyCode } : {}),
+          }
+        : isRichVerifier
+          ? {
+              pos_profile: posProfile,
+              room: queryText,
+              ...(roomChargeAmount > 0 ? { amount: roomChargeAmount, currency: currencyCode } : {}),
+            }
+          : { pos_profile: posProfile, room: queryText };
+      const res = await call.get(roomLookupMethod, params);
+      const msg = (res as { message?: RoomMatchCandidate & { matches?: RoomMatchCandidate[]; shared_room?: boolean } } | null)?.message;
+      if (!msg) {
+        setRoomCheck({ room: queryText, ok: false, error: t('payment.room_check_failed') });
+        return;
       }
+      if (Array.isArray(msg.matches) && msg.matches.length > 1) {
+        setRoomMatches(msg.matches);
+        setRoomCheck({
+          room: queryText,
+          ok: false,
+          overrideRequired: false,
+          error: msg.reason || t('payment.room_pick_guest'),
+        });
+        return;
+      }
+      if (Array.isArray(msg.matches) && msg.matches.length === 1) {
+        applyRoomCandidate(msg.matches[0], queryText);
+        return;
+      }
+      applyRoomCandidate(msg, queryText);
     } catch (err) {
-      setRoomCheck({ room, ok: false, error: parseFrappeError(err, t('payment.room_check_failed')) });
+      setRoomCheck({ room: queryText, ok: false, error: parseFrappeError(err, t('payment.room_check_failed')) });
     } finally {
       setCheckingRoom(false);
     }
@@ -342,14 +547,25 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     });
   };
 
-  const executePayment = async (haloApprovalToken?: string, haloApprovalReason?: string) => {
+  const executePayment = async (opts?: {
+    accountGrant?: ApprovalGrant | null;
+    haloApprovalToken?: string;
+    haloApprovalReason?: string;
+  }) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
     setIsProcessing(true);
     setError(null);
+    const activeAccountApproval = opts?.accountGrant !== undefined ? opts.accountGrant : onAccountApproval;
+    const accountApprovalFields = activeAccountApproval
+      ? {
+          on_account_approval: activeAccountApproval.token,
+          on_account_reason: activeAccountApproval.reason,
+        }
+      : {};
     const haloFields = {
-      ...(haloApprovalToken ? { halo_approval_token: haloApprovalToken } : {}),
-      ...(haloApprovalReason ? { halo_approval_reason: haloApprovalReason } : {}),
+      ...(opts?.haloApprovalToken ? { halo_approval_token: opts.haloApprovalToken } : {}),
+      ...(opts?.haloApprovalReason ? { halo_approval_reason: opts.haloApprovalReason } : {}),
     };
     try {
       await assertOfflineActionAllowed('online invoice settlement');
@@ -407,6 +623,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           submit_invoice: 0,
           ...tipFields,
           ...roomFields,
+          ...accountApprovalFields,
           ...haloFields,
         });
 
@@ -415,6 +632,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         // check is pro forma; the receipt prints at tender).
         await call.post('ury.ury.doctype.ury_order.ury_order.submit_order_invoice', {
           invoice,
+          ...(roomChargeAmount > 0 && roomApproval
+            ? { room_charge_approval: roomApproval.token, room_charge_reason: roomApproval.reason }
+            : {}),
+          ...accountApprovalFields,
         });
       } else {
         const settlement = await submitSettlementOfflineAware({
@@ -434,6 +655,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             submit_invoice: 1,
             ...tipFields,
             ...roomFields,
+            ...accountApprovalFields,
             ...haloFields,
             ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId }),
           }),
@@ -481,32 +703,66 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       await fetchOrders();
     } catch (err) {
       console.error('Payment failed:', err);
-      setError(parseFrappeError(err, t('errors.payment_failed')));
+      const parsed = parseFrappeError(err, t('errors.payment_failed'));
+      if (canPayOnAccount && (isAuthRequiredError(err) || parsed.includes('POS-CREDIT-004'))) {
+        setActiveApproval('on_account_over_limit');
+      }
+      setError(parsed);
     } finally {
       submittingRef.current = false;
       setIsProcessing(false);
     }
   };
 
-  const handlePayment = () => {
+  const handlePayment = async () => {
+    if (onAccountOverLimit && !onAccountApproval) {
+      setActiveApproval('on_account_over_limit');
+      return;
+    }
     if (overHaloTenders.length > 0) {
       setError(null);
       setShowHaloApproval(true);
       return;
     }
-    void executePayment();
+    await executePayment();
+  };
+
+  const handleManagerApproved = (result: ManagerApprovalResult) => {
+    const grant: ApprovalGrant = {
+      token: result.token,
+      approverName: result.approverName,
+      reason: result.reason || '',
+    };
+    const kind = activeApproval;
+    setActiveApproval(null);
+    if (kind === 'room_charge_over_limit') {
+      setRoomApproval(grant);
+      return;
+    }
+    if (kind === 'on_account_over_limit') {
+      setOnAccountApproval(grant);
+      if (overHaloTenders.length > 0) {
+        setError(null);
+        setShowHaloApproval(true);
+        return;
+      }
+      void executePayment({ accountGrant: grant });
+    }
   };
 
   const handleHaloApproved = (result: ManagerApprovalResult) => {
     setShowHaloApproval(false);
-    void executePayment(result.token, result.reason);
+    void executePayment({
+      haloApprovalToken: result.token,
+      haloApprovalReason: result.reason,
+    });
   };
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent variant="xlarge" className="bg-white w-full max-w-4xl max-h-dialog-max-h flex flex-col md:flex-row p-0" showCloseButton={false}>
+      <DialogContent variant="xlarge" className="bg-white w-full max-w-4xl max-h-dialog-max-h flex flex-col md:flex-row overflow-y-auto md:overflow-hidden p-0" showCloseButton={false}>
         {/* Left Column - Discount and Payment Mode */}
-        <div className="md:w-1/2 p-6 border-b md:border-b-0 md:border-e border-border overflow-y-auto">
+        <div className="md:w-1/2 shrink-0 md:shrink md:min-h-0 p-6 border-b md:border-b-0 md:border-e border-border md:overflow-y-auto">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-gray-900">{t('payment.title')}</h2>
             <Button
@@ -642,12 +898,77 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                     </Button>
                   )}
                 </div>
-                {roomLookupMethod && roomCheck && roomCheck.room === roomNumber.trim() && (
-                  <p role="status" className={`text-sm font-medium ${roomCheck.ok ? 'text-green-700' : 'text-red-700'}`}>
-                    {roomCheck.ok ? roomCheck.label : roomCheck.error}
-                  </p>
+                {roomLookupMethod && roomMatches.length > 1 && (
+                  <div className="space-y-1.5" data-testid="room-match-picker">
+                    <p className="text-xs font-medium text-amber-800">{t('payment.room_pick_guest')}</p>
+                    {roomMatches.map((candidate, idx) => (
+                      <Button
+                        key={candidate.reservation || `${candidate.room_number}-${idx}`}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="w-full h-auto whitespace-normal justify-start text-start"
+                        onClick={() => {
+                          const chosenRoom = candidate.room_number || roomNumber.trim();
+                          setRoomNumber(chosenRoom);
+                          applyRoomCandidate(candidate, chosenRoom);
+                        }}
+                      >
+                        <span>
+                          {t('payment.room_match', {
+                            room: candidate.room_number || '',
+                            guest: candidate.guest_name || '',
+                            departure: candidate.departure || '',
+                          })}
+                          {candidate.limit !== undefined && (
+                            <> · {t('payment.room_limit')}: {formatCurrency(candidate.limit, candidate.currency || currencyCode)}</>
+                          )}
+                          {candidate.balance !== undefined && (
+                            <> · {t('payment.room_balance')}: {formatCurrency(candidate.balance, candidate.currency || currencyCode)}</>
+                          )}
+                        </span>
+                      </Button>
+                    ))}
+                  </div>
                 )}
-                {roomLookupMethod && !roomVerified && !(roomCheck && roomCheck.room === roomNumber.trim()) && (
+                {roomLookupMethod && roomMatchActive && roomCheck && (
+                  <div className="space-y-1.5">
+                    <p role="status" className={`text-sm font-medium ${roomCheck.ok || roomApproval ? 'text-green-700' : 'text-red-700'}`}>
+                      {roomCheck.ok ? roomCheck.label : roomCheck.error}
+                    </p>
+                    {(roomCheck.limit !== undefined || roomCheck.balance !== undefined) && (
+                      <p className="text-xs text-gray-700" data-testid="room-charge-limits">
+                        {roomCheck.limit !== undefined && (
+                          <span>
+                            {t('payment.room_limit')}: {formatCurrency(roomCheck.limit, roomCheck.currency || currencyCode)}
+                          </span>
+                        )}
+                        {roomCheck.limit !== undefined && roomCheck.balance !== undefined && ' · '}
+                        {roomCheck.balance !== undefined && (
+                          <span>
+                            {t('payment.room_balance')}: {formatCurrency(roomCheck.balance, roomCheck.currency || currencyCode)}
+                          </span>
+                        )}
+                      </p>
+                    )}
+                    {roomCheck.overrideRequired && !roomApproval && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setActiveApproval('room_charge_over_limit')}
+                      >
+                        {t('payment.request_room_override')}
+                      </Button>
+                    )}
+                    {roomApproval && (
+                      <p className="text-xs font-medium text-emerald-700">
+                        {t('payment.override_approved_by', { approver: roomApproval.approverName })}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {roomLookupMethod && !roomVerified && !roomMatchActive && (
                   <p className="text-sm text-amber-700">{t('payment.room_check_required')}</p>
                 )}
               </div>
@@ -701,7 +1022,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         </div>
 
         {/* Right Column - Order Summary and Pay Button */}
-        <div className="md:w-1/2 p-6 overflow-y-auto">
+        <div className="md:w-1/2 shrink-0 md:shrink md:min-h-0 p-6 md:overflow-y-auto">
           {/* Error Message */}
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -820,6 +1141,72 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           </Button>
         </div>
       </DialogContent>
+      {activeApproval === 'room_charge_over_limit' && roomCheck && (() => {
+        const roomClaimCurrency = roomCheck.currency || currencyCode;
+        const roomIsFx = Boolean(
+          roomClaimCurrency && currencyCode && roomClaimCurrency.toUpperCase() !== currencyCode.toUpperCase(),
+        );
+        const roomClaimAmount =
+          roomCheck.chargeAmount !== undefined && roomCheck.chargeAmount !== null
+            ? roundToCurrency(Number(roomCheck.chargeAmount), roomClaimCurrency)
+            : roomIsFx && Number(order?.conversion_rate) > 0
+              ? roundToCurrency(roomChargeAmount * Number(order?.conversion_rate), roomClaimCurrency)
+              : roundToCurrency(roomChargeAmount, roomClaimCurrency);
+        const amountLabel = roomIsFx
+          ? `${formatMoney(roomChargeAmount)} (${formatCurrency(roomClaimAmount, roomClaimCurrency)})`
+          : formatMoney(roomChargeAmount);
+        return (
+          <ManagerApproval
+            open={true}
+            posProfile={posProfile}
+            privilege="room_charge_over_limit"
+            summaryLines={[
+              roomCheck.label || `${roomCheck.roomNumber || roomNumber} · ${roomCheck.guestName || ''}`,
+              roomCheck.reason || t('payment.room_over_limit'),
+              t('manager_approval.amount_line', { amount: amountLabel }),
+            ]}
+            reference={{ doctype: 'POS Invoice', name: invoice }}
+            claim={{
+              reservation: roomCheck.reservation || '',
+              room: roomCheck.roomNumber || roomNumber.trim(),
+              amount: roomClaimAmount,
+              currency: roomClaimCurrency,
+            }}
+            amount={roomClaimAmount}
+            requireReason={true}
+            onApproved={handleManagerApproved}
+            onCancel={() => setActiveApproval(null)}
+          />
+        );
+      })()}
+      {activeApproval === 'on_account_over_limit' && (
+        <ManagerApproval
+          open={true}
+          posProfile={posProfile}
+          privilege="on_account_over_limit"
+          summaryLines={[
+            account ? `${account.customer_name} · ${account.name}` : customer,
+            t('payment.account_over_limit_notice'),
+            t('manager_approval.amount_line', {
+              amount: isFxAccount
+                ? `${formatMoney(shortfall)} (${formatCurrency(proposedInAccountCurrency, accountCurrency)})`
+                : formatMoney(shortfall),
+            }),
+          ]}
+          reference={{ doctype: 'POS Invoice', name: invoice }}
+          claim={{
+            customer: account?.name || customer,
+            company: storePosProfile?.company || '',
+            proposed: proposedInAccountCurrency,
+            limit: roundToCurrency(Number(account?.limit || 0), accountCurrency),
+            currency: accountCurrency,
+          }}
+          amount={proposedInAccountCurrency}
+          requireReason={true}
+          onApproved={handleManagerApproved}
+          onCancel={() => setActiveApproval(null)}
+        />
+      )}
       {showHaloApproval && overHaloTenders.length > 0 && (
         <ManagerApproval
           open={showHaloApproval}
