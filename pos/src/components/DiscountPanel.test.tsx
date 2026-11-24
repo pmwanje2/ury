@@ -594,4 +594,202 @@ describe("DiscountPanel (Simphony / SAP / PMS parity)", () => {
     );
     expect(onApplied).toHaveBeenCalled();
   });
+
+  it("P1-1: never renders hardcoded QUICK_PERCENTS (5%/10%/15%/20%) and exposes an explicit Complimentary button wired to complimentary privilege even when allow_discount_change is false", async () => {
+    setupMockCalls({
+      options: makeOptions({ allow_discount_change: true }),
+      preview: (params) =>
+        makePreview({
+          before_total: 50000,
+          discount_total: params.complimentary ? 50000 : 5000,
+          after_total: params.complimentary ? 0 : 45000,
+          effective_percent: params.complimentary ? 100 : 10,
+          needs_approval: Boolean(params.complimentary),
+          is_comp: Boolean(params.complimentary),
+          privilege: params.complimentary ? "complimentary" : "discount",
+          approval_reasons: params.complimentary ? ["comp"] : [],
+        }),
+    });
+
+    const { unmount } = render(
+      <DiscountPanel
+        open={true}
+        invoice="CHK-NO-QUICK"
+        posProfile="Lakeside Till"
+        items={ITEMS}
+        currency="UGX"
+        existingDiscounts={null}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("discount-open-keypad")).toBeInTheDocument());
+    for (const label of ["5%", "10%", "15%", "20%"]) {
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+    }
+    unmount();
+
+    // Even when allow_discount_change is false (presets-only till), explicit Complimentary control works
+    setupMockCalls({
+      options: makeOptions({ allow_discount_change: false }),
+      preview: () =>
+        makePreview({
+          before_total: 50000,
+          discount_total: 50000,
+          after_total: 0,
+          effective_percent: 100,
+          needs_approval: true,
+          is_comp: true,
+          privilege: "complimentary",
+          approval_reasons: ["comp"],
+        }),
+    });
+
+    render(
+      <DiscountPanel
+        open={true}
+        invoice="CHK-PRESET-COMP"
+        posProfile="Lakeside Till"
+        items={ITEMS}
+        currency="UGX"
+        existingDiscounts={null}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("comp-100-btn")).toBeInTheDocument());
+    expect(screen.queryByTestId("discount-open-keypad")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("comp-100-btn"));
+    fireEvent.change(screen.getByLabelText("Discount reason"), { target: { value: "Complaint" } });
+
+    await waitFor(() =>
+      expect(call.get).toHaveBeenCalledWith(
+        "ury.ury.doctype.ury_order.ury_order.preview_settlement_totals",
+        expect.objectContaining({ invoice: "CHK-PRESET-COMP", complimentary: 1, discount_percent: 100 }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId("manager-approval-card")).toBeInTheDocument());
+  });
+
+  it("P0-6 UI: clears stale submission error and re-enables Apply discount after in-place re-authorisation", async () => {
+    setupMockCalls({
+      options: makeOptions({ limit_percent: 5 }),
+      preview: () =>
+        makePreview({
+          before_total: 60000,
+          discount_total: 60000,
+          after_total: 0,
+          effective_percent: 100,
+          limit_percent: 5,
+          needs_approval: true,
+          is_comp: true,
+          privilege: "complimentary",
+          approval_reasons: ["comp"],
+        }),
+      approvers: [{ user: "owner@example.com", full_name: "Olivia Owner" }],
+    });
+
+    let applyCalls = 0;
+    vi.mocked(call.post).mockImplementation(async (method: string) => {
+      if (method.endsWith(".authorise")) {
+        return {
+          message: {
+            token: `TOK-${applyCalls + 1}`,
+            approver: "owner@example.com",
+            approver_name: "Olivia Owner",
+            expires_in: 120,
+          },
+        };
+      }
+      if (method === "ury.ury.doctype.ury_order.ury_order.apply_check_discount") {
+        applyCalls += 1;
+        if (applyCalls === 1) {
+          throw new Error("SITEOPS-DISC-002: The named approver does not hold authority for this discount.");
+        }
+        return { message: makePreview({ after_total: 0, discount_total: 60000, effective_percent: 100 }) };
+      }
+      return { message: {} };
+    });
+
+    render(
+      <DiscountPanel
+        open={true}
+        invoice="CHK-REAUTH"
+        posProfile="Lakeside Till"
+        items={ITEMS}
+        currency="UGX"
+        existingDiscounts={null}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("Discount reason")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Discount reason"), { target: { value: "Complaint" } });
+    fireEvent.change(screen.getByLabelText("Open discount"), { target: { value: "100" } });
+
+    // First approval attempt
+    await waitFor(() => expect(screen.getByRole("button", { name: "Authorise" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Authorise" }));
+    let modal = await screen.findByRole("dialog");
+    await waitFor(() => expect(within(modal).getByLabelText("Manager")).toBeInTheDocument());
+    fireEvent.change(within(modal).getByLabelText("Manager"), { target: { value: "owner@example.com" } });
+    for (const d of ["4", "3", "2", "1"]) fireEvent.click(within(modal).getByRole("button", { name: d }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Apply discount" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "Apply discount" }));
+
+    // First apply fails with SITEOPS-DISC-002
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/SITEOPS-DISC-002/));
+
+    // Re-authorise in place
+    fireEvent.click(screen.getByRole("button", { name: "Authorise" }));
+    modal = await screen.findByRole("dialog");
+    await waitFor(() => expect(within(modal).getByLabelText("Manager")).toBeInTheDocument());
+    fireEvent.change(within(modal).getByLabelText("Manager"), { target: { value: "owner@example.com" } });
+    for (const d of ["4", "3", "2", "1"]) fireEvent.click(within(modal).getByRole("button", { name: d }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Approve" }));
+
+    // Stale error MUST be cleared and Apply discount MUST be enabled!
+    await waitFor(() => expect(screen.getByText(/Approved by Olivia Owner/i)).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Apply discount" })).not.toBeDisabled();
+  });
+
+  it("P1-6 & P1-7c: renders solid opaque surface (animate-none), pinned footer outside scroll container, and rounds 3.3333% to 3.33%", async () => {
+    setupMockCalls({
+      preview: () => makePreview({ effective_percent: 3.3333, discount_total: 2000, before_total: 60000, after_total: 58000 }),
+    });
+
+    render(
+      <DiscountPanel
+        open={true}
+        invoice="CHK-PHONE-PCT"
+        posProfile="Lakeside Till"
+        items={ITEMS}
+        currency="UGX"
+        existingDiscounts={null}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("discount-open-keypad")).toBeInTheDocument());
+    const dialogContent = screen.getByTestId("discount-dialog").firstElementChild as HTMLElement;
+    expect(dialogContent.className).toMatch(/\banimate-none\b/);
+    expect(dialogContent.className).toMatch(/\bbg-white\b/);
+
+    // Footer must be a direct child of DialogContent (pinned outside overflow-y-auto body)
+    const footer = screen.getByTestId("discount-panel-footer");
+    expect(footer.parentElement).toBe(dialogContent);
+
+    fireEvent.change(screen.getByLabelText("Open discount"), { target: { value: "3.3333" } });
+    await waitFor(() => expect(screen.getByTestId("preview-discount")).toBeInTheDocument());
+    expect(dialogContent.textContent || "").toContain("(3.33%)");
+    expect(dialogContent.textContent || "").not.toContain("3.3333%");
+  });
 });

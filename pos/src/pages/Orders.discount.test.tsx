@@ -95,7 +95,8 @@ vi.mock("react-router-dom", () => ({
 
 vi.mock("@ury/core", () => ({
   getSessionUser: () => "cashier@example.com",
-  formatCurrency: (amount: number, curr?: string) => `${curr || "UGX"} ${Math.round(amount).toLocaleString("en-US")}`,
+  formatCurrency: (amount: number, curr?: string) =>
+    curr ? `${curr} ${Math.round(amount).toLocaleString("en-US")}` : `Sh ${Math.round(amount).toLocaleString("en-US")}`,
   normalizeFrappeTime: (time: any) => time || "2026-11-24 12:00:00",
   parseFrappeError: (e: any, fallback: string) => e?.message || fallback,
   call: {
@@ -207,11 +208,29 @@ describe("Orders open-check Discount key and check/line discount lines", () => {
     const checkDiscRow = screen.getByTestId("check-discount-row");
     expect(checkDiscRow).toHaveTextContent("Corporate rate");
     expect(checkDiscRow).toHaveTextContent("LUNCH10");
-    expect(checkDiscRow).toHaveTextContent(/4,600/);
+    expect(checkDiscRow).toHaveTextContent(/UGX 4,600/);
+    expect(checkDiscRow).not.toHaveTextContent(/\bSh\b/);
 
     // Clicking Discount opens DiscountPanel for this check
     fireEvent.click(discBtn);
     await waitFor(() => expect(screen.getByTestId("open-discount-panel")).toHaveTextContent("DiscountPanel:CHK-OPEN-1"));
+  });
+
+  it("P1-7d: fr, es, and ar locales translate orders.settled_closed and order_status_types.outstanding", async () => {
+    const fr = (await import("../i18n/locales/fr.json")).default as any;
+    const es = (await import("../i18n/locales/es.json")).default as any;
+    const ar = (await import("../i18n/locales/ar.json")).default as any;
+
+    for (const [lang, loc] of [
+      ["fr", fr],
+      ["es", es],
+      ["ar", ar],
+    ] as const) {
+      expect(loc.orders?.settled_closed, `${lang} orders.settled_closed`).toBeTruthy();
+      expect(loc.orders?.settled_closed, `${lang} settled_closed not English`).not.toBe("Settled / Closed");
+      expect(loc.order_status_types?.outstanding, `${lang} order_status_types.outstanding`).toBeTruthy();
+      expect(loc.order_status_types?.outstanding, `${lang} outstanding not English`).not.toBe("Outstanding");
+    }
   });
 
   it("hides Discount key on settled (Paid) checks", () => {

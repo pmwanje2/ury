@@ -492,6 +492,117 @@ describe("PaymentDialog", () => {
       );
     });
   });
+
+  it("P0-1: enables Pay UGX 0 and settles a 100% comped check cleanly", async () => {
+    mockUsePOSStore.mockReturnValue({
+      paymentModes: ["Cash", "Card"],
+      fetchPaymentModes: vi.fn(),
+      posProfile: {
+        name: "POS001",
+        currency: "UGX",
+        default_payment_mode: "Cash",
+        enable_payment_without_printing: 1,
+      },
+      currency: "UGX",
+    });
+
+    render(
+      <PaymentDialog
+        onClose={vi.fn()}
+        grandTotal={0}
+        roundedTotal={0}
+        invoice="INV-COMP-1"
+        customer="Walk-in Guest"
+        posProfile="POS001"
+        table="T-02"
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn().mockResolvedValue(undefined)}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={100}
+        discountAmount={60000}
+        discountReason="Complaint"
+        order={{ invoice_printed: 1 }}
+      />
+    );
+
+    const checkbox = screen.getByRole("checkbox");
+    fireEvent.click(checkbox);
+
+    const payButton = screen.getByRole("button", { name: /payment.pay_button/ }) as HTMLButtonElement;
+    expect(payButton.disabled).toBe(false);
+
+    fireEvent.click(payButton);
+    await waitFor(() => {
+      expect(call.post).toHaveBeenCalledWith(
+        "ury.ury.doctype.ury_order.ury_order.make_invoice",
+        expect.objectContaining({
+          invoice: "INV-COMP-1",
+          payments: [{ mode_of_payment: "Cash", amount: 0 }],
+          submit_invoice: 1,
+        }),
+      );
+    });
+  });
+
+  it("P0-1 guard: keeps Pay disabled on an un-discounted zero check with no received tender", () => {
+    mockUsePOSStore.mockReturnValue({
+      paymentModes: ["Cash", "Card"],
+      fetchPaymentModes: vi.fn(),
+      posProfile: {
+        name: "POS001",
+        currency: "UGX",
+        default_payment_mode: "Cash",
+        enable_payment_without_printing: 1,
+      },
+      currency: "UGX",
+    });
+
+    render(
+      <PaymentDialog
+        onClose={vi.fn()}
+        grandTotal={0}
+        roundedTotal={0}
+        invoice="INV-ZERO-EMPTY"
+        customer="Walk-in Guest"
+        posProfile="POS001"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn()}
+        clearSelectedOrder={vi.fn()}
+      />
+    );
+
+    const payButton = screen.getByRole("button", { name: /payment.pay_button/ }) as HTMLButtonElement;
+    expect(payButton.disabled).toBe(true);
+  });
+
+  it("P1-7a: renders read-only discount summary when only line discounts exist (appliedDiscount = 0)", () => {
+    render(
+      <PaymentDialog
+        onClose={vi.fn()}
+        grandTotal={45000}
+        roundedTotal={45000}
+        invoice="INV-LINE-ONLY"
+        customer="Walk-in Guest"
+        posProfile="POS001"
+        table="T-01"
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn()}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={0}
+        discountAmount={0}
+        lineDiscountTotal={5000}
+        discountReason="Complaint"
+      />
+    );
+
+    const summaryRow = screen.getByTestId("payment-discount-summary");
+    expect(summaryRow).toHaveTextContent("Complaint");
+    expect(summaryRow).toHaveTextContent("5000");
+  });
 });
 
 

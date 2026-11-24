@@ -31,6 +31,8 @@ API_PATH = URY_PKG / "ury_pos/api.py"
 
 class Row(dict):
     def __getattr__(self, key):
+        if key.startswith("_"):
+            raise AttributeError(key)
         try:
             return self[key]
         except KeyError:
@@ -253,24 +255,51 @@ class FakePOSInvoice:
 
     def calculate_taxes_and_totals(self):
         prec = self.precision("grand_total")
-        inclusive_rate = sum(float(t.get("rate") or 0) for t in self.taxes if int(t.get("included_in_print_rate") or 0))
-        exclusive_rate = sum(float(t.get("rate") or 0) for t in self.taxes if not int(t.get("included_in_print_rate") or 0))
+        inclusive_rate = sum(
+            float(t.get("rate") or 0)
+            for t in self.taxes
+            if int(t.get("included_in_print_rate") or 0) and (t.get("charge_type") or "") != "Actual"
+        )
+        exclusive_rate = sum(
+            float(t.get("rate") or 0)
+            for t in self.taxes
+            if not int(t.get("included_in_print_rate") or 0) and (t.get("charge_type") or "") != "Actual"
+        )
+        actual_tax = sum(
+            float(t.get("tax_amount") or 0)
+            for t in self.taxes
+            if (t.get("charge_type") or "") == "Actual"
+        )
 
-        # 1) Item-level discounts
+        # 1) Item-level discounts — mirrors REAL ERPNext v16 calculate_item_rate():
+        # If item.rate is non-zero AND does not equal calculated_rate, ERPNext v16
+        # prefers item.rate and resets discount_percentage = 0!
         gross_items = 0.0
         for item in self.items:
             qty = float(item.get("qty") or 0)
-            plr = float(item.get("price_list_rate") if item.get("price_list_rate") is not None else item.get("rate") or 0)
-            item["price_list_rate"] = plr
-            pct = float(item.get("discount_percentage") or 0)
-            amt = float(item.get("discount_amount") or 0)
-            if pct:
-                amt = round(plr * pct / 100.0, prec)
-                item["discount_amount"] = amt
-            elif amt and plr > 0:
-                item["discount_percentage"] = round(amt * 100.0 / plr, 4)
-            rate = round(plr - amt, prec)
-            item["rate"] = rate
+            plr = float(item.get("price_list_rate") or 0)
+            if not plr:
+                item["discount_percentage"] = 0.0
+                item["discount_amount"] = 0.0
+                rate = round(float(item.get("rate") or 0), prec)
+            else:
+                pct = float(item.get("discount_percentage") or 0)
+                amt = float(item.get("discount_amount") or 0)
+                if pct > 0:
+                    amt = round(plr * pct / 100.0, prec)
+                    item["discount_amount"] = amt
+                calculated_rate = round(plr - amt, prec)
+                existing_rate = round(float(item.get("rate") or 0), prec)
+                if not existing_rate:
+                    item["rate"] = calculated_rate
+                    rate = calculated_rate
+                elif existing_rate == calculated_rate:
+                    rate = existing_rate
+                else:
+                    # ERPNext v16 resets discount_percentage to 0 and keeps existing_rate
+                    item["discount_amount"] = round(plr - existing_rate, prec)
+                    item["discount_percentage"] = 0.0
+                    rate = existing_rate
             item["amount"] = round(rate * qty, prec)
             gross_items += item["amount"]
 
@@ -278,11 +307,11 @@ class FakePOSInvoice:
         # Pre-header-discount net & tax
         if inclusive_rate > 0:
             pre_net = round(self.total / (1.0 + inclusive_rate / 100.0), prec)
-            pre_tax = round(self.total - pre_net, prec)
-            pre_grand = self.total
+            pre_tax = round(self.total - pre_net + actual_tax, prec)
+            pre_grand = round(self.total + actual_tax, prec)
         else:
             pre_net = self.total
-            pre_tax = round(pre_net * exclusive_rate / 100.0, prec)
+            pre_tax = round(pre_net * exclusive_rate / 100.0 + actual_tax, prec)
             pre_grand = round(pre_net + pre_tax, prec)
 
         # 2) Header-level discount
@@ -295,23 +324,25 @@ class FakePOSInvoice:
         if self.apply_discount_on == "Net Total":
             self.net_total = round(pre_net - self.discount_amount, prec)
             if inclusive_rate > 0:
-                self.total_taxes_and_charges = round(self.net_total * inclusive_rate / 100.0, prec)
+                self.total_taxes_and_charges = round(self.net_total * inclusive_rate / 100.0 + actual_tax, prec)
                 self.grand_total = round(self.net_total + self.total_taxes_and_charges, prec)
             else:
-                self.total_taxes_and_charges = round(self.net_total * exclusive_rate / 100.0, prec)
+                self.total_taxes_and_charges = round(self.net_total * exclusive_rate / 100.0 + actual_tax, prec)
                 self.grand_total = round(self.net_total + self.total_taxes_and_charges, prec)
         else:
             # Grand Total basis
             self.grand_total = round(pre_grand - self.discount_amount, prec)
             if inclusive_rate > 0:
-                self.net_total = round(self.grand_total / (1.0 + inclusive_rate / 100.0), prec)
+                net_ex_actual = round((self.grand_total - actual_tax) / (1.0 + inclusive_rate / 100.0), prec)
+                self.net_total = net_ex_actual
                 self.total_taxes_and_charges = round(self.grand_total - self.net_total, prec)
             elif exclusive_rate > 0:
-                self.net_total = round(self.grand_total / (1.0 + exclusive_rate / 100.0), prec)
+                net_ex_actual = round((self.grand_total - actual_tax) / (1.0 + exclusive_rate / 100.0), prec)
+                self.net_total = net_ex_actual
                 self.total_taxes_and_charges = round(self.grand_total - self.net_total, prec)
             else:
-                self.net_total = self.grand_total
-                self.total_taxes_and_charges = 0.0
+                self.net_total = round(self.grand_total - actual_tax, prec)
+                self.total_taxes_and_charges = round(actual_tax, prec)
 
         self.rounded_total = self.grand_total
         self.events.append(("totals", self.additional_discount_percentage, self.discount_amount, self.grand_total))
@@ -498,9 +529,32 @@ def _item(row_id, code, qty, rate, **extra):
 class DiscountBase(unittest.TestCase):
     def setUp(self):
         self.frappe, self.order, self.discount, self.hook = _load_modules()
+        override_mod = self.discount._get_override_module()
+        self.enterContext(patch.object(override_mod, "_get_user_permissions", return_value={}))
+        self.enterContext(patch.object(override_mod, "_add_authentication_log", MagicMock()))
+        self.enterContext(
+            patch.object(
+                override_mod,
+                "_get_login_attempt_tracker_cls",
+                return_value=type(
+                    "_T",
+                    (),
+                    {
+                        "__init__": lambda self, *a, **k: None,
+                        "is_user_allowed": lambda self: True,
+                        "add_failure_attempt": lambda self: None,
+                        "add_success_attempt": lambda self: None,
+                    },
+                ),
+            )
+        )
+        self.frappe.db.sql.side_effect = self._db_sql
+        self.pos_reasons = []
         self.roles_by_user = {
             "cashier@example.com": ["URY Cashier"],
             "manager@example.com": ["URY Manager"],
+            "owner@example.com": ["Owner Approver"],
+            "gm@example.com": ["URY Manager", "Owner Approver"],
             "waiter@example.com": ["URY Captain"],
             "Administrator": ["Administrator", "System Manager"],
             "sysman@example.com": ["System Manager"],
@@ -549,6 +603,7 @@ class DiscountBase(unittest.TestCase):
             applicable_for_users=[
                 Row(user="cashier@example.com"),
                 Row(user="manager@example.com"),
+                Row(user="owner@example.com"),
                 Row(user="gm@example.com"),
             ],
         )
@@ -575,6 +630,14 @@ class DiscountBase(unittest.TestCase):
             (lambda user, pin, *a, **kw: pin == "4321") if path == "test.pin_verifier" else None
         )
 
+    def _db_sql(self, query, params=None, as_dict=False):
+        q = str(query or "").lower()
+        if "count(*)" in q:
+            return [[0]]
+        if "max(" in q:
+            return [[None]]
+        return []
+
     def _db_table_exists(self, doctype):
         if doctype == "Approval Limit":
             return self.has_approval_limit_doctype
@@ -582,6 +645,8 @@ class DiscountBase(unittest.TestCase):
             return self.has_discount_reason_doctype
         if doctype == "POS Privilege Rule":
             return True
+        if doctype == "POS Reason":
+            return bool(self.pos_reasons)
         return True
 
     def _get_meta(self, doctype):
@@ -784,6 +849,18 @@ class DiscountBase(unittest.TestCase):
                     rows = [r for r in rows if r.get(k) in v[1]]
                 else:
                     rows = [r for r in rows if r.get(k) == v]
+            return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "POS Reason":
+            rows = list(self.pos_reasons)
+            if "disabled" in filters:
+                rows = [r for r in rows if int(r.get("disabled") or 0) == int(filters["disabled"])]
+            return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "User":
+            rows = [
+                Row(name=u, full_name=u, enabled=1, user_type="System User")
+                for u in sorted(self.roles_by_user.keys())
+                if u not in ("Administrator", "Guest")
+            ]
             return [r.get(pluck) for r in rows] if pluck else rows
         if doctype == "POS Invoice":
             out = []
@@ -1511,7 +1588,7 @@ class TestSplitMergeAndOptions(DiscountBase):
                 "CHK-SP-1",
                 currency="UGX",
                 items=[
-                    _item("i1", "FISH", 1, 30000, discount_percentage=10, discount_amount=3000),
+                    _item("i1", "FISH", 1, 30000, discount_percentage=10, discount_amount=3000, rate=27000, amount=27000),
                     _item("i2", "STEAK", 1, 20000),
                 ],
                 custom_discount_reason="Complaint",
@@ -1873,6 +1950,530 @@ class TestAmendment1PrivilegesAndRuleMin(DiscountBase):
         self.assertEqual(check.items[0].get("discount_percentage"), 10)
         self.order.remove_check_discount(invoice="CHK-DOCROW", pos_profile="Lakeside Till", row="r1")
         self.assertEqual(check.items[0].get("discount_percentage"), 0)
+
+
+class TestHydrogenR1Defects(DiscountBase):
+    """RED -> GREEN regression suite for every P0 and P1 uncovered in Hydrogen R1 live review."""
+
+    def _siteops_disc_007_guard(self, doc, prev_approver, prev_pct):
+        """Mirrors siteops#8620 sales-discount-control@3 lines 243-252."""
+        approval_flag = getattr(getattr(doc, "flags", None), "discount_approval", None)
+        if approval_flag is None:
+            curr_approver = str(doc.get("custom_discount_approver") or "")
+            curr_pct = float(doc.get("custom_discount_approved_percent") or 0.0)
+            if curr_approver != str(prev_approver or "") or curr_pct != float(prev_pct or 0.0):
+                raise Refused(
+                    "SITEOPS-DISC-007: Discount approver and approved percentage can only be set "
+                    "by a verified override and cannot be altered on a later save. Nothing was saved."
+                )
+
+    def test_p0_2_line_percent_amount_and_combined_persist_under_erpnext_v16_calculate_item_rate(self):
+        """P0-2: Real ERPNext v16 calculate_item_rate resets discount_percentage=0 if rate is not updated."""
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 25",
+            discount_approver_role="Owner Approver",
+        )
+        check = self._register_check(
+            FakePOSInvoice(
+                "CHK-P02",
+                items=[
+                    _item("r1", "STEAK", 1, 50000),
+                    _item("r2", "JUICE", 1, 10000),
+                ],
+            )
+        )
+        self._patch_settlement_helpers(check)
+
+        # 1) Line % preview + combined with check flat amount 2,000 -> 5,000 + 2,000 = 7,000 off 60,000 (11.67% > 5% limit!)
+        prev_comb = self.order.preview_settlement_totals(
+            invoice="CHK-P02",
+            pos_profile="Lakeside Till",
+            discount_amount=2000,
+            line_discounts=[{"row": "r1", "percent": 10}],
+            discount_reason="Complaint",
+        )
+        self.assertEqual(prev_comb["line_discount_total"], 5000)
+        self.assertEqual(prev_comb["header_discount_amount"], 2000)
+        self.assertEqual(prev_comb["discount_total"], 7000)
+        self.assertEqual(prev_comb["after_total"], 53000)
+        self.assertAlmostEqual(prev_comb["effective_percent"], 11.6667, places=2)
+        self.assertTrue(prev_comb["needs_approval"])
+
+        # 2) Line amount preview (5,000 off 50,000)
+        prev_amt = self.order.preview_settlement_totals(
+            invoice="CHK-P02",
+            pos_profile="Lakeside Till",
+            line_discounts=[{"row": "r1", "amount": 5000}],
+            discount_reason="Complaint",
+        )
+        self.assertEqual(prev_amt["line_discount_total"], 5000)
+        self.assertEqual(prev_amt["discount_total"], 5000)
+        self.assertEqual(prev_amt["after_total"], 55000)
+
+        # 3) Persisting with manager approval keeps rate=45000 and discount_percentage=10 even after second calculate_taxes_and_totals()
+        token = self._issue_override_token(check, prev_comb["claim"], approver="manager@example.com", percent=12)
+        saved = self.order.apply_check_discount(
+            invoice="CHK-P02",
+            pos_profile="Lakeside Till",
+            discount_amount=2000,
+            line_discounts=[{"row": "r1", "percent": 10}],
+            discount_reason="Complaint",
+            approval=token,
+        )
+        # Re-run ERPNext v16 calculate_taxes_and_totals as save() does
+        check.calculate_taxes_and_totals()
+        self.assertEqual(check.items[0].discount_percentage, 10)
+        self.assertEqual(check.items[0].rate, 45000)
+        self.assertEqual(check.items[0].amount, 45000)
+        self.assertEqual(saved["line_discount_total"], 5000)
+        self.assertEqual(saved["after_total"], 53000)
+
+    def test_p0_3_remove_approved_discount_and_lower_downward_pass_siteops_disc_007_and_validate(self):
+        """P0-3: Removing an approved discount passes SITEOPS-DISC-007; lowering 10%->5% passes without POS-DISC-FORGED."""
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 25",
+            discount_approver_role="Owner Approver",
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount_remove", role="URY Manager", may_perform=1, may_authorise=1, max_percent=0),
+        ]
+        check = self._register_check(FakePOSInvoice("CHK-P03", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        # Apply 10% with manager PIN
+        p10 = self.order.preview_settlement_totals(
+            invoice="CHK-P03", pos_profile="Lakeside Till", discount_percent=10, discount_reason="Complaint"
+        )
+        tok10 = self._issue_override_token(check, p10["claim"], approver="manager@example.com", percent=10)
+        self.order.apply_check_discount(
+            invoice="CHK-P03", pos_profile="Lakeside Till", discount_percent=10, discount_reason="Complaint", approval=tok10
+        )
+        self.assertEqual(check.custom_discount_approver, "manager@example.com")
+        self.assertEqual(check.custom_discount_approved_percent, 10.0)
+
+        # Snapshot committed state before downward edit (10% -> 5%)
+        prev_snap = FakePOSInvoice(
+            "CHK-P03",
+            items=[_item("r1", "FISH", 1, 50000)],
+            additional_discount_percentage=10.0,
+            discount_amount=5000.0,
+            custom_discount_reason="Complaint",
+            custom_discount_approver="manager@example.com",
+            custom_discount_approved_percent=10.0,
+            ury_discount_meta=check.ury_discount_meta,
+        )
+        check._doc_before_save = prev_snap
+
+        def _guarded_save(**kw):
+            self._siteops_disc_007_guard(check, prev_snap.custom_discount_approver, prev_snap.custom_discount_approved_percent)
+            self.hook.validate_pos_discount(check)
+
+        check.save = _guarded_save
+
+        # 1) Lowering 10% -> 5% (within cashier's 5% limit, no PIN) MUST succeed without POS-DISC-FORGED or SITEOPS-DISC-007
+        res5 = self.order.apply_check_discount(
+            invoice="CHK-P03", pos_profile="Lakeside Till", discount_percent=5, discount_reason="Complaint"
+        )
+        self.assertEqual(res5["after_total"], 47500)
+        self.assertEqual(check.additional_discount_percentage, 5.0)
+
+        # 2) Removing the approved discount with discount_remove PIN MUST pass SITEOPS-DISC-007 & clear fields
+        prev_snap2 = FakePOSInvoice(
+            "CHK-P03",
+            items=[_item("r1", "FISH", 1, 50000)],
+            additional_discount_percentage=5.0,
+            discount_amount=2500.0,
+            custom_discount_reason="Complaint",
+            custom_discount_approver=check.custom_discount_approver,
+            custom_discount_approved_percent=check.custom_discount_approved_percent,
+            ury_discount_meta=check.ury_discount_meta,
+        )
+        check._doc_before_save = prev_snap2
+
+        def _guarded_remove_save(**kw):
+            self._siteops_disc_007_guard(check, prev_snap2.custom_discount_approver, prev_snap2.custom_discount_approved_percent)
+            self.hook.validate_pos_discount(check)
+
+        check.save = _guarded_remove_save
+
+        rem_claim = self.discount.canonical_remove_claim(check, row=None)
+        rem_tok = self._issue_override_token(check, rem_claim, approver="manager@example.com", privilege="discount_remove")
+        res_rem = self.order.remove_check_discount(
+            invoice="CHK-P03", pos_profile="Lakeside Till", approval=rem_tok
+        )
+        self.assertEqual(res_rem["after_total"], 50000)
+        self.assertFalse(check.custom_discount_approver)
+        self.assertEqual(check.additional_discount_percentage, 0)
+
+    def test_p0_4_all_discount_removal_bypasses_blocked_without_discount_remove_auth(self):
+        """P0-4: apply(percent=0), make_invoice(clear_discount=1), apply(line percent=0), and REST clear all require discount_remove."""
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 20\nURY Manager: 80",
+            discount_approver_role="URY Manager",
+        )
+        check = self._register_check(
+            FakePOSInvoice("CHK-P04", items=[_item("r1", "FISH", 1, 50000)], invoice_printed=1)
+        )
+        self._patch_settlement_helpers(check)
+
+        # Put both header 5% and line 10% on printed check
+        self.order.apply_check_discount(
+            invoice="CHK-P04",
+            pos_profile="Lakeside Till",
+            discount_percent=5,
+            line_discounts=[{"row": "r1", "percent": 10}],
+            discount_reason="Complaint",
+        )
+        self.assertEqual(check.additional_discount_percentage, 5)
+        self.assertEqual(check.items[0].discount_percentage, 10)
+
+        # Vector 1: apply_check_discount(discount_percent=0)
+        with self.assertRaises((Refused, NotPermitted)) as ctx1:
+            self.order.apply_check_discount(
+                invoice="CHK-P04", pos_profile="Lakeside Till", discount_percent=0
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx1.exception))
+        self.assertEqual(check.additional_discount_percentage, 5)
+
+        # Vector 2: make_invoice(clear_discount=1)
+        with self.assertRaises((Refused, NotPermitted)) as ctx2:
+            self.order.make_invoice(
+                customer="Walk-in",
+                payments=[{"mode_of_payment": "Cash", "amount": 50000}],
+                cashier="cashier@example.com",
+                pos_profile="Lakeside Till",
+                owner="cashier@example.com",
+                invoice="CHK-P04",
+                submit_invoice=0,
+                clear_discount=1,
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx2.exception))
+        self.assertEqual(check.additional_discount_percentage, 5)
+
+        # Vector 3: apply_check_discount(line_discounts=[{"row": "r1", "percent": 0}])
+        with self.assertRaises((Refused, NotPermitted)) as ctx3:
+            self.order.apply_check_discount(
+                invoice="CHK-P04",
+                pos_profile="Lakeside Till",
+                discount_percent=5,
+                line_discounts=[{"row": "r1", "percent": 0}],
+                discount_reason="Complaint",
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx3.exception))
+        self.assertEqual(check.items[0].discount_percentage, 10)
+
+        # Vector 4a: direct REST save clearing header discount (even if flipping invoice_printed=0!)
+        prev_printed = FakePOSInvoice(
+            "CHK-P04-REST",
+            items=[_item("r1", "FISH", 1, 50000)],
+            invoice_printed=1,
+            additional_discount_percentage=10,
+            discount_amount=5000,
+            custom_discount_reason="Complaint",
+        )
+        prev_printed.calculate_taxes_and_totals()
+        rest_cleared = FakePOSInvoice(
+            "CHK-P04-REST",
+            items=[_item("r1", "FISH", 1, 50000)],
+            invoice_printed=0,  # attempt to clear invoice_printed in same PUT!
+            additional_discount_percentage=0,
+            discount_amount=0,
+        )
+        rest_cleared._doc_before_save = prev_printed
+        rest_cleared.calculate_taxes_and_totals()
+        with self.assertRaises((Refused, NotPermitted)) as ctx4:
+            self.hook.validate_pos_discount(rest_cleared)
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx4.exception))
+
+        # Vector 4b: direct REST save clearing line discount on printed check
+        prev_line = FakePOSInvoice(
+            "CHK-P04-RESTL",
+            items=[_item("r1", "FISH", 1, 50000, discount_percentage=10, discount_amount=5000, rate=45000, amount=45000)],
+            invoice_printed=1,
+            custom_discount_reason="Complaint",
+        )
+        rest_line_cleared = FakePOSInvoice(
+            "CHK-P04-RESTL",
+            items=[_item("r1", "FISH", 1, 50000, discount_percentage=0, discount_amount=0, rate=50000, amount=50000)],
+            invoice_printed=1,
+        )
+        rest_line_cleared._doc_before_save = prev_line
+        with self.assertRaises((Refused, NotPermitted)) as ctx4b:
+            self.hook.validate_pos_discount(rest_line_cleared)
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx4b.exception))
+
+    def test_p0_5_actual_tax_charge_row_cannot_zero_out_discount_or_bypass_validation(self):
+        """P0-5: Adding charge_type='Actual' (5000) + discount_amount=5000 must NOT compute discount_total=0."""
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5",
+            discount_approver_role="Owner Approver",
+        )
+        prev = FakePOSInvoice(
+            "CHK-P05",
+            items=[_item("r1", "FISH", 1, 50000)],
+            taxes=[Row(charge_type="Actual", description="Service Fee", tax_amount=5000, rate=0, included_in_print_rate=0)],
+        )
+        doc = FakePOSInvoice(
+            "CHK-P05",
+            items=[_item("r1", "FISH", 1, 50000)],
+            taxes=[Row(charge_type="Actual", description="Service Fee", tax_amount=5000, rate=0, included_in_print_rate=0)],
+            apply_discount_on="Grand Total",
+        )
+        doc._doc_before_save = prev
+        doc.discount_amount = 5000
+        doc.calculate_taxes_and_totals()
+
+        summary = self.discount._compute_manual_discount_summary(doc, 0)
+        self.assertEqual(summary["discount_total"], 5000.0)
+        self.assertEqual(summary["header_discount_amount"], 5000.0)
+        self.assertEqual(summary["effective_percent"], 10.0)
+
+        # Must refuse because reason is missing (and 10% > 5% limit)
+        with self.assertRaises((Refused, NotPermitted)):
+            self.hook.validate_pos_discount(doc)
+
+    def test_p0_6_complimentary_approver_eligibility_aligned_with_approval_limit_and_owner_approver(self):
+        """P0-6: URY Manager (25% limit, not Owner Approver) cannot approve 100% comp; Owner Approver without rule CAN."""
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 25",
+            discount_approver_role="Owner Approver",
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=5),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="complimentary", role="URY Manager", may_perform=0, may_authorise=1, max_percent=0, requires_reason=1),
+        ]
+        # Seeded POS Reason rows (like real B2a migration!) must NOT block Discount Reason on complimentary
+        self.pos_reasons = [
+            Row(code="OTHER", description="Other", applies_to="", requires_note=1, sort_order=999, disabled=0),
+        ]
+        check = self._register_check(FakePOSInvoice("CHK-P06", items=[_item("r1", "FISH", 1, 60000)]))
+        override_mod = self.discount._get_override_module()
+
+        approvers = override_mod.list_approvers(
+            pos_profile="Lakeside Till",
+            privilege="complimentary",
+            reference_name="CHK-P06",
+            percent=100,
+        )
+        approver_ids = {a["user"] for a in approvers}
+        self.assertNotIn("manager@example.com", approver_ids)
+        self.assertIn("owner@example.com", approver_ids)
+
+        claim = self.discount.canonical_discount_claim(percent=100, reason="Complaint", precision=0)
+        # URY Manager (limit 25%, not Owner Approver) MUST be refused at authorise() before consuming token
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            override_mod.authorise(
+                pos_profile="Lakeside Till",
+                privilege="complimentary",
+                approver="manager@example.com",
+                pin="4321",
+                reference_doctype="POS Invoice",
+                reference_name="CHK-P06",
+                claim=claim,
+            )
+        self.assertIn("POS-AUTH-NOT-ELIGIBLE", str(ctx.exception))
+
+        # Owner Approver (no POS Privilege Rule row for complimentary) MUST succeed with Discount Reason "Complaint"
+        res = override_mod.authorise(
+            pos_profile="Lakeside Till",
+            privilege="complimentary",
+            approver="owner@example.com",
+            pin="4321",
+            reference_doctype="POS Invoice",
+            reference_name="CHK-P06",
+            claim=claim,
+        )
+        self.assertEqual(res["approver"], "owner@example.com")
+
+    def test_p0_7_split_bill_by_approving_owner_and_meta_only_approver_pass_siteops_guards(self):
+        """P0-7: Approving owner splitting their approved check & meta-only approver split both avoid SITEOPS-DISC-002/007."""
+        self.enterContext(patch.object(self.order, "_enforce_order_access"))
+        self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))
+        self.frappe.generate_hash.return_value = "GRP-P07"
+
+        def _siteops_check(doc, is_new=False, prev_approver="", prev_pct=0.0):
+            flag = getattr(getattr(doc, "flags", None), "discount_approval", None)
+            if flag is not None:
+                ap = str(flag.get("approver") or "")
+                if ap == self.frappe.session.user or ap == str(doc.get("owner") or ""):
+                    raise Refused("SITEOPS-DISC-002 (SUPERVISOR_SELF_APPROVAL)")
+            elif not is_new:
+                curr_ap = str(doc.get("custom_discount_approver") or "")
+                curr_pct = float(doc.get("custom_discount_approved_percent") or 0.0)
+                if curr_ap != prev_approver or curr_pct != prev_pct:
+                    raise Refused("SITEOPS-DISC-007")
+            else:
+                if doc.get("custom_discount_approver") or float(doc.get("custom_discount_approved_percent") or 0) > 0:
+                    raise Refused("SITEOPS-DISC-007")
+
+        # Case 1: Approving owner splits cashier's check
+        self.frappe.session.user = "owner@example.com"
+        source1 = self._register_check(
+            FakePOSInvoice(
+                "CHK-P07-1",
+                owner="cashier@example.com",
+                items=[_item("i1", "FISH", 1, 30000), _item("i2", "STEAK", 1, 20000)],
+                additional_discount_percentage=30,
+                custom_discount_reason="Complaint",
+                custom_discount_approver="owner@example.com",
+                custom_discount_approved_percent=30.0,
+            )
+        )
+        source1.save = lambda **kw: _siteops_check(source1, is_new=False, prev_approver="owner@example.com", prev_pct=30.0)
+        child1 = FakePOSInvoice("CHK-P07-1C", owner="owner@example.com", items=[])
+        child1.insert = lambda **kw: _siteops_check(child1, is_new=True)
+        self.frappe.new_doc.return_value = child1
+
+        self.order.split_bill("CHK-P07-1", [{"name": "i1", "qty": 1}])
+        self.assertEqual(self.frappe.session.user, "owner@example.com")  # session restored!
+        self.assertEqual(child1.owner, "cashier@example.com")
+
+        # Case 2: Source had approver ONLY in ury_discount_meta (pre-B1), split after B1 installed
+        self.frappe.session.user = "cashier@example.com"
+        source2 = self._register_check(
+            FakePOSInvoice(
+                "CHK-P07-2",
+                owner="cashier@example.com",
+                items=[_item("i1", "FISH", 1, 30000), _item("i2", "STEAK", 1, 20000)],
+                additional_discount_percentage=20,
+                custom_discount_reason="Complaint",
+                custom_discount_approver=None,
+                custom_discount_approved_percent=0.0,
+                ury_discount_meta=json.dumps({
+                    "reason": "Complaint",
+                    "approver": "manager@example.com",
+                    "approved_percent": 20.0,
+                }),
+            )
+        )
+        source2.save = lambda **kw: _siteops_check(source2, is_new=False, prev_approver="", prev_pct=0.0)
+        child2 = FakePOSInvoice("CHK-P07-2C", owner="cashier@example.com", items=[])
+        child2.insert = lambda **kw: _siteops_check(child2, is_new=True)
+        self.frappe.new_doc.return_value = child2
+
+        self.order.split_bill("CHK-P07-2", [{"name": "i1", "qty": 1}])
+        self.assertEqual(child2.flags.discount_approval["approver"], "manager@example.com")
+        self.assertEqual(source2.flags.discount_approval["approver"], "manager@example.com")
+
+    def test_p1_1_explicit_complimentary_allowed_when_open_discounts_disabled(self):
+        """P1-1: Explicit complimentary=1 works when allow_discount_change=0, while open 10% stays refused."""
+        self.profile.allow_discount_change = 0
+        check = self._register_check(FakePOSInvoice("CHK-P11", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        with self.assertRaises((Refused, NotPermitted)):
+            self.order.preview_settlement_totals(
+                invoice="CHK-P11", pos_profile="Lakeside Till", discount_percent=10, discount_reason="Complaint"
+            )
+
+        comp = self.order.preview_settlement_totals(
+            invoice="CHK-P11",
+            pos_profile="Lakeside Till",
+            discount_percent=100,
+            complimentary=1,
+            discount_reason="Complaint",
+        )
+        self.assertTrue(comp["is_comp"])
+        self.assertEqual(comp["privilege"], "complimentary")
+        self.assertTrue(comp["needs_approval"])
+        self.assertEqual(comp["after_total"], 0)
+
+    def test_p1_2_currency_precision_prefers_iso_minor_units_over_system_default_2_for_ugx_and_kwd(self):
+        """P1-2: UGX=0 and KWD=3 even when real Frappe doc.precision('grand_total') returns System Settings 2."""
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 50",
+            discount_approver_role="URY Manager",
+        )
+        # Simulate Frappe System Settings currency_precision = 2 overriding doc.precision()
+        ugx_doc = self._register_check(FakePOSInvoice("CHK-UGX-P", currency="UGX", items=[_item("r1", "FISH", 1, 50000)]))
+        ugx_doc.precision = lambda fieldname, parentfield=None: 2
+        self._patch_settlement_helpers(ugx_doc)
+        p_ugx = self.order.preview_settlement_totals(
+            invoice="CHK-UGX-P", pos_profile="Lakeside Till", discount_amount=5000, discount_reason="Complaint"
+        )
+        self.assertEqual(p_ugx["precision"], 0)
+
+        self.profile.currency = "KWD"
+        kwd_doc = self._register_check(
+            FakePOSInvoice("CHK-KWD-P", currency="KWD", items=[_item("r1", "STEAK", 1, 15.375)])
+        )
+        kwd_doc.precision = lambda fieldname, parentfield=None: 2
+        with patch.object(self.order, "get_order_invoice", return_value=kwd_doc):
+            p_kwd = self.order.preview_settlement_totals(
+                invoice="CHK-KWD-P", pos_profile="Lakeside Till", discount_amount=1.234, discount_reason="Complaint"
+            )
+        self.assertEqual(p_kwd["precision"], 3)
+        self.assertEqual(p_kwd["before_total"], 15.375)
+        self.assertEqual(p_kwd["discount_total"], 1.234)
+        self.assertEqual(p_kwd["after_total"], 14.141)
+
+    def test_p1_3_item_scoped_coupon_refused_without_b1(self):
+        """P1-3: Coupon linked to Pricing Rule with apply_on='Item Code' must NOT bleed across header without #8620."""
+        self.has_approval_limit_doctype = False
+        self.pricing_rules["PR-ITEM10"] = Row(
+            name="PR-ITEM10",
+            title="Item Only 10%",
+            apply_on="Item Code",
+            selling=1,
+            disable=0,
+            coupon_code_based=1,
+            price_or_product_discount="Price",
+            rate_or_discount="Discount Percentage",
+            discount_percentage=10.0,
+            discount_amount=0.0,
+            company="Lakeside Hotel",
+            valid_from="2026-01-01",
+            valid_upto="2026-12-31",
+        )
+        self.coupons["ITEMONLY10"] = Row(
+            name="ITEMONLY10",
+            coupon_name="ITEMONLY10",
+            coupon_code="ITEMONLY10",
+            coupon_type="Promotional",
+            pricing_rule="PR-ITEM10",
+            valid_from="2026-01-01",
+            valid_upto="2026-12-31",
+            maximum_use=0,
+            used=0,
+        )
+        check = self._register_check(
+            FakePOSInvoice("CHK-P13", items=[_item("r1", "FISH", 1, 40000), _item("r2", "JUICE", 1, 10000)])
+        )
+        self._patch_settlement_helpers(check)
+
+        with self.assertRaises(Refused) as ctx:
+            self.order.preview_settlement_totals(
+                invoice="CHK-P13", pos_profile="Lakeside Till", coupon_code="ITEMONLY10", discount_reason="Complaint"
+            )
+        self.assertIn("POS-DISC-COUPON-SCOPE", str(ctx.exception))
+
+        with self.assertRaises(Refused) as ctx2:
+            self.order.apply_check_discount(
+                invoice="CHK-P13", pos_profile="Lakeside Till", coupon_code="ITEMONLY10", discount_reason="Complaint"
+            )
+        self.assertIn("POS-DISC-COUPON-SCOPE", str(ctx2.exception))
+
+    def test_p1_5_manager_privilege_rule_limit_honored_when_approval_limit_not_installed(self):
+        """P1-5: Without #8620 Approval Limit, min(0%, Privilege Rule) must NOT zero out managers with max_percent=25."""
+        self.has_approval_limit_doctype = False
+        self.has_privilege_rule_doctype = True
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier", may_perform=1, may_authorise=0, max_percent=0),
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=25),
+        ]
+        self.assertEqual(self.discount.user_discount_limit("manager@example.com", "Lakeside Hotel", "Lakeside Till"), 25.0)
+        self.assertEqual(self.discount.user_discount_limit("cashier@example.com", "Lakeside Hotel", "Lakeside Till"), 0.0)
 
 
 if __name__ == "__main__":
