@@ -17,6 +17,18 @@ except ImportError:  # pragma: no cover - partial frappe.utils stubs in unrelate
 
         return _validate_pos_discount(doc, method)
 
+try:
+    from ury.ury_pos.pricing_actions import (
+        prorate_return_service_charge,
+        sync_service_charge_on_before_validate,
+    )
+except ImportError:  # pragma: no cover - partial frappe stubs in unrelated unit tests
+    def prorate_return_service_charge(doc, *, recalc=True):
+        return None
+
+    def sync_service_charge_on_before_validate(doc):
+        return None
+
 
 def before_insert(doc, method):
     pos_invoice_naming(doc, method)
@@ -26,6 +38,10 @@ def before_insert(doc, method):
 
 def before_validate(doc, method=None):
     prorate_return_discount(doc, method)
+    if getattr(doc, "is_return", 0) or (callable(getattr(doc, "get", None)) and doc.get("is_return")):
+        prorate_return_service_charge(doc)
+    else:
+        sync_service_charge_on_before_validate(doc)
 
 
 def validate(doc, method):
@@ -38,6 +54,8 @@ def validate(doc, method):
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)
+    from ury.ury_pos.pricing_actions import validate_privileged_pricing_mutations
+    validate_privileged_pricing_mutations(doc, method)
 
 
 def before_submit(doc, method):

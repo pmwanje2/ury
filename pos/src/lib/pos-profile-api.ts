@@ -1,6 +1,7 @@
 import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
+import type { ServiceChargeRule } from './service-charge';
 
 export interface OfflinePaymentMode {
   mode_of_payment: string;
@@ -12,6 +13,7 @@ export interface OfflinePaymentMode {
 export interface PaymentModeMeta {
   type: string;
   overtender_rule: string;
+  halo_max_amount?: number;
 }
 
 // Limited fields response
@@ -51,6 +53,12 @@ export interface PosProfileLimited {
   enable_cash_movements?: number;
   require_over_short_reason?: number;
   over_short_reason_tolerance?: number;
+  over_short_tolerance?: number;
+  cash_pull_threshold?: number;
+  paid_out_approval_threshold?: number | null;
+  paid_in_approval_threshold?: number;
+  paid_in_enabled?: boolean;
+  cash_drawer_id?: string;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
@@ -67,6 +75,10 @@ export interface PosProfileLimited {
   offline_payment_modes?: OfflinePaymentMode[];
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
   efris_print_wait_seconds?: number;
+  custom_drawer_pin?: number | string | null;
+  custom_drawer_kick_hex?: string | null;
+  custom_auto_kick_on_cash_tender?: number | boolean | null;
+  drawer_opening_modes?: string[];
 }
 
 export interface PosProfileLimitedResponse {
@@ -130,11 +142,28 @@ export interface PosProfileFull {
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   offline_tender_limit?: number;
   offline_payment_modes?: OfflinePaymentMode[];
+  allow_rate_change?: number;
+  custom_max_free_bill_prints?: number;
+  custom_max_free_closed_copies?: number;
+  custom_service_charge_rate?: number;
+  custom_service_charge_account?: string | null;
+  custom_service_charge_min_pax?: number;
+  custom_service_charge_order_types?: string | null;
+  custom_service_charge_taxable?: number;
+  custom_service_charge_description?: string | null;
+  custom_service_charge_rules?: ServiceChargeRule[];
+  custom_tax_exempt_category?: string | null;
+  custom_tips_payable_account?: string | null;
   efris_print_wait_seconds?: number;
+  custom_drawer_pin?: number | string | null;
+  custom_drawer_kick_hex?: string | null;
+  custom_auto_kick_on_cash_tender?: number | boolean | null;
+  drawer_opening_modes?: string[];
 }
 
 // Combined POS Profile with both limited and full fields
 export interface PosProfileCombined extends PosProfileFull {
+  pos_profile?: string;
   ury_offline_capture?: number | string | boolean;
   // Add limited fields that don't exist in full profile
   waiter: string;
@@ -163,6 +192,12 @@ export interface PosProfileCombined extends PosProfileFull {
   enable_cash_movements?: number;
   require_over_short_reason?: number;
   over_short_reason_tolerance?: number;
+  over_short_tolerance?: number;
+  cash_pull_threshold?: number;
+  paid_out_approval_threshold?: number | null;
+  paid_in_approval_threshold?: number;
+  paid_in_enabled?: boolean;
+  cash_drawer_id?: string;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
@@ -220,6 +255,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
   // Merge both profiles
   const combinedProfile: PosProfileCombined = {
     ...fullProfile,
+    pos_profile: limitedProfile.pos_profile || fullProfile.name,
     currency: fullProfile.currency || limitedProfile.currency || '',
     country: fullProfile.country || limitedProfile.country || '',
     owner: limitedProfile.owner,
@@ -248,6 +284,12 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
     require_over_short_reason: Number(limitedProfile.require_over_short_reason ?? 0),
     over_short_reason_tolerance: Number(limitedProfile.over_short_reason_tolerance ?? 0),
+    over_short_tolerance: limitedProfile.over_short_tolerance,
+    cash_pull_threshold: limitedProfile.cash_pull_threshold,
+    paid_out_approval_threshold: limitedProfile.paid_out_approval_threshold,
+    paid_in_approval_threshold: limitedProfile.paid_in_approval_threshold,
+    paid_in_enabled: limitedProfile.paid_in_enabled,
+    cash_drawer_id: limitedProfile.cash_drawer_id,
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',
@@ -257,6 +299,14 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     offline_tender_limit: Number(limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0),
     offline_payment_modes: limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
     efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    custom_drawer_pin: limitedProfile.custom_drawer_pin ?? fullProfile.custom_drawer_pin ?? 2,
+    custom_drawer_kick_hex: limitedProfile.custom_drawer_kick_hex ?? fullProfile.custom_drawer_kick_hex ?? '',
+    custom_auto_kick_on_cash_tender: Number(
+      limitedProfile.custom_auto_kick_on_cash_tender ??
+      fullProfile.custom_auto_kick_on_cash_tender ??
+      1
+    ),
+    drawer_opening_modes: limitedProfile.drawer_opening_modes ?? fullProfile.drawer_opening_modes ?? [],
   };
 
   return combinedProfile;

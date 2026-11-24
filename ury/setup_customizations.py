@@ -7,6 +7,10 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def after_install():
     create_custom_fields(get_custom_fields())
+    from ury.ury_pos.kds_device_fields import ensure_kds_device_custom_fields
+    ensure_kds_device_custom_fields()
+    from ury.ury_pos.privileged_fields import ensure_privileged_action_custom_fields
+    ensure_privileged_action_custom_fields()
     add_roles_to_administrator()
     hide_setup_sidebar_options()
     setup_pos_invoice_print_fields()
@@ -114,7 +118,7 @@ def get_custom_fields():
 					"fieldtype": "Select",
 					"default": "Dine In",
 					"label": "Order Type",
-					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
 				},
@@ -338,7 +342,7 @@ def get_custom_fields():
 					"options": "URY Restaurant",
 					"fetch_from": "customer.mobile_number",
 					"label": "Order Type",
-					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
 				},

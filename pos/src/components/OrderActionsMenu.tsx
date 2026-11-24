@@ -1,5 +1,13 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react';
-import { GitMerge, MoreVertical, SplitSquareHorizontal } from 'lucide-react';
+import {
+  Flame,
+  Gift,
+  GitMerge,
+  MoreVertical,
+  Percent,
+  ShieldCheck,
+  SplitSquareHorizontal,
+} from 'lucide-react';
 import { Button } from '@ury/ui';
 import { t } from '../i18n';
 
@@ -10,6 +18,14 @@ interface OrderActionsMenuProps {
   onSplitBill?: () => void;
   showMergeBill?: boolean;
   onMergeBill?: () => void;
+  showComplimentary?: boolean;
+  onComplimentary?: () => void;
+  showTaxExempt?: boolean;
+  onTaxExempt?: () => void;
+  showServiceCharge?: boolean;
+  onServiceCharge?: () => void;
+  showRefireKot?: boolean;
+  onRefireKot?: () => void;
 }
 
 const OrderActionsMenu = ({
@@ -19,6 +35,14 @@ const OrderActionsMenu = ({
   onSplitBill,
   showMergeBill = false,
   onMergeBill,
+  showComplimentary = false,
+  onComplimentary,
+  showTaxExempt = false,
+  onTaxExempt,
+  showServiceCharge = false,
+  onServiceCharge,
+  showRefireKot = false,
+  onRefireKot,
 }: OrderActionsMenuProps) => {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -35,7 +59,14 @@ const OrderActionsMenu = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen, onOpenChange]);
 
-  if (!showSplitBill && !showMergeBill) {
+  const hasAnyAction =
+    showSplitBill ||
+    showMergeBill ||
+    showComplimentary ||
+    showTaxExempt ||
+    showServiceCharge ||
+    showRefireKot;
+  if (!hasAnyAction) {
     return null;
   }
 
@@ -44,16 +75,10 @@ const OrderActionsMenu = ({
     onOpenChange(!isOpen);
   };
 
-  const handleSplitBill = (event: ReactMouseEvent<HTMLButtonElement>) => {
+  const runAction = (callback?: () => void) => (event: ReactMouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     onOpenChange(false);
-    onSplitBill?.();
-  };
-
-  const handleMergeBill = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    onOpenChange(false);
-    onMergeBill?.();
+    callback?.();
   };
 
   return (
@@ -70,12 +95,12 @@ const OrderActionsMenu = ({
       </Button>
 
       {isOpen && (
-        <div className="absolute end-0 top-full z-50 mt-1 w-48 rounded-lg border border-border bg-white py-1 shadow-lg">
+        <div className="absolute end-0 top-full z-50 mt-1 w-56 rounded-lg border border-border bg-white py-1 shadow-lg">
           {showMergeBill && (
             <Button
               variant="ghost"
-              className="flex h-auto w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
-              onClick={handleMergeBill}
+              className="flex h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
+              onClick={runAction(onMergeBill)}
             >
               <GitMerge className="h-4 w-4 shrink-0" />
               {t('bill_merge.merge_bill')}
@@ -84,11 +109,51 @@ const OrderActionsMenu = ({
           {showSplitBill && (
             <Button
               variant="ghost"
-              className="flex h-auto w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
-              onClick={handleSplitBill}
+              className="flex h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
+              onClick={runAction(onSplitBill)}
             >
               <SplitSquareHorizontal className="h-4 w-4 shrink-0" />
               {t('bill_split.split_bill')}
+            </Button>
+          )}
+          {showComplimentary && (
+            <Button
+              variant="ghost"
+              className="flex h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
+              onClick={runAction(onComplimentary)}
+            >
+              <Gift className="h-4 w-4 shrink-0" />
+              {t('privileged_actions.complimentary')}
+            </Button>
+          )}
+          {showTaxExempt && (
+            <Button
+              variant="ghost"
+              className="flex h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
+              onClick={runAction(onTaxExempt)}
+            >
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              {t('privileged_actions.tax_exempt')}
+            </Button>
+          )}
+          {showServiceCharge && (
+            <Button
+              variant="ghost"
+              className="flex h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
+              onClick={runAction(onServiceCharge)}
+            >
+              <Percent className="h-4 w-4 shrink-0" />
+              {t('privileged_actions.service_charge')}
+            </Button>
+          )}
+          {showRefireKot && (
+            <Button
+              variant="ghost"
+              className="flex h-auto min-h-10 w-full justify-start gap-2 rounded-none px-4 py-2 text-sm font-normal text-gray-700 hover:bg-gray-100"
+              onClick={runAction(onRefireKot)}
+            >
+              <Flame className="h-4 w-4 shrink-0" />
+              {t('privileged_actions.reprint_kot')}
             </Button>
           )}
         </div>

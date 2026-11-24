@@ -119,9 +119,14 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
   // A short named-account settlement (#44) leaves a balance owed. It is not a
   // cash settlement and stays online-only, so the tender must cover the bill.
   const paidInFull = Number.isFinite(due) && amount >= due - 0.005;
-  // Discounts and tips stay online: the outbox replays neither.
+  // Discounts, tips, and over-HALO tenders stay online: the outbox replays none of them.
+  const haloLimit = Number(
+    (profile as { payment_mode_meta?: Record<string, { halo_max_amount?: number }> })
+      .payment_mode_meta?.[modeOfPayment]?.halo_max_amount,
+  ) || 0;
+  const exceedsHalo = haloLimit > 0 && amount > haloLimit + 1e-6;
   const queueable = !!kind && paidInFull && canCaptureOffline(profile, user) && !(discount && discount > 0)
-    && !(tip && tip > 0);
+    && !(tip && tip > 0) && !exceedsHalo;
   if (!queueable) return { offline: false as const, response: await onlineSettle() };
   const existing = clientOrderId
     ? (await queue.list()).find((row) => row.client_order_id === clientOrderId && row.state === 'pending')
