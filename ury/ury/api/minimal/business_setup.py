@@ -621,6 +621,7 @@ def _run_configure_data(data, results, user):
                 "write_off_cost_center": write_off_cost_center,
                 "selling_price_list": selling_price_list,
                 "customer": customer,
+                "print_format": "Merged POS Invoice Format",
                 "update_stock": 1,
                 "custom_kot_naming_series": "KOT-URY-",
                 "kot_naming_series": "KOT-URY-",

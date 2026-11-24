@@ -216,6 +216,7 @@ export const PrinterConfigPage: React.FC = () => {
       call('frappe.client.get_list', {
         doctype: 'Print Format',
         fields: ['name', 'doc_type'],
+        filters: [['disabled', '=', 0]],
         limit_page_length: 0,
       }),
       call('frappe.client.get_list', { doctype: 'Letter Head', fields: ['name'] }),

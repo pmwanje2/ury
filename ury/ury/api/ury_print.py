@@ -69,11 +69,13 @@ def network_printing(
         restaurant_table = frappe.db.get_value("POS Invoice", name, "restaurant_table")
 
     if not print_format and doctype == "POS Invoice":
+        from ury.ury.print_format.defaults import resolve_safe_pos_print_format
+
         pos_profile = getattr(doc, "pos_profile", None) or frappe.db.get_value("POS Invoice", name, "pos_profile")
         if pos_profile:
             print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
-        if not print_format:
-            print_format = "POS Invoice"
+        default_meta_fmt = frappe.get_meta("POS Invoice").default_print_format if hasattr(frappe, "get_meta") else None
+        print_format = resolve_safe_pos_print_format(print_format, default_format=default_meta_fmt)
 
     printer_doc = frappe.get_doc("Network Printer Settings", printer_setting)
     result = printer_doc.print_doc(
@@ -142,7 +144,10 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
     if not print_format and pos_profile:
         print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
     if not print_format:
-        print_format = "POS Invoice"
+        from ury.ury.print_format.defaults import resolve_safe_pos_print_format
+
+        default_meta_fmt = frappe.get_meta("POS Invoice").default_print_format if hasattr(frappe, "get_meta") else None
+        print_format = resolve_safe_pos_print_format(print_format, default_format=default_meta_fmt)
 
     print_jobs = []
     bill_printers = _bill_printers(pos_profile, table)

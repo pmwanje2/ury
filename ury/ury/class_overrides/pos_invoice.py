@@ -69,6 +69,40 @@ _COPY_RENDER_MARKER = object()
 class CustomPOSInvoice(POSInvoice):
 	def before_print(self, settings=None):
 		from ury.ury.doctype.ury_order.ury_order import check_split_target_access
+		from ury.ury.print_format.defaults import is_print_format_disabled_or_unsafe
+
+		# Frappe v16 Print Format Builder Beta skips checking print_format.disabled in
+		# printview/get_html_and_style; enforce refusal here before rendering.
+		form_dict = getattr(frappe, "form_dict", None)
+		requested_fmt = None
+		if isinstance(form_dict, dict):
+			requested_fmt = form_dict.get("format") or form_dict.get("print_format")
+		if isinstance(requested_fmt, str) and is_print_format_disabled_or_unsafe(requested_fmt):
+			frappe.throw(
+				_("Print Format {0} is disabled").format(requested_fmt),
+				frappe.DoesNotExistError,
+			)
+		# Also guard direct Python get_html_and_style / frappe.get_print calls through
+		# PrintFormatGenerator when the Print Format record itself is marked disabled.
+		import inspect
+		frame = inspect.currentframe()
+		try:
+			cur = frame.f_back if frame else None
+			depth = 0
+			while cur is not None and depth < 10:
+				caller_self = cur.f_locals.get("self")
+				pf_obj = getattr(caller_self, "print_format", None)
+				if pf_obj is not None and getattr(pf_obj, "doctype", None) == "Print Format":
+					if cint(getattr(pf_obj, "disabled", 0)):
+						frappe.throw(
+							_("Print Format {0} is disabled").format(getattr(pf_obj, "name", "")),
+							frappe.DoesNotExistError,
+						)
+					break
+				cur = cur.f_back
+				depth += 1
+		finally:
+			del frame
 
 		# Frappe printview also accepts a serialized document. Authorize the saved check.
 		if self.name and frappe.db.exists("POS Invoice", self.name):
@@ -80,11 +114,13 @@ class CustomPOSInvoice(POSInvoice):
 				check_split_target_access(partner, "read")
 				self.ury_print_partner = partner
 			if not getattr(self, "copy_number", None) and saved.docstatus == 1:
-				requested = cint((getattr(frappe, "form_dict", None) or {}).get("copy_number"))
+				requested = cint((form_dict if isinstance(form_dict, dict) else {}).get("copy_number"))
 				if requested > 0:
 					self.copy_number = requested
 				else:
-					logged = frappe.db.get_value("URY Bill Reprint Log", {"invoice": self.name}, "max(copy_number)")
+					logged = frappe.db.get_value(
+						"URY Bill Reprint Log", {"invoice": self.name}, [{"MAX": "copy_number"}]
+					)
 					self.copy_number = cint(logged) or 1
 		super().before_print(settings)
 		if flt(getattr(self, "outstanding_amount", 0)) > 0:

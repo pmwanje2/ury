@@ -9,6 +9,31 @@ def validate(doc, method):
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
     validate_room_lookup_method(doc, method)
+    validate_print_format(doc, method)
+
+
+def validate_print_format(doc, method=None):
+    """Default blank POS Profile print_format to the guest-check format and refuse
+    disabled or XSS-vulnerable ERPNext standard POS Invoice print formats."""
+    from ury.ury.print_format.defaults import (
+        GUEST_CHECK_PRINT_FORMAT,
+        _active_db,
+        is_print_format_disabled_or_unsafe,
+    )
+
+    pf = (doc.get("print_format") or "").strip()
+    if not pf:
+        db = _active_db()
+        if db is not None and db.sql("SELECT 1 FROM `tabPrint Format` WHERE name=%s LIMIT 1", (GUEST_CHECK_PRINT_FORMAT,)):
+            doc.print_format = GUEST_CHECK_PRINT_FORMAT
+        return
+    if is_print_format_disabled_or_unsafe(pf):
+        frappe.throw(
+            _("Print Format {0} is disabled or unsafe for POS Invoice printing. Choose an enabled guest-check format such as {1}.").format(
+                pf, GUEST_CHECK_PRINT_FORMAT
+            ),
+            frappe.ValidationError,
+        )
 
 
 def validate_room_lookup_method(doc, method=None):

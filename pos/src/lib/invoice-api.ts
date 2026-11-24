@@ -413,6 +413,16 @@ export function isMergedBill(order: Pick<POSInvoice, 'custom_merged_pos_invoice'
   return !!order?.custom_merged_pos_invoice;
 }
 
+export const UNSAFE_POS_INVOICE_PRINT_FORMATS = new Set([
+  'POS Invoice Classic',
+  'POS Invoice Bordered',
+  'POS Invoice Modern',
+  'POS Invoice Modern with Images',
+  'POS Invoice',
+  'Return POS Invoice',
+  'EFRIS POS Receipt 80mm',
+]);
+
 export function resolvePrintFormat(
   order: Pick<POSInvoice, 'custom_merged_pos_invoice'>,
   defaultFormat: string | null | undefined
@@ -420,7 +430,11 @@ export function resolvePrintFormat(
   if (order?.custom_merged_pos_invoice) {
     return MERGED_POS_INVOICE_PRINT_FORMAT;
   }
-  return (defaultFormat || '') as string;
+  const candidate = (defaultFormat || '').trim();
+  if (!candidate || UNSAFE_POS_INVOICE_PRINT_FORMATS.has(candidate)) {
+    return MERGED_POS_INVOICE_PRINT_FORMAT;
+  }
+  return candidate;
 }
 
 export const MERGE_CANDIDATE_PAGE_SIZE = 10;

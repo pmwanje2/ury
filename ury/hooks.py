@@ -240,6 +240,7 @@ after_migrate = [
     # Role Permissions, User Permissions and Data Import, which site governance depends on.
     "ury.ury.desk_islands.after_migrate",
     "ury.ury.brief_admin.ensure_default",
+    "ury.ury.print_format.defaults.configure_pos_invoice_print_formats",
 ]
 
 # The "URY Sales Plan" Workflow fixture (ury/ury/workflow/ury_sales_plan/ury_sales_plan.json)
