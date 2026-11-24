@@ -74,12 +74,27 @@ def _site_less_frappe():
         cint=lambda value: int(value or 0),
         flt=lambda value, precision=None: round(float(value or 0), precision) if precision else float(value or 0),
         get_datetime=lambda value=None: value,
+        get_fullname=lambda value=None: str(value or ""),
         get_system_timezone=lambda: "Africa/Kampala",
         now_datetime=lambda: None,
     )
     return framework, {
         "frappe": framework,
+        "frappe.auth": _stub("frappe.auth", LoginAttemptTracker=MagicMock()),
         "frappe.utils": utils,
+        "frappe.utils.password": _stub(
+            "frappe.utils.password", check_password=MagicMock(), get_encryption_key=lambda: "test-key"
+        ),
+        "frappe.core": _stub("frappe.core"),
+        "frappe.core.doctype": _stub("frappe.core.doctype"),
+        "frappe.core.doctype.activity_log": _stub("frappe.core.doctype.activity_log"),
+        "frappe.core.doctype.activity_log.activity_log": _stub(
+            "frappe.core.doctype.activity_log.activity_log", add_authentication_log=MagicMock()
+        ),
+        "frappe.core.doctype.user_permission": _stub("frappe.core.doctype.user_permission"),
+        "frappe.core.doctype.user_permission.user_permission": _stub(
+            "frappe.core.doctype.user_permission.user_permission", get_user_permissions=lambda *a, **k: {}
+        ),
         "frappe.model.document": _stub("frappe.model.document", Document=object),
         "erpnext.controllers.queries": _stub("erpnext.controllers.queries", item_query=MagicMock()),
         "ury.ury_pos.api": _stub(
@@ -114,7 +129,16 @@ def _site_less_frappe():
 
 def _load():
     framework, modules = _site_less_frappe()
+    modules["ury.brand"] = _stub("ury.brand", coded_message=lambda key, msg="": f"[{key}] {msg}".strip())
     with patch.dict(sys.modules, modules):
+        for stale in ("ury.ury_pos.discount", "ury.ury_pos._discount_override_stub", "ury.ury_pos.override"):
+            sys.modules.pop(stale, None)
+        discount_path = APP.parent / "ury_pos/discount.py"
+        if discount_path.exists():
+            dspec = importlib.util.spec_from_file_location("ury.ury_pos.discount", discount_path)
+            dmod = importlib.util.module_from_spec(dspec)
+            sys.modules[dspec.name] = dmod
+            dspec.loader.exec_module(dmod)
         spec = importlib.util.spec_from_file_location(
             "ury.ury.doctype.ury_order.ury_order", APP / "doctype/ury_order/ury_order.py")
         module = importlib.util.module_from_spec(spec)
@@ -306,25 +330,48 @@ class TestLegacyLinkedSettlement(Loaded):
     def setUp(self):
         super().setUp()
         self.profile = Row(name="Lakeside Till", company="Lakeside Hotel", currency="UGX", customer="Walk-in",
-                           custom_enable_discount=1, allow_discount_change=0)
+                           custom_enable_discount=1, allow_discount_change=1)
+        self.frappe._dict = Row
         self.frappe.get_cached_doc.return_value = self.profile
         self.frappe.get_value.return_value = "Dine In"
-        self.frappe.db.get_value.return_value = 0
+        self.frappe.db.get_value.side_effect = self._db_get_value
+        self.frappe.db.exists.side_effect = lambda dt, name=None: name != "POS Privilege Rule"
+        self.frappe.get_meta.return_value = SimpleNamespace(has_field=lambda f: f in (
+            "custom_discount_reason", "custom_discount_note", "custom_discount_approver",
+            "custom_discount_approved_percent", "ury_discount_meta", "allow_discount_change",
+            "max_document_discount_percent", "discount_limits_by_role", "discount_approver_role",
+        ))
         self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.session = SimpleNamespace(user="cashier")
         self.primary = Check("CHK-1", custom_merged_pos_invoice="CHK-2", rounded_total=100, grand_total=100)
         self.partner = Check("CHK-2", custom_merged_pos_invoice="CHK-1", rounded_total=80, grand_total=80)
-        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: self.partner
+        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: (
+            self.profile if doctype == "POS Profile" else self.partner
+        )
         for helper in ("_validate_client_ids", "_lock_settlement_customer", "_client_order_invoice",
                        "_check_held_before_settlement", "_refuse_client_order_rebind", "_set_settlement_customer",
                        "_enforce_on_account"):
             self.enterContext(patch.object(self.order, helper, return_value=None))
-        self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=10))
         self.enterContext(patch.object(self.order, "get_order_invoice", return_value=self.primary))
+
+    def _db_get_value(self, doctype, filters, fieldname=None, as_dict=False, **kw):
+        if doctype == "Approval Limit":
+            data = {"max_document_discount_percent": "0", "discount_limits_by_role": "URY Cashier: 20", "discount_approver_role": "URY Manager"}
+            if isinstance(fieldname, (list, tuple)):
+                return Row({f: data.get(f) for f in fieldname}) if as_dict else tuple(data.get(f) for f in fieldname)
+            return data.get(fieldname)
+        if doctype == "Discount Reason":
+            data = {"name": "Complaint", "code": "Complaint", "description": "Complaint", "applies_to": "Both", "requires_supervisor": 0, "requires_note": 0, "disabled": 0}
+            if isinstance(fieldname, (list, tuple)):
+                return Row({f: data.get(f) for f in fieldname}) if as_dict else tuple(data.get(f) for f in fieldname)
+            return data.get(fieldname)
+        return 0
 
     def test_the_bill_discount_applies_to_the_linked_partner_before_it_is_totalled(self):
         result = self.order.make_invoice(
             customer="Walk-in", payments=[{"mode_of_payment": "Cash", "amount": 162}], cashier="cashier",
-            pos_profile="Lakeside Till", owner="cashier", additionalDiscount=10, invoice="CHK-1", submit_invoice=0,
+            pos_profile="Lakeside Till", owner="cashier", discount_percent=10, discount_reason="Complaint",
+            invoice="CHK-1", submit_invoice=0,
         )
         self.assertEqual(result["status"], "Draft")
         self.assertEqual(self.partner.additional_discount_percentage, 10)
@@ -336,10 +383,18 @@ class TestSettlementTotalsPreview(Loaded):
 
     def setUp(self):
         super().setUp()
-        self.check = Check("CHK-1")
-        self.partner = Check("CHK-2")
-        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: {"CHK-1": self.check, "CHK-2": self.partner}[name]
-        self.discount = self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=10))
+        self.profile = Row(name="Lakeside Till", company="Lakeside Hotel", currency="USD", customer="Walk-in",
+                           custom_enable_discount=1, allow_discount_change=1)
+        self.check = Check("CHK-1", currency="USD", grand_total=1234.0, rounded_total=1234.0, total=1234.0, net_total=1234.0)
+        self.partner = Check("CHK-2", currency="USD", grand_total=500.28, rounded_total=500.28, total=500.28, net_total=500.28)
+        self.frappe.get_cached_doc.return_value = self.profile
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.session = SimpleNamespace(user="cashier")
+        self.frappe.db.exists.return_value = True
+        self.frappe.get_meta.return_value = SimpleNamespace(has_field=lambda f: f in ("allow_discount_change", "custom_discount_reason"))
+        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: (
+            self.profile if doctype == "POS Profile" else {"CHK-1": self.check, "CHK-2": self.partner}[name]
+        )
         self.access = self.enterContext(patch.object(self.order, "_enforce_order_access"))
 
         def priced(bill, grand, rounded):
@@ -354,11 +409,12 @@ class TestSettlementTotalsPreview(Loaded):
     def preview(self, **kwargs):
         preview = getattr(self.order, "preview_settlement_totals", None)
         self.assertTrue(callable(preview), "preview_settlement_totals is missing: the till rounds money itself")
-        return preview(invoice="CHK-1", pos_profile="Lakeside Till", additionalDiscount=10, **kwargs)
+        return preview(invoice="CHK-1", pos_profile="Lakeside Till", discount_percent=10, **kwargs)
 
     def test_returns_the_native_totals_at_the_validated_discount_without_saving(self):
-        self.assertEqual(self.preview(), {"grand_total": 1110.5, "rounded_total": 1110})
-        self.discount.assert_called_once_with(10, "Lakeside Till")
+        res = self.preview()
+        self.assertEqual(res["grand_total"], 1110.5)
+        self.assertEqual(res["rounded_total"], 1110)
         self.assertEqual(self.check.events[-1], ("totals", 10, 0))
         self.assertFalse([e for e in self.check.events if e[0] == "save"])
         self.assertIn(("permission", "read"), self.check.events)
@@ -366,7 +422,9 @@ class TestSettlementTotalsPreview(Loaded):
 
     def test_a_linked_bill_previews_both_halves_at_the_one_discount(self):
         self.check.custom_merged_pos_invoice = "CHK-2"
-        self.assertEqual(self.preview(), {"grand_total": 1560.75, "rounded_total": 1560})
+        res = self.preview()
+        self.assertEqual(res["grand_total"], 1560.75)
+        self.assertEqual(res["rounded_total"], 1560)
         self.assertEqual(self.partner.events[-1], ("totals", 10, 0))
 
     def test_another_tills_check_is_refused(self):
@@ -627,7 +685,7 @@ class TestAddCheckDiscountsAndTenders(Loaded):
         self.assertEqual(self.source.docstatus, 0)
         self.assertFalse([e for e in self.destination.events if e[0] == "save"])
 
-    def test_make_invoice_without_new_discount_keeps_carried_fixed_discount_and_clears_stale_percentage(self):
+    def test_make_invoice_without_new_discount_preserves_saved_check_discounts(self):
         profile = Row(name="Lakeside Till", company="Lakeside Hotel", currency="USD", customer="Walk-in",
                       custom_enable_discount=1, allow_discount_change=1)
         self.frappe.get_cached_doc.return_value = profile
@@ -638,7 +696,6 @@ class TestAddCheckDiscountsAndTenders(Loaded):
                        "_check_held_before_settlement", "_refuse_client_order_rebind", "_set_settlement_customer",
                        "_enforce_on_account"):
             self.enterContext(patch.object(self.order, helper, return_value=None))
-        self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=0))
 
         carried = Check("CHK-CARRIED", additional_discount_percentage=0, discount_amount=0.59,
                         rounded_total=23.01, grand_total=23.01)
@@ -646,21 +703,22 @@ class TestAddCheckDiscountsAndTenders(Loaded):
             self.order.make_invoice(
                 customer="Walk-in", payments=[{"mode_of_payment": "Mobile Money", "amount": 23.01}],
                 cashier="cashier", pos_profile="Lakeside Till", owner="cashier",
-                additionalDiscount=None, invoice="CHK-CARRIED", submit_invoice=0,
+                invoice="CHK-CARRIED", submit_invoice=0,
             )
         self.assertEqual(carried.additional_discount_percentage, 0)
         self.assertAlmostEqual(carried.discount_amount, 0.59, places=2)
 
-        stale = Check("CHK-STALE", additional_discount_percentage=30, discount_amount=75.0,
-                      rounded_total=175.0, grand_total=175.0)
-        with patch.object(self.order, "get_order_invoice", return_value=stale):
+        # Saved open-check % discount applied before opening PaymentDialog is preserved on settle
+        saved_pct = Check("CHK-PCT", additional_discount_percentage=10, discount_amount=25.0,
+                          rounded_total=225.0, grand_total=225.0)
+        with patch.object(self.order, "get_order_invoice", return_value=saved_pct):
             self.order.make_invoice(
-                customer="Walk-in", payments=[{"mode_of_payment": "Mobile Money", "amount": 250.0}],
+                customer="Walk-in", payments=[{"mode_of_payment": "Mobile Money", "amount": 225.0}],
                 cashier="cashier", pos_profile="Lakeside Till", owner="cashier",
-                additionalDiscount=None, invoice="CHK-STALE", submit_invoice=0,
+                invoice="CHK-PCT", submit_invoice=0,
             )
-        self.assertEqual(stale.additional_discount_percentage, 0)
-        self.assertEqual(stale.discount_amount, 0)
+        self.assertEqual(saved_pct.additional_discount_percentage, 10)
+        self.assertAlmostEqual(saved_pct.discount_amount, 25.0, places=2)
 
 
 class TestSettlementPreservesExistingTenders(Loaded):
@@ -691,7 +749,6 @@ class TestSettlementPreservesExistingTenders(Loaded):
             "_enforce_on_account",
         ):
             self.enterContext(patch.object(self.order, helper, return_value=None))
-        self.enterContext(patch.object(self.order, "_validate_additional_discount", return_value=0))
 
     def _settle(self, check, payments, submit_invoice=0, room_number=None):
         with patch.object(self.order, "get_order_invoice", return_value=check):
@@ -1269,20 +1326,25 @@ class TestSettlementPreservesExistingTenders(Loaded):
 
         saved_pct.calculate_taxes_and_totals = calc(saved_pct, 35.40)
         carried_fixed.calculate_taxes_and_totals = calc(carried_fixed, 23.60)
-        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: {
-            "CHK-PCT": saved_pct,
-            "CHK-FIXED": carried_fixed,
-        }[name]
+        self.frappe.get_cached_doc.return_value = Row(
+            name="Lakeside Till", company="Lakeside Hotel", currency="USD", allow_discount_change=1
+        )
+        self.frappe.get_roles.return_value = ["URY Cashier"]
+        self.frappe.session = SimpleNamespace(user="cashier")
+        self.frappe.db.exists.return_value = True
+        self.frappe.get_meta.return_value = SimpleNamespace(has_field=lambda f: f in ("allow_discount_change",))
+        self.frappe.get_doc.side_effect = lambda doctype, name, *a, **k: (
+            self.frappe.get_cached_doc.return_value if doctype == "POS Profile" else {
+                "CHK-PCT": saved_pct,
+                "CHK-FIXED": carried_fixed,
+            }[name]
+        )
         self.enterContext(patch.object(self.order, "_enforce_order_access"))
 
-        self.assertEqual(
-            self.order.preview_settlement_totals("CHK-PCT", "Lakeside Till", additionalDiscount=0),
-            {"grand_total": 35.40, "rounded_total": 35.40},
-        )
-        self.assertEqual(
-            self.order.preview_settlement_totals("CHK-FIXED", "Lakeside Till", additionalDiscount=0),
-            {"grand_total": 23.01, "rounded_total": 23.01},
-        )
+        p_pct = self.order.preview_settlement_totals("CHK-PCT", "Lakeside Till", clear_discount=1)
+        self.assertEqual((p_pct["grand_total"], p_pct["rounded_total"]), (35.40, 35.40))
+        p_fixed = self.order.preview_settlement_totals("CHK-FIXED", "Lakeside Till")
+        self.assertEqual((p_fixed["grand_total"], p_fixed["rounded_total"]), (23.01, 23.01))
 
     def test_preserves_frappe_dict_style_payment_rows_without_callable_as_dict(self):
         class FrappeStyleDict(dict):
