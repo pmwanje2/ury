@@ -42,14 +42,24 @@ from ury.brand import coded_message
 def _today() -> str:
     fn = getattr(getattr(frappe, "utils", None), "today", None)
     if callable(fn):
-        return fn()
+        try:
+            res = fn()
+            if isinstance(res, str) and res.strip():
+                return res
+        except Exception:
+            pass
     return date.today().isoformat()
 
 
 def _getdate(val=None) -> date:
     fn = getattr(getattr(frappe, "utils", None), "getdate", None)
     if callable(fn):
-        return fn(val)
+        try:
+            res = fn(val)
+            if isinstance(res, date):
+                return res
+        except Exception:
+            pass
     if val is None or val == "":
         return date.today()
     if isinstance(val, datetime):
@@ -62,7 +72,12 @@ def _getdate(val=None) -> date:
 def _add_days(val, days: int) -> date:
     fn = getattr(getattr(frappe, "utils", None), "add_days", None)
     if callable(fn):
-        return fn(val, days)
+        try:
+            res = fn(val, days)
+            if isinstance(res, date):
+                return res
+        except Exception:
+            pass
     return _getdate(val) + timedelta(days=int(days))
 
 
