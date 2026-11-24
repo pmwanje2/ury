@@ -794,8 +794,8 @@ class TestFloorPrivilegedActions(unittest.TestCase):
                 get_users_with_role=MagicMock(return_value=[]),
             ),
             "ury.ury.api.item_price": SimpleNamespace(
-                item_price_release_states=MagicMock(return_value=["Released"]),
-                price_valid_on=MagicMock(return_value=50000.0),
+                item_price_release_states=MagicMock(return_value=(None, None)),
+                price_valid_on=MagicMock(return_value=FakeDoc(price_list_rate=50000.0)),
             ),
             "ury.ury.api.ury_fulfilment_posting_service": SimpleNamespace(
                 trigger_manufacture_on_bill_print=MagicMock(),
