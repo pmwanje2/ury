@@ -4,7 +4,7 @@ import { call, parseFrappeError } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
 import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
-import { isReasonRequiredError } from '../lib/privileged-actions-api';
+import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import TipAdjustDialog from '../components/TipAdjustDialog';
 
@@ -33,6 +33,7 @@ export default function SettledBills() {
   const [pendingCopyApproval, setPendingCopyApproval] = useState<{
     bill: Bill;
     idempotencyKey: string;
+    claim: Record<string, unknown>;
   } | null>(null);
   const [showTipDialog, setShowTipDialog] = useState(false);
 
@@ -67,7 +68,16 @@ export default function SettledBills() {
       if (result.status === 'COMPLETED') keys.delete(targetBill.name);
     } catch (error) {
       if (!approval?.token && (isAuthRequiredError(error) || isReasonRequiredError(error))) {
-        setPendingCopyApproval({ bill: targetBill, idempotencyKey: key });
+        const challenge = extractAuthChallenge(error);
+        setPendingCopyApproval({
+          bill: targetBill,
+          idempotencyKey: key,
+          claim: challenge?.claim ?? {
+            action: 'print_bill_copy',
+            invoice: targetBill.name,
+            copy_number: 1,
+          },
+        });
         return;
       }
       setOutcome('ERROR'); setMessage(overrideErrorMessage(error));
@@ -128,11 +138,7 @@ export default function SettledBills() {
           `${pendingCopyApproval.bill.currency} ${pendingCopyApproval.bill.grand_total}`,
         ]}
         reference={{ doctype: 'POS Invoice', name: pendingCopyApproval.bill.name }}
-        claim={{
-          action: 'print_bill_copy',
-          invoice: pendingCopyApproval.bill.name,
-          copy_number: 1,
-        }}
+        claim={pendingCopyApproval.claim}
         requireReason
         onApproved={(res) => {
           const pending = pendingCopyApproval;

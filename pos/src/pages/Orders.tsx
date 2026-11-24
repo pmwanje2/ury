@@ -23,7 +23,7 @@ import { call, getSessionUser } from '@ury/core';
 import { splitBill, cancelOrder, reprintKot } from '../lib/order-api';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import CheckPrivilegedDialog, { type CheckPrivilegedTab } from '../components/CheckPrivilegedDialog';
-import { isReasonRequiredError } from '../lib/privileged-actions-api';
+import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
 import {
   getOrdersTabForInvoice,
   getOpenCheckCounts,
@@ -554,12 +554,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     } catch (err: any) {
       if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
         const orderName = selectedOrder.name;
+        const challenge = extractAuthChallenge(err);
         setPendingOrderApproval({
           privilege: 'reprint_bill',
           title: t('privileged_actions.reprint_bill'),
           summaryLines: [`${t('privileged_actions.check_ref')}: ${orderName}`],
           referenceName: orderName,
-          claim: { action: 'reprint_open_bill', invoice: orderName },
+          claim: challenge?.claim ?? { action: 'reprint_open_bill', invoice: orderName },
           requireReason: true,
           retry: (res) => handlePrintOrder(res),
         });
@@ -582,12 +583,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       showToast.success(t('privileged_actions.kot_refired'));
     } catch (err) {
       if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        const challenge = extractAuthChallenge(err);
         setPendingOrderApproval({
           privilege: 'reprint_kot',
           title: t('privileged_actions.reprint_kot'),
           summaryLines: [`${t('privileged_actions.check_ref')}: ${orderName}`],
           referenceName: orderName,
-          claim: { action: 'reprint_kot', invoice: orderName },
+          claim: challenge?.claim ?? { action: 'reprint_kot', invoice: orderName },
           requireReason: true,
           retry: (res) => handleRefireKot(res),
         });
@@ -618,6 +620,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       );
     } catch (err) {
       if (!approval?.token && isAuthRequiredError(err)) {
+        const challenge = extractAuthChallenge(err);
         const sortedMoves = [...payload.itemsToMove]
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((row) => [row.name, Math.round(row.qty * 10000) / 10000]);
@@ -626,7 +629,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           title: t('privileged_actions.split_check'),
           summaryLines: [`${t('privileged_actions.check_ref')}: ${sourceName}`],
           referenceName: sourceName,
-          claim: { action: 'split_bill', source_invoice: sourceName, move_items: sortedMoves },
+          claim: challenge?.claim ?? { action: 'split_bill', source_invoice: sourceName, move_items: sortedMoves },
           retry: (res) => handleSplitBill(payload, res),
         });
         return;

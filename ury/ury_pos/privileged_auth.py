@@ -224,12 +224,23 @@ def validate_pos_reason(
             r for r in (all_reasons or [])
             if cint(r.get("disabled")) == 0 and _reason_applies_to_privilege(r.get("applies_to"), privilege)
         ]
-        # Match exact code or description
+        # Match exact code or description, or ManagerApproval's "Description: note" / "Other: note" format
         found = None
+        extracted_note = ""
         for r in all_reasons or []:
             if r.get("code") == cleaned or r.get("description") == cleaned:
                 found = r
                 break
+        if found is None and ":" in cleaned:
+            prefix, suffix = cleaned.split(":", 1)
+            prefix_cf = prefix.strip().casefold()
+            for r in all_reasons or []:
+                code_cf = str(r.get("code") or "").strip().casefold()
+                desc_cf = str(r.get("description") or "").strip().casefold()
+                if prefix_cf in (code_cf, desc_cf) or (prefix_cf == "other" and code_cf == "other"):
+                    found = r
+                    extracted_note = suffix.strip()
+                    break
 
         if found is not None:
             if cint(found.get("disabled")) == 1 or not _reason_applies_to_privilege(found.get("applies_to"), privilege):
@@ -237,7 +248,8 @@ def validate_pos_reason(
                     _code("POS-REASON-INVALID", _("Select an active reason configured for this action.")),
                     frappe.ValidationError,
                 )
-            if cint(found.get("requires_note")) == 1 and len(note) < 3:
+            effective_note = note or extracted_note
+            if cint(found.get("requires_note")) == 1 and len(effective_note) < 3:
                 frappe.throw(
                     _code(
                         "POS-REASON-NOTE-REQUIRED",
@@ -245,7 +257,7 @@ def validate_pos_reason(
                     ),
                     frappe.ValidationError,
                 )
-            return str(found.get("code") or cleaned), note
+            return str(found.get("code") or cleaned), effective_note
 
         if matching_table:
             frappe.throw(
@@ -390,6 +402,31 @@ def _check_privilege_group(
     return False
 
 
+def _attach_auth_challenge(
+    *,
+    privilege: str,
+    pos_profile: str | None,
+    reference_doctype: str,
+    reference_name: str,
+    claim: dict[str, Any],
+    amount: float | None = None,
+    percent: float | None = None,
+) -> None:
+    """Attach the exact server-computed claim to frappe.local.response for ManagerApproval parity."""
+    local = getattr(frappe, "local", None)
+    resp = getattr(local, "response", None) if local is not None else None
+    if isinstance(resp, dict):
+        resp["pos_auth_challenge"] = {
+            "privilege": privilege,
+            "pos_profile": pos_profile or "",
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "claim": claim,
+            "amount": amount,
+            "percent": percent,
+        }
+
+
 def authorize_or_perform(
     *,
     privilege: str,
@@ -417,13 +454,27 @@ def authorize_or_perform(
     Returns ``{"approver": str, "via_pin": bool, "reason": str, "reason_note": str}``.
     """
     assert_not_offline_replay()
-    validated_reason, validated_note = validate_pos_reason(
-        privilege,
-        pos_profile,
-        reason,
-        reason_note,
-        required=require_reason,
-    )
+    challenge_kwargs = {
+        "privilege": privilege,
+        "pos_profile": pos_profile,
+        "reference_doctype": reference_doctype,
+        "reference_name": reference_name,
+        "claim": claim,
+        "amount": amount,
+        "percent": percent,
+    }
+    try:
+        validated_reason, validated_note = validate_pos_reason(
+            privilege,
+            pos_profile,
+            reason,
+            reason_note,
+            required=require_reason,
+        )
+    except Exception:
+        if not token:
+            _attach_auth_challenge(**challenge_kwargs)
+        raise
 
     user = getattr(getattr(frappe, "session", None), "user", None)
     resolved_company = company if _is_valid_str(company) else (
@@ -442,7 +493,24 @@ def authorize_or_perform(
                 ),
                 frappe.PermissionError,
             )
-        consumed = override.consume(token, privilege, pos_profile, reference_name, claim)
+        raw_reason = (reason or "").strip()
+        try:
+            consumed = override.consume(token, privilege, pos_profile, reference_name, claim)
+        except Exception as err:
+            # B2a's ManagerApproval.tsx appends `reason = resolvedReasonText` to finalClaim
+            # whenever its built-in reason picker is shown. Because override.consume rejects
+            # POS-AUTH-CHANGED BEFORE inserting the Consumed log row, check the exact
+            # claim+{reason: raw_reason} form (never loosening any non-reason field).
+            if raw_reason and "POS-AUTH-CHANGED" in str(err) and "reason" not in claim:
+                consumed = override.consume(
+                    token,
+                    privilege,
+                    pos_profile,
+                    reference_name,
+                    {**claim, "reason": raw_reason},
+                )
+            else:
+                raise
         return {
             "approver": consumed.get("approver"),
             "via_pin": True,
@@ -453,6 +521,7 @@ def authorize_or_perform(
     # Path 2: Actions that ALWAYS require a second person (e.g. full comp, zeroing a priced item)
     # or explicitly escalated conditions (e.g. price below cost, over-HALO, re-split cap).
     if always_second_person or force_pin:
+        _attach_auth_challenge(**challenge_kwargs)
         frappe.throw(
             _code("POS-AUTH-REQUIRED", auth_denied_msg),
             frappe.PermissionError,
@@ -464,6 +533,7 @@ def authorize_or_perform(
             if required_privilege_group > 0 and not _check_privilege_group(
                 resolved_company, pos_profile, privilege, user, required_privilege_group
             ):
+                _attach_auth_challenge(**challenge_kwargs)
                 frappe.throw(
                     _code("POS-AUTH-REQUIRED", auth_denied_msg),
                     frappe.PermissionError,
@@ -479,6 +549,7 @@ def authorize_or_perform(
                     amount=amount,
                 )
             except frappe.PermissionError:
+                _attach_auth_challenge(**challenge_kwargs)
                 if deny_message:
                     frappe.throw(
                         _code("POS-AUTH-REQUIRED", auth_denied_msg),
@@ -509,6 +580,7 @@ def authorize_or_perform(
         else _fallback_allows(user, fallback_roles)
     )
     if not allowed:
+        _attach_auth_challenge(**challenge_kwargs)
         frappe.throw(
             _code("POS-AUTH-REQUIRED", auth_denied_msg),
             frappe.PermissionError,

@@ -18,7 +18,7 @@ import {
   overrideErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
-import { adjustClosedCheckTip } from '../lib/privileged-actions-api';
+import { adjustClosedCheckTip, extractAuthChallenge } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 export interface TipAdjustDialogProps {
@@ -107,9 +107,10 @@ export default function TipAdjustDialog({
       onOpenChange(false);
     } catch (err) {
       if (!approval?.token && isAuthRequiredError(err)) {
+        const challenge = extractAuthChallenge(err);
         setPendingApproval({
-          amount: Math.abs(parsedTip - currentTip),
-          claim: {
+          amount: typeof challenge?.amount === 'number' ? challenge.amount : Math.abs(parsedTip - currentTip),
+          claim: challenge?.claim ?? {
             action: 'tip_adjust',
             invoice: invoiceName,
             from_tip: currentTip,

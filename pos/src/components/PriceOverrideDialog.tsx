@@ -18,7 +18,7 @@ import {
   overrideErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
-import { addOpenItem, overrideLinePrice } from '../lib/privileged-actions-api';
+import { addOpenItem, extractAuthChallenge, overrideLinePrice } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 export interface PriceOverrideDialogProps {
@@ -146,9 +146,10 @@ export default function PriceOverrideDialog({
       onOpenChange(false);
     } catch (err) {
       if (!approval?.token && isAuthRequiredError(err)) {
+        const challenge = extractAuthChallenge(err);
         const delta = Math.abs(parsedRate - currentRate);
         const pct = currentRate > 0 ? Math.round((delta / currentRate) * 10000) / 100 : undefined;
-        const claim =
+        const fallbackClaim =
           mode === 'override'
             ? {
                 action: 'price_override',
@@ -165,7 +166,11 @@ export default function PriceOverrideDialog({
                 rate: parsedRate,
                 reference: reference.trim(),
               };
-        setPendingApproval({ claim, amount: mode === 'override' ? delta : parsedRate, percent: pct });
+        setPendingApproval({
+          claim: challenge?.claim ?? fallbackClaim,
+          amount: typeof challenge?.amount === 'number' ? challenge.amount : mode === 'override' ? delta : parsedRate,
+          percent: typeof challenge?.percent === 'number' ? challenge.percent : pct,
+        });
         return;
       }
       setError(overrideErrorMessage(err));

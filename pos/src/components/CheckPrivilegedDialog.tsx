@@ -23,6 +23,7 @@ import {
   applyComplimentary,
   applyTaxExemption,
   clearTaxExemption,
+  extractAuthChallenge,
   listTaxExemptionOptions,
   type TaxExemptionOption,
 } from '../lib/privileged-actions-api';
@@ -181,17 +182,18 @@ export default function CheckPrivilegedDialog({
       }
     } catch (err) {
       if (!approval?.token && isAuthRequiredError(err)) {
+        const challenge = extractAuthChallenge(err);
         const priv = TAB_PRIVILEGE[tab];
-        let claim: Record<string, unknown>;
+        let fallbackClaim: Record<string, unknown>;
         let summaryLines: string[];
         if (tab === 'complimentary') {
-          claim = { action: 'complimentary', invoice: invoiceName, comp_type: compType, item_row_name: '' };
+          fallbackClaim = { action: 'complimentary', invoice: invoiceName, comp_type: compType, item_row_name: '' };
           summaryLines = [
             `${t('privileged_actions.complimentary')}: ${compType}`,
             `${t('privileged_actions.check_ref')}: ${invoiceName}`,
           ];
         } else if (tab === 'tax_exempt') {
-          claim = clearExempt
+          fallbackClaim = clearExempt
             ? { action: 'clear_tax_exemption', invoice: invoiceName }
             : {
                 action: 'tax_exempt',
@@ -204,7 +206,7 @@ export default function CheckPrivilegedDialog({
             certificate.trim() ? `${t('privileged_actions.certificate_ref')}: ${certificate.trim()}` : invoiceName,
           ];
         } else {
-          claim = {
+          fallbackClaim = {
             action: 'service_charge',
             invoice: invoiceName,
             mode: svcMode,
@@ -216,7 +218,7 @@ export default function CheckPrivilegedDialog({
             `${t('privileged_actions.check_ref')}: ${invoiceName}`,
           ];
         }
-        setPendingApproval({ privilege: priv, claim, summaryLines });
+        setPendingApproval({ privilege: priv, claim: challenge?.claim ?? fallbackClaim, summaryLines });
         return;
       }
       setError(overrideErrorMessage(err));

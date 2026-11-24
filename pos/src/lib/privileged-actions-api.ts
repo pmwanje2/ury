@@ -17,6 +17,35 @@ export interface TaxExemptionOptionsResponse {
   item_tax_templates: TaxExemptionOption[];
 }
 
+export interface AuthChallenge {
+  privilege?: string;
+  pos_profile?: string;
+  reference_doctype?: string;
+  reference_name?: string;
+  claim?: Record<string, unknown>;
+  amount?: number | null;
+  percent?: number | null;
+}
+
+export function extractAuthChallenge(err: unknown): AuthChallenge | null {
+  if (!err || typeof err !== 'object') return null;
+  const obj = err as Record<string, unknown>;
+  const candidates = [
+    (obj.response as Record<string, unknown> | undefined)?.data,
+    obj.data,
+    obj,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'object') {
+      const challenge = (candidate as Record<string, unknown>).pos_auth_challenge;
+      if (challenge && typeof challenge === 'object') {
+        return challenge as AuthChallenge;
+      }
+    }
+  }
+  return null;
+}
+
 export function isReasonRequiredError(errorOrMessage: unknown): boolean {
   const raw =
     typeof errorOrMessage === 'string'

@@ -46,7 +46,7 @@ def _parse_finite_float(value: Any, code: str, message: str) -> float:
     return num
 
 
-def _load_invoice_and_profile(invoice_name: str, pos_profile_name: str, *, for_update: bool = True):
+def _load_invoice_and_profile(invoice_name: str, pos_profile_name: str | None = None, *, for_update: bool = True):
     if not invoice_name:
         frappe.throw(coded_message("POS-INVOICE-REQUIRED", _("Invoice is required.")), frappe.ValidationError)
     doc = frappe.get_doc("POS Invoice", invoice_name, for_update=for_update)
@@ -157,9 +157,9 @@ def build_price_override_claim(
 @frappe.whitelist(methods=["POST"])
 def override_line_price(
     invoice: str,
-    pos_profile: str,
-    item_row_name: str,
-    new_rate: float,
+    pos_profile: str | None = None,
+    item_row_name: str | None = None,
+    new_rate: float | None = None,
     reason: str | None = None,
     reason_note: str | None = None,
     approval_token: str | None = None,
@@ -309,17 +309,20 @@ def build_open_item_claim(
 @frappe.whitelist(methods=["POST"])
 def add_open_item(
     invoice: str,
-    pos_profile: str,
-    item_code: str,
-    rate: float,
+    pos_profile: str | None = None,
+    item_code: str | None = None,
+    rate: float | None = None,
     qty: float = 1.0,
     reference_name_text: str | None = None,
     reason: str | None = None,
     reason_note: str | None = None,
     approval_token: str | None = None,
+    reference: str | None = None,
 ) -> dict[str, Any]:
     """Add an open-priced (market price / catch weight / special) or zero-price item."""
     assert_not_offline_replay()
+    if reference_name_text is None and reference is not None:
+        reference_name_text = reference
     rate_val = _parse_finite_float(rate, "PRICE-INVALID", "Enter a valid price.")
     qty_val = _parse_finite_float(qty, "QTY-INVALID", "Enter a valid quantity.")
     if rate_val < 0:
@@ -473,7 +476,7 @@ def build_complimentary_claim(
 @frappe.whitelist(methods=["POST"])
 def apply_complimentary(
     invoice: str,
-    pos_profile: str,
+    pos_profile: str | None = None,
     scope: str = "check",
     item_row_name: str | None = None,
     comp_type: str = "Complimentary",
@@ -488,6 +491,8 @@ def apply_complimentary(
     strictly refused.
     """
     assert_not_offline_replay()
+    if item_row_name and scope == "check":
+        scope = "item"
     if scope not in ("check", "item"):
         frappe.throw(coded_message("COMP-SCOPE-INVALID", _("Select Check or Item scope.")), frappe.ValidationError)
     if comp_type not in ALLOWED_COMP_TYPES:
@@ -685,7 +690,7 @@ def _resolve_efris_code(tax_category: str | None, item_tax_template: str | None,
 @frappe.whitelist(methods=["POST"])
 def apply_tax_exemption(
     invoice: str,
-    pos_profile: str,
+    pos_profile: str | None = None,
     scope: str = "check",
     item_row_name: str | None = None,
     tax_category: str | None = None,
@@ -695,6 +700,7 @@ def apply_tax_exemption(
     reason: str | None = None,
     reason_note: str | None = None,
     approval_token: str | None = None,
+    certificate: str | None = None,
 ) -> dict[str, Any]:
     """Apply tax exemption via native Tax Category + Tax Rule or Item Tax Template.
 
@@ -702,6 +708,10 @@ def apply_tax_exemption(
     and EFRIS tax-category mapping (`02` Zero-rated / `03` Exempt / `04` Deemed).
     """
     assert_not_offline_replay()
+    if certificate_reference is None and certificate is not None:
+        certificate_reference = certificate
+    if item_row_name and scope == "check":
+        scope = "item"
     if scope not in ("check", "item"):
         frappe.throw(coded_message("TAX-EXEMPT-SCOPE-INVALID", _("Select Check or Item scope.")), frappe.ValidationError)
 
@@ -838,7 +848,13 @@ def apply_tax_exemption(
 
 
 @frappe.whitelist(methods=["POST"])
-def clear_tax_exemption(invoice: str, pos_profile: str) -> dict[str, Any]:
+def clear_tax_exemption(
+    invoice: str,
+    pos_profile: str | None = None,
+    reason: str | None = None,
+    reason_note: str | None = None,
+    approval_token: str | None = None,
+) -> dict[str, Any]:
     """Revert a draft check's tax exemption back to the outlet's default tax template."""
     assert_not_offline_replay()
     doc, profile = _load_invoice_and_profile(invoice, pos_profile, for_update=True)
@@ -888,10 +904,18 @@ def clear_tax_exemption(invoice: str, pos_profile: str) -> dict[str, Any]:
 
 
 @frappe.whitelist(methods=["GET"])
-def list_tax_exemption_options(pos_profile: str) -> dict[str, Any]:
+def list_tax_exemption_options(
+    pos_profile: str | None = None,
+    company: str | None = None,
+) -> dict[str, Any]:
     """List native Tax Categories with Sales Tax Rules and Item Tax Templates for this till's company."""
-    profile = frappe.get_doc("POS Profile", pos_profile)
-    company = profile.company
+    resolved_company = company
+    if pos_profile:
+        profile = frappe.get_doc("POS Profile", pos_profile)
+        resolved_company = profile.company
+    if not resolved_company:
+        frappe.throw(_("POS Profile or Company is required."), frappe.ValidationError)
+    company = resolved_company
     categories = []
     if frappe.db.table_exists("Tax Rule"):
         rules = frappe.get_all(
@@ -906,17 +930,21 @@ def list_tax_exemption_options(pos_profile: str) -> dict[str, Any]:
                 seen.add(tc)
                 efris_code = _resolve_efris_code(tc, None, None)
                 categories.append({
+                    "name": tc,
                     "tax_category": tc,
                     "sales_tax_template": r.get("sales_tax_template"),
                     "efris_tax_category": efris_code,
+                    "custom_efris_tax_category": efris_code,
                 })
     item_templates = []
     if frappe.db.table_exists("Item Tax Template"):
         for row in frappe.get_all("Item Tax Template", filters={"company": company, "disabled": 0}, fields=["name", "title"]):
+            efris_code = _resolve_efris_code(None, row.get("name"), None)
             item_templates.append({
                 "name": row.get("name"),
                 "title": row.get("title") or row.get("name"),
-                "efris_tax_category": _resolve_efris_code(None, row.get("name"), None),
+                "efris_tax_category": efris_code,
+                "custom_efris_tax_category": efris_code,
             })
     return {"tax_categories": categories, "item_tax_templates": item_templates}
 
@@ -1023,16 +1051,30 @@ def build_service_charge_claim(
 @frappe.whitelist(methods=["POST"])
 def adjust_service_charge(
     invoice: str,
-    pos_profile: str,
-    action: str = "waive",
+    pos_profile: str | None = None,
+    action: str | None = None,
     new_rate: float | None = None,
     new_amount: float | None = None,
     reason: str | None = None,
     reason_note: str | None = None,
     approval_token: str | None = None,
+    mode: str | None = None,
+    rate: float | None = None,
+    amount: float | None = None,
 ) -> dict[str, Any]:
     """Waive, change rate/amount, or restore service charge on an open check."""
     assert_not_offline_replay()
+    if action is None:
+        if mode == "override":
+            action = "change"
+        elif mode is not None:
+            action = mode
+        else:
+            action = "waive"
+    if new_rate is None and rate is not None:
+        new_rate = rate
+    if new_amount is None and amount is not None:
+        new_amount = amount
     if action not in ("waive", "change", "restore"):
         frappe.throw(
             coded_message("SERVICE-CHARGE-ACTION-INVALID", _("Choose waive, change, or restore.")),
@@ -1186,13 +1228,14 @@ def _validate_tips_liability_account(company: str, account: str | None) -> str:
 @frappe.whitelist(methods=["POST"])
 def adjust_closed_check_tip(
     invoice: str,
-    pos_profile: str,
-    new_tip_amount: float,
+    pos_profile: str | None = None,
+    new_tip_amount: float | None = None,
     tip_server: str | None = None,
     payment_mode: str | None = None,
     reason: str | None = None,
     reason_note: str | None = None,
     approval_token: str | None = None,
+    mode_of_payment: str | None = None,
 ) -> dict[str, Any]:
     """Adjust charged tip on a submitted (closed) POS Invoice via balanced Liability JE.
 
@@ -1202,6 +1245,8 @@ def adjust_closed_check_tip(
     taxes, or EFRIS FDN.
     """
     assert_not_offline_replay()
+    if payment_mode is None and mode_of_payment is not None:
+        payment_mode = mode_of_payment
     new_tip = _parse_finite_float(new_tip_amount, "TIP-INVALID", "Enter a valid tip amount.")
     if new_tip < 0:
         frappe.throw(
