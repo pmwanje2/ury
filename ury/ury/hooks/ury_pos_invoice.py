@@ -1059,18 +1059,60 @@ def _lookup_authoritative_item_price(item_code, price_list, uom=None):
     return None
 
 
-def _reprice_items_from_authoritative_price_list(doc, price_list, force_all=False):
+def _persisted_authorized_price_rows(prev):
+    """Return persisted child row names that already hold a server-verified #152 override/open/comp."""
+    if prev is None:
+        return set()
+    rows = _doc_get(prev, "items")
+    if rows is None and _doc_get(prev, "name"):
+        try:
+            rows = frappe.get_all(
+                "POS Invoice Item",
+                filters={"parent": _doc_get(prev, "name")},
+                fields=[
+                    "name",
+                    "custom_price_overridden",
+                    "custom_is_open_item",
+                    "custom_is_complimentary",
+                    "custom_price_override_approver",
+                ],
+            )
+        except Exception:
+            rows = None
+    authorized = set()
+    for row in rows or []:
+        row_name = _doc_get(row, "name")
+        if not row_name:
+            continue
+        if (
+            int(float(_doc_get(row, "custom_price_overridden") or 0)) == 1
+            or int(float(_doc_get(row, "custom_is_open_item") or 0)) == 1
+            or int(float(_doc_get(row, "custom_is_complimentary") or 0)) == 1
+            or bool((_doc_get(row, "custom_price_override_approver") or "").strip())
+        ):
+            authorized.add(row_name)
+    return authorized
+
+
+def _reprice_items_from_authoritative_price_list(
+    doc, price_list, force_all=False, authorized_row_names=None
+):
     """Resolve authoritative selling Item Price rates before tender hooks run.
 
     ``ury_pos_tender.before_validate`` calls ``calculate_taxes_and_totals()`` before
     ERPNext's ``set_missing_item_details(for_validate=True)`` runs, which coerces
     ``None`` rates to ``0.0`` and prevents ERPNext from backfilling ``Item Price``.
     Resolving directly from the authoritative ``selling_price_list`` ensures spoofed
-    price-list overrides and rate-omitted direct REST writes always bill the real
-    selling price list rate (with active Pricing Rules evaluated by ERPNext next).
+    price-list overrides, forged rates on direct REST creates, and rate-omitted direct
+    REST writes always bill the real selling price list rate (with active Pricing Rules
+    evaluated by ERPNext next).
     """
+    authorized = authorized_row_names or set()
     for item in _doc_get(doc, "items") or []:
         if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
+            continue
+        row_name = _doc_get(item, "name")
+        if row_name and row_name in authorized:
             continue
         needs_fill = force_all or (
             _doc_get(item, "price_list_rate") is None and _doc_get(item, "rate") is None
@@ -1087,6 +1129,7 @@ def _reprice_items_from_authoritative_price_list(doc, price_list, force_all=Fals
                     "pricing_rules": None,
                     "discount_percentage": 0,
                     "discount_amount": 0,
+                    "ignore_pricing_rule": 0,
                 })
             _set_item_fields(item, updates)
         elif force_all:
@@ -1096,16 +1139,17 @@ def _reprice_items_from_authoritative_price_list(doc, price_list, force_all=Fals
                 "pricing_rules": None,
                 "discount_percentage": 0,
                 "discount_amount": 0,
+                "ignore_pricing_rule": 0,
             })
 
 
 def enforce_authoritative_outlet_time(doc, method=None):
-    """Server-authoritative outlet clock, serving period, and price list enforcement (G40/G41).
+    """Server-authoritative outlet clock, serving period, price list, and order-type tax enforcement (G40/G41/G42).
 
     Runs in ``before_validate`` BEFORE ERPNext's ``set_pos_fields()`` and ``apply_pricing_rule()``
     so direct REST ``POST``/``PUT`` payloads can never spoof ``custom_transaction_local_time``,
     ``custom_transaction_weekday``, ``custom_serving_period``, ``ury_offline_captured_at``,
-    ``set_posting_time``, or ``selling_price_list``.
+    ``set_posting_time``, ``selling_price_list``, item rates, or order-type taxes.
     """
     if int(float(_doc_get(doc, "is_return") or 0)) == 1:
         return
@@ -1139,12 +1183,59 @@ def enforce_authoritative_outlet_time(doc, method=None):
     trusted_offline = bool(getattr(flags, "ury_trusted_offline_capture", False))
     server_ot_change = bool(getattr(flags, "ury_server_order_type_change", False))
     trusted_pricing = bool(getattr(flags, "ury_trusted_server_pricing", False))
+    privileged_verified = bool(getattr(flags, "ury_privileged_action_verified", False))
+    bill_split_or_merge = bool(
+        getattr(frappe.flags, "ury_bill_split", False)
+        or getattr(frappe.flags, "in_bill_merge_sync", False)
+        or getattr(frappe.flags, "ury_qty_reduction", False)
+    )
+    server_disc_write = bool(getattr(frappe.flags, "ury_server_discount_write", False))
+    has_disc_approval = bool(
+        getattr(flags, "discount_approval", None)
+        or getattr(flags, "discount_removal", None)
+    )
     is_super = _is_privileged_clock_user()
 
     prev = _persisted_invoice_state(doc)
     incoming_cap = _doc_get(doc, "ury_offline_captured_at")
     prev_cap = _doc_get(prev, "ury_offline_captured_at") if prev is not None else None
     incoming_pl = (_doc_get(doc, "selling_price_list") or "").strip()
+
+    # Refuse forged #152 privileged item pricing or tax-exempt flags on untrusted new REST POSTs.
+    if (
+        prev is None
+        and not (privileged_verified or trusted_pricing or bill_split_or_merge)
+        and not is_super
+        and not (getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False))
+    ):
+        for item in _doc_get(doc, "items") or []:
+            if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
+                continue
+            if (
+                int(float(_doc_get(item, "custom_price_overridden") or 0)) == 1
+                or int(float(_doc_get(item, "custom_is_open_item") or 0)) == 1
+                or int(float(_doc_get(item, "custom_is_complimentary") or 0)) == 1
+                or bool((_doc_get(item, "custom_price_override_approver") or "").strip())
+            ):
+                from ury.brand import coded_message
+
+                frappe.throw(
+                    coded_message(
+                        "POS-AUTH-REQUIRED",
+                        frappe._("Privileged item pricing flags must go through the POS authorisation flow."),
+                    ),
+                    frappe.PermissionError,
+                )
+        if int(float(_doc_get(doc, "custom_tax_exempt") or 0)) == 1:
+            from ury.brand import coded_message
+
+            frappe.throw(
+                coded_message(
+                    "POS-AUTH-REQUIRED",
+                    frappe._("Tax exemption must go through the POS authorisation flow."),
+                ),
+                frappe.PermissionError,
+            )
 
     # Validate ury_offline_captured_at: never honor client-supplied offline timestamps unless
     # POS Profile.ury_offline_capture == 1 and the timestamp is inside the user's open shift.
@@ -1207,37 +1298,107 @@ def enforce_authoritative_outlet_time(doc, method=None):
             if prev_period and not server_ot_change:
                 doc.custom_serving_period = prev_period
 
-        if not is_super and not trusted_offline and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
+        if not is_super and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
             doc.set_posting_time = 0
-            if _doc_get(prev, "posting_date"):
-                doc.posting_date = _doc_get(prev, "posting_date")
-            if _doc_get(prev, "posting_time"):
-                doc.posting_time = _doc_get(prev, "posting_time")
+            if not trusted_offline:
+                if _doc_get(prev, "posting_date"):
+                    doc.posting_date = _doc_get(prev, "posting_date")
+                if _doc_get(prev, "posting_time"):
+                    doc.posting_time = _doc_get(prev, "posting_time")
 
         if flags is not None:
             flags._ury_persisted_serving_period = prev_period
             flags._ury_persisted_price_list = prev_pl
             flags._ury_validated_at = validated_at
+            flags._ury_auth_local_time = _doc_get(doc, "custom_transaction_local_time")
+            flags._ury_auth_weekday = _doc_get(doc, "custom_transaction_weekday")
+            flags._ury_auth_serving_period = _doc_get(doc, "custom_serving_period")
+            if trusted_offline and validated_at is not None and getattr(flags, "_ury_offline_posting_dt", None) is None:
+                flags._ury_offline_posting_dt = validated_at
     else:
         stamp_meta = stamp_invoice_outlet_time(doc, at=validated_at, overwrite=True)
-        if not is_super and not trusted_offline and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
+        if not is_super and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
             doc.set_posting_time = 0
-            if stamp_meta.get("local_dt"):
+            if not trusted_offline and stamp_meta.get("local_dt"):
                 doc.posting_date = stamp_meta["local_dt"].date()
                 doc.posting_time = stamp_meta["local_time"]
         if flags is not None:
             flags._ury_persisted_serving_period = ""
             flags._ury_persisted_price_list = ""
             flags._ury_validated_at = validated_at
+            flags._ury_auth_local_time = _doc_get(doc, "custom_transaction_local_time")
+            flags._ury_auth_weekday = _doc_get(doc, "custom_transaction_weekday")
+            flags._ury_auth_serving_period = _doc_get(doc, "custom_serving_period")
+            if trusted_offline and validated_at is not None and getattr(flags, "_ury_offline_posting_dt", None) is None:
+                flags._ury_offline_posting_dt = validated_at
 
     if _doc_get(doc, "restaurant"):
         validate_price_list(doc, method)
-        resolved_pl = (_doc_get(doc, "selling_price_list") or "").strip()
-        if resolved_pl and not trusted_pricing and not server_ot_change:
-            pl_corrected = bool(incoming_pl and resolved_pl != incoming_pl)
-            _reprice_items_from_authoritative_price_list(
-                doc, resolved_pl, force_all=pl_corrected
-            )
+    resolved_pl = (_doc_get(doc, "selling_price_list") or "").strip()
+    if not resolved_pl and pos_profile:
+        try:
+            pp_pl = frappe.db.get_value("POS Profile", pos_profile, "selling_price_list")
+            if isinstance(pp_pl, str) and pp_pl.strip():
+                resolved_pl = pp_pl.strip()
+        except Exception:
+            pass
+    if resolved_pl and not (
+        trusted_pricing
+        or privileged_verified
+        or server_ot_change
+        or bill_split_or_merge
+        or server_disc_write
+        or has_disc_approval
+    ):
+        pl_corrected = bool(incoming_pl and resolved_pl != incoming_pl)
+        is_new_untrusted = prev is None
+        authorized_rows = _persisted_authorized_price_rows(prev)
+        _reprice_items_from_authoritative_price_list(
+            doc,
+            resolved_pl,
+            force_all=(is_new_untrusted or pl_corrected),
+            authorized_row_names=authorized_rows,
+        )
+
+    # G42 direct-REST hardening: ensure direct POST /api/resource/POS Invoice (or order_type PUT)
+    # on a POS Profile using custom_order_type_tax_categories resolves authoritative taxes server-side.
+    if pos_profile and not (
+        trusted_pricing
+        or privileged_verified
+        or server_ot_change
+        or bill_split_or_merge
+    ):
+        order_type_changed = (
+            prev is not None
+            and ((_doc_get(doc, "order_type") or "").strip() != (_doc_get(prev, "order_type") or "").strip())
+        )
+        if prev is None or order_type_changed:
+            profile_doc = None
+            try:
+                profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+            except Exception:
+                try:
+                    profile_doc = frappe.get_doc("POS Profile", pos_profile)
+                except Exception:
+                    profile_doc = None
+            if (
+                profile_doc is not None
+                and hasattr(profile_doc, "get")
+                and isinstance(profile_doc.get("name"), str)
+            ):
+                if (
+                    not _doc_get(doc, "company")
+                    and isinstance(profile_doc.get("company"), str)
+                    and profile_doc.get("company")
+                ):
+                    doc.company = profile_doc.get("company")
+                from ury.ury_pos.tax_determination import apply_order_type_tax
+
+                apply_order_type_tax(
+                    doc,
+                    profile_doc,
+                    reset_non_exempt_item_taxes=order_type_changed,
+                )
 
 
 def validate_price_list(doc, method):

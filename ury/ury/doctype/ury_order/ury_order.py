@@ -1950,13 +1950,16 @@ def _department_warehouse_for_item(item_code, branch, company):
 
 
 def invoice_pricing_date(invoice):
-    """The pricing date of an invoice: its posting date.
+    """The pricing date of an invoice: its posting date or verified offline capture date.
 
     ERPNext resets posting_date to today on validate unless set_posting_time
-    is on, so an open till invoice prices on today.
+    is on, so an open till invoice prices on today; offline replays price on
+    their verified capture date without needing set_posting_time=1.
     """
     if cint(getattr(invoice, "set_posting_time", 0)) and getattr(invoice, "posting_date", None):
         return frappe.utils.getdate(invoice.posting_date)
+    if getattr(invoice, "ury_offline_captured_at", None):
+        return frappe.utils.getdate(invoice.ury_offline_captured_at)
     return frappe.utils.getdate()
 
 
@@ -3555,11 +3558,12 @@ def sync_order(
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile)
         invoice.ury_offline_captured_at = captured
-        invoice.set_posting_time = 1
+        invoice.set_posting_time = 0
         invoice.posting_date = captured.date()
         invoice.posting_time = captured.time()
         if getattr(invoice, "flags", None) is not None:
             invoice.flags.ury_trusted_offline_capture = True
+            invoice.flags._ury_offline_posting_dt = captured
 
     customer = _order_customer(invoice, posprofile, order_type, customer)
     if not customer:

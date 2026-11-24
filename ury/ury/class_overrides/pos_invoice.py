@@ -66,6 +66,52 @@ _COPY_RENDER_MARKER = object()
 
 
 class CustomPOSInvoice(POSInvoice):
+	def validate(self):
+		# G41 coexistence with sales-time-pricing@1:
+		# `Sales Time Pricing - POS Invoice` (Before Validate Server Script) runs AFTER
+		# `ury_pos_invoice.before_validate` and overwrites `custom_transaction_local_time` /
+		# `custom_transaction_weekday` with site `now_datetime()`. Re-apply the server-only
+		# outlet-timezone stamp captured on `self.flags` right BEFORE `super().validate()`
+		# evaluates ERPNext's `apply_pricing_rule()` so Pricing Rules ALWAYS evaluate against
+		# the outlet's true local time (or verified offline capture window).
+		flags = getattr(self, "flags", None)
+		if flags is not None and not cint(self.get("is_return")):
+			auth_time = getattr(flags, "_ury_auth_local_time", None)
+			auth_wd = getattr(flags, "_ury_auth_weekday", None)
+			if isinstance(auth_time, str) and auth_time.strip():
+				self.custom_transaction_local_time = auth_time.strip()
+			if isinstance(auth_wd, str) and auth_wd.strip():
+				self.custom_transaction_weekday = auth_wd.strip()
+			if hasattr(flags, "_ury_auth_serving_period"):
+				auth_period = getattr(flags, "_ury_auth_serving_period", None)
+				self.custom_serving_period = auth_period or None
+
+		orig_spt = cint(self.get("set_posting_time"))
+		temp_offline_spt = False
+		if (
+			flags is not None
+			and getattr(flags, "ury_trusted_offline_capture", False)
+			and not cint(self.get("is_return"))
+		):
+			offline_dt = getattr(flags, "_ury_offline_posting_dt", None)
+			if offline_dt is not None:
+				if not hasattr(offline_dt, "date"):
+					try:
+						offline_dt = frappe.utils.get_datetime(offline_dt)
+					except Exception:
+						offline_dt = None
+				if offline_dt is not None and hasattr(offline_dt, "date"):
+					self.posting_date = offline_dt.date()
+					self.posting_time = offline_dt.time()
+					if not orig_spt:
+						self.set_posting_time = 1
+						temp_offline_spt = True
+		try:
+			return super().validate()
+		finally:
+			if temp_offline_spt:
+				self.set_posting_time = 0
+
 	def set_taxes(self):
 		if getattr(self.flags, "ury_explicit_no_taxes", False):
 			return
