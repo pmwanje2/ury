@@ -198,10 +198,12 @@ describe("unapplied typed discount is never sent on Pay", () => {
     document.querySelector<HTMLInputElement>('input[type="number"]:not([step])')!;
 
   it("does not send an unapplied typed discount on direct Pay", async () => {
-    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0 });
+    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 1 });
     renderDialog(35.4, 35.4);
     await waitFor(() => expect(tender(0).value).toBe("35.4"));
 
+    // Untick Print invoice to exercise the direct single-step make_invoice(submit_invoice: 1) path.
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.change(discountInput(), { target: { value: "10" } });
     fireEvent.click(payButton());
 
@@ -568,10 +570,14 @@ describe("tenders already received on the check (Simphony parity)", () => {
     );
   });
 
-  it("allows changing payment method and retrying after Step-2 print failure", async () => {
-    vi.mocked(printOrder)
-      .mockRejectedValueOnce(new Error("Printer offline"))
-      .mockResolvedValueOnce("qz");
+  it("allows changing payment method and retrying after Step-2 submit refusal before printing", async () => {
+    vi.mocked(printOrder).mockClear();
+    vi.mocked(call.post).mockImplementation(async (method: string) => {
+      if (method === SUBMIT_INVOICE && vi.mocked(call.post).mock.calls.filter(([m]) => m === SUBMIT_INVOICE).length === 1) {
+        throw new Error("Mobile Money payment is not confirmed");
+      }
+      return { message: { name: "BILL-1", status: "Submitted" } };
+    });
     setTill(["Cash", "Mobile Money"], {
       default_payment_mode: "Mobile Money",
       enable_payment_without_printing: 1,
@@ -581,11 +587,11 @@ describe("tenders already received on the check (Simphony parity)", () => {
     await waitFor(() => expect(tender(1).value).toBe("5.9"));
 
     fireEvent.click(payButton());
-    await waitFor(() => expect(screen.getByText(/payment\.payment_not_processed/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Mobile Money payment is not confirmed/)).toBeInTheDocument());
     expect(screen.queryByTestId("received-tenders")).toBeNull();
-    expect(vi.mocked(call.post)).not.toHaveBeenCalledWith(SUBMIT_INVOICE, expect.anything());
+    expect(printOrder).not.toHaveBeenCalled();
 
-    // Switch method to Cash and retry cleanly.
+    // Switch method to Cash and retry cleanly; fiscal receipt prints only after submit succeeds.
     fireEvent.change(tender(1), { target: { value: "" } });
     fireEvent.focus(tender(0));
     expect(tender(0).value).toBe("5.9");
@@ -600,7 +606,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         }),
       ),
     );
-    await waitFor(() => expect(call.post).toHaveBeenCalledWith(SUBMIT_INVOICE, { invoice: "BILL-1" }));
+    await waitFor(() => expect(printOrder).toHaveBeenCalledTimes(1));
   });
 });
 
