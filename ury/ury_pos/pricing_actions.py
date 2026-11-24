@@ -1874,13 +1874,20 @@ def prorate_return_service_charge(doc, *, recalc: bool = True) -> None:
     if orig_sc_actual <= 0:
         return
 
+    def _line_abs_total(r) -> float:
+        qty = r.get("qty")
+        rate = r.get("rate")
+        if qty is not None and rate is not None:
+            return abs(flt(qty) * flt(rate))
+        return abs(flt(r.get("amount")))
+
     orig_items_total = sum(
-        abs(flt(r.get("amount")) or (flt(r.get("qty")) * flt(r.get("rate"))))
+        _line_abs_total(r)
         for r in (orig.get("items") or [])
         if cint(r.get("is_disposable")) != 1
     )
     ret_items_total = sum(
-        abs(flt(r.get("amount")) or (flt(r.get("qty")) * flt(r.get("rate"))))
+        _line_abs_total(r)
         for r in (doc.get("items") or [])
         if cint(r.get("is_disposable")) != 1
     )
