@@ -73,6 +73,12 @@ vi.mock("../store/pos-store", () => ({
 const navigateMock = vi.fn();
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigateMock,
+  useLocation: () => ({ pathname: "/orders", search: "", hash: "", state: null, key: "default" }),
+  Link: ({ children, to, ...props }: any) => (
+    <a href={typeof to === "string" ? to : "#"} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 // Mock core functions
@@ -95,6 +101,7 @@ vi.mock("../lib/order-api", () => ({
 vi.mock("../lib/invoice-api", () => ({
   getOrdersTabForInvoice: vi.fn(),
   getSplitGroup: vi.fn(),
+  getOpenCheckCounts: vi.fn().mockResolvedValue({}),
   getCombinedOrderTotals: vi.fn(() => ({
     grandTotal: 1000,
     roundedTotal: 1000,
@@ -119,6 +126,9 @@ vi.mock("../i18n", () => ({
   t: (key: string, opts?: any) => {
     if (key === 'orders.pagination.page' && opts?.number) {
       return `Page ${opts.number}`;
+    }
+    if (key === 'orders.reduce_item_qty' && opts?.item) {
+      return `Reduce quantity of ${opts.item}`;
     }
     return key;
   },
@@ -233,6 +243,7 @@ describe("Orders Page", () => {
     mockRootStoreState.selectedOrder = {
       name: "ACC-PSINV-0001",
       status: "Unbilled",
+      order_type: "Dine In",
       invoice_printed: 0,
       rounded_total: 100,
     } as any;
@@ -251,6 +262,7 @@ describe("Orders Page", () => {
     mockRootStoreState.selectedOrder = {
       name: "ACC-PSINV-0001",
       status: "Unbilled",
+      order_type: "Dine In",
       invoice_printed: 0,
       rounded_total: 100,
     } as any;
@@ -317,7 +329,7 @@ describe("Orders guest label", () => {
     render(<Orders />);
     fireEvent.click(screen.getByRole("button", { name: "orders.edit_order" }));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/register"));
-    expect(mockPosStore.setOrderForUpdate).toHaveBeenCalledWith(order.name, order.customer, order.modified);
+    expect(mockPosStore.setOrderForUpdate).toHaveBeenCalledWith(order.name, order.customer, order.modified, []);
     expect(setGuestLabel).toHaveBeenCalledWith("Susan");
     vi.unstubAllGlobals();
   });

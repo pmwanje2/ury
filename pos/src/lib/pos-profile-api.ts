@@ -2,6 +2,11 @@ import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
 
+export interface PaymentModeMeta {
+  type: string;
+  overtender_rule: string;
+}
+
 // Limited fields response
 export interface PosProfileLimited {
   pos_profile: string;
@@ -22,6 +27,7 @@ export interface PosProfileLimited {
   paid_limit: number;
   disable_rounded_total: number;
   enable_discount: number;
+  allow_discount_change?: number;
   multiple_cashier: number;
   owner: string;
   edit_order_type?: number;
@@ -32,6 +38,12 @@ export interface PosProfileLimited {
   custom_blind_cash_count?: number;
   /** Mode of Payment -> default account for the profile's company. */
   payment_mode_accounts?: Record<string, string | null>;
+  /** Mode of Payment -> type and non-cash over-tender rule. */
+  payment_mode_meta?: Record<string, PaymentModeMeta>;
+  /** POS Profile toggle for cashier touchscreen Pickup / Loan / Paid Out. */
+  enable_cash_movements?: number;
+  require_over_short_reason?: number;
+  over_short_reason_tolerance?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
@@ -78,6 +90,7 @@ export interface PosProfileFull {
   company: string;
   customer: string | null;
   allow_partial_payment?: number;
+  allow_discount_change?: number;
   country: string;
   disabled: number;
   warehouse: string;
@@ -123,6 +136,7 @@ export interface PosProfileCombined extends PosProfileFull {
   paid_limit: number;
   disable_rounded_total: number;
   enable_discount: number;
+  allow_discount_change?: number;
   multiple_cashier: number;
   edit_order_type?: number;
   view_all_status?: number;
@@ -132,6 +146,10 @@ export interface PosProfileCombined extends PosProfileFull {
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
   payment_mode_accounts?: Record<string, string | null>;
+  payment_mode_meta?: Record<string, PaymentModeMeta>;
+  enable_cash_movements?: number;
+  require_over_short_reason?: number;
+  over_short_reason_tolerance?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
@@ -202,6 +220,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     paid_limit: limitedProfile.paid_limit,
     disable_rounded_total: limitedProfile.disable_rounded_total,
     enable_discount: limitedProfile.enable_discount,
+    allow_discount_change: Number(fullProfile.allow_discount_change ?? limitedProfile.allow_discount_change ?? 0),
     multiple_cashier: limitedProfile.multiple_cashier,
     edit_order_type: limitedProfile.edit_order_type,
     custom_invoice_warning_time: limitedProfile.custom_invoice_warning_time ?? 0,
@@ -210,6 +229,10 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
     custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
+    payment_mode_meta: limitedProfile.payment_mode_meta,
+    enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
+    require_over_short_reason: Number(limitedProfile.require_over_short_reason ?? 0),
+    over_short_reason_tolerance: Number(limitedProfile.over_short_reason_tolerance ?? 0),
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',

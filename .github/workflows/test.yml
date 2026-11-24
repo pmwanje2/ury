@@ -138,6 +138,10 @@ jobs:
               ury.ury.api.test_ury_comparable_weekday_history
               ury.ury.api.test_ury_cost_variance_attribution
               ury.ury.api.test_ury_dashboard
+              ury.ury.hooks.test_ury_pos_tender
+              ury.ury.hooks.test_ury_cash_movement
+              ury.ury.tests.test_settlement_tip
+              ury.ury_pos.test_till_cash_movements
           - shard: 1
             modules: |
               ury.ury.api.test_ury_department_profitability

@@ -165,6 +165,27 @@ class TestSiteBrand(unittest.TestCase):
                          "[MAX-CLOSE-LATE-INVOICE] Close the till later.")
         self.assertEqual(brand.coded_message("FEEDBACK-DISABLED"), "[MAX-FEEDBACK-DISABLED]")
 
+    def test_coded_message_does_not_double_prefix_pos_keys(self):
+        brand = self.brand_module()
+        self.assertEqual(
+            brand.coded_message("POS-DISC-REASON-REQUIRED", "Select a discount reason."),
+            "[POS-DISC-REASON-REQUIRED] Select a discount reason.",
+        )
+        self.assertEqual(brand.coded_message("POS-AUTH-REQUIRED"), "[POS-AUTH-REQUIRED]")
+        self.assertEqual(
+            brand.coded_message("SPLIT-RESERVED-KOT", "Move together."),
+            "[POS-SPLIT-RESERVED-KOT] Move together.",
+        )
+        self.framework.conf["ury_message_code_prefix"] = "MAX"
+        self.assertEqual(
+            brand.coded_message("MAX-CUSTOM-CODE", "Custom."),
+            "[MAX-CUSTOM-CODE] Custom.",
+        )
+        self.assertEqual(
+            brand.coded_message("POS-DISC-INVALID", "Bad value."),
+            "[MAX-POS-DISC-INVALID] Bad value.",
+        )
+
     def test_refusal_code_prefix_never_names_the_engine_or_breaks_the_code(self):
         brand = self.brand_module()
         for prefix in ("URY", "ury", "Kamra", "ERPNEXT", "Frappe", "XURY",

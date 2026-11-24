@@ -3,10 +3,9 @@ import { Button } from '@ury/ui';
 import { t } from '../i18n';
 
 const ScreenSizeDialog = () => {
-  const handleSwitchToVersion1 = () => {
-    // Get the current domain and open /urypos in a new tab
+  const handleOpenDesk = () => {
     const currentDomain = window.location.origin;
-    window.open(`${currentDomain}/urypos`, '_blank');
+    window.open(`${currentDomain}/app`, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -20,12 +19,12 @@ const ScreenSizeDialog = () => {
               <Smartphone className="h-4 w-4 text-red-500 absolute -top-1 -end-1" />
             </div>
           </div>
-          
+
           {/* Title */}
           <h2 className="text-2xl font-bold text-gray-900 mb-4">
             {t('screen_size.title')}
           </h2>
-          
+
           {/* Message */}
           <div className="text-gray-600 mb-8 space-y-3">
             <p className="text-lg">
@@ -35,7 +34,7 @@ const ScreenSizeDialog = () => {
               {t('screen_size.mobile_note')}
             </p>
           </div>
-          
+
           {/* Current Screen Info */}
           <div className="bg-gray-50 rounded-lg p-4 mb-6">
             <p className="text-sm text-gray-600">
@@ -45,18 +44,19 @@ const ScreenSizeDialog = () => {
               <span className="font-semibold text-gray-800">{t('screen_size.required')}</span>
             </p>
           </div>
-          
-          {/* Alternative Option */}
+
+          {/* Back-office option (live Desk route, never dead /urypos) */}
           <div className="bg-blue-50 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-800 mb-3">
-              {t('screen_size.use_v1')}
+              {t('screen_size.desk_hint')}
             </p>
             <Button
-              onClick={handleSwitchToVersion1}
+              type="button"
+              onClick={handleOpenDesk}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 text-sm"
             >
               <ExternalLink className="w-4 h-4 me-2" />
-              {t('screen_size.switch_v1')}
+              {t('screen_size.open_desk')}
             </Button>
           </div>
         </div>
@@ -65,4 +65,4 @@ const ScreenSizeDialog = () => {
   );
 };
 
-export default ScreenSizeDialog; 
+export default ScreenSizeDialog;

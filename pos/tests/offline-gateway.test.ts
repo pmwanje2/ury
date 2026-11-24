@@ -182,6 +182,19 @@ test.each([
   expect(await queuedIds()).toEqual([]);
 });
 
+// A tipped settlement stays online, like a discounted one: the outbox replays
+// no tip, so a queued replay would drop the tip owed to the server.
+test('a gateway 502 on a tipped cash settlement is not queued', async () => {
+  const { submitSettlementOfflineAware } = await captureModule();
+  const error = { httpStatus: 502 };
+  await expect(submitSettlementOfflineAware({
+    profile, user, invoice: 'INV-9', customer: 'Walk In', cashier: user.name, owner: user.name,
+    amount: 120, due: 120, modeOfPayment: 'Cash', tip: 20,
+    onlineSettle: async () => { throw error; },
+  })).rejects.toEqual(error);
+  expect(await queuedIds()).toEqual([]);
+});
+
 // #44: a named account may settle short online, leaving the rest owed. That is
 // not a cash settlement, so a gateway error must not queue it offline.
 test.each([

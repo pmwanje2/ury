@@ -175,6 +175,36 @@ class TestSetOrderNumber(unittest.TestCase):
 			finally:
 				frappe.db = original_db
 
+	def test_amended_invoice_name_does_not_crash_set_order_number(self):
+		"""Amending a cancelled POS Invoice produces names like MHR00013-1 or
+		POS-INV-2026-00105-2; set_order_number must parse the base sequence without ValueError."""
+		import frappe
+
+		cases = [
+			("MHR00013-1", "MHR00013", "MHR00010", 3),
+			("POS-INV-2026-00105-2", "POS-INV-2026-00105-1", "POS-INV-2026-00100", 5),
+			("MHR00013", None, "MHR00010-1", 3),
+		]
+		for current_name, amended_from, last_name, expected in cases:
+			with self.subTest(current_name=current_name, last_name=last_name):
+				doc = MagicMock()
+				doc.name = current_name
+				doc.amended_from = amended_from
+				doc.pos_profile = "Main POS"
+				doc.order_type = "Dine In"
+
+				with patch(f"{MODULE}.frappe.get_value") as mock_get_value:
+					mock_get_value.return_value = last_name
+					original_db = frappe.db
+					try:
+						mock_db = MagicMock()
+						frappe.db = mock_db
+						set_order_number(doc, "after_insert")
+						last_call = mock_db.set_value.call_args_list[-1]
+						self.assertEqual(last_call[0][3], expected)
+					finally:
+						frappe.db = original_db
+
 
 class TestSetLastInvoiceInPosOpen(unittest.TestCase):
 	"""Test set_last_invoice_in_pos_open function for POS Opening Entry."""
