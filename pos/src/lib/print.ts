@@ -1,8 +1,10 @@
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call, printWithQz } from '@ury/core';
+import { buildLetterheadParams } from '@ury/core/print-format';
 import {
   getInvoicePrintHtml,
   networkPrint,
+  resolvePrintFormat,
   selectNetworkPrinter,
   updatePrintStatus
 } from './invoice-api';
@@ -29,7 +31,7 @@ export interface PrintBillCopyResult {
 
 export interface PrintBillCopyParams {
   orderId: string;
-  posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host'>;
+  posProfile: Pick<PosProfileCombined, 'print_type' | 'qz_host' | 'letter_head'>;
   idempotencyKey: string;
 }
 
@@ -59,9 +61,10 @@ export async function printBillCopy({ orderId, posProfile, idempotencyKey }: Pri
     }
   } else if (delivery === 'browser') {
     const copyParam = result.copy_number ? `&copy_number=${result.copy_number}` : '';
+    const { queryString: letterheadParams } = buildLetterheadParams(posProfile.letter_head);
     const url =
       result.print_url ||
-      `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy&no_letterhead=1&trigger_print=1${copyParam}`;
+      `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}&format=URY%20Bill%20Copy${letterheadParams}&trigger_print=1${copyParam}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   }
   return result;
@@ -69,14 +72,14 @@ export async function printBillCopy({ orderId, posProfile, idempotencyKey }: Pri
 
 export async function printOrder({ orderId, posProfile, printFormat, skipStatusUpdate }: PrintOrderParams): Promise<'qz' | 'network' | 'socket'> {
   await assertOfflineActionAllowed('fiscal print');
-  const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier } = posProfile;
-  const format = printFormat || print_format || '';
+  const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier, letter_head } = posProfile;
+  const format = resolvePrintFormat({ custom_merged_pos_invoice: null }, printFormat || print_format);
 
   if (print_type === 'qz') {
     if (!qz_host) {
       throw new Error('QZ host is not set');
     }
-    const html = await getInvoicePrintHtml(orderId, format as string);
+    const html = await getInvoicePrintHtml(orderId, format as string, letter_head);
     await printWithQz(qz_host, html);
     if (!skipStatusUpdate) {
       await updatePrintStatus(orderId);
@@ -93,9 +96,10 @@ export async function printOrder({ orderId, posProfile, printFormat, skipStatusU
     }
     return 'network';
   } else {
-    // Redirect to printview page
+    // Redirect to printview page, respecting configured POS Profile letter_head
     const formatParam = format ? `&format=${encodeURIComponent(format)}` : '';
-    const url = `/printview?doctype=POS Invoice&name=${orderId}${formatParam}&no_letterhead=1&settings={}&letterhead=No Letterhead&trigger_print=1&_lang=en`;
+    const { queryString: letterheadParams } = buildLetterheadParams(letter_head);
+    const url = `/printview?doctype=POS%20Invoice&name=${encodeURIComponent(orderId)}${formatParam}${letterheadParams}&settings=%7B%7D&trigger_print=1&_lang=en`;
     window.open(url, '_blank', 'noopener,noreferrer');
     if (!skipStatusUpdate) {
       await updatePrintStatus(orderId);

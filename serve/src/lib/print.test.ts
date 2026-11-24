@@ -24,6 +24,7 @@ vi.mock('./invoice-api', async () => {
 import { printOrder } from './print'
 import {
   assertNetworkPrintSuccess,
+  getInvoicePrintHtml,
   networkPrint,
   printPosPage,
   updatePrintStatus,
@@ -32,7 +33,8 @@ import {
 describe('printOrder transports', () => {
   const baseProfile = {
     name: 'POS-PROFILE',
-    print_format: 'POS Invoice',
+    print_format: 'Restaurant Receipt 80mm',
+    letter_head: 'Grand Terrace Receipt',
     printer: 'Printer-1',
     cashier: 'cashier@example.com',
     multiple_cashier: 0,
@@ -43,13 +45,37 @@ describe('printOrder transports', () => {
     vi.clearAllMocks()
   })
 
-  it('uses print_pos_page for socket print and does not mark via qz_print_update', async () => {
+  it('uses print_pos_page for socket print with safe custom format and does not mark via qz_print_update', async () => {
     await printOrder({
       orderId: 'INV-1',
       posProfile: { ...baseProfile, print_type: 'socket' },
     })
-    expect(printPosPage).toHaveBeenCalledWith('INV-1', 'POS Invoice')
+    expect(printPosPage).toHaveBeenCalledWith('INV-1', 'Restaurant Receipt 80mm')
     expect(updatePrintStatus).not.toHaveBeenCalled()
+  })
+
+  it('replaces unsafe or empty print_format with Merged POS Invoice Format and forwards letter_head on QZ (P1-5)', async () => {
+    await printOrder({
+      orderId: 'INV-UNSAFE',
+      posProfile: { ...baseProfile, print_type: 'socket', print_format: 'POS Invoice Classic' },
+    })
+    expect(printPosPage).toHaveBeenCalledWith('INV-UNSAFE', 'Merged POS Invoice Format')
+
+    await printOrder({
+      orderId: 'INV-QZ',
+      posProfile: {
+        ...baseProfile,
+        print_type: 'qz',
+        qz_host: 'localhost',
+        print_format: 'POS EFRIS Invoice',
+        letter_head: 'Grand Terrace Receipt',
+      },
+    })
+    expect(getInvoicePrintHtml).toHaveBeenCalledWith(
+      'INV-QZ',
+      'Merged POS Invoice Format',
+      'Grand Terrace Receipt'
+    )
   })
 
   it('honors network Success without double-marking', async () => {

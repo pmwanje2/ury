@@ -1,5 +1,11 @@
 import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
+import {
+  MERGED_POS_INVOICE_PRINT_FORMAT as CORE_MERGED_FORMAT,
+  UNSAFE_POS_INVOICE_PRINT_FORMATS as CORE_UNSAFE_FORMATS,
+  buildLetterheadParams,
+  resolveSafePosPrintFormat,
+} from '@ury/core/print-format';
 import { OrderStatusType, OrderType } from '../data/order-types';
 import type { Filter } from 'frappe-js-sdk/lib/db/types';
 
@@ -208,8 +214,13 @@ export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInv
   };
 }
 
-export async function getInvoicePrintHtml(invoiceId: string, printFormat: string) {
+export async function getInvoicePrintHtml(
+  invoiceId: string,
+  printFormat: string,
+  letterHead?: string | null
+) {
   try {
+    const { no_letterhead, letterhead } = buildLetterheadParams(letterHead);
     const response = await call.get<{ message: { html: string } }>(
       'frappe.www.printview.get_html_and_style',
       {
@@ -217,8 +228,8 @@ export async function getInvoicePrintHtml(invoiceId: string, printFormat: string
         name: invoiceId,
         print_format: printFormat,
         _lang: 'en',
-        no_letterhead: 1,
-        letterhead: "No Letterhead",
+        no_letterhead,
+        letterhead,
         settings: {}
       }
     );
@@ -274,7 +285,15 @@ export function assertNetworkPrintSuccess(result: unknown): void {
   throw new Error(text);
 }
 
-export const MERGED_POS_INVOICE_PRINT_FORMAT = 'Merged POS Invoice Format';
+export const MERGED_POS_INVOICE_PRINT_FORMAT = CORE_MERGED_FORMAT;
+export const UNSAFE_POS_INVOICE_PRINT_FORMATS = CORE_UNSAFE_FORMATS;
+
+export function resolvePrintFormat(
+  order: Pick<POSInvoice, 'custom_merged_pos_invoice'>,
+  defaultFormat: string | null | undefined
+) {
+  return resolveSafePosPrintFormat(defaultFormat, Boolean(order?.custom_merged_pos_invoice));
+}
 
 export interface MergeBillCandidate {
   name: string;
@@ -319,16 +338,6 @@ export function getCombinedOrderTotals(
 
 export function isMergedBill(order: Pick<POSInvoice, 'custom_merged_pos_invoice'>) {
   return !!order?.custom_merged_pos_invoice;
-}
-
-export function resolvePrintFormat(
-  order: Pick<POSInvoice, 'custom_merged_pos_invoice'>,
-  defaultFormat: string | null | undefined
-) {
-  if (order?.custom_merged_pos_invoice) {
-    return MERGED_POS_INVOICE_PRINT_FORMAT;
-  }
-  return (defaultFormat || '') as string;
 }
 
 export const MERGE_CANDIDATE_PAGE_SIZE = 10;

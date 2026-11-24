@@ -916,6 +916,7 @@ def getPosProfile():
         "warehouse": warehouse,
         "cashier": cashier,
         "print_format": print_format,
+        "letter_head": pos_profiles.get("letter_head"),
         "qz_print": qz_print,
         "qz_host": qz_host,
         "printer": printer,
@@ -1022,6 +1023,7 @@ def getPosProfileFull(pos_profile):
         "view_all_status": profile.get("view_all_status"),
         "custom_daily_pos_close": profile.get("custom_daily_pos_close"),
         "print_format": profile.print_format,
+        "letter_head": profile.get("letter_head"),
         "enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
@@ -2818,10 +2820,30 @@ def search_settled_bills(branch: str | None = None, pos_profile: str | None = No
     return rows
 
 
-def _copy_print_url(invoice: str, copy_number: int) -> str:
+def _resolve_invoice_letter_head(doc) -> str | None:
+    if doc is None:
+        return None
+    lh = doc.get('letter_head') if hasattr(doc, 'get') else getattr(doc, 'letter_head', None)
+    if isinstance(lh, str) and lh.strip():
+        return lh.strip()
+    pos_profile = doc.get('pos_profile') if hasattr(doc, 'get') else getattr(doc, 'pos_profile', None)
+    if isinstance(pos_profile, str) and pos_profile.strip():
+        prof_lh = frappe.db.get_value('POS Profile', pos_profile.strip(), 'letter_head')
+        if isinstance(prof_lh, str) and prof_lh.strip():
+            return prof_lh.strip()
+    return None
+
+
+def _copy_print_url(invoice: str, copy_number: int, letter_head: str | None = None) -> str:
+    clean_lh = letter_head.strip() if isinstance(letter_head, str) and letter_head.strip() else None
+    lh_params = (
+        f'&no_letterhead=0&letterhead={quote(clean_lh, safe="")}'
+        if clean_lh
+        else '&no_letterhead=1'
+    )
     return (
         f'/printview?doctype=POS%20Invoice&name={quote(invoice, safe="")}'
-        f'&format=URY%20Bill%20Copy&no_letterhead=1&trigger_print=1&copy_number={copy_number}'
+        f'&format=URY%20Bill%20Copy{lh_params}&trigger_print=1&copy_number={copy_number}'
     )
 
 
@@ -2831,7 +2853,11 @@ def _render_copy_html(doc, invoice: str, copy_number: int) -> tuple[str, str]:
     doc.copy_timestamp = frappe.utils.now()
     doc.copy_number = copy_number
     doc._ury_copy_render = _COPY_RENDER_MARKER
-    rendered = frappe.get_print('POS Invoice', invoice, print_format='URY Bill Copy', doc=doc, no_letterhead=1)
+    letter_head = _resolve_invoice_letter_head(doc)
+    kwargs = {'print_format': 'URY Bill Copy', 'doc': doc, 'no_letterhead': 0 if letter_head else 1}
+    if letter_head:
+        kwargs['letterhead'] = letter_head
+    rendered = frappe.get_print('POS Invoice', invoice, **kwargs)
     html = rendered.decode('utf-8') if isinstance(rendered, bytes) else (rendered or '')
     return html, doc.copy_timestamp
 
@@ -2858,7 +2884,9 @@ def _copy_result(job, *, doc=None, delivery=None):
             html, copy_timestamp = _render_copy_html(doc, invoice, copy_number)
             result['copy_timestamp'] = copy_timestamp
             result['html'] = html
-            result['print_url'] = _copy_print_url(invoice, copy_number)
+            result['print_url'] = _copy_print_url(
+                invoice, copy_number, letter_head=_resolve_invoice_letter_head(doc)
+            )
     return result
 
 
@@ -3078,8 +3106,9 @@ def _mark_pending_fiscal_reprint_dispatched(invoice: str):
 @frappe.whitelist(methods=['POST'])
 def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = None, delivery: str | None = None):
     from hashlib import sha256
-    from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
+
     from ury.ury.api.ury_print import _bill_printers
+    from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
     from ury.ury.printing.file_store import save_job
     from ury.ury.printing.service import submit_and_monitor_print_job
 
@@ -3200,8 +3229,20 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
         result = {'status': 'Failure', 'message': 'Could not create the print job.'}
     else:
         try:
-            result = submit_and_monitor_print_job(doctype='POS Invoice', name=invoice, printer_setting=chosen_printer,
-                print_format='URY Bill Copy', doc=doc, job_type='BILL_COPY', extra_metadata={k:v for k,v in meta.items() if k != 'status'})
+            copy_lh = _resolve_invoice_letter_head(doc)
+            submit_kwargs = dict(
+                doctype='POS Invoice',
+                name=invoice,
+                printer_setting=chosen_printer,
+                print_format='URY Bill Copy',
+                doc=doc,
+                job_type='BILL_COPY',
+                extra_metadata={k: v for k, v in meta.items() if k != 'status'},
+            )
+            if copy_lh:
+                submit_kwargs['no_letterhead'] = 0
+                submit_kwargs['letterhead'] = copy_lh
+            result = submit_and_monitor_print_job(**submit_kwargs)
         except Exception:
             frappe.log_error(title='Bill copy dispatch failed')
             result = {'status': 'Unknown', 'message': 'Copy outcome unknown. Check the printer.'}
