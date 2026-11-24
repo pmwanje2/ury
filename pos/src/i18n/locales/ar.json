@@ -175,7 +175,14 @@
     "overtender_to_tip": "سيتم تسجيل الزيادة البالغة {{amount}} كإكرامية.",
     "non_cash_overtender": "زيادة غير نقدية بقيمة {{amount}}: النقد فقط يعطي باقيًا.",
     "halo_warning": "قفل المبلغ المرتفع (HALO): دفعة {{mode}} ({{amount}}) تتجاوز الحد الأقصى ({{limit}}). تحقق من الرقم أو اطلب رمز PIN للمدير.",
-    "halo_approval_title": "اعتماد دفعة مبلغ مرتفع"
+    "halo_approval_title": "اعتماد دفعة مبلغ مرتفع",
+    "account_amount": "على الحساب: {{amount}}",
+    "charge_account": "تحميل على الحساب",
+    "account_balance": "الرصيد",
+    "account_limit": "الحد الائتماني",
+    "account_available": "الائتمان المتاح",
+    "no_accounts": "لم يتم العثور على حسابات معتمدة.",
+    "account_search_failed": "تعذر البحث عن حسابات الائتمان."
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -253,7 +260,8 @@
     "force_close_reason": "سبب الإغلاق الإجباري",
     "force_close_reason_placeholder": "مثال: إقفال المراجعة الليلية",
     "approve_force_close": "اعتماد الإغلاق الإجباري",
-    "no_sale_summary": "الفتح دون بيع: {{count}}"
+    "no_sale_summary": "الفتح دون بيع: {{count}}",
+    "on_account": "على الحساب"
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -367,7 +375,8 @@
     "failed_to_load_details": "تعذر تحميل تفاصيل الطلب",
     "edit_order": "تعديل الطلب",
     "cancel_order": "إلغاء الطلب",
-    "qty_label": "الكمية: {{qty}}"
+    "qty_label": "الكمية: {{qty}}",
+    "settled_closed": "مسوى / مغلق"
   },
   "tables": {
     "layout_view": "عرض المخطط",
