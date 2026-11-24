@@ -12,10 +12,19 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-const { mockCheckPOSOpening, mockValidatePOSClose, mockGetChecklist, mockPosProfile } = vi.hoisted(() => ({
+const {
+  mockCheckPOSOpening,
+  mockValidatePOSClose,
+  mockGetChecklist,
+  mockFetchPosProfile,
+  mockFetchAvailableOutlets,
+  mockPosProfile,
+} = vi.hoisted(() => ({
   mockCheckPOSOpening: vi.fn(),
   mockValidatePOSClose: vi.fn(),
   mockGetChecklist: vi.fn(),
+  mockFetchPosProfile: vi.fn(),
+  mockFetchAvailableOutlets: vi.fn(),
   // Stable identity: a fresh object per render would re-trigger the
   // provider's posProfile effect on every state change and re-run
   // checkPOSStatus mid-assertion.
@@ -65,6 +74,8 @@ vi.mock("../store/pos-store", () => ({
     posProfile: mockPosProfile,
     showVoluntaryClosing: false,
     setShowVoluntaryClosing: vi.fn(),
+    fetchPosProfile: mockFetchPosProfile,
+    fetchAvailableOutlets: mockFetchAvailableOutlets,
   }),
 }));
 
@@ -349,4 +360,26 @@ it('a confirmed opening cannot be reused for another opening when its checklist 
   await screen.findByTestId('opening-dialog');
   expect(sessionStorage.getItem(key)).toBeNull();
   delete profile.ury_offline_capture;
+});
+
+it('refreshes posProfile and availableOutlets immediately after opening a shift so active_business_date hydrates without reload', async () => {
+  mockCheckPOSOpening
+    .mockResolvedValueOnce({ message: [] })
+    .mockResolvedValueOnce({
+      message: [{ name: 'POS-OPE-NEW', company: 'Test', pos_profile: 'POS-001' }],
+    });
+  mockGetChecklist.mockResolvedValue({ logStatus: 'Complete' });
+
+  render(
+    <POSOpeningProvider>
+      <div>POS Workspace</div>
+    </POSOpeningProvider>
+  );
+
+  const openBtn = await screen.findByRole('button', { name: 'Open' });
+  fireEvent.click(openBtn);
+
+  await screen.findByText('POS Workspace');
+  expect(mockFetchPosProfile).toHaveBeenCalledTimes(1);
+  expect(mockFetchAvailableOutlets).toHaveBeenCalledTimes(1);
 });
