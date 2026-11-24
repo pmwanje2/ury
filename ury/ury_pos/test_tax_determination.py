@@ -1526,6 +1526,404 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
             self.assertEqual(len(doc.taxes), 1)
             self.assertEqual(doc.taxes[0]["rate"], 18.0)
 
+    def _load_direct_rest_env(self, *, profile=None, item_taxes_by_code=None):
+        frappe_mock, utils = _make_frappe_env()
+        utils.get_time = MagicMock()
+        utils.get_first_day = MagicMock()
+        utils.get_last_day = MagicMock()
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        set_taxes_mock = MagicMock(
+            side_effect=lambda customer, party_type, posting_date, company, customer_group=None, tax_category=None: (
+                "UG VAT 18% - MFU" if tax_category == "Take Away VAT" else None
+            )
+        )
+        party_mod = _stub("erpnext.accounts.party", set_taxes=set_taxes_mock)
+        erpnext_mod = _stub("erpnext", accounts=_stub("erpnext.accounts", party=party_mod))
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "erpnext": erpnext_mod,
+            "erpnext.accounts": erpnext_mod.accounts,
+            "erpnext.accounts.party": party_mod,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.doctype.ury_order.ury_order": _stub(
+                "ury.ury.doctype.ury_order.ury_order", release_merge_cluster_tables=MagicMock()
+            ),
+            "ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+                "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+                get_applicable_policy=MagicMock(),
+            ),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                prorate_return_discount=MagicMock(),
+                validate_pos_discount=MagicMock(),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                prorate_return_service_charge=MagicMock(),
+                sync_service_charge_on_before_validate=MagicMock(),
+            ),
+        }
+        profile_obj = profile or Row(
+            name="POS Profile A",
+            company="Maximus Foods UG",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            tax_category="",
+            taxes_and_charges="",
+            custom_order_type_tax_categories=[
+                Row(order_type="Take Away", tax_category="Take Away VAT"),
+                Row(order_type="Delivery", tax_category="Delivery Reduced"),
+            ],
+        )
+        frappe_mock.get_cached_doc.side_effect = lambda dt, name=None: profile_obj if dt == "POS Profile" else None
+        frappe_mock.get_doc.side_effect = lambda dt, name=None: profile_obj if dt == "POS Profile" else None
+
+        def db_get_value(dt, flt=None, field=None, **kw):
+            if dt == "POS Profile":
+                if isinstance(field, (list, tuple)):
+                    return Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=0)
+                return "Main Branch A" if field == "branch" else ("Rest A" if field == "restaurant" else 0)
+            if dt == "URY Branch Operating Schedule":
+                return "Africa/Kampala"
+            if dt == "URY Restaurant":
+                if isinstance(flt, dict):
+                    return "Rest A"
+                return "Standard Menu" if field == "active_menu" else 0
+            if dt == "Price List":
+                return 1 if field == "enabled" else "Standard UGX"
+            if dt == "Item Price":
+                if isinstance(flt, dict) and flt.get("price_list") == "Standard UGX" and flt.get("item_code") == "KH-BURGER-18":
+                    return 20000.0
+                return None
+            if dt == "Customer":
+                return Row(tax_category=None, customer_group="Individual")
+            return None
+
+        frappe_mock.db.get_value.side_effect = db_get_value
+        item_taxes = item_taxes_by_code or {
+            "KH-BURGER-18": [Row(item_tax_template="Item VAT 18% - MFU", tax_category="")]
+        }
+
+        def get_all(dt, filters=None, **kw):
+            if dt == "Item Tax" and isinstance(filters, dict):
+                return item_taxes.get(filters.get("parent"), [])
+            if dt == "Sales Taxes and Charges" and isinstance(filters, dict):
+                if filters.get("parent") == "UG VAT 18% - MFU":
+                    return [Row(rate=18.0, tax_amount=0.0, charge_type="On Net Total")]
+                if filters.get("parent") == "UG Exempt 0% - MFU":
+                    return [Row(rate=0.0, tax_amount=0.0, charge_type="On Net Total")]
+            return []
+
+        frappe_mock.get_all.side_effect = get_all
+        return frappe_mock, modules
+
+    def test_direct_rest_post_overwrites_tampered_item_tax_template_and_default_header_template(self):
+        """R3 P0 Security: Direct REST POST with authentic PL/header + tampered item_tax_template must be overwritten fail-closed."""
+        frappe_mock, modules = self._load_direct_rest_env()
+        with patch.dict(sys.modules, modules):
+            _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            dayparts = _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load_module("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+
+            doc = FakeInvoice(
+                name=None,
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                company="Maximus Foods UG",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                selling_price_list="Standard UGX",
+                items=[
+                    Row(
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        price_list_rate=20000.0,
+                        rate=20000.0,
+                        item_tax_template="Item Exempt 0% - MFU",
+                        item_tax_rate='{"VAT - MFU": 0}',
+                        custom_tax_exempt=0,
+                    )
+                ],
+            )
+            doc._tax_templates["UG VAT 18% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 18.0, "description": "VAT"}
+            ]
+            doc.get_doc_before_save = lambda: None
+
+            with patch.object(
+                dayparts,
+                "resolve_outlet_local_datetime",
+                return_value=(datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+            ):
+                hooks.before_validate(doc, "before_validate")
+
+            self.assertEqual(doc["items"][0].item_tax_template, "Item VAT 18% - MFU")
+            self.assertEqual(doc["items"][0].item_tax_rate, "{}")
+
+        # Also verify profile with NO custom_order_type_tax_categories (source == "default")
+        # refuses client-tampered taxes_and_charges="UG Exempt 0% - MFU" on direct REST POST.
+        default_profile = Row(
+            name="POS Profile Default",
+            company="Maximus Foods UG",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            tax_category="",
+            taxes_and_charges="UG VAT 18% - MFU",
+            custom_order_type_tax_categories=[],
+        )
+        frappe_mock2, modules2 = self._load_direct_rest_env(profile=default_profile)
+        with patch.dict(sys.modules, modules2):
+            _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            dayparts = _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load_module("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+
+            doc2 = FakeInvoice(
+                name=None,
+                pos_profile="POS Profile Default",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                company="Maximus Foods UG",
+                tax_category="",
+                taxes_and_charges="UG Exempt 0% - MFU",
+                selling_price_list="Standard UGX",
+                items=[
+                    Row(
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        price_list_rate=20000.0,
+                        rate=20000.0,
+                        item_tax_template="Item Exempt 0% - MFU",
+                        item_tax_rate='{"VAT - MFU": 0}',
+                        custom_tax_exempt=0,
+                    )
+                ],
+            )
+            doc2._tax_templates["UG VAT 18% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 18.0, "description": "VAT"}
+            ]
+            doc2.get_doc_before_save = lambda: None
+
+            with patch.object(
+                dayparts,
+                "resolve_outlet_local_datetime",
+                return_value=(datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+            ):
+                hooks.before_validate(doc2, "before_validate")
+
+            self.assertEqual(doc2.taxes_and_charges, "UG VAT 18% - MFU")
+            self.assertEqual(doc2["items"][0].item_tax_template, "Item VAT 18% - MFU")
+            self.assertEqual(doc2["items"][0].item_tax_rate, "{}")
+
+    def test_direct_rest_post_and_put_block_forged_item_tax_exempt_and_overwrite_tampered_put_item_tax(self):
+        """R3 P0 Security: Direct REST POST/PUT cannot forge item custom_tax_exempt or tamper item_tax_template."""
+        frappe_mock, modules = self._load_direct_rest_env()
+        with patch.dict(sys.modules, modules):
+            _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            dayparts = _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load_module("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+
+            # 1. Direct REST POST forging item-level custom_tax_exempt=1 -> PermissionError [POS-AUTH-REQUIRED]
+            forged_post = FakeInvoice(
+                name=None,
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                company="Maximus Foods UG",
+                selling_price_list="Standard UGX",
+                items=[
+                    Row(
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        item_tax_template="Item Exempt 0% - MFU",
+                        custom_tax_exempt=1,
+                    )
+                ],
+            )
+            forged_post.get_doc_before_save = lambda: None
+            with patch.object(
+                dayparts,
+                "resolve_outlet_local_datetime",
+                return_value=(datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+            ):
+                with self.assertRaisesRegex(frappe_mock.PermissionError, r"POS-AUTH-REQUIRED"):
+                    hooks.before_validate(forged_post, "before_validate")
+
+            # 2. Direct REST PUT tampering item_tax_template/item_tax_rate on existing check -> overwritten fail-closed
+            prev_row = Row(
+                name="ROW-TAX-1",
+                item_code="KH-BURGER-18",
+                qty=1,
+                price_list_rate=20000.0,
+                rate=20000.0,
+                item_tax_template="Item VAT 18% - MFU",
+                item_tax_rate='{"VAT - MFU": 18.0}',
+                custom_tax_exempt=0,
+            )
+            prev_doc = Row(
+                name="MFUA00099",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                custom_tax_exempt=0,
+                selling_price_list="Standard UGX",
+                custom_serving_period="All Day Dining",
+                custom_transaction_local_time="18:10:00",
+                custom_transaction_weekday="Tue",
+                items=[prev_row],
+            )
+            tampered_put = FakeInvoice(
+                name="MFUA00099",
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                company="Maximus Foods UG",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                custom_tax_exempt=0,
+                selling_price_list="Standard UGX",
+                items=[
+                    Row(
+                        name="ROW-TAX-1",
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        price_list_rate=20000.0,
+                        rate=20000.0,
+                        item_tax_template="Item Exempt 0% - MFU",
+                        item_tax_rate='{"VAT - MFU": 0}',
+                        custom_tax_exempt=0,
+                    )
+                ],
+            )
+            tampered_put._tax_templates["UG VAT 18% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 18.0, "description": "VAT"}
+            ]
+            tampered_put.get_doc_before_save = lambda: prev_doc
+            with patch.object(
+                dayparts,
+                "resolve_outlet_local_datetime",
+                return_value=(datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+            ):
+                hooks.before_validate(tampered_put, "before_validate")
+            self.assertEqual(tampered_put["items"][0].item_tax_template, "Item VAT 18% - MFU")
+            self.assertEqual(tampered_put["items"][0].item_tax_rate, "{}")
+
+            # 3. Direct REST PUT flipping item custom_tax_exempt 0 -> 1 -> PermissionError [POS-AUTH-REQUIRED]
+            exempt_put = FakeInvoice(
+                name="MFUA00099",
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                company="Maximus Foods UG",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                custom_tax_exempt=0,
+                selling_price_list="Standard UGX",
+                items=[
+                    Row(
+                        name="ROW-TAX-1",
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        price_list_rate=20000.0,
+                        rate=20000.0,
+                        item_tax_template="Item Exempt 0% - MFU",
+                        custom_tax_exempt=1,
+                    )
+                ],
+            )
+            exempt_put.get_doc_before_save = lambda: prev_doc
+            with patch.object(
+                dayparts,
+                "resolve_outlet_local_datetime",
+                return_value=(datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+            ):
+                with self.assertRaisesRegex(frappe_mock.PermissionError, r"POS-AUTH-REQUIRED"):
+                    hooks.before_validate(exempt_put, "before_validate")
+
+    def test_pos_invoice_custom_field_row_width_stays_within_mariadb_1118_budget(self):
+        """R3 Schema Guard: Combined URY POS Invoice custom fields must leave >=12KB headroom for ERPNext + uganda_compliance under MariaDB's 65,535B row limit."""
+        framework, utils = _make_frappe_env()
+        cf_mod = _stub("frappe.custom.doctype.custom_field.custom_field", create_custom_fields=MagicMock())
+        with patch.dict(
+            sys.modules,
+            {
+                "frappe": framework,
+                "frappe.utils": utils,
+                "frappe.custom": _stub("frappe.custom"),
+                "frappe.custom.doctype": _stub("frappe.custom.doctype"),
+                "frappe.custom.doctype.custom_field": _stub("frappe.custom.doctype.custom_field"),
+                "frappe.custom.doctype.custom_field.custom_field": cf_mod,
+                "click": _stub("click"),
+            },
+        ):
+            sc = _load_module("ury.setup_customizations", URY_PKG / "setup_customizations.py")
+            pf = _load_module("ury.ury_pos.privileged_fields", URY_PKG / "ury_pos/privileged_fields.py")
+            sc_fields = sc.get_custom_fields().get("POS Invoice", [])
+            pf_fields = pf.get_privileged_action_custom_fields().get("POS Invoice", [])
+
+        fixture_rows = [
+            r
+            for r in json.loads((URY_PKG / "fixtures/custom_field.json").read_text(encoding="utf-8"))
+            if r.get("dt") == "POS Invoice"
+        ]
+
+        # Merge in exact Frappe install order (fixtures -> setup_customizations -> privileged_fields)
+        merged = {}
+        for src in (fixture_rows, sc_fields, pf_fields):
+            for f in src:
+                fn = f.get("fieldname")
+                if not fn:
+                    continue
+                if fn not in merged:
+                    merged[fn] = dict(f)
+                else:
+                    # create_custom_fields updates existing custom field properties
+                    merged[fn].update({k: v for k, v in f.items() if v is not None})
+
+        def mariadb_utf8mb4_bytes(field):
+            ft = field.get("fieldtype")
+            if ft in ("Section Break", "Column Break", "Tab Break", "Button", "Table", "HTML", "Heading"):
+                return 0
+            if ft in ("Data", "Link", "Select", "Dynamic Link", "Read Only", "Password"):
+                raw_len = int(field.get("length") or 0)
+                chars = max(raw_len, 64) if raw_len > 0 else 140
+                octets = chars * 4
+                return octets + (2 if octets > 255 else 1)
+            if ft in ("Small Text", "Text", "Long Text", "Text Editor", "Code", "JSON"):
+                return 12
+            if ft in ("Currency", "Percent"):
+                return 10
+            if ft in ("Datetime", "Float"):
+                return 8
+            if ft in ("Int",):
+                return 4
+            if ft in ("Date", "Time"):
+                return 3
+            if ft in ("Check",):
+                return 1
+            return 8
+
+        total_bytes = sum(mariadb_utf8mb4_bytes(f) for f in merged.values())
+        # ERPNext base tabPOS Invoice (~33,808 B) + uganda_compliance (~10,150 B) = ~43,958 B.
+        # Keep URY's combined POS Invoice custom fields <= 18,000 B so total stays <= 61,958 B (< 65,535 B MariaDB 1118 limit).
+        self.assertLessEqual(
+            total_bytes,
+            18000,
+            f"URY POS Invoice custom fields use {total_bytes} B (> 18,000 B budget); triggers MariaDB 1118 Row size too large with uganda_compliance.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

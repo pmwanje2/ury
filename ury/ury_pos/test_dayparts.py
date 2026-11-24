@@ -1173,6 +1173,122 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
         pricing_src = ast.get_source_segment(order_src, pricing_fn) or ""
         self.assertIn("ury_offline_captured_at", pricing_src)
 
+    def test_persisted_offline_capture_preserves_posting_time_on_subsequent_submit_with_sales_time_pricing(self):
+        """R3 Blocker 2b follow-up: Second request (make_invoice/submit) on an offline-captured check keeps set_posting_time=0 across before_validate and restores posting_date/time in validate()."""
+        frappe_mock, utils = _make_frappe()
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        seen_in_super = []
+
+        class BasePOSInvoice:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+                self.flags = SimpleNamespace()
+
+            def get(self, key, default=None):
+                return self.__dict__.get(key, default)
+
+            def validate(self):
+                seen_in_super.append(
+                    {
+                        "local_time": self.get("custom_transaction_local_time"),
+                        "weekday": self.get("custom_transaction_weekday"),
+                        "posting_date": self.get("posting_date"),
+                        "posting_time": self.get("posting_time"),
+                        "set_posting_time": self.get("set_posting_time"),
+                    }
+                )
+
+        erpnext_pos_mod = _stub(
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice",
+            POSInvoice=BasePOSInvoice,
+            get_stock_availability=MagicMock(),
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.doctype.ury_order.ury_order": _stub(
+                "ury.ury.doctype.ury_order.ury_order", release_merge_cluster_tables=MagicMock()
+            ),
+            "ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+                "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+                get_applicable_policy=MagicMock(),
+            ),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                prorate_return_discount=MagicMock(),
+                validate_pos_discount=MagicMock(),
+            ),
+            "erpnext": _stub("erpnext"),
+            "erpnext.accounts": _stub("erpnext.accounts"),
+            "erpnext.accounts.doctype": _stub("erpnext.accounts.doctype"),
+            "erpnext.accounts.doctype.pos_invoice": _stub("erpnext.accounts.doctype.pos_invoice"),
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice": erpnext_pos_mod,
+        }
+        with patch.dict(sys.modules, modules):
+            dayparts = _load("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+            pos_inv_mod = _load("ury.ury.class_overrides.pos_invoice", URY_PKG / "ury/class_overrides/pos_invoice.py")
+
+            frappe_mock.get_all.side_effect = lambda dt, **kw: (
+                self._periods() if dt == "URY Restaurant Serving Period" else []
+            )
+            frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+                Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=1)
+                if dt == "POS Profile" and isinstance(field, (list, tuple))
+                else (1 if dt == "POS Profile" and field == "ury_offline_capture" else ("Africa/Kampala" if dt == "URY Branch Operating Schedule" else ("Standard UGX" if dt == "Price List" else ("Standard Menu" if field == "active_menu" else 0))))
+            )
+
+            captured_site_dt = datetime(2026, 11, 23, 23, 50, 0)
+            prev_doc = Row(
+                name="MFUA00077",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                selling_price_list="Standard UGX",
+                custom_serving_period="Late Night",
+                custom_transaction_local_time="21:20:00",
+                custom_transaction_weekday="Mon",
+                ury_offline_captured_at=captured_site_dt,
+                posting_date=captured_site_dt.date(),
+                posting_time=captured_site_dt.time(),
+            )
+            # Fresh HTTP request (make_invoice/submit): flags.ury_trusted_offline_capture is NOT set!
+            doc = pos_inv_mod.CustomPOSInvoice(
+                name="MFUA00077",
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                restaurant_table=None,
+                order_type="Take Away",
+                customer="Walk In Guest",
+                ury_offline_captured_at=captured_site_dt,
+                set_posting_time=0,
+                posting_date=captured_site_dt.date(),
+                posting_time=captured_site_dt.time(),
+                items=[],
+            )
+            doc.is_new = lambda: False
+            doc.get_doc_before_save = lambda: prev_doc
+
+            hooks.before_validate(doc, "before_validate")
+            self.assertEqual(doc.set_posting_time, 0)
+
+            # Simulate Sales Time Pricing - POS Invoice overwriting posting_date/time with next day's now_datetime()
+            doc.posting_date = date(2026, 11, 24)
+            doc.posting_time = "00:15:00"
+            doc.custom_transaction_local_time = "00:15:00"
+            doc.custom_transaction_weekday = "Tue"
+
+            doc.validate()
+
+            self.assertEqual(len(seen_in_super), 1)
+            self.assertEqual(seen_in_super[0]["local_time"], "21:20:00")
+            self.assertEqual(seen_in_super[0]["weekday"], "Mon")
+            self.assertEqual(seen_in_super[0]["posting_date"], captured_site_dt.date())
+            self.assertEqual(seen_in_super[0]["posting_time"], captured_site_dt.time())
+            self.assertEqual(seen_in_super[0]["set_posting_time"], 1)
+            self.assertEqual(doc.set_posting_time, 0)
+
 
 class TestStampInvoiceOutletClock(unittest.TestCase):
     def setUp(self):
