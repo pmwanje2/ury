@@ -116,6 +116,8 @@ export interface SyncOrderRequest {
   /** absent keeps the order's label; "" clears it */
   guest_label?: string;
   room?: string;
+  approval_token?: string;
+  void_reason?: string;
 }
 
 /**
@@ -228,6 +230,7 @@ export interface ReduceOrderItemQtyResponse {
   order_type: string;
   cancel_kot_names: string[];
   actor: string;
+  approved_by?: string | null;
 }
 
 /**
@@ -251,17 +254,22 @@ export async function reduceOrderItemQty(
   invoiceId: string,
   itemRowName: string,
   newQty: number,
-  reason?: string
+  reason?: string,
+  approvalToken?: string
 ): Promise<ReduceOrderItemQtyResponse> {
   await assertOfflineActionAllowed('quantity reduction');
+  const payload: Record<string, unknown> = {
+    invoice_id: invoiceId,
+    item_row_name: itemRowName,
+    new_qty: newQty,
+    reason,
+  };
+  if (approvalToken) {
+    payload.approval_token = approvalToken;
+  }
   const res = await call.post<{ message: ReduceOrderItemQtyResponse }>(
     'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty',
-    {
-      invoice_id: invoiceId,
-      item_row_name: itemRowName,
-      new_qty: newQty,
-      reason,
-    }
+    payload
   );
   return res.message;
 }

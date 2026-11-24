@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Lock,
   Wallet,
+  KeyRound,
 } from 'lucide-react';
 import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
@@ -24,6 +25,7 @@ import { PrinterStatusButton } from './PrinterWatch';
 import PairTabletDialog from './PairTabletDialog';
 import StaffPinsDialog from './StaffPinsDialog';
 import TillCashDialog from './TillCashDialog';
+import ApprovalPinDialog from './ApprovalPinDialog';
 
 const Header = () => {
   const brand = resolveBrand({ name: 'Maximus POS', logo: '/assets/ury/Images/maximus-mark.svg' });
@@ -40,6 +42,7 @@ const Header = () => {
   const [showStaffPins, setShowStaffPins] = useState(false);
   const [showPairTablet, setShowPairTablet] = useState(false);
   const [showTillCash, setShowTillCash] = useState(false);
+  const [showApprovalPin, setShowApprovalPin] = useState(false);
   const [canManagePins, setCanManagePins] = useState(false);
   const posProfileName = posProfile?.name;
   const cashMovementsEnabled = Number(posProfile?.enable_cash_movements) === 1;
@@ -233,6 +236,14 @@ const Header = () => {
                   <Button
                     variant="ghost"
                     className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    onClick={() => { setShowUserMenu(false); setShowApprovalPin(true); }}
+                  >
+                    <KeyRound className="w-4 h-4 me-3" />
+                    {t('header.my_approval_pin')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="flex justify-start items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                     onClick={handleClearCache}
                   >
                     <RefreshCw className="w-4 h-4 me-3" />
@@ -277,6 +288,12 @@ const Header = () => {
     {cashMovementsEnabled && posProfileName && (
       <TillCashDialog open={showTillCash} onOpenChange={setShowTillCash} />
     )}
+    <ApprovalPinDialog
+      open={showApprovalPin}
+      onOpenChange={setShowApprovalPin}
+      posProfile={posProfileName}
+      canManagePins={canManagePins}
+    />
     {canManagePins && posProfileName && (
       <>
         <StaffPinsDialog open={showStaffPins} onOpenChange={setShowStaffPins} />

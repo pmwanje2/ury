@@ -78,6 +78,7 @@ export interface SplitGroupResponse {
 
 export interface POSInvoiceItem {
   name: string;
+  item_code?: string;
   item_name: string;
   qty: number;
   rate: number;
