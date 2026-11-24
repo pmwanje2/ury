@@ -704,17 +704,20 @@ def getPosInvoice(status, limit, limit_start):
     updatedlist = []
     limit = int(limit)+1
     limit_start = int(limit_start)
+    extra_cols = ""
+    if frappe.db.has_column("POS Invoice", "efris_irn") and frappe.db.has_column("POS Invoice", "efris_status"):
+        extra_cols = ", efris_irn, efris_status"
     if status == "Draft":
         invoices = frappe.db.sql(
-            """
+            f"""
             SELECT 
-                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, pos_profile, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount, ury_client_order_id
+                additional_discount_percentage, discount_amount, ury_client_order_id{extra_cols}
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             AND (invoice_printed = 1 OR (invoice_printed = 0 AND COALESCE(restaurant_table, '') = ''))
@@ -729,15 +732,15 @@ def getPosInvoice(status, limit, limit_start):
         
         docstatus = "Draft"
         invoices = frappe.db.sql(
-            """
+            f"""
             SELECT 
-                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, pos_profile, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
                 custom_split_group, custom_split_from, custom_guest_label,
                 custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount, ury_client_order_id
+                additional_discount_percentage, discount_amount, ury_client_order_id{extra_cols}
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             AND (invoice_printed = 0 AND restaurant_table IS NOT NULL)
@@ -751,14 +754,14 @@ def getPosInvoice(status, limit, limit_start):
     elif status == "Recently Paid":
         docstatus = "Paid"
         invoices = frappe.db.sql(
-            """
+            f"""
             SELECT 
-                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, pos_profile, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from, custom_guest_label,
-                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
+                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id{extra_cols}
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             ORDER BY modified desc
@@ -771,14 +774,14 @@ def getPosInvoice(status, limit, limit_start):
     else:
         
         invoices = frappe.db.sql(
-            """
+            f"""
             SELECT 
-                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, pos_profile, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
                 discount_amount, custom_split_group, custom_split_from, custom_guest_label,
-                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id
+                custom_merged_pos_invoice, custom_merged_total, ury_client_order_id{extra_cols}
             FROM `tabPOS Invoice` 
             WHERE branch = %s AND status = %s 
             ORDER BY modified desc
@@ -823,6 +826,41 @@ def searchPosInvoice(query,status):
             "restaurant_table": ["not in", [None, ""]],  # Check if restaurant_table has value
             "invoice_printed": 0  # Check if invoice_printed is 0
         })
+    search_fields = [
+        "name",
+        "pos_profile",
+        "currency",
+        "conversion_rate",
+        "customer",
+        "customer_name",
+        "no_of_pax",
+        "creation",
+        "grand_total",
+        "posting_date",
+        "posting_time",
+        "order_type",
+        "restaurant_table",
+        "custom_merged_tables",
+        "status",
+        "rounded_total",
+        "net_total",
+        "mobile_number",
+        "invoice_printed",
+        "custom_printing_time",
+        "cashier",
+        "waiter",
+        "total_taxes_and_charges",
+        "custom_split_group",
+        "custom_split_from",
+        "custom_guest_label",
+        "ury_client_order_id",
+        "custom_merged_pos_invoice",
+        "custom_merged_total",
+        "additional_discount_percentage",
+        "discount_amount",
+    ]
+    if frappe.db.has_column("POS Invoice", "efris_irn") and frappe.db.has_column("POS Invoice", "efris_status"):
+        search_fields.extend(["efris_irn", "efris_status"])
     pos_invoices = frappe.get_all(
         "POS Invoice",
         filters=filters,           
@@ -832,38 +870,7 @@ def searchPosInvoice(query,status):
             ["customer_name", "like", f"%{query}%"],
             ["mobile_number", "like", f"%{query}%"],
         ],
-        fields=[
-            "name",
-            "currency",
-            "conversion_rate",
-            "customer",
-            "customer_name",
-            "no_of_pax",
-            "creation",
-            "grand_total",
-            "posting_date",
-            "posting_time",
-            "order_type",
-            "restaurant_table",
-            "custom_merged_tables",
-            "status",
-            "rounded_total",
-            "net_total",
-            "mobile_number",
-            "invoice_printed",
-            "custom_printing_time",
-            "cashier",
-            "waiter",
-            "total_taxes_and_charges",
-            "custom_split_group",
-            "custom_split_from",
-            "custom_guest_label",
-            "ury_client_order_id",
-            "custom_merged_pos_invoice",
-            "custom_merged_total",
-            "additional_discount_percentage",
-            "discount_amount"
-        ],
+        fields=search_fields,
         limit_page_length=10 
     )
     pos_invoices = _enrich_split_group_meta(pos_invoices)
@@ -3092,7 +3099,7 @@ def is_printer_watch_installed() -> dict:
     return {"installed": bool(installed)}
 
 
-_CLOSED_STATUSES = ('Paid', 'Partly Paid', 'Unpaid', 'Overdue', 'Consolidated', 'Return')
+_CLOSED_STATUSES = ('Paid', 'Partly Paid', 'Unpaid', 'Overdue', 'Consolidated', 'Return', 'Credit Note Issued')
 _COPY_LOG = 'URY Bill Reprint Log'
 
 
@@ -3105,13 +3112,40 @@ def _closed_branch(requested=None):
     return branch
 
 
+def _user_assigned_to_till(user: str | None, pos_profile: str | None) -> bool:
+    if not user or not pos_profile:
+        return False
+    return bool(
+        frappe.db.exists(
+            'POS Profile User',
+            {'parent': pos_profile, 'parenttype': 'POS Profile', 'user': user},
+        )
+        or frappe.db.exists('POS Profile User', {'parent': pos_profile, 'user': user})
+    )
+
+
 def _closed_invoice(name, branch, *, for_update=False):
     from ury.ury.doctype.ury_order.ury_order import _enforce_order_access
 
     doc = frappe.get_doc('POS Invoice', name, for_update=for_update)
     if doc.branch != branch or not frappe.has_permission('POS Invoice', 'read', doc=doc):
         frappe.throw('Not permitted to read this check.', frappe.PermissionError)
-    _enforce_order_access(doc, require_modify=False)
+    try:
+        _enforce_order_access(doc, require_modify=False)
+    except frappe.PermissionError:
+        user = getattr(getattr(frappe, 'session', None), 'user', None) or ''
+        roles = set(frappe.get_roles() or [])
+        same_till_cashier = bool(
+            roles.intersection({'URY Cashier', 'URY Manager'})
+            and user
+            and (
+                doc.get('cashier') == user
+                or doc.get('owner') == user
+                or _user_assigned_to_till(user, doc.get('pos_profile'))
+            )
+        )
+        if not same_till_cashier:
+            raise
     if doc.docstatus != 1 or doc.status not in _CLOSED_STATUSES:
         frappe.throw('Only submitted closed checks can be viewed here.')
     return doc
@@ -3140,11 +3174,16 @@ def search_settled_bills(branch: str | None = None, pos_profile: str | None = No
                             page_length=max(1, min(50, cint(page_length))), order_by='posting_date desc, posting_time desc, name desc')
     rows = []
     for row in names:
-        doc = _closed_invoice(row.name, branch)
+        try:
+            doc = _closed_invoice(row.name, branch)
+        except frappe.PermissionError:
+            continue
         data = {key: doc.get(key) for key in ('name', 'posting_date', 'posting_time', 'branch', 'restaurant_table',
                 'pos_profile', 'customer', 'cashier', 'waiter', 'currency', 'grand_total', 'net_total', 'rounded_total',
+                'discount_amount', 'additional_discount_percentage', 'paid_amount', 'change_amount', 'room_number',
+                'is_return', 'return_against', 'custom_reopened_from', 'efris_irn', 'efris_status',
                 'total_taxes_and_charges', 'outstanding_amount', 'status', 'consolidated_invoice')}
-        for child, fields in [('items', ('item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
+        for child, fields in [('items', ('name', 'item_code', 'item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
                               ('payments', ('mode_of_payment', 'amount', 'reference_no', 'reference_date',
                                             'custom_tender_currency', 'custom_tender_amount',
                                             'custom_exchange_rate', 'custom_exchange_rate_date'))]:

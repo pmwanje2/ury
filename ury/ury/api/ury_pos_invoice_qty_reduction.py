@@ -43,6 +43,7 @@ or captain-specific backend branch here. Frontend wiring is out of scope for
 this module.
 """
 
+import inspect
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
@@ -50,6 +51,15 @@ from frappe.utils import cint, flt
 from ury.ury.api.ury_kot_generate import (
 	_line_keyed_items,
 	process_items_for_cancel_kot,
+)
+from ury.ury_pos.void_return_reopen import (
+	CODE_OUTLET_MISMATCH,
+	CODE_VOID_CLOSED_USE_RETURN,
+	CODE_VOID_PARTIAL_PAYMENT,
+	post_waste_stock_entry,
+	received_tender_total,
+	require_pos_override,
+	resolve_pos_reason,
 )
 
 
@@ -79,47 +89,25 @@ def _allowed_order_types(pos_profile_doc):
 
 
 @frappe.whitelist()
-def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, reason=None, approval_token=None):
+def reduce_order_item_qty(
+	invoice_id,
+	item_row_name,
+	new_qty,
+	item_code=None,
+	reason=None,
+	note=None,
+	is_waste=0,
+	approval_token=None,
+):
 	"""Reduce (or fully remove, `new_qty=0`) one item's qty on a printed POS
 	Invoice, for an Order Type the POS Profile has explicitly allowed, and
 	generate the matching partial cancel-KOT for the delta.
 
-	Works identically for a cashier (Register) or captain (order UI) caller
-	-- there is no separate backend path per caller type.
-
-	The item to modify is selected by `item_row_name` -- the actual POS
-	Invoice Item child-table row `name` -- NOT by `item_code`. Matching by
-	item_code alone was ambiguous whenever the same item appeared as more
-	than one row (e.g. added in two separate rounds, or with different
-	comments): it matched the FIRST row with that item_code and, for
-	`new_qty=0`, removed EVERY row sharing that item_code rather than just
-	the one row the caller meant. `item_code`, if given, is only used as a
-	secondary sanity check against the resolved row.
-
-	Steps (see module docstring for the full rationale of each):
-	  1. Load the POS Invoice and resolve its Order Type.
-	  2. Check that Order Type against the POS Profile's configurable
-	     allow-list; raise `ORDER_TYPE_NOT_ALLOWED` (specific, not the
-	     generic post-print block) if not allowed.
-	  3. Resolve the exact item row by `item_row_name`.
-	  4. Validate `new_qty` is a real, integer reduction:
-	     `0 <= new_qty < current_qty`.
-	  5. Reject a `new_qty=0` that would leave the invoice with zero items --
-	     the whole invoice must be cancelled instead.
-	  6. Set `frappe.flags.ury_qty_reduction` around the save so
-	     `validate_invoice`'s guard does not fire for this legitimate write.
-	  7. Update the invoice item's qty (0 = full removal of that item row).
-	  8. Reuse `process_items_for_cancel_kot` (which itself reuses
-	     `create_cancel_kot_doc`) to create a partial cancel-KOT for exactly
-	     the reduced delta.
-
-	The permission check and the `actor` recorded on the result are always
-	`frappe.session.user` -- never a caller-supplied value. An `actor`
-	argument accepted from the client would be forgeable and must never be
-	used as the authority for a permission decision or an audit trail.
-
-	Returns a dict with the created cancel-KOT name(s) and the updated
-	invoice state.
+	Sent items require an active reason and either `may_perform` or a manager
+	PIN `approval_token` (`void_sent_item` for removal to 0, `reduce_sent_qty`
+	for partial reduction). Unsent (`ury_held == 1`) items stay free (Simphony
+	error correct). When the reason is waste, posts a native ERPNext Stock Entry
+	(Material Issue / Wastage) and links it to the cancel KOT.
 	"""
 	actor = frappe.session.user
 
@@ -128,10 +116,30 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 
 	pos_invoice = frappe.get_doc("POS Invoice", invoice_id, for_update=True)
 
+	if cint(pos_invoice.get("docstatus")) == 1:
+		raise QtyReductionError(
+			CODE_VOID_CLOSED_USE_RETURN,
+			_("Closed checks cannot be modified here. Process a return instead. [{0}]").format(
+				CODE_VOID_CLOSED_USE_RETURN
+			),
+		)
+
 	if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice, user=actor):
 		raise QtyReductionError(
 			NOT_PERMITTED, _("Not permitted to modify invoice {0}").format(invoice_id)
 		)
+
+	# Outlet/branch scoping: never modify a check belonging to another outlet.
+	inv_branch = pos_invoice.get("branch")
+	if actor != "Administrator" and isinstance(inv_branch, str) and inv_branch:
+		from ury.ury_pos.api import getBranch
+
+		user_branch = getBranch()
+		if isinstance(user_branch, str) and user_branch and user_branch != inv_branch:
+			frappe.throw(
+				_("Not permitted to modify a check from another outlet. [{0}]").format(CODE_OUTLET_MISMATCH),
+				frappe.PermissionError,
+			)
 
 	order_type = pos_invoice.get("order_type")
 	pos_profile = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
@@ -207,6 +215,22 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 			).format(item_code, invoice_id),
 		)
 
+	# Guard against reducing a partially paid open check below already-received tender.
+	received_paid = received_tender_total(pos_invoice)
+	if received_paid > 0:
+		rate = flt(item_row.get("rate"))
+		current_total = flt(pos_invoice.get("rounded_total") or pos_invoice.get("grand_total"))
+		if current_total <= 0:
+			current_total = sum(flt(r.get("qty")) * flt(r.get("rate")) for r in pos_invoice.items)
+		projected_total = current_total + (delta * rate)
+		if projected_total < received_paid - 1e-6:
+			raise QtyReductionError(
+				CODE_VOID_PARTIAL_PAYMENT,
+				_(
+					"Cannot reduce items below payments already received on this check. [{0}]"
+				).format(CODE_VOID_PARTIAL_PAYMENT),
+			)
+
 	pos_profile_id = pos_invoice.pos_profile
 	kot_naming_series = pos_profile.custom_kot_naming_series
 	held = cint(item_row.get("ury_held")) == 1
@@ -220,13 +244,34 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		)
 	cancel_kot_naming_series = "CNCL-" + (kot_naming_series or "")
 
-	approved_by = None
+	# Sent items require reason + privilege/manager PIN (Simphony Opt 135 keeps unsent/held free).
+	approver = None
+	reason_info = None
 	if not held:
-		from ury.ury_pos import override
-
+		privilege = "void_sent_item" if new_qty == 0 else "reduce_sent_qty"
+		fallback_privs = ("void_sent_item",) if privilege == "reduce_sent_qty" else ()
 		voided_qty = flt(current_qty) - flt(new_qty)
 		voided_amount = round(flt(item_row.get("rate") or 0) * voided_qty, 4)
+		reason_info = resolve_pos_reason(
+			privilege,
+			pos_profile.name,
+			reason,
+			note=note,
+			is_waste=is_waste,
+			fallback_privileges=fallback_privs,
+		)
 		claim = {
+			"invoice": invoice_id,
+			"item_row_name": item_row_name,
+			"item_code": item_code,
+			"previous_qty": float(current_qty),
+			"new_qty": float(new_qty),
+			"delta": float(delta),
+			"reason": reason_info["code"],
+			"note": reason_info["note"],
+			"is_waste": 1 if reason_info["is_waste"] else 0,
+		}
+		b2a_compat_claim = {
 			"action": "reduce_order_item_qty",
 			"item_row_name": item_row_name,
 			"item_code": item_code,
@@ -235,17 +280,18 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 			"amount": voided_amount,
 			"reason": (reason or "").strip(),
 		}
-		approval = override.require(
-			"void_sent_item",
+		approver = require_pos_override(
+			privilege,
 			pos_profile.name,
-			pos_invoice.name,
+			"POS Invoice",
+			invoice_id,
 			claim,
-			token=approval_token,
+			approval_token=approval_token,
 			amount=voided_amount,
+			doc=pos_invoice,
+			fallback_privileges=fallback_privs,
+			alt_claim=b2a_compat_claim,
 		)
-		override.mark_verified_approval(pos_invoice, "void_sent_item", approval)
-		if approval:
-			approved_by = approval.approver
 
 	from ury.ury.api.ury_availability import apply_count_delta
 
@@ -292,21 +338,42 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 			reconcile_order_reservations(order_ref=pos_invoice.name, previous_items=previous,
 				accepted_items=_previous_line_snapshot(pos_invoice.items), branch=pos_invoice.branch,
 				company=pos_invoice.company, actor=actor)
-		if held and new_qty == 0 and pos_invoice.docstatus == 0:
-			# ERPNext validates positive draft quantities again at settlement.
+		if new_qty == 0 and pos_invoice.docstatus == 0:
+			# ERPNext v16 validate_qty_is_not_zero() rejects qty==0 rows on draft POS Invoices.
 			pos_invoice.remove(item_row)
 		pos_invoice.save(ignore_permissions=False)
 	finally:
 		frappe.flags.ury_qty_reduction = False
 
-	# Reuse the existing cancel-KOT creation path for exactly the delta.
+	# Reuse the existing cancel-KOT creation path for exactly the delta, carrying void/waste reason.
 	created_kot_names = []
+	waste_stock_entry = None
 	if not held:
+		cancel_comment = reason_info["display"] if reason_info else reason
+		cancel_kwargs = {}
+		if reason_info and "void_reason_code" in inspect.signature(process_items_for_cancel_kot).parameters:
+			cancel_kwargs["void_reason_code"] = reason_info["code"]
 		created_kot_names = process_items_for_cancel_kot(
 			invoice_id, pos_invoice.customer, pos_invoice.get("restaurant_table"),
-			[{**cancel_line, "qty": delta}], reason, pos_profile_id, cancel_kot_naming_series,
-			"Partially cancelled", previous_items_snapshot,
+			[{**cancel_line, "qty": delta}], cancel_comment, pos_profile_id, cancel_kot_naming_series,
+			"Partially cancelled", previous_items_snapshot, **cancel_kwargs,
 		)
+		if reason_info and reason_info["is_waste"]:
+			waste_stock_entry = post_waste_stock_entry(
+				pos_invoice,
+				pos_profile,
+				[
+					{
+						"item_code": item_code,
+						"qty": abs(delta),
+						"warehouse": item_row.get("warehouse"),
+						"uom": item_row.get("uom"),
+					}
+				],
+				reason_info,
+				cancel_kot_names=created_kot_names,
+				approver=approver,
+			)
 
 	return {
 		"invoice": invoice_id,
@@ -318,5 +385,9 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		"order_type": order_type,
 		"cancel_kot_names": created_kot_names,
 		"actor": actor,
-		"approved_by": approved_by,
+		"approver": approver,
+		"approved_by": approver,
+		"reason": reason_info["code"] if reason_info else reason,
+		"is_waste": bool(reason_info["is_waste"]) if reason_info else False,
+		"waste_stock_entry": waste_stock_entry,
 	}
