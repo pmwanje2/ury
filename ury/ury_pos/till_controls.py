@@ -109,6 +109,8 @@ def _may_perform_till_privilege(
 	is_non_interactive = getattr(override_mod, "_is_non_interactive_or_agent_session", None) if override_mod else None
 	if callable(is_non_interactive) and is_non_interactive(user):
 		return False
+	if user == "Administrator":
+		return True
 	if override_mod and _has_configured_rules(profile.company, privilege):
 		code = _resolve_privilege_code(override_mod, privilege, fallback_privilege)
 		return bool(override_mod.may_perform(user, profile.name, code, amount=amount))
@@ -1017,10 +1019,10 @@ def get_shift_x_report(pos_profile: str, pos_opening_entry: str | None = None) -
 def _can_perform_over_short_solo(user: str, profile, opening_user: str | None, max_abs_diff: float) -> bool:
 	"""Whether ``user`` may submit an over-tolerance closing variance without a second-person PIN.
 
-	- When POS Privilege Rule rows exist for the company: requires an active `over_short_close`
-	  rule with `may_perform=1` covering ``max_abs_diff``, AND either `allow_self_approval=1` or
-	  `user != opening_user` (so a cashier/manager never self-approves their own till variance
-	  unless explicitly allowed by policy).
+	- When POS Privilege Rule rows exist for the company: delegates to B2a's ``override.may_perform``
+	  for ``over_short_close`` covering ``max_abs_diff`` (so ``may_perform=1`` roles may act alone
+	  within their ``max_amount`` cap, while ``may_perform=0`` roles such as ``URY Cashier`` and
+	  over-cap variances strictly require a second-person PIN).
 	- When no POS Privilege Rule rows exist (unconfigured site): keeps legacy manager roles usable
 	  while ALWAYS requiring a manager PIN for non-managers (e.g. URY Cashier).
 	"""
@@ -1030,29 +1032,32 @@ def _can_perform_over_short_solo(user: str, profile, opening_user: str | None, m
 	is_non_interactive = getattr(override_mod, "_is_non_interactive_or_agent_session", None) if override_mod else None
 	if callable(is_non_interactive) and is_non_interactive(user):
 		return False
+	if user == "Administrator":
+		return True
 	if override_mod and _has_configured_rules(profile.company, "over_short_close"):
 		code = _resolve_privilege_code(override_mod, "over_short_close")
-		if not override_mod.may_perform(user, profile.name, code, amount=max_abs_diff):
-			return False
-		if opening_user and user.casefold() == opening_user.casefold():
-			# Respect allow_self_approval on the matching rule (default 0 blocks self-approval of own till)
-			roles = list(frappe.get_roles(user))
-			rules = frappe.get_all(
-				"POS Privilege Rule",
-				filters={
-					"company": profile.company,
-					"privilege": code,
-					"role": ["in", roles],
-					"pos_profile": ["in", [profile.name, "", None]],
-				},
-				fields=["allow_self_approval", "may_perform"],
-			)
-			if not any(cint(r.get("may_perform")) == 1 and cint(r.get("allow_self_approval")) == 1 for r in rules):
-				return False
-		return True
+		return bool(override_mod.may_perform(user, profile.name, code, amount=max_abs_diff))
 
 	roles = set(frappe.get_roles(user))
-	return user == "Administrator" or bool(LEGACY_MANAGER_ROLES & roles)
+	return bool(LEGACY_MANAGER_ROLES & roles)
+
+
+def _refuse_if_pending_movements(opening_name: str) -> None:
+	pending = frappe.get_all(
+		"Journal Entry",
+		filters={"custom_pos_opening_entry": opening_name, "docstatus": 0},
+		pluck="name",
+	)
+	if pending:
+		frappe.throw(
+			coded_message(
+				"CLOSE-PENDING-MOVEMENT",
+				_(
+					"Submit or delete the shift's pending cash movements "
+					"before closing: {0}."
+				).format(", ".join(pending)),
+			)
+		)
 
 
 def _cash_variances_above_tolerance(doc, profile):
@@ -1185,11 +1190,14 @@ def validate_closing_controls(doc, method=None) -> None:
 			)
 		)
 
+	flags = getattr(doc, "flags", None)
+	if not getattr(flags, "pos_force_close", False):
+		_refuse_if_pending_movements(opening_name)
+
 	profile_name = doc.get("pos_profile") or opening.pos_profile
 	if not profile_name or not frappe.db.exists("POS Profile", profile_name):
 		return
 	profile = frappe.get_doc("POS Profile", profile_name)
-	flags = getattr(doc, "flags", None)
 
 	# Gate: closing another person's till
 	session_user = frappe.session.user
@@ -1468,6 +1476,8 @@ def close_till_with_controls(
 		frappe.throw(coded_message("CASH-SHIFT", _("POS shift not found on {0}.").format(profile.name)))
 	if cint(opening.docstatus) != 1 or opening.status != "Open":
 		frappe.throw(coded_message("CLOSE-ALREADY-CLOSED", _("This shift ({0}) is already closed.").format(opening.name)))
+
+	_refuse_if_pending_movements(opening.name)
 
 	# Fail fast when closing another person's till without permission or PIN token,
 	# but DEFER override.consume(close_other_approval_token) until after variance checks
