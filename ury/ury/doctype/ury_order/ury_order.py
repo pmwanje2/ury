@@ -22,9 +22,11 @@ from ury.ury_pos.discount import (
     get_check_discounts as _get_check_discounts_impl,
     list_discount_options as _list_discount_options_impl,
     parse_discount_request,
+    _read_meta as _read_discount_meta,
     _restore_doc_discount_state,
     _set_row_field,
     _snapshot_doc_discount_state,
+    _write_discount_audit_fields,
 )
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
@@ -991,7 +993,7 @@ def _prepare_consolidated_discount(destination, sources):
     if not discounted:
         return None
 
-    bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _, _ in discounted}
+    bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _pct, _amt in discounted}
     if len(bases) > 1:
         frappe.throw(
             _("Cannot merge checks with bill discounts applied on different bases ({0}).").format(
@@ -1002,14 +1004,28 @@ def _prepare_consolidated_discount(destination, sources):
 
     all_pcts = [flt(bill.get("additional_discount_percentage")) for bill in all_bills]
     coupons = {bill.get("coupon_code") for bill in all_bills if bill.get("coupon_code")}
-    reasons = [bill.get("custom_discount_reason") for bill, _, _ in discounted if bill.get("custom_discount_reason")]
-    notes = [bill.get("custom_discount_note") for bill, _, _ in discounted if bill.get("custom_discount_note")]
-    approvers = [
-        (bill.get("custom_discount_approver"), flt(bill.get("custom_discount_approved_percent")))
-        for bill, _, _ in discounted
-        if bill.get("custom_discount_approver")
-    ]
+    reasons = []
+    reason_descriptions = []
+    notes = []
+    approvers = []
+    merged_line_reasons = {}
+    for bill, _pct, _amt in discounted:
+        bmeta = _read_discount_meta(bill)
+        r = bill.get("custom_discount_reason") or bmeta.get("reason")
+        if r:
+            reasons.append(r)
+            reason_descriptions.append(bmeta.get("reason_description") or r)
+        n = bill.get("custom_discount_note") or bmeta.get("note")
+        if n:
+            notes.append(n)
+        ap = bill.get("custom_discount_approver") or bmeta.get("approver")
+        if ap:
+            ap_pct = flt(bill.get("custom_discount_approved_percent")) or flt(bmeta.get("approved_percent"))
+            approvers.append((ap, ap_pct))
+        if isinstance(bmeta.get("line_reasons"), dict):
+            merged_line_reasons.update(bmeta["line_reasons"])
     carry_reason = reasons[0] if reasons else None
+    carry_reason_desc = reason_descriptions[0] if reason_descriptions else carry_reason
     carry_note = "; ".join(dict.fromkeys(notes)) if notes else None
     carry_approver, carry_approved_pct = approvers[0] if approvers else (None, 0.0)
 
@@ -1020,9 +1036,11 @@ def _prepare_consolidated_discount(destination, sources):
             "discount_amount": None,
             "clear_coupon": len(coupons) > 1,
             "reason": carry_reason,
+            "reason_description": carry_reason_desc,
             "note": carry_note,
             "approver": carry_approver,
             "approved_percent": carry_approved_pct,
+            "line_reasons": merged_line_reasons,
         }
 
     return {
@@ -1031,9 +1049,11 @@ def _prepare_consolidated_discount(destination, sources):
         "discount_amount": sum(amt for _, _, amt in discounted),
         "clear_coupon": True,
         "reason": carry_reason,
+        "reason_description": carry_reason_desc,
         "note": carry_note,
         "approver": carry_approver,
         "approved_percent": carry_approved_pct,
+        "line_reasons": merged_line_reasons,
     }
 
 
@@ -1150,10 +1170,22 @@ def consolidate_checks(destination, sources):
             destination.discount_amount = discount_plan["discount_amount"]
         if discount_plan.get("clear_coupon") and hasattr(destination, "coupon_code"):
             destination.coupon_code = None
-        if discount_plan.get("reason"):
-            destination.set("custom_discount_reason", discount_plan["reason"])
-        if discount_plan.get("note"):
-            destination.set("custom_discount_note", discount_plan["note"])
+        if (
+            discount_plan.get("reason")
+            or discount_plan.get("note")
+            or discount_plan.get("approver")
+            or discount_plan.get("line_reasons")
+        ):
+            _write_discount_audit_fields(
+                destination,
+                reason=discount_plan.get("reason"),
+                reason_description=discount_plan.get("reason_description"),
+                note=discount_plan.get("note"),
+                coupon=destination.get("coupon_code") if hasattr(destination, "coupon_code") else None,
+                approver=discount_plan.get("approver"),
+                approved_percent=discount_plan.get("approved_percent") or 0.0,
+                line_reasons=discount_plan.get("line_reasons") or {},
+            )
         if discount_plan.get("approver"):
             destination.flags.discount_approval = frappe._dict(
                 approver=discount_plan["approver"],
@@ -1190,13 +1222,16 @@ def consolidate_checks(destination, sources):
     destination.set_outstanding_amount()
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
+    prev_merge_flag = getattr(frappe.flags, "in_bill_merge_sync", False)
     frappe.flags.ury_server_tender_received = True
     frappe.flags.ury_server_discount_write = True
+    frappe.flags.in_bill_merge_sync = True
     try:
         destination.save()
     finally:
         frappe.flags.ury_server_tender_received = prev_tender_flag
         frappe.flags.ury_server_discount_write = prev_disc_flag
+        frappe.flags.in_bill_merge_sync = prev_merge_flag
 
     for source in sources:
         for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
