@@ -142,11 +142,11 @@ class TestPrivilegedContractParity(TestPricingPrivilegedActions):
         import sys
         import types
 
-        # Install minimal frappe.utils stubs needed by ury.ury_pos.api import
-        utils_mod = self.h.frappe.utils
+        self._import_pricing_actions()
+        utils_mod = sys.modules["frappe.utils"]
         utils_mod.nestedset = types.SimpleNamespace()
         utils_mod.validate_phone_number = lambda v, throw=False: True
-        self.h.frappe.get_meta = lambda dt: types.SimpleNamespace(has_field=lambda fn: False)
+        sys.modules["frappe"].get_meta = lambda dt: types.SimpleNamespace(has_field=lambda fn: False)
         sys.modules.pop("ury.ury_pos.api", None)
         api_mod = importlib.import_module("ury.ury_pos.api")
         orig_get_branch = api_mod.getBranch
