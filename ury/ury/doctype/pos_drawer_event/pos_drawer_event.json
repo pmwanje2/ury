@@ -1,0 +1,171 @@
+{
+ "doctype": "DocType",
+ "name": "POS Drawer Event",
+ "module": "URY POS",
+ "engine": "InnoDB",
+ "autoname": "format:PDE-{YYYY}-{#####}",
+ "field_order": [
+  "event_type",
+  "company",
+  "pos_profile",
+  "branch",
+  "pos_opening_entry",
+  "pos_closing_entry",
+  "operator",
+  "approver",
+  "reason",
+  "note",
+  "drawer_expected_cash",
+  "threshold_amount",
+  "drawer_kick_sent",
+  "open_checks_snapshot",
+  "event_time"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_type",
+   "label": "Event Type",
+   "fieldtype": "Select",
+   "options": "No Sale\nThreshold Exception\nTill Reopen\nForce Close",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "company",
+   "label": "Company",
+   "fieldtype": "Link",
+   "options": "Company",
+   "reqd": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "pos_profile",
+   "label": "POS Profile",
+   "fieldtype": "Link",
+   "options": "POS Profile",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "branch",
+   "label": "Branch",
+   "fieldtype": "Link",
+   "options": "Branch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pos_opening_entry",
+   "label": "POS Opening Entry",
+   "fieldtype": "Link",
+   "options": "POS Opening Entry",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "pos_closing_entry",
+   "label": "POS Closing Entry",
+   "fieldtype": "Link",
+   "options": "POS Closing Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "operator",
+   "label": "Operator",
+   "fieldtype": "Link",
+   "options": "User",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "approver",
+   "label": "Approved By",
+   "fieldtype": "Link",
+   "options": "User",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "reason",
+   "label": "Reason",
+   "fieldtype": "Data",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "note",
+   "label": "Note",
+   "fieldtype": "Small Text",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drawer_expected_cash",
+   "label": "Expected Drawer Cash",
+   "fieldtype": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "threshold_amount",
+   "label": "Threshold Amount",
+   "fieldtype": "Currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drawer_kick_sent",
+   "label": "Drawer Kick Sent",
+   "fieldtype": "Check",
+   "default": "0",
+   "read_only": 1
+  },
+  {
+   "fieldname": "open_checks_snapshot",
+   "label": "Open Checks Snapshot",
+   "fieldtype": "Small Text",
+   "read_only": 1
+  },
+  {
+   "fieldname": "event_time",
+   "label": "Event Time",
+   "fieldtype": "Datetime",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "search_index": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "URY Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "URY Admin",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "event_time",
+ "sort_order": "DESC",
+ "track_changes": 0
+}
