@@ -17,6 +17,7 @@ Site-less unit tests (frappe double, no bench):
 - Open-check rate stability in validate_price_list after serving period boundary passes.
 """
 
+import ast
 import csv
 import importlib.util
 import json
@@ -710,6 +711,467 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
             )
             saved_doc.set_pos_fields(for_validate=True)
             self.assertEqual(saved_doc.selling_price_list, "Breakfast Prices")
+
+    def test_before_validate_reprices_forged_item_rate_even_when_selling_price_list_matches(self):
+        """R3 Blocker 1 (P0): Direct REST POST with authentic selling_price_list + forged price_list_rate=1/rate=1."""
+        frappe_mock, utils = _make_frappe()
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        dayparts, hooks = self._load_hooks(frappe_mock, utils)
+
+        frappe_mock.get_all.side_effect = lambda dt, **kw: (
+            self._periods() if dt == "URY Restaurant Serving Period" else []
+        )
+
+        def db_get_value(dt, flt=None, field=None, **kw):
+            if dt == "POS Profile":
+                if isinstance(field, (list, tuple)):
+                    return Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=0)
+                if field == "ury_offline_capture":
+                    return 0
+                return "Main Branch A" if field == "branch" else "Rest A"
+            if dt == "URY Branch Operating Schedule":
+                return "Africa/Kampala"
+            if dt == "URY Restaurant":
+                if isinstance(flt, dict):
+                    return "Rest A"
+                return "Standard Menu" if field == "active_menu" else 0
+            if dt == "Price List":
+                if field == "enabled":
+                    return 1
+                return "Standard UGX"
+            if dt == "Item Price":
+                if isinstance(flt, dict) and flt.get("price_list") == "Standard UGX" and flt.get("item_code") == "KH-BURGER-18":
+                    return 20000.0
+                return None
+            return None
+
+        frappe_mock.db.get_value.side_effect = db_get_value
+
+        real_eat = datetime(2026, 11, 24, 16, 3, 0)
+        doc = Row(
+            name=None,
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk In Guest",
+            # Attacker sends the authentic current selling_price_list alongside forged rate=1!
+            selling_price_list="Standard UGX",
+            items=[
+                Row(
+                    item_code="KH-BURGER-18",
+                    qty=1,
+                    price_list_rate=1.0,
+                    rate=1.0,
+                    discount_percentage=50.0,
+                    discount_amount=0.5,
+                    ignore_pricing_rule=1,
+                )
+            ],
+            flags=SimpleNamespace(),
+        )
+        doc.is_new = lambda: True
+        doc.get_doc_before_save = lambda: None
+
+        with patch.object(
+            dayparts,
+            "resolve_outlet_local_datetime",
+            return_value=(real_eat, "16:03:00", "Tue"),
+        ):
+            hooks.before_validate(doc, "before_validate")
+
+        self.assertEqual(doc.selling_price_list, "Standard UGX")
+        self.assertEqual(doc["items"][0].price_list_rate, 20000.0)
+        self.assertEqual(doc["items"][0].rate, 20000.0)
+        self.assertEqual(doc["items"][0].discount_percentage, 0)
+        self.assertEqual(doc["items"][0].discount_amount, 0)
+        self.assertEqual(doc["items"][0].ignore_pricing_rule, 0)
+
+    def test_before_validate_rejects_forged_override_flags_on_new_post_but_preserves_verified_overrides_and_discounts(self):
+        """R3 Blocker 1: Untrusted new POST cannot forge #152 override flags; verified #152 & #148 flows stay intact."""
+        frappe_mock, utils = _make_frappe()
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        dayparts, hooks = self._load_hooks(frappe_mock, utils)
+
+        frappe_mock.get_all.side_effect = lambda dt, **kw: (
+            self._periods() if dt == "URY Restaurant Serving Period" else []
+        )
+
+        def db_get_value(dt, flt=None, field=None, **kw):
+            if dt == "POS Profile":
+                if isinstance(field, (list, tuple)):
+                    return Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=0)
+                if field == "ury_offline_capture":
+                    return 0
+                return "Main Branch A" if field == "branch" else "Rest A"
+            if dt == "URY Branch Operating Schedule":
+                return "Africa/Kampala"
+            if dt == "URY Restaurant":
+                if isinstance(flt, dict):
+                    return "Rest A"
+                return "Standard Menu" if field == "active_menu" else 0
+            if dt == "Price List":
+                if field == "enabled":
+                    return 1
+                return "Standard UGX"
+            if dt == "Item Price":
+                if isinstance(flt, dict) and flt.get("price_list") == "Standard UGX" and flt.get("item_code") == "KH-BURGER-18":
+                    return 20000.0
+                return None
+            return None
+
+        frappe_mock.db.get_value.side_effect = db_get_value
+        real_eat = datetime(2026, 11, 24, 16, 3, 0)
+
+        # 1. Forged #152 open-item / price-override approver on untrusted new REST POST -> 403 PermissionError
+        forged_doc = Row(
+            name=None,
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk In Guest",
+            selling_price_list="Standard UGX",
+            items=[
+                Row(
+                    item_code="KH-BURGER-18",
+                    qty=1,
+                    price_list_rate=1.0,
+                    rate=1.0,
+                    custom_is_open_item=1,
+                    custom_price_override_approver="manager@example.com",
+                )
+            ],
+            flags=SimpleNamespace(),
+        )
+        forged_doc.is_new = lambda: True
+        forged_doc.get_doc_before_save = lambda: None
+        with patch.object(dayparts, "resolve_outlet_local_datetime", return_value=(real_eat, "16:03:00", "Tue")):
+            with self.assertRaisesRegex(frappe_mock.PermissionError, r"POS-AUTH-REQUIRED"):
+                hooks.before_validate(forged_doc, "before_validate")
+
+        # 2. Legitimate #152 Open Item via _insert_verified (ury_privileged_action_verified=True) -> rate preserved!
+        open_item_doc = Row(
+            name=None,
+            pos_profile="POS Profile A",
+            order_type="Take Away",
+            customer="Walk In Guest",
+            selling_price_list="Standard UGX",
+            items=[
+                Row(
+                    item_code="KH-OPEN-ITEM",
+                    qty=1,
+                    price_list_rate=7500.0,
+                    rate=7500.0,
+                    custom_is_open_item=1,
+                    custom_price_override_approver="manager@example.com",
+                )
+            ],
+            flags=SimpleNamespace(ury_privileged_action_verified=True),
+        )
+        open_item_doc.is_new = lambda: True
+        open_item_doc.get_doc_before_save = lambda: None
+        with patch.object(dayparts, "resolve_outlet_local_datetime", return_value=(real_eat, "16:03:00", "Tue")):
+            hooks.before_validate(open_item_doc, "before_validate")
+        self.assertEqual(open_item_doc["items"][0].rate, 7500.0)
+        self.assertEqual(open_item_doc["items"][0].price_list_rate, 7500.0)
+
+        # 3. Persisted #152 Manager Price Override on existing invoice -> preserved across resaves (even if PL corrected)
+        persisted_override_doc = Row(
+            name="MFUA00050",
+            pos_profile="POS Profile A",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            order_type="Take Away",
+            customer="Walk In Guest",
+            selling_price_list="Happy Hour UGX",  # forces pl_corrected=True -> Standard UGX
+            items=[
+                Row(
+                    name="ROW-OV-1",
+                    item_code="KH-BURGER-18",
+                    qty=1,
+                    price_list_rate=12000.0,
+                    rate=12000.0,
+                    custom_price_overridden=1,
+                    custom_price_override_approver="manager@example.com",
+                )
+            ],
+            flags=SimpleNamespace(),
+        )
+        persisted_override_doc.is_new = lambda: False
+        persisted_override_doc.get_doc_before_save = lambda: Row(
+            name="MFUA00050",
+            selling_price_list="Standard UGX",
+            custom_serving_period="All Day Dining",
+            custom_transaction_local_time="16:00:00",
+            custom_transaction_weekday="Tue",
+            items=[
+                Row(
+                    name="ROW-OV-1",
+                    item_code="KH-BURGER-18",
+                    qty=1,
+                    price_list_rate=12000.0,
+                    rate=12000.0,
+                    custom_price_overridden=1,
+                    custom_price_override_approver="manager@example.com",
+                )
+            ],
+        )
+        with patch.object(dayparts, "resolve_outlet_local_datetime", return_value=(real_eat, "16:03:00", "Tue")):
+            hooks.before_validate(persisted_override_doc, "before_validate")
+        self.assertEqual(persisted_override_doc["items"][0].rate, 12000.0)
+
+        # 4. #148 server-authorized discount write -> preserved untouched
+        frappe_mock.flags.ury_server_discount_write = True
+        try:
+            disc_doc = Row(
+                name="MFUA00051",
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                selling_price_list="Standard UGX",
+                additional_discount_percentage=10.0,
+                items=[Row(name="ROW-D-1", item_code="KH-BURGER-18", qty=1, price_list_rate=20000.0, rate=18000.0)],
+                flags=SimpleNamespace(),
+            )
+            disc_doc.is_new = lambda: False
+            disc_doc.get_doc_before_save = lambda: Row(
+                name="MFUA00051",
+                selling_price_list="Standard UGX",
+                custom_serving_period="All Day Dining",
+                custom_transaction_local_time="16:00:00",
+                custom_transaction_weekday="Tue",
+                items=[Row(name="ROW-D-1", item_code="KH-BURGER-18", qty=1, price_list_rate=20000.0, rate=20000.0)],
+            )
+            with patch.object(dayparts, "resolve_outlet_local_datetime", return_value=(real_eat, "16:03:00", "Tue")):
+                hooks.before_validate(disc_doc, "before_validate")
+            self.assertEqual(disc_doc["items"][0].rate, 18000.0)
+        finally:
+            frappe_mock.flags.ury_server_discount_write = False
+
+    def test_custom_pos_invoice_validate_restores_outlet_timezone_after_sales_time_pricing_server_script(self):
+        """R3 Blocker 2a: CustomPOSInvoice.validate() restores outlet TZ before super().validate() after sales-time-pricing@1 overwrites it."""
+        frappe_mock, utils = _make_frappe()
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        seen_in_super = []
+
+        class BasePOSInvoice:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+                self.flags = SimpleNamespace()
+
+            def get(self, key, default=None):
+                return self.__dict__.get(key, default)
+
+            def validate(self):
+                seen_in_super.append(
+                    (
+                        self.get("custom_transaction_local_time"),
+                        self.get("custom_transaction_weekday"),
+                        self.get("custom_serving_period"),
+                    )
+                )
+
+        erpnext_pos_mod = _stub(
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice",
+            POSInvoice=BasePOSInvoice,
+            get_stock_availability=MagicMock(),
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.doctype.ury_order.ury_order": _stub(
+                "ury.ury.doctype.ury_order.ury_order", release_merge_cluster_tables=MagicMock()
+            ),
+            "ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+                "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+                get_applicable_policy=MagicMock(),
+            ),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                prorate_return_discount=MagicMock(),
+                validate_pos_discount=MagicMock(),
+            ),
+            "erpnext": _stub("erpnext"),
+            "erpnext.accounts": _stub("erpnext.accounts"),
+            "erpnext.accounts.doctype": _stub("erpnext.accounts.doctype"),
+            "erpnext.accounts.doctype.pos_invoice": _stub("erpnext.accounts.doctype.pos_invoice"),
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice": erpnext_pos_mod,
+        }
+        with patch.dict(sys.modules, modules):
+            dayparts = _load("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+            pos_inv_mod = _load("ury.ury.class_overrides.pos_invoice", URY_PKG / "ury/class_overrides/pos_invoice.py")
+
+            frappe_mock.get_all.side_effect = lambda dt, **kw: (
+                self._periods() if dt == "URY Restaurant Serving Period" else []
+            )
+            frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+                Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=0)
+                if dt == "POS Profile" and isinstance(field, (list, tuple))
+                else ("Africa/Kampala" if dt == "URY Branch Operating Schedule" else ("Standard UGX" if dt == "Price List" else ("Standard Menu" if field == "active_menu" else 0)))
+            )
+
+            doc = pos_inv_mod.CustomPOSInvoice(
+                name=None,
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                restaurant_table=None,
+                order_type="Take Away",
+                customer="Walk In Guest",
+                items=[],
+            )
+            doc.is_new = lambda: True
+            doc.get_doc_before_save = lambda: None
+
+            # 1. before_validate stamps Africa/Kampala 18:17:14 Tue
+            kampala_dt = datetime(2026, 11, 24, 18, 17, 14)
+            with patch.object(dayparts, "resolve_outlet_local_datetime", return_value=(kampala_dt, "18:17:14", "Tue")):
+                hooks.before_validate(doc, "before_validate")
+
+            # 2. Simulate sales-time-pricing@1 Before Validate Server Script overwriting with Asia/Kolkata site clock!
+            doc.custom_transaction_local_time = "20:47:14"
+            doc.custom_transaction_weekday = "Wed"
+
+            # 3. CustomPOSInvoice.validate() MUST restore Africa/Kampala time BEFORE super().validate() (apply_pricing_rule)
+            doc.validate()
+
+            self.assertEqual(seen_in_super, [("18:17:14", "Tue", None)])
+            self.assertEqual(doc.custom_transaction_local_time, "18:17:14")
+            self.assertEqual(doc.custom_transaction_weekday, "Tue")
+
+    def test_offline_capture_keeps_set_posting_time_zero_across_before_validate_while_honoring_capture_window(self):
+        """R3 Blocker 2b: Verified offline replay never triggers SALES-TIME-005 (set_posting_time=0) while honoring captured window."""
+        frappe_mock, utils = _make_frappe()
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        seen_in_super = []
+
+        class BasePOSInvoice:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+                self.flags = SimpleNamespace()
+
+            def get(self, key, default=None):
+                return self.__dict__.get(key, default)
+
+            def validate(self):
+                seen_in_super.append(
+                    {
+                        "local_time": self.get("custom_transaction_local_time"),
+                        "weekday": self.get("custom_transaction_weekday"),
+                        "posting_date": self.get("posting_date"),
+                        "posting_time": self.get("posting_time"),
+                        "set_posting_time": self.get("set_posting_time"),
+                    }
+                )
+
+        erpnext_pos_mod = _stub(
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice",
+            POSInvoice=BasePOSInvoice,
+            get_stock_availability=MagicMock(),
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.doctype.ury_order.ury_order": _stub(
+                "ury.ury.doctype.ury_order.ury_order", release_merge_cluster_tables=MagicMock()
+            ),
+            "ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+                "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+                get_applicable_policy=MagicMock(),
+            ),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                prorate_return_discount=MagicMock(),
+                validate_pos_discount=MagicMock(),
+            ),
+            "erpnext": _stub("erpnext"),
+            "erpnext.accounts": _stub("erpnext.accounts"),
+            "erpnext.accounts.doctype": _stub("erpnext.accounts.doctype"),
+            "erpnext.accounts.doctype.pos_invoice": _stub("erpnext.accounts.doctype.pos_invoice"),
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice": erpnext_pos_mod,
+        }
+        with patch.dict(sys.modules, modules):
+            dayparts = _load("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+            pos_inv_mod = _load("ury.ury.class_overrides.pos_invoice", URY_PKG / "ury/class_overrides/pos_invoice.py")
+
+            frappe_mock.get_all.side_effect = lambda dt, **kw: (
+                self._periods() if dt == "URY Restaurant Serving Period" else []
+            )
+            frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+                Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=1)
+                if dt == "POS Profile" and isinstance(field, (list, tuple))
+                else (1 if dt == "POS Profile" and field == "ury_offline_capture" else ("Africa/Kampala" if dt == "URY Branch Operating Schedule" else ("Standard UGX" if dt == "Price List" else ("Standard Menu" if field == "active_menu" else 0))))
+            )
+
+            captured_site_dt = datetime(2026, 11, 24, 19, 45, 0)  # Asia/Kolkata site time == 17:15:00 Africa/Kampala
+            doc = pos_inv_mod.CustomPOSInvoice(
+                name=None,
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                restaurant_table=None,
+                order_type="Take Away",
+                customer="Walk In Guest",
+                ury_offline_captured_at=captured_site_dt,
+                set_posting_time=1,  # even if set to 1 beforehand, unprivileged cashier MUST end before_validate at 0
+                posting_date=captured_site_dt.date(),
+                posting_time=captured_site_dt.time(),
+                items=[],
+            )
+            doc.flags.ury_trusted_offline_capture = True
+            doc.flags._ury_offline_posting_dt = captured_site_dt
+            doc.is_new = lambda: True
+            doc.get_doc_before_save = lambda: None
+
+            captured_eat = datetime(2026, 11, 24, 17, 15, 0)
+            with patch.object(dayparts, "resolve_outlet_local_datetime", return_value=(captured_eat, "17:15:00", "Tue")):
+                hooks.before_validate(doc, "before_validate")
+
+            # Must be 0 after before_validate so `Sales Time Pricing - POS Invoice` NEVER raises SALES-TIME-005!
+            self.assertEqual(doc.set_posting_time, 0)
+
+            # Simulate Sales Time Pricing - POS Invoice overwriting clock with current site now_datetime()
+            doc.posting_date = date(2026, 11, 24)
+            doc.posting_time = "23:10:00"
+            doc.custom_transaction_local_time = "23:10:00"
+            doc.custom_transaction_weekday = "Tue"
+
+            doc.validate()
+
+            self.assertEqual(len(seen_in_super), 1)
+            self.assertEqual(seen_in_super[0]["local_time"], "17:15:00")
+            self.assertEqual(seen_in_super[0]["weekday"], "Tue")
+            self.assertEqual(seen_in_super[0]["posting_date"], captured_site_dt.date())
+            self.assertEqual(seen_in_super[0]["posting_time"], captured_site_dt.time())
+            self.assertEqual(seen_in_super[0]["set_posting_time"], 1)
+            # After validate() finishes, set_posting_time returns to 0 so DB persists 0 for subsequent cashier saves
+            self.assertEqual(doc.set_posting_time, 0)
+
+        # Verify sync_order itself does NOT set invoice.set_posting_time = 1 during offline replay
+        order_src = (URY_PKG / "ury/doctype/ury_order/ury_order.py").read_text(encoding="utf-8")
+        tree = ast.parse(order_src)
+        sync_fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "sync_order")
+        cap_ifs = [
+            n for n in ast.walk(sync_fn)
+            if isinstance(n, ast.If)
+            and isinstance(n.test, ast.Compare)
+            and isinstance(n.test.left, ast.Name)
+            and n.test.left.id == "captured_at"
+        ]
+        self.assertTrue(cap_ifs, "Expected `if captured_at is not None:` block in sync_order")
+        cap_src = ast.get_source_segment(order_src, cap_ifs[0]) or ""
+        self.assertNotIn("invoice.set_posting_time = 1", cap_src)
+        self.assertIn("invoice.set_posting_time = 0", cap_src)
+
+        # Verify invoice_pricing_date honors ury_offline_captured_at even when set_posting_time=0
+        pricing_fn = next(
+            n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "invoice_pricing_date"
+        )
+        pricing_src = ast.get_source_segment(order_src, pricing_fn) or ""
+        self.assertIn("ury_offline_captured_at", pricing_src)
 
 
 class TestStampInvoiceOutletClock(unittest.TestCase):

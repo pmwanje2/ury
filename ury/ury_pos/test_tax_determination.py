@@ -1410,5 +1410,122 @@ class TestR2SecurityParityAndEfrisFixes(unittest.TestCase):
                 order_mod.change_order_type("MFUA00030", "Dine In", table="T-A-RES")
 
 
+class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
+    """R3 Blocker 1 / REPORT.md:26: Direct REST POST /api/resource/POS Invoice must resolve order-type tax."""
+
+    def test_direct_rest_post_pos_invoice_before_validate_applies_order_type_tax_without_profile_default_template(self):
+        frappe_mock, utils = _make_frappe_env()
+        utils.get_time = MagicMock()
+        utils.get_first_day = MagicMock()
+        utils.get_last_day = MagicMock()
+        set_taxes_mock = MagicMock(
+            side_effect=lambda customer, party_type, posting_date, company, customer_group=None, tax_category=None: (
+                "UG VAT 18% - MFU" if tax_category == "Take Away VAT" else None
+            )
+        )
+        party_mod = _stub("erpnext.accounts.party", set_taxes=set_taxes_mock)
+        erpnext_mod = _stub("erpnext", accounts=_stub("erpnext.accounts", party=party_mod))
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "erpnext": erpnext_mod,
+            "erpnext.accounts": erpnext_mod.accounts,
+            "erpnext.accounts.party": party_mod,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury.doctype.ury_order.ury_order": _stub(
+                "ury.ury.doctype.ury_order.ury_order", release_merge_cluster_tables=MagicMock()
+            ),
+            "ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+                "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+                get_applicable_policy=MagicMock(),
+            ),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                prorate_return_discount=MagicMock(),
+                validate_pos_discount=MagicMock(),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                prorate_return_service_charge=MagicMock(),
+                sync_service_charge_on_before_validate=MagicMock(),
+            ),
+        }
+        with patch.dict(sys.modules, modules):
+            _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            dayparts = _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            hooks = _load_module("ury.ury.hooks.ury_pos_invoice", URY_PKG / "ury/hooks/ury_pos_invoice.py")
+
+            profile = Row(
+                name="POS Profile A",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                tax_category="",
+                taxes_and_charges="",  # Intentionally blank: relies solely on custom_order_type_tax_categories!
+                custom_order_type_tax_categories=[
+                    Row(order_type="Take Away", tax_category="Take Away VAT"),
+                    Row(order_type="Delivery", tax_category="Delivery Reduced"),
+                ],
+            )
+            frappe_mock.get_cached_doc.side_effect = lambda dt, name=None: profile if dt == "POS Profile" else None
+            frappe_mock.get_doc.side_effect = lambda dt, name=None: profile if dt == "POS Profile" else None
+
+            def db_get_value(dt, flt=None, field=None, **kw):
+                if dt == "POS Profile":
+                    if isinstance(field, (list, tuple)):
+                        return Row(branch="Main Branch A", restaurant="Rest A", ury_offline_capture=0)
+                    return "Main Branch A" if field == "branch" else ("Rest A" if field == "restaurant" else 0)
+                if dt == "URY Branch Operating Schedule":
+                    return "Africa/Kampala"
+                if dt == "URY Restaurant":
+                    if isinstance(flt, dict):
+                        return "Rest A"
+                    return "Standard Menu" if field == "active_menu" else 0
+                if dt == "Price List":
+                    return 1 if field == "enabled" else "Standard UGX"
+                if dt == "Item Price":
+                    if isinstance(flt, dict) and flt.get("price_list") == "Standard UGX" and flt.get("item_code") == "KH-BURGER-18":
+                        return 20000.0
+                    return None
+                if dt == "Customer":
+                    return Row(tax_category=None, customer_group="Individual")
+                return None
+
+            frappe_mock.db.get_value.side_effect = db_get_value
+            frappe_mock.get_all.return_value = []
+
+            doc = FakeInvoice(
+                name=None,
+                pos_profile="POS Profile A",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                company=None,
+                tax_category="",
+                taxes_and_charges="",
+                selling_price_list="Standard UGX",
+                items=[Row(item_code="KH-BURGER-18", qty=1, price_list_rate=1.0, rate=1.0)],
+            )
+            doc._tax_templates["UG VAT 18% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 18.0, "description": "VAT"}
+            ]
+            doc.get_doc_before_save = lambda: None
+
+            with patch.object(
+                dayparts,
+                "resolve_outlet_local_datetime",
+                return_value=(datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+            ):
+                hooks.before_validate(doc, "before_validate")
+
+            self.assertEqual(doc["items"][0].price_list_rate, 20000.0)
+            self.assertEqual(doc["items"][0].rate, 20000.0)
+            self.assertEqual(doc.tax_category, "Take Away VAT")
+            self.assertEqual(doc.taxes_and_charges, "UG VAT 18% - MFU")
+            self.assertEqual(len(doc.taxes), 1)
+            self.assertEqual(doc.taxes[0]["rate"], 18.0)
+
+
 if __name__ == "__main__":
     unittest.main()
