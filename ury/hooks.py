@@ -176,6 +176,7 @@ jinja = {
     "methods": [
         "ury.ury.api.self_ordering.feedback_receipt_link",
         "ury.ury.api.self_ordering.feedback_receipt_qr",
+        "ury.ury.print_format.utils.format_bill_money",
     ],
 }
 

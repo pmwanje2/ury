@@ -2649,9 +2649,138 @@ def _copy_result(job, *, doc=None, delivery=None):
     return result
 
 
-def _copy_race_errno(exc: Exception) -> int | None:
-    errno = exc.args[0] if getattr(exc, 'args', None) else None
-    return errno if isinstance(errno, int) else None
+def _copy_race_errno(exc: BaseException) -> int | None:
+    """Extract MariaDB/MySQL numeric errno across Frappe wrappers, nested args, and __cause__/__context__."""
+    queue = [exc]
+    seen: set[int] = set()
+    while queue:
+        cur = queue.pop(0)
+        if cur is None or id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        errno = getattr(cur, 'errno', None)
+        if isinstance(errno, int) and not isinstance(errno, bool):
+            return errno
+        if isinstance(cur, BaseException):
+            args = getattr(cur, 'args', None) or ()
+            if args and isinstance(args[0], int) and not isinstance(args[0], bool):
+                return args[0]
+            for arg in args:
+                if isinstance(arg, (BaseException, tuple, list)):
+                    queue.append(arg)
+            if cur.__cause__ is not None:
+                queue.append(cur.__cause__)
+            if cur.__context__ is not None:
+                queue.append(cur.__context__)
+        elif isinstance(cur, (tuple, list)) and cur:
+            if isinstance(cur[0], int) and not isinstance(cur[0], bool):
+                return cur[0]
+    return None
+
+
+def _open_isolated_copy_db():
+    """Open a short-lived independent DB connection for URY Bill Reprint Log isolation."""
+    try:
+        from frappe.database import get_db
+        from frappe.database.database import Database
+    except Exception:
+        return None
+    current_db = getattr(frappe, 'db', None)
+    if not isinstance(current_db, Database):
+        return None
+    if getattr(current_db, '_conn', None) is None:
+        return None
+    conf = getattr(getattr(frappe, 'local', None), 'conf', None)
+    db_name = getattr(conf, 'db_name', None) if conf else None
+    if not db_name:
+        return None
+    isolated = get_db(
+        socket=getattr(conf, 'db_socket', None),
+        host=getattr(conf, 'db_host', None),
+        port=getattr(conf, 'db_port', None),
+        user=getattr(conf, 'db_user', None) or db_name,
+        password=getattr(conf, 'db_password', None),
+        cur_db_name=db_name,
+    )
+    isolated.connect()
+    return isolated
+
+
+class _IsolatedCopyLogDB:
+    """Run URY Bill Reprint Log claiming/updates in an isolated short DB transaction.
+
+    Prevents MariaDB 11.8 innodb_snapshot_isolation (errno 1020) from leaking or
+    invalidating a caller's uncommitted transaction when concurrent bill copies race.
+    """
+
+    def __init__(self, invoice: str | None = None):
+        self.invoice = invoice
+        self.isolated = None
+        self._prev_db = None
+        self._swapped_local = False
+        self._lock_name = None
+
+    def __enter__(self):
+        from hashlib import sha256
+
+        isolated = _open_isolated_copy_db()
+        if isolated is None:
+            return None
+        self.isolated = isolated
+        try:
+            current_db = getattr(frappe, 'db', None)
+            if type(current_db).__name__ == 'LocalProxy':
+                self._prev_db = frappe.local.db
+                frappe.local.db = isolated
+                self._swapped_local = True
+            else:
+                self._prev_db = current_db
+                frappe.db = isolated
+                self._swapped_local = False
+
+            if self.invoice:
+                db_name = getattr(isolated, 'cur_db_name', None) or ''
+                digest = sha256(f'{db_name}:{self.invoice}'.encode()).hexdigest()[:48]
+                lock_name = f'ury_copy_{digest}'
+                lock_rows = isolated.sql('SELECT GET_LOCK(%s, 10)', (lock_name,))
+                acquired = bool(lock_rows and lock_rows[0] and cint(lock_rows[0][0]) == 1)
+                if not acquired:
+                    timeout_exc = getattr(frappe, 'QueryTimeoutError', TimeoutError)
+                    raise timeout_exc('Timed out waiting for bill copy numbering lock.')
+                self._lock_name = lock_name
+                # Start the InnoDB ReadView strictly after acquiring the advisory lock.
+                isolated.rollback()
+            return isolated
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.isolated is None:
+            return False
+        try:
+            if exc_type is not None:
+                try:
+                    self.isolated.rollback()
+                except Exception:
+                    pass
+            if self._lock_name:
+                try:
+                    self.isolated.sql('SELECT RELEASE_LOCK(%s)', (self._lock_name,))
+                except Exception:
+                    pass
+        finally:
+            if self._swapped_local:
+                frappe.local.db = self._prev_db
+            else:
+                frappe.db = self._prev_db
+            try:
+                self.isolated.close()
+            except Exception:
+                pass
+            self.isolated = None
+            self._lock_name = None
+        return False
 
 
 def _is_retryable_copy_race_error(exc: Exception) -> bool:
@@ -2750,90 +2879,102 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
     requested_delivery = (delivery or '').strip().lower() or None
     is_auto_fiscal = idempotency_key == f'efris-auto-{invoice}'
 
-    doc = None
+    doc = _closed_invoice(invoice, branch)
     transport = None
     record = None
+    replayed = None
     number = 0
     job_id = ''
     chosen_printer = printer
     caller_has_writes = getattr(frappe.db, 'transaction_writes', None) != 0
-    for race_attempt in range(5):
-        savepoint = f'ury_print_bill_copy_{race_attempt}'
-        frappe.db.savepoint(savepoint)
-        try:
-            # Serializes copy numbering and retries, including competing cashier sessions.
-            doc = _closed_invoice(invoice, branch, for_update=True)
-            previous = _find_previous_copy_log(invoice, key, owner, idempotency_key, is_auto_fiscal)
-            if previous and previous.status not in ('FAILED', 'CANCELED'):
-                if is_auto_fiscal and previous.status in ('SUBMITTED', 'COMPLETED'):
-                    _mark_pending_fiscal_reprint_dispatched(invoice)
-                return _copy_result(previous, doc=doc, delivery=requested_delivery)
+    with _IsolatedCopyLogDB(invoice) as claim_db:
+        for race_attempt in range(5):
+            savepoint = None
+            if claim_db is None:
+                savepoint = f'ury_print_bill_copy_{race_attempt}'
+                frappe.db.savepoint(savepoint)
+            try:
+                previous = _find_previous_copy_log(invoice, key, owner, idempotency_key, is_auto_fiscal)
+                if previous and previous.status not in ('FAILED', 'CANCELED'):
+                    if is_auto_fiscal and previous.status in ('SUBMITTED', 'COMPLETED'):
+                        _mark_pending_fiscal_reprint_dispatched(invoice)
+                        if claim_db is not None:
+                            claim_db.commit()
+                    replayed = previous
+                    break
 
-            printers = _bill_printers(doc.pos_profile, doc.restaurant_table)
-            if requested_delivery in ('browser', 'qz'):
-                transport = requested_delivery
-                chosen_printer = None
-            elif requested_delivery is None and not printer and not printers:
-                transport = 'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
-                chosen_printer = None
-            else:
-                transport = 'network'
-                if not printers or (printer and printer not in printers):
-                    frappe.throw('Select a configured bill printer for this outlet.')
-                chosen_printer = printer or printers[0]
-
-            attempt = previous.attempt + 1 if previous else 1
-            if previous:
-                number = previous.copy_number
-            else:
-                # Locking read prevents MariaDB 11.8 innodb_snapshot_isolation stale-count races.
-                latest_copy = frappe.db.get_value(
-                    _COPY_LOG,
-                    {'invoice': invoice, 'attempt': 1},
-                    'copy_number',
-                    order_by='copy_number desc',
-                    for_update=True,
-                )
-                number = cint(latest_copy) + 1
-            job_id = f'COPY-{key}-{attempt}'
-            copy_slot = f'{invoice}:{number}:{attempt}'
-
-            record = {
-                'doctype': _COPY_LOG,
-                'name': job_id,
-                'print_job_id': job_id,
-                'request_key': key,
-                'copy_slot': copy_slot,
-                'invoice': invoice,
-                'printer': None if transport in ('browser', 'qz') else chosen_printer,
-                'job_owner': owner,
-                'attempt': attempt,
-                'copy_number': number,
-                'retry_of': previous.name if previous else None,
-                'status': 'COMPLETED' if transport in ('browser', 'qz') else 'SUBMITTING',
-            }
-            frappe.get_doc(record).insert(ignore_permissions=True)
-            break
-        except Exception as exc:
-            if race_attempt < 4 and _is_retryable_copy_race_error(exc):
-                if not caller_has_writes and _copy_race_errno(exc) == 1020:
-                    # MariaDB 11.8 innodb_snapshot_isolation pins ReadView across savepoints.
-                    # Resetting the transaction is only safe when the caller had zero prior writes.
-                    frappe.db.rollback()
+                printers = _bill_printers(doc.pos_profile, doc.restaurant_table)
+                if requested_delivery in ('browser', 'qz'):
+                    transport = requested_delivery
+                    chosen_printer = None
+                elif requested_delivery is None and not printer and not printers:
+                    transport = 'qz' if cint(frappe.db.get_value('POS Profile', doc.pos_profile, 'qz_print')) else 'browser'
+                    chosen_printer = None
                 else:
-                    try:
-                        frappe.db.rollback(save_point=savepoint)
-                    except Exception as rb_exc:
-                        if not caller_has_writes and _copy_race_errno(rb_exc) == 1305:
-                            frappe.db.rollback()
-                        else:
-                            raise exc from rb_exc
-                continue
-            raise
+                    transport = 'network'
+                    if not printers or (printer and printer not in printers):
+                        frappe.throw('Select a configured bill printer for this outlet.')
+                    chosen_printer = printer or printers[0]
+
+                attempt = previous.attempt + 1 if previous else 1
+                if previous:
+                    number = previous.copy_number
+                else:
+                    # Locking read prevents MariaDB 11.8 innodb_snapshot_isolation stale-count races.
+                    latest_copy = frappe.db.get_value(
+                        _COPY_LOG,
+                        {'invoice': invoice, 'attempt': 1},
+                        'copy_number',
+                        order_by='copy_number desc',
+                        for_update=True,
+                    )
+                    number = cint(latest_copy) + 1
+                job_id = f'COPY-{key}-{attempt}'
+                copy_slot = f'{invoice}:{number}:{attempt}'
+
+                record = {
+                    'doctype': _COPY_LOG,
+                    'name': job_id,
+                    'print_job_id': job_id,
+                    'request_key': key,
+                    'copy_slot': copy_slot,
+                    'invoice': invoice,
+                    'printer': None if transport in ('browser', 'qz') else chosen_printer,
+                    'job_owner': owner,
+                    'attempt': attempt,
+                    'copy_number': number,
+                    'retry_of': previous.name if previous else None,
+                    'status': 'COMPLETED' if transport in ('browser', 'qz') else 'SUBMITTING',
+                }
+                frappe.get_doc(record).insert(ignore_permissions=True)
+                if transport in ('browser', 'qz') and is_auto_fiscal:
+                    _mark_pending_fiscal_reprint_dispatched(invoice)
+                if claim_db is not None:
+                    claim_db.commit()
+                break
+            except Exception as exc:
+                if race_attempt < 4 and _is_retryable_copy_race_error(exc):
+                    if claim_db is not None:
+                        claim_db.rollback()
+                    elif not caller_has_writes and _copy_race_errno(exc) == 1020:
+                        # MariaDB 11.8 innodb_snapshot_isolation pins ReadView across savepoints.
+                        # Resetting the transaction is only safe when the caller had zero prior writes.
+                        frappe.db.rollback()
+                    else:
+                        try:
+                            frappe.db.rollback(save_point=savepoint)
+                        except Exception as rb_exc:
+                            if not caller_has_writes and _copy_race_errno(rb_exc) == 1305:
+                                frappe.db.rollback()
+                            else:
+                                raise exc from rb_exc
+                    continue
+                raise
+
+    if replayed is not None:
+        return _copy_result(replayed, doc=doc, delivery=requested_delivery)
 
     if transport in ('browser', 'qz'):
-        if is_auto_fiscal:
-            _mark_pending_fiscal_reprint_dispatched(invoice)
         return _copy_result(record, doc=doc, delivery=transport)
 
     doc.copy_timestamp = frappe.utils.now()
@@ -2856,21 +2997,28 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
     if status != 'SUBMITTED':
         save_job(job_id, {**meta, **update})
     # A fast polling worker can already have recorded the terminal outcome.
-    current = frappe.db.get_value(
-        _COPY_LOG,
-        job_id,
-        ['status', 'print_job_id', 'failure_reason', 'copy_number', 'invoice', 'printer'],
-        as_dict=True,
-        for_update=True,
-    )
-    if current and current.status != 'SUBMITTING':
-        if is_auto_fiscal and current.status in ('SUBMITTED', 'COMPLETED'):
-            _mark_pending_fiscal_reprint_dispatched(invoice)
-        return _copy_result(current, doc=doc, delivery='network')
-    frappe.db.set_value(_COPY_LOG, job_id, update)
-    if is_auto_fiscal and status in ('SUBMITTED', 'COMPLETED'):
-        _mark_pending_fiscal_reprint_dispatched(invoice)
-    return _copy_result({**record, **update}, doc=doc, delivery='network')
+    final_record = {**record, **update}
+    with _IsolatedCopyLogDB() as update_db:
+        current = frappe.db.get_value(
+            _COPY_LOG,
+            job_id,
+            ['status', 'print_job_id', 'failure_reason', 'copy_number', 'invoice', 'printer'],
+            as_dict=True,
+            for_update=True,
+        )
+        if current and current.status != 'SUBMITTING':
+            if is_auto_fiscal and current.status in ('SUBMITTED', 'COMPLETED'):
+                _mark_pending_fiscal_reprint_dispatched(invoice)
+            if update_db is not None:
+                update_db.commit()
+            final_record = current
+        else:
+            frappe.db.set_value(_COPY_LOG, job_id, update)
+            if is_auto_fiscal and status in ('SUBMITTED', 'COMPLETED'):
+                _mark_pending_fiscal_reprint_dispatched(invoice)
+            if update_db is not None:
+                update_db.commit()
+    return _copy_result(final_record, doc=doc, delivery='network')
 
 
 @frappe.whitelist(methods=['POST'])
