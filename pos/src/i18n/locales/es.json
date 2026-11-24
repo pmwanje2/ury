@@ -175,7 +175,10 @@
     "expected": "Esperado",
     "closing": "Cierre",
     "difference": "Diferencia",
-    "pending_cash_movements": "{{count}} movimiento(s) de caja pendiente(s) deben aprobarse o descartarse antes de cerrar."
+    "pending_cash_movements": "{{count}} movimiento(s) de caja pendiente(s) deben aprobarse o descartarse antes de cerrar.",
+    "over_short_reason_label": "Motivo de sobrante/faltante de caja",
+    "over_short_reason_placeholder": "Explique la diferencia de caja antes de cerrar",
+    "over_short_reason_required": "Ingrese un motivo para la diferencia de caja superior a {{tolerance}}."
   },
   "checklist": {
     "title_opening": "Lista de apertura",
@@ -777,6 +780,13 @@
     "recorded_by": "Registrado por",
     "approved_by": "Aprobado por",
     "approve": "Aprobar",
-    "discard": "Descartar"
+    "discard": "Descartar",
+    "tip_server": "Mesero",
+    "tip_server_placeholder": "Seleccionar mesero (opcional)",
+    "requires_second_person_all": "Cada pago de caja requiere la aprobación de una segunda persona antes de contabilizar."
+  },
+  "screen_size": {
+    "desk_hint": "¿Necesita reportes o gestión administrativa en el móvil?",
+    "open_desk": "Abrir escritorio"
   }
 }

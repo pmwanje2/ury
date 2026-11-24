@@ -229,7 +229,10 @@
     "expected": "Expected",
     "closing": "Closing",
     "difference": "Difference",
-    "pending_cash_movements": "{{count}} pending till cash movement(s) must be approved or discarded before closing."
+    "pending_cash_movements": "{{count}} pending till cash movement(s) must be approved or discarded before closing.",
+    "over_short_reason_label": "Cash Over/Short Reason",
+    "over_short_reason_placeholder": "Explain the cash variance before closing",
+    "over_short_reason_required": "Enter a reason for the cash over/short variance above {{tolerance}}."
   },
   "checklist": {
     "title_opening": "Opening Checklist",
@@ -782,7 +785,9 @@
     "switch_v1": "Switch to Version 1",
     "current_width": "Current screen width: {{px}}px",
     "required": "Required: 1024px or larger",
-    "mobile_note": "Mobile support will be available in a future update. Please use a device with a screen width of 1024px or larger."
+    "mobile_note": "Mobile support will be available in a future update. Please use a device with a screen width of 1024px or larger.",
+    "desk_hint": "Need reports or back-office tasks on mobile?",
+    "open_desk": "Open Desk"
   },
   "dash_cards": {
     "no_baseline": "no baseline yet",
@@ -1023,6 +1028,9 @@
     "recorded_by": "Recorded by",
     "approved_by": "Approved by",
     "approve": "Approve",
-    "discard": "Discard"
+    "discard": "Discard",
+    "tip_server": "Server",
+    "tip_server_placeholder": "Select server (optional)",
+    "requires_second_person_all": "Every paid-out requires second-person approval before posting."
   }
 }

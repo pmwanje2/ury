@@ -39,6 +39,8 @@ export interface PosProfileLimited {
   payment_mode_meta?: Record<string, PaymentModeMeta>;
   /** POS Profile toggle for cashier touchscreen Pickup / Loan / Paid Out. */
   enable_cash_movements?: number;
+  require_over_short_reason?: number;
+  over_short_reason_tolerance?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
@@ -130,6 +132,8 @@ export interface PosProfileCombined extends PosProfileFull {
   payment_mode_accounts?: Record<string, string | null>;
   payment_mode_meta?: Record<string, PaymentModeMeta>;
   enable_cash_movements?: number;
+  require_over_short_reason?: number;
+  over_short_reason_tolerance?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
@@ -204,6 +208,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
     payment_mode_meta: limitedProfile.payment_mode_meta,
     enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
+    require_over_short_reason: Number(limitedProfile.require_over_short_reason ?? 0),
+    over_short_reason_tolerance: Number(limitedProfile.over_short_reason_tolerance ?? 0),
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',

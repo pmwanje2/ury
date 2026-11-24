@@ -7,6 +7,11 @@ export interface TillCashPaidOutTarget {
   label: string;
 }
 
+export interface TillCashServerOption {
+  user: string;
+  full_name: string;
+}
+
 export interface TillCashMovementRow {
   name: string;
   movement_type: CashMovementType;
@@ -14,6 +19,8 @@ export interface TillCashMovementRow {
   drawer_change: number;
   reason: string;
   target_kind: 'safe' | 'expense' | 'tips';
+  tip_server?: string;
+  tip_server_name?: string;
   status: 'Submitted' | 'Pending Approval';
   docstatus: number;
   owner: string;
@@ -32,11 +39,12 @@ export interface TillCashState {
   currency: string;
   opening_entry: string | null;
   opening_user: string | null;
-  paid_out_threshold: number;
+  paid_out_threshold: number | null;
   can_approve: boolean;
   current_user: string;
   available_types: Record<CashMovementType, boolean>;
   paid_out_targets: TillCashPaidOutTarget[];
+  servers?: TillCashServerOption[];
   movements: TillCashMovementRow[];
   net_drawer_movement: number;
   pending_count: number;
@@ -61,6 +69,7 @@ export async function recordTillCashMovement(payload: {
   amount: number;
   reason?: string;
   paid_out_target?: 'expense' | 'tips';
+  tip_server?: string;
 }): Promise<TillCashMovementRow> {
   const body: Record<string, unknown> = {
     pos_profile: payload.pos_profile,
@@ -72,6 +81,9 @@ export async function recordTillCashMovement(payload: {
   }
   if (payload.paid_out_target !== undefined) {
     body.paid_out_target = payload.paid_out_target;
+  }
+  if (payload.tip_server) {
+    body.tip_server = payload.tip_server;
   }
   const response = await call.post<{ message: TillCashMovementRow }>(
     'ury.ury_pos.cash_movements.record_till_cash_movement',

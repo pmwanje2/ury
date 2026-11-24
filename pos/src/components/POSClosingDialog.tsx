@@ -9,7 +9,7 @@ import {
   DialogTitle,
   messageToPlainText,
 } from '@ury/ui';
-import { Button } from '@ury/ui';
+import { Button, Input } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { call, db, formatCurrency, shouldMaskAmounts } from '@ury/core';
 import { t } from '../i18n';
@@ -346,6 +346,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pendingCashMovements, setPendingCashMovements] = useState(0);
+  const [overShortReason, setOverShortReason] = useState('');
   // Set once the close submission (Sub POS Closing / POS Closing Entry) has
   // succeeded. Per plan decision D8, the Closing checklist gate hangs off
   // this success -- not off validatePOSClose() -- so it renders in place of
@@ -459,6 +460,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setRows(visible);
       setHiddenRows(hidden);
       setTouchedModes(new Set());
+      setOverShortReason('');
     } catch (error) {
       console.error('Failed to load POS closing details:', error);
       setLoadError(extractServerErrorMessage(error, t('pos_closing.load_failed')));
@@ -496,15 +498,42 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPendingCloseDoc(null);
       setShowConfirm(false);
       setPreCloseGate(false);
+      setOverShortReason('');
     }
     onOpenChange(next);
   };
+
+  const requireOverShortReason = Number(posProfile?.require_over_short_reason ?? 0) === 1;
+  const overShortTolerance = Number(posProfile?.over_short_reason_tolerance ?? 0) || 0;
+  const needsOverShortReason = useMemo(() => {
+    if (!requireOverShortReason || blindCashCount || maskAmounts || rows.length === 0) {
+      return false;
+    }
+    const meta = posProfile?.payment_mode_meta;
+    const hasMeta = Boolean(meta && Object.keys(meta).length > 0);
+    const cashRows = hasMeta
+      ? rows.filter((row) => meta?.[row.mode_of_payment]?.type === 'Cash')
+      : rows;
+    return cashRows.some(
+      (row) => Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001,
+    );
+  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance]);
 
   // Closing may be submitted with blank or zero amount fields. Blank inputs
   // count as 0; rows that had activity but a zero close only show a warning.
   const validation = useMemo(() => {
     if (rows.length === 0) {
       return { isValid: false, blockingMessage: null as string | null, warningMessage: null as string | null };
+    }
+
+    if (needsOverShortReason && !overShortReason.trim()) {
+      return {
+        isValid: false,
+        blockingMessage: t('pos_closing.over_short_reason_required', {
+          tolerance: formatCurrency(overShortTolerance, posProfile?.currency),
+        }),
+        warningMessage: null as string | null,
+      };
     }
 
     const zeroRowsWithActivity = rows.filter(
@@ -519,7 +548,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       zeroRowsWithActivity.length > 0 ? t('pos_closing.validation_zero_row_warning') : null;
 
     return { isValid: true, blockingMessage: null as string | null, warningMessage };
-  }, [rows, touchedModes, blindCashCount]);
+  }, [rows, touchedModes, blindCashCount, needsOverShortReason, overShortReason, overShortTolerance, posProfile?.currency]);
 
   const handleRequestSubmit = () => {
     if (!validation.isValid) return;
@@ -600,6 +629,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             grand_total: totals.grandTotal,
             net_total: totals.netTotal,
             total_quantity: totals.totalQty,
+            ...(overShortReason.trim() ? { custom_over_short_reason: overShortReason.trim() } : {}),
           });
           docName = doc.name;
         }
@@ -730,18 +760,18 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
               <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.on_account')}</p>
-                  <p>{maskAmounts ? MASKED : formatCurrency(totals.onAccount)}</p>
+                  <p>{maskAmounts ? MASKED : formatCurrency(totals.onAccount, posProfile?.currency)}</p>
                 </div>
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.grand_total')}</p>
                   <p className="text-lg font-semibold text-gray-900">
-                    {maskAmounts ? MASKED : formatCurrency(totals.grandTotal)}
+                    {maskAmounts ? MASKED : formatCurrency(totals.grandTotal, posProfile?.currency)}
                   </p>
                 </div>
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.net_total')}</p>
                   <p className="text-lg font-semibold text-gray-900">
-                    {maskAmounts ? MASKED : formatCurrency(totals.netTotal)}
+                    {maskAmounts ? MASKED : formatCurrency(totals.netTotal, posProfile?.currency)}
                   </p>
                 </div>
                 <div className="rounded-lg border border-border p-3">
@@ -762,11 +792,28 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   onChange={handleRowChange}
                   hideExpected={maskAmounts}
                   blindCashCount={blindCashCount}
+                  currency={posProfile?.currency}
                 />
               ) : (
                 <p className="py-8 text-center text-sm text-gray-500">
                   {t('pos_closing.no_invoices')}
                 </p>
+              )}
+
+              {hasRows && needsOverShortReason && (
+                <div className="mt-4 space-y-1.5">
+                  <label htmlFor="pos-closing-over-short-reason" className="text-sm font-medium text-gray-800">
+                    {t('pos_closing.over_short_reason_label')}
+                  </label>
+                  <Input
+                    id="pos-closing-over-short-reason"
+                    type="text"
+                    value={overShortReason}
+                    onChange={(e) => setOverShortReason(e.target.value)}
+                    placeholder={t('pos_closing.over_short_reason_placeholder')}
+                    disabled={isSubmitting}
+                  />
+                </div>
               )}
 
               {hasRows && pendingCashMovements > 0 && (

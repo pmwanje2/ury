@@ -599,7 +599,10 @@
     "expected": "Attendu",
     "closing": "Clôture",
     "difference": "Différence",
-    "pending_cash_movements": "{{count}} mouvement(s) de caisse en attente doivent être approuvés ou supprimés avant la clôture."
+    "pending_cash_movements": "{{count}} mouvement(s) de caisse en attente doivent être approuvés ou supprimés avant la clôture.",
+    "over_short_reason_label": "Motif d’écart de caisse",
+    "over_short_reason_placeholder": "Expliquez l’écart de caisse avant la clôture",
+    "over_short_reason_required": "Saisissez un motif pour l’écart de caisse supérieur à {{tolerance}}."
   },
   "checklist": {
     "pass": "PASS",
@@ -826,6 +829,13 @@
     "recorded_by": "Enregistré par",
     "approved_by": "Approuvé par",
     "approve": "Approuver",
-    "discard": "Supprimer"
+    "discard": "Supprimer",
+    "tip_server": "Serveur",
+    "tip_server_placeholder": "Sélectionner un serveur (facultatif)",
+    "requires_second_person_all": "Chaque décaissement nécessite l’approbation d’une seconde personne avant comptabilisation."
+  },
+  "screen_size": {
+    "desk_hint": "Besoin de rapports ou du back-office sur mobile ?",
+    "open_desk": "Ouvrir le back-office"
   }
 }
