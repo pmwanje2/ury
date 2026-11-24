@@ -30,6 +30,11 @@ from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
 from ury.ury.hooks.ury_pos_tender import sync_charged_tip
+from ury.ury_pos.fx import (
+    build_offline_collision_plan,
+    ensure_local_change_payment_row,
+    prepare_settlement_payments,
+)
 
 from frappe import cache
 
@@ -2589,8 +2594,6 @@ def sync_order(
                     _("URY_PROFILE_MISMATCH: This order belongs to a different POS Profile."),
                     frappe.PermissionError,
                 )
-            from ury.ury_pos.fx import build_offline_collision_plan
-
             collision_plan = build_offline_collision_plan(
                 existing_invoice=existing_meta,
                 table=table,
@@ -4146,8 +4149,6 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
 
     if isinstance(payments, str):
         payments = frappe.parse_json(payments) or []
-
-    from ury.ury_pos.fx import ensure_local_change_payment_row, prepare_settlement_payments
 
     payments = prepare_settlement_payments(
         payments=payments,

@@ -21,12 +21,40 @@ Key accounting & security invariants:
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 import re
 from urllib.parse import urlparse
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, getdate, today
+from frappe.utils import cint, flt
+
+
+def _today() -> str:
+    fn = getattr(getattr(frappe, "utils", None), "today", None)
+    if callable(fn):
+        return fn()
+    return date.today().isoformat()
+
+
+def _getdate(val=None) -> date:
+    fn = getattr(getattr(frappe, "utils", None), "getdate", None)
+    if callable(fn):
+        return fn(val)
+    if val is None or val == "":
+        return date.today()
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    return date.fromisoformat(str(val)[:10])
+
+
+def _add_days(val, days: int) -> date:
+    fn = getattr(getattr(frappe, "utils", None), "add_days", None)
+    if callable(fn):
+        return fn(val, days)
+    return _getdate(val) + timedelta(days=int(days))
 
 MAX_REFERENCE_PATTERN_LENGTH = 128
 MAX_REFERENCE_VALUE_LENGTH = 256
@@ -125,16 +153,20 @@ def get_mode_payment_config(mode_of_payment: str, company: str | None = None) ->
         except Exception:
             row = {}
 
-    cfg = dict(row or {})
-    cfg.setdefault("mode_of_payment", mode_of_payment)
+    cfg = dict(row) if isinstance(row, dict) else {}
+    def _s(key: str, default: str = "") -> str:
+        val = cfg.get(key)
+        return val.strip() if isinstance(val, str) and val.strip() else default
+
     cfg["mode_of_payment"] = mode_of_payment
-    cfg["custom_reference_mode"] = (cfg.get("custom_reference_mode") or "Hidden").strip() or "Hidden"
-    cfg["custom_reference_label"] = (cfg.get("custom_reference_label") or "").strip()
-    cfg["custom_reference_placeholder"] = (cfg.get("custom_reference_placeholder") or "").strip()
-    cfg["custom_reference_pattern"] = (cfg.get("custom_reference_pattern") or "").strip()
-    cfg["custom_reference_date_required"] = cint(cfg.get("custom_reference_date_required"))
-    cfg["custom_tender_currency"] = (cfg.get("custom_tender_currency") or "").strip().upper()
-    cfg["custom_fx_rate_type"] = (cfg.get("custom_fx_rate_type") or "Buying").strip() or "Buying"
+    cfg["custom_reference_mode"] = _s("custom_reference_mode", "Hidden")
+    cfg["custom_reference_label"] = _s("custom_reference_label")
+    cfg["custom_reference_placeholder"] = _s("custom_reference_placeholder")
+    cfg["custom_reference_pattern"] = _s("custom_reference_pattern")
+    raw_date_req = cfg.get("custom_reference_date_required")
+    cfg["custom_reference_date_required"] = cint(raw_date_req) if isinstance(raw_date_req, (int, float, str, bool)) else 0
+    cfg["custom_tender_currency"] = _s("custom_tender_currency").upper()
+    cfg["custom_fx_rate_type"] = _s("custom_fx_rate_type", "Buying")
 
     if company:
         acct = None
@@ -251,7 +283,7 @@ def resolve_pos_exchange_rate(
     """
     src = (from_currency or "").strip().upper()
     dst = (to_currency or "").strip().upper()
-    eff_date = getdate(posting_date or today())
+    eff_date = _getdate(posting_date or _today())
     effective_rate_type = (rate_type or "Buying").strip() or "Buying"
 
     if not src or not dst or src == dst:
@@ -267,7 +299,7 @@ def resolve_pos_exchange_rate(
         }
 
     stale_days = _accounts_stale_days()
-    min_date = add_days(eff_date, -stale_days)
+    min_date = _add_days(eff_date, -stale_days)
 
     filters = {
         "from_currency": src,
@@ -306,7 +338,7 @@ def resolve_pos_exchange_rate(
 
     return {
         "rate": rate,
-        "rate_date": str(getdate(chosen.get("date"))),
+        "rate_date": str(_getdate(chosen.get("date"))),
         "currency_exchange": chosen.get("name"),
         "from_currency": src,
         "to_currency": dst,
@@ -382,9 +414,11 @@ def prepare_settlement_payments(
     - Stamps `custom_tender_currency`, `custom_tender_amount`, `custom_exchange_rate`,
       `custom_exchange_rate_date`, `reference_no`, `reference_date`.
     """
-    home_currency = (pos_profile.get("currency") or "").strip().upper()
-    company = pos_profile.get("company")
-    eff_date = getdate(posting_date or today())
+    raw_home = pos_profile.get("currency") if pos_profile is not None else None
+    home_currency = raw_home.strip().upper() if isinstance(raw_home, str) else ""
+    raw_company = pos_profile.get("company") if pos_profile is not None else None
+    company = raw_company if isinstance(raw_company, str) else None
+    eff_date = _getdate(posting_date if isinstance(posting_date, (str, date, datetime)) else _today())
     base_prec = _base_precision(home_currency)
 
     prepared = []
@@ -487,7 +521,7 @@ def prepare_settlement_payments(
             entry["custom_tender_amount"] = tender_amount
             entry["custom_exchange_rate"] = flt(rate, 9)
             entry["custom_exchange_rate_date"] = rate_date
-        else:
+        elif any(k in raw for k in ("custom_tender_currency", "custom_tender_amount", "custom_exchange_rate", "custom_exchange_rate_date")):
             entry["custom_tender_currency"] = ""
             entry["custom_tender_amount"] = 0.0
             entry["custom_exchange_rate"] = 0.0
@@ -505,20 +539,24 @@ def ensure_local_change_payment_row(doc, pos_profile=None) -> None:
     """
     if doc.get("is_return"):
         return
-    if flt(doc.get("change_amount")) <= 0:
+    raw_change = doc.get("change_amount")
+    if not isinstance(raw_change, (int, float, str)) or flt(raw_change) <= 0:
         return
 
-    company = doc.get("company")
-    home_currency = (doc.get("currency") or "").strip().upper()
-    if pos_profile is None and doc.get("pos_profile"):
+    raw_company = doc.get("company")
+    company = raw_company if isinstance(raw_company, str) else None
+    raw_home = doc.get("currency")
+    home_currency = raw_home.strip().upper() if isinstance(raw_home, str) else ""
+    if pos_profile is None and isinstance(doc.get("pos_profile"), str):
         try:
             pos_profile = frappe.get_cached_doc("POS Profile", doc.pos_profile)
         except Exception:
             pos_profile = None
 
-    change_account = doc.get("account_for_change_amount") or (
+    raw_change_acct = doc.get("account_for_change_amount") or (
         pos_profile.get("account_for_change_amount") if pos_profile else None
     )
+    change_account = raw_change_acct if isinstance(raw_change_acct, str) and raw_change_acct.strip() else None
 
     profile_modes = [row.mode_of_payment for row in (pos_profile.get("payments") or [])] if pos_profile else []
     mode_to_account = {}
@@ -749,7 +787,7 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
     je = frappe.new_doc("Journal Entry")
     je.voucher_type = "Journal Entry"
     je.company = company
-    je.posting_date = doc.get("posting_date") or today()
+    je.posting_date = doc.get("posting_date") or _today()
     je.multi_currency = 1
     je.user_remark = f"FX Till Vault Sweep for POS Closing Entry {doc.get('name')}"
     if doc.get("branch") and hasattr(je, "branch"):
@@ -935,7 +973,7 @@ def get_pos_fx_rates(pos_profile: str, posting_date: str | None = None) -> dict:
     profile = frappe.get_cached_doc("POS Profile", pos_profile)
     home_currency = (profile.get("currency") or "").strip().upper()
     company = profile.get("company")
-    eff_date = getdate(posting_date or today())
+    eff_date = _getdate(posting_date or _today())
 
     rates = {}
     for row in profile.get("payments") or []:

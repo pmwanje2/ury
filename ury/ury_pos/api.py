@@ -1082,7 +1082,7 @@ def getPosProfileFull(pos_profile):
         "custom_offline_peer_relay_url": profile.get("custom_offline_peer_relay_url") or "",
         "custom_offline_collision_policy": profile.get("custom_offline_collision_policy") or "Auto Split Check",
         "custom_allow_fx_rate_override": 1 if profile.get("custom_allow_fx_rate_override") else 0,
-        "custom_max_fx_variance_pct": flt(profile.get("custom_max_fx_variance_pct")),
+        "custom_max_fx_variance_pct": frappe.utils.flt(profile.get("custom_max_fx_variance_pct")),
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # one configured void reason per line; None on sites without the field
