@@ -1230,7 +1230,7 @@ def mark_phone_payment_received(doc, method=None, status=None):
         or doc.get("payment_channel") != "Phone"
         or doc.get("payment_request_type") != "Inward"
         or cint(doc.get("docstatus")) != 1
-        or doc.get("status") != "Paid"
+        or doc.get("status") not in ("Paid", "Partially Paid")
     ):
         return
 
@@ -1244,12 +1244,13 @@ def mark_phone_payment_received(doc, method=None, status=None):
 
     with _elevated():
         invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
-        if cint(invoice.get("docstatus")) != 0:
+        if cint(invoice.docstatus) != 0:
             return
 
+        payments = invoice.payments or []
         row = next(
             (
-                p for p in (invoice.get("payments") or [])
+                p for p in payments
                 if (p.get("reference_no") or "").strip() == doc.name
             ),
             None,
@@ -1257,7 +1258,7 @@ def mark_phone_payment_received(doc, method=None, status=None):
         if row is None:
             row = next(
                 (
-                    p for p in (invoice.get("payments") or [])
+                    p for p in payments
                     if p.get("mode_of_payment") == mode_of_payment
                     and not (p.get("reference_no") or "").strip()
                 ),

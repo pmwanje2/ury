@@ -3708,11 +3708,11 @@ def _copy_payment_row(row):
 
 
 def _incoming_payment_dict(d):
+    # Never copy client-supplied custom_tender_received; Sales Invoice Payment defaults to 0
+    # and only server confirmation flows may mark a row received.
     entry = {
         "mode_of_payment": d["mode_of_payment"],
         "amount": flt(d["amount"]),
-        # Never trust a client-supplied received flag; only server confirmation flows set it.
-        "custom_tender_received": 0,
     }
     for field in ("reference_no", "reference_date", "clearance_date"):
         if d.get(field):
@@ -3861,7 +3861,6 @@ def _reconcile_settlement_payments(invoice, incoming_payments):
             row_dict = {
                 "mode_of_payment": entry["mode_of_payment"],
                 "amount": entry["amount"],
-                "custom_tender_received": 0,
             }
             for field in ("reference_no", "reference_date", "clearance_date"):
                 if entry.get(field):
@@ -4012,18 +4011,18 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
             
             if doc_req > 0:
                 give = min(amt, doc_req)
-                invoice.append("payments", dict(mode_of_payment=mode, amount=give, custom_tender_received=0))
+                invoice.append("payments", dict(mode_of_payment=mode, amount=give))
                 amt -= give
                 doc_req -= give
                 
             if target_req > 0 and amt > 0:
                 give = min(amt, target_req)
-                target.append("payments", dict(mode_of_payment=mode, amount=give, custom_tender_received=0))
+                target.append("payments", dict(mode_of_payment=mode, amount=give))
                 amt -= give
                 target_req -= give
                 
         if not target.payments and payments:
-            target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0, custom_tender_received=0))
+            target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
         _validate_confirmed_phone_payments(invoice, invoice.payments)
         _validate_confirmed_phone_payments(target, target.payments)
         if _enforce_on_account(invoice, pos_prof, customer_disabled, target):
