@@ -1068,7 +1068,7 @@ def getPosInvoiceItems(invoice):
         "docstatus": 1,
         "payment_channel": "Phone",
         "payment_request_type": "Inward",
-        "status": ["in", ["Paid", "Partially Paid"]],
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
     }
     if orderdItems.get("company"):
         pr_filters["company"] = orderdItems.get("company")
@@ -1095,7 +1095,7 @@ def getPosInvoiceItems(invoice):
 
     received_rows = []
     matched_pr_names = set()
-    matched_phone_modes = {}
+    matched_unreferenced_phone_modes = {}
     for payment in orderdItems.get("payments") or []:
         amt = frappe.utils.flt(payment.get("amount"))
         if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
@@ -1108,16 +1108,47 @@ def getPosInvoiceItems(invoice):
         )
         if is_phone:
             if ref:
-                if ref not in live_pr_by_name:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                # Rounded so binary float noise (5.9 - 2.0) never reaches the payment screen.
+                live_amt = round(
+                    frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount")), 9
+                )
+                if live_amt <= 0:
                     continue
                 matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": live_amt,
+                        "reference_no": ref,
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
             else:
-                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
                     continue
-                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
-            if mode:
-                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-            received_rows.append(payment)
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": used,
+                        "reference_no": payment.get("reference_no"),
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
             continue
 
         received_rows.append(payment)
@@ -1132,8 +1163,8 @@ def getPosInvoiceItems(invoice):
         mode = pr.get("mode_of_payment")
         if not mode or paid_amt <= 0:
             continue
-        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-            matched_phone_modes[mode] -= paid_amt
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
             continue
         received_rows.append(
             {

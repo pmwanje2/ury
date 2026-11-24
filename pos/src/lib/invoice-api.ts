@@ -385,6 +385,7 @@ export const MERGED_POS_INVOICE_PRINT_FORMAT = 'Merged POS Invoice Format';
 
 export interface MergeBillCandidate {
   name: string;
+  currency?: string;
   customer: string;
   customer_name?: string;
   grand_total: number;
@@ -443,6 +444,7 @@ export const MERGE_CANDIDATE_PAGE_SIZE = 10;
 
 const MERGE_CANDIDATE_FIELDS = [
   'name',
+  'currency',
   'customer',
   'customer_name',
   'grand_total',

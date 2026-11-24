@@ -85,6 +85,17 @@ class CustomPOSInvoice(POSInvoice):
 			line = _("Charged to account {0}: {1} {2}").format(self.customer, self.outstanding_amount, self.currency)
 			self.terms = (self.terms or "") + "<p>" + escape(line) + "</p>"
 
+	def check_phone_payments(self):
+		"""Validate Phone payment rows against the sum of live confirmed Payment Requests.
+
+		ERPNext's stock check_phone_payments() uses get_value(..., status='Paid'), which
+		both skips validation when no Paid PR exists and breaks when a grown check has
+		two Paid Payment Requests or a partially refunded Payment Request.
+		"""
+		from ury.ury.hooks.ury_pos_invoice import validate_confirmed_phone_payments
+
+		validate_confirmed_phone_payments(self, "on_submit")
+
 	def validate_stock_availablility(self):
 		if self.is_return or frappe.get_cached_doc("Stock Settings").allow_negative_stock:
 			return

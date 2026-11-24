@@ -5,6 +5,7 @@ import type { POSOpeningPayment } from '../lib/pos-opening-api';
 
 interface POSOpeningPaymentTableProps {
   payments: POSOpeningPayment[];
+  currency?: string;
   onChange: (payments: POSOpeningPayment[]) => void;
   readOnly?: boolean;
   disabled?: boolean;
@@ -12,6 +13,7 @@ interface POSOpeningPaymentTableProps {
 
 const POSOpeningPaymentTable = ({
   payments,
+  currency,
   onChange,
   readOnly = false,
   disabled = false,
@@ -90,7 +92,7 @@ const POSOpeningPaymentTable = ({
           {t('pos_opening.total_opening_balance')}
         </span>
         <span className="font-semibold text-gray-900">
-          {formatCurrency(total)}
+          {formatCurrency(total, currency)}
         </span>
       </div>
     </div>

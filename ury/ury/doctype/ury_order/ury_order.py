@@ -3544,7 +3544,7 @@ def _confirmed_phone_payment_requests(invoice_name, company=None):
         "docstatus": 1,
         "payment_channel": "Phone",
         "payment_request_type": "Inward",
-        "status": ["in", ["Paid", "Partially Paid"]],
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
     }
     if company:
         filters["company"] = company
@@ -3567,9 +3567,10 @@ def _received_payment_rows(invoice):
     """Return payment rows that represent money genuinely received on an open check.
 
     Only rows explicitly marked custom_tender_received=1 by a confirmed server flow, or
-    backed by a confirmed Paid/Partially Paid Phone Payment Request, are received.
-    Phone rows are always re-checked against live Payment Request status so cancelled,
-    failed, expired, or refunded requests never deadlock the check.
+    backed by a confirmed Paid/Partially Paid/Partially Refunded Phone Payment Request,
+    are received. Phone rows are always re-checked and capped against live Payment Request
+    paid amounts so cancelled, failed, expired, or partially/fully refunded requests never
+    deadlock the check.
     """
     confirmed_prs = _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company"))
     live_pr_by_name = {pr.get("name"): pr for pr in confirmed_prs if pr.get("name")}
@@ -3582,7 +3583,7 @@ def _received_payment_rows(invoice):
 
     rows = []
     matched_pr_names = set()
-    matched_phone_modes = {}
+    matched_unreferenced_phone_modes = {}
 
     for row in invoice.get("payments") or []:
         amt = flt(row.get("amount"))
@@ -3592,16 +3593,28 @@ def _received_payment_rows(invoice):
         ref = (row.get("reference_no") or "").strip()
         if _is_phone_mode(row):
             if ref:
-                if ref not in live_pr_by_name:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                live_amt = round(flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")), 9)
+                if live_amt <= 0:
                     continue
                 matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                copied = _copy_payment_row(row)
+                copied["amount"] = live_amt
+                rows.append(copied)
             else:
-                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
                     continue
-                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
-            if mode:
-                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-            rows.append(row)
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                copied = _copy_payment_row(row)
+                copied["amount"] = used
+                rows.append(copied)
             continue
 
         rows.append(row)
@@ -3616,8 +3629,8 @@ def _received_payment_rows(invoice):
         mode = pr.get("mode_of_payment")
         if not mode or paid_amt <= 0:
             continue
-        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-            matched_phone_modes[mode] -= paid_amt
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
             continue
         rows.append(
             {
@@ -3672,7 +3685,7 @@ def _validate_confirmed_phone_payments(invoice, payment_rows):
                 "reference_name": invoice.name,
                 "mode_of_payment": mode,
                 "docstatus": 1,
-                "status": ["in", ["Paid", "Partially Paid"]],
+                "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
             },
             fields=["name", "grand_total", "outstanding_amount"],
         )

@@ -46,6 +46,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     isOrderInteractionDisabled,
     isUpdatingOrder,
     posProfile,
+    currency: storeCurrency,
     selectedOrderType,
     selectedTable,
     selectedRoom,
@@ -63,6 +64,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     setNoOfPax,
     lastModifiedTime
   } = usePOSStore();
+  const activeCurrency = posProfile?.currency || storeCurrency;
   const user = useRootStore((state: RootState) => state.user);
   const outbox = useOutbox(posProfile, user);
   const [offlineTarget, setOfflineTarget] = useState('');
@@ -338,7 +340,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         {item.selectedAddons.map(addon => addon.name).join(', ')}
                       </p>
                     )}
-                    <p className="text-gray-600 text-sm">{formatCurrency(calculateItemTotal(item))}</p>
+                    <p className="text-gray-600 text-sm">{formatCurrency(calculateItemTotal(item), activeCurrency)}</p>
                   </div>
                   
                   <div className="flex items-center gap-2">
@@ -446,7 +448,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                 </Button>
                 <span className="text-lg font-semibold">{t('cart.total')}</span>
               </div>
-              <span className="text-lg font-semibold">{formatCurrency(total)}</span>
+              <span className="text-lg font-semibold">{formatCurrency(total, activeCurrency)}</span>
             </div>
             <Button
               onClick={handleSubmit}

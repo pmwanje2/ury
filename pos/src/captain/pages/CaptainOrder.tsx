@@ -80,6 +80,7 @@ export default function CaptainOrder() {
     isUpdatingOrder,
     orderId,
     posProfile,
+    currency: storeCurrency,
     paymentModes,
     orderComment,
     guestLabel,
@@ -95,6 +96,7 @@ export default function CaptainOrder() {
     setSelectedOrderType,
     loadTableOrder,
   } = usePOSStore();
+  const tillCurrency = posProfile?.currency || storeCurrency;
 
   // Every captain table order used to be assumed Dine In, but takeaway
   // tables (`URY Table.is_take_away`, surfaced via `context.table` from
@@ -591,6 +593,7 @@ export default function CaptainOrder() {
                 {alreadyOrderedLines.map((line) => (
                   <div key={`confirmed-${line.uniqueId}`}>
                     <CaptainOrderLine
+                      currency={tillCurrency}
                       line={line}
                       variant="confirmed"
                       disabled={isInteractionDisabled}
@@ -624,6 +627,7 @@ export default function CaptainOrder() {
               <div className="space-y-2">
                 {newOrChangedLines.map((line) => (
                   <CaptainOrderLine
+                      currency={tillCurrency}
                     key={`delta-${line.uniqueId}`}
                     line={line}
                     variant="delta"
@@ -645,6 +649,7 @@ export default function CaptainOrder() {
               <div className="space-y-2">
                 {reductionPendingLines.map((line) => (
                   <CaptainOrderLine
+                      currency={tillCurrency}
                     key={`reduction-${line.uniqueId}`}
                     line={line}
                     variant="reduction"
@@ -776,6 +781,7 @@ export default function CaptainOrder() {
             <SplitInvoiceDetails key={viewingSibling.invoice.name} invoice={viewingSibling.invoice} onClose={() => setViewingSibling(null)} />
           )}
           <SplitGroupPanel
+            currency={tillCurrency}
             key={`${invoiceId}-${splitGroupRefreshKey}`}
             invoiceName={invoiceId}
             onOpenInvoice={invoice => setViewingSibling({ source: invoiceId, invoice })}
@@ -812,7 +818,7 @@ export default function CaptainOrder() {
           <div className="bg-white border-t border-border p-3 mx-3 mb-3 rounded-lg">
             <div className="flex items-center justify-between mb-2 px-1">
               <span className="text-sm font-semibold text-gray-700">{t('pos_ui.total')}</span>
-              <span className="text-lg font-semibold text-gray-900">{formatCurrency(total)}</span>
+              <span className="text-lg font-semibold text-gray-900">{formatCurrency(total, tillCurrency)}</span>
             </div>
             <Button
               onClick={handleSend}
@@ -841,7 +847,7 @@ export default function CaptainOrder() {
         <div className="sticky bottom-0 lg:hidden bg-white border-t border-border p-3">
           <div className="flex items-center justify-between mb-2 px-1">
             <span className="text-sm font-semibold text-gray-700">{t('pos_ui.total')}</span>
-            <span className="text-lg font-semibold text-gray-900">{formatCurrency(total)}</span>
+            <span className="text-lg font-semibold text-gray-900">{formatCurrency(total, tillCurrency)}</span>
           </div>
           <Button
             onClick={handleSend}
