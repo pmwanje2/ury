@@ -62,7 +62,8 @@
     "user_fallback": "مستخدم",
     "switch_waiter": "تبديل النادل",
     "pair_tablet": "إقران هذا الجهاز اللوحي",
-    "staff_pins": "أرقام PIN للموظفين"
+    "staff_pins": "أرقام PIN للموظفين",
+    "my_approval_pin": "رقم PIN للموافقة الخاص بي"
   },
   "menu": {
     "manage_availability": "إدارة التوفر",
@@ -170,7 +171,14 @@
     "discount_not_applied": "اضغط على تطبيق لتحديث الإجمالي قبل الدفع.",
     "already_received": "تم استلامه مسبقاً",
     "balance_due": "الرصيد المتبقي",
-    "reference_label": "المرجع: {{ref}}"
+    "reference_label": "المرجع: {{ref}}",
+    "account_amount": "على الحساب: {{amount}}",
+    "charge_account": "قيد على الحساب",
+    "account_balance": "الرصيد",
+    "account_limit": "حد الائتمان",
+    "account_available": "الائتمان المتاح",
+    "no_accounts": "لم يتم العثور على حسابات معتمدة.",
+    "account_search_failed": "تعذّر البحث في حسابات الائتمان."
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -230,7 +238,8 @@
     "opening": "الافتتاح",
     "expected": "المتوقع",
     "closing": "الإغلاق",
-    "difference": "الفرق"
+    "difference": "الفرق",
+    "on_account": "على الحساب"
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -344,7 +353,9 @@
     "failed_to_load_details": "تعذر تحميل تفاصيل الطلب",
     "edit_order": "تعديل الطلب",
     "cancel_order": "إلغاء الطلب",
-    "qty_label": "الكمية: {{qty}}"
+    "qty_label": "الكمية: {{qty}}",
+    "settled_closed": "مُسوّاة / مغلقة",
+    "reduce_item_qty": "تقليل كمية {{item}}"
   },
   "tables": {
     "layout_view": "عرض المخطط",
@@ -987,5 +998,62 @@
     "title": "Bill requests",
     "unavailable": "Bill requests unavailable",
     "waiting": "Bill requests: {{count}} waiting"
+  },
+  "manager_approval": {
+    "title": "يلزم تفويض المدير",
+    "subtitle": "يعتمد المدير هذا الإجراء برقم PIN الخاص به. تبقى جلسة الصندوق الخاصة بك مسجلة الدخول.",
+    "manager": "المدير",
+    "select_manager": "اختر مديرًا…",
+    "no_approvers": "لا يوجد مدير لديه رقم PIN للموافقة يمكنه الاعتماد هنا بعد.",
+    "reason": "السبب",
+    "select_reason": "اختر سببًا…",
+    "note": "ملاحظة",
+    "note_placeholder": "أدخل توضيحًا مختصرًا (4 أحرف على الأقل)",
+    "pin_label": "رقم PIN للمدير",
+    "pin_hint": "من 4 إلى 8 أرقام",
+    "approve": "موافقة",
+    "approving": "جارٍ الاعتماد…",
+    "void_sent_item_title": "اعتماد إلغاء صنف مُرسل",
+    "void_sent_line": "إلغاء {{item}} ({{from}} → {{to}})",
+    "void_sent_order_summary": "إلغاء {{count}} بندًا مُرسلًا",
+    "amount_line": "القيمة: {{amount}}",
+    "check_line": "الفاتورة: {{check}}",
+    "error_wrong_pin": "رقم PIN للموافقة غير صحيح. حاول مرة أخرى.",
+    "error_locked": "تم قفل رقم PIN للموافقة بعد عدة محاولات خاطئة. حاول مرة أخرى لاحقًا.",
+    "error_no_pin": "لم يقم هذا المدير بتعيين رقم PIN للموافقة بعد.",
+    "error_self_approval": "لا يُسمح بالموافقة الذاتية. اطلب من مدير آخر.",
+    "error_not_eligible": "لا يمكن لهذا الشخص اعتماد هذا الإجراء في هذا الصندوق.",
+    "error_expired": "انتهت صلاحية هذه الموافقة أو تم استخدامها بالفعل. اطلب من المدير الاعتماد مجددًا.",
+    "error_changed": "تغيرت الفاتورة أو القيم بعد الموافقة. اطلب من المدير الاعتماد مجددًا.",
+    "error_required": "يجب أن يوافق المدير على هذا الإجراء.",
+    "error_generic": "تعذر إتمام الموافقة. حاول مرة أخرى.",
+    "pin_entered_count": "تم إدخال {{count}} أرقام",
+    "error_reason": "اختر سببًا نشطًا (وأضف ملاحظة قصيرة إذا كانت مطلوبة)."
+  },
+  "approval_pin": {
+    "title": "تعيين رقم PIN للموافقة",
+    "description": "استخدم رقم PIN الشخصي للموافقة على التجاوزات في الصندوق دون تبديل الجلسة.",
+    "tab_my_pin": "رقم PIN الخاص بي",
+    "tab_clear_staff": "مسح رقم PIN لموظف",
+    "status_label": "الحالة",
+    "status_set": "تم تعيين رقم PIN للموافقة",
+    "status_not_set": "لم يتم تعيين رقم PIN للموافقة",
+    "external_managed": "تُدار أرقام PIN للموافقة في هذا الموقع من خلال مخزن أرقام PIN للصندوق في المنشأة.",
+    "current_password": "كلمة المرور الحالية",
+    "new_pin": "رقم PIN الجديد للموافقة",
+    "confirm_pin": "تأكيد رقم PIN للموافقة",
+    "pin_placeholder": "من 4 إلى 8 أرقام",
+    "save_button": "حفظ رقم PIN للموافقة",
+    "password_required": "أدخل كلمة المرور الحالية للتأكيد.",
+    "pin_format": "أدخل رقم PIN للموافقة يتكون من 4 إلى 8 أرقام.",
+    "pin_mismatch": "رقما PIN للموافقة غير متطابقين.",
+    "saved": "تم حفظ رقم PIN للموافقة الخاص بك.",
+    "save_failed": "تعذر حفظ رقم PIN للموافقة. تحقق من كلمة المرور وحاول مجددًا.",
+    "load_failed": "تعذر تحميل حالة رقم PIN للموافقة.",
+    "clear_policy_note": "يمكن للمديرين مسح رقم PIN للموافقة الخاص بموظف ليتمكن من تعيين رقم جديد. لا يمكن لأي شخص قراءة أو تعيين رقم PIN لشخص آخر.",
+    "clear_pin": "مسح PIN",
+    "cleared": "تم مسح رقم PIN للموافقة لـ {{name}}.",
+    "clear_failed": "تعذر مسح رقم PIN للموافقة هذا.",
+    "error_wrong_password": "كلمة المرور الحالية غير مطابقة. تبقى جلسة الصندوق الخاصة بك نشطة."
   }
 }

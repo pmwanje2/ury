@@ -3,8 +3,9 @@
 Site-less: reads the shipped sources only. What a user can see from the backend is
 the translation source column, message strings (frappe.throw, returned reasons, Error
 Log titles) and DocType labels/descriptions. Docstrings and comments are developer
-text and stay. "HUF App" (the vendor app's DocType) and "Huf User" (its Role) are
-identifiers passed to frappe.db, never shown, so they are the strings allowed. Any
+text and stay. "HUF App" (the vendor app's DocType) and "Huf User" / "HUF Agent" (its
+Roles) are identifiers passed to frappe.db / role blocklists, never shown, so they are
+the strings allowed. Any
 other sentence (a string with whitespace) naming the vendor in any case is shown text:
 "huf app is not installed on this site" reaches the settings page as ``reason``.
 dev_seed/ is developer demo seeding run from bench, not tenant-facing behaviour.
@@ -20,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 VENDOR = re.compile(r"\bHUF\b")
 SENTENCE_VENDOR = re.compile(r"(?i)\bhuf\b")
-IDENTIFIERS = {"HUF App", "Huf User"}
+IDENTIFIERS = {"HUF App", "Huf User", "HUF Agent"}
 
 
 def _names_vendor(value):

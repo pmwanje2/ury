@@ -240,12 +240,12 @@ class HoldFireTests(OrderingCases, TestCase):
         self.invoice.save.assert_not_called()
         self.assertEqual(self.tickets, [])
 
-    def test_held_quantity_reduction_keeps_native_bill_removal_permission(self):
+    def test_held_quantity_reduction_allowed_without_sent_void_permission(self):
+        # Under B2a Amendment 1, unsent held (ury_held=1) lines are freely editable/removable even when remove_items=0.
         self.pos_profile.remove_items = 0
         self.row(qty=2)
-        with self.assertRaises(PermissionError):
-            self.sync([self.request("held-1", qty=1)])
-        self.invoice.save.assert_not_called()
+        self.sync([self.request("held-1", qty=1)])
+        self.assertEqual([(row.name, row.qty, row.ury_held) for row in self.invoice.items], [("held-1", 1, 1)])
         self.assertEqual(self.tickets, [])
 
     def test_repartitioning_same_sent_note_does_not_emit_a_kitchen_cancellation(self):
@@ -255,9 +255,13 @@ class HoldFireTests(OrderingCases, TestCase):
         self.assertEqual(self.tickets, [])
 
     def test_held_identity_survives_sync_and_unsent_removal_does_not_cancel_kitchen(self):
+        self.framework.get_roles.return_value = ["URY Manager"]
         self.row()
         self.row("sent", held=0, note="chilli", qty=2)
-        self.sync([self.request("held-1", qty=3), self.request("sent", held=0, note="chilli", qty=1)])
+        self.sync(
+            [self.request("held-1", qty=3), self.request("sent", held=0, note="chilli", qty=1)],
+            void_reason="Guest changed mind",
+        )
         self.assertEqual(self.invoice.items[0].name, "held-1")
         self.assertEqual([(r.comments, r.cancelled_qty) for t in self.tickets for r in t.kot_items], [("chilli", 1)])
         self.tickets.clear()
@@ -298,12 +302,16 @@ class HoldFireTests(OrderingCases, TestCase):
         self.assertEqual(self.tickets, [])
 
     def test_authorized_keyed_note_change_cancels_original_and_sends_replacement(self):
+        self.framework.get_roles.return_value = ["URY Manager"]
         old = self.row("sent", held=0, note="plain")
         old.reservation_line_key = "cart-line"
         self.historical_tickets = {"KOT-OLD": Row(kot_items=[Row(item="Fish", quantity=1, comments="plain", reservation_line_key="ref:Fish:cart-line")], name="KOT-OLD")}
         original = self.framework.db.get_list.side_effect
         self.framework.db.get_list.side_effect = lambda dt, **kw: [Row(name="KOT-OLD")] if dt == "URY KOT" else original(dt, **kw)
-        self.sync([{**self.request("sent", held=0, note="chilli"), "uniqueId": "cart-line"}])
+        self.sync(
+            [{**self.request("sent", held=0, note="chilli"), "uniqueId": "cart-line"}],
+            void_reason="Guest changed mind",
+        )
         self.assertEqual([(t.type, t.kot_items[0].comments) for t in self.tickets],
                          [("Order Modified", "chilli"), ("Partially cancelled", "plain")])
         self.assertEqual(self.tickets[-1].original_kot, "KOT-OLD")
@@ -389,11 +397,15 @@ class HoldFireTests(OrderingCases, TestCase):
         self.assertEqual(self.invoice.items[0].ury_held, 1)
 
     def test_after_fire_next_sync_and_cancel_keep_the_native_diffs(self):
+        self.framework.get_roles.return_value = ["URY Manager"]
         self.row(qty=2)
         self.row("held-2", qty=4, note="chilli")
         self.fire(line="held-1")
         self.tickets.clear()
-        self.sync([self.request("held-1", held=0, qty=1), self.request("held-2", qty=4, note="chilli")])
+        self.sync(
+            [self.request("held-1", held=0, qty=1), self.request("held-2", qty=4, note="chilli")],
+            void_reason="Guest changed mind",
+        )
         self.assertEqual([(r.comments, r.cancelled_qty) for t in self.tickets for r in t.kot_items], [("no onions", 1)])
 
     def test_stale_fire_and_kot_failure_are_not_acknowledged_as_success(self):
