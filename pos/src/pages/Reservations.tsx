@@ -46,6 +46,9 @@ import TableReservationCompleteDialog from '../components/TableReservationComple
 import TableReservationTimeline from '../components/TableReservationTimeline';
 import { DatePicker } from '../components/DatePicker';
 import { DINE_IN } from '../data/order-types';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isReasonRequiredError } from '../lib/privileged-actions-api';
+import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 
 // The statuses update_table_reservation accepts an edit in.
 const EDITABLE_STATUSES = ['Requested', 'Confirmed', 'Active'];
@@ -142,6 +145,11 @@ export default function Reservations() {
   const [isSeatDialogOpen, setIsSeatDialogOpen] = useState<boolean>(false);
   const [seatLoading, setSeatLoading] = useState<boolean>(false);
   const [cancelLoading, setCancelLoading] = useState<boolean>(false);
+  const [pendingResApproval, setPendingResApproval] = useState<{
+    reservation: TableReservation;
+    status: 'Cancelled' | 'No Show';
+    reason?: string;
+  } | null>(null);
 
   // Status filter state (Confirmed by default)
   const [selectedStatus, setSelectedStatus] = useState<string>('Confirmed');
@@ -266,35 +274,60 @@ export default function Reservations() {
     }
   };
 
-  const handleConfirmCancel = async (reason: string) => {
-    if (!cancelReservation) return;
-    if (!cancelReservation.can_cancel) {
-      showToast.error(t('reservations.not_authorized_cancel'));
-      return;
-    }
+  const handleConfirmCancel = async (reason: string, approval?: ManagerApprovalResult, targetRes?: TableReservation) => {
+    const target = targetRes ?? cancelReservation;
+    if (!target) return;
     setCancelLoading(true);
     try {
-      await updateTableReservationStatus(cancelReservation.name, 'Cancelled', undefined, reason);
+      await updateTableReservationStatus(
+        target.name,
+        'Cancelled',
+        undefined,
+        reason || approval?.reason,
+        {
+          approvalToken: approval?.token,
+          reasonNote: approval?.note,
+          posProfile: posProfile?.name,
+        },
+      );
       await fetchReservationsData(selectedDate);
       setIsCancelDialogOpen(false);
       setCancelReservation(null);
     } catch (err) {
+      if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        setPendingResApproval({ reservation: target, status: 'Cancelled', reason });
+        return;
+      }
       console.error('Failed to cancel reservation:', err);
-      showToast.error(extractErrorMessage(err, t('reservations.update_failed')));
+      showToast.error(overrideErrorMessage(err) || extractErrorMessage(err, t('reservations.update_failed')));
     } finally {
       setCancelLoading(false);
     }
   };
 
-  // Mark as No Show, offered only where the server's mark_no_show check allows it.
-  const handleMarkNoShow = async (res: TableReservation) => {
+  // Mark as No Show; supports Manager PIN + reason escalation in place when configured.
+  const handleMarkNoShow = async (res: TableReservation, approval?: ManagerApprovalResult) => {
     setMenuOpenId(null);
     try {
-      await updateTableReservationStatus(res.name, 'No Show');
+      await updateTableReservationStatus(
+        res.name,
+        'No Show',
+        undefined,
+        approval?.reason,
+        {
+          approvalToken: approval?.token,
+          reasonNote: approval?.note,
+          posProfile: posProfile?.name,
+        },
+      );
       await fetchReservationsData(selectedDate);
     } catch (err) {
+      if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        setPendingResApproval({ reservation: res, status: 'No Show' });
+        return;
+      }
       console.error('Failed to mark the reservation No Show:', err);
-      showToast.error(extractErrorMessage(err, t('reservations.update_failed')));
+      showToast.error(overrideErrorMessage(err) || extractErrorMessage(err, t('reservations.update_failed')));
     }
   };
 
@@ -797,6 +830,36 @@ export default function Reservations() {
         onConfirm={handleConfirmCancel}
         loading={cancelLoading}
       />
+
+      {pendingResApproval && posProfile && (
+        <ManagerApproval
+          open
+          posProfile={posProfile.name}
+          privilege="reservation_cancel"
+          title={t('privileged_actions.cancel_reservation')}
+          summaryLines={[
+            `${pendingResApproval.reservation.reserved_table} · ${pendingResApproval.reservation.customer_name || pendingResApproval.reservation.customer}`,
+            pendingResApproval.status,
+          ]}
+          reference={{ doctype: 'URY Table Reservation', name: pendingResApproval.reservation.name }}
+          claim={{
+            action: 'reservation_cancel',
+            reservation: pendingResApproval.reservation.name,
+            target_status: pendingResApproval.status,
+          }}
+          requireReason={!pendingResApproval.reason}
+          onApproved={(res) => {
+            const pending = pendingResApproval;
+            setPendingResApproval(null);
+            if (pending.status === 'Cancelled') {
+              void handleConfirmCancel(pending.reason || res.reason || '', res, pending.reservation);
+            } else {
+              void handleMarkNoShow(pending.reservation, res);
+            }
+          }}
+          onCancel={() => setPendingResApproval(null)}
+        />
+      )}
     </div>
   );
 }

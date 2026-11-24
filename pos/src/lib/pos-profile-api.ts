@@ -100,6 +100,13 @@ export interface PosProfileFull {
   custom_void_reasons?: string | null;
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
+  allow_rate_change?: number;
+  custom_max_free_bill_prints?: number;
+  custom_max_free_closed_copies?: number;
+  custom_service_charge_rate?: number;
+  custom_service_charge_account?: string | null;
+  custom_tax_exempt_category?: string | null;
+  custom_tips_payable_account?: string | null;
 }
 
 // Combined POS Profile with both limited and full fields

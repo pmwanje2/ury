@@ -14,6 +14,9 @@ import { useRootStore } from '../store/root-store';
 import { availabilityPermissions, type AvailabilityChange } from '@ury/core/availability';
 import { setItemAvailability } from '../lib/availability-api';
 import { SoldOutSheet } from '../components/SoldOutSheet';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
+import { showToast } from '@ury/ui';
 
 const EMPTY_MENU: Array<{ item: string }> = [];
 
@@ -32,14 +35,43 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
   } = usePOSStore();
   const { availabilityMap, availabilityStale, refetchAll } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
   const user = useRootStore(state => state.user);
-  const { canMark, canRestore } = availabilityPermissions(user?.roles);
+  const { canMark, canRestore, canRequestRestoreWithPin } = availabilityPermissions(user?.roles);
   const branch = posProfile?.branch;
   const company = posProfile?.company;
-  const itemAvailabilityActions = canMark && branch ? (item: string) => ({
-    canRestore,
-    update: async (change: AvailabilityChange) => {
-      await setItemAvailability(branch, item, change);
+  const [pending86Approval, setPending86Approval] = useState<{
+    branch: string;
+    item: string;
+    change: AvailabilityChange;
+  } | null>(null);
+
+  const runAvailabilityUpdate = async (
+    targetBranch: string,
+    item: string,
+    change: AvailabilityChange,
+    approval?: ManagerApprovalResult,
+  ) => {
+    try {
+      await setItemAvailability(targetBranch, item, change, {
+        approvalToken: approval?.token,
+        reason: approval?.reason,
+        reasonNote: approval?.note,
+        posProfile: posProfile?.name,
+      });
       await refetchAll();
+    } catch (err) {
+      if (!approval?.token && isAuthRequiredError(err)) {
+        setPending86Approval({ branch: targetBranch, item, change });
+        return;
+      }
+      showToast.error(overrideErrorMessage(err));
+      throw err;
+    }
+  };
+
+  const itemAvailabilityActions = canMark && branch ? (item: string) => ({
+    canRestore: canRestore || canRequestRestoreWithPin,
+    update: async (change: AvailabilityChange) => {
+      await runAvailabilityUpdate(branch, item, change);
     },
   }) : undefined;
   
@@ -160,6 +192,33 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
       </div>
       <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
+      {pending86Approval && posProfile && (
+        <ManagerApproval
+          open
+          posProfile={posProfile.name}
+          privilege="item_86_restore"
+          title={t('privileged_actions.restore_86')}
+          summaryLines={[
+            `${pending86Approval.item} (${pending86Approval.branch})`,
+            pending86Approval.change.status || String(pending86Approval.change.count ?? pending86Approval.change.reset_policy ?? ''),
+          ]}
+          reference={{ doctype: 'URY Item Availability', name: `${pending86Approval.branch}:${pending86Approval.item}` }}
+          claim={{
+            action: 'item_86_restore',
+            branch: pending86Approval.branch,
+            item_code: pending86Approval.item,
+            status: pending86Approval.change.status || '',
+            count: pending86Approval.change.count ?? '',
+            reset_policy: pending86Approval.change.reset_policy || '',
+          }}
+          onApproved={(res) => {
+            const pending = pending86Approval;
+            setPending86Approval(null);
+            void runAvailabilityUpdate(pending.branch, pending.item, pending.change, res);
+          }}
+          onCancel={() => setPending86Approval(null)}
+        />
+      )}
     </div>
   );
 }

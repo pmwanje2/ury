@@ -20,7 +20,10 @@ import SplitGroupPanel from '../components/SplitGroupPanel';
 import MergedBillPanel from '../components/MergedBillPanel';
 import { printOrder } from '../lib/print';
 import { call, getSessionUser } from '@ury/core';
-import { splitBill, cancelOrder } from '../lib/order-api';
+import { splitBill, cancelOrder, reprintKot } from '../lib/order-api';
+import PriceOverrideDialog from '../components/PriceOverrideDialog';
+import CheckPrivilegedDialog, { type CheckPrivilegedTab } from '../components/CheckPrivilegedDialog';
+import { isReasonRequiredError } from '../lib/privileged-actions-api';
 import {
   getOrdersTabForInvoice,
   getOpenCheckCounts,
@@ -218,6 +221,17 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     amount: number;
     claim: Record<string, unknown>;
   } | null>(null);
+  const [priceOverrideItem, setPriceOverrideItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
+  const [checkPrivTab, setCheckPrivTab] = React.useState<CheckPrivilegedTab | null>(null);
+  const [pendingOrderApproval, setPendingOrderApproval] = React.useState<{
+    privilege: 'reprint_bill' | 'reprint_kot' | 'split_check';
+    title: string;
+    summaryLines: string[];
+    referenceName: string;
+    claim: Record<string, unknown>;
+    requireReason?: boolean;
+    retry: (res: ManagerApprovalResult) => Promise<void>;
+  } | null>(null);
 
   React.useEffect(() => {
     if (selectedOrder?.name) {
@@ -402,6 +416,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       }
       posStore.setSelectedCustomer({ id: order.customer, name: order.customer_name, phone: order.mobile_number });
       posStore.setGuestLabel(order.custom_guest_label || '');
+      if (order.no_of_pax != null && Number(order.no_of_pax) > 0) {
+        posStore.setNoOfPax(Number(order.no_of_pax));
+      }
       // Fill cart
       const items = (order.items || []).map((item: any) => ({
         id: item.item_code,
@@ -502,7 +519,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     });
   }
 
-  async function handlePrintOrder() {
+  async function handlePrintOrder(approval?: ManagerApprovalResult) {
     if (!selectedOrder || !posStore.posProfile) return;
     setIsPrinting(true);
     try {
@@ -510,6 +527,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         orderId: selectedOrder.name,
         posProfile: posStore.posProfile,
         printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
+        approvalToken: approval?.token,
+        reason: approval?.reason,
+        reasonNote: approval?.note,
       });
       showToast.success(t('success.printed'));
       // Locally update selectedOrder.invoice_printed to 1
@@ -532,19 +552,87 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         fetchOrders();
       }
     } catch (err: any) {
-      showToast.error(t('errors.print_failed', { reason: err?.message || String(err) }));
+      if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        const orderName = selectedOrder.name;
+        setPendingOrderApproval({
+          privilege: 'reprint_bill',
+          title: t('privileged_actions.reprint_bill'),
+          summaryLines: [`${t('privileged_actions.check_ref')}: ${orderName}`],
+          referenceName: orderName,
+          claim: { action: 'reprint_open_bill', invoice: orderName },
+          requireReason: true,
+          retry: (res) => handlePrintOrder(res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(err) || t('errors.print_failed', { reason: err?.message || String(err) }));
     } finally {
       setIsPrinting(false);
     }
   }
 
-  async function handleSplitBill(payload: {
-    itemsToMove: Array<{ name: string; qty: number }>;
-    customer?: string;
-    guestLabel?: string;
-  }) {
+  async function handleRefireKot(approval?: ManagerApprovalResult) {
     if (!selectedOrder) return;
-    const result = await splitBill(selectedOrder.name, payload.itemsToMove, payload.customer, payload.guestLabel);
+    const orderName = selectedOrder.name;
+    try {
+      await reprintKot(
+        orderName,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
+      showToast.success(t('privileged_actions.kot_refired'));
+    } catch (err) {
+      if (!approval?.token && (isAuthRequiredError(err) || isReasonRequiredError(err))) {
+        setPendingOrderApproval({
+          privilege: 'reprint_kot',
+          title: t('privileged_actions.reprint_kot'),
+          summaryLines: [`${t('privileged_actions.check_ref')}: ${orderName}`],
+          referenceName: orderName,
+          claim: { action: 'reprint_kot', invoice: orderName },
+          requireReason: true,
+          retry: (res) => handleRefireKot(res),
+        });
+        return;
+      }
+      showToast.error(overrideErrorMessage(err));
+    }
+  }
+
+  async function handleSplitBill(
+    payload: {
+      itemsToMove: Array<{ name: string; qty: number }>;
+      customer?: string;
+      guestLabel?: string;
+    },
+    approval?: ManagerApprovalResult,
+  ) {
+    if (!selectedOrder) return;
+    const sourceName = selectedOrder.name;
+    let result;
+    try {
+      result = await splitBill(
+        sourceName,
+        payload.itemsToMove,
+        payload.customer,
+        payload.guestLabel,
+        approval ? { approvalToken: approval.token, reason: approval.reason, reasonNote: approval.note } : undefined,
+      );
+    } catch (err) {
+      if (!approval?.token && isAuthRequiredError(err)) {
+        const sortedMoves = [...payload.itemsToMove]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((row) => [row.name, Math.round(row.qty * 10000) / 10000]);
+        setPendingOrderApproval({
+          privilege: 'split_check',
+          title: t('privileged_actions.split_check'),
+          summaryLines: [`${t('privileged_actions.check_ref')}: ${sourceName}`],
+          referenceName: sourceName,
+          claim: { action: 'split_bill', source_invoice: sourceName, move_items: sortedMoves },
+          retry: (res) => handleSplitBill(payload, res),
+        });
+        return;
+      }
+      throw err;
+    }
     showToast.success(t('bill_split.split_success', { invoice: result.new_invoice }));
 
     const childOnUnbilledTab =
@@ -829,6 +917,14 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         onMergeBill={() => setShowMergeDialog(true)}
                         showSplitBill={canSplitBill}
                         onSplitBill={() => setShowSplitDialog(true)}
+                        showComplimentary={selectedOrderItems.length > 0}
+                        onComplimentary={() => setCheckPrivTab('complimentary')}
+                        showTaxExempt={selectedOrderItems.length > 0}
+                        onTaxExempt={() => setCheckPrivTab('tax_exempt')}
+                        showServiceCharge={selectedOrderItems.length > 0}
+                        onServiceCharge={() => setCheckPrivTab('service_charge')}
+                        showRefireKot={selectedOrderItems.length > 0}
+                        onRefireKot={() => void handleRefireKot()}
                       />
                       <button
                         type="button"
@@ -1045,6 +1141,15 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                           <p className="text-sm font-semibold text-gray-900">
                             {formatCurrency(item.amount, selectedOrderCurrency)}
                           </p>
+                          {isOrderEditable(selectedOrder.status) && !isMergedBill(selectedOrder) && (
+                            <button
+                              type="button"
+                              onClick={() => setPriceOverrideItem(item)}
+                              className="mt-0.5 text-xs font-medium text-blue-600 hover:underline"
+                            >
+                              {t('privileged_actions.price_override')}
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -1077,7 +1182,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 <Button
                   variant="outline"
                   className="min-h-11 shrink-0 gap-2"
-                  onClick={handlePrintOrder}
+                  onClick={() => void handlePrintOrder()}
                   disabled={isPrinting}
                 >
                   {isPrinting ? <Spinner className="w-5 h-5" hideMessage  message={t('common.loading')} /> : <Printer className="w-5 h-5" />}
@@ -1152,6 +1257,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showMergeDialog}
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
+          posProfile={posStore.posProfile?.name || selectedOrder.pos_profile || ''}
           onConfirm={handleMergeBill}
         />
       )}
@@ -1190,6 +1296,56 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           amount={pendingVoidApproval.amount}
           onApproved={(res) => void handleVoidApprovalGranted(res)}
           onCancel={() => setPendingVoidApproval(null)}
+        />
+      )}
+      {selectedOrder && priceOverrideItem && (
+        <PriceOverrideDialog
+          open
+          onOpenChange={(next) => !next && setPriceOverrideItem(null)}
+          mode="override"
+          posProfile={posStore.posProfile?.name || ''}
+          invoiceName={selectedOrder.name}
+          itemRowName={priceOverrideItem.name}
+          itemName={priceOverrideItem.item_name}
+          currentRate={priceOverrideItem.rate}
+          currency={selectedOrderCurrency}
+          onSuccess={async () => {
+            await fetchOrders();
+            await selectOrder(selectedOrder);
+          }}
+        />
+      )}
+      {selectedOrder && checkPrivTab && (
+        <CheckPrivilegedDialog
+          open
+          onOpenChange={(next) => !next && setCheckPrivTab(null)}
+          initialTab={checkPrivTab}
+          posProfile={posStore.posProfile?.name || ''}
+          company={posStore.posProfile?.company || ''}
+          invoiceName={selectedOrder.name}
+          currency={selectedOrderCurrency}
+          onSuccess={async () => {
+            await fetchOrders();
+            await selectOrder(selectedOrder);
+          }}
+        />
+      )}
+      {pendingOrderApproval && (
+        <ManagerApproval
+          open
+          posProfile={posStore.posProfile?.name || ''}
+          privilege={pendingOrderApproval.privilege}
+          title={pendingOrderApproval.title}
+          summaryLines={pendingOrderApproval.summaryLines}
+          reference={{ doctype: 'POS Invoice', name: pendingOrderApproval.referenceName }}
+          claim={pendingOrderApproval.claim}
+          requireReason={pendingOrderApproval.requireReason}
+          onApproved={(res) => {
+            const pending = pendingOrderApproval;
+            setPendingOrderApproval(null);
+            void pending.retry(res);
+          }}
+          onCancel={() => setPendingOrderApproval(null)}
         />
       )}
     </div>

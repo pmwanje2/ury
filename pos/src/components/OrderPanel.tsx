@@ -74,10 +74,12 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
   const [pendingSyncVoidApproval, setPendingSyncVoidApproval] = useState<{
+    privilege: 'void_sent_item' | 'guest_count_change' | 'order_type_change' | 'pickup_other_check';
     orderData: SyncOrderRequest;
     amount: number;
     linesCount: number;
     claim: Record<string, unknown>;
+    summaryLines: string[];
   } | null>(null);
 
   // Read-only kitchen state per item_code for a running (saved) order.
@@ -243,11 +245,89 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     } catch (error) {
       if (allowPromptOnAuthRequired && isUpdatingOrder && orderId && isAuthRequiredError(error)) {
         const voidInfo = buildSyncVoidClaim(orderData);
+        if (voidInfo.linesCount > 0) {
+          setPendingSyncVoidApproval({
+            privilege: 'void_sent_item',
+            orderData,
+            amount: voidInfo.amount,
+            linesCount: voidInfo.linesCount,
+            claim: voidInfo.claim,
+            summaryLines: [
+              t('manager_approval.void_sent_order_summary', { count: voidInfo.linesCount }),
+              t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount) }),
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
+        const existingInv = tableOrder?.message?.name === orderId ? tableOrder.message : null;
+        if (existingInv?.order_type && orderData.order_type && existingInv.order_type !== orderData.order_type) {
+          setPendingSyncVoidApproval({
+            privilege: 'order_type_change',
+            orderData,
+            amount: 0,
+            linesCount: 0,
+            claim: {
+              action: 'order_type_change',
+              invoice: orderId,
+              from_order_type: existingInv.order_type,
+              to_order_type: orderData.order_type,
+            },
+            summaryLines: [
+              `${existingInv.order_type} → ${orderData.order_type}`,
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
+        if (existingInv?.no_of_pax && Number(existingInv.no_of_pax) !== Number(orderData.no_of_pax)) {
+          setPendingSyncVoidApproval({
+            privilege: 'guest_count_change',
+            orderData,
+            amount: 0,
+            linesCount: 0,
+            claim: {
+              action: 'guest_count_change',
+              invoice: orderId,
+              from_pax: Number(existingInv.no_of_pax),
+              to_pax: Number(orderData.no_of_pax),
+            },
+            summaryLines: [
+              `${existingInv.no_of_pax} → ${orderData.no_of_pax}`,
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
+        if (existingInv?.waiter && existingInv.waiter !== user.name) {
+          setPendingSyncVoidApproval({
+            privilege: 'pickup_other_check',
+            orderData,
+            amount: 0,
+            linesCount: 0,
+            claim: {
+              action: 'pickup_other_check',
+              invoice: orderId,
+              owner_waiter: existingInv.waiter,
+            },
+            summaryLines: [
+              `${t('privileged_actions.pickup_other_check')}: ${existingInv.waiter}`,
+              t('manager_approval.check_line', { check: orderId }),
+            ],
+          });
+          return;
+        }
         setPendingSyncVoidApproval({
+          privilege: 'void_sent_item',
           orderData,
           amount: voidInfo.amount,
           linesCount: voidInfo.linesCount,
           claim: voidInfo.claim,
+          summaryLines: [
+            t('manager_approval.void_sent_order_summary', { count: voidInfo.linesCount || 1 }),
+            t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount) }),
+            t('manager_approval.check_line', { check: orderId }),
+          ],
         });
         return;
       }
@@ -262,11 +342,18 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     const pending = pendingSyncVoidApproval;
     setPendingSyncVoidApproval(null);
     if (!pending) return;
+    const tokenPatch: Partial<SyncOrderRequest> =
+      pending.privilege === 'guest_count_change'
+        ? { guest_count_approval_token: res.token, privilege_reason: res.reason, privilege_reason_note: res.note }
+        : pending.privilege === 'order_type_change'
+          ? { order_type_approval_token: res.token, privilege_reason: res.reason, privilege_reason_note: res.note }
+          : pending.privilege === 'pickup_other_check'
+            ? { pickup_approval_token: res.token, privilege_reason: res.reason, privilege_reason_note: res.note }
+            : { approval_token: res.token, void_reason: res.reason };
     await submitSyncPayload(
       {
         ...pending.orderData,
-        approval_token: res.token,
-        void_reason: res.reason,
+        ...tokenPatch,
       },
       false,
     );
@@ -624,16 +711,16 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         <ManagerApproval
           open
           posProfile={posProfile.name}
-          privilege="void_sent_item"
-          title={t('manager_approval.void_sent_item_title')}
-          summaryLines={[
-            t('manager_approval.void_sent_order_summary', { count: pendingSyncVoidApproval.linesCount || 1 }),
-            t('manager_approval.amount_line', { amount: formatCurrency(pendingSyncVoidApproval.amount) }),
-            t('manager_approval.check_line', { check: orderId }),
-          ]}
+          privilege={pendingSyncVoidApproval.privilege}
+          title={
+            pendingSyncVoidApproval.privilege === 'void_sent_item'
+              ? t('manager_approval.void_sent_item_title')
+              : t(`privileged_actions.${pendingSyncVoidApproval.privilege}`)
+          }
+          summaryLines={pendingSyncVoidApproval.summaryLines}
           reference={{ doctype: 'POS Invoice', name: orderId }}
           claim={pendingSyncVoidApproval.claim}
-          amount={pendingSyncVoidApproval.amount}
+          amount={pendingSyncVoidApproval.amount || undefined}
           onApproved={(res) => void handleSyncVoidApproved(res)}
           onCancel={() => setPendingSyncVoidApproval(null)}
         />
