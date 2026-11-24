@@ -1023,6 +1023,18 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         self.assertEqual([r1["refund_total"], r2["refund_total"], r3["refund_total"]], [1.083, 1.084, 1.083])
         self.assertAlmostEqual(r1["refund_total"] + r2["refund_total"] + r3["refund_total"], 3.250, places=3)
 
+    def test_ugx_zero_decimal_precision_overrides_legacy_currency_fraction_units_100(self):
+        """Frappe's shipped UGX Currency fixture carries fraction_units=100; ISO-4217 UGX MUST stay 0dp."""
+        orig_get_value = self.h.frappe.db.get_value
+
+        def _get_value_with_ugx_100(dt, filt=None, fieldname=None, *a, **kw):
+            if dt == "Currency" and filt == "UGX" and fieldname == "fraction_units":
+                return 100
+            return orig_get_value(dt, filt, fieldname, *a, **kw)
+
+        self.h.frappe.db.get_value = _get_value_with_ugx_100
+        self.assertEqual(self.mod._currency_precision("UGX"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
