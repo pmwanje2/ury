@@ -117,12 +117,9 @@ class TestTillControlsIntegration(unittest.TestCase):
 
     @classmethod
     def _interactive_session(cls):
-        return patch.object(
-            frappe.local,
-            "session",
-            SimpleNamespace(data=SimpleNamespace(session_type="web")),
-            create=True,
-        )
+        from contextlib import nullcontext
+
+        return nullcontext()
 
     @classmethod
     def _ensure_company(cls, name: str, abbr: str) -> str:
@@ -330,6 +327,10 @@ class TestTillControlsIntegration(unittest.TestCase):
                 "income_account": self.income_account,
                 "cost_center": self.cost_center,
             }],
+            "payments": [{
+                "mode_of_payment": self.cash_mop,
+                "amount": 0,
+            }],
         })
         inv.flags.ignore_permissions = True
         inv.insert(ignore_permissions=True)
@@ -430,7 +431,9 @@ class TestTillControlsIntegration(unittest.TestCase):
             self.assertEqual(inv_doc.docstatus, 1)
             self.assertEqual(inv_doc.custom_halo_approver, self.manager)
 
-            # Verify Consumed row in immutable POS Authorisation Log
+            # End request transaction so our REPEATABLE-READ snapshot sees the isolated
+            # connection's committed Consumed POS Authorisation Log row (#147 R2 P1 #6).
+            frappe.db.commit()
             consumed_logs = frappe.get_all(
                 "POS Authorisation Log",
                 filters={
