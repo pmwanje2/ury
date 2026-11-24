@@ -519,6 +519,67 @@ class TestServiceChargeSchemaAndFields(unittest.TestCase):
         for opt in ("Service Charge", "Service Charge Tax", "Charged Tip"):
             self.assertIn(opt, kind["options"])
 
+    def test_order_type_options_include_room_service_in_setup_fixtures_and_migration(self):
+        # 1. setup_customizations.py must include Room Service on POS Invoice & Sales Invoice
+        setup_src = (ROOT / "ury/setup_customizations.py").read_text()
+        self.assertIn(
+            "Room Service",
+            setup_src,
+            "ury/setup_customizations.py must include Room Service in order_type Select options",
+        )
+
+        # 2. fixtures/custom_field.json must include Room Service on POS Invoice & Sales Invoice
+        cf_rows = json.loads((ROOT / "ury/fixtures/custom_field.json").read_text())
+        by_name = {row["name"]: row for row in cf_rows if isinstance(row, dict) and "name" in row}
+        for cf_name in ("POS Invoice-order_type", "Sales Invoice-order_type"):
+            self.assertIn(cf_name, by_name)
+            opts = (by_name[cf_name].get("options") or "").splitlines()
+            self.assertIn(
+                "Room Service",
+                opts,
+                f"fixtures/custom_field.json {cf_name} options missing Room Service: {opts}",
+            )
+
+        # 3. ensure_privileged_action_custom_fields() upgrades pre-existing sites' Custom Field options
+        f, docs, modules, _logs = _build_frappe_harness()
+        existing_cf = {
+            "POS Invoice-order_type": "\nDine In\nPhone In\nTake Away\nDelivery\nAggregators",
+            "Sales Invoice-order_type": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+        }
+        orig_exists = f.db.exists
+        orig_get_value = f.db.get_value
+
+        def cf_exists(dt, name=None):
+            if dt == "Custom Field" and name in existing_cf:
+                return name
+            return orig_exists(dt, name)
+
+        def cf_get_value(dt, name, fieldname=None, as_dict=False, **kw):
+            if dt == "Custom Field" and name in existing_cf and fieldname == "options":
+                return existing_cf[name]
+            return orig_get_value(dt, name, fieldname, as_dict=as_dict, **kw)
+
+        def cf_set_value(dt, name, fieldname, val=None, **kw):
+            if dt == "Custom Field" and name in existing_cf and fieldname == "options":
+                existing_cf[name] = val
+
+        f.db.exists = cf_exists
+        f.db.get_value = cf_get_value
+        f.db.set_value = cf_set_value
+        f.clear_cache = MagicMock()
+
+        with patch.dict(sys.modules, modules):
+            sys.modules.pop("ury.ury_pos.privileged_fields", None)
+            pf = _load("ury.ury_pos.privileged_fields", "ury/ury_pos/privileged_fields.py")
+            pf.ensure_privileged_action_custom_fields()
+
+        for cf_name, opts_str in existing_cf.items():
+            self.assertIn(
+                "Room Service",
+                opts_str.splitlines(),
+                f"ensure_privileged_action_custom_fields did not add Room Service to {cf_name}",
+            )
+
 
 class TestServiceChargeEngineAndHooks(unittest.TestCase):
     def setUp(self):

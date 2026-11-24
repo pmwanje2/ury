@@ -341,6 +341,9 @@ describe('G19 Service Charge UI, Rule Matching, Precision (0/2/3dp) & 4-Locale i
         expect(section[key], `Missing ${lang}.privileged_actions.${key}`).toBeTruthy();
         expect(section[key]).not.toMatch(/\b(URY|HUF|Kamra|Tridz|Simphony)\b/i);
       }
+      const orderTypes = (locale as Record<string, Record<string, string>>).order_types || {};
+      expect(orderTypes.room_service, `Missing ${lang}.order_types.room_service`).toBeTruthy();
+      expect(orderTypes.room_service).not.toMatch(/\b(URY|HUF|Kamra|Tridz|Simphony)\b/i);
     }
   });
 });
