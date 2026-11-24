@@ -2786,8 +2786,14 @@ class TestHydrogenR2Regressions(DiscountBase):
         with self.assertRaises((Refused, NotPermitted)) as ctx_a:
             self.order.split_bill("CHK-R2-SP-A", [{"name": "i_platter", "qty": 1}])
         self.assertIn("POS-AUTH-REQUIRED", str(ctx_a.exception))
-        self.assertFalse(child_a.events, "Blocked split must not insert child invoice")
-        self.assertFalse(src_a.events, "Blocked split must not save source invoice")
+        self.assertFalse(
+            [e for e in child_a.events if e[0] in ("insert", "save")],
+            "Blocked split must not insert child invoice",
+        )
+        self.assertFalse(
+            [e for e in src_a.events if e[0] in ("insert", "save")],
+            "Blocked split must not save source invoice",
+        )
 
         # Re-attempt Case A with valid Manager PIN token covering 15% -> succeeds cleanly
         src_a_ok = self._register_check(
@@ -2847,8 +2853,8 @@ class TestHydrogenR2Regressions(DiscountBase):
         with self.assertRaises((Refused, NotPermitted)) as ctx_b:
             self.order.split_bill("CHK-R2-SP-B", [{"name": "i_juice", "qty": 1}])
         self.assertIn("POS-AUTH-REQUIRED", str(ctx_b.exception))
-        self.assertFalse(child_b.events)
-        self.assertFalse(src_b.events)
+        self.assertFalse([e for e in child_b.events if e[0] in ("insert", "save")])
+        self.assertFalse([e for e in src_b.events if e[0] in ("insert", "save")])
 
         # Case C: Inflation above prior approved % on the MOVED new split check (moving STEAK 20%)
         src_c = self._register_check(

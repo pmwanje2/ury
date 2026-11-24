@@ -17,13 +17,22 @@ from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
 from ury.ury_pos.discount import (
     apply_discount_to_invoice,
+    canonical_split_discount_claim,
     currency_precision,
     enforce_remove_discount_auth,
     get_check_discounts as _get_check_discounts_impl,
     list_discount_options as _list_discount_options_impl,
     parse_discount_request,
+    user_discount_limit,
     with_currency_precision,
+    _above_limit,
+    _approver_discount_ceiling,
+    _compute_manual_discount_summary,
+    _exceeds_approved_percent,
+    _get_override_module,
+    _is_auto_pricing_rule_row,
     _read_meta as _read_discount_meta,
+    _resolve_reason,
     _restore_doc_discount_state,
     _set_row_field,
     _snapshot_doc_discount_state,
@@ -634,8 +643,22 @@ def _split_kots_to_move(source, move_map, reservations_enabled):
     return movable
 
 
+def _has_manual_line_discount(rows):
+    """True when any active non-automatic item row carries a manual line discount."""
+    for r in rows or []:
+        if cint(r.get("is_disposable")) or flt(r.get("qty")) <= 0 or _is_auto_pricing_rule_row(r):
+            continue
+        if flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0:
+            return True
+        plr = flt(r.get("price_list_rate"))
+        rate = flt(r.get("rate"))
+        if plr > 0 and rate >= 0 and plr > rate + 1e-9:
+            return True
+    return False
+
+
 @frappe.whitelist()
-def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
+def split_bill(source_invoice, items_to_move, customer=None, guest_label=None, approval=None):
     """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
     if isinstance(items_to_move, str):
         items_to_move = json.loads(items_to_move)
@@ -788,14 +811,8 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
 
     # Carry bill-level discount & audit metadata cleanly across the split halves.
     has_header_discount = orig_pct > 0 or orig_flat > 0
-    has_moved_line_discount = any(
-        flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
-        for r in new_invoice.items
-    )
-    source_has_remaining_line_discount = any(
-        flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
-        for r in source.items
-    )
+    has_moved_line_discount = _has_manual_line_discount(new_invoice.items)
+    source_has_remaining_line_discount = _has_manual_line_discount(source.items)
     source_has_remaining_discount = has_header_discount or source_has_remaining_line_discount
     if source.get("owner"):
         new_invoice.owner = source.get("owner")
@@ -901,6 +918,131 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         new_invoice.set_missing_values()
         new_invoice.run_method("set_missing_values")
         new_invoice.calculate_taxes_and_totals()
+
+        # P1: Guard against discount-% inflation on BOTH split halves (standalone and under #8620).
+        if has_header_discount or has_moved_line_discount or source_has_remaining_line_discount or carry_approver:
+            split_prec = currency_precision(source)
+            source_post_summary = _compute_manual_discount_summary(source, split_prec)
+            child_post_summary = _compute_manual_discount_summary(new_invoice, split_prec)
+            caller_limit_pct = user_discount_limit(frappe.session.user, company, source.get("pos_profile"))
+            prior_approved_pct = carry_approved_pct if carry_approver else 0.0
+            reason_code_for_split = source.get("custom_discount_reason") or src_meta.get("reason")
+            reason_requires_sup = False
+            if reason_code_for_split and (
+                source_post_summary["discount_total"] > 0 or child_post_summary["discount_total"] > 0
+            ):
+                try:
+                    r_doc = _resolve_reason(reason_code_for_split, required=False)
+                    reason_requires_sup = bool(r_doc and cint(r_doc.get("requires_supervisor")) == 1)
+                except Exception:
+                    reason_requires_sup = False
+
+            def _check_split_half(half_doc, half_sum):
+                if half_sum["discount_total"] <= 0:
+                    return False, False, False, 0.0
+                half_eff = half_sum["effective_percent"]
+                half_req = max(half_eff, flt(half_doc.get("additional_discount_percentage")))
+                is_comp_half = bool(
+                    half_eff >= 100.0
+                    or (half_sum["discount_basis"] > 0 and flt(half_sum["after_total"], split_prec) <= 0)
+                )
+                exceeds_self = bool(
+                    is_comp_half
+                    or reason_requires_sup
+                    or _above_limit(
+                        half_sum["discount_total"],
+                        half_sum["discount_basis"],
+                        half_doc.get("additional_discount_percentage"),
+                        caller_limit_pct,
+                        split_prec,
+                    )
+                )
+                exceeds_prior = bool(
+                    not carry_approver
+                    or _exceeds_approved_percent(half_sum, half_doc, prior_approved_pct, split_prec)
+                )
+                return exceeds_prior, (exceeds_self and exceeds_prior), is_comp_half, half_req
+
+            src_over_prior, src_needs_reauth, src_comp, src_req_pct = _check_split_half(source, source_post_summary)
+            chd_over_prior, chd_needs_reauth, chd_comp, chd_req_pct = _check_split_half(new_invoice, child_post_summary)
+
+            if src_needs_reauth or chd_needs_reauth:
+                elevated_pct = max(
+                    src_req_pct if src_needs_reauth else 0.0,
+                    chd_req_pct if chd_needs_reauth else 0.0,
+                )
+                split_privilege = "complimentary" if (src_comp or chd_comp) else "discount"
+                token = str(approval).strip() if approval is not None and str(approval).strip() else None
+                if not token:
+                    frappe.throw(
+                        coded_message(
+                            "POS-AUTH-REQUIRED",
+                            _(
+                                "Manager approval is required because splitting this check raises the discount percentage to {0}%."
+                            ).format(round(elevated_pct, 2)),
+                        ),
+                        frappe.PermissionError,
+                    )
+                split_claim = canonical_split_discount_claim(
+                    source.name, items_to_move, percent=elevated_pct, reason=reason_code_for_split
+                )
+                override_mod = _get_override_module()
+                consumed = override_mod.consume(
+                    token,
+                    split_privilege,
+                    source.get("pos_profile") or "",
+                    source.name,
+                    split_claim,
+                )
+                new_approver = consumed.get("approver")
+                if not new_approver or new_approver == frappe.session.user:
+                    frappe.throw(
+                        coded_message("POS-AUTH-SELF", _("You cannot approve your own discount.")),
+                        frappe.PermissionError,
+                    )
+                approver_ceiling = _approver_discount_ceiling(
+                    new_approver, company, pos_profile=source.get("pos_profile"), privilege=split_privilege
+                )
+                new_approved_pct = elevated_pct
+                if approver_ceiling is not None and new_approved_pct > approver_ceiling:
+                    new_approved_pct = approver_ceiling
+                reauth_payload = frappe._dict(approver=new_approver, percent=new_approved_pct)
+                for half_doc, half_needs in (
+                    (source, src_needs_reauth or src_over_prior),
+                    (new_invoice, chd_needs_reauth or chd_over_prior),
+                ):
+                    if not half_needs:
+                        continue
+                    h_meta = _read_discount_meta(half_doc)
+                    half_doc.flags.discount_approval = reauth_payload
+                    _write_discount_audit_fields(
+                        half_doc,
+                        reason=half_doc.get("custom_discount_reason") or h_meta.get("reason") or reason_code_for_split,
+                        reason_description=h_meta.get("reason_description") or reason_code_for_split,
+                        note=half_doc.get("custom_discount_note") or h_meta.get("note") or src_meta.get("note"),
+                        coupon=half_doc.get("coupon_code") if hasattr(half_doc, "coupon_code") else None,
+                        approver=new_approver,
+                        approved_percent=new_approved_pct,
+                        line_reasons=h_meta.get("line_reasons") or src_meta.get("line_reasons") or {},
+                    )
+                carry_approver = new_approver
+                carry_approved_pct = new_approved_pct
+            elif carry_approver:
+                for half_doc, half_over in ((source, src_over_prior), (new_invoice, chd_over_prior)):
+                    if not half_over:
+                        continue
+                    h_meta = _read_discount_meta(half_doc)
+                    half_doc.flags.discount_approval = None
+                    _write_discount_audit_fields(
+                        half_doc,
+                        reason=half_doc.get("custom_discount_reason") or h_meta.get("reason") or reason_code_for_split,
+                        reason_description=h_meta.get("reason_description") or reason_code_for_split,
+                        note=half_doc.get("custom_discount_note") or h_meta.get("note") or src_meta.get("note"),
+                        coupon=half_doc.get("coupon_code") if hasattr(half_doc, "coupon_code") else None,
+                        approver=None,
+                        approved_percent=0.0,
+                        line_reasons=h_meta.get("line_reasons") or src_meta.get("line_reasons") or {},
+                    )
 
         # Never copy received tenders onto the split child check.
         for row in new_invoice.get("payments") or []:
@@ -1035,15 +1177,19 @@ def _reservation_lines(rows):
 
 
 def _prepare_consolidated_discount(destination, sources):
-    """Resolve ONE bill-level discount for the consolidated check (Simphony Add Check).
+    """Resolve ONE bill-level discount and preserve line/header discount metadata for the
+    consolidated check (Simphony Add Check).
 
     Matching percentages keep that percentage; differing discounts (such as merging a 0%
     check with a 10%-discounted check) sum their exact discount amounts on the shared
     apply_discount_on basis so neither an overcharge nor an unintended discount expansion
     occurs. Conflicting apply_discount_on bases (Net Total vs Grand Total) are refused.
+    Line-only discounted checks still carry their discount reason, note, approver, and
+    ury_discount_meta onto the consolidated check.
     """
     all_bills = [destination, *sources]
     discounted = []
+    line_discounted = []
     for bill in all_bills:
         pct = flt(bill.get("additional_discount_percentage"))
         amt = flt(bill.get("discount_amount"))
@@ -1052,9 +1198,60 @@ def _prepare_consolidated_discount(destination, sources):
             amt = flt(bill.get("discount_amount"))
         if pct > 0 or amt > 0:
             discounted.append((bill, pct, amt))
+        if _has_manual_line_discount(bill.get("items")):
+            line_discounted.append(bill)
+
+    if not discounted and not line_discounted:
+        return None
+
+    metadata_bills = []
+    seen_bill_ids = set()
+    for bill in [b for b, _pct, _amt in discounted] + line_discounted:
+        if id(bill) not in seen_bill_ids:
+            seen_bill_ids.add(id(bill))
+            metadata_bills.append(bill)
+
+    reasons = []
+    reason_descriptions = []
+    notes = []
+    approvers = []
+    merged_line_reasons = {}
+    for bill in metadata_bills:
+        bmeta = _read_discount_meta(bill)
+        r = bill.get("custom_discount_reason") or bmeta.get("reason")
+        if r:
+            reasons.append(r)
+            reason_descriptions.append(bmeta.get("reason_description") or r)
+        n = bill.get("custom_discount_note") or bmeta.get("note")
+        if n:
+            notes.append(n)
+        ap = bill.get("custom_discount_approver") or bmeta.get("approver")
+        if ap:
+            ap_pct = flt(bill.get("custom_discount_approved_percent")) or flt(bmeta.get("approved_percent"))
+            if ap_pct <= 0:
+                ap_pct = _compute_manual_discount_summary(bill, currency_precision(bill))["effective_percent"]
+            approvers.append((ap, ap_pct))
+        if isinstance(bmeta.get("line_reasons"), dict):
+            merged_line_reasons.update(bmeta["line_reasons"])
+    carry_reason = reasons[0] if reasons else None
+    carry_reason_desc = reason_descriptions[0] if reason_descriptions else carry_reason
+    carry_note = "; ".join(dict.fromkeys(notes)) if notes else None
+    carry_approver, carry_approved_pct = max(approvers, key=lambda pair: pair[1]) if approvers else (None, 0.0)
 
     if not discounted:
-        return None
+        return {
+            "has_header_discount": False,
+            "apply_discount_on": None,
+            "additional_discount_percentage": None,
+            "discount_amount": None,
+            "clear_coupon": False,
+            "reason": carry_reason,
+            "reason_description": carry_reason_desc,
+            "note": carry_note,
+            "approver": carry_approver,
+            "approved_percent": carry_approved_pct,
+            "line_reasons": merged_line_reasons,
+        }
 
     bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _pct, _amt in discounted}
     if len(bases) > 1:
@@ -1067,33 +1264,10 @@ def _prepare_consolidated_discount(destination, sources):
 
     all_pcts = [flt(bill.get("additional_discount_percentage")) for bill in all_bills]
     coupons = {bill.get("coupon_code") for bill in all_bills if bill.get("coupon_code")}
-    reasons = []
-    reason_descriptions = []
-    notes = []
-    approvers = []
-    merged_line_reasons = {}
-    for bill, _pct, _amt in discounted:
-        bmeta = _read_discount_meta(bill)
-        r = bill.get("custom_discount_reason") or bmeta.get("reason")
-        if r:
-            reasons.append(r)
-            reason_descriptions.append(bmeta.get("reason_description") or r)
-        n = bill.get("custom_discount_note") or bmeta.get("note")
-        if n:
-            notes.append(n)
-        ap = bill.get("custom_discount_approver") or bmeta.get("approver")
-        if ap:
-            ap_pct = flt(bill.get("custom_discount_approved_percent")) or flt(bmeta.get("approved_percent"))
-            approvers.append((ap, ap_pct))
-        if isinstance(bmeta.get("line_reasons"), dict):
-            merged_line_reasons.update(bmeta["line_reasons"])
-    carry_reason = reasons[0] if reasons else None
-    carry_reason_desc = reason_descriptions[0] if reason_descriptions else carry_reason
-    carry_note = "; ".join(dict.fromkeys(notes)) if notes else None
-    carry_approver, carry_approved_pct = approvers[0] if approvers else (None, 0.0)
 
     if all(p > 0 for p in all_pcts) and len({round(p, 6) for p in all_pcts}) == 1:
         return {
+            "has_header_discount": True,
             "apply_discount_on": basis,
             "additional_discount_percentage": all_pcts[0],
             "discount_amount": None,
@@ -1107,6 +1281,7 @@ def _prepare_consolidated_discount(destination, sources):
         }
 
     return {
+        "has_header_discount": True,
         "apply_discount_on": basis,
         "additional_discount_percentage": 0,
         "discount_amount": sum(amt for _, _, amt in discounted),
@@ -1227,12 +1402,13 @@ def consolidate_checks(destination, sources):
             )
 
     if discount_plan is not None:
-        destination.apply_discount_on = discount_plan["apply_discount_on"]
-        destination.additional_discount_percentage = discount_plan["additional_discount_percentage"]
-        if discount_plan["discount_amount"] is not None:
-            destination.discount_amount = discount_plan["discount_amount"]
-        if discount_plan.get("clear_coupon") and hasattr(destination, "coupon_code"):
-            destination.coupon_code = None
+        if discount_plan.get("has_header_discount"):
+            destination.apply_discount_on = discount_plan["apply_discount_on"]
+            destination.additional_discount_percentage = discount_plan["additional_discount_percentage"]
+            if discount_plan["discount_amount"] is not None:
+                destination.discount_amount = discount_plan["discount_amount"]
+            if discount_plan.get("clear_coupon") and hasattr(destination, "coupon_code"):
+                destination.coupon_code = None
         if (
             discount_plan.get("reason")
             or discount_plan.get("note")

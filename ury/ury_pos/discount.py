@@ -351,6 +351,54 @@ def user_discount_limit(user, company, pos_profile=None):
     return max(effective) if effective else 0.0
 
 
+def _approver_discount_ceiling(approver, company, pos_profile=None, privilege="discount"):
+    """Return the maximum discount % `approver` is authorised to approve, never exceeding their
+    effective company Approval Limit / POS Privilege Rule ceiling."""
+    if not approver:
+        return 0.0
+    if privilege == "complimentary":
+        return 100.0
+    policy = company_discount_policy(company)
+    roles = set(frappe.get_roles(approver) or [])
+    has_rules, rules_by_role = _privilege_rules_for(company, "discount", pos_profile=pos_profile)
+    has_approval_limit = bool(policy.get("has_approval_limit"))
+
+    if has_approval_limit:
+        approver_role = (policy.get("approver_role") or "").strip()
+        if not approver_role or approver_role in ("All", "Guest", "Desk User", "Administrator", "System Manager"):
+            approver_role = "Owner Approver"
+        if approver_role in roles and approver_role not in policy["role_limits"]:
+            return 100.0
+        if has_rules:
+            caps = []
+            for role in roles:
+                rule = rules_by_role.get(role)
+                if not rule or cint(rule.get("may_authorise")) != 1:
+                    continue
+                app_lim = policy["role_limits"][role] if role in policy["role_limits"] else policy["base_limit"]
+                rule_max = flt(rule.get("max_percent"))
+                caps.append(min(app_lim, rule_max) if rule_max > 0 else app_lim)
+            if caps:
+                return max(caps)
+            if approver_role in roles:
+                return policy["role_limits"].get(approver_role, 100.0)
+            return 0.0
+        matched = [policy["role_limits"][r] for r in roles if r in policy["role_limits"]]
+        return max(matched) if matched else policy["base_limit"]
+
+    if has_rules:
+        caps = []
+        for role in roles:
+            rule = rules_by_role.get(role)
+            if not rule or cint(rule.get("may_authorise")) != 1:
+                continue
+            rule_max = flt(rule.get("max_percent"))
+            caps.append(rule_max if rule_max > 0 else 100.0)
+        return max(caps) if caps else 0.0
+
+    return 100.0
+
+
 def user_can_remove_discount(user, company, pos_profile=None, invoice_printed=0):
     """Whether `user` may remove a discount without manager PIN approval."""
     roles = frappe.get_roles(user) or []
@@ -425,6 +473,56 @@ def _above_limit(discount_amount, basis_amount, explicit_percent, limit_percent,
     limit_scale = 10000
     limit_units = int(round(flt(limit_percent) * limit_scale))
     return disc_units * 100 * limit_scale > basis_units * limit_units
+
+
+def _exceeds_approved_percent(summary, doc, approved_percent, precision):
+    """Match siteops#8620 sales-discount-control@3 exact minor-unit half-up limit comparison."""
+    if summary["discount_total"] <= 0 and flt(doc.get("additional_discount_percentage")) <= 0:
+        return False
+    pct_val = flt(approved_percent)
+    if pct_val < 0:
+        return True
+    header_pct = flt(doc.get("additional_discount_percentage"))
+    if header_pct > pct_val + 1e-9:
+        return True
+    scale = 10 ** max(0, int(precision))
+    disc_units = int(round(flt(summary["discount_total"]) * scale))
+    basis_units = int(round(flt(summary["discount_basis"]) * scale))
+    if disc_units <= 0:
+        return False
+    if basis_units <= 0:
+        return True
+    limit_units = int(round(pct_val * 1000000.0))
+    limit_scale = 1000000
+    while limit_scale > 1 and limit_units % 10 == 0:
+        limit_units //= 10
+        limit_scale //= 10
+    if limit_units == 0:
+        return True
+    denom = 100 * limit_scale
+    allowed_units = (2 * basis_units * limit_units + denom) // (2 * denom)
+    return disc_units > allowed_units
+
+
+def canonical_split_discount_claim(source_invoice, items_to_move, *, percent, reason=None):
+    """Canonical manager override claim when split_bill elevates a check's effective discount %."""
+    normalized_items = []
+    for entry in items_to_move or []:
+        if not isinstance(entry, dict):
+            continue
+        row_id = str(entry.get("name") or "").strip()
+        qty = _norm_number(entry.get("qty"), 4)
+        if not row_id or qty is None or qty <= 0:
+            continue
+        normalized_items.append({"name": row_id, "qty": qty})
+    normalized_items.sort(key=lambda item: item["name"])
+    return {
+        "action": "split_discount",
+        "source_invoice": str(source_invoice or "").strip(),
+        "items": normalized_items,
+        "percent": _norm_number(percent, 4),
+        "reason": (str(reason).strip() or None) if reason else None,
+    }
 
 
 def canonical_discount_claim(*, percent=None, amount=None, coupon=None, lines=None, reason=None, note=None, precision=2):
@@ -1402,7 +1500,17 @@ def apply_discount_to_invoice(
                     coded_message("POS-AUTH-SELF", _("You cannot approve your own discount.")),
                     frappe.PermissionError,
                 )
-            approved_pct = effective_pct
+            requested_pct = max(
+                flt(invoice.get("additional_discount_percentage")),
+                flt(spec.get("percent")),
+                flt(coupon_info.get("discount_percentage") if coupon_info else 0.0),
+            )
+            approved_pct = max(effective_pct, requested_pct)
+            approver_ceiling = _approver_discount_ceiling(
+                approver, company, pos_profile=pos_profile_doc.name, privilege=privilege
+            )
+            if approver_ceiling is not None and approved_pct > approver_ceiling:
+                approved_pct = approver_ceiling
             # ONLY a consumed single-use token sets doc.flags.discount_approval!
             invoice.flags.discount_approval = frappe._dict(approver=approver, percent=approved_pct)
             if linked_partner is not None:
@@ -1782,7 +1890,7 @@ def validate_pos_discount(doc, method=None):
 
     # Unchanged or lowered already-approved discount (e.g. printing, settling, or lowering 10% -> 5%)
     if not is_new_discount and not discount_increased and stored_approver:
-        if curr_summary["effective_percent"] > stored_approved_pct + 1e-4:
+        if _exceeds_approved_percent(curr_summary, doc, stored_approved_pct, prec):
             frappe.throw(
                 coded_message("SITEOPS-DISC-007", _("Cannot raise an approved discount without fresh manager approval.")),
                 frappe.PermissionError,
