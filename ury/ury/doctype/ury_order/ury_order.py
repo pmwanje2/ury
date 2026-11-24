@@ -3543,9 +3543,11 @@ def _enforce_on_account(
     *,
     on_account_approval=None,
     on_account_reason=None,
+    consume_token=True,
 ):
     from ury.ury_pos import override
     from ury.ury_pos.credit import balance, credit_limit, default_accounts, require_credit_access
+    from ury.ury_pos.offline_tenders import currency_precision
 
     bills = (invoice, target) if target else (invoice,)
     proposed = 0
@@ -3575,9 +3577,13 @@ def _enforce_on_account(
             frappe.ValidationError,
         )
     projected = balance(customer, invoice.company, invoice.name, current=True) + proposed
-    precision = invoice.precision("base_grand_total")
+    acct_currency = invoice.get("currency") or profile.get("currency") or ""
+    claim_prec = currency_precision(acct_currency)
+    precision = max(invoice.precision("base_grand_total"), claim_prec)
     if flt(projected, precision) > flt(limit, precision):
-        approval_key = (customer, round(flt(proposed), 2), round(flt(limit), 2))
+        rounded_proposed = round(flt(proposed), claim_prec)
+        rounded_limit = round(flt(limit), claim_prec)
+        approval_key = (customer, rounded_proposed, rounded_limit)
         already_verified = getattr(getattr(invoice, "flags", None), "pos_verified_on_account_override", None)
         if already_verified == approval_key:
             invoice.flags.pos_verified_on_account_checked = True
@@ -3593,12 +3599,16 @@ def _enforce_on_account(
                 + " [POS-AUTH-REQUIRED]",
                 frappe.ValidationError,
             )
+        # Two-step draft save (`make_invoice(..., submit_invoice=0)`): defer consuming
+        # the single-use approval token until actual submission (`submit_order_invoice`).
+        if not consume_token:
+            return True
         claim = {
             "customer": customer,
             "company": invoice.company,
-            "proposed": round(flt(proposed), 2),
-            "limit": round(flt(limit), 2),
-            "currency": invoice.get("currency") or profile.get("currency") or "",
+            "proposed": rounded_proposed,
+            "limit": rounded_limit,
+            "currency": acct_currency,
             "reason": (on_account_reason or "").strip(),
         }
         consumed = override.consume(
@@ -4215,6 +4225,7 @@ def make_invoice(
             target,
             on_account_approval=on_account_approval,
             on_account_reason=on_account_reason,
+            consume_token=bool(submit_invoice),
         ):
             if target.company != invoice.company or target.pos_profile != invoice.pos_profile or target.docstatus != 0:
                 frappe.throw(_('Merged credit bills must be open on the same till.'))
@@ -4253,6 +4264,7 @@ def make_invoice(
         offline_replay=offline_replay,
         offline_approval=offline_approval,
         offline_reason=offline_reason,
+        consume_token=bool(submit_invoice),
         _frappe=frappe,
     )
     rc_outcome = room_charge.enforce_room_charge_settlement(
@@ -4263,6 +4275,7 @@ def make_invoice(
         room_charge_stay=room_charge_stay,
         room_charge_approval=room_charge_approval,
         room_charge_reason=room_charge_reason,
+        consume_token=bool(submit_invoice),
         _frappe=frappe,
     )
 
@@ -4274,6 +4287,7 @@ def make_invoice(
             customer_disabled,
             on_account_approval=on_account_approval,
             on_account_reason=on_account_reason,
+            consume_token=bool(submit_invoice),
         )
     invoice.set_outstanding_amount()
     if client_order_id:

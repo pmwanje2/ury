@@ -743,11 +743,15 @@ def validate_credit_and_room_charge_before_submit(doc, method=None):
             rate = flt(doc.get("conversion_rate") or 1)
             proposed = remaining * rate
             projected = credit.balance(customer, doc.company, doc.name, current=True) + proposed
+            from ury.ury_pos.offline_tenders import currency_precision
+
+            claim_prec = currency_precision(doc.get("currency") or profile.get("currency"))
             base_precision = doc.precision("base_grand_total") if callable(getattr(doc, "precision", None)) else 2
             if not isinstance(base_precision, int) or isinstance(base_precision, bool):
                 base_precision = 2
-            if flt(projected, base_precision) > flt(limit, base_precision):
-                approval_key = (customer, round(flt(proposed), 2), round(flt(limit), 2))
+            eff_precision = max(base_precision, claim_prec)
+            if flt(projected, eff_precision) > flt(limit, eff_precision):
+                approval_key = (customer, round(flt(proposed), claim_prec), round(flt(limit), claim_prec))
                 if getattr(flags, "pos_verified_on_account_override", None) != approval_key:
                     frappe.throw(
                         "[POS-CREDIT-004] "

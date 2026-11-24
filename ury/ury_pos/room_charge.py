@@ -13,7 +13,18 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
-from ury.ury_pos import override
+
+def _field(obj, key: str, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    getter = getattr(obj, "get", None)
+    if callable(getter):
+        val = getter(key)
+        return default if val is None else val
+    val = getattr(obj, key, default)
+    return default if val is None else val
 
 
 def _resolve_verifier(method_path: str):
@@ -27,7 +38,7 @@ def _resolve_verifier(method_path: str):
 
 def profile_room_charge_modes(profile, company: str | None = None, *, _frappe=None) -> list[str]:
     f = _frappe or frappe
-    comp = company or profile.get("company")
+    comp = company or _field(profile, "company")
     if not comp:
         return []
     meta = f.get_meta("Company")
@@ -37,8 +48,8 @@ def profile_room_charge_modes(profile, company: str | None = None, *, _frappe=No
     if not clearing:
         return []
     modes: list[str] = []
-    for row in profile.get("payments") or []:
-        mode = row.get("mode_of_payment")
+    for row in _field(profile, "payments") or []:
+        mode = _field(row, "mode_of_payment")
         if not mode:
             continue
         account = f.db.get_value(
@@ -56,9 +67,9 @@ def room_charge_amount(payments, room_charge_modes: list[str]) -> float:
     if not mode_set:
         return 0.0
     return sum(
-        flt(row.get("amount"))
+        flt(_field(row, "amount"))
         for row in (payments or [])
-        if row.get("mode_of_payment") in mode_set and flt(row.get("amount")) > 0
+        if _field(row, "mode_of_payment") in mode_set and flt(_field(row, "amount")) > 0
     )
 
 
@@ -71,6 +82,7 @@ def enforce_room_charge_settlement(
     room_charge_stay: str | None = None,
     room_charge_approval: str | None = None,
     room_charge_reason: str | None = None,
+    consume_token: bool = True,
     _frappe=None,
 ) -> dict | None:
     """Enforce room-charge eligibility and manager override at settlement/submit.
@@ -80,17 +92,17 @@ def enforce_room_charge_settlement(
     records `custom_room_charge_stay` + override attribution on `invoice`.
     """
     f = _frappe or frappe
-    rc_modes = profile_room_charge_modes(profile, invoice.get("company"), _frappe=f)
+    rc_modes = profile_room_charge_modes(profile, _field(invoice, "company"), _frappe=f)
     rc_amt = room_charge_amount(payments, rc_modes)
     if rc_amt <= 0:
         return None
 
-    method_path = (profile.get("custom_room_lookup_method") or "").strip()
+    method_path = (_field(profile, "custom_room_lookup_method") or "").strip()
     if not method_path:
         return None
 
-    room_in = (room_number if room_number is not None else invoice.get("room_number") or "").strip()
-    stay_in = (room_charge_stay if room_charge_stay is not None else invoice.get("custom_room_charge_stay") or "").strip()
+    room_in = (room_number if room_number is not None else _field(invoice, "room_number") or "").strip()
+    stay_in = (room_charge_stay if room_charge_stay is not None else _field(invoice, "custom_room_charge_stay") or "").strip()
     if not room_in and not stay_in:
         f.throw(
             _("Enter and verify a room or guest stay before posting a room charge. [POS-RC-REQUIRED]"),
@@ -105,10 +117,14 @@ def enforce_room_charge_settlement(
             f.ValidationError,
         )
 
+    from ury.ury_pos.offline_tenders import currency_precision
+
+    req_currency = _field(invoice, "currency") or _field(profile, "currency") or ""
+    req_prec = currency_precision(req_currency)
     kwargs = {
         "pos_profile": profile.name,
-        "amount": round(flt(rc_amt), 2),
-        "currency": invoice.get("currency") or profile.get("currency") or "",
+        "amount": round(flt(rc_amt), req_prec),
+        "currency": req_currency,
     }
     if stay_in:
         kwargs["reservation"] = stay_in
@@ -141,7 +157,7 @@ def enforce_room_charge_settlement(
         return {
             "reservation": resolved_stay,
             "room_number": resolved_room,
-            "amount": round(flt(rc_amt), 2),
+            "amount": round(flt(rc_amt), currency_precision(result.get("currency") or req_currency)),
             "override_approver": None,
             "override_reason": None,
         }
@@ -164,11 +180,30 @@ def enforce_room_charge_settlement(
             f.PermissionError,
         )
 
+    claim_currency = result.get("currency") or req_currency
+    claim_prec = currency_precision(claim_currency)
+    rounded_rc_amt = round(flt(rc_amt), claim_prec)
+
+    # Two-step draft save (`make_invoice(..., submit_invoice=0)`): keep the stay
+    # and defer consuming the single-use approval token until actual submission.
+    if not consume_token:
+        if resolved_stay:
+            invoice.custom_room_charge_stay = resolved_stay
+        return {
+            "reservation": resolved_stay,
+            "room_number": resolved_room,
+            "amount": rounded_rc_amt,
+            "override_approver": None,
+            "override_reason": None,
+        }
+
+    from ury.ury_pos import override
+
     claim = {
         "reservation": resolved_stay,
         "room": resolved_room,
-        "amount": round(flt(rc_amt), 2),
-        "currency": result.get("currency") or invoice.get("currency") or profile.get("currency") or "",
+        "amount": rounded_rc_amt,
+        "currency": claim_currency,
         "reason": (room_charge_reason or "").strip(),
     }
     consumed = override.consume(
@@ -194,7 +229,7 @@ def enforce_room_charge_settlement(
     return {
         "reservation": resolved_stay,
         "room_number": resolved_room,
-        "amount": round(flt(rc_amt), 2),
+        "amount": rounded_rc_amt,
         "override_approver": approver,
         "override_reason": str(approved_reason)[:200],
     }

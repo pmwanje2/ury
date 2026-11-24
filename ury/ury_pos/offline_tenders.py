@@ -12,12 +12,47 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-from ury.ury_pos import override
 from ury.ury_pos.room_charge import profile_room_charge_modes
+
+_ZERO_DP_CURRENCIES = frozenset({
+    "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW",
+    "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF",
+})
+_THREE_DP_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"})
+
+
+def _field(obj, key: str, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    getter = getattr(obj, "get", None)
+    if callable(getter):
+        val = getter(key)
+        return default if val is None else val
+    val = getattr(obj, key, default)
+    return default if val is None else val
+
+
+def currency_precision(currency: str | None) -> int:
+    """Return minor-unit decimal places for an ISO 4217 currency (0/2/3dp)."""
+    code = (currency or "").strip().upper()
+    if not code:
+        return 2
+    if code in _ZERO_DP_CURRENCIES:
+        return 0
+    if code in _THREE_DP_CURRENCIES:
+        return 3
+    try:
+        from babel.numbers import get_currency_precision
+
+        return int(get_currency_precision(code))
+    except Exception:
+        return 2
 
 
 def offline_tender_limit(profile) -> float:
-    return max(0.0, flt(profile.get("custom_offline_tender_limit") or 0))
+    return max(0.0, flt(_field(profile, "custom_offline_tender_limit") or 0))
 
 
 def profile_offline_payment_modes(profile, room_charge_modes: list[str] | None = None, *, _frappe=None) -> list[dict]:
@@ -26,7 +61,7 @@ def profile_offline_payment_modes(profile, room_charge_modes: list[str] | None =
     rc_set = set(
         room_charge_modes
         if room_charge_modes is not None
-        else profile_room_charge_modes(profile, profile.get("company"), _frappe=f)
+        else profile_room_charge_modes(profile, _field(profile, "company"), _frappe=f)
     )
     mop_meta = f.get_meta("Mode of Payment")
     has_allow = bool(mop_meta and mop_meta.has_field("custom_allow_offline"))
@@ -39,8 +74,8 @@ def profile_offline_payment_modes(profile, room_charge_modes: list[str] | None =
 
     out: list[dict] = []
     seen: set[str] = set()
-    for row in profile.get("payments") or []:
-        mode = row.get("mode_of_payment")
+    for row in _field(profile, "payments") or []:
+        mode = _field(row, "mode_of_payment")
         if not mode or mode in seen:
             continue
         seen.add(mode)
@@ -71,18 +106,19 @@ def enforce_offline_tender_replay(
     offline_replay: int = 0,
     offline_approval: str | None = None,
     offline_reason: str | None = None,
+    consume_token: bool = True,
     _frappe=None,
 ) -> dict | None:
     """Re-verify Mode of Payment offline flags, reference requirement, and per-till
     floor limit when replaying or submitting an offline-captured check."""
     f = _frappe or frappe
-    is_offline = bool(cint(offline_replay)) or bool(invoice.get("ury_offline_captured_at"))
+    is_offline = bool(cint(offline_replay)) or bool(_field(invoice, "ury_offline_captured_at"))
     if not is_offline:
         return None
-    if invoice.get("is_return"):
+    if _field(invoice, "is_return"):
         return None
 
-    if not cint(profile.get("ury_offline_capture")):
+    if not cint(_field(profile, "ury_offline_capture")):
         f.throw(
             _("Offline capture is disabled on this till. [POS-OFFLINE-DISABLED]"),
             f.ValidationError,
@@ -91,16 +127,16 @@ def enforce_offline_tender_replay(
     modes_list = profile_offline_payment_modes(profile, _frappe=f)
     by_mode = {row["mode_of_payment"]: row for row in modes_list}
 
-    positive_rows = [row for row in (payments or []) if flt(row.get("amount")) > 0]
+    positive_rows = [row for row in (payments or []) if flt(_field(row, "amount")) > 0]
     if not positive_rows:
         return None
 
     total_offline = 0.0
     modes_used: list[str] = []
-    comments = (invoice.get("custom_comments") or "").strip()
+    comments = (_field(invoice, "custom_comments") or "").strip()
 
     for row in positive_rows:
-        mode = row.get("mode_of_payment") or ""
+        mode = _field(row, "mode_of_payment") or ""
         info = by_mode.get(mode)
         if not info or not info.get("allow_offline"):
             f.throw(
@@ -110,7 +146,7 @@ def enforce_offline_tender_replay(
                 f.ValidationError,
             )
         if info.get("requires_reference"):
-            ref = (row.get("reference_no") or "").strip()
+            ref = (_field(row, "reference_no") or "").strip()
             if not ref and not comments:
                 f.throw(
                     _(
@@ -118,30 +154,35 @@ def enforce_offline_tender_replay(
                     ).format(mode),
                     f.ValidationError,
                 )
-        total_offline += flt(row.get("amount"))
+        total_offline += flt(_field(row, "amount"))
         if mode not in modes_used:
             modes_used.append(mode)
 
     limit = offline_tender_limit(profile)
-    if limit > 0 and flt(total_offline, 2) > flt(limit, 2):
+    prec = currency_precision(_field(invoice, "currency") or _field(profile, "currency"))
+    if limit > 0 and flt(total_offline, prec) > flt(limit, prec):
         # Already verified in-process during this make_invoice -> submit flow?
         if getattr(getattr(invoice, "flags", None), "pos_verified_offline_override", False):
             return {
-                "override_approver": invoice.get("custom_override_approver"),
-                "override_reason": invoice.get("custom_override_reason"),
+                "override_approver": _field(invoice, "custom_override_approver"),
+                "override_reason": _field(invoice, "custom_override_reason"),
             }
         if not offline_approval:
             f.throw(
                 _(
                     "Offline tender ({0}) exceeds this till's offline limit ({1}). "
                     "Manager approval is required. [POS-OFFLINE-OVER-LIMIT] [POS-AUTH-REQUIRED]"
-                ).format(round(flt(total_offline), 2), round(flt(limit), 2)),
+                ).format(round(flt(total_offline), prec), round(flt(limit), prec)),
                 f.PermissionError,
             )
+        if not consume_token:
+            return {"override_approver": None, "override_reason": None}
+
+        from ury.ury_pos import override
 
         claim = {
-            "amount": round(flt(total_offline), 2),
-            "limit": round(flt(limit), 2),
+            "amount": round(flt(total_offline), prec),
+            "limit": round(flt(limit), prec),
             "modes": sorted(modes_used),
             "reason": (offline_reason or "").strip(),
         }

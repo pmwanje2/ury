@@ -40,8 +40,16 @@ def _set_user_pin_or_kamra(user: str, pin: str) -> None:
                 "must_reset": 0,
             }).insert(ignore_permissions=True)
         frappe.cache.delete_value(f"kamra_supervisor_pin_fails:{user.casefold()}")
-    digest = override._pin_digest(user, pin)
-    frappe.db.set_value("User", user, "custom_override_pin_hash", digest, update_modified=False)
+    if override._external_pin_verifier() is None:
+        from frappe.utils.password import update_password
+
+        update_password(
+            user,
+            pin,
+            doctype=override.PIN_AUTH_DOCTYPE,
+            fieldname=override.PIN_AUTH_FIELDNAME,
+            logout_all_sessions=False,
+        )
 
 
 def _ensure_user(email: str, roles: list[str], full_name: str) -> str:
@@ -176,7 +184,7 @@ class TestCreditAndOfflineIntegration(IntegrationTestCase):
             "proposed": 200.0,
             "limit": 100.0,
             "currency": self.pos.profile.currency,
-            "reason": "Cross-till test",
+            "reason": "Other: Cross-till test",
         }
         auth = override.authorise(
             self.other_profile.name,
@@ -197,7 +205,7 @@ class TestCreditAndOfflineIntegration(IntegrationTestCase):
                 invoice=inv.name,
                 submit_invoice=1,
                 on_account_approval=auth["token"],
-                on_account_reason="Cross-till test",
+                on_account_reason="Other: Cross-till test",
             )
 
     def test_on_account_over_limit_never_silently_bypasses_and_logs_approval(self):
@@ -226,7 +234,7 @@ class TestCreditAndOfflineIntegration(IntegrationTestCase):
             "proposed": 200.0,
             "limit": 100.0,
             "currency": self.pos.profile.currency,
-            "reason": "Approved corporate lunch",
+            "reason": "Other: Approved corporate lunch",
         }
         auth = override.authorise(
             self.pos.profile.name,
@@ -246,24 +254,30 @@ class TestCreditAndOfflineIntegration(IntegrationTestCase):
             invoice=inv.name,
             submit_invoice=1,
             on_account_approval=auth["token"],
-            on_account_reason="Approved corporate lunch",
+            on_account_reason="Other: Approved corporate lunch",
         )
         self.assertEqual(out["status"], "Submitted")
         self.assertEqual(
             frappe.db.get_value("POS Invoice", inv.name, "custom_override_approver"),
             self.mgr,
         )
-        self.assertTrue(
-            frappe.db.exists(
-                "POS Authorisation Log",
-                {
-                    "privilege": "on_account_over_limit",
-                    "reference_name": inv.name,
-                    "approver": self.mgr,
-                    "outcome": "Consumed",
-                },
-            )
+        # #147 R2 writes POS Authorisation Log on an isolated DB connection so audit
+        # rows survive caller rollbacks; read on an isolated snapshot to observe it.
+        has_consumed_log = override._with_isolated_db(
+            lambda db: bool(
+                db.sql(
+                    """
+                    SELECT name FROM `tabPOS Authorisation Log`
+                    WHERE privilege = %s AND reference_name = %s
+                      AND approver = %s AND outcome = 'Consumed'
+                    LIMIT 1
+                    """,
+                    ("on_account_over_limit", inv.name, self.mgr),
+                )
+            ),
+            commit=False,
         )
+        self.assertTrue(has_consumed_log)
 
     def test_offline_replay_airtel_money_refused_after_flag_switched_off_and_pin_over_limit(self):
         frappe.set_user(self.pos.user.name)
@@ -314,7 +328,7 @@ class TestCreditAndOfflineIntegration(IntegrationTestCase):
             "amount": 200.0,
             "limit": 150.0,
             "modes": [self.airtel_mop],
-            "reason": "Network outage approved",
+            "reason": "Other: Network outage approved",
         }
         auth = override.authorise(
             self.pos.profile.name,
@@ -336,7 +350,7 @@ class TestCreditAndOfflineIntegration(IntegrationTestCase):
             round_id="r1",
             offline_replay=1,
             offline_approval=auth["token"],
-            offline_reason="Network outage approved",
+            offline_reason="Other: Network outage approved",
         )
         self.assertEqual(out["status"], "Submitted")
 

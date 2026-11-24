@@ -4,9 +4,10 @@ import { useOutbox } from '../offline/use-outbox';
 import { t } from '../i18n';
 import { useEffect, useState } from 'react';
 import { Button, showToast } from '@ury/ui';
-import { parseFrappeError } from '@ury/core';
+import { currencyFractionDigits, formatCurrency, parseFrappeError } from '@ury/core';
 import {
   canCaptureOffline,
+  offlineTolerance,
   type OfflineEntry,
   type OfflineOutbox,
   type OfflinePaymentModeConfig,
@@ -14,17 +15,25 @@ import {
 import { flushPendingFiscalReprints } from '../lib/efris-print';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
+function roundForCurrency(value: number, currencyCode?: string): number {
+  const digits = currencyCode ? currencyFractionDigits(currencyCode) : 2;
+  const factor = Math.pow(10, digits);
+  return Math.round(value * factor) / factor;
+}
+
 function PendingOrder({
   row,
   queue,
   eligibleModes,
   offlineLimit,
+  currencyCode,
   disabled,
 }: {
   row: OfflineEntry;
   queue: OfflineOutbox;
   eligibleModes: OfflinePaymentModeConfig[];
   offlineLimit: number;
+  currencyCode?: string;
   disabled: boolean;
 }) {
   const [busy, setBusy] = useState(false);
@@ -37,7 +46,9 @@ function PendingOrder({
     refModes[0]?.mode_of_payment ||
     '';
   const total = row.rounds[row.rounds.length - 1].expected_total;
-  const overLimit = offlineLimit > 0 && total > offlineLimit + 0.005;
+  const overLimit = offlineLimit > 0 && total > offlineLimit + offlineTolerance(currencyCode);
+  const formatAmount = (amount: number) =>
+    currencyCode ? formatCurrency(amount, currencyCode) : String(amount);
 
   const action = async (run: () => Promise<unknown>) => {
     setBusy(true);
@@ -54,7 +65,7 @@ function PendingOrder({
     <li className="border-t border-amber-300 py-2" data-client-order={row.client_order_id}>
       <span>
         {row.order.customer || row.order.table} · {row.client_order_id.slice(0, 8)} ·{' '}
-        {t('payment.total')}: {total}
+        {t('payment.total')}: {formatAmount(total)}
       </span>
       {row.rounds.some((round) => !round.offline_printed) && (
         <Button
@@ -89,7 +100,7 @@ function PendingOrder({
         <div className="space-y-1.5 mt-1">
           {overLimit && (
             <p className="text-xs font-medium text-amber-900">
-              {t('offline.over_limit_notice', { limit: offlineLimit })}
+              {t('offline.over_limit_notice', { limit: formatAmount(offlineLimit) })}
             </p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -164,10 +175,13 @@ function PendingOrder({
 }
 
 export default function OfflineBanner() {
-  const { posProfile } = usePOSStore();
+  const { posProfile, currency } = usePOSStore();
   const { user } = useRootStore();
   const { rows, replaying, offline, queue } = useOutbox(posProfile, user, true);
   const [approvalRow, setApprovalRow] = useState<OfflineEntry | null>(null);
+  const currencyCode = posProfile?.currency || currency || undefined;
+  const formatAmount = (amount: number) =>
+    currencyCode ? formatCurrency(amount, currencyCode) : String(amount);
 
   useEffect(() => {
     if (!posProfile) return;
@@ -239,6 +253,7 @@ export default function OfflineBanner() {
                   queue={queue}
                   eligibleModes={eligibleModes}
                   offlineLimit={offlineLimit}
+                  currencyCode={currencyCode}
                   disabled={replaying || queue.sessionBlocked || !canCaptureOffline(posProfile, user)}
                 />
               ))}
@@ -275,15 +290,15 @@ export default function OfflineBanner() {
           summaryLines={[
             t('offline.approval_summary', {
               mode: approvalRow.settlement?.mode_of_payment || '',
-              amount: approvalAmount,
-              limit: offlineLimit,
+              amount: formatAmount(approvalAmount),
+              limit: formatAmount(offlineLimit),
             }),
             `${t('offline.client_order')}: ${approvalRow.client_order_id.slice(0, 8)}`,
           ]}
           reference={{ doctype: 'POS Invoice', name: approvalRow.server_invoice || '' }}
           claim={{
-            amount: Math.round(approvalAmount * 100) / 100,
-            limit: Math.round(offlineLimit * 100) / 100,
+            amount: roundForCurrency(approvalAmount, currencyCode),
+            limit: roundForCurrency(offlineLimit, currencyCode),
             modes: approvalRow.settlement ? [approvalRow.settlement.mode_of_payment] : [],
           }}
           amount={approvalAmount}

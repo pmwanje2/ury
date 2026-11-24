@@ -1,7 +1,7 @@
 import { clearAppStorage, logout, purgeOfflineSession } from '@ury/core';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
-import { OfflineOutbox, canCaptureOffline, openTableRow, resolveOfflineModeConfig, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import { OfflineOutbox, canCaptureOffline, offlineTolerance, openTableRow, resolveOfflineModeConfig, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
 import { gatewayStatusOf } from './gateway';
 import { readOpenTableCheck } from './open-table-checks';
 import { triggerPostReplayFiscalPrint } from '../lib/efris-print';
@@ -101,7 +101,7 @@ export function resolveOfflineTender(
   if (!cfg) return null;
   if (cfg.requires_reference && !reference?.trim()) return null;
   const limit = Number(profile.offline_tender_limit || 0);
-  if (limit > 0 && amount > limit + 0.005) return null;
+  if (limit > 0 && amount > limit + offlineTolerance(profile.currency)) return null;
   if (cfg.type === 'Cash') return 'cash';
   return cfg.requires_reference ? 'mobile-money' : 'offline';
 }

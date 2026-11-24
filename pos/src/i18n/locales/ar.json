@@ -139,13 +139,6 @@
     "settle_bill": "تسوية الفاتورة"
   },
   "payment": {
-    "account_amount": "على الحساب: {{amount}}",
-    "charge_account": "قيد على الحساب",
-    "account_balance": "الرصيد",
-    "account_limit": "حد الائتمان",
-    "account_available": "الائتمان المتاح",
-    "no_accounts": "لم يتم العثور على حسابات معتمدة.",
-    "account_search_failed": "تعذر البحث في حسابات الائتمان.",
     "title": "الدفع",
     "apply_discount": "تطبيق الخصم",
     "discount_placeholder": "أدخل نسبة %",
@@ -223,7 +216,6 @@
     "failed_to_load": "تعذر تحميل نقطة البيع"
   },
   "pos_closing": {
-    "on_account": "على الحساب",
     "title": "إغلاق نقطة البيع",
     "description": "راجع مبيعات ورديتك وأدخل المبالغ الفعلية للإغلاق.",
     "loading": "جاري تحميل تفاصيل الإغلاق...",
@@ -354,7 +346,6 @@
     "order_moved_to_draft": "تم نقل الطلب إلى المسودات بعد الطباعة."
   },
   "orders": {
-    "settled_closed": "مُسوّاة / مغلقة",
     "no_orders_found": "لم يتم العثور على طلبات",
     "click_to_view": "انقر على أي بطاقة طلب لعرض تفاصيلها",
     "status_title": "حالة الطلب",

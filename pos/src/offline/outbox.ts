@@ -1,8 +1,13 @@
-import { resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
+import { currencyFractionDigits, resolveDefaultCustomer, type DefaultCustomerConfig } from '@ury/core';
 import { v4 as uuid } from 'uuid';
 import { t } from '../i18n';
 import { isGatewayUnreachableStatus } from './gateway';
 import { forgetOpenTableCheck, readOpenTableCheck, rememberOpenTableCheck, type OpenTableCheck } from './open-table-checks';
+
+export function offlineTolerance(currency?: string | null): number {
+  const digits = currency ? currencyFractionDigits(currency) : 2;
+  return 0.5 * Math.pow(10, -digits);
+}
 
 export interface OfflinePaymentModeConfig {
   mode_of_payment: string;
@@ -13,6 +18,7 @@ export interface OfflinePaymentModeConfig {
 
 export interface OfflineProfile extends DefaultCustomerConfig {
   name: string;
+  currency?: string;
   ury_offline_capture?: unknown;
   role_allowed_for_billing?: Array<{ role: string }>;
   offline_tender_limit?: number;
@@ -307,7 +313,7 @@ export class OfflineOutbox {
       throw new Error('Type the manual mobile-money reference.');
     }
     const limit = Number(this.options.profile.offline_tender_limit || 0);
-    if (limit > 0 && tender.amount > limit + 0.005 && !tender.needs_online_approval) {
+    if (limit > 0 && tender.amount > limit + offlineTolerance(this.options.profile.currency) && !tender.needs_online_approval) {
       throw new Error(t('offline.over_limit_error', { limit }));
     }
   }

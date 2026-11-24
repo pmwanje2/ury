@@ -283,9 +283,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         ...(roomApproval ? { room_charge_approval: roomApproval.token, room_charge_reason: roomApproval.reason } : {}),
       }
     : {};
+  const minorTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(currencyCode));
   const rawShortfall = finalTotal - rawTotalTendered;
   const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
-  const isShort = rawShortfall > 0.005;
+  const isShort = rawShortfall > minorTolerance;
   const changeDue = Math.max(0, roundToCurrency(rawTotalTendered - finalTotal, currencyCode));
   // A named (non-default) customer on a profile with allow_partial_payment
   // may settle short; the balance stays owed on the invoice. Profile, order-type
@@ -301,7 +302,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
-  const onAccountOverLimit = canPayOnAccount && !!account && shortfall > Number(account.available) + 0.005;
+  const accountTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(account?.currency || currencyCode));
+  const onAccountOverLimit = canPayOnAccount && !!account && shortfall > Number(account.available) + accountTolerance;
 
   useEffect(() => {
     setRoomApproval(null);
@@ -554,6 +556,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         // check is pro forma; the receipt prints at tender).
         await call.post('ury.ury.doctype.ury_order.ury_order.submit_order_invoice', {
           invoice,
+          ...(roomChargeAmount > 0 && roomApproval
+            ? { room_charge_approval: roomApproval.token, room_charge_reason: roomApproval.reason }
+            : {}),
           ...accountApprovalFields,
         });
       } else {
