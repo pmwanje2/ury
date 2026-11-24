@@ -885,6 +885,5 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 		caller_db.commit.assert_not_called()
 		caller_db.rollback.assert_not_called()
 
-
 if __name__ == "__main__":
 	unittest.main()

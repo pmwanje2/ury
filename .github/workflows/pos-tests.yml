@@ -38,6 +38,8 @@ jobs:
         run: npm --prefix ../packages/ui test --offline -- --maxWorkers=1
       - name: Run serve tests
         run: npm --prefix ../serve test --offline -- --maxWorkers=1
+      - name: Run frontend print configuration and POS print tests
+        run: npm --prefix ../frontend test --offline -- src/pages/Dashboard/PrinterConfigPage.test.tsx src/pages/Pos/lib/print.test.ts --maxWorkers=1
       # The print-format tests render with the Jinja2 and MarkupSafe that Frappe v16 pins.
       - name: Install print Jinja
         run: 'python3 -m pip install --user --break-system-packages --no-deps --only-binary=:all: --require-hashes -r ../ury/ury/print_format/print-jinja-requirements.txt'
@@ -63,6 +65,7 @@ jobs:
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_waiter_name
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_escaping
           PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_fiscal_receipt
+          PYTHONPATH=.. python3 -m unittest ury.ury.print_format.test_print_format_layout
           PYTHONPATH=.. python3 -m unittest ury.ury.doctype.ury_order.test_merged_bill_submit_efris
           PYTHONPATH=.. python3 -m unittest ury.tests.unit.test_assistant_vendor_name
           PYTHONPATH=.. python3 -m unittest ury.ury.hooks.test_pos_invoice_money_integrity

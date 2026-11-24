@@ -1,7 +1,20 @@
-"""Currency-aware formatting helpers for URY Jinja print formats."""
+"""Currency-aware formatting and safe print-asset helpers for URY Jinja print formats."""
+
+import base64
+import os
 
 import frappe
 from frappe.utils import cint, fmt_money
+
+_MAX_INLINE_LOGO_BYTES = 512 * 1024
+_LOGO_MIME_BY_EXT = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".svg": "image/svg+xml",
+}
 
 
 def _currency_format_spec(currency: str | None) -> tuple[int | None, str | None]:
@@ -57,3 +70,69 @@ def format_bill_money(value, currency: str | None = None) -> str:
 	"""Format monetary amounts on receipts and bill copies by Currency.number_format or fraction_units."""
 	precision, number_format = _currency_format_spec(currency)
 	return fmt_money(value or 0, precision=precision, currency=currency, format=number_format)
+
+
+def resolve_bill_logo_src(path: str | None) -> str:
+	"""Resolve a configured receipt logo into a wkhtmltopdf- and QZ-safe image src.
+
+	Local site images (/files/..., /private/files/..., /assets/...) are inlined as
+	``data:<mime>;base64,...`` URIs when present on disk so server PDFs (wkhtmltopdf / CUPS)
+	and standalone QZ Tray HTML never depend on an unreachable ``host_name`` HTTP fetch.
+	Falls back to the relative path when no local file is present; blocks path traversal
+	and non-image / unsafe URL schemes.
+	"""
+	if not isinstance(path, str):
+		return ""
+	raw = path.strip()
+	if not raw:
+		return ""
+	lower = raw.lower()
+	if lower.startswith("data:image/"):
+		return raw
+	if lower.startswith(("https://", "http://")):
+		return raw
+	# Block unsafe schemes (javascript:, file:, vbscript:, etc.)
+	scheme_sep = raw.find(":")
+	slash_sep = raw.find("/")
+	if scheme_sep != -1 and (slash_sep == -1 or scheme_sep < slash_sep):
+		return ""
+
+	normalized = raw if raw.startswith("/") else "/" + raw
+	parts = [p for p in normalized.split("/") if p]
+	if any(p in (".", "..") for p in parts):
+		return ""
+
+	clean_path = normalized.split("?", 1)[0].split("#", 1)[0]
+	ext = os.path.splitext(clean_path)[1].lower()
+	mime = _LOGO_MIME_BY_EXT.get(ext)
+	if not mime:
+		return ""
+
+	get_site_path = getattr(frappe, "get_site_path", None)
+	if callable(get_site_path):
+		base_dir = None
+		rel_path = None
+		if clean_path.startswith("/files/"):
+			base_dir = get_site_path("public", "files")
+			rel_path = clean_path[len("/files/"):]
+		elif clean_path.startswith("/private/files/"):
+			base_dir = get_site_path("private", "files")
+			rel_path = clean_path[len("/private/files/"):]
+		elif clean_path.startswith("/assets/"):
+			base_dir = os.path.join(get_site_path(), "..", "assets")
+			rel_path = clean_path[len("/assets/"):]
+
+		if isinstance(base_dir, str) and rel_path:
+			try:
+				real_base = os.path.realpath(base_dir)
+				candidate = os.path.realpath(os.path.join(real_base, rel_path))
+				if os.path.commonpath([candidate, real_base]) == real_base and os.path.isfile(candidate):
+					size = os.path.getsize(candidate)
+					if 0 < size <= _MAX_INLINE_LOGO_BYTES:
+						with open(candidate, "rb") as fh:
+							encoded = base64.b64encode(fh.read()).decode("ascii")
+						return f"data:{mime};base64,{encoded}"
+			except OSError:
+				pass
+
+	return normalized

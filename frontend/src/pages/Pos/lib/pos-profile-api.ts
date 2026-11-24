@@ -12,6 +12,7 @@ export interface PosProfileLimited {
   warehouse: string;
   cashier: string;
   print_format: string | null;
+  letter_head?: string | null;
   qz_print: number;
   qz_host: string | null;
   printer: string | null;
@@ -66,6 +67,7 @@ export interface PosProfileFull {
   restaurant: string;
   branch: string;
   currency: string;
+  letter_head?: string | null;
   role_allowed_for_billing: RolePermission[];
   role_restricted_for_table_order?: RolePermission[];
   /** Roles that must not see grand/net total and expected amounts (POS Profile config). */
@@ -86,6 +88,7 @@ export interface PosProfileCombined extends PosProfileFull {
   waiter: string;
   cashier: string;
   print_format: string | null;
+  letter_head?: string | null;
   qz_print: number;
   qz_host: string | null;
   printer: string | null;
@@ -154,6 +157,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     waiter: limitedProfile.waiter,
     cashier: limitedProfile.cashier,
     print_format: limitedProfile.print_format,
+    letter_head: limitedProfile.letter_head ?? fullProfile.letter_head ?? null,
     qz_print: limitedProfile.qz_print,
     qz_host: limitedProfile.qz_host,
     printer: limitedProfile.printer,
