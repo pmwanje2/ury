@@ -87,7 +87,9 @@ def _resolve_item_cost(item_code: str, warehouse: str | None, buying_price_list:
 def _is_room_charge_mode(mode_of_payment: str | None, company: str | None) -> bool:
     if not mode_of_payment:
         return False
-    clearing = frappe.db.get_value("Company", company, "custom_guest_ledger_clearing") if company else None
+    has_col = getattr(getattr(frappe, "db", None), "has_column", None)
+    can_query_clearing = bool(company) and (not callable(has_col) or bool(has_col("Company", "custom_guest_ledger_clearing")))
+    clearing = frappe.db.get_value("Company", company, "custom_guest_ledger_clearing") if can_query_clearing else None
     if clearing:
         acct = frappe.db.get_value(
             "Mode of Payment Account",
