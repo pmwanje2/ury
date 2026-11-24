@@ -1,8 +1,8 @@
-"""Real Frappe + MariaDB 11.8 integration & concurrency tests for manager PIN authorisation (B2a).
+"""Real Frappe + MariaDB 11.8 integration & concurrency tests for manager PIN authorisation (B2a + Amendment 1).
 
 Proves against a real MariaDB 11.8 + Redis bench:
-- DocPerm ceilings on POS Privilege Rule & insert-only POS Authorisation Log
-- Seed-once patch never overwrites or resurrects tenant edits/deletes
+- DocPerm ceilings on POS Privilege Rule, POS Reason & insert-only POS Authorisation Log
+- Seed-once patch never overwrites or resurrects tenant edits/deletes (both rules & POS Reasons)
 - User.custom_override_pin_hash enrolment, shared PINs, manager clear, zero Version leak
 - Wrong PIN attempt counter surviving real DB rollback & triggering lockout
 - Two concurrent consume() calls under MariaDB 11.8 REPEATABLE-READ snapshot isolation
@@ -54,6 +54,7 @@ class TestOverrideIntegration(unittest.TestCase):
         from ury.patches.v2_0 import setup_pos_manager_authorisation
         setup_pos_manager_authorisation.seed_default_rules(company=self.company_a)
         setup_pos_manager_authorisation.seed_default_rules(company=self.company_b)
+        setup_pos_manager_authorisation.seed_default_reasons()
         frappe.db.commit()
 
     def tearDown(self):
@@ -78,19 +79,19 @@ class TestOverrideIntegration(unittest.TestCase):
 
     def _ensure_company(self, name, abbr):
         base_company = frappe.db.get_value("Company", {}, "name")
-        if base_company:
-            base = frappe.get_doc("Company", base_company)
-            doc = frappe.get_doc({
-                "doctype": "Company",
-                "company_name": name,
-                "abbr": abbr,
-                "default_currency": base.default_currency or "USD",
-                "country": base.country or "United States",
-            }).insert(ignore_permissions=True)
-            self.created.append(("Company", doc.name))
-            self.cleanup_companies.append(doc.name)
-            return doc.name
-        raise RuntimeError("No base Company available on test site")
+        if not base_company:
+            raise RuntimeError("No base Company available on test site")
+        base = frappe.get_doc("Company", base_company)
+        doc = frappe.get_doc({
+            "doctype": "Company",
+            "company_name": name,
+            "abbr": abbr,
+            "default_currency": base.default_currency or "USD",
+            "country": base.country or "United States",
+        }).insert(ignore_permissions=True)
+        self.created.append(("Company", doc.name))
+        self.cleanup_companies.append(doc.name)
+        return doc.name
 
     def _make_user(self, email, first_name, roles, enabled=1):
         doc = frappe.get_doc({
@@ -116,13 +117,32 @@ class TestOverrideIntegration(unittest.TestCase):
         self.created.append(("Branch", doc.name))
         return doc.name
 
+    def _ensure_cash_mop(self, company):
+        cash_acct = frappe.db.get_value("Company", company, "default_cash_account") or frappe.db.get_value(
+            "Account", {"company": company, "account_type": "Cash", "is_group": 0}, "name"
+        )
+        mop_name = f"Cash-{self.suffix}-{company[:6]}"
+        mop = frappe.get_doc({
+            "doctype": "Mode of Payment",
+            "mode_of_payment": mop_name,
+            "type": "Cash",
+            "accounts": [{"company": company, "default_account": cash_acct}],
+        }).insert(ignore_permissions=True)
+        self.created.append(("Mode of Payment", mop.name))
+        return mop.name
+
     def _make_pos_profile(self, name, company, branch, users):
+        co = frappe.get_doc("Company", company)
         wh = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
-        income = frappe.db.get_value("Account", {"company": company, "account_type": "Income Account", "is_group": 0}, "name")
-        expense = frappe.db.get_value("Account", {"company": company, "account_type": "Cost of Goods Sold", "is_group": 0}, "name") or frappe.db.get_value("Account", {"company": company, "root_type": "Expense", "is_group": 0}, "name")
-        cc = frappe.db.get_value("Cost Center", {"company": company, "is_group": 0}, "name")
-        currency = frappe.db.get_value("Company", company, "default_currency") or "USD"
-        mop = frappe.db.get_value("Mode of Payment", {}, "name") or "Cash"
+        income = co.default_income_account or frappe.db.get_value(
+            "Account", {"company": company, "root_type": "Income", "is_group": 0}, "name"
+        )
+        expense = co.default_expense_account or frappe.db.get_value(
+            "Account", {"company": company, "root_type": "Expense", "is_group": 0}, "name"
+        )
+        cc = co.cost_center or frappe.db.get_value("Cost Center", {"company": company, "is_group": 0}, "name")
+        currency = co.default_currency or "USD"
+        mop = self._ensure_cash_mop(company)
         doc = frappe.get_doc({
             "doctype": "POS Profile",
             "name": name,
@@ -146,38 +166,39 @@ class TestOverrideIntegration(unittest.TestCase):
         return doc.name
 
     def test_docperms_and_insert_only_log_are_enforced(self):
-        # Cashier cannot create or write POS Privilege Rule.
         frappe.set_user(self.cashier)
         self.assertFalse(frappe.has_permission("POS Privilege Rule", "create"))
         self.assertFalse(frappe.has_permission("POS Privilege Rule", "write"))
+        self.assertTrue(frappe.has_permission("POS Reason", "read"))
+        self.assertFalse(frappe.has_permission("POS Reason", "write"))
 
-        # Manager CAN write POS Privilege Rule, and can READ (never create/write/delete) POS Authorisation Log.
         frappe.set_user(self.manager_a)
         self.assertTrue(frappe.has_permission("POS Privilege Rule", "write"))
+        self.assertTrue(frappe.has_permission("POS Reason", "write"))
         self.assertTrue(frappe.has_permission("POS Authorisation Log", "read"))
         self.assertFalse(frappe.has_permission("POS Authorisation Log", "create"))
         self.assertFalse(frappe.has_permission("POS Authorisation Log", "write"))
         self.assertFalse(frappe.has_permission("POS Authorisation Log", "delete"))
 
-        # Even Administrator cannot insert POS Authorisation Log directly without server flag, nor update/delete one.
         frappe.set_user("Administrator")
         with self.assertRaises(frappe.PermissionError):
             frappe.get_doc({
                 "doctype": "POS Authorisation Log",
                 "requester": self.cashier,
                 "approver": self.manager_a,
-                "privilege": "void_after_send",
+                "privilege": "void_sent_item",
                 "pos_profile": self.profile_a,
                 "company": self.company_a,
                 "outcome": "Approved",
             }).insert(ignore_permissions=True)
 
-    def test_seed_once_patch_never_overwrites_edits_or_resurrects_deleted_rules(self):
+    def test_seed_once_patch_never_overwrites_edits_or_resurrects_deleted_rules_or_reasons(self):
         from ury.patches.v2_0 import setup_pos_manager_authorisation
+        from ury.ury_pos import override
 
         rule_name = frappe.db.get_value(
             "POS Privilege Rule",
-            {"company": self.company_a, "privilege": "void_after_send", "role": "URY Manager"},
+            {"company": self.company_a, "privilege": "void_sent_item", "role": "URY Manager"},
             "name",
         )
         self.assertTrue(rule_name)
@@ -190,20 +211,25 @@ class TestOverrideIntegration(unittest.TestCase):
         )
         self.assertTrue(deleted_name)
         frappe.delete_doc("POS Privilege Rule", deleted_name, ignore_permissions=True)
+
+        # Verify seeded POS Reasons exist and client edits are never overwritten.
+        void_reasons = override.list_reasons("void_sent_item")
+        self.assertTrue(len(void_reasons) >= 2)
+        first_reason = void_reasons[0]["code"]
+        orig_desc = frappe.db.get_value("POS Reason", first_reason, "description")
+        frappe.db.set_value("POS Reason", first_reason, "description", f"Custom-{self.suffix}")
         frappe.db.commit()
 
-        # Re-run the patch: edit preserved, deleted rule stays deleted!
-        setup_pos_manager_authorisation.execute()
-        self.assertEqual(
-            float(frappe.db.get_value("POS Privilege Rule", rule_name, "max_amount")),
-            123.45,
-        )
-        self.assertFalse(
-            frappe.db.exists(
-                "POS Privilege Rule",
-                {"company": self.company_a, "privilege": "no_sale", "role": "URY Manager"},
+        try:
+            setup_pos_manager_authorisation.execute()
+            self.assertEqual(float(frappe.db.get_value("POS Privilege Rule", rule_name, "max_amount")), 123.45)
+            self.assertFalse(
+                frappe.db.exists("POS Privilege Rule", {"company": self.company_a, "privilege": "no_sale", "role": "URY Manager"})
             )
-        )
+            self.assertEqual(frappe.db.get_value("POS Reason", first_reason, "description"), f"Custom-{self.suffix}")
+        finally:
+            frappe.db.set_value("POS Reason", first_reason, "description", orig_desc)
+            frappe.db.commit()
 
     def test_pin_enrolment_shared_pin_zero_version_and_no_secret_in_logs(self):
         from ury.ury_pos import override
@@ -223,12 +249,11 @@ class TestOverrideIntegration(unittest.TestCase):
         self.assertEqual(versions_before, versions_after, "PIN enrolment must never create a Version record")
 
         frappe.set_user(self.cashier)
-        r1 = override.authorise(self.profile_a, "void_after_send", self.manager_a, "4826", "POS Invoice", "CHK-1", {"amount": 10})
-        r2 = override.authorise(self.profile_a, "void_after_send", self.manager_b, "4826", "POS Invoice", "CHK-1", {"amount": 10})
+        r1 = override.authorise(self.profile_a, "void_sent_item", self.manager_a, "4826", "POS Invoice", "CHK-1", {"amount": 10})
+        r2 = override.authorise(self.profile_a, "void_sent_item", self.manager_b, "4826", "POS Invoice", "CHK-1", {"amount": 10})
         self.assertEqual(r1["approver"], self.manager_a)
         self.assertEqual(r2["approver"], self.manager_b)
 
-        # Ensure PIN and hash NEVER appear in POS Authorisation Log or Activity Log.
         logs = frappe.get_all("POS Authorisation Log", filters={"pos_profile": self.profile_a}, fields=["*"])
         dumped = json.dumps(logs, default=str)
         self.assertNotIn("4826", dumped)
@@ -245,18 +270,16 @@ class TestOverrideIntegration(unittest.TestCase):
         frappe.set_user(self.cashier)
         for _ in range(2):
             with self.assertRaisesRegex(frappe.ValidationError, "POS-AUTH-PIN"):
-                override.authorise(self.profile_a, "void_after_send", self.manager_a, "9999", "POS Invoice", "CHK-RB", {"amount": 10})
+                override.authorise(self.profile_a, "void_sent_item", self.manager_a, "9999", "POS Invoice", "CHK-RB", {"amount": 10})
             frappe.db.rollback()
 
         with self.assertRaisesRegex(frappe.ValidationError, "POS-AUTH-LOCKED"):
-            override.authorise(self.profile_a, "void_after_send", self.manager_a, "9999", "POS Invoice", "CHK-RB", {"amount": 10})
+            override.authorise(self.profile_a, "void_sent_item", self.manager_a, "9999", "POS Invoice", "CHK-RB", {"amount": 10})
         frappe.db.rollback()
 
-        # Even with the right PIN, locked!
         with self.assertRaisesRegex(frappe.ValidationError, "POS-AUTH-LOCKED"):
-            override.authorise(self.profile_a, "void_after_send", self.manager_a, "1357", "POS Invoice", "CHK-RB", {"amount": 10})
+            override.authorise(self.profile_a, "void_sent_item", self.manager_a, "1357", "POS Invoice", "CHK-RB", {"amount": 10})
 
-        # Failed PIN log rows survived rollback and do not contain the PIN!
         failed_rows = frappe.get_all(
             "POS Authorisation Log",
             filters={"pos_profile": self.profile_a, "reference_name": "CHK-RB"},
@@ -276,7 +299,7 @@ class TestOverrideIntegration(unittest.TestCase):
         claim = {"amount": 42.5, "reason": "Wrong dish"}
         frappe.set_user(self.cashier)
         issued = override.authorise(
-            self.profile_a, "void_after_send", self.manager_a, "2580",
+            self.profile_a, "void_sent_item", self.manager_a, "2580",
             "POS Invoice", "CHK-RACE-1", claim,
         )
         frappe.db.commit()
@@ -293,12 +316,11 @@ class TestOverrideIntegration(unittest.TestCase):
             try:
                 frappe.set_user(self.cashier)
                 iso = frappe.db.sql("SELECT @@SESSION.transaction_isolation")[0][0]
-                # Start an open REPEATABLE-READ snapshot BEFORE either worker writes.
                 frappe.db.sql("SELECT 1")
                 with lock:
                     isolations.append(iso)
                 barrier.wait(timeout=15)
-                consumed = override.consume(token, "void_after_send", self.profile_a, "CHK-RACE-1", claim)
+                consumed = override.consume(token, "void_sent_item", self.profile_a, "CHK-RACE-1", claim)
                 frappe.db.commit()
                 with lock:
                     results.append(("ok", idx, consumed.approver))
@@ -324,7 +346,6 @@ class TestOverrideIntegration(unittest.TestCase):
         self.assertEqual(len(err), 1, f"Exactly one concurrent consume must fail: {results}")
         self.assertIn("POS-AUTH-EXPIRED", err[0][2])
 
-        # Database confirms exactly ONE Consumed audit log row!
         frappe.db.commit()
         consumed_count = frappe.db.count(
             "POS Authorisation Log",
@@ -346,10 +367,9 @@ class TestOverrideIntegration(unittest.TestCase):
         for bad in (self.disabled_mgr, self.manager_other_outlet, self.manager_other_co, self.sysmgr, "Administrator"):
             with self.subTest(approver=bad):
                 with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-NOT-ELIGIBLE"):
-                    override.authorise(self.profile_a, "void_after_send", bad, "6420", "POS Invoice", "CHK-ADV", {"amount": 5})
+                    override.authorise(self.profile_a, "void_sent_item", bad, "6420", "POS Invoice", "CHK-ADV", {"amount": 5})
 
-        # API-key HTTP session refused.
         fake_req = SimpleNamespace(headers={"Authorization": "token key:secret"}, cookies={})
         with patch.object(frappe, "request", fake_req, create=True):
             with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-NOT-ELIGIBLE"):
-                override.authorise(self.profile_a, "void_after_send", self.manager_a, "6420", "POS Invoice", "CHK-ADV", {"amount": 5})
+                override.authorise(self.profile_a, "void_sent_item", self.manager_a, "6420", "POS Invoice", "CHK-ADV", {"amount": 5})
