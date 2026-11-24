@@ -96,6 +96,7 @@ class ContractOverrideStub(ModuleType):
             "return": ("Return / Refund Check", True, ("URY Manager", "URY Admin"), ("URY Manager", "URY Admin")),
             "reopen_check": ("Reopen Closed Check", True, ("URY Manager", "URY Admin"), ("URY Manager", "URY Admin")),
             "adjust_closed_check": ("Adjust Closed Check", True, ("URY Manager", "URY Admin"), ("URY Manager", "URY Admin")),
+            "pickup_other_check": ("Pick Up Another Operator's Check", False, ("URY Manager", "URY Admin"), ("URY Manager", "URY Admin")),
         }
         self._tokens = {}  # token -> metadata
 
@@ -104,14 +105,16 @@ class ContractOverrideStub(ModuleType):
 
     def requires_reason(self, pos_profile, privilege):
         profile = self._h.profiles.get(pos_profile)
+        spec = self.PRIVILEGES.get(privilege)
+        default_req = bool(spec[1]) if spec else False
         if not profile:
-            return True
+            return default_req
         rules = [
             r for r in self._h.privilege_rules
             if r.get("company") == profile.get("company") and r.get("privilege") == privilege
         ]
         if not rules:
-            return True
+            return default_req
         return any(int(r.get("requires_reason") or 0) == 1 for r in rules)
 
     def list_reasons(self, privilege=None):
@@ -278,6 +281,9 @@ class VoidCancelHarness:
         self.privilege_rules = [
             Doc(company="Hotel Co", pos_profile="", privilege=p, role="URY Manager", may_perform=1, may_authorise=1, requires_reason=1)
             for p in ("void_sent_item", "reduce_sent_qty", "cancel_check", "return", "reopen_check", "adjust_closed_check")
+        ] + [
+            Doc(company="Hotel Co", pos_profile="", privilege="pickup_other_check", role=r, may_perform=1, may_authorise=1, requires_reason=0)
+            for r in ("URY Manager", "URY Cashier")
         ]
         self.reasons = [
             Doc(code="VOID-GUEST", description="Guest changed mind", applies_to="void_sent_item\nreduce_sent_qty\ncancel_check", requires_note=0, sort_order=10, disabled=0),
@@ -1075,7 +1081,7 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
     def test_adversarial_offline_replay_cannot_void_sent_lines(self):
         self.h.frappe.session.user = "manager@example.test"
         self.h.profiles["Till A"].ury_offline_capture = 1
-        inv = self.h.add_invoice(invoice_printed=0)
+        inv = self.h.add_invoice(invoice_printed=0, waiter="manager@example.test")
         with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-VOID-OFFLINE-REFUSED"):
             self.order_mod.sync_order(
                 items=[
