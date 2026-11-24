@@ -518,6 +518,30 @@ class TestTipsDeclaration(unittest.TestCase):
         # Never link directly to HRMS Additional Salary so non-HRMS sites stay valid
         self.assertEqual(fields["custom_additional_salary_ref"].get("fieldtype"), "Data")
 
+    def test_get_doc_for_update_mariadb_1020_deadlock_maps_to_417(self):
+        """MariaDB 11.8 Error 1020 ('Record has changed since last read in table tabPOS Tip Declaration')
+        raised inside `frappe.get_doc(..., for_update=True)` must map to 417 `[POS-TIPS-PAYROLL-ALREADY-CREATED]`,
+        never raw HTTP 500 QueryDeadlockError."""
+        _store, frappe, td = self._env(currency="UGX", hrms_installed=True, user="hr@example.test")
+
+        class FakeQueryDeadlockError(Exception):
+            pass
+
+        frappe.QueryDeadlockError = FakeQueryDeadlockError
+        orig_get_doc = frappe.get_doc
+
+        def _get_doc_1020(arg, name=None, **kw):
+            if arg == "POS Closing Entry" and kw.get("for_update"):
+                raise FakeQueryDeadlockError(
+                    "(1020, \"Record has changed since last read in table 'tabPOS Tip Declaration'; try restarting transaction\")"
+                )
+            return orig_get_doc(arg, name)
+
+        frappe.get_doc = _get_doc_1020
+        with self.assertRaises(Refused) as ctx:
+            td.create_tip_additional_salaries("POS-CLO-001")
+        self.assertIn("TIPS-PAYROLL-ALREADY-CREATED", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
