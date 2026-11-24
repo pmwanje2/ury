@@ -248,7 +248,7 @@ class TestMenuSaveKeepsPriceHistory(unittest.TestCase):
     def test_release_workflow_refuses_to_change_a_price_released_today(self):
         self.prices.use_workflow()
         released = self.prices.add("Fish", 100, "2026-11-18", state="Approved")
-        with self.assertRaisesRegex(_framework.ValidationError, r"\[URY-PRICE-RELEASED-TODAY\]"):
+        with self.assertRaisesRegex(_framework.ValidationError, r"\[POS-PRICE-RELEASED-TODAY\]"):
             self.save_menu(Fish=120)
         self.assertEqual((self.prices.inserted, self.prices.saved), ([], []))
         self.assertEqual(self.prices.rate_of(released["name"]), 100)

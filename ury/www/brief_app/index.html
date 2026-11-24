@@ -21,6 +21,9 @@
 <body>
 <script>window.csrf_token = {{ csrf_token | tojson }};</script>
 <div id="root"></div>
+<footer style="padding:8px 16px;text-align:center;font-size:12px;color:#64748b">
+  {{ (brand.name if brand and brand.name else 'Maximus Brief') | e }} · AGPL-3.0 · <a href="{{ brand_source_url | e }}" style="color:inherit;text-decoration:underline">Source</a>
+</footer>
 <noscript><p style="padding:2rem;font-family:system-ui">JavaScript is required to show your daily slides.</p></noscript>
 <script type="module" src="/assets/ury/brief/dist/assets/app.js?v={{ build_version }}"></script>
 </body>

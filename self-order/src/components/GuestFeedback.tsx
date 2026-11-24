@@ -27,20 +27,20 @@ const COPY = {
   retry: 'feedback.retry',
 }
 
-// Stable server refusal ids become guest copy; the raw id is never shown.
+// Stable server refusal keys become guest copy; the raw id is never shown.
 const REFUSALS: Record<string, string> = {
-  'URY-FEEDBACK-RETRY': COPY.retryLater,
-  'URY-FEEDBACK-NOT-ELIGIBLE': COPY.notEligible,
-  'URY-FEEDBACK-LINK-INVALID': COPY.invalidLink,
-  'URY-FEEDBACK-DISABLED': COPY.unavailable,
-  'URY-FEEDBACK-TEMPLATE': COPY.unavailable,
-  'URY-FEEDBACK-BILL-LINK-MISSING': COPY.unavailable,
-  'URY-FEEDBACK-RATINGS': COPY.ratingsAgain,
-  'URY-FEEDBACK-RATE-LIMITED': COPY.rateLimited,
+  'FEEDBACK-RETRY': COPY.retryLater,
+  'FEEDBACK-NOT-ELIGIBLE': COPY.notEligible,
+  'FEEDBACK-LINK-INVALID': COPY.invalidLink,
+  'FEEDBACK-DISABLED': COPY.unavailable,
+  'FEEDBACK-TEMPLATE': COPY.unavailable,
+  'FEEDBACK-BILL-LINK-MISSING': COPY.unavailable,
+  'FEEDBACK-RATINGS': COPY.ratingsAgain,
+  'FEEDBACK-RATE-LIMITED': COPY.rateLimited,
 }
 
 // Retry reloads the form: a lock conflict clears, and a ratings refusal starts the form again.
-const RETRYABLE = new Set(['URY-FEEDBACK-RETRY', 'URY-FEEDBACK-RATINGS'])
+const RETRYABLE = new Set(['FEEDBACK-RETRY', 'FEEDBACK-RATINGS'])
 
 /** The receipt token travels only in the URL fragment, which is never sent to the server. */
 function readCredential(): FeedbackCredential | null {
@@ -52,7 +52,7 @@ function readCredential(): FeedbackCredential | null {
 
 function errorText(error: unknown): ShownError {
   const parsed = parseFrappeError(error, '')
-  const code = parsed.match(/\[(URY-FEEDBACK-[A-Z-]+)\]/)?.[1]
+  const code = parsed.match(/\[[A-Z][A-Z0-9]{1,9}-(FEEDBACK-[A-Z-]+)\]/)?.[1]
   if (!code) return { key: COPY.loadError, retryable: false }
   return { key: REFUSALS[code] ?? COPY.unavailable, retryable: RETRYABLE.has(code) }
 }

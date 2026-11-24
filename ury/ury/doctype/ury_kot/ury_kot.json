@@ -157,6 +157,7 @@
    "fieldtype": "Section Break"
   },
   {
+   "default": "KOT-",
    "fieldname": "naming_series",
    "fieldtype": "Data",
    "hidden": 1,

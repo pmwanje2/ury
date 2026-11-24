@@ -6,6 +6,7 @@ from frappe.utils import cint, nestedset, validate_phone_number
 
 from urllib.parse import quote
 
+from ury.brand import coded_message
 from ury.ury_pos.default_customer import get_default_customer_config
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
 
@@ -176,7 +177,7 @@ def _user_branch_assignments():
         if permission.get("is_default") and permission.get("doc") in branches
     }
     if len(defaults) != 1:
-        frappe.throw(_("URY-BRANCH-AMBIGUOUS: Set a default Branch User Permission for an assigned branch."))
+        frappe.throw(coded_message("BRANCH-AMBIGUOUS", _("Set a default Branch User Permission for an assigned branch.")))
     branch = defaults.pop()
     return [row for row in rows if row.get("branch") == branch]
 
@@ -1259,7 +1260,7 @@ def get_till_invoices(start, end, pos_profile, user):
     if frappe.session.user != user and not (
         {"URY Manager", "System Manager"} & set(frappe.get_roles(frappe.session.user))
     ):
-        frappe.throw(_("[URY-TILL-NOT-HOLDER] Not permitted"), frappe.PermissionError)
+        frappe.throw(coded_message("TILL-NOT-HOLDER", _("Not permitted")), frappe.PermissionError)
 
     openings = frappe.get_list(
         "POS Opening Entry",
@@ -1269,7 +1270,7 @@ def get_till_invoices(start, end, pos_profile, user):
         limit_page_length=1,
     )
     if not openings:
-        frappe.throw(_("[URY-TILL-NO-OPEN-SESSION] Not permitted"), frappe.PermissionError)
+        frappe.throw(coded_message("TILL-NO-OPEN-SESSION", _("Not permitted")), frappe.PermissionError)
 
     def reader(doctype, **query):
         # Full documents are read below; keep the endpoint's narrow query.
@@ -1563,7 +1564,7 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     if pos_profile:
         if pos_profile not in {profile["name"] for profile in allowed_profiles}:
             frappe.throw(
-                _("[URY-OPENING-PROFILE-NOT-ALLOWED] Not permitted to use this POS Profile."),
+                coded_message("OPENING-PROFILE-NOT-ALLOWED", _("Not permitted to use this POS Profile.")),
                 frappe.PermissionError,
             )
         pos_profile_name = pos_profile

@@ -3,6 +3,7 @@ from frappe.utils import flt, get_datetime
 from frappe import _
 from datetime import datetime
 
+from ury.brand import coded_message
 from ury.ury_pos.api import (
 	_goal_submitted_since,
 	_phase_dependent_rows,
@@ -30,13 +31,13 @@ def before_submit(doc, method):
     start, end, inside, before, after = _closing_invoice_rows(doc)
 
     if after:
-        frappe.throw("[URY-CLOSE-LATE-INVOICE] Unconsolidated invoices exist after the closing end.")
+        frappe.throw(coded_message("CLOSE-LATE-INVOICE", "Unconsolidated invoices exist after the closing end."))
     if before:
-        frappe.throw("[URY-CLOSE-ORPHAN-INVOICE] Unconsolidated invoices exist before the opening start.")
+        frappe.throw(coded_message("CLOSE-ORPHAN-INVOICE", "Unconsolidated invoices exist before the opening start."))
 
     readable = _till_invoice_rows(doc.pos_profile, start, end, frappe.get_list)
     if {row.name for row in inside} != {row.name for row in readable}:
-        frappe.throw("[URY-CLOSE-UNREADABLE-INVOICE] Not all till invoices are readable by this user.")
+        frappe.throw(coded_message("CLOSE-UNREADABLE-INVOICE", "Not all till invoices are readable by this user."))
 
     _set_till_invoices(doc, inside)
     doc.set("taxes", [
@@ -144,10 +145,11 @@ def _set_expected_amounts(doc):
             else:
                 modes = till_modes_by_account.get(invoice.account_for_change_amount, [])
                 if len(modes) != 1:
-                    frappe.throw(
-                        "[URY-CLOSE-CHANGE-NO-TILL-MODE] Map exactly one till payment mode "
-                        f"to the change account {invoice.account_for_change_amount} before closing."
-                    )
+                    frappe.throw(coded_message(
+                        "CLOSE-CHANGE-NO-TILL-MODE",
+                        "Map exactly one till payment mode "
+                        f"to the change account {invoice.account_for_change_amount} before closing.",
+                    ))
                 fallback_changes[modes[0]] = fallback_changes.get(modes[0], 0) + change_amount
         for row in rows:
             amounts_by_mode[row.mode_of_payment] = _currency_flt(

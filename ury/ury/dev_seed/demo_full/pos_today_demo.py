@@ -386,8 +386,8 @@ def _step_access(ctx):
 		_insert_child("POS Profile", ctx.profile, "applicable_for_users", "POS Profile User", {"user": user, "default": 0})
 		done.append("POS Profile.applicable_for_users +user")
 	if not frappe.db.get_value("POS Profile", ctx.profile, "custom_kot_naming_series"):
-		frappe.db.set_value("POS Profile", ctx.profile, "custom_kot_naming_series", "KOT-URY-")
-		done.append("POS Profile.custom_kot_naming_series='KOT-URY-'")
+		frappe.db.set_value("POS Profile", ctx.profile, "custom_kot_naming_series", "KOT-")
+		done.append("POS Profile.custom_kot_naming_series='KOT-'")
 	if not cint(frappe.db.get_value("POS Profile", ctx.profile, "custom_kot_warning_time")):
 		frappe.db.set_value("POS Profile", ctx.profile, "custom_kot_warning_time", KOT_WARNING_MINUTES)
 		done.append(f"POS Profile.custom_kot_warning_time={KOT_WARNING_MINUTES}")
