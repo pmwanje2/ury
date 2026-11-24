@@ -53,9 +53,10 @@ def flt(value: Any, precision: int | None = None) -> float:
     return round(num, precision) if precision is not None else num
 
 # Neutral refusal codes (no vendor/brand names).
-CODE_REASON_REQUIRED = "POS-REASON-REQUIRED"
-CODE_REASON_NOTE_REQUIRED = "POS-REASON-NOTE-REQUIRED"
-CODE_REASON_INVALID = "POS-REASON-INVALID"
+CODE_AUTH_REASON = "POS-AUTH-REASON"
+CODE_REASON_REQUIRED = CODE_AUTH_REASON
+CODE_REASON_NOTE_REQUIRED = CODE_AUTH_REASON
+CODE_REASON_INVALID = CODE_AUTH_REASON
 CODE_AUTH_REQUIRED = "POS-AUTH-REQUIRED"
 CODE_OUTLET_MISMATCH = "POS-OUTLET-MISMATCH"
 CODE_VOID_CLOSED_USE_RETURN = "POS-VOID-CLOSED-USE-RETURN"
@@ -350,6 +351,11 @@ def resolve_pos_reason(
     """Validate and normalise a POS Reason (with graceful legacy fallback when no POS Reason rows exist)."""
     fr = _f()
     reasons = _active_pos_reasons(privilege)
+    if not reasons and fallback_privileges:
+        for alt_priv in fallback_privileges:
+            reasons = _active_pos_reasons(alt_priv)
+            if reasons:
+                break
     clean_note = note.strip() if isinstance(note, str) else ""
 
     # Honour POS Privilege Rule `requires_reason=0` when caller supplied no reason.
@@ -575,16 +581,36 @@ def _select_token_claim_and_privilege(
     hash_fn = getattr(ov, "_token_digest", None) or getattr(ov, "_hash_token", None)
     if not callable(hash_fn):
         return privilege, claim
+    token_hash = hash_fn(str(token).strip())
     fr = _f()
+    row = None
     try:
-        if fr.db.table_exists("POS Authorisation Log") is not True:
-            return privilege, claim
-        row = fr.db.get_value(
-            "POS Authorisation Log",
-            {"token_hash": hash_fn(str(token).strip()), "outcome": "Approved"},
-            ["privilege", "claim_values"],
-            as_dict=True,
-        )
+        has_isolated = getattr(ov, "_has_real_isolated_db", None)
+        with_isolated = getattr(ov, "_with_isolated_db", None)
+        if callable(has_isolated) and has_isolated() and callable(with_isolated):
+            def _fetch(db):
+                rows = db.sql(
+                    """
+                    SELECT `privilege`, `claim_values`
+                    FROM `tabPOS Authorisation Log`
+                    WHERE `token_hash` = %s AND `outcome` = 'Approved'
+                    LIMIT 1
+                    """,
+                    (token_hash,),
+                    as_dict=True,
+                )
+                return rows[0] if rows else None
+
+            row = with_isolated(_fetch, commit=False)
+        else:
+            if fr.db.table_exists("POS Authorisation Log") is not True:
+                return privilege, claim
+            row = fr.db.get_value(
+                "POS Authorisation Log",
+                {"token_hash": token_hash, "outcome": "Approved"},
+                ["privilege", "claim_values"],
+                as_dict=True,
+            )
     except Exception:
         return privilege, claim
     if not row:

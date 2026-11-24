@@ -249,6 +249,7 @@ def reduce_order_item_qty(
 	reason_info = None
 	if not held:
 		privilege = "void_sent_item" if new_qty == 0 else "reduce_sent_qty"
+		fallback_privs = ("void_sent_item",) if privilege == "reduce_sent_qty" else ()
 		voided_qty = flt(current_qty) - flt(new_qty)
 		voided_amount = round(flt(item_row.get("rate") or 0) * voided_qty, 4)
 		reason_info = resolve_pos_reason(
@@ -257,6 +258,7 @@ def reduce_order_item_qty(
 			reason,
 			note=note,
 			is_waste=is_waste,
+			fallback_privileges=fallback_privs,
 		)
 		claim = {
 			"invoice": invoice_id,
@@ -287,7 +289,7 @@ def reduce_order_item_qty(
 			approval_token=approval_token,
 			amount=voided_amount,
 			doc=pos_invoice,
-			fallback_privileges=("void_sent_item",) if privilege == "reduce_sent_qty" else (),
+			fallback_privileges=fallback_privs,
 			alt_claim=b2a_compat_claim,
 		)
 
