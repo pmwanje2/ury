@@ -60,7 +60,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   );
   const submittingRef = useRef(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const printRequired = !enablePaymentWithoutPrinting;
   const [printInvoice, setPrintInvoice] = useState(true);
+  const effectivePrintInvoice = printRequired ? true : printInvoice;
   const [error, setError] = useState<string | null>(null);
   const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
   
@@ -259,7 +261,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       );
       const trimmedRoomNumber = roomChargeAmount > 0 ? roomNumber.trim() : undefined;
 
-      if (printInvoice && !offlineCapable) {
+      if (effectivePrintInvoice && !offlineCapable) {
         // Step 1: Save the draft invoice with discount and payment modes
         await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
           additionalDiscount: discountValue ? parseFloat(discountValue) : null,
@@ -309,9 +311,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         }
       }
 
-      // Step 3: Wait boundedly for the EFRIS FDN (Simphony host timeout default 30s),
+      // Step 3: Wait boundedly for the EFRIS FDN (default 5s, configurable 0-15s),
       // print the fiscal receipt, and on timeout queue an automatic COPY #n reprint.
-      if (printInvoice && storePosProfile) {
+      if (effectivePrintInvoice && storePosProfile) {
         const efrisOutcome = await waitForEfrisFdn({
           invoice,
           partnerInvoice: order?.custom_merged_pos_invoice ?? null,
@@ -544,18 +546,25 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             </div>
           </div>
 
-          {/* Print Receipt Checkbox (always shown; defaults on so fiscal receipts are never silently dropped) */}
+          {/* Print Receipt Checkbox (always shown; locked checked when printing is required) */}
           <div className="mb-4 flex items-center gap-2">
             <input
               id="print-invoice-checkbox"
               type="checkbox"
-              checked={printInvoice}
-              onChange={(e) => setPrintInvoice(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              checked={effectivePrintInvoice}
+              disabled={printRequired || isProcessing}
+              onChange={(e) => {
+                if (!printRequired) setPrintInvoice(e.target.checked);
+              }}
+              className={`h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 ${
+                printRequired ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'
+              }`}
             />
             <label
               htmlFor="print-invoice-checkbox"
-              className="text-sm font-medium text-gray-700 cursor-pointer select-none flex items-center gap-1.5"
+              className={`text-sm font-medium text-gray-700 select-none flex items-center gap-1.5 ${
+                printRequired ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'
+              }`}
             >
               <Printer className="w-4 h-4 text-gray-500" />
               {t('payment.print_invoice')}

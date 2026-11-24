@@ -4,8 +4,8 @@ import { t } from '../i18n';
 import { printBillCopy } from './print';
 import type { PosProfileCombined } from './pos-profile-api';
 
-export const DEFAULT_EFRIS_PRINT_WAIT_SECONDS = 30;
-export const MAX_EFRIS_PRINT_WAIT_SECONDS = 180;
+export const DEFAULT_EFRIS_PRINT_WAIT_SECONDS = 5;
+export const MAX_EFRIS_PRINT_WAIT_SECONDS = 15;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const STORAGE_KEY = 'ury_pending_fiscal_reprints';
 const EFRIS_STATUS_METHOD = 'uganda_compliance.efris.efris_queue.get_efris_status';
@@ -43,18 +43,34 @@ export function resolveEfrisPrintWaitSeconds(raw: unknown): number {
   return Math.max(0, Math.min(Math.floor(parsed), MAX_EFRIS_PRINT_WAIT_SECONDS));
 }
 
-async function fetchEfrisStatus(invoice: string): Promise<EfrisStatusResponse | null> {
+type FetchEfrisOutcome =
+  | { kind: 'ok'; data: EfrisStatusResponse | null }
+  | { kind: 'not_applicable' }
+  | { kind: 'transient_error' };
+
+function isMethodUnavailableError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const record = err as Record<string, unknown>;
+  const status = Number(record.httpStatus ?? record.status ?? record.statusCode ?? 0);
+  if (status === 404) return true;
+  const text = [record.message, record.exc_type, record.exc, record._server_messages]
+    .filter((v): v is string => typeof v === 'string')
+    .join(' ');
+  return /Failed to get method for command|No module named|AppNotInstalledError|is not whitelisted/i.test(text);
+}
+
+async function fetchEfrisStatus(invoice: string): Promise<FetchEfrisOutcome> {
   if (typeof call.get !== 'function') {
-    return null;
+    return { kind: 'not_applicable' };
   }
   try {
     const res = await call.get<{ message?: EfrisStatusResponse }>(EFRIS_STATUS_METHOD, {
       doctype: 'POS Invoice',
       name: invoice,
     });
-    return res?.message ?? null;
-  } catch {
-    return null;
+    return { kind: 'ok', data: res?.message ?? null };
+  } catch (err) {
+    return isMethodUnavailableError(err) ? { kind: 'not_applicable' } : { kind: 'transient_error' };
   }
 }
 
@@ -65,9 +81,17 @@ function sleep(ms: number): Promise<void> {
 async function evaluateInvoiceGroup(
   invoice: string,
   partnerInvoice?: string | null,
-): Promise<{ state: 'fiscalised' | 'pending' | 'failed' | 'not_applicable'; fdn?: string | null; status?: string | null }> {
+): Promise<{
+  state: 'fiscalised' | 'pending' | 'failed' | 'not_applicable' | 'transient_error';
+  fdn?: string | null;
+  status?: string | null;
+}> {
   const names = partnerInvoice ? [invoice, partnerInvoice] : [invoice];
-  const statuses = await Promise.all(names.map((name) => fetchEfrisStatus(name)));
+  const results = await Promise.all(names.map((name) => fetchEfrisStatus(name)));
+  if (results.some((r) => r.kind === 'transient_error')) {
+    return { state: 'transient_error' };
+  }
+  const statuses = results.map((r) => (r.kind === 'ok' ? r.data : null));
   const active = statuses.filter((s): s is EfrisStatusResponse => Boolean(s && (s.fdn || s.efris_status)));
   if (active.length === 0) {
     return { state: 'not_applicable' };

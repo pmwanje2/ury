@@ -119,7 +119,10 @@ class CustomPOSInvoice(POSInvoice):
 					self.copy_number = requested
 				else:
 					logged = frappe.db.get_value(
-						"URY Bill Reprint Log", {"invoice": self.name}, [{"MAX": "copy_number"}]
+						"URY Bill Reprint Log",
+						{"invoice": self.name},
+						"copy_number",
+						order_by="copy_number desc",
 					)
 					self.copy_number = cint(logged) or 1
 		super().before_print(settings)

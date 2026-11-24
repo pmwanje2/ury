@@ -4,8 +4,8 @@ Covers:
 - P0: submit_order_invoice sets doc.flags.ignore_payment_sync = True on legacy merged bills,
   and sync_merged_invoice skips already-posted partners and re-raises partner submit errors
   when doc.docstatus == 1 (all-or-nothing, compatible with #143).
-- Print timing: POS Profile custom_efris_print_wait_seconds (Int, default 30, non_negative 1)
-  exposed on getPosProfile / getPosProfileFull (clamped 0..180).
+- Print timing: POS Profile custom_efris_print_wait_seconds (Int, default 5, non_negative 1)
+  exposed on getPosProfile / getPosProfileFull (clamped 0..15).
 - Auto-reprint queue: queue_fiscal_reprint creates an idempotent AWAITING_FDN row in
   URY Bill Reprint Log, and process_pending_fiscal_reprints polls
   uganda_compliance.efris.efris_queue.get_efris_status and dispatches COPY #n via
@@ -270,21 +270,25 @@ class TestMergedBillSubmitAtomicity(unittest.TestCase):
 
 
 class TestEfrisPrintWaitConfiguration(unittest.TestCase):
-	def test_pos_profile_custom_field_declared_with_30s_simphony_default(self):
+	def test_pos_profile_custom_field_declared_with_5s_default_and_15s_max(self):
 		from ury import hooks
 
 		setup = (APP / "setup_customizations.py").read_text(encoding="utf-8")
 		self.assertIn('"fieldname": "custom_efris_print_wait_seconds"', setup)
 		declared = setup[setup.index("custom_efris_print_wait_seconds"):][:500]
-		self.assertIn('"default": "30"', declared)
+		self.assertIn('"default": "5"', declared)
+		self.assertIn("15", declared)
+		self.assertNotIn("180", declared)
 
 		name = "POS Profile-custom_efris_print_wait_seconds"
 		rows = json.loads((APP / "fixtures" / "custom_field.json").read_text(encoding="utf-8"))
 		fields = {row["name"]: row for row in rows}
 		self.assertIn(name, fields)
 		self.assertEqual(fields[name]["fieldtype"], "Int")
-		self.assertEqual(str(fields[name]["default"]), "30")
+		self.assertEqual(str(fields[name]["default"]), "5")
 		self.assertEqual(fields[name].get("non_negative"), 1)
+		self.assertIn("15", fields[name].get("description") or "")
+		self.assertNotIn("180", fields[name].get("description") or "")
 
 		named = [
 			f for entry in hooks.fixtures
@@ -293,8 +297,8 @@ class TestEfrisPrintWaitConfiguration(unittest.TestCase):
 		]
 		self.assertIn(name, named)
 
-	def test_get_pos_profile_exposes_wait_seconds_default_30_and_honors_override(self):
-		for raw, expected in ((None, 30), ("", 30), (0, 0), (45, 45), (500, 180)):
+	def test_get_pos_profile_exposes_wait_seconds_default_5_and_clamps_0_to_15(self):
+		for raw, expected in ((None, 5), ("", 5), (0, 0), (10, 10), (15, 15), (16, 15), (45, 15), (500, 15), (-5, 0)):
 			with self.subTest(raw=raw):
 				profile = MagicMock()
 				profile.name = "Main Till"
@@ -430,6 +434,49 @@ class TestPendingFiscalReprintQueue(unittest.TestCase):
 			fake_frappe.db.set_value.assert_called_with(
 				"URY Bill Reprint Log", "PENDING-EFRIS-INV-001", {"status": "DISPATCHED"}
 			)
+
+	def test_process_pending_fiscal_reprints_switches_to_job_owner_and_restores_user(self):
+		"""P1: Scheduler must impersonate row.job_owner during print_bill_copy so multi-branch sites resolve branch."""
+		row = SimpleNamespace(name="PENDING-EFRIS-INV-MB1", invoice="INV-MB1", job_owner="cashier@example.com")
+		inv = SimpleNamespace(
+			name="INV-MB1", docstatus=1, status="Paid", branch="Branch A",
+			pos_profile="Main Till", restaurant_table="T1", custom_merged_pos_invoice=None,
+		)
+		fake_frappe = MagicMock()
+		fake_frappe.session = SimpleNamespace(user="Administrator")
+		user_transitions = []
+
+		def set_user(user):
+			user_transitions.append(user)
+			fake_frappe.session.user = user
+
+		fake_frappe.set_user.side_effect = set_user
+		fake_frappe.get_all.return_value = [row]
+		fake_frappe.get_doc.return_value = inv
+		fake_frappe.db.get_value.side_effect = lambda dt, name, field=None, **kw: (
+			0 if (dt, field) == ("POS Profile", "qz_print") else None
+		)
+		fake_efris = ModuleType("uganda_compliance.efris.efris_queue")
+		fake_efris.get_efris_status = MagicMock(return_value={"fdn": "324013579864", "efris_status": "Submitted"})
+
+		seen_user_in_pbc = []
+
+		def fake_pbc(**kwargs):
+			seen_user_in_pbc.append(fake_frappe.session.user)
+			return {"status": "SUBMITTED", "copy_number": 1}
+
+		with patch.dict(sys.modules, {
+			"uganda_compliance": ModuleType("uganda_compliance"),
+			"uganda_compliance.efris": ModuleType("uganda_compliance.efris"),
+			"uganda_compliance.efris.efris_queue": fake_efris,
+		}), patch.object(api, "frappe", fake_frappe), \
+			patch.object(api, "print_bill_copy", side_effect=fake_pbc), \
+			patch("ury.ury.api.ury_print._bill_printers", return_value=["Bar Printer"]):
+			api.process_pending_fiscal_reprints()
+
+		self.assertEqual(seen_user_in_pbc, ["cashier@example.com"])
+		self.assertEqual(user_transitions, ["cashier@example.com", "Administrator"])
+		self.assertEqual(fake_frappe.session.user, "Administrator")
 
 
 if __name__ == "__main__":

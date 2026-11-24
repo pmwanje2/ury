@@ -6,6 +6,11 @@ from frappe.model.document import Document
 from frappe import _
 from frappe.utils import now_datetime, get_datetime
 
+# The moves the system makes by its own rule, never by a user's choice: the
+# site clock's No Show after the grace period (process_reservation_no_shows)
+# and the closed check's Seated -> Completed (complete_seated_reservation_on_submit).
+SYSTEM_TRANSITIONS = frozenset({("Confirmed", "No Show"), ("Seated", "Completed")})
+
 
 class URYTableReservation(Document):
     def validate(self):
@@ -59,6 +64,8 @@ class URYTableReservation(Document):
             frappe.throw(_("Please select a table."))
         if not self.reserved_at:
             frappe.throw(_("Please select a reservation time."))
+        if self.status == "Cancelled" and not (self.cancel_reason or "").strip():
+            frappe.throw(_("Please enter a cancellation reason."))
 
     def validate_table_branch(self):
         if self.reserved_table:
@@ -92,15 +99,20 @@ class URYTableReservation(Document):
         allowed_transitions = {
             "Requested": ["Confirmed", "Cancelled"],
             "Active": ["Completed", "Cancelled", "No Show"],
-            "Confirmed": ["Completed", "Cancelled", "No Show"],
+            "Confirmed": ["Seated", "Cancelled", "No Show"],
+            # Unseat (back to Confirmed) returns a party seated by mistake.
+            "Seated": ["Completed", "Confirmed"],
             "Completed": [],
             "Cancelled": [],
             "No Show": [],
         }
 
-        if new_status in ("Completed", "Cancelled") and old_status != new_status:
-            from ury.ury.api.table_reservation import is_user_authorized_for_reservation_status_change
-            if not is_user_authorized_for_reservation_status_change(branch=self.branch):
+        # Completing, cancelling or marking No Show by hand needs the user's own
+        # privilege, whatever the save path; only a system transition does not.
+        transition = (old_status, new_status)
+        if not (transition in SYSTEM_TRANSITIONS and self.flags.system_transition == transition):
+            from ury.ury.api.table_reservation import is_user_authorized_to_set_status
+            if not is_user_authorized_to_set_status(self, new_status):
                 frappe.throw(
                     _("Not permitted to change reservation status to {0}.").format(new_status),
                     frappe.PermissionError,
@@ -111,10 +123,35 @@ class URYTableReservation(Document):
                 _("Invalid status transition from {0} to {1}.").format(old_status, new_status)
             )
 
+        if new_status == "Seated":
+            self.validate_table_is_free_to_seat()
+        if old_status == "Seated" and new_status == "Confirmed":
+            self.validate_unseat()
+
+    def validate_table_is_free_to_seat(self):
+        from ury.ury.api.table_reservation import open_checks_on
+
+        if open_checks_on([self.reserved_table]):
+            frappe.throw(_("Table {0} has an open check. Seat the party at a free table.").format(self.reserved_table))
+        if frappe.db.exists("URY Table Reservation", {
+            "reserved_table": self.reserved_table, "status": "Seated", "name": ["!=", self.name],
+        }):
+            frappe.throw(_("Another party is already seated at table {0}.").format(self.reserved_table))
+
+    def validate_unseat(self):
+        from ury.ury.api.table_reservation import _bound_check_or_split_is_open, open_checks_on
+
+        if open_checks_on([self.reserved_table]) or _bound_check_or_split_is_open(self.pos_invoice):
+            frappe.throw(
+                _("Table {0} has an open check: a party can be unseated only before it orders.").format(
+                    self.reserved_table
+                )
+            )
+
     def on_update(self):
         old_doc = self.get_doc_before_save()
         old_status = old_doc.status if old_doc else None
-        if self.status == "Completed" and old_status != "Completed" and self.reserved_table:
+        if self.status == "Seated" and old_status != "Seated" and self.reserved_table:
             frappe.db.set_value(
                 "URY Table",
                 self.reserved_table,
@@ -123,11 +160,24 @@ class URYTableReservation(Document):
                     "latest_invoice_time": now_datetime(),
                 },
             )
+        if self.status == "Confirmed" and old_status == "Seated" and self.reserved_table:
+            # Unseated before ordering: the table is free again.
+            frappe.db.set_value("URY Table", self.reserved_table, {"occupied": 0, "latest_invoice_time": None})
 
     def validate_conflicts(self):
         # Only Confirmed / Active / Requested reservations require validation rules
         if self.status not in ("Confirmed", "Active", "Requested"):
             return
+        before = self.get_doc_before_save()
+        if before and before.status == "Seated":
+            return  # unseating: its slot stayed held while the party sat
+
+        # The Minimum Reservation Notice applies to the booking time, as in
+        # Simphony: when the booking is made or its time moves, not when staff
+        # edit its notes, covers, phone or table. The occupied-table buffer
+        # check applies only when the booking's time or table is set or moved.
+        time_moved = not before or get_datetime(before.reserved_at) != get_datetime(self.reserved_at)
+        table_moved = not before or before.reserved_table != self.reserved_table
 
         from ury.ury.api.table_reservation import validate_reservation_rules
         validate_reservation_rules(
@@ -136,4 +186,6 @@ class URYTableReservation(Document):
             reserved_at=self.reserved_at,
             no_of_pax=self.no_of_pax,
             exclude_name=self.name,
+            check_notice=time_moved,
+            check_occupancy=time_moved or table_moved,
         )

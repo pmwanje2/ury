@@ -180,7 +180,7 @@ def spec(name):
 
 
 def render(name, doc, text, *, with_efris=True):
-	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False):
+	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False, order_by=None):
 		if doctype == "Company":
 			if fieldname == "custom_guest_ledger_clearing":
 				return None

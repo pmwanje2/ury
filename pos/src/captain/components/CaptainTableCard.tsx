@@ -61,9 +61,11 @@ const CaptainTableCard = ({
   const elapsed = isOccupied ? elapsedLabel(table.latest_invoice_time) : null;
   // Both timestamps are site-local strings from the same server snapshot.
   // Do not reinterpret them in the waiter's device timezone.
-  const showBooking = booking && !(isOccupied && booking.scheduled_time < booking.server_now);
+  // A Seated party shows, labelled Seated, while its table is occupied; a released table is Free.
+  const isSeated = booking?.status === 'Seated';
+  const showBooking = booking && (isSeated ? isOccupied : !(isOccupied && booking.scheduled_time < booking.server_now));
   const bookingLabel = booking ? [
-    `${t('common.reserved')} ${booking.scheduled_time.slice(11, 16)}`,
+    isSeated ? t('reservations.status_seated') : `${t('common.reserved')} ${booking.scheduled_time.slice(11, 16)}`,
     booking.party_size,
     booking.customer_name.trim().split(/\s+/)[0],
   ].filter(value => value !== null && value !== undefined && value !== '').join(' · ') : '';

@@ -2856,7 +2856,12 @@ def table_transfer(table, newTable, invoice):
     if new_table.occupied == 1:
         frappe.throw(f"Table {new_table.name} is already occupied")
 
-    from ury.ury.api.table_reservation import check_table_reservation, parse_to_datetime
+    from ury.ury.api.table_reservation import (
+        check_table_reservation,
+        parse_to_datetime,
+        transfer_seated_reservation,
+        validate_seated_reservation_transfer,
+    )
     active_res = check_table_reservation(new_table.name)
     if active_res and active_res.get("is_lock_window_active") and active_res.get("status") == "Confirmed":
         res_time_raw = active_res.get("reserved_at")
@@ -2873,20 +2878,30 @@ def table_transfer(table, newTable, invoice):
             )
         )
 
+    old_table_name = current_table.name if isinstance(current_table.name, str) else table
+    validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
+
     frappe.db.set_value(
         "URY Table",
         new_table.name,
         {"occupied": 1, "latest_invoice_time": pos_invoice.creation},
     )
-    frappe.db.set_value(
-        "URY Table",
-        current_table.name,
-        {"occupied": 0, "latest_invoice_time": None},
+    other_open_on_old = frappe.db.exists(
+        "POS Invoice",
+        {"restaurant_table": old_table_name, "docstatus": 0, "name": ["!=", pos_invoice.name]},
     )
+    if not other_open_on_old:
+        frappe.db.set_value(
+            "URY Table",
+            current_table.name,
+            {"occupied": 0, "latest_invoice_time": None},
+        )
 
     pos_invoice.restaurant_table = new_table.name
     pos_invoice.custom_restaurant_room = new_table.restaurant_room
     pos_invoice.save()
+
+    transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
 
     # Do not swallow KOT-transfer failures: a raise here aborts the request
     # (and its transaction) so the table/invoice changes above are rolled

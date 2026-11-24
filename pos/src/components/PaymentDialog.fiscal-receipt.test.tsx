@@ -118,7 +118,7 @@ describe("PaymentDialog fiscal receipt order", () => {
 
     fireEvent.click(screen.getByText(/payment.pay_button/));
 
-    await waitFor(() => expect(printOrder).toHaveBeenCalledWith(expect.objectContaining({ orderId: "INV001" })));
+    await waitFor(() => expect(printOrder).toHaveBeenCalledWith(expect.objectContaining({ orderId: "INV001", skipStatusUpdate: true })));
     const printedAt = vi.mocked(printOrder).mock.invocationCallOrder[0];
     expect(callOrder(MAKE)).toBeLessThan(callOrder(SUBMIT));
     expect(callOrder(SUBMIT)).toBeLessThan(printedAt);
@@ -218,7 +218,13 @@ describe("PaymentDialog fiscal receipt order", () => {
       flushPendingFiscalReprints: (profile: Record<string, unknown>) => Promise<void>;
       resolveEfrisPrintWaitSeconds: (raw: unknown) => number;
     };
-    expect(resolveEfrisPrintWaitSeconds(undefined)).toBe(30);
+    expect(resolveEfrisPrintWaitSeconds(undefined)).toBe(5);
+    expect(resolveEfrisPrintWaitSeconds(0)).toBe(0);
+    expect(resolveEfrisPrintWaitSeconds(10)).toBe(10);
+    expect(resolveEfrisPrintWaitSeconds(15)).toBe(15);
+    expect(resolveEfrisPrintWaitSeconds(16)).toBe(15);
+    expect(resolveEfrisPrintWaitSeconds(500)).toBe(15);
+    expect(resolveEfrisPrintWaitSeconds(-3)).toBe(0);
     vi.mocked(call.get).mockResolvedValue({ message: { efris_status: "Submitted", fdn: "324013579864" } });
     await flushPendingFiscalReprints(mockUsePOSStore().posProfile);
 
@@ -228,6 +234,49 @@ describe("PaymentDialog fiscal receipt order", () => {
         idempotencyKey: "efris-auto-INV001",
       }),
     );
+  });
+
+  it("short-circuits immediately on efris_status Failed and queues automatic reprint", async () => {
+    const { waitForEfrisFdn } = await import("../lib/efris-print");
+    vi.mocked(call.get).mockResolvedValue({ message: { efris_status: "Failed", fdn: null } });
+
+    const started = Date.now();
+    const res = await waitForEfrisFdn({ invoice: "INV-FAIL", timeoutSeconds: 15, pollIntervalMs: 500 });
+    expect(res).toEqual({ outcome: "timed_out", status: "Failed" });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(call.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps polling and retains localStorage reprint queue on transient HTTP errors", async () => {
+    const { flushPendingFiscalReprints, queuePendingFiscalReprint, waitForEfrisFdn } = await import("../lib/efris-print");
+    const profile = mockUsePOSStore().posProfile;
+
+    // 1) Transient 502 on poll 1 followed by Submitted FDN on poll 2 recovers instead of returning not_applicable.
+    vi.mocked(call.get)
+      .mockRejectedValueOnce(new Error("502 Bad Gateway"))
+      .mockResolvedValueOnce({ message: { efris_status: "Submitted", fdn: "324013579999" } });
+    const recovered = await waitForEfrisFdn({ invoice: "INV-T1", timeoutSeconds: 2, pollIntervalMs: 10 });
+    expect(recovered).toEqual({ outcome: "fiscalised", fdn: "324013579999", status: "Submitted" });
+
+    // 2) Persistent transient error returns timed_out (so caller queues reprint), NOT not_applicable.
+    vi.mocked(call.get).mockRejectedValue(new Error("503 Service Unavailable"));
+    const timedOut = await waitForEfrisFdn({ invoice: "INV-T2", timeoutSeconds: 0.03, pollIntervalMs: 10 });
+    expect(timedOut.outcome).toBe("timed_out");
+
+    // 3) flushPendingFiscalReprints keeps entry in localStorage across transient errors and prints once reachable.
+    await queuePendingFiscalReprint({ invoice: "INV-T2", posProfile: profile });
+    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toContain("INV-T2");
+
+    await flushPendingFiscalReprints(profile);
+    expect(printBillCopy).not.toHaveBeenCalled();
+    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toContain("INV-T2");
+
+    vi.mocked(call.get).mockResolvedValueOnce({ message: { efris_status: "Submitted", fdn: "324013570002" } });
+    await flushPendingFiscalReprints(profile);
+    expect(printBillCopy).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: "INV-T2", idempotencyKey: "efris-auto-INV-T2" }),
+    );
+    expect(localStorage.getItem("ury_pending_fiscal_reprints")).toBeNull();
   });
 
   it("blocks double-click race synchronously across step 1 with a ref mutex", async () => {
@@ -257,7 +306,7 @@ describe("PaymentDialog fiscal receipt order", () => {
     expect(makeCalls).toHaveLength(1);
   });
 
-  it("shows the print toggle checked by default and prints the fiscal receipt even when enable_payment_without_printing is 0", async () => {
+  it("locks the print toggle checked and non-skippable when enable_payment_without_printing is 0", async () => {
     mockUsePOSStore.mockReturnValue({
       paymentModes: ["Cash"],
       fetchPaymentModes: vi.fn(),
@@ -275,10 +324,17 @@ describe("PaymentDialog fiscal receipt order", () => {
     const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
     expect(checkbox).toBeInTheDocument();
     expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(true);
+
+    // Attempting to click the locked checkbox must have no effect: fiscal receipt printing stays mandatory.
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
 
     fireEvent.click(screen.getByText(/payment.pay_button/));
 
-    await waitFor(() => expect(printOrder).toHaveBeenCalledWith(expect.objectContaining({ orderId: "INV001" })));
+    await waitFor(() =>
+      expect(printOrder).toHaveBeenCalledWith(expect.objectContaining({ orderId: "INV001", skipStatusUpdate: true })),
+    );
     expect(callOrder(MAKE)).toBeLessThan(callOrder(SUBMIT));
     expect(callOrder(SUBMIT)).toBeLessThan(vi.mocked(printOrder).mock.invocationCallOrder[0]);
   });

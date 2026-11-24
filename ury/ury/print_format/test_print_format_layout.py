@@ -178,7 +178,7 @@ def render_format(
 		"image": "/files/grand-terrace-logo.svg",
 	}
 
-	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False):
+	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False, order_by=None):
 		if doctype == "Company":
 			if fieldname == "custom_guest_ledger_clearing":
 				return "Guest Ledger Clearing - GT"

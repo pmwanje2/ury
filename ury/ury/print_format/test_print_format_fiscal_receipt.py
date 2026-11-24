@@ -83,8 +83,11 @@ def render(name, doc, efris=None, e_invoices=None, *, clearing="Guest Ledger Cle
 		assert doctype == "E Invoice", doctype
 		return (e_invoices or {})[docname]
 
-	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False):
+	def get_value(doctype, filters_or_name, fieldname=None, as_dict=False, order_by=None):
 		if doctype == "URY Bill Reprint Log":
+			assert fieldname == "copy_number" and order_by == "copy_number desc", (
+				f"Frappe v16 forbids SQL function strings in get_value; got fieldname={fieldname!r}, order_by={order_by!r}"
+			)
 			return copy_log_max
 		if doctype == "Company" and fieldname == "custom_guest_ledger_clearing":
 			return clearing
@@ -292,6 +295,26 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 		self.assertIn("FISCAL RECEIPT PENDING", flat)
 		self.assertNotIn(FDN, flat)
 
+	def test_a_copy_of_a_pending_return_shows_credit_note_pending(self):
+		for state in ("credit_note_pending", "pending"):
+			with self.subTest(state=state):
+				doc = bill(is_return=1)
+				flat = text(render(COPY, doc, {doc.name: {"state": state, "application_ref": None, "sandbox": 0}})[0])
+				self.assertIn("CREDIT NOTE PENDING URA APPROVAL", flat)
+				self.assertNotIn("FISCAL RECEIPT PENDING", flat)
+
+	def test_copy_fiscal_values_are_escaped(self):
+		doc = bill(tax_id=XSS, is_return=1, efris_e_invoice="EINV-1")
+		einv = SimpleNamespace(taxes=[SimpleNamespace(tax_category_code=f"01:A: {XSS}", net_amount=847.46, tax_amount=152.54)])
+		html = render(
+			COPY,
+			doc,
+			{doc.name: fiscalised(fdn=XSS, verification_code=XSS, device_no=XSS, issued=XSS, is_return=1, original_fdn=XSS)},
+			{"EINV-1": einv},
+		)[0]
+		self.assertNotIn(XSS, html)
+		self.assertGreaterEqual(html.count("&lt;img src=x onerror=alert(1)&gt;"), 7)
+
 	def test_a_non_fiscal_tenant_copy_prints_no_efris_lines(self):
 		flat = text(render(COPY, bill())[0])
 		self.assertIn("COPY", flat)
@@ -299,7 +322,8 @@ class BillCopyFiscalReceipt(unittest.TestCase):
 			self.assertNotIn(needle, flat)
 
 	def test_the_standard_format_is_re_synced_on_migrate(self):
-		self.assertGreater(spec(COPY)["modified"], "2026-11-23 22:00:00.000000")
+		self.assertGreater(spec(COPY)["modified"], "2026-11-23 23:00:00.000000")
+		self.assertNotIn("max(copy_number)", spec(COPY)["html"])
 
 
 if __name__ == "__main__":
