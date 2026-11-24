@@ -216,7 +216,6 @@ def test_settlement_records_authenticated_operator_not_client_or_original_cashie
     invoice.owner = "waiter@example.com"
     invoice.waiter = "waiter@example.com"
     monkeypatch.setattr(runtime.order, "get_order_invoice", lambda *args: invoice)
-    monkeypatch.setattr(runtime.order, "_validate_additional_discount", lambda *args: None)
     persisted_cashiers = []
     invoice.save.side_effect = lambda: persisted_cashiers.append(invoice.cashier)
     runtime.order.make_invoice(
@@ -243,7 +242,6 @@ def test_merged_settlement_attributes_both_paid_invoices_to_operator(runtime, mo
     target.owner = "waiter@example.com"
     target.waiter = "waiter@example.com"
     monkeypatch.setattr(runtime.order, "get_order_invoice", lambda *args: invoice)
-    monkeypatch.setattr(runtime.order, "_validate_additional_discount", lambda *args: None)
     runtime.frappe.get_doc.return_value = target
     persisted_cashiers = []
     target.save.side_effect = lambda **kwargs: persisted_cashiers.append(target.cashier)

@@ -49,7 +49,6 @@ vi.mock("@ury/ui", () => ({
 }));
 vi.mock("../i18n", () => ({ t: (key: string) => key }));
 
-const PREVIEW = "ury.ury.doctype.ury_order.ury_order.preview_settlement_totals";
 const MAKE_INVOICE = "ury.ury.doctype.ury_order.ury_order.make_invoice";
 const SUBMIT_INVOICE = "ury.ury.doctype.ury_order.ury_order.submit_order_invoice";
 
@@ -126,21 +125,31 @@ describe("the total is the server's", () => {
     await waitFor(() => expect(tender(0).value).toBe("12.34"));
   });
 
-  it("prices a discount applied in the dialog on the server", async () => {
-    vi.mocked(call.get).mockResolvedValue({ message: { grand_total: 1110.6, rounded_total: 1110 } });
-    setTill(["Cash"], { default_payment_mode: "Cash" });
-    renderDialog(1234, 1234);
-    await waitFor(() => expect(tender(0).value).toBe("1234"));
-
-    const discount = document.querySelector<HTMLInputElement>('input[type="number"]:not([step])')!;
-    fireEvent.change(discount, { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
-
-    await waitFor(() => expect(call.get).toHaveBeenCalledExactlyOnceWith(PREVIEW, {
-      invoice: "BILL-1", pos_profile: "Till A", additionalDiscount: 10,
-    }));
+  it("shows a saved check discount read-only in Order Summary and never exposes a discount entry box", async () => {
+    setTill(["Cash"], { default_payment_mode: "Cash", currency: "USD" });
+    render(
+      <PaymentDialog
+        order={{ invoice_printed: 1 }}
+        onClose={vi.fn()}
+        grandTotal={1110}
+        roundedTotal={1110}
+        invoice="BILL-1"
+        customer="Walk-in Customer"
+        posProfile="Till A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={10}
+        discountAmount={124}
+        discountReason="Corporate rate"
+      />,
+    );
     await waitFor(() => expect(tender(0).value).toBe("1110"));
-    fireEvent.change(tender(0), { target: { value: "1110" } });
+    expect(document.querySelector('input[type="number"]:not([step])')).toBeNull();
+    expect(screen.getByTestId("payment-discount-summary")).toHaveTextContent("Corporate rate");
+    expect(screen.getByTestId("payment-discount-summary")).toHaveTextContent("124.00");
     expect(payButton().disabled).toBe(false);
   });
 });
@@ -193,77 +202,49 @@ describe("the room-charge tender is the POS Profile's", () => {
   });
 });
 
-describe("unapplied typed discount is never sent on Pay", () => {
-  const discountInput = () =>
-    document.querySelector<HTMLInputElement>('input[type="number"]:not([step])')!;
-
-  it("does not send an unapplied typed discount on direct Pay", async () => {
+describe("PaymentDialog never enters discounts or sends legacy additionalDiscount on Pay", () => {
+  it("settles without sending additionalDiscount on direct Pay", async () => {
     setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 1 });
     renderDialog(35.4, 35.4);
     await waitFor(() => expect(tender(0).value).toBe("35.4"));
+    expect(document.querySelector('input[type="number"]:not([step])')).toBeNull();
 
     // Uncheck print receipt to exercise direct single-call settlement (submit_invoice: 1).
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.change(discountInput(), { target: { value: "10" } });
     fireEvent.click(payButton());
 
     await waitFor(() =>
       expect(call.post).toHaveBeenCalledWith(
         MAKE_INVOICE,
         expect.objectContaining({
-          additionalDiscount: null,
           payments: [{ mode_of_payment: "Cash", amount: 35.4 }],
           submit_invoice: 1,
         }),
       ),
     );
+    expect(vi.mocked(call.post).mock.calls[0][1]).not.toHaveProperty("additionalDiscount");
   });
 
-  it("does not send an unapplied typed discount on print-then-submit Pay", async () => {
+  it("settles without sending additionalDiscount on print-then-submit Pay", async () => {
     setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 1 });
     renderDialog(35.4, 35.4);
     await waitFor(() => expect(tender(0).value).toBe("35.4"));
 
-    fireEvent.change(discountInput(), { target: { value: "10" } });
     fireEvent.click(payButton());
 
     await waitFor(() =>
       expect(call.post).toHaveBeenCalledWith(
         MAKE_INVOICE,
         expect.objectContaining({
-          additionalDiscount: null,
           payments: [{ mode_of_payment: "Cash", amount: 35.4 }],
           submit_invoice: 0,
         }),
       ),
     );
+    expect(vi.mocked(call.post).mock.calls[0][1]).not.toHaveProperty("additionalDiscount");
   });
 
-  it("sends the last server-previewed discount when the box is edited without pressing Apply again", async () => {
-    vi.mocked(call.get).mockResolvedValue({ message: { grand_total: 31.86, rounded_total: 31.86 } });
-    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0 });
-    renderDialog(35.4, 35.4);
-    await waitFor(() => expect(tender(0).value).toBe("35.4"));
-
-    fireEvent.change(discountInput(), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
-    await waitFor(() => expect(tender(0).value).toBe("31.86"));
-
-    fireEvent.change(discountInput(), { target: { value: "25" } });
-    fireEvent.click(payButton());
-
-    await waitFor(() =>
-      expect(call.post).toHaveBeenCalledWith(
-        MAKE_INVOICE,
-        expect.objectContaining({
-          additionalDiscount: 10,
-          payments: [{ mode_of_payment: "Cash", amount: 31.86 }],
-        }),
-      ),
-    );
-  });
-
-  it("preserves a carried fixed bill discount without inventing a percentage", async () => {
+  it("preserves a carried fixed bill discount without sending additionalDiscount", async () => {
     setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0 });
     render(
       <PaymentDialog
@@ -284,56 +265,18 @@ describe("unapplied typed discount is never sent on Pay", () => {
       />,
     );
     await waitFor(() => expect(tender(0).value).toBe("23.01"));
-    expect(discountInput().value).toBe("");
+    expect(screen.getByTestId("payment-discount-summary")).toHaveTextContent("0.59");
 
     fireEvent.click(payButton());
     await waitFor(() =>
       expect(call.post).toHaveBeenCalledWith(
         MAKE_INVOICE,
         expect.objectContaining({
-          additionalDiscount: null,
           payments: [{ mode_of_payment: "Cash", amount: 23.01 }],
         }),
       ),
     );
-  });
-
-  it("clearing an applied percentage discount to blank flags unapplied change and resets to 0 on Apply", async () => {
-    vi.mocked(call.get)
-      .mockResolvedValueOnce({ message: { grand_total: 31.86, rounded_total: 31.86 } })
-      .mockResolvedValueOnce({ message: { grand_total: 35.4, rounded_total: 35.4 } });
-    setTill(["Cash"], { default_payment_mode: "Cash", enable_payment_without_printing: 0, currency: "USD" });
-    renderDialog(35.4, 35.4);
-    await waitFor(() => expect(tender(0).value).toBe("35.4"));
-
-    fireEvent.change(discountInput(), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
-    await waitFor(() => expect(tender(0).value).toBe("31.86"));
-
-    fireEvent.change(discountInput(), { target: { value: "" } });
-    expect(screen.getByRole("status")).toHaveTextContent("payment.discount_not_applied");
-
-    fireEvent.click(screen.getByRole("button", { name: "common.apply" }));
-    await waitFor(() =>
-      expect(call.get).toHaveBeenLastCalledWith(PREVIEW, {
-        invoice: "BILL-1",
-        pos_profile: "Till A",
-        additionalDiscount: 0,
-      }),
-    );
-    await waitFor(() => expect(tender(0).value).toBe("35.4"));
-    expect(screen.queryByText("payment.discount_not_applied")).toBeNull();
-
-    fireEvent.click(payButton());
-    await waitFor(() =>
-      expect(call.post).toHaveBeenCalledWith(
-        MAKE_INVOICE,
-        expect.objectContaining({
-          additionalDiscount: null,
-          payments: [{ mode_of_payment: "Cash", amount: 35.4 }],
-        }),
-      ),
-    );
+    expect(vi.mocked(call.post).mock.calls[0][1]).not.toHaveProperty("additionalDiscount");
   });
 });
 
@@ -379,7 +322,6 @@ describe("tenders already received on the check (Simphony parity)", () => {
         MAKE_INVOICE,
         expect.objectContaining({
           invoice: "LKG-00061",
-          additionalDiscount: null,
           payments: [
             { mode_of_payment: "Cash", amount: 5.31 },
             { mode_of_payment: "Mobile Money", amount: 17.7 },
@@ -387,6 +329,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         }),
       ),
     );
+    expect(vi.mocked(call.post).mock.calls[0][1]).not.toHaveProperty("additionalDiscount");
   });
 
   it("preserves external payment reference on earlier tender when settling remaining balance", async () => {
