@@ -16,10 +16,15 @@ import json
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
+from frappe.utils import cint
 
 from ury.tests import till_money_fixtures as till_fx
 
 DRAWER_CREDIT = {"Pickup": True, "Loan": False, "Paid Out": True}
+USD_CASH_ACCOUNT = "_Test Cash USD - _TC"
+USD_DEBTORS_ACCOUNT = "_Test Debtors USD - _TC"
+USD_MODE = "_Test Cash USD"
+USD_CUSTOMER = "_Test Till Money USD Customer"
 
 
 def movement(till, kind, amount, counter=None, reason=None, submit=True, drawer=None, creator=None, extra=None):
@@ -81,14 +86,190 @@ def over_short_entries(closing):
 	)
 
 
+def _ensure_usd_till_masters():
+	if not frappe.db.exists("Account", USD_CASH_ACCOUNT):
+		frappe.get_doc(
+			{
+				"doctype": "Account",
+				"account_name": "_Test Cash USD",
+				"parent_account": "Cash In Hand - _TC",
+				"company": till_fx.COMPANY,
+				"is_group": 0,
+				"root_type": "Asset",
+				"account_type": "Cash",
+				"account_currency": "USD",
+			}
+		).insert(ignore_permissions=True)
+
+	if not frappe.db.exists("Account", USD_DEBTORS_ACCOUNT):
+		frappe.get_doc(
+			{
+				"doctype": "Account",
+				"account_name": "_Test Debtors USD",
+				"parent_account": "Accounts Receivable - _TC",
+				"company": till_fx.COMPANY,
+				"is_group": 0,
+				"root_type": "Asset",
+				"account_type": "Receivable",
+				"account_currency": "USD",
+			}
+		).insert(ignore_permissions=True)
+
+	if not frappe.db.exists("Customer", USD_CUSTOMER):
+		frappe.get_doc(
+			{
+				"doctype": "Customer",
+				"customer_name": USD_CUSTOMER,
+				"customer_group": "Individual",
+				"territory": "All Territories",
+				"default_currency": "USD",
+				"accounts": [{"company": till_fx.COMPANY, "account": USD_DEBTORS_ACCOUNT}],
+			}
+		).insert(ignore_permissions=True, ignore_mandatory=True)
+
+	if not frappe.db.exists("Mode of Payment", USD_MODE):
+		frappe.get_doc(
+			{
+				"doctype": "Mode of Payment",
+				"mode_of_payment": USD_MODE,
+				"type": "Cash",
+				"accounts": [{"company": till_fx.COMPANY, "default_account": USD_CASH_ACCOUNT}],
+			}
+		).insert(ignore_permissions=True)
+
+	today = frappe.utils.nowdate()
+	existing_fx = frappe.db.get_value(
+		"Currency Exchange",
+		{"date": today, "from_currency": "USD", "to_currency": "INR"},
+		"name",
+	)
+	if existing_fx:
+		frappe.db.set_value("Currency Exchange", existing_fx, "exchange_rate", 80.0)
+	else:
+		frappe.get_doc(
+			{
+				"doctype": "Currency Exchange",
+				"date": today,
+				"from_currency": "USD",
+				"to_currency": "INR",
+				"exchange_rate": 80.0,
+				"for_buying": 1,
+				"for_selling": 1,
+			}
+		).insert(ignore_permissions=True)
+
+
+def _open_usd_till(profile_name, holder, opening_amount=100):
+	today = frappe.utils.nowdate()
+	till_fx._make_role_only_user(holder, "URY Cashier")
+	till_fx.assign_branch_user(till_fx.BRANCH, holder)
+	if frappe.db.exists("POS Profile", profile_name):
+		frappe.delete_doc("POS Profile", profile_name, ignore_permissions=True, force=1)
+	profile = frappe.get_doc(
+		{
+			"doctype": "POS Profile",
+			"name": profile_name,
+			"company": till_fx.COMPANY,
+			"currency": "USD",
+			"warehouse": "_Test Warehouse - _TC",
+			"cost_center": till_fx.COST_CENTER,
+			"income_account": till_fx.INCOME_ACCOUNT,
+			"expense_account": "Cost of Goods Sold - _TC",
+			"write_off_account": "_Test Write Off - _TC",
+			"write_off_cost_center": till_fx.COST_CENTER,
+			"account_for_change_amount": USD_CASH_ACCOUNT,
+			"selling_price_list": "Standard Selling",
+			"branch": till_fx.BRANCH,
+			"restaurant": till_fx.RESTAURANT,
+			"custom_enable_cash_movements": 1,
+			"custom_tips_payable_account": till_fx.TIPS_ACCOUNT,
+			"custom_cash_safe_account": till_fx.SAFE_ACCOUNT,
+			"custom_paid_out_account": till_fx.PAID_OUT_ACCOUNT,
+			"custom_cash_over_short_account": till_fx.OVER_SHORT_ACCOUNT,
+			"custom_paid_out_approval_threshold": "20",
+			"custom_cash_movement_approver_role": till_fx.APPROVER_ROLE,
+		}
+	)
+	profile.append("payments", {"mode_of_payment": USD_MODE, "default": 1})
+	for email in (holder, till_fx.PURE_MANAGER, till_fx.WAITER):
+		profile.append("applicable_for_users", {"user": email})
+	profile.insert(ignore_permissions=True)
+
+	opening = frappe.new_doc("POS Opening Entry")
+	opening.pos_profile = profile_name
+	opening.user = holder
+	opening.company = till_fx.COMPANY
+	opening.period_start_date = frappe.utils.add_to_date(frappe.utils.now_datetime(), minutes=-5)
+	opening.posting_date = today
+	opening.branch = till_fx.BRANCH
+	opening.restaurant = till_fx.RESTAURANT
+	opening.set("balance_details", [{"mode_of_payment": USD_MODE, "opening_amount": opening_amount}])
+	opening.insert(ignore_permissions=True)
+	opening.submit()
+	return profile, opening
+
+
+def _make_usd_invoice(profile_name, customer, rate=50, debit_to=None):
+	inv = frappe.new_doc("POS Invoice")
+	inv.pos_profile = profile_name
+	inv.company = till_fx.COMPANY
+	inv.customer = customer
+	inv.currency = "USD"
+	inv.conversion_rate = 80.0
+	if debit_to:
+		inv.debit_to = debit_to
+	inv.is_pos = 1
+	inv.update_stock = 0
+	inv.waiter = till_fx.WAITER
+	inv.disable_rounded_total = 1
+	inv.append(
+		"items",
+		{
+			"item_code": till_fx.ITEM,
+			"qty": 1,
+			"rate": rate,
+			"income_account": till_fx.INCOME_ACCOUNT,
+			"cost_center": till_fx.COST_CENTER,
+		},
+	)
+	inv.append("payments", {"mode_of_payment": USD_MODE, "amount": rate})
+	inv.insert(ignore_permissions=True)
+	inv.submit()
+	return inv
+
+
+def _close_usd_till(profile_name, opening, holder, opening_amount, closing_amount):
+	today = frappe.utils.nowdate()
+	closing = frappe.new_doc("POS Closing Entry")
+	closing.pos_opening_entry = opening.name
+	closing.pos_profile = profile_name
+	closing.company = till_fx.COMPANY
+	closing.user = holder
+	closing.period_start_date = opening.period_start_date
+	closing.period_end_date = frappe.utils.now_datetime()
+	closing.posting_date = today
+	closing.posting_time = frappe.utils.nowtime()
+	closing.append(
+		"payment_reconciliation",
+		{"mode_of_payment": USD_MODE, "opening_amount": opening_amount, "closing_amount": closing_amount},
+	)
+	closing.insert(ignore_permissions=True)
+	closing.submit()
+	closing.reload()
+	return closing
+
+
 class TestTillCashMovements(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
 		till_fx.ensure_masters()
+		frappe.db.commit()
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		frappe.db.rollback()
+		super().tearDown()
 
 	def test_pickup_loan_and_paid_out_move_expected_cash(self):
 		till = till_fx.make_till("_Test Till Movements")
@@ -280,126 +461,22 @@ class TestTillCashMovements(FrappeTestCase):
 		from ury.ury.hooks.ury_cash_movement import till_cash_movements
 		from ury.ury_pos import cash_movements
 
-		usd_account = "_Test Cash USD - _TC"
-		if not frappe.db.exists("Account", usd_account):
-			frappe.get_doc(
-				{
-					"doctype": "Account",
-					"account_name": "_Test Cash USD",
-					"parent_account": "Cash In Hand - _TC",
-					"company": till_fx.COMPANY,
-					"is_group": 0,
-					"root_type": "Asset",
-					"account_type": "Cash",
-					"account_currency": "USD",
-				}
-			).insert(ignore_permissions=True)
-
-		usd_mode = "_Test Cash USD"
-		if not frappe.db.exists("Mode of Payment", usd_mode):
-			frappe.get_doc(
-				{
-					"doctype": "Mode of Payment",
-					"mode_of_payment": usd_mode,
-					"type": "Cash",
-					"accounts": [{"company": till_fx.COMPANY, "default_account": usd_account}],
-				}
-			).insert(ignore_permissions=True)
-
-		today = frappe.utils.nowdate()
-		existing_fx = frappe.db.get_value(
-			"Currency Exchange",
-			{"date": today, "from_currency": "USD", "to_currency": "INR"},
-			"name",
+		# Standard clean Frappe/ERPNext v16 site defaults to flag == 0; foreign-currency tills
+		# close cleanly when the Customer carries a matching-currency Receivable Party Account.
+		self.assertEqual(
+			cint(
+				frappe.db.get_single_value(
+					"Accounts Settings", "allow_multi_currency_invoices_against_single_party_account"
+				)
+			),
+			0,
 		)
-		if existing_fx:
-			frappe.db.set_value("Currency Exchange", existing_fx, "exchange_rate", 80.0)
-		else:
-			frappe.get_doc(
-				{
-					"doctype": "Currency Exchange",
-					"date": today,
-					"from_currency": "USD",
-					"to_currency": "INR",
-					"exchange_rate": 80.0,
-					"for_buying": 1,
-					"for_selling": 1,
-				}
-			).insert(ignore_permissions=True)
+		_ensure_usd_till_masters()
 
-		# Foreign USD till under INR company (_Test Company)
 		profile_name = "_Test Till USD Foreign"
 		holder = "till-money-usd-cashier@example.com"
-		till_fx._make_role_only_user(holder, "URY Cashier")
-		till_fx.assign_branch_user(till_fx.BRANCH, holder)
-		if frappe.db.exists("POS Profile", profile_name):
-			frappe.delete_doc("POS Profile", profile_name, ignore_permissions=True, force=1)
-		profile = frappe.get_doc(
-			{
-				"doctype": "POS Profile",
-				"name": profile_name,
-				"company": till_fx.COMPANY,
-				"currency": "USD",
-				"warehouse": "_Test Warehouse - _TC",
-				"cost_center": till_fx.COST_CENTER,
-				"income_account": till_fx.INCOME_ACCOUNT,
-				"expense_account": "Cost of Goods Sold - _TC",
-				"write_off_account": "_Test Write Off - _TC",
-				"write_off_cost_center": till_fx.COST_CENTER,
-				"account_for_change_amount": usd_account,
-				"selling_price_list": "Standard Selling",
-				"branch": till_fx.BRANCH,
-				"restaurant": till_fx.RESTAURANT,
-				"custom_enable_cash_movements": 1,
-				"custom_tips_payable_account": till_fx.TIPS_ACCOUNT,
-				"custom_cash_safe_account": till_fx.SAFE_ACCOUNT,
-				"custom_paid_out_account": till_fx.PAID_OUT_ACCOUNT,
-				"custom_cash_over_short_account": till_fx.OVER_SHORT_ACCOUNT,
-				"custom_paid_out_approval_threshold": "20",
-				"custom_cash_movement_approver_role": till_fx.APPROVER_ROLE,
-			}
-		)
-		profile.append("payments", {"mode_of_payment": usd_mode, "default": 1})
-		for email in (holder, till_fx.PURE_MANAGER, till_fx.WAITER):
-			profile.append("applicable_for_users", {"user": email})
-		profile.insert(ignore_permissions=True)
-
-		opening = frappe.new_doc("POS Opening Entry")
-		opening.pos_profile = profile_name
-		opening.user = holder
-		opening.company = till_fx.COMPANY
-		opening.period_start_date = frappe.utils.add_to_date(frappe.utils.now_datetime(), minutes=-5)
-		opening.posting_date = today
-		opening.branch = till_fx.BRANCH
-		opening.restaurant = till_fx.RESTAURANT
-		opening.set("balance_details", [{"mode_of_payment": usd_mode, "opening_amount": 100}])
-		opening.insert(ignore_permissions=True)
-		opening.submit()
-
-		# Cash sale of $50 on USD till
-		inv = frappe.new_doc("POS Invoice")
-		inv.pos_profile = profile_name
-		inv.company = till_fx.COMPANY
-		inv.customer = till_fx.CUSTOMER
-		inv.currency = "USD"
-		inv.conversion_rate = 80.0
-		inv.is_pos = 1
-		inv.update_stock = 0
-		inv.waiter = till_fx.WAITER
-		inv.disable_rounded_total = 1
-		inv.append(
-			"items",
-			{
-				"item_code": till_fx.ITEM,
-				"qty": 1,
-				"rate": 50,
-				"income_account": till_fx.INCOME_ACCOUNT,
-				"cost_center": till_fx.COST_CENTER,
-			},
-		)
-		inv.append("payments", {"mode_of_payment": usd_mode, "amount": 50})
-		inv.insert(ignore_permissions=True)
-		inv.submit()
+		_profile, opening = _open_usd_till(profile_name, holder, opening_amount=100)
+		inv = _make_usd_invoice(profile_name, USD_CUSTOMER, rate=50)
 
 		frappe.set_user(holder)
 		try:
@@ -446,38 +523,26 @@ class TestTillCashMovements(FrappeTestCase):
 			frappe.set_user("Administrator")
 
 		# Net drawer change in profile currency (USD): -20 + 30 - 10 - 25 = -25 USD
-		self.assertEqual(till_cash_movements(opening.name), {usd_account: -25.0})
+		self.assertEqual(till_cash_movements(opening.name), {USD_CASH_ACCOUNT: -25.0})
 		self.assertEqual(state["net_drawer_movement"], -25.0)
-		self.assertEqual(totals["by_mode"], {usd_mode: -25.0})
+		self.assertEqual(totals["by_mode"], {USD_MODE: -25.0})
 
 		# Verify multi_currency & balanced INR GL on Pickup ($20 * 80 = 1600 INR)
 		pickup_je = frappe.get_doc("Journal Entry", pickup["name"])
 		self.assertEqual(pickup_je.multi_currency, 1)
 		self.assertEqual(
 			till_fx.gl_by_account("Journal Entry", pickup["name"]),
-			{till_fx.SAFE_ACCOUNT: (1600.0, 0), usd_account: (0, 1600.0)},
+			{till_fx.SAFE_ACCOUNT: (1600.0, 0), USD_CASH_ACCOUNT: (0, 1600.0)},
 		)
 
 		# Close USD till counting $120 vs expected $125 ($100 open + $50 sale - $25 movements) -> -$5 short
-		closing = frappe.new_doc("POS Closing Entry")
-		closing.pos_opening_entry = opening.name
-		closing.pos_profile = profile_name
-		closing.company = till_fx.COMPANY
-		closing.user = holder
-		closing.period_start_date = opening.period_start_date
-		closing.period_end_date = frappe.utils.now_datetime()
-		closing.posting_date = today
-		closing.posting_time = frappe.utils.nowtime()
-		closing.append(
-			"payment_reconciliation",
-			{"mode_of_payment": usd_mode, "opening_amount": 100, "closing_amount": 120},
-		)
-		closing.insert(ignore_permissions=True)
-		closing.submit()
-		closing.reload()
+		closing = _close_usd_till(profile_name, opening, holder, opening_amount=100, closing_amount=120)
 
 		row = closing.payment_reconciliation[0]
 		self.assertEqual((row.expected_amount, row.closing_amount, row.difference), (125.0, 120.0, -5.0))
+		consolidated = frappe.db.get_value("POS Invoice", inv.name, "consolidated_invoice")
+		self.assertTrue(consolidated, "USD POS Invoice must consolidate on shift close")
+		self.assertEqual(frappe.db.get_value("Sales Invoice", consolidated, "debit_to"), USD_DEBTORS_ACCOUNT)
 		entries = over_short_entries(closing)
 		self.assertEqual(len(entries), 1)
 		os_je = frappe.get_doc("Journal Entry", entries[0])
@@ -485,7 +550,82 @@ class TestTillCashMovements(FrappeTestCase):
 		# $5 * 80 = 400 INR balanced in company GL
 		self.assertEqual(
 			till_fx.gl_by_account("Journal Entry", entries[0]),
-			{till_fx.OVER_SHORT_ACCOUNT: (400.0, 0), usd_account: (0, 400.0)},
+			{till_fx.OVER_SHORT_ACCOUNT: (400.0, 0), USD_CASH_ACCOUNT: (0, 400.0)},
+		)
+
+	def test_foreign_currency_till_preserves_invoice_usd_receivable_and_refuses_misconfigured_flag_zero(self):
+		self.assertEqual(
+			cint(
+				frappe.db.get_single_value(
+					"Accounts Settings", "allow_multi_currency_invoices_against_single_party_account"
+				)
+			),
+			0,
+		)
+		_ensure_usd_till_masters()
+
+		# Case 1: explicit USD debit_to on POS Invoice (even for INR-default Customer) is preserved and consolidates cleanly.
+		profile_ok = "_Test Till USD Explicit DebitTo"
+		holder_ok = "till-money-usd-explicit@example.com"
+		_p1, opening_ok = _open_usd_till(profile_ok, holder_ok, opening_amount=100)
+		inv_ok = _make_usd_invoice(profile_ok, till_fx.CUSTOMER, rate=40, debit_to=USD_DEBTORS_ACCOUNT)
+		closing_ok = _close_usd_till(profile_ok, opening_ok, holder_ok, opening_amount=100, closing_amount=140)
+		self.assertEqual(closing_ok.docstatus, 1)
+		consolidated_ok = frappe.db.get_value("POS Invoice", inv_ok.name, "consolidated_invoice")
+		self.assertTrue(consolidated_ok)
+		self.assertEqual(frappe.db.get_value("Sales Invoice", consolidated_ok, "debit_to"), USD_DEBTORS_ACCOUNT)
+
+		# Case 2: neither USD Party Account/debit_to nor Accounts Settings flag enabled -> actionable coded refusal.
+		inr_only_customer = "_Test Till Money INR Only Customer"
+		if not frappe.db.exists("Customer", inr_only_customer):
+			frappe.get_doc(
+				{
+					"doctype": "Customer",
+					"customer_name": inr_only_customer,
+					"customer_group": "Individual",
+					"territory": "All Territories",
+				}
+			).insert(ignore_permissions=True, ignore_mandatory=True)
+		profile_bad = "_Test Till USD Misconfigured"
+		holder_bad = "till-money-usd-misconf@example.com"
+		_p2, opening_bad = _open_usd_till(profile_bad, holder_bad, opening_amount=100)
+		_make_usd_invoice(profile_bad, inr_only_customer, rate=30)
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CLOSE-FOREIGN-RECEIVABLE\]") as ctx:
+			_close_usd_till(profile_bad, opening_bad, holder_bad, opening_amount=100, closing_amount=130)
+		self.assertIn("Accounts Settings", str(ctx.exception))
+
+	def test_foreign_currency_till_closes_with_single_party_account_flag_enabled(self):
+		original = cint(
+			frappe.db.get_single_value(
+				"Accounts Settings", "allow_multi_currency_invoices_against_single_party_account"
+			)
+		)
+
+		def _restore_flag():
+			frappe.db.set_single_value(
+				"Accounts Settings", "allow_multi_currency_invoices_against_single_party_account", original
+			)
+			frappe.db.commit()
+
+		self.addCleanup(_restore_flag)
+		frappe.db.set_single_value(
+			"Accounts Settings", "allow_multi_currency_invoices_against_single_party_account", 1
+		)
+		_ensure_usd_till_masters()
+
+		profile_name = "_Test Till USD Flag Enabled"
+		holder = "till-money-usd-flag1@example.com"
+		_profile, opening = _open_usd_till(profile_name, holder, opening_amount=100)
+		inv = _make_usd_invoice(profile_name, till_fx.CUSTOMER, rate=50)
+		closing = _close_usd_till(profile_name, opening, holder, opening_amount=100, closing_amount=145)
+		self.assertEqual(closing.docstatus, 1)
+		consolidated = frappe.db.get_value("POS Invoice", inv.name, "consolidated_invoice")
+		self.assertTrue(consolidated)
+		entries = over_short_entries(closing)
+		self.assertEqual(len(entries), 1)
+		self.assertEqual(
+			till_fx.gl_by_account("Journal Entry", entries[0]),
+			{till_fx.OVER_SHORT_ACCOUNT: (400.0, 0), USD_CASH_ACCOUNT: (0, 400.0)},
 		)
 
 
@@ -494,9 +634,12 @@ class TestCashOverShort(FrappeTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		till_fx.ensure_masters()
+		frappe.db.commit()
 
 	def tearDown(self):
 		frappe.set_user("Administrator")
+		frappe.db.rollback()
+		super().tearDown()
 
 	def test_short_close_posts_over_short_journal(self):
 		till = till_fx.make_till("_Test Till Short")
