@@ -383,7 +383,7 @@ export class OfflineOutbox {
             const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
               customer: entry.order.customer, cashier: entry.order.cashier, owner: entry.order.owner, table: entry.order.table || null,
               pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
-              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }], additionalDiscount: null,
+              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }],
               ...(entry.settlement.room_number ? { room_number: entry.settlement.room_number } : {}),
             });
             // v16 make_invoice answers {name, status}; a settled retry answers the same.

@@ -56,6 +56,7 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  coupon_code?: string | null;
   payments?: POSInvoicePayment[];
   room_number?: string | null;
   age_minutes?: number;
@@ -94,6 +95,9 @@ export interface POSInvoiceItem {
   rate: number;
   price_list_rate: number;
   amount: number;
+  discount_percentage?: number;
+  discount_amount?: number;
+  max_discount?: number;
   is_disposable?: number;
 }
 

@@ -20,6 +20,9 @@ function show(opts?: {
   grandTotal?: number;
   roundedTotal?: number;
   chargedTip?: number;
+  discountPercentage?: number;
+  discountAmount?: number;
+  discountReason?: string;
 }) {
   useRootStore.setState({ user: { name: 'user', roles: ['URY Cashier'] } });
   usePOSStore.setState({
@@ -52,6 +55,9 @@ function show(opts?: {
       onClose={vi.fn()}
       fetchOrders={async () => {}}
       clearSelectedOrder={vi.fn()}
+      discountPercentage={opts?.discountPercentage}
+      discountAmount={opts?.discountAmount}
+      discountReason={opts?.discountReason}
     />,
   );
 }
@@ -151,22 +157,26 @@ it('never shows Change due on non-cash over-tender for Refuse or Post to Charged
   expect(screen.getByText(/only cash gives change/i)).toHaveTextContent(/10/);
 });
 
-it('computes bill discount on pre-tip subtotal and autofills amount due including tip', async () => {
-  vi.spyOn(call, 'get').mockResolvedValue({ message: { grand_total: 110, rounded_total: 110 } });
-  show({ enableDiscount: 1, grandTotal: 120, roundedTotal: 120, chargedTip: 20 });
+it('computes bill discount on pre-tip subtotal and autofills amount due including tip', () => {
+  show({
+    enableDiscount: 1,
+    grandTotal: 110,
+    roundedTotal: 110,
+    chargedTip: 20,
+    discountPercentage: 10,
+    discountAmount: 10,
+    discountReason: 'Corporate rate',
+  });
   const tipField = screen.getByRole('textbox', { name: /^tip$/i }) as HTMLInputElement;
   expect(tipField.value).toBe('20');
 
-  fireEvent.change(screen.getByPlaceholderText('Enter %'), { target: { value: '10' } });
-  fireEvent.click(screen.getByRole('button', { name: /^Apply$/i }));
-
   const summary = screen.getByText('Order Summary').parentElement!;
-  await waitFor(() => expect(summary).toHaveTextContent(/Discount.*-.*10/));
+  expect(summary).toHaveTextContent(/Discount.*-.*10/);
   expect(summary).toHaveTextContent(/Subtotal.*100/);
   expect(summary).toHaveTextContent(/Tip.*20/);
   expect(summary).toHaveTextContent(/Total.*110/);
 
-  const cashInput = screen.getAllByRole('spinbutton')[1] as HTMLInputElement;
+  const cashInput = screen.getByRole('spinbutton') as HTMLInputElement;
   fireEvent.change(cashInput, { target: { value: '' } });
   fireEvent.focus(cashInput);
   expect(cashInput.value).toBe('110');

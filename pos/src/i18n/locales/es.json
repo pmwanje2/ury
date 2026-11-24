@@ -22,6 +22,7 @@
     "confirm_cancel": "Confirmar cancelación",
     "loading_ury_pos": "Cargando {{name}}...",
     "please_wait_setup": "Espera mientras configuramos todo",
+    "clear": "Limpiar",
     "dismiss": "Cerrar"
   },
   "header": {
@@ -127,6 +128,52 @@
     "reference_label": "Ref.: {{ref}}",
     "halo_warning": "Bloqueo por monto alto (HALO): el pago {{mode}} ({{amount}}) supera el máximo permitido ({{limit}}). Verifique los dígitos o solicite PIN de gerente.",
     "halo_approval_title": "Aprobar pago de monto alto"
+  },
+  "discount": {
+    "title": "Descuento",
+    "key_label": "Descuento",
+    "tab_check": "Cuenta",
+    "tab_line": "Artículo",
+    "presets": "Preajustes",
+    "open_entry": "Descuento libre",
+    "presets_only_notice": "Solo los preajustes de descuento configurados están habilitados para esta caja.",
+    "line_open_disabled": "Los descuentos libres por artículo están deshabilitados para esta caja.",
+    "percent_off": "% desc.",
+    "amount_off": "Monto ({{currency}})",
+    "reason_label": "Motivo del descuento",
+    "reason_placeholder": "Seleccionar un motivo…",
+    "note_label": "Nota",
+    "note_placeholder_required": "Ingresa los detalles (obligatorio)",
+    "note_placeholder_optional": "Detalles (opcional)",
+    "preview_title": "Totales de la cuenta",
+    "preview_empty": "Elige un preajuste o ingresa un descuento para ver los totales actualizados.",
+    "before": "Antes",
+    "discount_line": "Descuento",
+    "tax": "Impuesto",
+    "after": "Después",
+    "apply": "Aplicar descuento",
+    "applying": "Aplicando…",
+    "remove": "Quitar descuento",
+    "removing": "Quitando…",
+    "edit_or_remove": "Editar / Quitar",
+    "your_limit": "Tu límite: {{limit}}%",
+    "manager_required_zero": "Requiere autorización de gerente",
+    "approved_by": "Aprobado por {{name}}",
+    "needs_approval_over_limit": "Supera tu límite del {{limit}}% ({{effective}}%).",
+    "needs_approval_comp": "Una cortesía del 100% requiere el PIN de una segunda persona.",
+    "needs_approval_reason": "Este motivo requiere autorización de gerente.",
+    "manager_approval_title": "Autorización de gerente requerida",
+    "remove_approval_title": "Autorizar eliminación de descuento",
+    "manager_label": "Gerente",
+    "manager_placeholder": "Seleccionar gerente…",
+    "pin_label": "PIN de autorización",
+    "pin_placeholder": "PIN",
+    "authorise": "Autorizar",
+    "no_approvers": "Ningún gerente con PIN de autorización puede aprobar aquí todavía.",
+    "item_max_cap": "Máx. {{max}}%",
+    "comp_100": "100% Cortesía",
+    "applied_toast": "Descuento aplicado",
+    "removed_toast": "Descuento eliminado"
   },
   "pos": {
     "not_opened_title": "POS no abierto",
@@ -311,7 +358,8 @@
       "next": "Siguiente",
       "page": "Página {{number}}"
     },
-    "reduce_item_qty": "Reducir cantidad de {{item}}"
+    "reduce_item_qty": "Reducir cantidad de {{item}}",
+    "settled_closed": "Cobradas / Cerradas"
   },
   "tables": {
     "layout_view": "Vista de plano",
@@ -560,7 +608,8 @@
     "recently_paid": "Pagado reciente",
     "paid": "Pagado",
     "consolidated": "Consolidado",
-    "return": "Devolución"
+    "return": "Devolución",
+    "outstanding": "Pendiente"
   },
   "settings": {
     "title": "Configuración",
