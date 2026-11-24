@@ -1369,7 +1369,7 @@ class TestModifiersAndCombosEngine(unittest.TestCase):
 			#    (verified=False) MUST succeed at the saved rate=1500, but tampering rate to 100 MUST fail!
 			orig_exists = self.framework.db.exists
 			orig_get_doc = self.framework.get_doc
-			saved_snapshot = make_doc([ribeye_ok, Row(**overridden_child.__dict__)], is_new=False, verified=False)
+			saved_snapshot = make_doc([ribeye_ok, Row(**overridden_child)], is_new=False, verified=False)
 			try:
 				self.framework.db.exists = MagicMock(
 					side_effect=lambda dt, nm=None: True if (dt == "POS Invoice" and nm == "POS-PRIV-001") else orig_exists(dt, nm)
@@ -1377,12 +1377,12 @@ class TestModifiersAndCombosEngine(unittest.TestCase):
 				self.framework.get_doc = MagicMock(
 					side_effect=lambda dt, nm=None: saved_snapshot if (dt == "POS Invoice" and nm == "POS-PRIV-001") else orig_get_doc(dt, nm)
 				)
-				resave_doc = make_doc([ribeye_ok, Row(**overridden_child.__dict__)], is_new=False, verified=False)
+				resave_doc = make_doc([ribeye_ok, Row(**overridden_child)], is_new=False, verified=False)
 				mods.validate_pos_invoice_modifiers(resave_doc)
 				mods.validate_invoice_modifiers_before_submit(resave_doc)
 
 				# Tampering the already-overridden row's rate from 1500 -> 100 without verification MUST fail
-				tampered_child = Row(**overridden_child.__dict__)
+				tampered_child = Row(**overridden_child)
 				tampered_child.rate = 100
 				tampered_doc = make_doc([ribeye_ok, tampered_child], is_new=False, verified=False)
 				with self.assertRaises(self.framework.ValidationError) as ctx:
@@ -1531,6 +1531,7 @@ class TestSplitBillAtomicParentChildModifiers(unittest.TestCase):
 					items=[parent1, child1, parent2],
 					payments=[Row(mode_of_payment="Cash", amount=0, custom_tender_received=0)],
 				)
+				src.set = lambda k, v: setattr(src, k, v)
 				src.remove = lambda row: src.items.remove(row)
 				src.set_missing_values = MagicMock()
 				src.run_method = MagicMock()

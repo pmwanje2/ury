@@ -1169,6 +1169,7 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 
 	saved_child_qty = defaultdict(float)
 	saved_option_keys = set()
+	saved_privileged_child_rates = {}
 	if saved_doc is not None:
 		for srow in saved_doc.get("items") or []:
 			if cint(srow.get("is_disposable")) == 1 or flt(srow.get("qty")) <= 0:
@@ -1181,6 +1182,12 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 					srow.get("item_code"),
 				)
 				saved_child_qty[ck] += flt(srow.get("qty"))
+				if cint(srow.get("custom_price_overridden")) == 1 or cint(srow.get("custom_is_complimentary")) == 1:
+					saved_rate = flt(srow.get("rate"), precision)
+					if srow.get("name"):
+						saved_privileged_child_rates[("name", str(srow.get("name")))] = saved_rate
+					if srow.get("reservation_line_key"):
+						saved_privileged_child_rates[("rkey", str(srow.get("reservation_line_key")))] = saved_rate
 			else:
 				spk = (srow.get("reservation_line_key") or srow.get("name") or "").strip()
 				for sm in _parse_json_list(srow.get("custom_modifiers_json")):
@@ -1227,6 +1234,9 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 	release_field, released = (None, None)
 	discount_line_keys = _authorized_discount_line_keys(doc)
 	server_discount_write = bool(getattr(frappe.flags, "ury_server_discount_write", False))
+	privileged_action_verified = bool(
+		getattr(getattr(doc, "flags", None), "ury_privileged_action_verified", False)
+	)
 	rate_tol = (10 ** (-precision)) / 2.0 if precision > 0 else 0.001
 
 	# 3. Validate every parent row, its modifiers, its linked children, and its bundle overrides
@@ -1424,7 +1434,28 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 				or (child.get("name") and str(child.get("name")) in discount_line_keys)
 				or (child.get("reservation_line_key") and str(child.get("reservation_line_key")) in discount_line_keys)
 			) and abs(flt(child.get("price_list_rate"), precision) - expected_rate) <= rate_tol
-			if not row_has_authorized_discount and abs(actual_rate - expected_rate) > rate_tol:
+			row_is_privileged_priced = (
+				cint(child.get("custom_price_overridden")) == 1
+				or cint(child.get("custom_is_complimentary")) == 1
+			)
+			saved_priv_rate = None
+			if row_is_privileged_priced:
+				if child.get("name") and ("name", str(child.get("name"))) in saved_privileged_child_rates:
+					saved_priv_rate = saved_privileged_child_rates[("name", str(child.get("name")))]
+				elif (
+					child.get("reservation_line_key")
+					and ("rkey", str(child.get("reservation_line_key"))) in saved_privileged_child_rates
+				):
+					saved_priv_rate = saved_privileged_child_rates[("rkey", str(child.get("reservation_line_key")))]
+			row_has_authorized_privileged_rate = row_is_privileged_priced and (
+				privileged_action_verified
+				or (saved_priv_rate is not None and abs(actual_rate - saved_priv_rate) <= rate_tol)
+			)
+			if (
+				not row_has_authorized_discount
+				and not row_has_authorized_privileged_rate
+				and abs(actual_rate - expected_rate) > rate_tol
+			):
 				frappe.throw(
 					coded_message(
 						"MODIFIER-RATE-MISMATCH",
