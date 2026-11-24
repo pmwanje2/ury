@@ -1523,6 +1523,57 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
             self.assertEqual(forged_row.rate, 16000.0)
             self.assertEqual(forged_row.discount_percentage, 20.0)
 
+            # Part 3: CustomPOSInvoice.set_missing_values(for_validate=True) — called by change_order_type()
+            # BEFORE save() — MUST also shield persisted #152 overrides from apply_pricing_rule().
+            BasePOSInvoice.set_missing_values = lambda self, for_validate=False: BasePOSInvoice.validate(self)
+            row_auth_cot = Row(
+                name="ROW-AUTH",
+                item_code="KH-BURGER-18",
+                qty=1.0,
+                price_list_rate=12500.0,
+                rate=12500.0,
+                base_price_list_rate=12500.0,
+                base_rate=12500.0,
+                discount_percentage=0.0,
+                discount_amount=0.0,
+                pricing_rules=None,
+                custom_price_overridden=1,
+                custom_price_override_approver="manager@example.com",
+            )
+            row_norm_cot = Row(
+                name="ROW-NORM",
+                item_code="KH-BURGER-18",
+                qty=1.0,
+                price_list_rate=22000.0,
+                rate=22000.0,
+                base_price_list_rate=22000.0,
+                base_rate=22000.0,
+                discount_percentage=0.0,
+                discount_amount=0.0,
+                pricing_rules=None,
+                custom_price_overridden=0,
+            )
+            cot_doc = pos_inv_mod.CustomPOSInvoice(
+                name="MFUA00066",
+                is_return=0,
+                items=[row_auth_cot, row_norm_cot],
+                pricing_rules=[],
+            )
+            cot_doc.is_new = lambda: False
+            cot_doc.get_doc_before_save = lambda: Row(
+                name="MFUA00066",
+                items=[
+                    Row(name="ROW-AUTH", custom_price_overridden=1),
+                    Row(name="ROW-NORM", custom_price_overridden=0),
+                ],
+            )
+            cot_doc.set_missing_values(for_validate=True)
+            self.assertEqual(row_auth_cot.rate, 12500.0)
+            self.assertEqual(row_auth_cot.discount_percentage, 0.0)
+            self.assertFalse(row_auth_cot.pricing_rules)
+            self.assertEqual(row_norm_cot.rate, 17600.0)
+            self.assertEqual(row_norm_cot.discount_percentage, 20.0)
+
 
 class TestStampInvoiceOutletClock(unittest.TestCase):
     def setUp(self):
