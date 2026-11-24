@@ -120,6 +120,22 @@ class TestPrivilegedContractParity(TestPricingPrivilegedActions):
         )
         self.assertEqual(res["action"], "change")
 
+    def test_room_charge_detection_handles_missing_kamra_company_column(self):
+        """Sites without Kamra lack Company.custom_guest_ledger_clearing; must not raise OperationalError."""
+        pricing, _ = self._import_pricing_actions()
+        orig_get_value = self.h.frappe.db.get_value
+
+        def strict_get_value(doctype, filters=None, fieldname=None, *args, **kwargs):
+            if doctype == "Company" and fieldname == "custom_guest_ledger_clearing":
+                raise RuntimeError("(1054, \"Unknown column 'custom_guest_ledger_clearing' in 'SELECT'\")")
+            return orig_get_value(doctype, filters, fieldname, *args, **kwargs)
+
+        self.h.frappe.db.has_column = lambda dt, col: not (dt == "Company" and col == "custom_guest_ledger_clearing")
+        self.h.frappe.db.get_value = strict_get_value
+
+        self.assertTrue(pricing._is_room_charge_mode("Room Charge", "Test Co"))
+        self.assertFalse(pricing._is_room_charge_mode("Cash", "Test Co"))
+
 
 if __name__ == "__main__":
     unittest.main()
