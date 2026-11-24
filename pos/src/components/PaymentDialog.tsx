@@ -40,7 +40,15 @@ function roundToCurrency(amount: number, code?: string | null): number {
   return Object.is(rounded, -0) ? 0 : rounded;
 }
 
-type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
+type CreditAccount = {
+  name: string;
+  customer_name: string;
+  balance: number;
+  limit: number;
+  available: number;
+  currency: string;
+  conversion_rate?: number | null;
+};
 
 interface RoomMatchCandidate {
   ok?: boolean;
@@ -54,6 +62,7 @@ interface RoomMatchCandidate {
   balance?: number;
   available?: number | null;
   currency?: string;
+  charge_amount?: number | null;
   override_required?: boolean;
   reason_code?: string | null;
   reason?: string | null;
@@ -74,6 +83,7 @@ interface RoomCheckState {
   balance?: number;
   available?: number | null;
   currency?: string;
+  chargeAmount?: number | null;
   reason?: string | null;
 }
 
@@ -84,7 +94,7 @@ interface ApprovalGrant {
 }
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'custom_charged_tip' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'currency' | 'conversion_rate' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'custom_charged_tip' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
   existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
@@ -293,8 +303,18 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
-  const accountTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(account?.currency || currencyCode));
-  const onAccountOverLimit = canPayOnAccount && !!account && shortfall > Number(account.available) + accountTolerance;
+  const accountCurrency = account?.currency || currencyCode;
+  const isFxAccount = Boolean(
+    accountCurrency && currencyCode && accountCurrency.toUpperCase() !== currencyCode.toUpperCase(),
+  );
+  const accountConversionRate = isFxAccount
+    ? Number(order?.conversion_rate || account?.conversion_rate || 0)
+    : 1;
+  const proposedInAccountCurrency = isFxAccount && accountConversionRate > 0
+    ? roundToCurrency(shortfall * accountConversionRate, accountCurrency)
+    : roundToCurrency(shortfall, accountCurrency);
+  const accountTolerance = 0.5 * Math.pow(10, -currencyDecimalPlaces(accountCurrency));
+  const onAccountOverLimit = canPayOnAccount && !!account && proposedInAccountCurrency > Number(account.available) + accountTolerance;
 
   useEffect(() => {
     setRoomApproval(null);
@@ -350,6 +370,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         balance: match.balance,
         available: match.available,
         currency: matchCurrency,
+        chargeAmount: match.charge_amount ?? null,
         reason: reasonMsg,
         error: reasonMsg,
       });
@@ -365,6 +386,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         balance: match.balance,
         available: match.available,
         currency: matchCurrency,
+        chargeAmount: match.charge_amount ?? null,
         error: t('payment.room_no_post'),
       });
       return;
@@ -382,6 +404,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         balance: match.balance,
         available: match.available,
         currency: matchCurrency,
+        chargeAmount: match.charge_amount ?? null,
         error: match.reason || t('payment.room_check_failed'),
       });
       return;
@@ -399,6 +422,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       balance: match.balance,
       available: match.available,
       currency: matchCurrency,
+      chargeAmount: match.charge_amount ?? null,
       label: t('payment.room_match', {
         room: match.room_number || queryKey,
         guest: match.guest_name || '',
@@ -657,9 +681,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
-      <DialogContent variant="xlarge" className="bg-white w-full max-w-4xl max-h-dialog-max-h flex flex-col md:flex-row p-0" showCloseButton={false}>
+      <DialogContent variant="xlarge" className="bg-white w-full max-w-4xl max-h-dialog-max-h flex flex-col md:flex-row overflow-y-auto md:overflow-hidden p-0" showCloseButton={false}>
         {/* Left Column - Discount and Payment Mode */}
-        <div className="md:w-1/2 p-6 border-b md:border-b-0 md:border-e border-border overflow-y-auto">
+        <div className="md:w-1/2 shrink-0 md:shrink md:min-h-0 p-6 border-b md:border-b-0 md:border-e border-border md:overflow-y-auto">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-gray-900">{t('payment.title')}</h2>
             <Button
@@ -903,7 +927,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         </div>
 
         {/* Right Column - Order Summary and Pay Button */}
-        <div className="md:w-1/2 p-6 overflow-y-auto">
+        <div className="md:w-1/2 shrink-0 md:shrink md:min-h-0 p-6 md:overflow-y-auto">
           {/* Error Message */}
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -1022,29 +1046,44 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           </Button>
         </div>
       </DialogContent>
-      {activeApproval === 'room_charge_over_limit' && roomCheck && (
-        <ManagerApproval
-          open={true}
-          posProfile={posProfile}
-          privilege="room_charge_over_limit"
-          summaryLines={[
-            roomCheck.label || `${roomCheck.roomNumber || roomNumber} · ${roomCheck.guestName || ''}`,
-            roomCheck.reason || t('payment.room_over_limit'),
-            t('manager_approval.amount_line', { amount: formatMoney(roomChargeAmount) }),
-          ]}
-          reference={{ doctype: 'POS Invoice', name: invoice }}
-          claim={{
-            reservation: roomCheck.reservation || '',
-            room: roomCheck.roomNumber || roomNumber.trim(),
-            amount: roundToCurrency(roomChargeAmount, roomCheck.currency || currencyCode),
-            currency: roomCheck.currency || currencyCode,
-          }}
-          amount={roomChargeAmount}
-          requireReason={true}
-          onApproved={handleManagerApproved}
-          onCancel={() => setActiveApproval(null)}
-        />
-      )}
+      {activeApproval === 'room_charge_over_limit' && roomCheck && (() => {
+        const roomClaimCurrency = roomCheck.currency || currencyCode;
+        const roomIsFx = Boolean(
+          roomClaimCurrency && currencyCode && roomClaimCurrency.toUpperCase() !== currencyCode.toUpperCase(),
+        );
+        const roomClaimAmount =
+          roomCheck.chargeAmount !== undefined && roomCheck.chargeAmount !== null
+            ? roundToCurrency(Number(roomCheck.chargeAmount), roomClaimCurrency)
+            : roomIsFx && Number(order?.conversion_rate) > 0
+              ? roundToCurrency(roomChargeAmount * Number(order?.conversion_rate), roomClaimCurrency)
+              : roundToCurrency(roomChargeAmount, roomClaimCurrency);
+        const amountLabel = roomIsFx
+          ? `${formatMoney(roomChargeAmount)} (${formatCurrency(roomClaimAmount, roomClaimCurrency)})`
+          : formatMoney(roomChargeAmount);
+        return (
+          <ManagerApproval
+            open={true}
+            posProfile={posProfile}
+            privilege="room_charge_over_limit"
+            summaryLines={[
+              roomCheck.label || `${roomCheck.roomNumber || roomNumber} · ${roomCheck.guestName || ''}`,
+              roomCheck.reason || t('payment.room_over_limit'),
+              t('manager_approval.amount_line', { amount: amountLabel }),
+            ]}
+            reference={{ doctype: 'POS Invoice', name: invoice }}
+            claim={{
+              reservation: roomCheck.reservation || '',
+              room: roomCheck.roomNumber || roomNumber.trim(),
+              amount: roomClaimAmount,
+              currency: roomClaimCurrency,
+            }}
+            amount={roomClaimAmount}
+            requireReason={true}
+            onApproved={handleManagerApproved}
+            onCancel={() => setActiveApproval(null)}
+          />
+        );
+      })()}
       {activeApproval === 'on_account_over_limit' && (
         <ManagerApproval
           open={true}
@@ -1053,17 +1092,21 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           summaryLines={[
             account ? `${account.customer_name} · ${account.name}` : customer,
             t('payment.account_over_limit_notice'),
-            t('manager_approval.amount_line', { amount: formatMoney(shortfall) }),
+            t('manager_approval.amount_line', {
+              amount: isFxAccount
+                ? `${formatMoney(shortfall)} (${formatCurrency(proposedInAccountCurrency, accountCurrency)})`
+                : formatMoney(shortfall),
+            }),
           ]}
           reference={{ doctype: 'POS Invoice', name: invoice }}
           claim={{
             customer: account?.name || customer,
             company: storePosProfile?.company || '',
-            proposed: roundToCurrency(shortfall, account?.currency || currencyCode),
-            limit: roundToCurrency(Number(account?.limit || 0), account?.currency || currencyCode),
-            currency: account?.currency || currencyCode,
+            proposed: proposedInAccountCurrency,
+            limit: roundToCurrency(Number(account?.limit || 0), accountCurrency),
+            currency: accountCurrency,
           }}
-          amount={shortfall}
+          amount={proposedInAccountCurrency}
           requireReason={true}
           onApproved={handleManagerApproved}
           onCancel={() => setActiveApproval(null)}

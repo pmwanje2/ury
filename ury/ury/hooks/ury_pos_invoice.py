@@ -677,7 +677,7 @@ def validate_server_only_override_fields(doc, method=None):
     if getattr(getattr(frappe, "session", None), "user", None) == "Administrator":
         return
 
-    fields = ("custom_override_approver", "custom_override_reason")
+    fields = ("custom_room_charge_stay", "custom_override_approver", "custom_override_reason")
     if doc.is_new():
         if any(doc.get(f) for f in fields):
             frappe.throw(
@@ -763,7 +763,13 @@ def validate_credit_and_room_charge_before_submit(doc, method=None):
             projected = credit.balance(customer, doc.company, doc.name, current=True) + proposed
             from ury.ury_pos.offline_tenders import currency_precision
 
-            claim_prec = currency_precision(doc.get("currency") or profile.get("currency"))
+            raw_company_currency = frappe.get_cached_value("Company", doc.company, "default_currency")
+            acct_currency = (
+                raw_company_currency.strip()
+                if isinstance(raw_company_currency, str) and raw_company_currency.strip()
+                else (doc.get("currency") or profile.get("currency") or "")
+            )
+            claim_prec = currency_precision(acct_currency)
             base_precision = doc.precision("base_grand_total") if callable(getattr(doc, "precision", None)) else 2
             if not isinstance(base_precision, int) or isinstance(base_precision, bool):
                 base_precision = 2

@@ -3931,7 +3931,12 @@ def _enforce_on_account(
             frappe.ValidationError,
         )
     projected = balance(customer, invoice.company, invoice.name, current=True) + proposed
-    acct_currency = invoice.get("currency") or profile.get("currency") or ""
+    raw_company_currency = frappe.get_cached_value("Company", invoice.company, "default_currency")
+    acct_currency = (
+        raw_company_currency.strip()
+        if isinstance(raw_company_currency, str) and raw_company_currency.strip()
+        else (invoice.get("currency") or profile.get("currency") or "")
+    )
     claim_prec = currency_precision(acct_currency)
     precision = max(invoice.precision("base_grand_total"), claim_prec)
     if flt(projected, precision) > flt(limit, precision):
@@ -4891,7 +4896,9 @@ def make_invoice(
     if rc_outcome and rc_outcome.get("override_approver"):
         frappe.flags.kamra_room_charge_override = {
             "reservation": rc_outcome.get("reservation"),
+            "room": rc_outcome.get("room_number"),
             "amount": rc_outcome.get("amount"),
+            "currency": rc_outcome.get("currency"),
             "approver": rc_outcome.get("override_approver"),
             "reason": rc_outcome.get("override_reason"),
         }
@@ -5031,7 +5038,9 @@ def submit_order_invoice(
     if rc_outcome and rc_outcome.get("override_approver"):
         frappe.flags.kamra_room_charge_override = {
             "reservation": rc_outcome.get("reservation"),
+            "room": rc_outcome.get("room_number"),
             "amount": rc_outcome.get("amount"),
+            "currency": rc_outcome.get("currency"),
             "approver": rc_outcome.get("override_approver"),
             "reason": rc_outcome.get("override_reason"),
         }

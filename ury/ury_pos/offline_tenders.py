@@ -8,9 +8,30 @@ Room Charge tenders and live Phone-push tenders are never offline-eligible.
 
 from __future__ import annotations
 
-import frappe
-from frappe import _
-from frappe.utils import cint, flt
+import datetime
+
+try:
+    import frappe
+    from frappe import _
+    from frappe.utils import cint, flt
+except ImportError:  # pragma: no cover - site-less host unit tests without frappe installed
+    frappe = None
+
+    def _(msg):
+        return msg
+
+    def cint(val):
+        try:
+            return int(val or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def flt(val, precision=None):
+        try:
+            num = float(val or 0)
+        except (TypeError, ValueError):
+            num = 0.0
+        return round(num, precision) if precision is not None else num
 
 from ury.ury_pos.room_charge import profile_room_charge_modes
 
@@ -112,7 +133,9 @@ def enforce_offline_tender_replay(
     """Re-verify Mode of Payment offline flags, reference requirement, and per-till
     floor limit when replaying or submitting an offline-captured check."""
     f = _frappe or frappe
-    is_offline = bool(cint(offline_replay)) or bool(_field(invoice, "ury_offline_captured_at"))
+    captured_at = _field(invoice, "ury_offline_captured_at")
+    has_captured_at = isinstance(captured_at, (str, datetime.date, datetime.datetime)) and bool(captured_at)
+    is_offline = bool(cint(offline_replay)) or has_captured_at
     if not is_offline:
         return None
     if _field(invoice, "is_return"):

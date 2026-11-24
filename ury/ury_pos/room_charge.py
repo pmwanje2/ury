@@ -9,9 +9,22 @@ house account, wrong property, missing FX rate), and requires a consumed
 
 from __future__ import annotations
 
-import frappe
-from frappe import _
-from frappe.utils import flt
+try:
+    import frappe
+    from frappe import _
+    from frappe.utils import flt
+except ImportError:  # pragma: no cover - site-less host unit tests without frappe installed
+    frappe = None
+
+    def _(msg):
+        return msg
+
+    def flt(val, precision=None):
+        try:
+            num = float(val or 0)
+        except (TypeError, ValueError):
+            num = 0.0
+        return round(num, precision) if precision is not None else num
 
 
 def _field(obj, key: str, default=None):
@@ -27,10 +40,13 @@ def _field(obj, key: str, default=None):
     return default if val is None else val
 
 
-def _resolve_verifier(method_path: str):
+def _resolve_verifier(method_path: str, _frappe=None):
     if not method_path or not isinstance(method_path, str):
         raise ImportError("Room lookup method is not configured.")
-    fn = frappe.get_attr(method_path)
+    f = _frappe or frappe
+    if f is None:
+        raise ImportError("Framework context is unavailable.")
+    fn = f.get_attr(method_path)
     if not callable(fn):
         raise ImportError(f"Room lookup method {method_path} is not callable.")
     return fn
@@ -39,25 +55,25 @@ def _resolve_verifier(method_path: str):
 def profile_room_charge_modes(profile, company: str | None = None, *, _frappe=None) -> list[str]:
     f = _frappe or frappe
     comp = company or _field(profile, "company")
-    if not comp:
+    if not isinstance(comp, str) or not comp or f is None:
         return []
     meta = f.get_meta("Company")
     if not meta or not meta.has_field("custom_guest_ledger_clearing"):
         return []
     clearing = f.db.get_value("Company", comp, "custom_guest_ledger_clearing")
-    if not clearing:
+    if not isinstance(clearing, str) or not clearing:
         return []
     modes: list[str] = []
     for row in _field(profile, "payments") or []:
         mode = _field(row, "mode_of_payment")
-        if not mode:
+        if not isinstance(mode, str) or not mode:
             continue
         account = f.db.get_value(
             "Mode of Payment Account",
             {"parent": mode, "company": comp},
             "default_account",
         )
-        if account == clearing:
+        if isinstance(account, str) and account == clearing:
             modes.append(mode)
     return modes
 
@@ -87,9 +103,11 @@ def enforce_room_charge_settlement(
 ) -> dict | None:
     """Enforce room-charge eligibility and manager override at settlement/submit.
 
-    Returns None when the check has no room-charge tender or the profile has no
-    configured room verifier method. Otherwise returns verification metadata and
-    records `custom_room_charge_stay` + override attribution on `invoice`.
+    Returns None when the check has no room-charge tender. Fails closed with
+    [POS-RC-UNCONFIGURED] when a room-charge tender is present and the profile
+    has no configured room verifier method. Otherwise returns verification
+    metadata and records `custom_room_charge_stay` + override attribution on
+    `invoice`.
     """
     f = _frappe or frappe
     rc_modes = profile_room_charge_modes(profile, _field(invoice, "company"), _frappe=f)
@@ -97,9 +115,16 @@ def enforce_room_charge_settlement(
     if rc_amt <= 0:
         return None
 
-    method_path = (_field(profile, "custom_room_lookup_method") or "").strip()
+    raw_method = _field(profile, "custom_room_lookup_method")
+    method_path = raw_method.strip() if isinstance(raw_method, str) else ""
     if not method_path:
-        return None
+        f.throw(
+            _(
+                "Room charge verification is not configured for this till. "
+                "Configure a room lookup method before posting room charges. [POS-RC-UNCONFIGURED]"
+            ),
+            f.ValidationError,
+        )
 
     room_in = (room_number if room_number is not None else _field(invoice, "room_number") or "").strip()
     stay_in = (room_charge_stay if room_charge_stay is not None else _field(invoice, "custom_room_charge_stay") or "").strip()
@@ -110,7 +135,7 @@ def enforce_room_charge_settlement(
         )
 
     try:
-        verifier = _resolve_verifier(method_path)
+        verifier = _resolve_verifier(method_path) if frappe is not None else _resolve_verifier(method_path, _frappe=f)
     except Exception:
         f.throw(
             _("Room charge verification is unavailable. Check the property connection before posting. [POS-RC-UNAVAILABLE]"),
@@ -119,7 +144,7 @@ def enforce_room_charge_settlement(
 
     from ury.ury_pos.offline_tenders import currency_precision
 
-    req_currency = _field(invoice, "currency") or _field(profile, "currency") or ""
+    req_currency = (_field(invoice, "currency") or _field(profile, "currency") or "").strip()
     req_prec = currency_precision(req_currency)
     kwargs = {
         "pos_profile": profile.name,
@@ -149,6 +174,27 @@ def enforce_room_charge_settlement(
 
     resolved_stay = (result.get("reservation") or stay_in or "").strip()
     resolved_room = (result.get("room_number") or room_in or "").strip()
+    claim_currency = (result.get("currency") or req_currency or "").strip()
+    claim_prec = currency_precision(claim_currency)
+
+    def _resolved_claim_amount() -> float:
+        if result.get("charge_amount") is not None:
+            return round(flt(result.get("charge_amount")), claim_prec)
+        if claim_currency and req_currency and claim_currency.upper() != req_currency.upper():
+            inv_company = _field(invoice, "company") or _field(profile, "company")
+            comp_cur = (
+                f.get_cached_value("Company", inv_company, "default_currency")
+                if isinstance(inv_company, str) and inv_company
+                else None
+            )
+            conv_rate = flt(_field(invoice, "conversion_rate"))
+            if isinstance(comp_cur, str) and comp_cur.strip().upper() == claim_currency.upper() and conv_rate > 0:
+                return round(flt(rc_amt) * conv_rate, claim_prec)
+            f.throw(
+                _("Room charge currency conversion is unavailable. [POS-RC-CURRENCY]"),
+                f.ValidationError,
+            )
+        return round(flt(rc_amt), claim_prec)
 
     if result.get("ok") is not False and result.get("posting_allowed"):
         if resolved_stay:
@@ -157,7 +203,8 @@ def enforce_room_charge_settlement(
         return {
             "reservation": resolved_stay,
             "room_number": resolved_room,
-            "amount": round(flt(rc_amt), currency_precision(result.get("currency") or req_currency)),
+            "amount": _resolved_claim_amount(),
+            "currency": claim_currency,
             "override_approver": None,
             "override_reason": None,
         }
@@ -180,9 +227,7 @@ def enforce_room_charge_settlement(
             f.PermissionError,
         )
 
-    claim_currency = result.get("currency") or req_currency
-    claim_prec = currency_precision(claim_currency)
-    rounded_rc_amt = round(flt(rc_amt), claim_prec)
+    rounded_rc_amt = _resolved_claim_amount()
 
     # Two-step draft save (`make_invoice(..., submit_invoice=0)`): keep the stay
     # and defer consuming the single-use approval token until actual submission.
@@ -193,6 +238,7 @@ def enforce_room_charge_settlement(
             "reservation": resolved_stay,
             "room_number": resolved_room,
             "amount": rounded_rc_amt,
+            "currency": claim_currency,
             "override_approver": None,
             "override_reason": None,
         }
@@ -230,6 +276,7 @@ def enforce_room_charge_settlement(
         "reservation": resolved_stay,
         "room_number": resolved_room,
         "amount": rounded_rc_amt,
+        "currency": claim_currency,
         "override_approver": approver,
         "override_reason": str(approved_reason)[:200],
     }

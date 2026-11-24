@@ -397,6 +397,7 @@ def get_split_group(invoice):
         "name",
         "ury_client_order_id",
         "currency",
+        "conversion_rate",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",
@@ -591,7 +592,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -614,7 +615,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -636,7 +637,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -656,7 +657,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -718,6 +719,7 @@ def searchPosInvoice(query,status):
         fields=[
             "name",
             "currency",
+            "conversion_rate",
             "customer",
             "customer_name",
             "no_of_pax",
@@ -3436,9 +3438,27 @@ def credit_accounts(pos_profile: str, query: str):
         fields=['name','customer_name','credit_limits.credit_limit as limit_amount'],
         order_by='customer_name asc, name asc', page_length=20)
     currency = frappe.get_cached_value('Company', profile.company, 'default_currency')
+    profile_currency = (profile.get('currency') or currency or '').strip()
+    conversion_rate = 1.0
+    if profile_currency and currency and profile_currency.upper() != str(currency).strip().upper():
+        try:
+            from erpnext.setup.utils import get_exchange_rate
+
+            conversion_rate = frappe.utils.flt(get_exchange_rate(profile_currency, currency)) or 0.0
+        except Exception:
+            conversion_rate = 0.0
+        if conversion_rate <= 0:
+            conversion_rate = frappe.utils.flt(
+                frappe.db.get_value(
+                    'Currency Exchange',
+                    {'from_currency': profile_currency, 'to_currency': currency},
+                    'exchange_rate',
+                )
+            ) or 0.0
     result = []
     for row in accounts:
         outstanding = balance(row.name, profile.company)
         result.append(dict(name=row.name, customer_name=row.customer_name, balance=outstanding,
-                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding, currency=currency))
+                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding,
+                           currency=currency, conversion_rate=conversion_rate))
     return result
