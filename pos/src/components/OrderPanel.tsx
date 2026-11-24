@@ -14,7 +14,9 @@ import { HoldFireControls } from './HoldFireControls';
 import { useOutbox } from '../offline/use-outbox';
 import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
-import { syncOrder, type SavedInvoice } from '../lib/order-api';
+import { syncOrder, type SavedInvoice, type SyncOrderRequest } from '../lib/order-api';
+import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { useRootStore } from '../store/root-store';
 import type { RootState } from '../store/root-store';
 import { showToast } from '@ury/ui';
@@ -55,6 +57,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     resetOrderState,
     paymentModes,
     orderId,
+    originalSentItems = [],
     orderComment,
     setOrderComment,
     guestLabel,
@@ -70,6 +73,12 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const [editingItem, setEditingItem] = useState<typeof activeOrders[0] | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
+  const [pendingSyncVoidApproval, setPendingSyncVoidApproval] = useState<{
+    orderData: SyncOrderRequest;
+    amount: number;
+    linesCount: number;
+    claim: Record<string, unknown>;
+  } | null>(null);
 
   // Read-only kitchen state per item_code for a running (saved) order.
   const [kotState, setKotState] = useState<Record<string, KotItemState>>({});
@@ -116,6 +125,153 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     setOrderComment(comment);
   };
 
+  const buildSyncVoidClaim = (orderData: SyncOrderRequest) => {
+    const beforeMap = new Map<string, { item_code: string; line_key: string; qty: number; rate: number }>();
+    const afterMap = new Map<string, number>();
+
+    for (const row of originalSentItems) {
+      if (Number(row.ury_held || 0) === 1) continue;
+      const lineKey = row.reservation_line_key || '';
+      const composite = JSON.stringify([row.item_code, row.comment || '', lineKey]);
+      const prev = beforeMap.get(composite);
+      if (prev) {
+        prev.qty += Number(row.qty || 0);
+      } else {
+        beforeMap.set(composite, {
+          item_code: row.item_code,
+          line_key: lineKey,
+          qty: Number(row.qty || 0),
+          rate: Number(row.rate || 0),
+        });
+      }
+    }
+
+    for (const row of orderData.items) {
+      if (Number(row.ury_held || 0) === 1) continue;
+      const lineKey = row.reservation_line_key || '';
+      const composite = JSON.stringify([row.item, row.comment || '', lineKey]);
+      afterMap.set(composite, (afterMap.get(composite) || 0) + Number(row.qty || 0));
+    }
+
+    const sortedKeys = Array.from(beforeMap.keys()).sort();
+    const lines: Array<{
+      item_code: string;
+      reservation_line_key: string;
+      from_qty: number;
+      to_qty: number;
+      delta: number;
+    }> = [];
+    let amount = 0;
+
+    for (const composite of sortedKeys) {
+      const before = beforeMap.get(composite)!;
+      const afterQty = afterMap.get(composite) || 0;
+      if (afterQty < before.qty) {
+        const delta = before.qty - afterQty;
+        amount += before.rate * delta;
+        lines.push({
+          item_code: before.item_code,
+          reservation_line_key: before.line_key,
+          from_qty: before.qty,
+          to_qty: afterQty,
+          delta,
+        });
+      }
+    }
+
+    const roundedAmount = Math.round(amount * 10000) / 10000;
+    return {
+      amount: roundedAmount,
+      linesCount: lines.length,
+      claim: {
+        action: 'sync_order_void_sent_item',
+        lines,
+        amount: roundedAmount,
+        reason: '',
+      },
+    };
+  };
+
+  const submitSyncPayload = async (orderData: SyncOrderRequest, allowPromptOnAuthRequired: boolean) => {
+    if (!posProfile || !user?.name) return;
+    setIsSubmitting(true);
+    try {
+      const submission = await submitOrderOfflineAware({
+        profile: posProfile,
+        user,
+        order: target ? { ...target.order, items: orderData.items } : orderData,
+        total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
+        clientOrderId: target?.client_order_id,
+        onlineSubmit: (ids) =>
+          syncOrder({
+            ...orderData,
+            ...(ids && {
+              client_order_id: ids.clientOrderId,
+              round_id: ids.roundId,
+              items: roundItems(orderData.items, ids.roundId),
+            }),
+          }),
+      });
+      const result = submission.offline ? null : submission.response;
+
+      // sync_order returns { status: 'Failure' } instead of throwing when the
+      // write is rejected (stale last_modified_time, table already occupied,
+      // or the invoice was already billed by another user).
+      if (
+        result?.message &&
+        typeof result.message === 'object' &&
+        'status' in result.message &&
+        result.message.status === 'Failure'
+      ) {
+        showToast.error(parseFrappeError(result, t('errors.order_sync_failed')));
+        return;
+      }
+
+      // Reset all states after successful order submission
+      resetOrderState();
+      setOfflineTarget('');
+      showToast.success(
+        submission.offline
+          ? t('offline.saved')
+          : isUpdatingOrder
+            ? t('success.order_updated')
+            : t('success.order_created'),
+      );
+      if (result?.message && 'name' in result.message && user.roles?.includes('URY Cashier')) {
+        onCashierCheck?.(result.message);
+      }
+    } catch (error) {
+      if (allowPromptOnAuthRequired && isUpdatingOrder && orderId && isAuthRequiredError(error)) {
+        const voidInfo = buildSyncVoidClaim(orderData);
+        setPendingSyncVoidApproval({
+          orderData,
+          amount: voidInfo.amount,
+          linesCount: voidInfo.linesCount,
+          claim: voidInfo.claim,
+        });
+        return;
+      }
+      console.error('Failed to sync order:', error);
+      showToast.error(overrideErrorMessage(error, 'errors.failed_process_order'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSyncVoidApproved = async (res: ManagerApprovalResult) => {
+    const pending = pendingSyncVoidApproval;
+    setPendingSyncVoidApproval(null);
+    if (!pending) return;
+    await submitSyncPayload(
+      {
+        ...pending.orderData,
+        approval_token: res.token,
+        void_reason: res.reason,
+      },
+      false,
+    );
+  };
+
   const handleSubmit = async () => {
     try {
       if (!posProfile) {
@@ -150,9 +306,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         return;
       }
 
-      setIsSubmitting(true);
-      
-      const orderData = {
+      const orderData: SyncOrderRequest = {
         items: activeOrders.map(item => ({
           ...(item.invoiceItemName ? { name: item.invoiceItemName } : {}),
           ...(posProfile.ury_enable_hold_fire || item.ury_held ? { ury_held: item.ury_held || 0 } : {}),
@@ -186,36 +340,10 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         ...(guestLabel?.trim() || isUpdatingOrder ? { guest_label: guestLabel?.trim() ?? '' } : {}),
       };
 
-      const submission = await submitOrderOfflineAware({ profile: posProfile, user,
-        order: target ? { ...target.order, items: orderData.items } : orderData,
-        total: total + (target ? target.rounds[target.rounds.length - 1].expected_total : 0),
-        clientOrderId: target?.client_order_id,
-        onlineSubmit: (ids) => syncOrder({ ...orderData,
-          ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId, items: roundItems(orderData.items, ids.roundId) }),
-        }),
-      });
-      const result = submission.offline ? null : submission.response;
-
-      // sync_order returns { status: 'Failure' } instead of throwing when the
-      // write is rejected (stale last_modified_time, table already occupied,
-      // or the invoice was already billed by another user).
-      if (result?.message && typeof result.message === 'object' && 'status' in result.message && result.message.status === 'Failure') {
-        showToast.error(parseFrappeError(result, t('errors.order_sync_failed')));
-        return;
-      }
-
-      // Reset all states after successful order submission
-      resetOrderState();
-      setOfflineTarget('');
-      showToast.success(submission.offline ? t('offline.saved') : isUpdatingOrder ? t('success.order_updated') : t('success.order_created'));
-      if (result?.message && 'name' in result.message && user.roles?.includes('URY Cashier')) {
-        onCashierCheck?.(result.message);
-      }
+      await submitSyncPayload(orderData, true);
     } catch (error) {
       console.error('Failed to sync order:', error);
       showToast.error(parseFrappeError(error, t('errors.failed_process_order')));
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -491,6 +619,25 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         onSave={handleCommentSave}
         initialComment={orderComment}
       />
+
+      {pendingSyncVoidApproval && orderId && posProfile && (
+        <ManagerApproval
+          open
+          posProfile={posProfile.name}
+          privilege="void_sent_item"
+          title={t('manager_approval.void_sent_item_title')}
+          summaryLines={[
+            t('manager_approval.void_sent_order_summary', { count: pendingSyncVoidApproval.linesCount || 1 }),
+            t('manager_approval.amount_line', { amount: formatCurrency(pendingSyncVoidApproval.amount) }),
+            t('manager_approval.check_line', { check: orderId }),
+          ]}
+          reference={{ doctype: 'POS Invoice', name: orderId }}
+          claim={pendingSyncVoidApproval.claim}
+          amount={pendingSyncVoidApproval.amount}
+          onApproved={(res) => void handleSyncVoidApproved(res)}
+          onCancel={() => setPendingSyncVoidApproval(null)}
+        />
+      )}
     </div>
   );
 };

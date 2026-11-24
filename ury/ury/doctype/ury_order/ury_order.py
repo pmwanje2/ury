@@ -3688,25 +3688,47 @@ def _received_payment_rows(invoice):
 
     Only rows explicitly marked custom_tender_received=1 by a confirmed server flow, or
     backed by a confirmed Paid/Partially Paid Phone Payment Request, are received.
-    Draft/split placeholders, unconfirmed Phone requests, and Step-1 print-preview rows
-    have custom_tender_received=0 and are never treated as received.
+    Phone rows are always re-checked against live Payment Request status so cancelled,
+    failed, expired, or refunded requests never deadlock the check.
     """
+    confirmed_prs = _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company"))
+    live_pr_by_name = {pr.get("name"): pr for pr in confirmed_prs if pr.get("name")}
+    live_paid_by_mode = {}
+    for pr in confirmed_prs:
+        pr_mode = pr.get("mode_of_payment")
+        pr_paid = flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount"))
+        if pr_mode and pr_paid > 0:
+            live_paid_by_mode[pr_mode] = live_paid_by_mode.get(pr_mode, 0.0) + pr_paid
+
     rows = []
     matched_pr_names = set()
     matched_phone_modes = {}
 
     for row in invoice.get("payments") or []:
         amt = flt(row.get("amount"))
-        if amt > 0 and cint(row.get("custom_tender_received")) == 1:
-            rows.append(row)
-            ref = (row.get("reference_no") or "").strip()
+        if amt <= 0 or cint(row.get("custom_tender_received")) != 1:
+            continue
+        mode = row.get("mode_of_payment")
+        ref = (row.get("reference_no") or "").strip()
+        if _is_phone_mode(row):
             if ref:
+                if ref not in live_pr_by_name:
+                    continue
                 matched_pr_names.add(ref)
-            mode = row.get("mode_of_payment")
-            if row.get("type") == "Phone" and mode:
+            else:
+                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                    continue
+                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
+            if mode:
                 matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
+            rows.append(row)
+            continue
 
-    for pr in _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company")):
+        rows.append(row)
+        if ref:
+            matched_pr_names.add(ref)
+
+    for pr in confirmed_prs:
         pr_name = pr.get("name")
         if pr_name in matched_pr_names:
             continue

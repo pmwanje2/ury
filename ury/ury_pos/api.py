@@ -384,6 +384,7 @@ def get_split_group(invoice):
     split_fields = [
         "name",
         "ury_client_order_id",
+        "currency",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",
@@ -578,7 +579,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -601,7 +602,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -623,7 +624,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -643,7 +644,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -704,6 +705,7 @@ def searchPosInvoice(query,status):
         ],
         fields=[
             "name",
+            "currency",
             "customer",
             "customer_name",
             "no_of_pax",
@@ -1066,6 +1068,7 @@ def getPosInvoiceItems(invoice):
         itemDetails.append(
             {
                 "name": items.name,
+                "item_code": items.item_code,
                 "item_name": items.item_name,
                 "qty": items.qty,
                 "rate": items.rate,
@@ -1086,21 +1089,6 @@ def getPosInvoiceItems(invoice):
     paymentDetails = []
     room_number = orderdItems.get("room_number")
     room_modes = None
-    received_rows = []
-    matched_pr_names = set()
-    matched_phone_modes = {}
-    for payment in orderdItems.get("payments") or []:
-        amt = frappe.utils.flt(payment.get("amount"))
-        if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
-            continue
-        received_rows.append(payment)
-        ref = (payment.get("reference_no") or "").strip()
-        if ref:
-            matched_pr_names.add(ref)
-        mode = payment.get("mode_of_payment")
-        if payment.get("type") == "Phone" and mode:
-            matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-
     pr_filters = {
         "reference_doctype": "POS Invoice",
         "reference_name": orderdItems.name,
@@ -1117,27 +1105,72 @@ def getPosInvoiceItems(invoice):
         fields=["name", "mode_of_payment", "payment_account", "grand_total", "outstanding_amount", "status"],
         order_by="creation asc",
     )
-    if isinstance(paid_requests, (list, tuple)):
-        for pr in paid_requests:
-            pr_name = pr.get("name")
-            if pr_name in matched_pr_names:
-                continue
-            paid_amt = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
-            mode = pr.get("mode_of_payment")
-            if not mode or paid_amt <= 0:
-                continue
-            if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-                matched_phone_modes[mode] -= paid_amt
-                continue
-            received_rows.append(
-                {
-                    "mode_of_payment": mode,
-                    "amount": paid_amt,
-                    "reference_no": pr_name,
-                    "type": "Phone",
-                    "custom_tender_received": 1,
-                }
-            )
+    if not isinstance(paid_requests, (list, tuple)):
+        paid_requests = []
+    live_prs = [
+        pr
+        for pr in paid_requests
+        if (frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))) > 0
+    ]
+    live_pr_by_name = {pr.get("name"): pr for pr in live_prs if pr.get("name")}
+    live_paid_by_mode = {}
+    for pr in live_prs:
+        pr_mode = pr.get("mode_of_payment")
+        pr_paid = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
+        if pr_mode and pr_paid > 0:
+            live_paid_by_mode[pr_mode] = live_paid_by_mode.get(pr_mode, 0.0) + pr_paid
+
+    received_rows = []
+    matched_pr_names = set()
+    matched_phone_modes = {}
+    for payment in orderdItems.get("payments") or []:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
+            continue
+        mode = payment.get("mode_of_payment")
+        ref = (payment.get("reference_no") or "").strip()
+        is_phone = (
+            payment.get("type") == "Phone"
+            or (bool(mode) and frappe.db.get_value("Mode of Payment", mode, "type") == "Phone")
+        )
+        if is_phone:
+            if ref:
+                if ref not in live_pr_by_name:
+                    continue
+                matched_pr_names.add(ref)
+            else:
+                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                    continue
+                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
+            if mode:
+                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
+            received_rows.append(payment)
+            continue
+
+        received_rows.append(payment)
+        if ref:
+            matched_pr_names.add(ref)
+
+    for pr in live_prs:
+        pr_name = pr.get("name")
+        if pr_name in matched_pr_names:
+            continue
+        paid_amt = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
+        mode = pr.get("mode_of_payment")
+        if not mode or paid_amt <= 0:
+            continue
+        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_phone_modes[mode] -= paid_amt
+            continue
+        received_rows.append(
+            {
+                "mode_of_payment": mode,
+                "amount": paid_amt,
+                "reference_no": pr_name,
+                "type": "Phone",
+                "custom_tender_received": 1,
+            }
+        )
 
     for payment in received_rows:
         amt = frappe.utils.flt(payment.get("amount"))

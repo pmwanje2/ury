@@ -9,6 +9,7 @@ import type { Filter } from 'frappe-js-sdk/lib/db/types';
 export interface POSInvoice {
   ury_client_order_id?: string | null;
   name: string;
+  currency?: string;
   invoice_printed: number;
   custom_printing_time?: string | null;
   grand_total: number;
@@ -76,6 +77,7 @@ export interface SplitGroupResponse {
 
 export interface POSInvoiceItem {
   name: string;
+  item_code?: string;
   item_name: string;
   qty: number;
   rate: number;
@@ -109,7 +111,7 @@ interface GetPOSInvoiceItemsResponse {
 }
 
 export const outstandingFields = [
-  'docstatus', 'name', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
+  'docstatus', 'name', 'currency', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
   'custom_merged_tables', 'cashier', 'waiter', 'net_total', 'posting_time', 'total_taxes_and_charges',
   'customer', 'customer_name', 'status', 'mobile_number', 'posting_date', 'rounded_total', 'order_type',
   'custom_split_group', 'custom_split_from', 'custom_guest_label', 'custom_merged_pos_invoice',
@@ -300,6 +302,7 @@ export function getOrdersTabForInvoice(
 export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInvoice {
   return {
     name: inv.name,
+    currency: inv.currency,
     ury_client_order_id: inv.ury_client_order_id,
     invoice_printed: inv.invoice_printed,
     custom_printing_time: inv.custom_printing_time ?? null,
