@@ -885,6 +885,10 @@ def post_waste_stock_entry(
 
 def _currency_precision(currency: str | None) -> int:
     code = (currency or "").strip().upper()
+    if code in ZERO_DECIMAL_CURRENCIES:
+        return 0
+    if code in THREE_DECIMAL_CURRENCIES:
+        return 3
     if code:
         try:
             frac = _f().db.get_value("Currency", code, "fraction_units")
@@ -897,10 +901,6 @@ def _currency_precision(currency: str | None) -> int:
                     return 2
         except Exception:
             pass
-    if code in ZERO_DECIMAL_CURRENCIES:
-        return 0
-    if code in THREE_DECIMAL_CURRENCIES:
-        return 3
     return 2
 
 
