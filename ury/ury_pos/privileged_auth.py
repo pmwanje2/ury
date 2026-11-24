@@ -22,11 +22,23 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, now_datetime
-
-from ury.brand import coded_message
+from frappe.utils import cint, flt
 
 DEFAULT_MANAGER_ROLES = frozenset({"URY Manager", "URY Admin"})
+
+
+def _now_dt():
+    fn = getattr(getattr(frappe, "utils", None), "now_datetime", None)
+    if callable(fn):
+        return fn()
+    import datetime as _dt
+
+    return _dt.datetime.now()
+
+
+def _code(code: str, message: str) -> str:
+    """Format canonical refusal code (`[POS-AUTH-REQUIRED] ...`) without doubling `POS-`."""
+    return f"[{code}] {message}" if message else f"[{code}]"
 
 try:
     from ury.ury_pos import override as _IMPORTED_OVERRIDE
@@ -58,15 +70,16 @@ def assert_not_offline_replay(
 ) -> None:
     """Refuse every privileged action during offline capture or offline outbox replay."""
     flags = getattr(frappe, "flags", None)
+    flag_offline = getattr(flags, "ury_offline_replay", False) is True
     is_offline = bool(
-        (flags and getattr(flags, "ury_offline_replay", False))
+        flag_offline
         or cint(append) == 1
         or captured_at is not None
         or cint(offline_printed) == 1
     )
     if is_offline:
         frappe.throw(
-            coded_message(
+            _code(
                 "POS-OFFLINE-PRIVILEGED-REFUSED",
                 _("This privileged action requires an online connection and cannot be replayed offline."),
             ),
@@ -74,22 +87,31 @@ def assert_not_offline_replay(
         )
 
 
+def _doc_get(doc, key: str, default: Any = None) -> Any:
+    if doc is None:
+        return default
+    getter = getattr(doc, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    return getattr(doc, key, default)
+
+
 def is_efris_fiscalised(doc) -> bool:
     """True when the invoice has been fiscalised with EFRIS (mirrors efris-ug@3)."""
     if not doc:
         return False
-    status = (doc.get("efris_status") or "").strip()
-    if doc.get("efris_irn") or (status and status != "Cancelled"):
+    status = (_doc_get(doc, "efris_status") or "").strip()
+    if _doc_get(doc, "efris_irn") or (status and status != "Cancelled"):
         return True
-    name = doc.get("name")
-    if name and frappe.db.table_exists("E Invoice"):
+    name = _doc_get(doc, "name")
+    if name and _table_exists("E Invoice"):
         ref = frappe.db.get_value(
             "E Invoice",
             {"invoice": name},
             ["irn", "credit_note_application_ref_no"],
             as_dict=True,
         )
-        if ref and (ref.get("irn") or ref.get("credit_note_application_ref_no")):
+        if ref and (_doc_get(ref, "irn") or _doc_get(ref, "credit_note_application_ref_no")):
             return True
     return False
 
@@ -97,7 +119,7 @@ def is_efris_fiscalised(doc) -> bool:
 def assert_not_efris_fiscalised(doc) -> None:
     if is_efris_fiscalised(doc):
         frappe.throw(
-            coded_message(
+            _code(
                 "EFRIS_FISCALISED_USE_RETURN",
                 _("This bill was sent to EFRIS and cannot be modified. Correct it with a return."),
             ),
@@ -118,9 +140,23 @@ def _reason_applies_to_privilege(applies_to: str | None, privilege: str) -> bool
     return privilege in tokens
 
 
+def _table_exists(doctype: str) -> bool:
+    """True only when the DB genuinely reports the table exists (safe under bare MagicMock)."""
+    db = getattr(frappe, "db", None)
+    fn = getattr(db, "table_exists", None)
+    if not callable(fn):
+        return False
+    res = fn(doctype)
+    return res is True or res == 1
+
+
+def _is_valid_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def list_active_reasons(privilege: str) -> list[dict[str, Any]]:
     """Return active `POS Reason` rows applicable to `privilege`."""
-    if not frappe.db.table_exists("POS Reason"):
+    if not _table_exists("POS Reason"):
         return []
     rows = frappe.get_all(
         "POS Reason",
@@ -141,7 +177,7 @@ def list_active_reasons(privilege: str) -> list[dict[str, Any]]:
 
 def requires_reason_for(pos_profile: str | None, privilege: str) -> bool:
     override = _get_override_module()
-    if override is not None and pos_profile and hasattr(override, "requires_reason"):
+    if override is not None and _is_valid_str(pos_profile) and hasattr(override, "requires_reason"):
         try:
             return bool(override.requires_reason(pos_profile, privilege))
         except Exception:
@@ -174,12 +210,12 @@ def validate_pos_reason(
     if not cleaned:
         if must_have:
             frappe.throw(
-                coded_message("POS-REASON-REQUIRED", _("Select a reason for this action.")),
+                _code("POS-REASON-REQUIRED", _("Select a reason for this action.")),
                 frappe.ValidationError,
             )
         return "", note
 
-    if frappe.db.table_exists("POS Reason"):
+    if _table_exists("POS Reason"):
         all_reasons = frappe.get_all(
             "POS Reason",
             fields=["code", "description", "applies_to", "requires_note", "disabled"],
@@ -198,12 +234,12 @@ def validate_pos_reason(
         if found is not None:
             if cint(found.get("disabled")) == 1 or not _reason_applies_to_privilege(found.get("applies_to"), privilege):
                 frappe.throw(
-                    coded_message("POS-REASON-INVALID", _("Select an active reason configured for this action.")),
+                    _code("POS-REASON-INVALID", _("Select an active reason configured for this action.")),
                     frappe.ValidationError,
                 )
             if cint(found.get("requires_note")) == 1 and len(note) < 3:
                 frappe.throw(
-                    coded_message(
+                    _code(
                         "POS-REASON-NOTE-REQUIRED",
                         _("Enter a note (at least 3 characters) for the selected reason."),
                     ),
@@ -213,20 +249,20 @@ def validate_pos_reason(
 
         if matching_table:
             frappe.throw(
-                coded_message("POS-REASON-INVALID", _("Select an active reason configured for this action.")),
+                _code("POS-REASON-INVALID", _("Select an active reason configured for this action.")),
                 frappe.ValidationError,
             )
 
     if len(cleaned) < 3:
         frappe.throw(
-            coded_message("POS-REASON-REQUIRED", _("Enter a reason of at least 3 characters.")),
+            _code("POS-REASON-REQUIRED", _("Enter a reason of at least 3 characters.")),
             frappe.ValidationError,
         )
     return cleaned, note
 
 
 def has_privilege_rules(company: str | None, privilege: str) -> bool:
-    if not company or not frappe.db.table_exists("POS Privilege Rule"):
+    if not _is_valid_str(company) or not _table_exists("POS Privilege Rule"):
         return False
     rows = frappe.get_all(
         "POS Privilege Rule",
@@ -235,6 +271,29 @@ def has_privilege_rules(company: str | None, privilege: str) -> bool:
         limit=1,
     )
     return bool(rows)
+
+
+def mark_verified_approval(doc, privilege: str, approver: str | None = None) -> None:
+    """Attach an in-process verified-approval proof via B2a `override` when available."""
+    override = _get_override_module()
+    if override is not None and hasattr(override, "mark_verified_approval"):
+        approval_obj = type("_Approval", (), {"approver": approver})() if approver else None
+        override.mark_verified_approval(doc, privilege, approval=approval_obj)
+    else:
+        flags = getattr(doc, "flags", None)
+        if flags is not None:
+            setattr(flags, f"pos_override_verified_{privilege}", (privilege, str(doc.get("name") or ""), approver))
+
+
+def has_verified_approval(doc, privilege: str) -> bool:
+    """True only when `mark_verified_approval` attached a matching proof in-process."""
+    override = _get_override_module()
+    if override is not None and hasattr(override, "has_verified_approval"):
+        if override.has_verified_approval(doc, privilege):
+            return True
+    flags = getattr(doc, "flags", None)
+    marker = getattr(flags, f"pos_override_verified_{privilege}", None) if flags is not None else None
+    return isinstance(marker, tuple) and len(marker) >= 2 and marker[0] == privilege and marker[1] == str(doc.get("name") or "")
 
 
 def _record_self_performed_log(
@@ -248,7 +307,7 @@ def _record_self_performed_log(
     reason: str,
 ) -> None:
     """Write a `POS Authorisation Log` entry for a self-performed privileged action."""
-    if not frappe.db.table_exists("POS Authorisation Log"):
+    if not _table_exists("POS Authorisation Log"):
         return
     user = getattr(getattr(frappe, "session", None), "user", None)
     claim_json = _canonical_json(claim)
@@ -267,7 +326,7 @@ def _record_self_performed_log(
             "reason": (reason or "").strip()[:500],
             "outcome": "Approved",
             "refusal_code": "",
-            "event_time": now_datetime(),
+            "event_time": _now_dt(),
             "claim_hash": claim_hash,
         }
     )
@@ -276,9 +335,10 @@ def _record_self_performed_log(
 
 
 def _profile_company(pos_profile: str | None) -> str | None:
-    if not pos_profile:
+    if not _is_valid_str(pos_profile):
         return None
-    return frappe.db.get_value("POS Profile", pos_profile, "company")
+    val = frappe.db.get_value("POS Profile", pos_profile, "company")
+    return val if _is_valid_str(val) else None
 
 
 def _fallback_allows(user: str, fallback_roles: set[str] | frozenset[str] | None) -> bool:
@@ -299,7 +359,7 @@ def _check_privilege_group(
     """Verify the acting user holds a rule with privilege_group == 0 or >= required_group."""
     if required_group <= 0:
         return True
-    if not company or not frappe.db.table_exists("POS Privilege Rule"):
+    if not _is_valid_str(company) or not _table_exists("POS Privilege Rule"):
         return _fallback_allows(user, DEFAULT_MANAGER_ROLES)
     roles = set(frappe.get_roles(user))
     if not roles:
@@ -348,6 +408,9 @@ def authorize_or_perform(
     force_pin: bool = False,
     required_privilege_group: int = 0,
     allow_fallback_predicate: bool | None = None,
+    company: str | None = None,
+    deny_message: str | None = None,
+    skip_profile_company_lookup: bool = False,
 ) -> dict[str, Any]:
     """Enforce privilege rules, PIN token consumption, reason validation, and audit logging.
 
@@ -363,14 +426,17 @@ def authorize_or_perform(
     )
 
     user = getattr(getattr(frappe, "session", None), "user", None)
-    company = _profile_company(pos_profile)
+    resolved_company = company if _is_valid_str(company) else (
+        None if skip_profile_company_lookup else _profile_company(pos_profile)
+    )
     override = _get_override_module()
+    auth_denied_msg = deny_message or _("A manager must approve this action.")
 
     # Path 1: Manager approval token supplied -> consume atomically through B2a.
     if token:
         if override is None:
             frappe.throw(
-                coded_message(
+                _code(
                     "POS-AUTH-NOT-ELIGIBLE",
                     _("Manager authorisation service is unavailable on this site."),
                 ),
@@ -388,33 +454,41 @@ def authorize_or_perform(
     # or explicitly escalated conditions (e.g. price below cost, over-HALO, re-split cap).
     if always_second_person or force_pin:
         frappe.throw(
-            coded_message("POS-AUTH-REQUIRED", _("A manager must approve this action.")),
+            _code("POS-AUTH-REQUIRED", auth_denied_msg),
             frappe.PermissionError,
         )
 
     # Path 3: Company has explicit POS Privilege Rule rows -> B2a rules govern.
-    if has_privilege_rules(company, privilege):
+    if has_privilege_rules(resolved_company, privilege):
         if override is not None:
             if required_privilege_group > 0 and not _check_privilege_group(
-                company, pos_profile, privilege, user, required_privilege_group
+                resolved_company, pos_profile, privilege, user, required_privilege_group
             ):
                 frappe.throw(
-                    coded_message("POS-AUTH-REQUIRED", _("A manager must approve this action.")),
+                    _code("POS-AUTH-REQUIRED", auth_denied_msg),
                     frappe.PermissionError,
                 )
-            override.require(
-                privilege,
-                pos_profile,
-                reference_name,
-                claim,
-                token=None,
-                percent=percent,
-                amount=amount,
-            )
+            try:
+                override.require(
+                    privilege,
+                    pos_profile,
+                    reference_name,
+                    claim,
+                    token=None,
+                    percent=percent,
+                    amount=amount,
+                )
+            except frappe.PermissionError:
+                if deny_message:
+                    frappe.throw(
+                        _code("POS-AUTH-REQUIRED", auth_denied_msg),
+                        frappe.PermissionError,
+                    )
+                raise
             _record_self_performed_log(
                 privilege=privilege,
                 pos_profile=pos_profile,
-                company=company,
+                company=resolved_company,
                 reference_doctype=reference_doctype,
                 reference_name=reference_name,
                 claim=claim,
@@ -436,14 +510,14 @@ def authorize_or_perform(
     )
     if not allowed:
         frappe.throw(
-            coded_message("POS-AUTH-REQUIRED", _("A manager must approve this action.")),
+            _code("POS-AUTH-REQUIRED", auth_denied_msg),
             frappe.PermissionError,
         )
 
     _record_self_performed_log(
         privilege=privilege,
         pos_profile=pos_profile,
-        company=company,
+        company=resolved_company,
         reference_doctype=reference_doctype,
         reference_name=reference_name,
         claim=claim,

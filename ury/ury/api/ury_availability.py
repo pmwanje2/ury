@@ -600,15 +600,94 @@ def _whole_count(value):
 
 
 @frappe.whitelist(methods=["POST"])
-def set_item_availability(branch, item_code, status=None, count=None, reset_policy=None, reason=None):
-	"""The only public write path; floor staff can make only the safe transition."""
+def set_item_availability(
+	branch,
+	item_code,
+	status=None,
+	count=None,
+	reset_policy=None,
+	reason=None,
+	reason_note=None,
+	approval_token=None,
+	pos_profile=None,
+):
+	"""The only public write path; marking Sold Out stays easy, restoring/counts use `item_86_restore` / PIN."""
 	user = frappe.session.user
 	roles = set(frappe.get_roles(user))
-	manager = bool(roles & MANAGE_ROLES)
-	if not (roles & MARK_ROLES) or (not manager and (status != "Sold Out" or count is not None or reset_policy is not None)):
+	is_restore_or_manage = status != "Sold Out" or count is not None or reset_policy is not None
+
+	if not (roles & MARK_ROLES):
 		frappe.throw(_("[AVAIL-ROLE] You do not have permission to make this change."), frappe.PermissionError)
+
 	company = _branch_company(branch)
 	_verify_branch_scope(user, branch, company)
+
+	if is_restore_or_manage:
+		try:
+			from ury.ury_pos.privileged_auth import (
+				_table_exists,
+				assert_not_offline_replay,
+				authorize_or_perform,
+				has_privilege_rules,
+			)
+		except ModuleNotFoundError:
+			# Site-less unit tests that unload frappe after importing this module.
+			if not (roles & MANAGE_ROLES):
+				frappe.throw(_("[AVAIL-ROLE] You do not have permission to make this change."), frappe.PermissionError)
+		else:
+			assert_not_offline_replay()
+			manager = bool(roles & MANAGE_ROLES)
+			resolved_profile = pos_profile
+			if not resolved_profile and (_table_exists("POS Privilege Rule") or approval_token):
+				resolved_profile = frappe.db.get_value("POS Profile", {"branch": branch, "disabled": 0}, "name")
+
+			if has_privilege_rules(company, "item_86_restore") or approval_token or not manager:
+				authorize_or_perform(
+					privilege="item_86_restore",
+					pos_profile=resolved_profile,
+					company=company,
+					skip_profile_company_lookup=True,
+					reference_doctype="URY Item Availability",
+					reference_name=f"{branch}:{item_code}",
+					claim={
+						"action": "item_86_restore",
+						"branch": branch,
+						"item_code": item_code,
+						"status": status or "",
+						"count": count if count is not None else "",
+						"reset_policy": reset_policy or "",
+					},
+					token=approval_token,
+					reason=reason,
+					reason_note=reason_note,
+					require_reason=None if has_privilege_rules(company, "item_86_restore") else False,
+					allow_fallback_predicate=manager,
+					deny_message=_("[AVAIL-ROLE] You do not have permission to make this change."),
+				)
+			elif _table_exists("POS Authorisation Log"):
+				# Manager self-performed under legacy fallback still writes audit log
+				authorize_or_perform(
+					privilege="item_86_restore",
+					pos_profile=resolved_profile,
+					company=company,
+					skip_profile_company_lookup=True,
+					reference_doctype="URY Item Availability",
+					reference_name=f"{branch}:{item_code}",
+					claim={
+						"action": "item_86_restore",
+						"branch": branch,
+						"item_code": item_code,
+						"status": status or "",
+						"count": count if count is not None else "",
+						"reset_policy": reset_policy or "",
+					},
+					token=None,
+					reason=reason,
+					reason_note=reason_note,
+					require_reason=False,
+					allow_fallback_predicate=True,
+				)
+
 	if status not in (None, "Available", "Sold Out") or reset_policy not in (None, "Never", "Start of business day"):
 		frappe.throw(_("[AVAIL-COUNT-INVALID] Select a valid status and reset option."), frappe.ValidationError)
 	if status is None and count is None and reset_policy is None:

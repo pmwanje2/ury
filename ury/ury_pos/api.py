@@ -2499,13 +2499,25 @@ def _merge_sources(secondary_invoice):
 
 @frappe.whitelist()
 
-def merge_bills(primary_invoice, secondary_invoice):
+def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=None, reason_note=None):
     """Add Check (Oracle Simphony Add/Transfer Check): move every line of the selected open
     check(s) onto the primary check, which stays the guest's one POS Invoice.
 
     `secondary_invoice` is one check name or a JSON list of names. The checks must be drafts of
-    one branch and one order type that the caller may write.
+    one branch and one order type that the caller may write. Governed by `merge_checks` privilege
+    / Manager PIN in place with deterministic sorted `FOR UPDATE` locking.
     """
+    from ury.ury_pos.privileged_auth import (
+        DEFAULT_MANAGER_ROLES,
+        _is_valid_str,
+        _table_exists,
+        assert_not_efris_fiscalised,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        has_privilege_rules,
+    )
+
+    assert_not_offline_replay()
 
     try:
 
@@ -2514,8 +2526,12 @@ def merge_bills(primary_invoice, secondary_invoice):
         if not secondaries or primary_invoice in secondaries:
             frappe.throw("Cannot merge an invoice with itself.")
 
-        primary_doc = frappe.get_doc("POS Invoice", primary_invoice)
-        secondary_docs = [frappe.get_doc("POS Invoice", name) for name in secondaries]
+        # Lock all participating checks in deterministic sorted order to prevent deadlocks / races.
+        locked_docs = {}
+        for name in sorted([primary_invoice, *secondaries]):
+            locked_docs[name] = frappe.get_doc("POS Invoice", name, for_update=True)
+        primary_doc = locked_docs[primary_invoice]
+        secondary_docs = [locked_docs[name] for name in secondaries]
 
         # Authorization: caller must have write permission on every invoice
         if not frappe.has_permission("POS Invoice", "write", doc=primary_doc):
@@ -2524,6 +2540,8 @@ def merge_bills(primary_invoice, secondary_invoice):
                 frappe.PermissionError,
             )
 
+        assert_not_efris_fiscalised(primary_doc)
+
         for secondary_doc in secondary_docs:
 
             if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
@@ -2531,6 +2549,8 @@ def merge_bills(primary_invoice, secondary_invoice):
                     "You do not have permission to merge the selected bill.",
                     frappe.PermissionError,
                 )
+
+            assert_not_efris_fiscalised(secondary_doc)
 
             # Prevent cross-branch merging
             if primary_doc.branch != secondary_doc.branch:
@@ -2556,6 +2576,53 @@ def merge_bills(primary_invoice, secondary_invoice):
             if primary_doc.order_type != secondary_doc.order_type:
                 frappe.throw(_("Only bills of the same order type can be merged."))
 
+        pos_profile_name = getattr(primary_doc, "pos_profile", None)
+        raw_company = getattr(primary_doc, "company", None)
+        company = raw_company if _is_valid_str(raw_company) else None
+        policy_active = has_privilege_rules(company, "merge_checks")
+
+        # Determine legacy fallback when no POS Privilege Rule rows exist yet:
+        # keep same-operator / elevated / billing merges usable, while cross-waiter
+        # merges by an ordinary floor captain require a manager PIN.
+        user = getattr(getattr(frappe, "session", None), "user", None)
+        other_waiters = [
+            getattr(d, "waiter", None)
+            for d in [primary_doc, *secondary_docs]
+            if getattr(d, "waiter", None) and getattr(d, "waiter", None) != user
+        ]
+        user_roles = set(frappe.get_roles() or [])
+        elevated_or_billing = bool(user_roles & (DEFAULT_MANAGER_ROLES | {"System Manager", "URY Cashier"}))
+        if _is_valid_str(pos_profile_name) and _table_exists("POS Profile"):
+            try:
+                profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+                transfer_roles = {r.role for r in (getattr(profile_doc, "transfer_role_permissions", None) or [])}
+                billing_roles = {r.role for r in (getattr(profile_doc, "role_allowed_for_billing", None) or [])}
+                if user_roles & (transfer_roles | billing_roles):
+                    elevated_or_billing = True
+            except Exception:
+                pass
+        legacy_allowed = (not other_waiters) or elevated_or_billing or user == "Administrator"
+
+        if policy_active or approval_token or not legacy_allowed or _table_exists("POS Authorisation Log"):
+            authorize_or_perform(
+                privilege="merge_checks",
+                pos_profile=pos_profile_name if _is_valid_str(pos_profile_name) else None,
+                company=company,
+                skip_profile_company_lookup=True,
+                reference_doctype="POS Invoice",
+                reference_name=primary_doc.name,
+                claim={
+                    "action": "merge_bills",
+                    "primary_invoice": primary_doc.name,
+                    "secondary_invoices": sorted(secondaries),
+                },
+                token=approval_token,
+                reason=reason,
+                reason_note=reason_note,
+                require_reason=None if policy_active else False,
+                allow_fallback_predicate=legacy_allowed,
+            )
+
         from ury.ury.doctype.ury_order.ury_order import consolidate_checks
 
         consolidate_checks(primary_doc, secondary_docs)
@@ -2575,6 +2642,25 @@ def merge_bills(primary_invoice, secondary_invoice):
         frappe.db.rollback()
 
         raise
+
+
+    except frappe.ValidationError as e:
+
+        frappe.db.rollback()
+
+        msg = str(e)
+        if any(code in msg for code in ("POS-AUTH-", "POS-REASON-", "POS-OFFLINE-", "EFRIS_FISCALISED")):
+            raise
+
+        frappe.log_error(
+            title="Bill Merge Error",
+            message=frappe.get_traceback(),
+        )
+
+        return {
+            "status": "error",
+            "message": msg,
+        }
 
 
     except Exception as e:
@@ -2699,12 +2785,28 @@ def _copy_result(job):
 
 
 @frappe.whitelist(methods=['POST'])
-def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = None):
+def print_bill_copy(
+    invoice: str,
+    idempotency_key: str,
+    printer: str | None = None,
+    approval_token: str | None = None,
+    reason: str | None = None,
+    reason_note: str | None = None,
+):
     from hashlib import sha256
     from ury.ury.class_overrides.pos_invoice import _COPY_RENDER_MARKER
     from ury.ury.api.ury_print import _bill_printers
     from ury.ury.printing.file_store import save_job
     from ury.ury.printing.service import submit_and_monitor_print_job
+    from ury.ury_pos.privileged_auth import (
+        DEFAULT_MANAGER_ROLES,
+        _is_valid_str,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        has_privilege_rules,
+    )
+
+    assert_not_offline_replay()
 
     if not idempotency_key or len(idempotency_key) > 128:
         frappe.throw('A copy request key is required (maximum 128 characters).')
@@ -2723,7 +2825,42 @@ def print_bill_copy(invoice: str, idempotency_key: str, printer: str | None = No
         frappe.throw('Select a configured bill printer for this outlet.')
     printer = printer or printers[0]
     attempt = previous.attempt + 1 if previous else 1
-    number = previous.copy_number if previous else frappe.db.count(_COPY_LOG, {'invoice': invoice, 'attempt': 1}) + 1
+    prior_copies = frappe.db.count(_COPY_LOG, {'invoice': invoice, 'attempt': 1})
+    number = previous.copy_number if previous else prior_copies + 1
+
+    # Enforce free closed-copy cap (`custom_max_free_closed_copies`, default 0 on configured profiles)
+    # and `reprint_bill` privilege / Manager PIN + reason on every new copy beyond the free cap.
+    raw_max_free = (
+        frappe.db.get_value('POS Profile', doc.pos_profile, 'custom_max_free_closed_copies')
+        if _is_valid_str(doc.get('pos_profile'))
+        else None
+    )
+    raw_company = doc.get('company')
+    company = raw_company if _is_valid_str(raw_company) else None
+    policy_active = has_privilege_rules(company, 'reprint_bill')
+
+    if not previous and (raw_max_free is not None or policy_active or approval_token):
+        max_free = max(0, cint(raw_max_free)) if raw_max_free is not None else 0
+        if prior_copies >= max_free:
+            authorize_or_perform(
+                privilege='reprint_bill',
+                pos_profile=doc.pos_profile,
+                company=company,
+                skip_profile_company_lookup=True,
+                reference_doctype='POS Invoice',
+                reference_name=invoice,
+                claim={
+                    'action': 'print_bill_copy',
+                    'invoice': invoice,
+                    'copy_number': number,
+                },
+                token=approval_token,
+                reason=reason,
+                reason_note=reason_note,
+                require_reason=True,
+                fallback_roles=DEFAULT_MANAGER_ROLES,
+            )
+
     job_id = f'COPY-{key}-{attempt}'
     record = {'doctype': _COPY_LOG, 'name': job_id, 'print_job_id': job_id, 'request_key': key,
               'invoice': invoice, 'printer': printer, 'job_owner': owner, 'attempt': attempt,

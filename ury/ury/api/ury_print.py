@@ -57,12 +57,29 @@ def network_printing(
     print_format=None,
     doc=None,
     no_letterhead=0,
+    approval_token=None,
+    reason=None,
+    reason_note=None,
+    _reprint_meta=None,
 ):
     target = frappe.get_doc(doctype, name)
     validate_print_permission(target)
+    reprint_meta = _reprint_meta
     if doctype == "POS Invoice":
         check_split_target_access(target, "write")
         doc = target
+        if reprint_meta is None:
+            from ury.ury_pos.floor_actions import authorize_and_count_bill_print
+
+            reprint_meta = authorize_and_count_bill_print(
+                name,
+                approval_token=approval_token,
+                reason=reason,
+                reason_note=reason_note,
+                pos_profile=getattr(doc, "pos_profile", None),
+            )
+        if reprint_meta and reprint_meta.get("is_reprint"):
+            doc.copy_number = reprint_meta.get("copy_number")
 
     restaurant_table = None
     if doctype == "POS Invoice":
@@ -75,6 +92,24 @@ def network_printing(
         if not print_format:
             print_format = "POS Invoice"
 
+    extra_metadata = {
+        "invoice": name,
+        "table": restaurant_table,
+        "restaurant_table": restaurant_table,
+        "job_owner": getattr(frappe.session, "user", "Administrator"),
+    }
+    if reprint_meta:
+        extra_metadata.update(
+            {
+                "print_number": reprint_meta.get("print_number"),
+                "is_reprint": bool(reprint_meta.get("is_reprint")),
+                "copy_number": reprint_meta.get("copy_number"),
+                "reprint_label": reprint_meta.get("reprint_label") or "",
+                "reprint_reason": reprint_meta.get("reason") or "",
+                "reprint_approver": reprint_meta.get("approver") or "",
+            }
+        )
+
     printer_doc = frappe.get_doc("Network Printer Settings", printer_setting)
     result = printer_doc.print_doc(
         doctype=doctype,
@@ -83,12 +118,7 @@ def network_printing(
         doc=doc,
         no_letterhead=no_letterhead,
         job_type="BILL",
-        extra_metadata={
-            "invoice": name,
-            "table": restaurant_table,
-            "restaurant_table": restaurant_table,
-            "job_owner": getattr(frappe.session, "user", "Administrator"),
-        },
+        extra_metadata=extra_metadata,
     )
 
     if isinstance(result, dict) and result.get("status") == "Success":
@@ -132,12 +162,29 @@ def _bill_printers(pos_profile, table):
 
 
 @frappe.whitelist()
-def select_network_printer(pos_profile, invoice_id, print_format=None):
+def select_network_printer(
+    pos_profile,
+    invoice_id,
+    print_format=None,
+    approval_token=None,
+    reason=None,
+    reason_note=None,
+):
     invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
     check_split_target_access(invoice_doc, "write")
+    from ury.ury_pos.floor_actions import authorize_and_count_bill_print
+
+    reprint_meta = authorize_and_count_bill_print(
+        invoice_id,
+        approval_token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+        pos_profile=pos_profile or getattr(invoice_doc, "pos_profile", None),
+    )
+
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
     if not print_format and pos_profile:
         print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
@@ -150,7 +197,7 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
     if bill_printers:
         for printer in bill_printers:
             print_result = network_printing(
-                "POS Invoice", invoice_id, printer, print_format
+                "POS Invoice", invoice_id, printer, print_format, _reprint_meta=reprint_meta
             )
             print_jobs.append(print_result)
 
@@ -166,17 +213,30 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
         "status": "Success" if any_succeeded else "Failure",
         "print_jobs": print_jobs,
         "invoice": invoice_id,
+        "print_number": reprint_meta.get("print_number"),
+        "is_reprint": bool(reprint_meta.get("is_reprint")),
+        "reprint_label": reprint_meta.get("reprint_label") or "",
     })
 
 
 @frappe.whitelist()
-def qz_print_update(invoice):
-    try:
-        invoice_doc = frappe.get_doc("POS Invoice", invoice)
-        if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
-            frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None):
+    invoice_doc = frappe.get_doc("POS Invoice", invoice)
+    if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
+        frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
-        check_split_target_access(invoice_doc, "write")
+    check_split_target_access(invoice_doc, "write")
+    from ury.ury_pos.floor_actions import authorize_and_count_bill_print
+
+    reprint_meta = authorize_and_count_bill_print(
+        invoice,
+        approval_token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+        pos_profile=getattr(invoice_doc, "pos_profile", None),
+    )
+
+    try:
         table = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
         
         if table == None or table == "":
@@ -204,9 +264,14 @@ def qz_print_update(invoice):
         from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
         trigger_manufacture_on_bill_print(invoice)
 
-        return {"status": "Success"}
+        return {
+            "status": "Success",
+            "print_number": reprint_meta.get("print_number"),
+            "is_reprint": bool(reprint_meta.get("is_reprint")),
+            "reprint_label": reprint_meta.get("reprint_label") or "",
+        }
         
-    except frappe.PermissionError:
+    except (frappe.PermissionError, frappe.ValidationError):
         raise
     except Exception as e:
         frappe.log_error(message=e, title="Print Fail")
@@ -215,14 +280,31 @@ def qz_print_update(invoice):
 
 
 @frappe.whitelist()
-def print_pos_page(doctype, name, print_format):
+def print_pos_page(doctype, name, print_format, approval_token=None, reason=None, reason_note=None):
     doc_to_check = frappe.get_doc(doctype, name)
     if not frappe.has_permission(doctype, "write", doc=doc_to_check):
         frappe.throw(_("Not permitted to print this document"), frappe.PermissionError)
 
+    reprint_meta = None
     if doctype == "POS Invoice":
         check_split_target_access(doc_to_check, "write")
-    data = {"name": name, "doctype": doctype, "print_format": print_format}
+        from ury.ury_pos.floor_actions import authorize_and_count_bill_print
+
+        reprint_meta = authorize_and_count_bill_print(
+            name,
+            approval_token=approval_token,
+            reason=reason,
+            reason_note=reason_note,
+            pos_profile=getattr(doc_to_check, "pos_profile", None),
+        )
+    data = {
+        "name": name,
+        "doctype": doctype,
+        "print_format": print_format,
+        "is_reprint": bool(reprint_meta.get("is_reprint")) if reprint_meta else False,
+        "copy_number": reprint_meta.get("copy_number") if reprint_meta else None,
+        "reprint_label": reprint_meta.get("reprint_label") if reprint_meta else "",
+    }
 
     restaurant_table, branch, name = frappe.db.get_value(
         "POS Invoice", name, ["restaurant_table", "branch", "name"]

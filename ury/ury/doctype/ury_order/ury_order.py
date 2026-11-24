@@ -37,13 +37,31 @@ class URYOrder(Document):
     pass
 
 @frappe.whitelist()
-def merge_free_tables(table1, table2):
+def merge_free_tables(table1, table2, approval_token=None, reason=None, reason_note=None):
     """Merges two tables in the same room; allows one occupied and one free."""
-    return merge_tables_batch(table1, [table2])
+    if approval_token is None and reason is None and reason_note is None:
+        return merge_tables_batch(table1, [table2])
+    return merge_tables_batch(
+        table1,
+        [table2],
+        approval_token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+    )
 
 
 @frappe.whitelist()
-def merge_tables_batch(anchor_table, tables):
+def merge_tables_batch(anchor_table, tables, approval_token=None, reason=None, reason_note=None):
+    from ury.ury_pos.privileged_auth import (
+        DEFAULT_MANAGER_ROLES,
+        _is_valid_str,
+        _table_exists,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        has_privilege_rules,
+    )
+
+    assert_not_offline_replay()
 
     if isinstance(tables, str):
         tables = json.loads(tables)
@@ -71,6 +89,42 @@ def merge_tables_batch(anchor_table, tables):
         frappe.throw(
             _("Table not found.")
         )
+
+    # Resolve POS Profile / Company for `merge_checks` privilege rule enforcement when present.
+    if _table_exists("POS Privilege Rule") or approval_token:
+        anchor_branch = frappe.db.get_value("URY Table", anchor_table, "branch")
+        pos_profile_name = (
+            frappe.db.get_value("POS Profile", {"branch": anchor_branch, "disabled": 0}, "name")
+            if _is_valid_str(anchor_branch)
+            else None
+        )
+        company = (
+            frappe.db.get_value("Branch", anchor_branch, "company")
+            if _is_valid_str(anchor_branch)
+            else None
+        )
+        if not _is_valid_str(company) and _is_valid_str(pos_profile_name):
+            company = frappe.db.get_value("POS Profile", pos_profile_name, "company")
+        policy_active = has_privilege_rules(company, "merge_checks")
+        if policy_active or approval_token:
+            authorize_or_perform(
+                privilege="merge_checks",
+                pos_profile=pos_profile_name if _is_valid_str(pos_profile_name) else None,
+                company=company if _is_valid_str(company) else None,
+                skip_profile_company_lookup=True,
+                reference_doctype="URY Table",
+                reference_name=anchor_table,
+                claim={
+                    "action": "merge_tables",
+                    "anchor_table": anchor_table,
+                    "tables": sorted(targets),
+                },
+                token=approval_token,
+                reason=reason,
+                reason_note=reason_note,
+                require_reason=None if policy_active else False,
+                fallback_roles=DEFAULT_MANAGER_ROLES | {"URY Cashier", "URY Captain", "System Manager"},
+            )
 
     # Start from anchor cluster only
     cluster, table_map = _get_merge_cluster(
@@ -615,13 +669,32 @@ def _split_kots_to_move(source, move_map, reservations_enabled):
 
 
 @frappe.whitelist()
-def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
-    """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
+def split_bill(
+    source_invoice,
+    items_to_move,
+    customer=None,
+    guest_label=None,
+    approval_token=None,
+    reason=None,
+    reason_note=None,
+):
+    """Move selected line items from a draft bill to a new sibling POS Invoice."""
+    from ury.ury_pos.privileged_auth import (
+        _is_valid_str,
+        _table_exists,
+        assert_not_efris_fiscalised,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        has_privilege_rules,
+    )
+
+    assert_not_offline_replay()
+
     if isinstance(items_to_move, str):
         items_to_move = json.loads(items_to_move)
     guest_label = _guest_label(guest_label)
 
-    source = frappe.get_doc("POS Invoice", source_invoice)
+    source = frappe.get_doc("POS Invoice", source_invoice, for_update=True)
 
     if not frappe.has_permission("POS Invoice", "write", doc=source):
         frappe.throw(_("Not permitted to split this invoice."), frappe.PermissionError)
@@ -637,16 +710,9 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     if user_branch and source.branch != user_branch:
         frappe.throw(_("Not permitted to split invoices from another branch."), frappe.PermissionError)
 
-    # Same ownership / elevated / billing / billed / room gates as sync_order.
-    _enforce_order_access(
-        source,
-        pos_profile_name=source.get("pos_profile"),
-        require_modify=True,
-        deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
-    )
-
     if source.docstatus != 0:
         frappe.throw(_("Only draft invoices can be split."))
+    assert_not_efris_fiscalised(source)
 
     move_map = {
         row["name"]: float(row["qty"])
@@ -672,7 +738,67 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     if total_remaining_qty <= 0:
         frappe.throw(_("At least one item must remain on the original bill."))
 
-    company = source.company or frappe.db.get_value("Branch", source.branch, "company")
+    # Check Simphony Opt 102 (`custom_max_splits_before_pin`) and `split_check` privilege / PIN.
+    pos_profile_name = source.get("pos_profile")
+    raw_company = source.get("company")
+    company = raw_company if _is_valid_str(raw_company) else (
+        frappe.db.get_value("Branch", source.branch, "company") if _is_valid_str(source.branch) else None
+    )
+    max_splits = 0
+    if _is_valid_str(pos_profile_name) and _table_exists("POS Profile"):
+        raw_max_splits = frappe.db.get_value("POS Profile", pos_profile_name, "custom_max_splits_before_pin")
+        max_splits = max(0, cint(raw_max_splits)) if raw_max_splits is not None else 0
+
+    existing_splits = 0
+    if max_splits > 0:
+        if source.get("custom_split_group"):
+            group_count = frappe.db.count(
+                "POS Invoice",
+                {"custom_split_group": source.custom_split_group, "docstatus": ["!=", 2]},
+            )
+            existing_splits = max(0, cint(group_count) - 1)
+        if source.get("custom_split_from"):
+            existing_splits = max(existing_splits, 1)
+
+    over_split_cap = max_splits > 0 and existing_splits >= max_splits
+    policy_active = has_privilege_rules(company, "split_check")
+
+    # Compute ownership access; a verified Manager PIN can authorise splitting a teammate's or billed check.
+    access_ok = True
+    try:
+        _enforce_order_access(
+            source,
+            pos_profile_name=pos_profile_name,
+            require_modify=True,
+            deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
+        )
+    except frappe.PermissionError:
+        access_ok = False
+        if not approval_token and not policy_active:
+            raise
+
+    if policy_active or over_split_cap or approval_token or not access_ok or _table_exists("POS Authorisation Log"):
+        authorize_or_perform(
+            privilege="split_check",
+            pos_profile=pos_profile_name if _is_valid_str(pos_profile_name) else None,
+            company=company if _is_valid_str(company) else None,
+            skip_profile_company_lookup=True,
+            reference_doctype="POS Invoice",
+            reference_name=source.name,
+            claim={
+                "action": "split_bill",
+                "source_invoice": source.name,
+                "move_items": [[k, round(flt(v), 4)] for k, v in sorted(move_map.items())],
+            },
+            token=approval_token,
+            reason=reason,
+            reason_note=reason_note,
+            require_reason=None if policy_active else False,
+            force_pin=over_split_cap,
+            allow_fallback_predicate=access_ok,
+            deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
+        )
+
     reservations_enabled = get_branch_stock_policy(branch=source.branch, company=company).reservation_control_enabled
     movable_kots = _split_kots_to_move(source, move_map, reservations_enabled)
 
@@ -711,6 +837,9 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     new_invoice.custom_split_group = split_group
     new_invoice.invoice_printed = 0
     new_invoice.invoice_created = 0
+    # Adversarial split-then-reprint control: child starts at 0 prints while source preserves its print count.
+    new_invoice.custom_bill_print_count = 0
+    new_invoice.custom_kot_reprint_count = 0
     # the new check is named for who it is for, else keeps the source label
     new_invoice.custom_guest_label = guest_label or source.get("custom_guest_label")
 
@@ -2535,6 +2664,11 @@ def sync_order(
     expected_total=None,
     approval_token=None,
     void_reason=None,
+    pickup_approval_token=None,
+    guest_count_approval_token=None,
+    order_type_approval_token=None,
+    privilege_reason=None,
+    privilege_reason_note=None,
 ):
     # None keeps the order's label; any string, blank included, replaces it
     clear_guest_label = guest_label is not None and not str(guest_label).strip()
@@ -2590,13 +2724,53 @@ def sync_order(
     # acting user holds billing access. Only applies once an order actually
     # exists — a brand-new invoice has no owner or billed state to protect.
     elevated_user = _has_role(user_role, posprofile.transfer_role_permissions)
+    is_super_user = frappe.session.user == "Administrator" or "System Manager" in user_role
+    picked_up_with_pin = False
     if invoice.name:
         is_mine = frappe.session.user == invoice.waiter
-        can_view_order = is_mine or elevated_user or billing_user
+        can_view_order = is_super_user or is_mine or elevated_user or billing_user
+        if not is_mine and not is_super_user:
+            from ury.ury_pos.privileged_auth import (
+                _is_valid_str,
+                assert_not_offline_replay,
+                authorize_or_perform,
+                has_privilege_rules,
+            )
+
+            _co = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
+            _co = _co if _is_valid_str(_co) else None
+            _pickup_policy = has_privilege_rules(_co, "pickup_other_check")
+            _pickup_tok = pickup_approval_token
+            if _pickup_policy or _pickup_tok or not can_view_order:
+                assert_not_offline_replay(
+                    append=append, captured_at=captured_at, offline_printed=offline_printed
+                )
+                auth_pickup = authorize_or_perform(
+                    privilege="pickup_other_check",
+                    pos_profile=pos_profile,
+                    company=_co,
+                    skip_profile_company_lookup=True,
+                    reference_doctype="POS Invoice",
+                    reference_name=invoice.name,
+                    claim={
+                        "action": "pickup_other_check",
+                        "invoice": invoice.name,
+                        "owner_waiter": invoice.waiter or "",
+                    },
+                    token=_pickup_tok,
+                    reason=privilege_reason,
+                    reason_note=privilege_reason_note,
+                    require_reason=None if _pickup_policy else False,
+                    allow_fallback_predicate=can_view_order,
+                    deny_message=_("Not permitted to modify this order"),
+                )
+                picked_up_with_pin = bool(auth_pickup.get("via_pin"))
+                can_view_order = True
+
         if not can_view_order:
             frappe.throw(_("Not permitted to modify this order"), frappe.PermissionError)
 
-        if bool(invoice.invoice_printed) and not billing_user:
+        if bool(invoice.invoice_printed) and not billing_user and not picked_up_with_pin:
             frappe.throw(
                 _("This order has already been billed and cannot be modified."),
                 frappe.PermissionError,
@@ -2864,6 +3038,86 @@ def sync_order(
     else:
         _validate_customer_change(invoice, customer)
         invoice.customer = customer
+
+    # Privilege gates for changing order type (`order_type_change`) and guest count
+    # (`guest_count_change`) on an existing open check (Simphony Opt 7 & Opt 33).
+    if invoice.name:
+        from ury.ury_pos.privileged_auth import (
+            DEFAULT_MANAGER_ROLES,
+            _is_valid_str,
+            assert_not_offline_replay,
+            authorize_or_perform,
+            has_privilege_rules,
+        )
+
+        _co = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
+        _co = _co if _is_valid_str(_co) else None
+        prev_order_type = invoice.get("order_type")
+        if order_type and prev_order_type and order_type != prev_order_type:
+            assert_not_offline_replay(
+                append=append, captured_at=captured_at, offline_printed=offline_printed
+            )
+            branch_no_taxes = (
+                cint(frappe.db.get_value("Branch", invoice.branch, "custom_no_taxes")) == 1
+                if invoice.get("branch")
+                else False
+            )
+            tax_dropping_switch = order_type == "Aggregators" and branch_no_taxes
+            _ot_policy = has_privilege_rules(_co, "order_type_change")
+            legacy_ot_allowed = bool(
+                is_super_user
+                or elevated_user
+                or (not tax_dropping_switch and (bool(getattr(posprofile, "custom_edit_order_type", 0)) or billing_user))
+            )
+            if _ot_policy or order_type_approval_token or tax_dropping_switch or not legacy_ot_allowed:
+                authorize_or_perform(
+                    privilege="order_type_change",
+                    pos_profile=pos_profile,
+                    company=_co,
+                    skip_profile_company_lookup=True,
+                    reference_doctype="POS Invoice",
+                    reference_name=invoice.name,
+                    claim={
+                        "action": "order_type_change",
+                        "invoice": invoice.name,
+                        "from_order_type": prev_order_type,
+                        "to_order_type": order_type,
+                    },
+                    token=order_type_approval_token,
+                    reason=privilege_reason,
+                    reason_note=privilege_reason_note,
+                    require_reason=None if _ot_policy else False,
+                    force_pin=tax_dropping_switch and not bool(set(user_role) & (DEFAULT_MANAGER_ROLES | {"System Manager"})),
+                    allow_fallback_predicate=legacy_ot_allowed,
+                )
+
+        prev_pax = cint(invoice.get("no_of_pax") or 0)
+        incoming_pax = cint(no_of_pax) if no_of_pax not in (None, "") else prev_pax
+        if no_of_pax not in (None, "") and prev_pax > 0 and incoming_pax != prev_pax:
+            _pax_policy = has_privilege_rules(_co, "guest_count_change")
+            if _pax_policy or guest_count_approval_token:
+                assert_not_offline_replay(
+                    append=append, captured_at=captured_at, offline_printed=offline_printed
+                )
+                authorize_or_perform(
+                    privilege="guest_count_change",
+                    pos_profile=pos_profile,
+                    company=_co,
+                    skip_profile_company_lookup=True,
+                    reference_doctype="POS Invoice",
+                    reference_name=invoice.name,
+                    claim={
+                        "action": "guest_count_change",
+                        "invoice": invoice.name,
+                        "from_pax": prev_pax,
+                        "to_pax": incoming_pax,
+                    },
+                    token=guest_count_approval_token,
+                    reason=privilege_reason,
+                    reason_note=privilege_reason_note,
+                    require_reason=None if _pax_policy else False,
+                    allow_fallback_predicate=True,
+                )
 
     if order_type:
         invoice.order_type = order_type
@@ -3215,17 +3469,45 @@ def pos_opening_check():
 
 
 @frappe.whitelist()
-def table_transfer(table, newTable, invoice):
-    current_table = frappe.get_doc("URY Table", table)
-    pos_invoice = frappe.get_doc("POS Invoice", invoice)
-    new_table = frappe.get_doc("URY Table", newTable)
+def table_transfer(table, newTable, invoice, approval_token=None, reason=None, reason_note=None):
+    from ury.ury_pos.floor_actions import assert_table_free_for_transfer
+    from ury.ury_pos.privileged_auth import (
+        _is_valid_str,
+        assert_not_efris_fiscalised,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        has_privilege_rules,
+    )
+
+    assert_not_offline_replay()
+
+    # Lock invoice and tables in deterministic sorted order to prevent concurrent transfer races.
+    pos_invoice = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    locked_tables = {
+        t: frappe.get_doc("URY Table", t, for_update=True)
+        for t in sorted({table, newTable})
+    }
+    current_table = locked_tables[table]
+    new_table = locked_tables[newTable]
 
     if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice):
         frappe.throw(_("Not permitted to transfer this order"), frappe.PermissionError)
 
-    # Explicit server-side transfer-permission check (POS Profile
-    # transfer_role_permissions) — the frontend's canCaptainTransfer() is UX
-    # only and must not be relied on for authorization.
+    if cint(pos_invoice.docstatus) != 0:
+        frappe.throw(_("Only open draft checks can be transferred."), frappe.ValidationError)
+    assert_not_efris_fiscalised(pos_invoice)
+
+    # Anti-race check: reject if another waiter already transferred this check elsewhere.
+    old_table_name = current_table.name if isinstance(current_table.name, str) else table
+    if pos_invoice.restaurant_table and pos_invoice.restaurant_table != old_table_name:
+        frappe.throw(
+            coded_message(
+                "TRANSFER-CONFLICT",
+                _("This check has already been transferred to another table. Reload and try again."),
+            ),
+            frappe.ValidationError,
+        )
+
     if not pos_invoice.pos_profile:
         frappe.throw(
             _("Cannot verify transfer permission: order has no POS Profile."),
@@ -3233,11 +3515,6 @@ def table_transfer(table, newTable, invoice):
         )
 
     pos_profile_doc = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
-    if not _has_role(frappe.get_roles(), pos_profile_doc.transfer_role_permissions):
-        frappe.throw(
-            _("You are not permitted to transfer tables."),
-            frappe.PermissionError,
-        )
 
     merge_members, _table_map = _get_merge_cluster(table)
     if len(merge_members) > 1:
@@ -3246,8 +3523,34 @@ def table_transfer(table, newTable, invoice):
     if current_table.branch != new_table.branch:
         frappe.throw(_("Table transfer between different branches is restricted."))
 
-    if new_table.occupied == 1:
-        frappe.throw(f"Table {new_table.name} is already occupied")
+    # Check destination occupancy BEFORE consuming any manager PIN token (refused even with PIN!).
+    assert_table_free_for_transfer(new_table, exclude_invoice=pos_invoice.name)
+
+    raw_company = getattr(pos_invoice, "company", None) or getattr(pos_profile_doc, "company", None)
+    company = raw_company if _is_valid_str(raw_company) else None
+    policy_active = has_privilege_rules(company, "transfer_check")
+    legacy_allowed = _has_role(frappe.get_roles(), pos_profile_doc.transfer_role_permissions)
+
+    authorize_or_perform(
+        privilege="transfer_check",
+        pos_profile=pos_invoice.pos_profile,
+        company=company,
+        skip_profile_company_lookup=True,
+        reference_doctype="POS Invoice",
+        reference_name=pos_invoice.name,
+        claim={
+            "action": "table_transfer",
+            "from_table": old_table_name,
+            "to_table": new_table.name,
+            "invoice": pos_invoice.name,
+        },
+        token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+        require_reason=None if policy_active else False,
+        allow_fallback_predicate=legacy_allowed,
+        deny_message=_("You are not permitted to transfer tables."),
+    )
 
     from ury.ury.api.table_reservation import (
         check_table_reservation,
@@ -3271,7 +3574,6 @@ def table_transfer(table, newTable, invoice):
             )
         )
 
-    old_table_name = current_table.name if isinstance(current_table.name, str) else table
     validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
 
     frappe.db.set_value(
@@ -3311,12 +3613,73 @@ def get_captain_transfer_candidates(invoice):
 
 
 @frappe.whitelist()
-def captain_transfer(currentCaptain, newCaptain, invoice):
-    pos_invoice_doc, pos_profile_doc = _authorize_captain_transfer(invoice)
+def captain_transfer(currentCaptain, newCaptain, invoice, approval_token=None, reason=None, reason_note=None):
+    from ury.ury_pos.privileged_auth import (
+        _is_valid_str,
+        assert_not_offline_replay,
+        authorize_or_perform,
+        has_privilege_rules,
+    )
 
+    assert_not_offline_replay()
+
+    try:
+        pos_invoice_doc = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    except TypeError:
+        pos_invoice_doc = frappe.get_doc("POS Invoice", invoice)
+
+    if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice_doc):
+        frappe.throw(_("Not permitted to transfer this order"), frappe.PermissionError)
+
+    pos_profile = pos_invoice_doc.pos_profile
+    if not pos_profile:
+        frappe.throw(
+            _("Cannot verify transfer permission: order has no POS Profile."),
+            frappe.PermissionError,
+        )
+
+    pos_profile_doc = frappe.get_doc("POS Profile", pos_profile)
+
+    raw_company = getattr(pos_invoice_doc, "company", None) or getattr(pos_profile_doc, "company", None)
+    company = raw_company if _is_valid_str(raw_company) else None
+    policy_active = has_privilege_rules(company, "transfer_check")
+    legacy_allowed = _has_role(frappe.get_roles(), pos_profile_doc.transfer_role_permissions)
+
+    # Validate refusal (including newCaptain == current waiter) before conflict check and token consumption.
     refusal = _captain_transfer_refusal(pos_invoice_doc, pos_profile_doc, newCaptain)
     if refusal:
         frappe.throw(refusal, frappe.PermissionError)
+
+    # Anti-race check: reject if another transfer already changed the check's server.
+    if currentCaptain and pos_invoice_doc.waiter and currentCaptain != pos_invoice_doc.waiter:
+        frappe.throw(
+            coded_message(
+                "TRANSFER-CONFLICT",
+                _("This check is now owned by another server. Reload and try again."),
+            ),
+            frappe.ValidationError,
+        )
+
+    authorize_or_perform(
+        privilege="transfer_check",
+        pos_profile=pos_profile,
+        company=company,
+        skip_profile_company_lookup=True,
+        reference_doctype="POS Invoice",
+        reference_name=pos_invoice_doc.name,
+        claim={
+            "action": "captain_transfer",
+            "from_waiter": pos_invoice_doc.waiter or "",
+            "to_waiter": newCaptain,
+            "invoice": pos_invoice_doc.name,
+        },
+        token=approval_token,
+        reason=reason,
+        reason_note=reason_note,
+        require_reason=None if policy_active else False,
+        allow_fallback_predicate=legacy_allowed,
+        deny_message=_("You are not permitted to transfer captains."),
+    )
 
     pos_invoice = pos_invoice_doc
     new_captain_doc = frappe.get_doc("User", newCaptain)
