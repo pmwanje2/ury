@@ -279,6 +279,13 @@ describe("DiscountPanel (Simphony / SAP / PMS parity)", () => {
     expect(optionValues).toEqual(["Corporate rate", "Complaint", "VIP Comp", "Other"]);
 
     expect(container.textContent || "").not.toMatch(VENDOR_RE);
+
+    // Regression guard: DialogContent must stay stacked above the backdrop overlay on desktop/tablet
+    // (never sm:static, which disables z-index and lets the backdrop blur & block clicks).
+    const dialogContent = screen.getByTestId("discount-dialog").firstElementChild as HTMLElement;
+    expect(dialogContent.className).not.toMatch(/\bsm:static\b/);
+    expect(dialogContent.className).toMatch(/\brelative\b/);
+    expect(dialogContent.className).toMatch(/\bz-10\b/);
   });
 
   it("hides open amount/percent keypad when allow_discount_change is false while keeping coupon presets working", async () => {
