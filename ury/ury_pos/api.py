@@ -21,6 +21,49 @@ def _efris_print_wait_seconds(profile):
     return max(0, min(cint(raw), _MAX_EFRIS_PRINT_WAIT_SECONDS))
 
 
+def _safe_int_value(value, default=0):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(float(value.strip()))
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _drawer_kick_profile_fields(profile):
+    """Return G23 cash drawer pin/hex/auto-kick settings and config-driven drawer-opening modes."""
+    resolved_pin = _safe_int_value(profile.get("custom_drawer_pin"), default=2)
+    if resolved_pin not in (2, 5):
+        resolved_pin = 2
+    raw_hex_val = profile.get("custom_drawer_kick_hex")
+    raw_hex = raw_hex_val.strip() if isinstance(raw_hex_val, str) else ""
+    auto_kick_raw = profile.get("custom_auto_kick_on_cash_tender")
+    auto_kick = 1 if auto_kick_raw is None else (1 if _safe_int_value(auto_kick_raw, default=1) else 0)
+    drawer_modes = []
+    for payment in (profile.get("payments") or []):
+        mop = getattr(payment, "mode_of_payment", None) or (
+            payment.get("mode_of_payment") if isinstance(payment, dict) else None
+        )
+        if not isinstance(mop, str) or not mop.strip():
+            continue
+        mop = mop.strip()
+        if mop in drawer_modes:
+            continue
+        opens = frappe.db.get_value("Mode of Payment", mop, "custom_open_cash_drawer")
+        if _safe_int_value(opens, default=0):
+            drawer_modes.append(mop)
+    return {
+        "custom_drawer_pin": resolved_pin,
+        "custom_drawer_kick_hex": raw_hex,
+        "custom_auto_kick_on_cash_tender": auto_kick,
+        "drawer_opening_modes": drawer_modes,
+    }
+
+
 #GetTable  decripted temporarily
 # @frappe.whitelist()
 # def getTable(room):
@@ -1101,6 +1144,7 @@ def getPosProfile():
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": room_lookup_method,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
+        **_drawer_kick_profile_fields(pos_profiles),
         **get_default_customer_config(pos_profiles),
         **_safe_order_type_tax_config(pos_profiles),
     }
@@ -1193,6 +1237,7 @@ def getPosProfileFull(pos_profile):
         "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(profile.get("custom_over_short_reason_tolerance")),
         "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
+        **_drawer_kick_profile_fields(profile),
         **get_default_customer_config(profile),
         **_safe_order_type_tax_config(profile),
     }

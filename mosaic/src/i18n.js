@@ -1,10 +1,12 @@
 // Minimal i18n for Mosaic. Language comes from frappe boot (window.frappe.boot.lang),
 // then the server-rendered <html lang>, then "en". English strings are their own keys,
-// so the English path is unchanged; ar.json supplies translations.
+// so the English path is unchanged; ar/fr/es catalogs supply translations.
 import ar from "./locales/ar.json";
 import en from "./locales/en.json";
+import es from "./locales/es.json";
+import fr from "./locales/fr.json";
 
-const catalogs = { ar, en };
+const catalogs = { ar, en, es, fr };
 const RTL = ["ar", "he", "fa", "ur", "ku"];
 
 function detect() {
