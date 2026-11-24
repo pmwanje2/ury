@@ -460,9 +460,39 @@ def _check_owners(reference_doctype: str | None, reference_name: str | None) -> 
 
 def is_policy_active(company: str | None) -> bool:
     """True once a company has POS Privilege Rule rows (seeded or configured)."""
-    if not company:
+    if not isinstance(company, str) or not company.strip():
         return False
     return bool(frappe.db.exists("POS Privilege Rule", {"company": company}))
+
+
+class _VerifiedApprovalProof:
+    """In-process proof that an override check succeeded; cannot be forged from JSON."""
+
+    __slots__ = ("approver", "docname", "privilege")
+
+    def __init__(self, privilege: str, docname: str, approver: str | None = None):
+        self.privilege = privilege
+        self.docname = docname
+        self.approver = approver
+
+
+def mark_verified_approval(doc, privilege: str, approval=None) -> None:
+    """Attach an unforgeable in-process approval proof onto `doc.flags`."""
+    _validate_privilege(privilege)
+    approver = getattr(approval, "approver", None) if approval is not None else None
+    doc.flags[f"pos_override_verified_{privilege}"] = _VerifiedApprovalProof(
+        privilege=privilege,
+        docname=str(getattr(doc, "name", "") or ""),
+        approver=approver,
+    )
+
+
+def has_verified_approval(doc, privilege: str) -> bool:
+    """True only when `mark_verified_approval` attached a matching proof in-process."""
+    proof = getattr(doc, "flags", {}).get(f"pos_override_verified_{privilege}")
+    if not isinstance(proof, _VerifiedApprovalProof):
+        return False
+    return proof.privilege == privilege and proof.docname == str(getattr(doc, "name", "") or "")
 
 
 def requires_reason(pos_profile: str, privilege: str) -> bool:
