@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Percent, Coins, Printer } from 'lucide-react';
+import { X, Percent, Coins, Printer, AlertTriangle } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
@@ -12,6 +12,7 @@ import { printOrder } from '../lib/print';
 import { queuePendingFiscalReprint, resolveEfrisPrintWaitSeconds, waitForEfrisFdn } from '../lib/efris-print';
 import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
+import { useOrderPreview } from '../lib/use-order-preview';
 
 
 const currencyDigitsCache = new Map<string, number>();
@@ -41,7 +42,10 @@ function roundToCurrency(amount: number, code?: string | null): number {
 type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number'> & {
+    invoice_printed?: string | number;
+    order_type?: string;
+  }) | null;
   existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
@@ -142,6 +146,18 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   useEffect(() => {
     fetchPaymentModes();
   }, [fetchPaymentModes]);
+
+  // Stateless server tax breakdown & optional EFRIS readiness check for live orders
+  const { preview: taxPreview } = useOrderPreview({
+    enabled: Boolean(order?.order_type && posProfile && invoice),
+    debounceMs: 150,
+    posProfile,
+    orderType: order?.order_type,
+    customer,
+    invoiceName: invoice,
+    additionalDiscountPercentage: appliedDiscountPct || 0,
+    table,
+  });
 
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
@@ -654,6 +670,43 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 <span className="text-gray-600">{t('payment.subtotal')}</span>
                 <span>{formatMoney(subtotal)}</span>
               </div>
+              {taxPreview && (
+                <div
+                  data-testid="payment-tax-breakdown"
+                  className="space-y-1 rounded-md bg-gray-50 px-2.5 py-2 text-xs text-gray-700"
+                >
+                  <div className="flex justify-between tabular-nums">
+                    <span>{t('payment.net_total')}</span>
+                    <span>{formatMoney(taxPreview.net_total)}</span>
+                  </div>
+                  {taxPreview.tax_rows.map((taxRow, idx) => (
+                    <div
+                      key={`${taxRow.description}-${idx}`}
+                      className="flex justify-between tabular-nums"
+                    >
+                      <span className="truncate pe-2">{taxRow.description || t('payment.tax')}</span>
+                      <span className="shrink-0">{formatMoney(taxRow.tax_amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {taxPreview?.efris_warnings && taxPreview.efris_warnings.length > 0 && (
+                <div
+                  data-testid="payment-efris-alert"
+                  role="alert"
+                  className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden />
+                    <div className="space-y-1">
+                      <p className="font-semibold">{t('payment.efris_warning_title')}</p>
+                      {taxPreview.efris_warnings.map((w, idx) => (
+                        <p key={`${w.item_code}-${idx}`}>{w.message}</p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* Discount */}
               {appliedDiscount > 0 && (
                 <div className="flex justify-between text-green-600">

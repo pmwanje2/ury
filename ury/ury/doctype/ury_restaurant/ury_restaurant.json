@@ -23,7 +23,9 @@
   "column_break_vo5jt",
   "default_room",
   "order_type_wise_menu",
-  "order_type_menu"
+  "order_type_menu",
+  "serving_periods_section",
+  "custom_serving_periods"
  ],
  "fields": [
   {
@@ -122,6 +124,17 @@
    "fieldtype": "Table",
    "label": "Order Type Menu",
    "options": "Order Type Menu"
+  },
+  {
+   "fieldname": "serving_periods_section",
+   "fieldtype": "Section Break",
+   "label": "Serving Periods"
+  },
+  {
+   "fieldname": "custom_serving_periods",
+   "fieldtype": "Table",
+   "label": "Serving Periods",
+   "options": "URY Restaurant Serving Period"
   }
  ],
  "image_field": "image",

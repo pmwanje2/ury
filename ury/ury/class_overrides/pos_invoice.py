@@ -66,6 +66,27 @@ _COPY_RENDER_MARKER = object()
 
 
 class CustomPOSInvoice(POSInvoice):
+	def set_taxes(self):
+		if getattr(self.flags, "ury_explicit_no_taxes", False):
+			return
+		return super().set_taxes()
+
+	def set_pos_fields(self, for_validate=False):
+		# Open-check rate stability (G40): ERPNext's set_pos_fields() unconditionally resets
+		# selling_price_list to POS Profile.selling_price_list on every validate(). Preserve an
+		# open check's stamped Serving Period price list across period boundaries.
+		preserved_pl = None
+		if (
+			(self.get("order_type") or "") != "Aggregators"
+			and (self.get("custom_serving_period") or "").strip()
+			and (self.get("selling_price_list") or "").strip()
+		):
+			preserved_pl = self.selling_price_list
+		res = super().set_pos_fields(for_validate=for_validate)
+		if preserved_pl:
+			self.selling_price_list = preserved_pl
+		return res
+
 	def before_print(self, settings=None):
 		from ury.ury.doctype.ury_order.ury_order import check_split_target_access
 		from ury.ury.print_format.defaults import validate_pos_invoice_print_format

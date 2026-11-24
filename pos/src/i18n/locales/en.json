@@ -56,7 +56,8 @@
     "switch_waiter": "Switch waiter",
     "pair_tablet": "Pair this tablet",
     "staff_pins": "Staff PINs",
-    "my_approval_pin": "My approval PIN"
+    "my_approval_pin": "My approval PIN",
+    "tax_exempt": "Tax Exempt"
   },
   "menu": {
     "manage_availability": "Manage availability",
@@ -80,7 +81,8 @@
       "sold_out": "Sold out",
       "temporarily": "Temporarily unavailable"
     },
-    "search_placeholder": "Search menu items..."
+    "search_placeholder": "Search menu items...",
+    "daypart_available": "Outside serving window"
   },
   "pos_sidebar": {
     "categories": "Categories",
@@ -103,7 +105,13 @@
     "edit_comment": "Edit comment",
     "pax": "Pax",
     "insufficient_capacity": "Insufficient capacity to add more of this item",
-    "guest_label": "Guest name (optional)"
+    "guest_label": "Guest name (optional)",
+    "net_total": "Net",
+    "discount": "Discount",
+    "tax": "Tax",
+    "offline_estimate": "Offline estimate — verified on reconnect",
+    "tax_preview_loading": "Calculating taxes...",
+    "toggle_breakdown": "Tax breakdown"
   },
   "order": {
     "select_to_view": "Select an order to view details",
@@ -171,7 +179,10 @@
     "discount_not_applied": "Press Apply to update the total before paying.",
     "already_received": "Already received",
     "balance_due": "Balance due",
-    "reference_label": "Ref: {{ref}}"
+    "reference_label": "Ref: {{ref}}",
+    "net_total": "Net",
+    "tax": "Tax",
+    "efris_warning_title": "Tax readiness check"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",

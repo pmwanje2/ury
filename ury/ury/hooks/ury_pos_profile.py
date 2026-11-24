@@ -9,8 +9,17 @@ def validate(doc, method):
     validate_bill_check(doc, method)
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
+    validate_order_type_tax_categories_hook(doc, method)
     validate_room_lookup_method(doc, method)
     validate_print_format(doc, method)
+
+
+def validate_order_type_tax_categories_hook(doc, method=None):
+    if not doc.get("custom_order_type_tax_categories"):
+        return
+    from ury.ury_pos.tax_determination import validate_order_type_tax_categories
+
+    validate_order_type_tax_categories(doc, method)
 
 
 def validate_print_format(doc, method=None):

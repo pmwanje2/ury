@@ -295,3 +295,84 @@ export function isLastItemCannotBeRemovedError(message: string | null | undefine
   if (!message) return false;
   return /only item on invoice/i.test(message);
 }
+
+export interface PreviewTaxRow {
+  description: string;
+  rate: number;
+  tax_amount: number;
+  account_head?: string;
+}
+
+export interface EfrisWarning {
+  code: string;
+  item_code: string;
+  item_name?: string;
+  missing?: string[];
+  message: string;
+}
+
+export interface OrderTotalsPreview {
+  net_total: number;
+  discount_amount: number;
+  tax_rows: PreviewTaxRow[];
+  total_taxes_and_charges?: number;
+  grand_total: number;
+  rounded_total: number;
+  rounding_adjustment?: number;
+  tax_category?: string;
+  taxes_and_charges?: string;
+  serving_period?: string | null;
+  transaction_local_time?: string | null;
+  transaction_weekday?: string | null;
+  item_taxes: Array<{
+    item_code: string;
+    item_tax_template?: string | null;
+    item_tax_rate?: string;
+    rate?: number;
+    net_amount?: number;
+  }>;
+  efris_warnings: EfrisWarning[];
+}
+
+export interface PreviewOrderTotalsRequest {
+  pos_profile: string;
+  order_type: string;
+  customer?: string;
+  items?: Array<{ item: string; qty: number; rate?: number; item_name?: string }>;
+  no_of_pax?: number;
+  invoice_name?: string | null;
+  additional_discount_percentage?: number;
+  coupon_code?: string;
+  room?: string;
+  table?: string;
+}
+
+export async function previewOrderTotals(
+  payload: PreviewOrderTotalsRequest,
+): Promise<OrderTotalsPreview> {
+  const res = await call.post<{ message: OrderTotalsPreview }>(
+    'ury.ury_pos.api.preview_order_totals',
+    payload,
+  );
+  return res.message;
+}
+
+export async function changeOrderType(
+  invoice: string,
+  orderType: string,
+  opts?: { table?: string; room?: string; noOfPax?: number; reason?: string },
+): Promise<POSInvoice> {
+  await assertOfflineActionAllowed('order type change');
+  const res = await call.post<{ message: POSInvoice }>(
+    'ury.ury.doctype.ury_order.ury_order.change_order_type',
+    {
+      invoice,
+      order_type: orderType,
+      ...(opts?.table ? { table: opts.table } : {}),
+      ...(opts?.room ? { room: opts.room } : {}),
+      ...(opts?.noOfPax ? { no_of_pax: opts.noOfPax } : {}),
+      ...(opts?.reason ? { reason: opts.reason } : {}),
+    },
+  );
+  return res.message;
+}

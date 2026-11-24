@@ -39,7 +39,8 @@
     "switch_waiter": "Cambiar de mesero",
     "pair_tablet": "Vincular esta tableta",
     "staff_pins": "PIN del personal",
-    "my_approval_pin": "Mi PIN de aprobación"
+    "my_approval_pin": "Mi PIN de aprobación",
+    "tax_exempt": "Exento de impuestos"
   },
   "menu": {
     "special_items": "Artículos especiales",
@@ -53,7 +54,8 @@
     "availability_load_failed": "No se pudo cargar la disponibilidad. Inténtalo de nuevo.",
     "no_availability_overrides": "No hay cambios de disponibilidad para este local.",
     "sold_out_count": "Agotados ({{count}})",
-    "qty_left_unconfirmed": "¿Quedan {{qty}}?"
+    "qty_left_unconfirmed": "¿Quedan {{qty}}?",
+    "daypart_available": "Fuera del horario de servicio"
   },
   "pos_sidebar": {
     "categories": "Categorías",
@@ -76,7 +78,13 @@
     "edit_comment": "Editar comentario",
     "pax": "Pax",
     "insufficient_capacity": "Capacidad insuficiente para agregar más de este artículo",
-    "guest_label": "Nombre del huésped (opcional)"
+    "guest_label": "Nombre del huésped (opcional)",
+    "net_total": "Neto",
+    "discount": "Descuento",
+    "tax": "Impuesto",
+    "offline_estimate": "Estimación sin conexión — verificada al reconectar",
+    "tax_preview_loading": "Calculando impuestos...",
+    "toggle_breakdown": "Desglose de impuestos"
   },
   "order": {
     "select_to_view": "Selecciona un pedido para ver el detalle",
@@ -120,7 +128,10 @@
     "discount_not_applied": "Pulsa Aplicar para actualizar el total antes de pagar.",
     "already_received": "Ya recibido",
     "balance_due": "Saldo pendiente",
-    "reference_label": "Ref.: {{ref}}"
+    "reference_label": "Ref.: {{ref}}",
+    "net_total": "Neto",
+    "tax": "Impuesto",
+    "efris_warning_title": "Verificación fiscal"
   },
   "pos": {
     "not_opened_title": "POS no abierto",

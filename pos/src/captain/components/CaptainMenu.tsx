@@ -56,7 +56,7 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
   const disabled = !canAddItems || isOrderInteractionDisabled();
 
   const handleTap = (item: (typeof menuItems)[number]) => {
-    if (disabled) return;
+    if (disabled || item.unavailable_daypart) return;
     addToOrder({ ...item, quantity: 1 });
   };
 
@@ -122,6 +122,10 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
                 id={item.id}
                 name={item.name}
                 price={item.price}
+                promoRate={item.promo_rate}
+                promoLabel={item.promo_label}
+                unavailableDaypart={item.unavailable_daypart}
+                daypartLabel={item.daypart_label}
                 item_image={item.image}
                 course={item.course_label || item.course}
                 item={item.item}

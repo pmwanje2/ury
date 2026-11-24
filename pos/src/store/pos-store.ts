@@ -3,7 +3,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { ownedSessionKey, getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
 import { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
-import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
+import {
+  getRestaurantMenuWithMeta,
+  getAggregatorMenu,
+  type ActiveServingPeriod,
+  type TaxSummary,
+  MenuItem as APIMenuItem,
+} from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
 import { getMenuCourses } from '../lib/menu-course-api';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
@@ -42,6 +48,10 @@ export interface MenuItem extends Omit<APIMenuItem, 'rate' | 'item_image'> {
   selectedAddons?: Array<{ id: string; name: string; price: number }>;
   uniqueId?: string;
   tax_rate?: number;
+  unavailable_daypart?: boolean;
+  daypart_label?: string | null;
+  promo_rate?: number | null;
+  promo_label?: string | null;
 }
 
 export interface Customer {
@@ -208,6 +218,9 @@ interface POSState {
    * shown as an overlay without unmounting the app underneath it.
    */
   showVoluntaryClosing: boolean;
+  activeServingPeriod: ActiveServingPeriod | null;
+  activeTaxSummary: TaxSummary | null;
+  activePriceList: string | null;
 }
 
 interface POSStore extends POSState {
@@ -317,6 +330,9 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   orderId: null,
   originalSentItems: [],
   showVoluntaryClosing: false,
+  activeServingPeriod: null,
+  activeTaxSummary: null,
+  activePriceList: null,
   orderComment: '',
   guestLabel: '',
   noOfPax: 1,
@@ -433,12 +449,18 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   fetchMenuItems: async () => {
-    const { posProfile, selectedRoom, selectedOrderType } = get();
+    const { posProfile, selectedRoom, selectedOrderType, selectedCustomer } = get();
     if (!posProfile?.restaurant) return;
 
     try {
       set({ menuLoading: true, error: null });
-      const items = await getRestaurantMenu(posProfile.name, selectedRoom, selectedOrderType);
+      const payload = await getRestaurantMenuWithMeta(
+        posProfile.name,
+        selectedRoom,
+        selectedOrderType,
+        selectedCustomer?.id || null,
+      );
+      const items = payload.items || [];
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
         id: item.item,
@@ -453,9 +475,18 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         description: item.description || '',
         special_dish: item.special_dish || 0,
         tax_rate: 0,
+        unavailable_daypart: Boolean(item.unavailable_daypart),
+        daypart_label: item.daypart_label ?? null,
+        promo_rate: item.promo_rate != null ? Number(item.promo_rate) : null,
+        promo_label: item.promo_label ?? null,
       }));
 
-      set((state) => withMenuItems(state, menuItems));
+      set((state) => ({
+        ...withMenuItems(state, menuItems),
+        activeServingPeriod: payload.active_serving_period ?? null,
+        activeTaxSummary: payload.tax_summary ?? null,
+        activePriceList: payload.price_list ?? null,
+      }));
     } catch (error) {
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);

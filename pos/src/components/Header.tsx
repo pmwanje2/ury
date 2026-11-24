@@ -11,7 +11,10 @@ import {
   RefreshCw,
   Lock,
   KeyRound,
+  Clock,
+  Receipt,
 } from 'lucide-react';
+import { orderTypeLabel } from '../data/order-types';
 import { Button, Input } from '@ury/ui';
 import { useRootStore } from '../store/root-store';
 import { usePOSStore } from '../store/pos-store';
@@ -32,7 +35,23 @@ const Header = () => {
   const user = useRootStore((state: RootState) => state.user);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const location = useLocation();
-  const { searchQuery, setSearchQuery, setShowVoluntaryClosing, posProfile } = usePOSStore();
+  const {
+    searchQuery,
+    setSearchQuery,
+    setShowVoluntaryClosing,
+    posProfile,
+    selectedOrderType,
+    activeServingPeriod,
+    activeTaxSummary,
+  } = usePOSStore();
+  const taxBadgeText =
+    activeTaxSummary?.label ||
+    activeTaxSummary?.taxes_and_charges ||
+    activeTaxSummary?.tax_category ||
+    null;
+  const showStatusStrip = Boolean(
+    activeServingPeriod?.period_name || selectedOrderType || taxBadgeText,
+  );
   const outbox = useOutbox(posProfile, user);
   const printStatusDisabled = isPrintStatusDisabled(posProfile);
   const { orderSearchQuery, setOrderSearchQuery } = useRootStore();
@@ -267,6 +286,44 @@ const Header = () => {
           </div>
         </div>
       </div>
+      {showStatusStrip && (
+        <div
+          data-testid="pos-status-strip"
+          className="flex flex-wrap items-center gap-1.5 border-t border-header-border/60 bg-gray-50/80 px-2 py-1 text-xs text-gray-700 sm:px-4 md:px-6"
+        >
+          {activeServingPeriod?.period_name && (
+            <span
+              data-testid="status-serving-period"
+              className="inline-flex items-center gap-1 rounded-full bg-amber-100/90 px-2 py-0.5 font-medium text-amber-900"
+            >
+              <Clock className="h-3 w-3 shrink-0" aria-hidden />
+              <span>
+                {activeServingPeriod.period_name}
+                {activeServingPeriod.start_time && activeServingPeriod.end_time
+                  ? ` (${activeServingPeriod.start_time}–${activeServingPeriod.end_time})`
+                  : ''}
+              </span>
+            </span>
+          )}
+          {selectedOrderType && (
+            <span
+              data-testid="status-order-type"
+              className="inline-flex items-center rounded-full bg-blue-100/90 px-2 py-0.5 font-medium text-blue-900"
+            >
+              {orderTypeLabel(selectedOrderType)}
+            </span>
+          )}
+          {taxBadgeText && (
+            <span
+              data-testid="status-tax-badge"
+              className="inline-flex items-center gap-1 rounded-full bg-emerald-100/90 px-2 py-0.5 font-medium text-emerald-900"
+            >
+              <Receipt className="h-3 w-3 shrink-0" aria-hidden />
+              <span>{taxBadgeText}</span>
+            </span>
+          )}
+        </div>
+      )}
     </header>
     <ApprovalPinDialog
       open={showApprovalPin}

@@ -48,7 +48,7 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
   const clickCountRef = useRef(0);
 
   const handleItemClick = (item: any) => {
-    if (isMenuInteractionDisabled()) return;
+    if (isMenuInteractionDisabled() || item?.unavailable_daypart) return;
     
     clickCountRef.current += 1;
     

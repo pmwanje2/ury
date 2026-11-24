@@ -44,6 +44,8 @@ export interface PosProfileLimited {
   room_charge_unconfigured?: boolean;
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
   efris_print_wait_seconds?: number;
+  tax_category?: string | null;
+  order_type_tax_categories?: Record<string, string>;
 }
 
 export interface PosProfileLimitedResponse {
@@ -105,6 +107,8 @@ export interface PosProfileFull {
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   efris_print_wait_seconds?: number;
+  tax_category?: string | null;
+  order_type_tax_categories?: Record<string, string>;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -217,6 +221,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     room_charge_modes: limitedProfile.room_charge_modes ?? [],
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
     efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
+    tax_category: fullProfile.tax_category ?? limitedProfile.tax_category ?? null,
+    order_type_tax_categories: fullProfile.order_type_tax_categories ?? limitedProfile.order_type_tax_categories ?? {},
   };
 
   return combinedProfile;

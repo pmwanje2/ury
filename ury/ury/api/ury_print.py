@@ -62,6 +62,10 @@ def network_printing(
     validate_print_permission(target)
     if doctype == "POS Invoice":
         check_split_target_access(target, "write")
+        if int(getattr(target, "docstatus", 0) or 0) == 0:
+            from ury.ury_pos.tax_determination import validate_efris_readiness
+
+            validate_efris_readiness(target, throw=True)
         doc = target
 
     restaurant_table = None
@@ -146,6 +150,10 @@ def select_network_printer(pos_profile, invoice_id, print_format=None):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
     check_split_target_access(invoice_doc, "write")
+    if int(getattr(invoice_doc, "docstatus", 0) or 0) == 0:
+        from ury.ury_pos.tax_determination import validate_efris_readiness
+
+        validate_efris_readiness(invoice_doc, throw=True)
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
     from ury.ury.print_format.defaults import (
         resolve_safe_pos_print_format,
@@ -193,6 +201,10 @@ def qz_print_update(invoice):
             frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
 
         check_split_target_access(invoice_doc, "write")
+        if int(getattr(invoice_doc, "docstatus", 0) or 0) == 0:
+            from ury.ury_pos.tax_determination import validate_efris_readiness
+
+            validate_efris_readiness(invoice_doc, throw=True)
         table = frappe.db.get_value("POS Invoice", invoice, "restaurant_table")
         
         if table == None or table == "":
@@ -222,7 +234,7 @@ def qz_print_update(invoice):
 
         return {"status": "Success"}
         
-    except frappe.PermissionError:
+    except (frappe.PermissionError, frappe.ValidationError):
         raise
     except Exception as e:
         frappe.log_error(message=e, title="Print Fail")
@@ -243,6 +255,10 @@ def print_pos_page(doctype, name, print_format):
         )
 
         check_split_target_access(doc_to_check, "write")
+        if int(getattr(doc_to_check, "docstatus", 0) or 0) == 0:
+            from ury.ury_pos.tax_determination import validate_efris_readiness
+
+            validate_efris_readiness(doc_to_check, throw=True)
         if print_format:
             validate_pos_invoice_print_format(doc_to_check, print_format)
         else:

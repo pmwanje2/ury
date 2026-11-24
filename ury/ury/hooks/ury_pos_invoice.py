@@ -822,6 +822,24 @@ def validate_price_list(doc, method):
         doc.selling_price_list = price_list
         return
 
+    from ury.ury_pos.dayparts import (
+        allowed_price_lists_for_period,
+        get_serving_periods,
+        resolve_active_serving_period,
+    )
+
+    serving_periods = get_serving_periods(doc.restaurant)
+    stamped_period = (doc.get("custom_serving_period") or "").strip() if serving_periods else ""
+    stamped_allowed_pls = (
+        allowed_price_lists_for_period(doc.restaurant, stamped_period) if stamped_period else set()
+    )
+    if stamped_allowed_pls:
+        # Open-check rate stability (G40): once a check is stamped with a Serving Period and
+        # already carries one of that period's enabled Price Lists, never silently re-price it.
+        existing_pl = (doc.get("selling_price_list") or "").strip()
+        if existing_pl and existing_pl in stamped_allowed_pls and frappe.db.get_value("Price List", existing_pl, "enabled"):
+            return
+
     menu_name = None
     if doc.restaurant_table:
         if frappe.db.get_value("URY Restaurant", doc.restaurant, "room_wise_menu"):
@@ -829,7 +847,34 @@ def validate_price_list(doc, method):
             menu_name = frappe.db.get_value(
                 "Menu for Room", {"parent": doc.restaurant, "room": room}, "menu"
             )
-    elif frappe.db.get_value("URY Restaurant", doc.restaurant, "order_type_wise_menu"):
+            if menu_name:
+                doc.selling_price_list = frappe.db.get_value(
+                    "Price List", dict(restaurant_menu=menu_name, enabled=1)
+                )
+                return
+
+    if stamped_allowed_pls:
+        for candidate_pl in sorted(stamped_allowed_pls):
+            if frappe.db.get_value("Price List", candidate_pl, "enabled"):
+                doc.selling_price_list = candidate_pl
+                return
+
+    if serving_periods:
+        active_period = resolve_active_serving_period(
+            doc.restaurant, order_type=doc.get("order_type"), branch=doc.get("branch")
+        )
+        if active_period and (active_period.get("price_list_override") or active_period.get("menu")):
+            if active_period.get("price_list_override"):
+                doc.selling_price_list = active_period["price_list_override"]
+                return
+            sp_pl = frappe.db.get_value(
+                "Price List", dict(restaurant_menu=active_period["menu"], enabled=1)
+            )
+            if sp_pl:
+                doc.selling_price_list = sp_pl
+                return
+
+    if not doc.restaurant_table and frappe.db.get_value("URY Restaurant", doc.restaurant, "order_type_wise_menu"):
         menu_name = frappe.db.get_value(
             "Order Type Menu", {"parent": doc.restaurant, "order_type": doc.order_type}, "menu"
         )

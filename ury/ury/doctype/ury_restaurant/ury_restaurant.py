@@ -6,4 +6,8 @@ from frappe.model.document import Document
 
 
 class URYRestaurant(Document):
-    pass
+    def validate(self):
+        from ury.ury_pos.dayparts import validate_serving_periods
+
+        validate_serving_periods(self.get("custom_serving_periods") or [])
+

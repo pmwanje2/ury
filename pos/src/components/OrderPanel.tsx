@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { formatCurrency, parseFrappeError, resolveDefaultCustomer } from '@ury/core';
@@ -15,6 +15,7 @@ import { useOutbox } from '../offline/use-outbox';
 import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
 import { syncOrder, type SavedInvoice, type SyncOrderRequest } from '../lib/order-api';
+import { useOrderPreview } from '../lib/use-order-preview';
 import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { useRootStore } from '../store/root-store';
@@ -112,6 +113,39 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     (sum, item) => sum + calculateItemTotal(item),
     0
   );
+
+  const [showMobileBreakdown, setShowMobileBreakdown] = useState(true);
+  const previewCustomer =
+    selectedOrderType === 'Aggregators'
+      ? selectedAggregator?.customer
+      : selectedCustomer?.id || undefined;
+  const previewItems = useMemo(
+    () =>
+      activeOrders.map((item) => ({
+        item: item.id,
+        item_name: item.name,
+        qty: item.quantity,
+        rate: item.selectedVariant?.price || item.price,
+      })),
+    [activeOrders],
+  );
+  const { preview: orderPreview, loading: previewLoading } = useOrderPreview({
+    enabled: activeOrders.length > 0 && Boolean(posProfile?.name),
+    offline: Boolean(outbox.offline),
+    debounceMs: 150,
+    posProfile: posProfile?.name,
+    orderType: selectedOrderType,
+    customer: previewCustomer,
+    items: previewItems,
+    noOfPax,
+    invoiceName: isUpdatingOrder ? orderId : undefined,
+    room: selectedRoom,
+    table: selectedTable,
+  });
+  const displayTotal =
+    !outbox.offline && orderPreview
+      ? (orderPreview.rounded_total || orderPreview.grand_total)
+      : total;
 
   const handleEdit = (item: typeof activeOrders[0]) => {
     const menuItem = {
@@ -547,7 +581,10 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
             )}
           </div>
           
-          <div className="sticky bottom-0 p-4 border-t border-border flex-shrink-0 bg-white lg:static">
+          <div
+            data-testid="order-tax-preview-footer"
+            className="sticky bottom-0 p-4 border-t border-border flex-shrink-0 bg-white lg:static"
+          >
             <input
               type="text"
               name="guest_label"
@@ -559,6 +596,70 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               className="mb-3 w-full rounded-md border border-border px-3 py-1.5 text-sm"
               disabled={isInteractionDisabled}
             />
+            {outbox.offline ? (
+              <div
+                data-testid="offline-estimate-badge"
+                className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800"
+              >
+                {t('cart.offline_estimate')}
+              </div>
+            ) : orderPreview ? (
+              <div className="mb-2 space-y-1 text-xs text-gray-600">
+                <div className="flex items-center justify-between lg:hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowMobileBreakdown((prev) => !prev)}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                  >
+                    <span>{t('cart.toggle_breakdown')}</span>
+                    {showMobileBreakdown ? (
+                      <ChevronUp className="h-3.5 w-3.5" aria-hidden />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                    )}
+                  </button>
+                </div>
+                <div className={cn('space-y-1', !showMobileBreakdown && 'hidden lg:block')}>
+                  <div className="flex justify-between tabular-nums">
+                    <span>{t('cart.net_total')}</span>
+                    <span>{formatCurrency(orderPreview.net_total, activeCurrency)}</span>
+                  </div>
+                  {orderPreview.discount_amount > 0 && (
+                    <div className="flex justify-between text-emerald-700 tabular-nums">
+                      <span>{t('cart.discount')}</span>
+                      <span>-{formatCurrency(orderPreview.discount_amount, activeCurrency)}</span>
+                    </div>
+                  )}
+                  {orderPreview.tax_rows.map((taxRow, idx) => (
+                    <div
+                      key={`${taxRow.description}-${idx}`}
+                      className="flex justify-between tabular-nums"
+                    >
+                      <span className="truncate pe-2">{taxRow.description || t('cart.tax')}</span>
+                      <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
+                    </div>
+                  ))}
+                </div>
+                {orderPreview.efris_warnings && orderPreview.efris_warnings.length > 0 && (
+                  <div
+                    data-testid="efris-readiness-alert"
+                    role="alert"
+                    className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900"
+                  >
+                    <div className="flex items-start gap-1.5">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" aria-hidden />
+                      <div className="space-y-0.5">
+                        {orderPreview.efris_warnings.map((w, idx) => (
+                          <p key={`${w.item_code}-${idx}`}>{w.message}</p>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : previewLoading ? (
+              <p className="mb-2 text-xs text-gray-400">{t('cart.tax_preview_loading')}</p>
+            ) : null}
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <Button
@@ -576,7 +677,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                 </Button>
                 <span className="text-lg font-semibold">{t('cart.total')}</span>
               </div>
-              <span className="text-lg font-semibold">{formatCurrency(total, activeCurrency)}</span>
+              <span className="text-lg font-semibold tabular-nums">{formatCurrency(displayTotal, activeCurrency)}</span>
             </div>
             <Button
               onClick={handleSubmit}

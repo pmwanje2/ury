@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "creation": "2026-11-24 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "period_name",
+  "enabled",
+  "priority",
+  "start_time",
+  "end_time",
+  "weekdays",
+  "order_types",
+  "menu",
+  "price_list_override"
+ ],
+ "fields": [
+  {
+   "fieldname": "period_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Period Name",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "default": "10",
+   "fieldname": "priority",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Priority"
+  },
+  {
+   "fieldname": "start_time",
+   "fieldtype": "Time",
+   "in_list_view": 1,
+   "label": "Start Time",
+   "reqd": 1
+  },
+  {
+   "fieldname": "end_time",
+   "fieldtype": "Time",
+   "in_list_view": 1,
+   "label": "End Time",
+   "reqd": 1
+  },
+  {
+   "description": "Comma-separated weekdays (Mon,Tue,Wed,Thu,Fri,Sat,Sun). Leave blank for every day.",
+   "fieldname": "weekdays",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Weekdays"
+  },
+  {
+   "description": "Comma-separated order types (Dine In,Take Away,Delivery,Phone In). Leave blank for all order types.",
+   "fieldname": "order_types",
+   "fieldtype": "Data",
+   "label": "Order Types"
+  },
+  {
+   "fieldname": "menu",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Menu",
+   "options": "URY Menu"
+  },
+  {
+   "fieldname": "price_list_override",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Price List Override",
+   "options": "Price List"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-24 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "URY",
+ "name": "URY Restaurant Serving Period",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

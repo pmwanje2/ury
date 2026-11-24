@@ -32,72 +32,62 @@ def _efris_print_wait_seconds(profile):
 #     )
 #     return tables
 
-def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
+def resolve_restaurant_menu(
+    branch,
+    room=None,
+    order_type=None,
+    cashier=False,
+    pos_profile=None,
+    customer=None,
+    at=None,
+):
     """
-    Resolve and return menu for a given branch, room, and order type.
-
-    Args:
-        branch: Branch name string (already resolved)
-        room: Optional room name
-        order_type: Optional order type
-        cashier: Boolean indicating if user is a cashier
-
-    Returns:
-        Dict with keys: items, modified_time, name
+    Resolve and return menu for a given branch, room, and order type using the
+    5-tier precedence (Aggregators -> room_wise_menu -> active Serving Period ->
+    order_type_wise_menu -> active_menu), plus per-item daypart availability and
+    active time-window Pricing Rule promo badges.
     """
-    menu_items = []
-    menu_items_with_image = []
+    from ury.ury_pos.dayparts import (
+        active_item_promos,
+        evaluate_item_daypart,
+        resolve_menu_and_price_list,
+    )
 
     restaurant = frappe.db.get_value("URY Restaurant", {"branch": branch}, "name")
-
-    if room:
-
-        room_wise_menu = frappe.db.get_value(
-            "URY Restaurant", restaurant, "room_wise_menu"
-        )
-
-        if room_wise_menu:
-            menu = frappe.db.get_value(
-                "Menu for Room",
-                {"parent": restaurant, "room": room},
-                "menu"
-            )
-            if not menu:
-                 menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-        else:
-            menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-
-    elif cashier and order_type:
-        order_type_wise_menu = frappe.db.get_value(
-            "URY Restaurant", restaurant, "order_type_wise_menu"
-        )
-
-        if order_type_wise_menu:
-            menu = frappe.db.get_value(
-                "Order Type Menu",
-                {"parent": restaurant, "order_type": order_type},
-                "menu"
-            )
-            if not menu:
-                 menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-
-        else:
-            menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
-
-    # Default menu if nothing is selected
-    else:
-        menu = frappe.db.get_value("URY Restaurant", restaurant, "active_menu")
+    resolved = resolve_menu_and_price_list(
+        branch,
+        restaurant=restaurant,
+        room=room,
+        order_type=order_type,
+        customer=customer,
+        at=at,
+        cashier=cashier,
+    )
+    menu = resolved.get("menu")
+    price_list = resolved.get("price_list")
+    active_period = resolved.get("serving_period")
+    local_dt = resolved.get("local_dt")
+    tz_name = resolved.get("timezone")
 
     if not menu:
         frappe.throw(_("Please set an active menu for Restaurant {0}").format(restaurant))
 
-
-    # Get menu items (your existing code)
     menu_items = frappe.get_all(
         "URY Menu Item",
         filters={"parent": menu, "disabled": 0},
-        fields=["item", "item_name", "rate", "special_dish", "disabled", "course", "idx"],
-        order_by="item_name asc"
+        fields=[
+            "item",
+            "item_name",
+            "rate",
+            "special_dish",
+            "disabled",
+            "course",
+            "idx",
+            "custom_available_from",
+            "custom_available_to",
+            "custom_serving_period",
+        ],
+        order_by="item_name asc",
     )
 
     # Guest screens order categories by the menu's own configuration
@@ -113,32 +103,89 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
         )
     } if courses else {}
 
-    menu_items_with_image = [
-        {
-            "item": item.item,
-            "item_name": _(item.item_name) if item.item_name else item.item_name,
-            "rate": item.rate,
-            "special_dish": item.special_dish,
-            "disabled": item.disabled,
-            "item_image": frappe.db.get_value("Item", item.item, "image"),
-            "course": item.course,
-            "course_label": _(item.course) if item.course else item.course,
-            "course_priority": course_priority.get(item.course),
-            "menu_order": item.idx,
-        }
-        for item in menu_items
-    ]
-    modified = frappe.db.get_value("URY Menu", menu, "modified")
+    posting_date = frappe.utils.getdate(local_dt.date() if local_dt else None)
+    release_field, released = (None, None)
+    if price_list:
+        try:
+            release_field, released = item_price_release_states()
+        except Exception:
+            release_field, released = (None, None)
 
+    menu_items_with_image = []
+    for item in menu_items:
+        resolved_rate = item.rate
+        if price_list:
+            try:
+                ip = price_valid_on(
+                    item.item, price_list, posting_date, release_field, released, customer=customer
+                )
+                if ip and ip.get("price_list_rate") is not None:
+                    resolved_rate = ip.get("price_list_rate")
+            except Exception:
+                pass
+
+        daypart_status = evaluate_item_daypart(
+            item, active_period=active_period, local_dt=local_dt, branch=branch
+        )
+        menu_items_with_image.append(
+            {
+                "item": item.item,
+                "item_name": _(item.item_name) if item.item_name else item.item_name,
+                "rate": resolved_rate,
+                "special_dish": item.special_dish,
+                "disabled": item.disabled,
+                "item_image": frappe.db.get_value("Item", item.item, "image"),
+                "course": item.course,
+                "course_label": _(item.course) if item.course else item.course,
+                "course_priority": course_priority.get(item.course),
+                "menu_order": item.idx,
+                "unavailable_daypart": daypart_status["unavailable_daypart"],
+                "daypart_label": daypart_status["daypart_label"],
+            }
+        )
+
+    company = (
+        pos_profile.get("company")
+        if pos_profile is not None and hasattr(pos_profile, "get")
+        else frappe.db.get_value("Branch", branch, "company")
+    )
+    promos = active_item_promos(
+        menu_items_with_image,
+        company=company,
+        price_list=price_list,
+        customer=customer,
+        local_dt=local_dt,
+        posting_date=posting_date,
+        order_type=order_type,
+    )
+    for row in menu_items_with_image:
+        promo = promos.get(row["item"])
+        if promo:
+            row["promo_rate"] = promo["promo_rate"]
+            row["promo_label"] = promo["promo_label"]
+
+    tax_summary = None
+    if pos_profile is not None:
+        from ury.ury_pos.tax_determination import summarize_tax_for_order_type
+
+        tax_summary = summarize_tax_for_order_type(
+            pos_profile, order_type, customer=customer, posting_date=posting_date
+        )
+
+    modified = frappe.db.get_value("URY Menu", menu, "modified")
 
     return {
         "items": menu_items_with_image,
         "modified_time": modified,
-        "name": menu
+        "name": menu,
+        "active_serving_period": active_period,
+        "price_list": price_list,
+        "timezone": tz_name,
+        "tax_summary": tax_summary,
     }
 
 @frappe.whitelist()
-def getRestaurantMenu(pos_profile, room=None, order_type=None):
+def getRestaurantMenu(pos_profile, room=None, order_type=None, customer=None):
     user_role = frappe.get_roles()
 
     pos_profile = frappe.get_doc("POS Profile", pos_profile)
@@ -148,7 +195,14 @@ def getRestaurantMenu(pos_profile, room=None, order_type=None):
     )
     branch_name = getBranch()
 
-    return resolve_restaurant_menu(branch_name, room, order_type, cashier)
+    return resolve_restaurant_menu(
+        branch_name,
+        room,
+        order_type,
+        cashier,
+        pos_profile=pos_profile,
+        customer=customer,
+    )
 
 @frappe.whitelist()
 def getMenuCourses():
@@ -947,6 +1001,7 @@ def getPosProfile():
         "room_lookup_method": room_lookup_method,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **get_default_customer_config(pos_profiles),
+        **_safe_order_type_tax_config(pos_profiles),
     }
 
     return invoice_details
@@ -1034,6 +1089,7 @@ def getPosProfileFull(pos_profile):
         "custom_void_reasons": profile.get("custom_void_reasons"),
         "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
         **get_default_customer_config(profile),
+        **_safe_order_type_tax_config(profile),
     }
 
 
@@ -3388,3 +3444,275 @@ def credit_accounts(pos_profile: str, query: str):
         result.append(dict(name=row.name, customer_name=row.customer_name, balance=outstanding,
                            limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding, currency=currency))
     return result
+
+
+def _safe_order_type_tax_config(profile):
+    try:
+        from ury.ury_pos.tax_determination import get_order_type_tax_config
+
+        return get_order_type_tax_config(profile)
+    except Exception:
+        return {"tax_category": None, "order_type_tax_categories": {}}
+
+
+@frappe.whitelist()
+def preview_order_totals(
+    pos_profile,
+    order_type=None,
+    customer=None,
+    items=None,
+    no_of_pax=0,
+    invoice_name=None,
+    additional_discount_percentage=0,
+    coupon_code=None,
+    room=None,
+    table=None,
+    captured_at=None,
+):
+    """Stateless, server-authoritative order totals & tax preview (ZERO DB writes).
+
+    Constructs an in-memory POS Invoice, stamps outlet timezone, resolves menu/daypart
+    price list + time-of-day Pricing Rules + SAP/Simphony order-type Tax Category &
+    native ERPNext Tax Rule + per-item Item Tax Templates + calculate_taxes_and_totals(),
+    plus optional country-gated EFRIS readiness warnings. Never inserts, saves, or commits.
+    """
+    from frappe.utils import flt, getdate
+
+    from ury.ury_pos.dayparts import resolve_menu_and_price_list, stamp_invoice_outlet_time
+    from ury.ury_pos.default_customer import resolve_default_customer
+    from ury.ury_pos.tax_determination import apply_order_type_tax, validate_efris_readiness
+
+    if isinstance(items, str):
+        items = frappe.parse_json(items) or []
+    items = list(items or [])
+
+    profile = frappe.get_doc("POS Profile", pos_profile)
+    user_roles = set(frappe.get_roles() or [])
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+    if not is_super and profile.get("branch"):
+        user_branch = getBranch()
+        if user_branch and user_branch != profile.get("branch"):
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+
+    doc = frappe.new_doc("POS Invoice")
+    doc.is_pos = 1
+    doc.pos_profile = pos_profile
+    doc.company = profile.get("company")
+    doc.currency = profile.get("currency")
+    doc.branch = profile.get("branch")
+    doc.restaurant = (
+        profile.get("restaurant")
+        or (
+            frappe.db.get_value("URY Restaurant", {"branch": doc.branch}, "name")
+            if doc.branch
+            else None
+        )
+    )
+
+    orig_invoice = None
+    if invoice_name:
+        orig_invoice = frappe.get_doc("POS Invoice", invoice_name)
+        if callable(getattr(orig_invoice, "check_permission", None)):
+            orig_invoice.check_permission("read")
+        if not is_super and orig_invoice.get("branch") and doc.branch and orig_invoice.branch != doc.branch:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+
+    effective_order_type = (
+        (order_type or "").strip()
+        or (orig_invoice.get("order_type") if orig_invoice else None)
+        or "Dine In"
+    )
+    doc.order_type = effective_order_type
+    doc.no_of_pax = cint(no_of_pax) or (cint(orig_invoice.get("no_of_pax")) if orig_invoice else 0)
+    doc.restaurant_table = table or (orig_invoice.get("restaurant_table") if orig_invoice else None)
+    doc.custom_restaurant_room = room or (orig_invoice.get("custom_restaurant_room") if orig_invoice else None)
+
+    effective_customer = (
+        (customer or "").strip()
+        or (orig_invoice.get("customer") if orig_invoice else None)
+        or resolve_default_customer(profile, effective_order_type)
+    )
+    doc.customer = effective_customer
+    customer_doc = None
+    if effective_customer:
+        try:
+            customer_doc = frappe.get_doc("Customer", effective_customer)
+        except Exception:
+            customer_doc = None
+
+    if orig_invoice and cint(orig_invoice.get("custom_tax_exempt")) == 1:
+        doc.custom_tax_exempt = 1
+        doc.tax_category = orig_invoice.get("tax_category") or ""
+        doc.taxes_and_charges = orig_invoice.get("taxes_and_charges") or ""
+
+    if orig_invoice and orig_invoice.get("custom_serving_period"):
+        doc.custom_serving_period = orig_invoice.get("custom_serving_period")
+    if orig_invoice and orig_invoice.get("custom_transaction_local_time"):
+        doc.custom_transaction_local_time = orig_invoice.get("custom_transaction_local_time")
+    if orig_invoice and orig_invoice.get("custom_transaction_weekday"):
+        doc.custom_transaction_weekday = orig_invoice.get("custom_transaction_weekday")
+
+    stamp_at = captured_at if captured_at is not None else (orig_invoice.get("ury_offline_captured_at") if orig_invoice else None)
+    stamp_meta = stamp_invoice_outlet_time(doc, at=stamp_at)
+    local_dt = stamp_meta["local_dt"]
+    posting_date = getdate(local_dt.date() if local_dt else None)
+    doc.posting_date = posting_date
+
+    resolved = resolve_menu_and_price_list(
+        doc.branch,
+        restaurant=doc.restaurant,
+        table=doc.restaurant_table,
+        room=doc.custom_restaurant_room,
+        order_type=effective_order_type,
+        customer=effective_customer,
+        local_dt=local_dt,
+    )
+    price_list = (
+        (orig_invoice.get("selling_price_list") if orig_invoice and orig_invoice.get("custom_serving_period") else None)
+        or resolved.get("price_list")
+        or profile.get("selling_price_list")
+    )
+    doc.selling_price_list = price_list
+
+    cost_center = profile.get("cost_center") or (
+        frappe.db.get_value("POS Profile", pos_profile, "cost_center") if pos_profile else None
+    )
+    warehouse = profile.get("warehouse")
+
+    if not items and orig_invoice is not None:
+        for row in orig_invoice.get("items") or []:
+            if cint(row.get("is_disposable")) == 1:
+                continue
+            item_entry = {
+                "item_code": row.get("item_code"),
+                "item_name": row.get("item_name") or row.get("item_code"),
+                "qty": flt(row.get("qty")),
+                "rate": flt(row.get("rate")),
+                "price_list_rate": flt(row.get("price_list_rate") or row.get("rate")),
+                "base_price_list_rate": flt(row.get("base_price_list_rate") or row.get("rate")),
+                "uom": row.get("uom"),
+                "cost_center": row.get("cost_center") or cost_center,
+                "warehouse": row.get("warehouse") or warehouse,
+            }
+            for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+                if row.get(tax_field) is not None:
+                    item_entry[tax_field] = row.get(tax_field)
+            doc.append("items", item_entry)
+    else:
+        release_field, released = (None, None)
+        if price_list:
+            try:
+                release_field, released = item_price_release_states()
+            except Exception:
+                release_field, released = (None, None)
+
+        for raw in items:
+            code = raw.get("item") or raw.get("item_code")
+            qty = flt(raw.get("qty") or raw.get("quantity") or 0)
+            if not code or qty <= 0:
+                continue
+            resolved_rate = None
+            if price_list:
+                try:
+                    ip = price_valid_on(
+                        code, price_list, posting_date, release_field, released, customer=effective_customer
+                    )
+                    if ip and ip.get("price_list_rate") is not None:
+                        resolved_rate = flt(ip.get("price_list_rate"))
+                except Exception:
+                    resolved_rate = None
+            if resolved_rate is None:
+                resolved_rate = flt(raw.get("rate") or raw.get("price") or 0)
+            item_name = raw.get("item_name") or frappe.db.get_value("Item", code, "item_name") or code
+            item_entry = {
+                "item_code": code,
+                "item_name": item_name,
+                "qty": qty,
+                "rate": resolved_rate,
+                "price_list_rate": resolved_rate,
+                "base_price_list_rate": resolved_rate,
+                "cost_center": cost_center,
+            }
+            if warehouse:
+                item_entry["warehouse"] = warehouse
+            for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+                if raw.get(tax_field) is not None:
+                    item_entry[tax_field] = raw.get(tax_field)
+            doc.append("items", item_entry)
+
+    disc_pct = flt(additional_discount_percentage)
+    if disc_pct < 0 or disc_pct > 100:
+        frappe.throw(_("Discount percentage must be between 0 and 100"), frappe.ValidationError)
+    if disc_pct > 0:
+        doc.additional_discount_percentage = disc_pct
+        doc.discount_amount = 0
+    elif orig_invoice and flt(orig_invoice.get("additional_discount_percentage")) > 0 and additional_discount_percentage in (None, ""):
+        doc.additional_discount_percentage = flt(orig_invoice.get("additional_discount_percentage"))
+        doc.discount_amount = 0
+    else:
+        doc.additional_discount_percentage = 0
+        doc.discount_amount = 0
+
+    if coupon_code and getattr(doc, "meta", None) and doc.meta.has_field("coupon_code"):
+        doc.coupon_code = coupon_code
+
+    # Frappe caches per-document field currency under (doctype, doc.name) on frappe.local.field_currency;
+    # for unsaved in-memory docs doc.name is None, so an earlier unsaved POS Invoice in another currency
+    # (e.g. UGX 0dp before USD 2dp or BHD 3dp) would otherwise poison precision() on this preview.
+    local_fc = getattr(getattr(frappe, "local", None), "field_currency", None)
+    saved_none_fc = None
+    if isinstance(local_fc, dict):
+        saved_none_fc = {k: local_fc.pop(k) for k in list(local_fc.keys()) if isinstance(k, tuple) and len(k) == 2 and k[1] is None}
+
+    try:
+        apply_order_type_tax(doc, profile, customer_doc=customer_doc, posting_date=posting_date)
+        doc.set_missing_values(for_validate=True)
+        doc.calculate_taxes_and_totals()
+
+        prec = doc.precision("grand_total") if callable(getattr(doc, "precision", None)) else 2
+        if not isinstance(prec, int) or isinstance(prec, bool):
+            prec = 2
+    finally:
+        final_fc = getattr(getattr(frappe, "local", None), "field_currency", None)
+        if isinstance(final_fc, dict):
+            for k in list(final_fc.keys()):
+                if isinstance(k, tuple) and len(k) == 2 and k[1] is None:
+                    final_fc.pop(k, None)
+            if saved_none_fc:
+                final_fc.update(saved_none_fc)
+
+    efris_warnings = validate_efris_readiness(doc, throw=False)
+
+    return {
+        "net_total": flt(doc.get("net_total"), prec),
+        "discount_amount": flt(doc.get("discount_amount"), prec),
+        "tax_rows": [
+            {
+                "description": row.get("description") or row.get("account_head") or "",
+                "rate": flt(row.get("rate")),
+                "tax_amount": flt(row.get("tax_amount"), prec),
+                "account_head": row.get("account_head") or "",
+            }
+            for row in (doc.get("taxes") or [])
+        ],
+        "total_taxes_and_charges": flt(doc.get("total_taxes_and_charges"), prec),
+        "grand_total": flt(doc.get("grand_total"), prec),
+        "rounded_total": flt(doc.get("rounded_total") or doc.get("grand_total"), prec),
+        "rounding_adjustment": flt(doc.get("rounding_adjustment"), prec),
+        "tax_category": doc.get("tax_category") or "",
+        "taxes_and_charges": doc.get("taxes_and_charges") or "",
+        "serving_period": doc.get("custom_serving_period") or None,
+        "transaction_local_time": doc.get("custom_transaction_local_time") or None,
+        "transaction_weekday": doc.get("custom_transaction_weekday") or None,
+        "item_taxes": [
+            {
+                "item_code": r.get("item_code"),
+                "item_tax_template": r.get("item_tax_template") or None,
+                "item_tax_rate": r.get("item_tax_rate") or "{}",
+                "rate": flt(r.get("rate"), prec),
+                "net_amount": flt(r.get("net_amount", r.get("amount")), prec),
+            }
+            for r in (doc.get("items") or [])
+        ],
+        "efris_warnings": efris_warnings,
+    }
