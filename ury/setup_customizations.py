@@ -102,6 +102,7 @@ def get_custom_fields():
 				{
 					"fieldname": "mobile_number",
 					"fieldtype": "Data",
+					"length": 64,
 					"fetch_from": "customer.mobile_number",
 					"label": "Mobile Number",
 					"insert_after": "customer_name",
@@ -116,6 +117,7 @@ def get_custom_fields():
 				{
 					"fieldname": "order_type",
 					"fieldtype": "Select",
+					"length": 64,
 					"default": "Dine In",
 					"label": "Order Type",
 					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
@@ -125,6 +127,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_serving_period",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Serving Period",
 					"read_only": 1,
 					"no_copy": 1,
@@ -134,6 +137,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_transaction_local_time",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Transaction Local Time",
 					"description": "Zero-padded HH:MM:SS in outlet timezone for time-of-day Pricing Rules.",
 					"read_only": 1,
@@ -144,6 +148,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_transaction_weekday",
 					"fieldtype": "Select",
+					"length": 64,
 					"label": "Transaction Weekday",
 					"options": "\nMon\nTue\nWed\nThu\nFri\nSat\nSun",
 					"read_only": 1,
@@ -176,6 +181,7 @@ def get_custom_fields():
 				{
 					"fieldname": "no_of_pax",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Pax",
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,
@@ -236,7 +242,7 @@ def get_custom_fields():
 				},
 				{
 					"fieldname": "custom_merged_tables",
-					"fieldtype": "Data",
+					"fieldtype": "Small Text",
 					"insert_after": "restaurant_table",
 					"label": "Merged Tables",
 					"read_only": 1,
@@ -252,6 +258,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_split_group",
 					"fieldtype": "Data",
+					"length": 64,
 					"insert_after": "custom_split_from",
 					"label": "Split Group",
 					"read_only": 1,
@@ -283,6 +290,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_order_source",
 					"fieldtype": "Select",
+					"length": 64,
 					"default": "POS",
 					"options": "\nPOS\nCaptain\nQR Table\nQR Pickup\nKiosk\nTable Tablet",
 					"label": "Order Source",
@@ -314,6 +322,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_room_charge_stay",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Room Charge Stay",
 					"description": "Verified stay identifier bound to a room-charge settlement.",
 					"insert_after": "custom_comments",
@@ -335,8 +344,7 @@ def get_custom_fields():
 				},
 				{
 					"fieldname": "custom_override_reason",
-					"fieldtype": "Data",
-					"length": 200,
+					"fieldtype": "Small Text",
 					"label": "Override Reason",
 					"description": "Recorded reason for the manager override on this check.",
 					"insert_after": "custom_override_approver",
@@ -387,6 +395,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_serving_period",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Serving Period",
 					"read_only": 1,
 					"no_copy": 1,
@@ -396,6 +405,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_transaction_local_time",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Transaction Local Time",
 					"read_only": 1,
 					"no_copy": 1,
@@ -405,6 +415,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_transaction_weekday",
 					"fieldtype": "Select",
+					"length": 64,
 					"label": "Transaction Weekday",
 					"options": "\nMon\nTue\nWed\nThu\nFri\nSat\nSun",
 					"read_only": 1,

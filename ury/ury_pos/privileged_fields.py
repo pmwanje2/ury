@@ -182,6 +182,7 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
             {
                 "fieldname": "custom_comp_type",
                 "fieldtype": "Select",
+                "length": 64,
                 "options": "\nComplimentary\nHouse\nNon-Revenue",
                 "label": "Comp Type",
                 "read_only": 1,
@@ -226,7 +227,7 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
             },
             {
                 "fieldname": "custom_tax_exempt_certificate",
-                "fieldtype": "Data",
+                "fieldtype": "Small Text",
                 "label": "Tax Exempt Certificate / Reference",
                 "read_only": 1,
                 "no_copy": 1,
@@ -255,6 +256,7 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
             {
                 "fieldname": "custom_efris_tax_category",
                 "fieldtype": "Data",
+                "length": 64,
                 "label": "EFRIS Tax Category",
                 "description": "URA EFRIS tax category code (02 Zero-rated, 03 Exempt, 04 Deemed).",
                 "read_only": 1,

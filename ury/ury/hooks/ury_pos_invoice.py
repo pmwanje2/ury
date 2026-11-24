@@ -994,6 +994,10 @@ def _persisted_invoice_state(doc):
                 "selling_price_list",
                 "ury_offline_captured_at",
                 "order_type",
+                "customer",
+                "tax_category",
+                "taxes_and_charges",
+                "custom_tax_exempt",
                 "restaurant_table",
                 "posting_date",
                 "posting_time",
@@ -1005,6 +1009,34 @@ def _persisted_invoice_state(doc):
     except Exception:
         return None
     return None
+
+
+def _persisted_item_tax_state(prev):
+    """Return persisted item tax metadata keyed by child row name for direct-REST PUT checks."""
+    if prev is None:
+        return {}
+    rows = _doc_get(prev, "items")
+    if rows is None and _doc_get(prev, "name"):
+        try:
+            rows = frappe.get_all(
+                "POS Invoice Item",
+                filters={"parent": _doc_get(prev, "name")},
+                fields=["name", "item_code", "item_tax_template", "item_tax_rate", "custom_tax_exempt"],
+            )
+        except Exception:
+            rows = None
+    state = {}
+    for row in rows or []:
+        row_name = _doc_get(row, "name")
+        if not row_name:
+            continue
+        state[row_name] = {
+            "item_code": (_doc_get(row, "item_code") or "").strip(),
+            "item_tax_template": (_doc_get(row, "item_tax_template") or "").strip(),
+            "item_tax_rate": (_doc_get(row, "item_tax_rate") or "").strip(),
+            "custom_tax_exempt": int(float(_doc_get(row, "custom_tax_exempt") or 0)),
+        }
+    return state
 
 
 def _is_privileged_clock_user():
@@ -1201,41 +1233,79 @@ def enforce_authoritative_outlet_time(doc, method=None):
     prev_cap = _doc_get(prev, "ury_offline_captured_at") if prev is not None else None
     incoming_pl = (_doc_get(doc, "selling_price_list") or "").strip()
 
-    # Refuse forged #152 privileged item pricing or tax-exempt flags on untrusted new REST POSTs.
+    # Refuse forged #152 privileged item pricing or tax-exempt flags on untrusted REST writes.
+    prev_item_tax = _persisted_item_tax_state(prev) if prev is not None else {}
     if (
-        prev is None
-        and not (privileged_verified or trusted_pricing or bill_split_or_merge)
+        not (privileged_verified or trusted_pricing or bill_split_or_merge)
         and not is_super
         and not (getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False))
     ):
-        for item in _doc_get(doc, "items") or []:
-            if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
-                continue
-            if (
-                int(float(_doc_get(item, "custom_price_overridden") or 0)) == 1
-                or int(float(_doc_get(item, "custom_is_open_item") or 0)) == 1
-                or int(float(_doc_get(item, "custom_is_complimentary") or 0)) == 1
-                or bool((_doc_get(item, "custom_price_override_approver") or "").strip())
-            ):
+        if prev is None:
+            for item in _doc_get(doc, "items") or []:
+                if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
+                    continue
+                if (
+                    int(float(_doc_get(item, "custom_price_overridden") or 0)) == 1
+                    or int(float(_doc_get(item, "custom_is_open_item") or 0)) == 1
+                    or int(float(_doc_get(item, "custom_is_complimentary") or 0)) == 1
+                    or bool((_doc_get(item, "custom_price_override_approver") or "").strip())
+                ):
+                    from ury.brand import coded_message
+
+                    frappe.throw(
+                        coded_message(
+                            "POS-AUTH-REQUIRED",
+                            frappe._("Privileged item pricing flags must go through the POS authorisation flow."),
+                        ),
+                        frappe.PermissionError,
+                    )
+                if int(float(_doc_get(item, "custom_tax_exempt") or 0)) == 1:
+                    from ury.brand import coded_message
+
+                    frappe.throw(
+                        coded_message(
+                            "POS-AUTH-REQUIRED",
+                            frappe._("Item tax exemption must go through the POS authorisation flow."),
+                        ),
+                        frappe.PermissionError,
+                    )
+            if int(float(_doc_get(doc, "custom_tax_exempt") or 0)) == 1:
                 from ury.brand import coded_message
 
                 frappe.throw(
                     coded_message(
                         "POS-AUTH-REQUIRED",
-                        frappe._("Privileged item pricing flags must go through the POS authorisation flow."),
+                        frappe._("Tax exemption must go through the POS authorisation flow."),
                     ),
                     frappe.PermissionError,
                 )
-        if int(float(_doc_get(doc, "custom_tax_exempt") or 0)) == 1:
-            from ury.brand import coded_message
+        else:
+            for item in _doc_get(doc, "items") or []:
+                if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
+                    continue
+                row_name = _doc_get(item, "name")
+                curr_item_exempt = int(float(_doc_get(item, "custom_tax_exempt") or 0))
+                if row_name and row_name in prev_item_tax:
+                    if curr_item_exempt != prev_item_tax[row_name]["custom_tax_exempt"]:
+                        from ury.brand import coded_message
 
-            frappe.throw(
-                coded_message(
-                    "POS-AUTH-REQUIRED",
-                    frappe._("Tax exemption must go through the POS authorisation flow."),
-                ),
-                frappe.PermissionError,
-            )
+                        frappe.throw(
+                            coded_message(
+                                "POS-AUTH-REQUIRED",
+                                frappe._("Item tax exemption must go through the POS authorisation flow."),
+                            ),
+                            frappe.PermissionError,
+                        )
+                elif curr_item_exempt == 1:
+                    from ury.brand import coded_message
+
+                    frappe.throw(
+                        coded_message(
+                            "POS-AUTH-REQUIRED",
+                            frappe._("Item tax exemption must go through the POS authorisation flow."),
+                        ),
+                        frappe.PermissionError,
+                    )
 
     # Validate ury_offline_captured_at: never honor client-supplied offline timestamps unless
     # POS Profile.ury_offline_capture == 1 and the timestamp is inside the user's open shift.
@@ -1313,8 +1383,9 @@ def enforce_authoritative_outlet_time(doc, method=None):
             flags._ury_auth_local_time = _doc_get(doc, "custom_transaction_local_time")
             flags._ury_auth_weekday = _doc_get(doc, "custom_transaction_weekday")
             flags._ury_auth_serving_period = _doc_get(doc, "custom_serving_period")
-            if trusted_offline and validated_at is not None and getattr(flags, "_ury_offline_posting_dt", None) is None:
+            if (trusted_offline or prev_cap) and validated_at is not None and getattr(flags, "_ury_offline_posting_dt", None) is None:
                 flags._ury_offline_posting_dt = validated_at
+                flags.ury_trusted_offline_capture = True
     else:
         stamp_meta = stamp_invoice_outlet_time(doc, at=validated_at, overwrite=True)
         if not is_super and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
@@ -1360,19 +1431,58 @@ def enforce_authoritative_outlet_time(doc, method=None):
             authorized_row_names=authorized_rows,
         )
 
-    # G42 direct-REST hardening: ensure direct POST /api/resource/POS Invoice (or order_type PUT)
-    # on a POS Profile using custom_order_type_tax_categories resolves authoritative taxes server-side.
+    # G42 direct-REST hardening: ensure direct POST /api/resource/POS Invoice (or PUT tampering
+    # with order_type, customer, header taxes, or item_tax_template/item_tax_rate) resolves
+    # authoritative taxes server-side and overwrites tampered item tax templates fail-closed.
     if pos_profile and not (
         trusted_pricing
         or privileged_verified
         or server_ot_change
         or bill_split_or_merge
     ):
+        prev_is_exempt = prev is not None and int(float(_doc_get(prev, "custom_tax_exempt") or 0)) == 1
         order_type_changed = (
             prev is not None
             and ((_doc_get(doc, "order_type") or "").strip() != (_doc_get(prev, "order_type") or "").strip())
         )
-        if prev is None or order_type_changed:
+        customer_changed = (
+            prev is not None
+            and bool((_doc_get(prev, "customer") or "").strip())
+            and ((_doc_get(doc, "customer") or "").strip() != (_doc_get(prev, "customer") or "").strip())
+        )
+        tax_tampered = False
+        if prev is not None and not prev_is_exempt:
+            prev_tc = (_doc_get(prev, "tax_category") or "").strip()
+            prev_tpl = (_doc_get(prev, "taxes_and_charges") or "").strip()
+            curr_tc = (_doc_get(doc, "tax_category") or "").strip()
+            curr_tpl = (_doc_get(doc, "taxes_and_charges") or "").strip()
+            if (prev_tc and curr_tc != prev_tc) or (prev_tpl and curr_tpl != prev_tpl):
+                tax_tampered = True
+            elif prev_tpl and not (_doc_get(doc, "taxes") or []):
+                tax_tampered = True
+            else:
+                for item in _doc_get(doc, "items") or []:
+                    if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
+                        continue
+                    if int(float(_doc_get(item, "custom_tax_exempt") or 0)) == 1:
+                        continue
+                    row_name = _doc_get(item, "name")
+                    curr_itpl = (_doc_get(item, "item_tax_template") or "").strip()
+                    curr_irate = (_doc_get(item, "item_tax_rate") or "").strip()
+                    if not row_name or row_name not in prev_item_tax:
+                        if curr_itpl or (curr_irate and curr_irate != "{}"):
+                            tax_tampered = True
+                            break
+                    else:
+                        prev_row_tax = prev_item_tax[row_name]
+                        if (
+                            curr_itpl != prev_row_tax["item_tax_template"]
+                            or (curr_irate != prev_row_tax["item_tax_rate"] and curr_irate not in ("", "{}"))
+                        ):
+                            tax_tampered = True
+                            break
+
+        if prev is None or order_type_changed or customer_changed or tax_tampered:
             profile_doc = None
             try:
                 profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
@@ -1392,12 +1502,17 @@ def enforce_authoritative_outlet_time(doc, method=None):
                     and profile_doc.get("company")
                 ):
                     doc.company = profile_doc.get("company")
+                # Never trust client-supplied tax_category / taxes_and_charges on untrusted new
+                # REST POSTs or tampered non-exempt PUTs (prevents source=="default" bypass).
+                if (prev is None or tax_tampered) and not prev_is_exempt and int(float(_doc_get(doc, "custom_tax_exempt") or 0)) != 1:
+                    doc.tax_category = ""
+                    doc.taxes_and_charges = ""
                 from ury.ury_pos.tax_determination import apply_order_type_tax
 
                 apply_order_type_tax(
                     doc,
                     profile_doc,
-                    reset_non_exempt_item_taxes=order_type_changed,
+                    reset_non_exempt_item_taxes=True,
                 )
 
 
