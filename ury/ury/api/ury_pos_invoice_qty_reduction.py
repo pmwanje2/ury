@@ -338,8 +338,8 @@ def reduce_order_item_qty(
 			reconcile_order_reservations(order_ref=pos_invoice.name, previous_items=previous,
 				accepted_items=_previous_line_snapshot(pos_invoice.items), branch=pos_invoice.branch,
 				company=pos_invoice.company, actor=actor)
-		if held and new_qty == 0 and pos_invoice.docstatus == 0:
-			# ERPNext validates positive draft quantities again at settlement.
+		if new_qty == 0 and pos_invoice.docstatus == 0:
+			# ERPNext v16 validate_qty_is_not_zero() rejects qty==0 rows on draft POS Invoices.
 			pos_invoice.remove(item_row)
 		pos_invoice.save(ignore_permissions=False)
 	finally:
