@@ -43,14 +43,11 @@ FALLBACK_POS_REASONS = (
 )
 
 
-try:
-    from ury.ury_pos import override as _OVERRIDE_MODULE
-except ImportError:
-    from ury.ury_pos import _discount_override_stub as _OVERRIDE_MODULE
+from ury.ury_pos import override as _OVERRIDE_MODULE
 
 
 def _get_override_module():
-    """Prefer B2a's ury.ury_pos.override when present, else use the temporary contract stub."""
+    """Return B2a's manager override module."""
     return _OVERRIDE_MODULE
 
 
@@ -299,10 +296,6 @@ def enforce_remove_discount_auth(bill, pos_profile_doc, row=None, approval=None)
         coded_message("POS-AUTH-REQUIRED", _("Manager approval is required to remove this discount.")),
         frappe.PermissionError,
     )
-
-
-if hasattr(_OVERRIDE_MODULE, "_bind_discount_helpers"):
-    _OVERRIDE_MODULE._bind_discount_helpers(company_discount_policy, user_discount_limit)
 
 
 def _above_limit(discount_amount, basis_amount, explicit_percent, limit_percent, precision):

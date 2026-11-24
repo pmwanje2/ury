@@ -11,6 +11,7 @@ Matches pos-override-contract.md and pos-pms-side-gaps.md §4.1–4.7:
   REST straight to save, split/merge checks with discount, and partial return flat-discount proration.
 """
 
+import datetime
 import importlib.util
 import json
 import math
@@ -76,12 +77,21 @@ def _make_frappe_double():
     framework = MagicMock()
     framework.PermissionError = NotPermitted
     framework.ValidationError = Refused
+    framework.UniqueValidationError = type("UniqueCollision", (Refused,), {})
+    framework.AuthenticationError = type("AuthFailed", (NotPermitted,), {})
     framework._ = lambda *messages: messages[0]
     framework.whitelist = lambda *args, **kwargs: (lambda fn: fn)
     framework._dict = Row
     framework.flags = SimpleNamespace()
-    framework.session = SimpleNamespace(user="cashier@example.com")
-    framework.request = SimpleNamespace(path="/api/method/ury.ury.doctype.ury_order.ury_order.make_invoice")
+    framework.conf = {}
+    framework.form_dict = {}
+    framework.session = SimpleNamespace(user="cashier@example.com", sid="sess-1")
+    framework.local = SimpleNamespace(session=framework.session)
+    framework.request = SimpleNamespace(
+        path="/api/method/ury.ury.doctype.ury_order.ury_order.make_invoice",
+        headers={},
+        cookies={"sid": "sess-1"},
+    )
 
     cache_store = {}
 
@@ -128,11 +138,12 @@ def _make_frappe_double():
         "frappe.utils",
         cint=cint_fn,
         flt=flt_fn,
-        get_datetime=lambda v=None: v,
+        get_datetime=lambda v=None: v if isinstance(v, datetime.datetime) else datetime.datetime(2026, 11, 24, 12, 0, 0),
+        get_fullname=lambda u=None: str(u or ""),
         getdate=lambda v=None: v,
         today=lambda: "2026-11-24",
         get_system_timezone=lambda: "Africa/Kampala",
-        now_datetime=lambda: None,
+        now_datetime=lambda: datetime.datetime(2026, 11, 24, 12, 0, 0),
         now=lambda: "2026-11-24 12:00:00",
         get_time=lambda v=None: v,
         get_first_day=lambda v=None: v,
@@ -338,9 +349,40 @@ def _load_modules():
         "ury.brand",
         coded_message=lambda key, msg="": f"[{key}] {msg}".strip(),
     )
+    class _FakeTracker:
+        def __init__(self, key, max_consecutive_login_attempts=5, lock_interval=900):
+            self.key = key
+
+        def is_user_allowed(self):
+            return True
+
+        def add_failure_attempt(self):
+            pass
+
+        def add_success_attempt(self):
+            pass
+
     modules = {
         "frappe": framework,
+        "frappe.auth": _stub("frappe.auth", LoginAttemptTracker=_FakeTracker),
         "frappe.utils": utils,
+        "frappe.utils.password": _stub(
+            "frappe.utils.password",
+            check_password=MagicMock(),
+            get_encryption_key=lambda: "test-encryption-key",
+        ),
+        "frappe.core": _stub("frappe.core"),
+        "frappe.core.doctype": _stub("frappe.core.doctype"),
+        "frappe.core.doctype.activity_log": _stub("frappe.core.doctype.activity_log"),
+        "frappe.core.doctype.activity_log.activity_log": _stub(
+            "frappe.core.doctype.activity_log.activity_log",
+            add_authentication_log=MagicMock(),
+        ),
+        "frappe.core.doctype.user_permission": _stub("frappe.core.doctype.user_permission"),
+        "frappe.core.doctype.user_permission.user_permission": _stub(
+            "frappe.core.doctype.user_permission.user_permission",
+            get_user_permissions=lambda *a, **k: {},
+        ),
         "frappe.model.document": _stub("frappe.model.document", Document=object),
         "erpnext.controllers.queries": _stub("erpnext.controllers.queries", item_query=MagicMock()),
         "ury.brand": brand_mod,
@@ -468,6 +510,8 @@ class DiscountBase(unittest.TestCase):
         self.has_discount_reason_doctype = True
         self.has_privilege_rule_doctype = False
         self.privilege_rules = []  # list[Row] matching B2a POS Privilege Rule schema
+        self.auth_logs = []  # in-memory POS Authorisation Log rows for real ury.ury_pos.override
+        self.consumed_token_hashes = set()
         self.reasons = {
             "Corporate rate": Row(name="Corporate rate", code="Corporate rate", description="Corporate rate", applies_to="POS", requires_supervisor=0, requires_note=0, sort_order=10, disabled=0),
             "Complaint": Row(name="Complaint", code="Complaint", description="Guest complaint", applies_to="Both", requires_supervisor=0, requires_note=0, sort_order=20, disabled=0),
@@ -496,6 +540,7 @@ class DiscountBase(unittest.TestCase):
             branch="Lakeside",
             currency="UGX",
             customer="Walk-in",
+            disabled=0,
             allow_discount_change=1,
             custom_enable_discount=1,
             apply_discount_on="Grand Total",
@@ -504,6 +549,7 @@ class DiscountBase(unittest.TestCase):
             applicable_for_users=[
                 Row(user="cashier@example.com"),
                 Row(user="manager@example.com"),
+                Row(user="gm@example.com"),
             ],
         )
         self.docs = {}  # (doctype, name) -> doc
@@ -513,7 +559,9 @@ class DiscountBase(unittest.TestCase):
         )
         self.frappe.get_meta.side_effect = self._get_meta
         self.frappe.db.exists.side_effect = self._db_exists
+        self.frappe.db.table_exists.side_effect = self._db_table_exists
         self.frappe.db.get_value.side_effect = self._db_get_value
+        self.frappe.db.is_unique_key_violation.return_value = False
         self.frappe.get_cached_value.side_effect = self._get_cached_value
         self.frappe.get_cached_doc.side_effect = self._get_cached_doc
         self.frappe.get_doc.side_effect = self._get_doc
@@ -524,8 +572,17 @@ class DiscountBase(unittest.TestCase):
             ["test.pin_verifier"] if hook == "pos_override_pin_verifier" else []
         )
         self.frappe.get_attr.side_effect = lambda path: (
-            (lambda user, pin, **kw: pin == "4321") if path == "test.pin_verifier" else None
+            (lambda user, pin, *a, **kw: pin == "4321") if path == "test.pin_verifier" else None
         )
+
+    def _db_table_exists(self, doctype):
+        if doctype == "Approval Limit":
+            return self.has_approval_limit_doctype
+        if doctype == "Discount Reason":
+            return self.has_discount_reason_doctype
+        if doctype == "POS Privilege Rule":
+            return True
+        return True
 
     def _get_meta(self, doctype):
         if doctype == "POS Invoice":
@@ -553,6 +610,14 @@ class DiscountBase(unittest.TestCase):
             return name in self.coupons
         if doctype == "Approval Limit":
             return self.has_approval_limit_doctype and name in self.approval_limits
+        if doctype == "User":
+            return name if isinstance(name, str) and name in self.roles_by_user else None
+        if doctype == "POS Profile":
+            return name if name == self.profile.name else None
+        if doctype == "URY User":
+            return True
+        if doctype == "POS Privilege Rule":
+            return any(all(r.get(k) == v for k, v in (name or {}).items()) for r in self.privilege_rules)
         return (doctype, name) in self.docs
 
     def _db_get_value(self, doctype, filters, fieldname=None, as_dict=False, **kw):
@@ -598,11 +663,29 @@ class DiscountBase(unittest.TestCase):
                 return self.item_max_discount.get(filters, 0)
             return None
         if doctype == "User":
+            if isinstance(fieldname, (list, tuple)):
+                data = {"name": filters, "enabled": 1, "user_type": "System User", "full_name": filters}
+                return Row({f: data.get(f) for f in fieldname}) if as_dict else tuple(data.get(f) for f in fieldname)
             if fieldname == "enabled":
                 return 1
+            if fieldname == "user_type":
+                return "System User"
             if fieldname == "full_name":
                 return filters
             return 1
+        if doctype == "POS Authorisation Log":
+            match = None
+            if isinstance(filters, dict):
+                for entry in reversed(self.auth_logs):
+                    if all(entry.get(k) == v for k, v in filters.items()):
+                        match = entry
+                        break
+            if not match:
+                return None
+            if isinstance(fieldname, (list, tuple)):
+                out = Row({f: match.get(f) for f in fieldname})
+                return out if as_dict else tuple(match.get(f) for f in fieldname)
+            return match.get(fieldname)
         if doctype == "POS Invoice":
             doc = self.docs.get(("POS Invoice", filters))
             if not doc:
@@ -629,6 +712,28 @@ class DiscountBase(unittest.TestCase):
         return self._get_doc(doctype, name)
 
     def _get_doc(self, doctype, name=None, **kw):
+        if isinstance(doctype, dict):
+            payload = dict(doctype)
+            case = self
+
+            class _LogDoc(Row):
+                def __init__(self, d):
+                    super().__init__(d)
+                    self.flags = SimpleNamespace()
+
+                def insert(self, ignore_permissions=False, **ikw):
+                    if self.get("doctype") == "POS Authorisation Log":
+                        cth = self.get("consumed_token_hash")
+                        if cth:
+                            if cth in case.consumed_token_hashes:
+                                raise case.frappe.UniqueValidationError("Duplicate consumed_token_hash")
+                            case.consumed_token_hashes.add(cth)
+                        if not self.get("name"):
+                            self["name"] = f"LOG-{len(case.auth_logs) + 1:04d}"
+                        case.auth_logs.append(Row(self))
+                    return self
+
+            return _LogDoc(payload)
         if doctype == "POS Profile":
             return self.profile
         if doctype == "Coupon Code" and name in self.coupons:
@@ -665,6 +770,15 @@ class DiscountBase(unittest.TestCase):
             return [r.get(pluck) for r in rows] if pluck else rows
         if doctype == "POS Privilege Rule":
             rows = list(self.privilege_rules)
+            # When privilege_rules wasn't explicitly populated for override.py authorise() tests,
+            # provide default manager authorise rules matching B2a seed-once defaults ONLY when
+            # filtering by role (override._effective_rules_for_roles), not when discount.py probes company rules.
+            if not rows and not self.has_privilege_rule_doctype and "role" in filters:
+                rows = [
+                    Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager", may_perform=1, may_authorise=1, max_percent=0, max_amount=0, allow_self_approval=0, require_clocked_in=0, privilege_group=0),
+                    Row(company="Lakeside Hotel", pos_profile="", privilege="complimentary", role="URY Manager", may_perform=0, may_authorise=1, max_percent=0, max_amount=0, allow_self_approval=0, require_clocked_in=0, privilege_group=0),
+                    Row(company="Lakeside Hotel", pos_profile="", privilege="discount_remove", role="URY Manager", may_perform=1, may_authorise=1, max_percent=0, max_amount=0, allow_self_approval=0, require_clocked_in=0, privilege_group=0),
+                ]
             for k, v in filters.items():
                 if isinstance(v, (list, tuple)) and v[0] == "in":
                     rows = [r for r in rows if r.get(k) in v[1]]

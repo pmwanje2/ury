@@ -74,12 +74,27 @@ def _site_less_frappe():
         cint=lambda value: int(value or 0),
         flt=lambda value, precision=None: round(float(value or 0), precision) if precision else float(value or 0),
         get_datetime=lambda value=None: value,
+        get_fullname=lambda value=None: str(value or ""),
         get_system_timezone=lambda: "Africa/Kampala",
         now_datetime=lambda: None,
     )
     return framework, {
         "frappe": framework,
+        "frappe.auth": _stub("frappe.auth", LoginAttemptTracker=MagicMock()),
         "frappe.utils": utils,
+        "frappe.utils.password": _stub(
+            "frappe.utils.password", check_password=MagicMock(), get_encryption_key=lambda: "test-key"
+        ),
+        "frappe.core": _stub("frappe.core"),
+        "frappe.core.doctype": _stub("frappe.core.doctype"),
+        "frappe.core.doctype.activity_log": _stub("frappe.core.doctype.activity_log"),
+        "frappe.core.doctype.activity_log.activity_log": _stub(
+            "frappe.core.doctype.activity_log.activity_log", add_authentication_log=MagicMock()
+        ),
+        "frappe.core.doctype.user_permission": _stub("frappe.core.doctype.user_permission"),
+        "frappe.core.doctype.user_permission.user_permission": _stub(
+            "frappe.core.doctype.user_permission.user_permission", get_user_permissions=lambda *a, **k: {}
+        ),
         "frappe.model.document": _stub("frappe.model.document", Document=object),
         "erpnext.controllers.queries": _stub("erpnext.controllers.queries", item_query=MagicMock()),
         "ury.ury_pos.api": _stub(
