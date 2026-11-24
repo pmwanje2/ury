@@ -11,6 +11,7 @@ import { useRootStore } from '../store/root-store';
 import { printOrder } from '../lib/print';
 import { queuePendingFiscalReprint, resolveEfrisPrintWaitSeconds, waitForEfrisFdn } from '../lib/efris-print';
 import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../lib/invoice-api';
+import { formatPreviewTaxLabel } from '../lib/tax-preview-label';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 import { useOrderPreview } from '../lib/use-order-preview';
 
@@ -666,7 +667,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                       key={`${taxRow.description}-${idx}`}
                       className="flex justify-between tabular-nums"
                     >
-                      <span className="truncate pe-2">{taxRow.description || t('payment.tax')}</span>
+                      <span className="truncate pe-2">
+                        {formatPreviewTaxLabel(taxRow, taxPreview.net_total, t('payment.tax'))}
+                      </span>
                       <span className="shrink-0">{formatMoney(taxRow.tax_amount)}</span>
                     </div>
                   ))}

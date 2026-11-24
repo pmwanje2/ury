@@ -342,6 +342,11 @@ class TestOpenCheckRateStability(unittest.TestCase):
                 "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
                 get_applicable_policy=MagicMock(),
             ),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                prorate_return_discount=MagicMock(),
+                validate_pos_discount=MagicMock(),
+            ),
         }
         with patch.dict(sys.modules, modules):
             if not (URY_PKG / "ury_pos/dayparts.py").is_file():

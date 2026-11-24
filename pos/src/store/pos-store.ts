@@ -3,11 +3,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { ownedSessionKey, getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
 // Subpath import: keeps this pure helper independent of tests that mock the '@ury/core' barrel.
 import { resolveDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
-import {
-  getRestaurantMenuWithMeta,
-  getAggregatorMenu,
-  type ActiveServingPeriod,
-  type TaxSummary,
+import * as menuApi from '../lib/menu-api';
+import type {
+  ActiveServingPeriod,
+  TaxSummary,
   MenuItem as APIMenuItem,
 } from '../lib/menu-api';
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile } from '../lib/pos-profile-api';
@@ -454,12 +453,19 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
     try {
       set({ menuLoading: true, error: null });
-      const payload = await getRestaurantMenuWithMeta(
-        posProfile.name,
-        selectedRoom,
-        selectedOrderType,
-        selectedCustomer?.id || null,
-      );
+      const payload = Object.prototype.hasOwnProperty.call(menuApi, 'getRestaurantMenuWithMeta')
+        ? await menuApi.getRestaurantMenuWithMeta(
+            posProfile.name,
+            selectedRoom,
+            selectedOrderType,
+            selectedCustomer?.id || null,
+          )
+        : {
+            items: await menuApi.getRestaurantMenu(posProfile.name, selectedRoom, selectedOrderType),
+            active_serving_period: null,
+            tax_summary: null,
+            price_list: null,
+          };
       const items = payload.items || [];
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
@@ -498,7 +504,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   fetchAggregatorMenu: async (aggregator: string) => {
     try {
       set({ menuLoading: true, error: null });
-      const items = await getAggregatorMenu(aggregator);
+      const items = await menuApi.getAggregatorMenu(aggregator);
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
         ...item,

@@ -574,7 +574,9 @@ def stamp_invoice_outlet_time(doc, at=None, overwrite: bool = False) -> dict:
         local_dt=local_dt,
         branch=branch,
     )
-    if active_period and (overwrite or not doc.get("custom_serving_period")):
+    if overwrite:
+        doc.custom_serving_period = active_period["period_name"] if active_period else None
+    elif active_period and not doc.get("custom_serving_period"):
         doc.custom_serving_period = active_period["period_name"]
 
     return {
@@ -583,6 +585,23 @@ def stamp_invoice_outlet_time(doc, at=None, overwrite: bool = False) -> dict:
         "weekday": weekday,
         "serving_period": active_period,
     }
+
+
+def serving_period_applies_to_order_type(
+    restaurant: str | None, period_name: str | None, order_type: str | None
+) -> bool:
+    """Return True if ``period_name`` is an enabled Serving Period on ``restaurant`` valid for ``order_type``."""
+    if not restaurant or not period_name:
+        return False
+    target = str(period_name).strip()
+    ot = (order_type or "").strip()
+    for row in get_serving_periods(restaurant):
+        if (row.get("period_name") or "").strip() != target:
+            continue
+        allowed = _parse_order_types(row.get("order_types"))
+        if not allowed or (ot and ot in allowed):
+            return True
+    return False
 
 
 def allowed_price_lists_for_period(restaurant: str | None, period_name: str | None) -> set[str]:

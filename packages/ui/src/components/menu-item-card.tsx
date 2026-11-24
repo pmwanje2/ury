@@ -200,7 +200,11 @@ export function MenuItemCard({
           </div>
         )}
         {promoBadge && !unavailableMessage && (
-          <span className="absolute start-1 top-1 rounded bg-emerald-600/95 px-2 py-0.5 text-[10px] font-semibold text-white">
+          <span
+            data-testid="menu-item-promo-badge"
+            title={promoBadge}
+            className="absolute bottom-1.5 start-1.5 max-w-[calc(100%-0.75rem)] truncate rounded bg-emerald-600/95 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+          >
             {promoBadge}
           </span>
         )}

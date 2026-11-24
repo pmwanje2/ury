@@ -53,6 +53,9 @@ def resolve_restaurant_menu(
         resolve_menu_and_price_list,
     )
 
+    if isinstance(pos_profile, str):
+        pos_profile = frappe.get_doc("POS Profile", pos_profile.strip()) if pos_profile.strip() else None
+
     restaurant = frappe.db.get_value("URY Restaurant", {"branch": branch}, "name")
     resolved = resolve_menu_and_price_list(
         branch,
@@ -184,16 +187,100 @@ def resolve_restaurant_menu(
         "tax_summary": tax_summary,
     }
 
+def _authorize_pos_profile_access(profile, *, expected_branch=None):
+    """Enforce read permission and branch/outlet authorization on a POS Profile."""
+    if callable(getattr(profile, "check_permission", None)):
+        profile.check_permission("read")
+    elif not frappe.has_permission("POS Profile", "read", doc=profile):
+        frappe.throw(_("Not permitted to access this POS Profile."), frappe.PermissionError)
+
+    user_roles = set(frappe.get_roles() or [])
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+    if is_super:
+        return None
+
+    user_branch = expected_branch if expected_branch is not None else getBranch()
+    profile_branch = (profile.get("branch") or "").strip() if hasattr(profile, "get") else ""
+    if profile_branch:
+        if not user_branch or user_branch != profile_branch:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+        return user_branch
+
+    # Branchless POS Profile: non-privileged POS users must be explicitly listed in
+    # applicable_for_users and match the branch's company when both are set.
+    applicable_users = [
+        (row.get("user") or "").strip()
+        for row in (profile.get("applicable_for_users") or [])
+        if (row.get("user") or "").strip()
+    ]
+    if not applicable_users or frappe.session.user not in applicable_users:
+        frappe.throw(_("Not permitted to access this POS Profile."), frappe.PermissionError)
+
+    profile_company = (profile.get("company") or "").strip() if hasattr(profile, "get") else ""
+    if user_branch and profile_company:
+        branch_company = (frappe.db.get_value("Branch", user_branch, "company") or "").strip()
+        if branch_company and branch_company != profile_company:
+            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+    return user_branch
+
+
+def _authorize_customer_for_pos_profile(customer_name, profile):
+    """Load Customer and enforce Frappe read/User Permissions and POS Profile customer-group scope."""
+    customer_doc = frappe.get_doc("Customer", customer_name)
+    if callable(getattr(customer_doc, "check_permission", None)):
+        customer_doc.check_permission("read")
+    if not frappe.has_permission("Customer", "read", doc=customer_doc):
+        frappe.throw(_("Not permitted to access this Customer."), frappe.PermissionError)
+
+    user_roles = set(frappe.get_roles() or [])
+    is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
+    if is_super:
+        return customer_doc
+
+    allowed_groups = {
+        (row.get("customer_group") or "").strip()
+        for row in (profile.get("customer_groups") or [])
+        if (row.get("customer_group") or "").strip()
+    }
+    if allowed_groups:
+        cust_group = (customer_doc.get("customer_group") or "").strip()
+        if cust_group and cust_group not in allowed_groups:
+            group_permitted = False
+            try:
+                bounds = frappe.db.get_value("Customer Group", cust_group, ["lft", "rgt"], as_dict=True)
+                if isinstance(bounds, dict) and bounds.get("lft") is not None:
+                    ancestors = frappe.get_all(
+                        "Customer Group",
+                        filters={"lft": ["<=", bounds["lft"]], "rgt": [">=", bounds["rgt"]]},
+                        pluck="name",
+                    )
+                    group_permitted = bool(set(ancestors or []) & allowed_groups)
+            except Exception:
+                group_permitted = False
+            if not group_permitted:
+                frappe.throw(_("Customer is not permitted for this POS Profile."), frappe.PermissionError)
+
+    cust_branch = (customer_doc.get("branch") or "").strip() if hasattr(customer_doc, "get") else ""
+    profile_branch = (profile.get("branch") or "").strip() if hasattr(profile, "get") else ""
+    if cust_branch and profile_branch and cust_branch != profile_branch:
+        frappe.throw(_("Not permitted to access a customer outside your active branch."), frappe.PermissionError)
+
+    return customer_doc
+
+
 @frappe.whitelist()
 def getRestaurantMenu(pos_profile, room=None, order_type=None, customer=None):
     user_role = frappe.get_roles()
 
     pos_profile = frappe.get_doc("POS Profile", pos_profile)
+    branch_name = getBranch()
+    _authorize_pos_profile_access(pos_profile, expected_branch=branch_name)
+    if customer and str(customer).strip():
+        _authorize_customer_for_pos_profile(str(customer).strip(), pos_profile)
 
     cashier = any(
         role.role in user_role for role in pos_profile.role_allowed_for_billing
     )
-    branch_name = getBranch()
 
     return resolve_restaurant_menu(
         branch_name,
@@ -3483,6 +3570,159 @@ def _safe_order_type_tax_config(profile):
         return {"tax_category": None, "order_type_tax_categories": {}}
 
 
+def _apply_preview_selling_pricing_rules(doc):
+    """Evaluate native ERPNext selling Pricing Rules when previewing a cart without a customer.
+
+    ERPNext v16's ``set_transaction_type()`` omits ``POS Invoice`` from its selling doctype
+    tuple, falling back to ``transaction_type='buying'`` whenever ``doc.customer`` is blank.
+    Invoking ``get_pricing_rule_for_item`` with explicit ``transaction_type='selling'`` ensures
+    cart preview matches ``MenuCard`` and ``sync_order`` identically before a customer is chosen.
+    """
+    if doc.get("customer") or cint(doc.get("ignore_pricing_rule")) == 1:
+        return
+    try:
+        from erpnext.accounts.doctype.pricing_rule.pricing_rule import get_pricing_rule_for_item
+    except (ImportError, ModuleNotFoundError):
+        return
+
+    apply_fn = getattr(doc, "apply_pricing_rule_on_items", None)
+    if not callable(apply_fn):
+        return
+
+    dict_cls = getattr(frappe, "_dict", None)
+    if not isinstance(dict_cls, type):
+        dict_cls = dict
+
+    for item in doc.get("items") or []:
+        if cint(item.get("is_disposable")) == 1 or not item.get("item_code"):
+            continue
+        ctx = dict_cls(
+            {
+                "doctype": "POS Invoice",
+                "name": doc.get("name"),
+                "child_doctype": "POS Invoice Item",
+                "child_docname": item.get("name"),
+                "transaction_type": "selling",
+                "company": doc.get("company"),
+                "currency": doc.get("currency"),
+                "conversion_rate": doc.get("conversion_rate") or 1.0,
+                "price_list": doc.get("selling_price_list"),
+                "selling_price_list": doc.get("selling_price_list"),
+                "price_list_currency": doc.get("price_list_currency") or doc.get("currency"),
+                "plc_conversion_rate": doc.get("plc_conversion_rate") or 1.0,
+                "posting_date": doc.get("posting_date"),
+                "transaction_date": doc.get("posting_date"),
+                "coupon_code": doc.get("coupon_code"),
+                "ignore_pricing_rule": 0,
+                "item_code": item.get("item_code"),
+                "item_group": item.get("item_group"),
+                "brand": item.get("brand"),
+                "qty": item.get("qty"),
+                "stock_qty": item.get("stock_qty") or item.get("qty"),
+                "uom": item.get("uom") or item.get("stock_uom"),
+                "price_list_rate": item.get("price_list_rate"),
+                "rate": item.get("rate"),
+                "warehouse": item.get("warehouse"),
+            }
+        )
+        try:
+            ret = get_pricing_rule_for_item(ctx, doc=doc, for_validate=False)
+        except Exception:
+            continue
+        if ret and ret.get("pricing_rules"):
+            apply_fn(item, ret)
+
+
+def _format_rate_pct(rate: float) -> str:
+    rounded = round(float(rate), 2)
+    return str(int(rounded)) if rounded == int(rounded) else f"{rounded:g}"
+
+
+def _clean_tax_account_label(account_head: str | None, fallback_desc: str | None = None) -> str:
+    import re
+
+    acct = (account_head or "").strip()
+    if acct:
+        stripped = re.sub(r"\s+-\s+[A-Za-z0-9]+$", "", acct).strip()
+        if stripped:
+            return stripped
+    desc = (fallback_desc or "").strip()
+    if desc:
+        return re.sub(r"\s*\(\s*\d+(?:\.\d+)?%\s*\)\s*$", "", desc).strip() or desc
+    return ""
+
+
+def _build_preview_tax_rows(doc, prec: int) -> list[dict]:
+    """Build truthful preview tax rows, surfacing actual item-level rates when Item Tax Templates
+    override the header Sales Taxes and Charges template rate."""
+    from frappe.utils import flt
+
+    item_wise_rows = doc.get("item_wise_tax_details") or []
+    items = [r for r in (doc.get("items") or []) if cint(r.get("is_disposable")) != 1]
+
+    result = []
+    for row in doc.get("taxes") or []:
+        account_head = row.get("account_head") or ""
+        header_rate = flt(row.get("rate"))
+        raw_desc = row.get("description") or account_head or ""
+        tax_row_name = row.get("name")
+
+        applied_rates: list[float] = []
+        if tax_row_name and item_wise_rows:
+            for iwd in item_wise_rows:
+                if iwd.get("tax_row") == tax_row_name and flt(iwd.get("taxable_amount")) > 0:
+                    applied_rates.append(round(flt(iwd.get("rate")), 4))
+
+        if not applied_rates and account_head and items:
+            for item in items:
+                raw_map = item.get("item_tax_rate")
+                item_rate = header_rate
+                if raw_map:
+                    try:
+                        parsed = json.loads(raw_map) if isinstance(raw_map, str) else raw_map
+                        if isinstance(parsed, dict) and account_head in parsed:
+                            item_rate = flt(parsed[account_head])
+                    except Exception:
+                        pass
+                applied_rates.append(round(item_rate, 4))
+
+        distinct_rates = sorted(set(applied_rates))
+        non_zero_rates = sorted({r for r in distinct_rates if r > 0})
+        overridden = any(abs(r - header_rate) > 1e-6 for r in distinct_rates)
+
+        item_rate_override = False
+        effective_rate = header_rate
+        description = raw_desc
+
+        if overridden:
+            base_label = _clean_tax_account_label(account_head, raw_desc)
+            if len(distinct_rates) == 1:
+                item_rate_override = True
+                effective_rate = distinct_rates[0]
+                description = f"{base_label} ({_format_rate_pct(effective_rate)}%)" if base_label else f"{_format_rate_pct(effective_rate)}%"
+            elif len(non_zero_rates) == 1 and abs(non_zero_rates[0] - header_rate) > 1e-6:
+                item_rate_override = True
+                effective_rate = non_zero_rates[0]
+                description = f"{base_label} ({_format_rate_pct(effective_rate)}%)" if base_label else f"{_format_rate_pct(effective_rate)}%"
+            elif len(non_zero_rates) > 1:
+                item_rate_override = True
+                effective_rate = None
+                description = base_label or raw_desc
+
+        result.append(
+            {
+                "description": description,
+                "rate": effective_rate if effective_rate is not None else header_rate,
+                "header_rate": header_rate,
+                "effective_rate": effective_rate,
+                "item_rate_override": item_rate_override,
+                "tax_amount": flt(row.get("tax_amount"), prec),
+                "account_head": account_head,
+            }
+        )
+    return result
+
+
 @frappe.whitelist()
 def preview_order_totals(
     pos_profile,
@@ -3515,12 +3755,18 @@ def preview_order_totals(
     items = list(items or [])
 
     profile = frappe.get_doc("POS Profile", pos_profile)
+    _authorize_pos_profile_access(profile)
     user_roles = set(frappe.get_roles() or [])
     is_super = frappe.session.user == "Administrator" or "System Manager" in user_roles
-    if not is_super and profile.get("branch"):
-        user_branch = getBranch()
-        if user_branch and user_branch != profile.get("branch"):
-            frappe.throw(_("Not permitted outside your active branch."), frappe.PermissionError)
+
+    if captured_at is not None and cint(profile.get("ury_offline_capture")) != 1:
+        frappe.throw(
+            coded_message(
+                "OFFLINE-CAPTURE-DISABLED",
+                _("Offline capture is not enabled for this POS Profile."),
+            ),
+            frappe.ValidationError,
+        )
 
     doc = frappe.new_doc("POS Invoice")
     doc.is_pos = 1
@@ -3563,10 +3809,7 @@ def preview_order_totals(
     doc.customer = effective_customer
     customer_doc = None
     if effective_customer:
-        try:
-            customer_doc = frappe.get_doc("Customer", effective_customer)
-        except Exception:
-            customer_doc = None
+        customer_doc = _authorize_customer_for_pos_profile(effective_customer, profile)
 
     if orig_invoice and cint(orig_invoice.get("custom_tax_exempt")) == 1:
         doc.custom_tax_exempt = 1
@@ -3585,6 +3828,7 @@ def preview_order_totals(
     local_dt = stamp_meta["local_dt"]
     posting_date = getdate(local_dt.date() if local_dt else None)
     doc.posting_date = posting_date
+    doc.posting_time = stamp_meta["local_time"]
 
     resolved = resolve_menu_and_price_list(
         doc.branch,
@@ -3601,6 +3845,8 @@ def preview_order_totals(
         or profile.get("selling_price_list")
     )
     doc.selling_price_list = price_list
+    if getattr(doc, "flags", None) is not None:
+        doc.flags.ury_authoritative_price_list = price_list
 
     cost_center = profile.get("cost_center") or (
         frappe.db.get_value("POS Profile", pos_profile, "cost_center") if pos_profile else None
@@ -3618,6 +3864,8 @@ def preview_order_totals(
                 "rate": flt(row.get("rate")),
                 "price_list_rate": flt(row.get("price_list_rate") or row.get("rate")),
                 "base_price_list_rate": flt(row.get("base_price_list_rate") or row.get("rate")),
+                "discount_percentage": flt(row.get("discount_percentage")),
+                "discount_amount": flt(row.get("discount_amount")),
                 "uom": row.get("uom"),
                 "cost_center": row.get("cost_center") or cost_center,
                 "warehouse": row.get("warehouse") or warehouse,
@@ -3674,9 +3922,18 @@ def preview_order_totals(
     if disc_pct > 0:
         doc.additional_discount_percentage = disc_pct
         doc.discount_amount = 0
-    elif orig_invoice and flt(orig_invoice.get("additional_discount_percentage")) > 0 and additional_discount_percentage in (None, ""):
-        doc.additional_discount_percentage = flt(orig_invoice.get("additional_discount_percentage"))
-        doc.discount_amount = 0
+    elif orig_invoice and additional_discount_percentage in (None, "", 0, "0"):
+        if flt(orig_invoice.get("additional_discount_percentage")) > 0:
+            doc.additional_discount_percentage = flt(orig_invoice.get("additional_discount_percentage"))
+            doc.discount_amount = 0
+        elif flt(orig_invoice.get("discount_amount")) > 0:
+            doc.additional_discount_percentage = 0
+            doc.discount_amount = flt(orig_invoice.get("discount_amount"))
+        else:
+            doc.additional_discount_percentage = 0
+            doc.discount_amount = 0
+        if orig_invoice.get("apply_discount_on"):
+            doc.apply_discount_on = orig_invoice.get("apply_discount_on")
     else:
         doc.additional_discount_percentage = 0
         doc.discount_amount = 0
@@ -3695,6 +3952,8 @@ def preview_order_totals(
     try:
         apply_order_type_tax(doc, profile, customer_doc=customer_doc, posting_date=posting_date)
         doc.set_missing_values(for_validate=True)
+        if not orig_invoice:
+            _apply_preview_selling_pricing_rules(doc)
         doc.calculate_taxes_and_totals()
 
         prec = doc.precision("grand_total") if callable(getattr(doc, "precision", None)) else 2
@@ -3714,15 +3973,7 @@ def preview_order_totals(
     return {
         "net_total": flt(doc.get("net_total"), prec),
         "discount_amount": flt(doc.get("discount_amount"), prec),
-        "tax_rows": [
-            {
-                "description": row.get("description") or row.get("account_head") or "",
-                "rate": flt(row.get("rate")),
-                "tax_amount": flt(row.get("tax_amount"), prec),
-                "account_head": row.get("account_head") or "",
-            }
-            for row in (doc.get("taxes") or [])
-        ],
+        "tax_rows": _build_preview_tax_rows(doc, prec),
         "total_taxes_and_charges": flt(doc.get("total_taxes_and_charges"), prec),
         "grand_total": flt(doc.get("grand_total"), prec),
         "rounded_total": flt(doc.get("rounded_total") or doc.get("grand_total"), prec),

@@ -570,7 +570,7 @@ def get_custom_fields():
 				"fieldtype": "Table",
 				"label": "Order Type Tax Categories",
 				"options": "POS Order Type Tax Category",
-				"description": "Map each order type (Dine In, Take Away, Delivery, Phone In, Aggregators) to a native Tax Category so ERPNext Tax Rules resolve the right tax template automatically.",
+				"description": "Map each order type (Dine In, Take Away, Delivery, Phone In, Aggregators) to a Tax Category so Tax Rules resolve the right tax template automatically.",
 				"insert_after": "tax_category",
 			}
 		],

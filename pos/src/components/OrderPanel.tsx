@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
-import { formatCurrency, parseFrappeError, resolveDefaultCustomer } from '@ury/core';
+import { formatCurrency, parseFrappeError } from '@ury/core';
+import { resolveDefaultCustomer } from '@ury/core/default-customer';
 import { CustomerSelect } from './CustomerSelect';
 import ProductDialog from './ProductDialog';
 import OrderTypeSelect from './OrderTypeSelect';
@@ -15,6 +16,7 @@ import { useOutbox } from '../offline/use-outbox';
 import { roundItems } from '../offline/outbox';
 import { submitOrderOfflineAware } from '../offline/cashier';
 import { syncOrder, type SavedInvoice, type SyncOrderRequest } from '../lib/order-api';
+import { formatPreviewTaxLabel } from '../lib/tax-preview-label';
 import { useOrderPreview } from '../lib/use-order-preview';
 import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
@@ -115,10 +117,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   );
 
   const [showMobileBreakdown, setShowMobileBreakdown] = useState(true);
+  const defaultPreviewCustomer =
+    !selectedCustomer?.id && posProfile && (selectedOrderType === DINE_IN || selectedOrderType === 'Take Away')
+      ? resolveDefaultCustomer(selectedOrderType, posProfile)?.id
+      : undefined;
   const previewCustomer =
     selectedOrderType === 'Aggregators'
       ? selectedAggregator?.customer
-      : selectedCustomer?.id || undefined;
+      : selectedCustomer?.id || defaultPreviewCustomer || undefined;
   const previewItems = useMemo(
     () =>
       activeOrders.map((item) => ({
@@ -146,6 +152,18 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     !outbox.offline && orderPreview
       ? (orderPreview.rounded_total || orderPreview.grand_total)
       : total;
+  const effectiveItemLineTotal = (item: typeof activeOrders[0], idx: number) => {
+    const baseTotal = calculateItemTotal(item);
+    const previewRow = !outbox.offline ? orderPreview?.item_taxes?.[idx] : undefined;
+    if (previewRow && previewRow.item_code === item.id && previewRow.net_amount != null && Number.isFinite(previewRow.net_amount)) {
+      return previewRow.net_amount;
+    }
+    if (!item.selectedVariant && item.promo_rate != null && Number.isFinite(item.promo_rate) && item.promo_rate < item.price) {
+      const addonsTotal = item.selectedAddons?.reduce((sum, addon) => sum + addon.price, 0) || 0;
+      return (item.promo_rate + addonsTotal) * item.quantity;
+    }
+    return baseTotal;
+  };
 
   const handleEdit = (item: typeof activeOrders[0]) => {
     const menuItem = {
@@ -472,7 +490,10 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         <>
           <div className="min-h-0 flex-1 overflow-y-auto px-6">
             <HoldFireControls />
-            {activeOrders.map((item) => (
+            {activeOrders.map((item, idx) => {
+              const baseLineTotal = calculateItemTotal(item);
+              const lineTotal = effectiveItemLineTotal(item, idx);
+              return (
               <div
                 key={item.uniqueId}
                 className={cn(
@@ -502,7 +523,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                         {item.selectedAddons.map(addon => addon.name).join(', ')}
                       </p>
                     )}
-                    <p className="text-gray-600 text-sm">{formatCurrency(calculateItemTotal(item), activeCurrency)}</p>
+                    <p className="flex items-center gap-1.5 text-gray-600 text-sm tabular-nums">
+                      <span>{formatCurrency(lineTotal, activeCurrency)}</span>
+                      {lineTotal < baseLineTotal && (
+                        <span className="text-xs text-gray-400 line-through">
+                          {formatCurrency(baseLineTotal, activeCurrency)}
+                        </span>
+                      )}
+                    </p>
                   </div>
                   
                   <div className="flex items-center gap-2">
@@ -567,7 +595,8 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
             {activeOrders.length > 0 && (
               <Button
                 onClick={clearOrder}
@@ -635,7 +664,9 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                       key={`${taxRow.description}-${idx}`}
                       className="flex justify-between tabular-nums"
                     >
-                      <span className="truncate pe-2">{taxRow.description || t('cart.tax')}</span>
+                      <span className="truncate pe-2">
+                        {formatPreviewTaxLabel(taxRow, orderPreview.net_total, t('cart.tax'))}
+                      </span>
                       <span className="shrink-0">{formatCurrency(taxRow.tax_amount, activeCurrency)}</span>
                     </div>
                   ))}

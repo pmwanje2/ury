@@ -296,9 +296,14 @@ export function isLastItemCannotBeRemovedError(message: string | null | undefine
   return /only item on invoice/i.test(message);
 }
 
+export { formatPreviewTaxLabel } from './tax-preview-label';
+
 export interface PreviewTaxRow {
   description: string;
   rate: number;
+  header_rate?: number;
+  effective_rate?: number | null;
+  item_rate_override?: boolean;
   tax_amount: number;
   account_head?: string;
 }

@@ -105,8 +105,27 @@ def validate_order_type_tax_categories(doc, method=None) -> None:
             )
 
 
+def _resolve_pos_profile_doc(profile):
+    """Accept either a POS Profile doc/dict or a POS Profile name string safely."""
+    if isinstance(profile, str):
+        name = profile.strip()
+        if not name:
+            return None
+        try:
+            return frappe.get_cached_doc("POS Profile", name)
+        except Exception:
+            try:
+                return frappe.get_doc("POS Profile", name)
+            except Exception:
+                return None
+    return profile
+
+
 def get_order_type_tax_config(profile) -> dict:
     """Serialize order-type tax mappings for getPosProfile / getPosProfileFull."""
+    profile = _resolve_pos_profile_doc(profile)
+    if not profile or not hasattr(profile, "get"):
+        return {"tax_category": None, "order_type_tax_categories": {}}
     mapping = {}
     for row in profile.get("custom_order_type_tax_categories") or []:
         ot = (row.get("order_type") or "").strip()
@@ -241,6 +260,9 @@ def apply_order_type_tax(
     company = _clean_str(invoice.get("company")) or _clean_str(pos_profile.get("company") if hasattr(pos_profile, "get") else None) or None
     eff_date = getdate(posting_date or invoice.get("posting_date"))
 
+    previous_tax_cat = _clean_str(invoice.get("tax_category"))
+    previous_template = _clean_str(invoice.get("taxes_and_charges"))
+
     invoice.tax_category = effective_tax_cat
 
     # Step 5: Native ERPNext Tax Rule resolution via party.set_taxes(...)
@@ -253,8 +275,6 @@ def apply_order_type_tax(
             tax_category=effective_tax_cat or None,
         )
     ) or None
-
-    previous_template = _clean_str(invoice.get("taxes_and_charges"))
 
     # Fallback ONLY when no Tax Rule matches. When no Tax Category rule applies (source == "default"),
     # preserve an already-resolved invoice template before falling back to profile / restaurant defaults.
@@ -269,27 +289,6 @@ def apply_order_type_tax(
         ) or None
 
     invoice.taxes_and_charges = resolved_template or ""
-
-    # Step 7: Preserve native per-item Item Tax Template (mixed baskets: e.g. 18% VAT burger +
-    # 0% Exempt milk on the same check). In ERPNext v16, _get_item_tax_template only auto-selects
-    # rows whose tax_category matches doc.tax_category verbatim, skipping blank-category Item Tax
-    # rows unless row.item_tax_template is already set. Populate missing item_tax_template (and
-    # re-evaluate non-exempt lines on order-type switches) while preserving custom_tax_exempt == 1.
-    for row in invoice.get("items") or []:
-        if cint(row.get("custom_tax_exempt")) == 1:
-            continue
-        item_code = _clean_str(row.get("item_code"))
-        if not item_code:
-            continue
-        if reset_non_exempt_item_taxes or not _clean_str(row.get("item_tax_template")):
-            matched_item_tpl = _resolve_item_tax_template_for_category(item_code, effective_tax_cat)
-            if reset_non_exempt_item_taxes:
-                row.item_tax_template = matched_item_tpl or ""
-                row.item_tax_rate = "{}"
-            elif matched_item_tpl:
-                row.item_tax_template = matched_item_tpl
-                if not _clean_str(row.get("item_tax_rate")) or _clean_str(row.get("item_tax_rate")) == "{}":
-                    row.item_tax_rate = "{}"
 
     template_changed = (resolved_template or "") != previous_template
     existing_taxes = invoice.get("taxes") or []
@@ -308,6 +307,39 @@ def apply_order_type_tax(
             if getattr(invoice, "flags", None) is not None:
                 invoice.flags.ury_explicit_no_taxes = True
 
+    # Step 7: Preserve native per-item Item Tax Template on mixed baskets (e.g. 18% VAT burger +
+    # 0% Exempt milk on the same check). However, when a customer-level Tax Category/Rule
+    # (e.g. Diplomat / NGO / Zero Exempt Guest) or a 0%/exempt header tax template governs the
+    # check, do NOT fall back to a blank-category standard-rate Item Tax row (such as 18% VAT);
+    # only honor an exact tax_category match and clear stale non-exempt item tax templates.
+    is_zero_or_exempt = _is_zero_rate_tax_template(resolved_template, invoice)
+    allow_blank_fallback = (source != "customer") and (not is_zero_or_exempt)
+    should_reevaluate_items = (
+        reset_non_exempt_item_taxes
+        or (not allow_blank_fallback)
+        or (bool(previous_template) and template_changed)
+        or (bool(previous_tax_cat) and effective_tax_cat != previous_tax_cat)
+    )
+    for row in invoice.get("items") or []:
+        if cint(row.get("custom_tax_exempt")) == 1:
+            continue
+        item_code = _clean_str(row.get("item_code"))
+        if not item_code:
+            continue
+        if should_reevaluate_items or not _clean_str(row.get("item_tax_template")):
+            matched_item_tpl = _resolve_item_tax_template_for_category(
+                item_code,
+                effective_tax_cat,
+                allow_blank_fallback=allow_blank_fallback,
+            )
+            if should_reevaluate_items:
+                row.item_tax_template = matched_item_tpl or ""
+                row.item_tax_rate = "{}"
+            elif matched_item_tpl:
+                row.item_tax_template = matched_item_tpl
+                if not _clean_str(row.get("item_tax_rate")) or _clean_str(row.get("item_tax_rate")) == "{}":
+                    row.item_tax_rate = "{}"
+
     return {
         "locked": False,
         "source": source,
@@ -316,8 +348,46 @@ def apply_order_type_tax(
     }
 
 
-def _resolve_item_tax_template_for_category(item_code: str | None, tax_category: str | None) -> str | None:
-    """Resolve an item's native ERPNext Item Tax child row matching tax_category (or blank category)."""
+def _is_zero_rate_tax_template(template_name: str | None, invoice=None) -> bool:
+    """Return True when ``template_name`` is empty or every tax row in the template has 0 rate/amount."""
+    if not template_name:
+        return True
+    rows = None
+    try:
+        fetched = frappe.get_all(
+            "Sales Taxes and Charges",
+            filters={"parent": template_name},
+            fields=["rate", "tax_amount", "charge_type"],
+        )
+        if isinstance(fetched, (list, tuple)) and fetched:
+            rows = fetched
+    except Exception:
+        rows = None
+    if not rows and invoice is not None:
+        inv_taxes = invoice.get("taxes") if hasattr(invoice, "get") else getattr(invoice, "taxes", None)
+        if isinstance(inv_taxes, (list, tuple)) and inv_taxes:
+            rows = inv_taxes
+        else:
+            tpl_map = getattr(invoice, "_tax_templates", None)
+            if isinstance(tpl_map, dict) and tpl_map.get(template_name):
+                rows = tpl_map[template_name]
+    if not rows:
+        return False
+    for r in rows:
+        rate = float(r.get("rate") or 0) if hasattr(r, "get") else float(getattr(r, "rate", 0) or 0)
+        amt = float(r.get("tax_amount") or 0) if hasattr(r, "get") else float(getattr(r, "tax_amount", 0) or 0)
+        if abs(rate) > 1e-9 or abs(amt) > 1e-9:
+            return False
+    return True
+
+
+def _resolve_item_tax_template_for_category(
+    item_code: str | None,
+    tax_category: str | None,
+    *,
+    allow_blank_fallback: bool = True,
+) -> str | None:
+    """Resolve an item's native ERPNext Item Tax child row matching tax_category (or blank category when allowed)."""
     if not item_code:
         return None
     try:
@@ -342,7 +412,7 @@ def _resolve_item_tax_template_for_category(item_code: str | None, tax_category:
             return tpl
         if not row_cat and blank_fallback is None:
             blank_fallback = tpl
-    return blank_fallback
+    return blank_fallback if allow_blank_fallback else None
 
 
 def summarize_tax_for_order_type(
@@ -352,7 +422,8 @@ def summarize_tax_for_order_type(
     posting_date=None,
 ) -> dict:
     """Read-only summary of active Tax Category and Tax Template for POS Header status strip."""
-    if not pos_profile:
+    pos_profile = _resolve_pos_profile_doc(pos_profile)
+    if not pos_profile or not hasattr(pos_profile, "get"):
         return {"tax_category": None, "taxes_and_charges": None, "label": None}
 
     order_type_map = get_order_type_tax_config(pos_profile).get("order_type_tax_categories", {})
@@ -499,22 +570,31 @@ def validate_efris_readiness(invoice, throw: bool = False) -> list[dict]:
             if not (str(uom_code or "").strip()):
                 missing.append(f"EFRIS UOM Code ({uom})")
 
-        # Check Item Tax Template EFRIS tax category when a template is configured on the row or Item
+        # Check Item Tax Template & EFRIS tax category (uganda_compliance EInvoice.fetch_items_from_invoice
+        # throws when item_doc.taxes is empty or its Item Tax Template lacks efris_e_tax_category).
         item_tax_template = (row.get("item_tax_template") or "").strip()
         if not item_tax_template:
-            item_tax_template = _resolve_item_tax_template_for_category(
-                item_code, invoice.get("tax_category")
-            ) or ""
-        if item_tax_template:
+            item_tax_template = (
+                _resolve_item_tax_template_for_category(
+                    item_code, invoice.get("tax_category"), allow_blank_fallback=True
+                )
+                or ""
+            )
+        if not item_tax_template:
+            missing.append("Item Tax Template")
+        else:
             try:
                 tpl_has_efris = frappe.get_all(
                     "Item Tax Template Detail",
                     filters={"parent": item_tax_template},
                     fields=["efris_e_tax_category"],
                 )
-                if isinstance(tpl_has_efris, (list, tuple)) and tpl_has_efris:
-                    if not any((d.get("efris_e_tax_category") or "").strip() for d in tpl_has_efris):
-                        missing.append(f"EFRIS Tax Category ({item_tax_template})")
+                if (
+                    not isinstance(tpl_has_efris, (list, tuple))
+                    or not tpl_has_efris
+                    or not any((d.get("efris_e_tax_category") or "").strip() for d in tpl_has_efris)
+                ):
+                    missing.append(f"EFRIS Tax Category ({item_tax_template})")
             except Exception:
                 pass
 

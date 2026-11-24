@@ -73,15 +73,29 @@ class CustomPOSInvoice(POSInvoice):
 
 	def set_pos_fields(self, for_validate=False):
 		# Open-check rate stability (G40): ERPNext's set_pos_fields() unconditionally resets
-		# selling_price_list to POS Profile.selling_price_list on every validate(). Preserve an
-		# open check's stamped Serving Period price list across period boundaries.
+		# selling_price_list to POS Profile.selling_price_list on every validate(). Preserve ONLY
+		# a server-authoritative price list (set by before_validate/sync_order/change_order_type)
+		# or a persisted open check's stamped Serving Period price list — never an unvalidated
+		# client payload on a new REST POST/PUT.
 		preserved_pl = None
-		if (
-			(self.get("order_type") or "") != "Aggregators"
-			and (self.get("custom_serving_period") or "").strip()
-			and (self.get("selling_price_list") or "").strip()
-		):
-			preserved_pl = self.selling_price_list
+		if (self.get("order_type") or "") != "Aggregators":
+			flags = getattr(self, "flags", None)
+			auth_pl = (getattr(flags, "ury_authoritative_price_list", None) or "").strip() if flags else ""
+			if auth_pl:
+				preserved_pl = auth_pl
+			elif not (callable(getattr(self, "is_new", None)) and self.is_new()):
+				get_before = getattr(self, "get_doc_before_save", None)
+				prev = get_before() if callable(get_before) else None
+				prev_period = (
+					(prev.get("custom_serving_period") if hasattr(prev, "get") else getattr(prev, "custom_serving_period", None))
+					or ""
+				).strip() if prev is not None else ""
+				prev_pl = (
+					(prev.get("selling_price_list") if hasattr(prev, "get") else getattr(prev, "selling_price_list", None))
+					or ""
+				).strip() if prev is not None else ""
+				if prev_period and prev_pl:
+					preserved_pl = prev_pl
 		res = super().set_pos_fields(for_validate=for_validate)
 		if preserved_pl:
 			self.selling_price_list = preserved_pl

@@ -26,6 +26,7 @@ def before_insert(doc, method):
 
 def before_validate(doc, method=None):
     prorate_return_discount(doc, method)
+    enforce_authoritative_outlet_time(doc, method)
 
 
 def validate(doc, method):
@@ -816,6 +817,243 @@ def ro_reload_submit(doc, method):
     frappe.publish_realtime("reload_ro", {"name": doc.name})
 
 
+def _doc_get(obj, field, default=None):
+    if obj is None:
+        return default
+    if hasattr(obj, "get"):
+        return obj.get(field, default)
+    return getattr(obj, field, default)
+
+
+def _persisted_invoice_state(doc):
+    """Return the persisted DB snapshot for an existing POS Invoice, or None for a new doc."""
+    is_new_fn = getattr(doc, "is_new", None)
+    if callable(is_new_fn):
+        try:
+            if is_new_fn():
+                return None
+        except Exception:
+            pass
+    doc_name = _doc_get(doc, "name")
+    if not doc_name:
+        return None
+    get_before = getattr(doc, "get_doc_before_save", None)
+    if callable(get_before):
+        try:
+            prev = get_before()
+            if prev is not None:
+                return prev
+        except Exception:
+            pass
+    try:
+        row = frappe.db.get_value(
+            "POS Invoice",
+            doc_name,
+            [
+                "custom_serving_period",
+                "custom_transaction_local_time",
+                "custom_transaction_weekday",
+                "selling_price_list",
+                "ury_offline_captured_at",
+                "order_type",
+                "restaurant_table",
+                "posting_date",
+                "posting_time",
+            ],
+            as_dict=True,
+        )
+        if isinstance(row, dict):
+            return row
+    except Exception:
+        return None
+    return None
+
+
+def _is_privileged_clock_user():
+    session = getattr(frappe, "session", None)
+    user = getattr(session, "user", None)
+    if user == "Administrator":
+        return True
+    get_roles = getattr(frappe, "get_roles", None)
+    if callable(get_roles):
+        try:
+            roles = set(get_roles() or [])
+            return "System Manager" in roles
+        except Exception:
+            return False
+    return False
+
+
+def _reset_items_for_authoritative_reprice(doc):
+    """Clear spoofed client item rates/pricing rules when selling_price_list is corrected."""
+    for item in _doc_get(doc, "items") or []:
+        if int(float(_doc_get(item, "is_disposable") or 0)) == 1:
+            continue
+        set_fn = getattr(item, "set", None)
+        if callable(set_fn):
+            set_fn("price_list_rate", 0)
+            set_fn("rate", 0)
+            set_fn("pricing_rules", None)
+            set_fn("discount_percentage", 0)
+            set_fn("discount_amount", 0)
+        elif isinstance(item, dict):
+            item["price_list_rate"] = 0
+            item["rate"] = 0
+            item["pricing_rules"] = None
+            item["discount_percentage"] = 0
+            item["discount_amount"] = 0
+        else:
+            item.price_list_rate = 0
+            item.rate = 0
+            item.pricing_rules = None
+            item.discount_percentage = 0
+            item.discount_amount = 0
+
+
+def enforce_authoritative_outlet_time(doc, method=None):
+    """Server-authoritative outlet clock, serving period, and price list enforcement (G40/G41).
+
+    Runs in ``before_validate`` BEFORE ERPNext's ``set_pos_fields()`` and ``apply_pricing_rule()``
+    so direct REST ``POST``/``PUT`` payloads can never spoof ``custom_transaction_local_time``,
+    ``custom_transaction_weekday``, ``custom_serving_period``, ``ury_offline_captured_at``,
+    ``set_posting_time``, or ``selling_price_list``.
+    """
+    if int(float(_doc_get(doc, "is_return") or 0)) == 1:
+        return
+    if int(float(_doc_get(doc, "docstatus") or 0)) != 0:
+        return
+
+    pos_profile = (_doc_get(doc, "pos_profile") or "").strip() if isinstance(_doc_get(doc, "pos_profile"), str) else _doc_get(doc, "pos_profile")
+    if pos_profile and (not _doc_get(doc, "branch") or not _doc_get(doc, "restaurant")):
+        try:
+            pp_vals = frappe.db.get_value("POS Profile", pos_profile, ["branch", "restaurant"], as_dict=True)
+            if isinstance(pp_vals, dict):
+                if not _doc_get(doc, "branch") and pp_vals.get("branch"):
+                    doc.branch = pp_vals.get("branch")
+                if not _doc_get(doc, "restaurant") and pp_vals.get("restaurant"):
+                    doc.restaurant = pp_vals.get("restaurant")
+        except Exception:
+            pass
+
+    if _doc_get(doc, "branch") and not _doc_get(doc, "restaurant"):
+        try:
+            rest = frappe.db.get_value("URY Restaurant", {"branch": _doc_get(doc, "branch")}, "name")
+            if isinstance(rest, str) and rest:
+                doc.restaurant = rest
+        except Exception:
+            pass
+
+    if not _doc_get(doc, "restaurant") and not _doc_get(doc, "branch"):
+        return
+
+    flags = getattr(doc, "flags", None)
+    trusted_offline = bool(getattr(flags, "ury_trusted_offline_capture", False))
+    server_ot_change = bool(getattr(flags, "ury_server_order_type_change", False))
+    trusted_pricing = bool(getattr(flags, "ury_trusted_server_pricing", False))
+    is_super = _is_privileged_clock_user()
+
+    prev = _persisted_invoice_state(doc)
+    incoming_cap = _doc_get(doc, "ury_offline_captured_at")
+    prev_cap = _doc_get(prev, "ury_offline_captured_at") if prev is not None else None
+    incoming_pl = (_doc_get(doc, "selling_price_list") or "").strip()
+
+    # Validate ury_offline_captured_at: never honor client-supplied offline timestamps unless
+    # POS Profile.ury_offline_capture == 1 and the timestamp is inside the user's open shift.
+    if prev is not None:
+        if not trusted_offline:
+            if incoming_cap and str(incoming_cap) != str(prev_cap or ""):
+                offline_enabled = bool(
+                    pos_profile
+                    and int(float(frappe.db.get_value("POS Profile", pos_profile, "ury_offline_capture") or 0)) == 1
+                )
+                if not offline_enabled:
+                    from ury.brand import coded_message
+
+                    frappe.throw(
+                        coded_message(
+                            "OFFLINE-CAPTURE-DISABLED",
+                            frappe._("Offline capture is not enabled for this POS Profile."),
+                        ),
+                        frappe.ValidationError,
+                    )
+            doc.ury_offline_captured_at = prev_cap
+    elif incoming_cap and not trusted_offline:
+        offline_enabled = bool(
+            pos_profile
+            and int(float(frappe.db.get_value("POS Profile", pos_profile, "ury_offline_capture") or 0)) == 1
+        )
+        if not offline_enabled:
+            from ury.brand import coded_message
+
+            frappe.throw(
+                coded_message(
+                    "OFFLINE-CAPTURE-DISABLED",
+                    frappe._("Offline capture is not enabled for this POS Profile."),
+                ),
+                frappe.ValidationError,
+            )
+        from ury.ury.doctype.ury_order.ury_order import _offline_capture_time
+
+        doc.ury_offline_captured_at = _offline_capture_time(incoming_cap, pos_profile)
+
+    from ury.ury_pos.dayparts import stamp_invoice_outlet_time
+
+    validated_at = _doc_get(doc, "ury_offline_captured_at") if (
+        trusted_offline or (prev is not None and prev_cap) or (prev is None and incoming_cap)
+    ) else None
+
+    if prev is not None:
+        prev_time = (_doc_get(prev, "custom_transaction_local_time") or "").strip()
+        prev_wd = (_doc_get(prev, "custom_transaction_weekday") or "").strip()
+        prev_period = (_doc_get(prev, "custom_serving_period") or "").strip()
+        prev_pl = (_doc_get(prev, "selling_price_list") or "").strip()
+
+        if prev_time and prev_wd:
+            doc.custom_transaction_local_time = prev_time
+            doc.custom_transaction_weekday = prev_wd
+            if not server_ot_change:
+                doc.custom_serving_period = prev_period or None
+        else:
+            stamp_invoice_outlet_time(doc, at=validated_at, overwrite=True)
+            if prev_period and not server_ot_change:
+                doc.custom_serving_period = prev_period
+
+        if not is_super and not trusted_offline and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
+            doc.set_posting_time = 0
+            if _doc_get(prev, "posting_date"):
+                doc.posting_date = _doc_get(prev, "posting_date")
+            if _doc_get(prev, "posting_time"):
+                doc.posting_time = _doc_get(prev, "posting_time")
+
+        if flags is not None:
+            flags._ury_persisted_serving_period = prev_period
+            flags._ury_persisted_price_list = prev_pl
+            flags._ury_validated_at = validated_at
+    else:
+        stamp_meta = stamp_invoice_outlet_time(doc, at=validated_at, overwrite=True)
+        if not is_super and not trusted_offline and int(float(_doc_get(doc, "set_posting_time") or 0)) == 1:
+            doc.set_posting_time = 0
+            if stamp_meta.get("local_dt"):
+                doc.posting_date = stamp_meta["local_dt"].date()
+                doc.posting_time = stamp_meta["local_time"]
+        if flags is not None:
+            flags._ury_persisted_serving_period = ""
+            flags._ury_persisted_price_list = ""
+            flags._ury_validated_at = validated_at
+
+    if _doc_get(doc, "restaurant"):
+        validate_price_list(doc, method)
+        resolved_pl = (_doc_get(doc, "selling_price_list") or "").strip()
+        if (
+            resolved_pl
+            and incoming_pl
+            and resolved_pl != incoming_pl
+            and not trusted_pricing
+            and not server_ot_change
+        ):
+            _reset_items_for_authoritative_reprice(doc)
+
+
 def validate_price_list(doc, method):
     """Keep the price list of the menu this check was rung on.
 
@@ -824,20 +1062,34 @@ def validate_price_list(doc, method):
     uses its room's menu when the restaurant prices by room; a counter check uses its order
     type's menu when the restaurant prices by order type; otherwise the active menu. The
     menu's enabled Price List is the check's price list.
+
+    Open-check Serving Period rate stability (G40) ONLY honors persisted DB state (never
+    client-submitted ``custom_serving_period`` or ``selling_price_list`` on REST POST/PUT).
     """
     if not doc.restaurant:
         return
 
+    flags = getattr(doc, "flags", None)
+    server_ot_change = bool(getattr(flags, "ury_server_order_type_change", False))
+
+    def _finish(pl):
+        doc.selling_price_list = pl
+        if flags is not None:
+            flags.ury_authoritative_price_list = pl
+
     if doc.order_type == "Aggregators":
-        price_list = frappe.db.get_value("Aggregator Settings",
+        price_list = frappe.db.get_value(
+            "Aggregator Settings",
             {"customer": doc.customer, "parent": doc.branch, "parenttype": "Branch"},
             "price_list",
-            )
+        )
 
         if not price_list:
-            frappe.throw(f"Price list for customer {doc.customer} in branch {doc.branch} not found in Aggregator Settings.")
+            frappe.throw(
+                f"Price list for customer {doc.customer} in branch {doc.branch} not found in Aggregator Settings."
+            )
 
-        doc.selling_price_list = price_list
+        _finish(price_list)
         return
 
     from ury.ury_pos.dayparts import (
@@ -847,15 +1099,28 @@ def validate_price_list(doc, method):
     )
 
     serving_periods = get_serving_periods(doc.restaurant)
-    stamped_period = (doc.get("custom_serving_period") or "").strip() if serving_periods else ""
+    persisted_period = ""
+    persisted_pl = ""
+    validated_at = getattr(flags, "_ury_validated_at", None) if flags is not None else None
+
+    if serving_periods and not server_ot_change:
+        if flags is not None and hasattr(flags, "_ury_persisted_serving_period"):
+            persisted_period = (getattr(flags, "_ury_persisted_serving_period", "") or "").strip()
+            persisted_pl = (getattr(flags, "_ury_persisted_price_list", "") or "").strip()
+        else:
+            prev = _persisted_invoice_state(doc)
+            if prev is not None:
+                persisted_period = (_doc_get(prev, "custom_serving_period") or "").strip()
+                persisted_pl = (_doc_get(prev, "selling_price_list") or "").strip()
+
     stamped_allowed_pls = (
-        allowed_price_lists_for_period(doc.restaurant, stamped_period) if stamped_period else set()
+        allowed_price_lists_for_period(doc.restaurant, persisted_period) if persisted_period else set()
     )
-    if stamped_allowed_pls:
-        # Open-check rate stability (G40): once a check is stamped with a Serving Period and
-        # already carries one of that period's enabled Price Lists, never silently re-price it.
-        existing_pl = (doc.get("selling_price_list") or "").strip()
-        if existing_pl and existing_pl in stamped_allowed_pls and frappe.db.get_value("Price List", existing_pl, "enabled"):
+    if stamped_allowed_pls and persisted_pl:
+        # Open-check rate stability (G40): ONLY a persisted open check's stamped Serving Period
+        # and persisted enabled Price List are preserved across period boundaries.
+        if persisted_pl in stamped_allowed_pls and frappe.db.get_value("Price List", persisted_pl, "enabled"):
+            _finish(persisted_pl)
             return
 
     menu_name = None
@@ -866,30 +1131,25 @@ def validate_price_list(doc, method):
                 "Menu for Room", {"parent": doc.restaurant, "room": room}, "menu"
             )
             if menu_name:
-                doc.selling_price_list = frappe.db.get_value(
-                    "Price List", dict(restaurant_menu=menu_name, enabled=1)
-                )
-                return
-
-    if stamped_allowed_pls:
-        for candidate_pl in sorted(stamped_allowed_pls):
-            if frappe.db.get_value("Price List", candidate_pl, "enabled"):
-                doc.selling_price_list = candidate_pl
+                _finish(frappe.db.get_value("Price List", dict(restaurant_menu=menu_name, enabled=1)))
                 return
 
     if serving_periods:
         active_period = resolve_active_serving_period(
-            doc.restaurant, order_type=doc.get("order_type"), branch=doc.get("branch")
+            doc.restaurant,
+            order_type=_doc_get(doc, "order_type"),
+            branch=_doc_get(doc, "branch"),
+            at=validated_at,
         )
         if active_period and (active_period.get("price_list_override") or active_period.get("menu")):
             if active_period.get("price_list_override"):
-                doc.selling_price_list = active_period["price_list_override"]
+                _finish(active_period["price_list_override"])
                 return
             sp_pl = frappe.db.get_value(
                 "Price List", dict(restaurant_menu=active_period["menu"], enabled=1)
             )
             if sp_pl:
-                doc.selling_price_list = sp_pl
+                _finish(sp_pl)
                 return
 
     if not doc.restaurant_table and frappe.db.get_value("URY Restaurant", doc.restaurant, "order_type_wise_menu"):
@@ -899,9 +1159,7 @@ def validate_price_list(doc, method):
 
     menu_name = menu_name or frappe.db.get_value("URY Restaurant", doc.restaurant, "active_menu")
 
-    doc.selling_price_list = frappe.db.get_value(
-        "Price List", dict(restaurant_menu=menu_name, enabled=1)
-    )
+    _finish(frappe.db.get_value("Price List", dict(restaurant_menu=menu_name, enabled=1)))
 
 
 def restrict_existing_order(doc, event):
