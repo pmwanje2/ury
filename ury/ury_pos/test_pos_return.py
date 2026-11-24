@@ -1287,6 +1287,25 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         self.assertFalse(res["is_room_charge"])
         self.assertEqual(res["refund_payments"], [{"mode_of_payment": "Showroom Cash", "amount": 10000.0}])
 
+    def test_r2_p1_foreign_currency_return_copies_conversion_rate_and_plc_fields(self):
+        """Foreign-currency returns (e.g. KWD on UGX company) must preserve orig conversion_rate & price_list_currency."""
+        self.h.frappe.session.user = "manager2@example.test"
+        inv = self.h.add_closed_check(
+            "POS-FX-KWD",
+            currency="KWD",
+            items=[{"name": "FX-R1", "item_code": "COFFEE", "item_name": "Coffee", "qty": 2, "rate": 1.0}],
+            payments=[{"mode_of_payment": "Cash", "amount": 2.0}],
+        )
+        inv.conversion_rate = 12000.0
+        inv.price_list_currency = "KWD"
+        inv.plc_conversion_rate = 12000.0
+
+        res = self.mod.create_pos_return(inv.name, [{"item_row_name": "FX-R1", "qty": 1}], reason="RET-QUALITY")
+        ret = self.h.invoices[res["return_invoice"]]
+        self.assertEqual(ret.get("conversion_rate"), 12000.0)
+        self.assertEqual(ret.get("price_list_currency"), "KWD")
+        self.assertEqual(ret.get("plc_conversion_rate"), 12000.0)
+
 
 if __name__ == "__main__":
     unittest.main()
