@@ -191,24 +191,24 @@ class TestCancelOrderReason(unittest.TestCase):
     def test_non_string_reason_is_refused_before_release(self):
         self.assert_invalid_reasons((None, 1234, False, [], {}, b"Wrong order"))
 
-    def test_submitted_invoice_also_requires_a_reason_before_release(self):
+    def test_submitted_invoice_is_refused_and_must_use_return(self):
         self.invoice.docstatus = 1
-        self.assert_invalid_reasons(("", "  abc  ", None))
+        with self.assertRaisesRegex(frappe.ValidationError, "POS-VOID-CLOSED-USE-RETURN"):
+            ury_order.cancel_order(self.invoice.name, "Void")
+        self.assert_no_mutation()
 
     def test_walk_in_invoice_also_requires_a_reason(self):
         self.invoice.restaurant_table = None
         self.assert_invalid_reasons(("abc",))
 
     def test_four_trimmed_characters_are_accepted_and_stored(self):
-        for docstatus in (0, 1):
-            with self.subTest(docstatus=docstatus):
-                self.invoice.docstatus = docstatus
-                self.invoice.reset_mock()
-                self.release.reset_mock()
-                self.reservations.reset_mock()
-                ury_order.cancel_order(self.invoice.name, " \tVoid\n ")
-                self.invoice.db_set.assert_called_with("cancel_reason", "Void")
-                self.release.assert_called_once_with("T1", commit=False)
+        self.invoice.docstatus = 0
+        self.invoice.reset_mock()
+        self.release.reset_mock()
+        self.reservations.reset_mock()
+        ury_order.cancel_order(self.invoice.name, " \tVoid\n ")
+        self.invoice.db_set.assert_called_with("cancel_reason", "Void")
+        self.release.assert_called_once_with("T1", commit=False)
 
     def test_cancel_permission_denial_precedes_reason_validation(self):
         self.framework.has_permission.return_value = False
@@ -230,7 +230,6 @@ class TestCancelOrderReason(unittest.TestCase):
             {"missing": True, "reason": "x" * 141, "limit": 140},
             {"broken": True, "reason": "x" * 141, "limit": 140},
             {"length": 140, "reason": "  " + ("x" * 141) + "\n", "limit": 140},
-            {"length": 0, "reason": "x" * 141, "limit": 140, "docstatus": 1},
             {"length": 0, "reason": "x" * 141, "limit": 140, "table": None},
         )
         for case in cases:
