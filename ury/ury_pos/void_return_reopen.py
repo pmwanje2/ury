@@ -1096,6 +1096,19 @@ def _copy_item_tax_fields(src_row: Any, dst_row: dict[str, Any]) -> None:
         dst_row["item_tax_rate"] = _field(src_row, "item_tax_rate")
 
 
+def _copy_currency_rate_fields(src: Any, dst: Any) -> None:
+    """Preserve FX exchange rates from the source check so foreign-currency returns/reopens match exact FX."""
+    conv = flt(_field(src, "conversion_rate", 0))
+    if conv > 0:
+        dst.conversion_rate = conv
+    plc = _field(src, "price_list_currency")
+    if plc:
+        dst.price_list_currency = plc
+    plc_conv = flt(_field(src, "plc_conversion_rate", 0))
+    if plc_conv > 0:
+        dst.plc_conversion_rate = plc_conv
+
+
 def _unreferenced_return_roles(pos_profile_doc) -> set[str]:
     raw = _field(pos_profile_doc, "custom_unreferenced_return_roles") or ""
     if not isinstance(raw, str):
@@ -1833,6 +1846,7 @@ def create_pos_return(
     ret.customer_name = _field(orig, "customer_name") or _field(orig, "customer")
     ret.currency = plan["currency"]
     ret.selling_price_list = _field(orig, "selling_price_list")
+    _copy_currency_rate_fields(orig, ret)
     ret.posting_date = _today_date()
     ret.posting_time = _now_time()
     ret.set_posting_time = 1
@@ -2383,6 +2397,7 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
     rev.customer_name = _field(orig, "customer_name") or _field(orig, "customer")
     rev.currency = currency
     rev.selling_price_list = _field(orig, "selling_price_list")
+    _copy_currency_rate_fields(orig, rev)
     rev.posting_date = _today_date()
     rev.posting_time = _now_time()
     rev.set_posting_time = 1
@@ -2634,6 +2649,7 @@ def adjust_closed_check(
     rep.order_type = _field(orig, "order_type") or "Dine In"
     rep.currency = currency
     rep.selling_price_list = _field(orig, "selling_price_list")
+    _copy_currency_rate_fields(orig, rep)
     rep.posting_date = _today_date()
     rep.posting_time = _now_time()
     rep.set_posting_time = 1
@@ -2784,6 +2800,7 @@ def reopen_closed_check(
     reopened.order_type = _field(orig, "order_type") or "Dine In"
     reopened.currency = currency
     reopened.selling_price_list = _field(orig, "selling_price_list")
+    _copy_currency_rate_fields(orig, reopened)
     reopened.posting_date = _today_date()
     reopened.posting_time = _now_time()
     reopened.set_posting_time = 1
