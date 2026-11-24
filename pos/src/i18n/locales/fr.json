@@ -984,6 +984,8 @@
     "add_open_item": "Ajouter l'article libre",
     "price_override_saved": "Prix de la ligne mis à jour.",
     "open_item_added": "Article libre ajouté à la note.",
+    "select_open_item": "Article libre",
+    "no_open_items_configured": "Aucun article à tarif libre n'est configuré pour ce menu.",
     "invalid_price": "Saisissez un prix valide positif ou nul.",
     "invalid_qty": "Saisissez une quantité positive.",
     "missing_line": "Sélectionnez une ligne à modifier.",

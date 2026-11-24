@@ -936,6 +936,8 @@
     "add_open_item": "Agregar artículo abierto",
     "price_override_saved": "Precio de la línea actualizado.",
     "open_item_added": "Artículo abierto agregado a la cuenta.",
+    "select_open_item": "Artículo abierto",
+    "no_open_items_configured": "No hay artículos de tarifa abierta configurados para este menú.",
     "invalid_price": "Introduce un precio válido no negativo.",
     "invalid_qty": "Introduce una cantidad positiva.",
     "missing_line": "Selecciona una línea para cambiar el precio.",

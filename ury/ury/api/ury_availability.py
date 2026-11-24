@@ -628,7 +628,7 @@ def set_item_availability(
 				_table_exists,
 				assert_not_offline_replay,
 				authorize_or_perform,
-				has_privilege_rules,
+				is_company_policy_active,
 			)
 		except ModuleNotFoundError:
 			# Site-less unit tests that unload frappe after importing this module.
@@ -641,7 +641,8 @@ def set_item_availability(
 			if not resolved_profile and (_table_exists("POS Privilege Rule") or approval_token):
 				resolved_profile = frappe.db.get_value("POS Profile", {"branch": branch, "disabled": 0}, "name")
 
-			if has_privilege_rules(company, "item_86_restore") or approval_token or not manager:
+			policy_active = is_company_policy_active(company)
+			if policy_active or approval_token or not manager:
 				authorize_or_perform(
 					privilege="item_86_restore",
 					pos_profile=resolved_profile,
@@ -660,7 +661,7 @@ def set_item_availability(
 					token=approval_token,
 					reason=reason,
 					reason_note=reason_note,
-					require_reason=None if has_privilege_rules(company, "item_86_restore") else False,
+					require_reason=None if policy_active else False,
 					allow_fallback_predicate=manager,
 					deny_message=_("[AVAIL-ROLE] You do not have permission to make this change."),
 				)

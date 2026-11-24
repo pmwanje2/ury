@@ -16,13 +16,72 @@ Covers matrix rows 11–15 and 30 (tracker G5, G19 part, G34):
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import math
 from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+
+try:
+    from frappe.utils import cint, flt
+except ImportError:  # pragma: no cover - partial frappe stubs in unrelated unit tests
+    def cint(val, default=0):
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            return default
+
+    def flt(val, precision=None):
+        try:
+            num = float(val or 0)
+        except (TypeError, ValueError):
+            num = 0.0
+        return round(num, int(precision)) if precision is not None else num
+
+
+_ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "JPY", "KRW", "VND", "CLP", "RWF", "BIF", "TZS", "XAF", "XOF"})
+_THREE_DECIMAL_CURRENCIES = frozenset({"KWD", "BHD", "OMR", "JOD", "TND", "LYD", "IQD"})
+
+try:
+    from ury.ury_pos.discount import (
+        currency_precision as _disc_currency_precision,
+        with_currency_precision as _disc_with_currency_precision,
+    )
+except ImportError:  # pragma: no cover - site-less test stub without discount module
+    _disc_currency_precision = None
+    _disc_with_currency_precision = None
+
+
+def _currency_precision(doc=None, currency: str | None = None) -> int:
+    if _disc_currency_precision is not None:
+        try:
+            return _disc_currency_precision(doc, currency)
+        except Exception:
+            pass
+    code = (currency or (doc.get("currency") if doc is not None and callable(getattr(doc, "get", None)) else getattr(doc, "currency", None)) or "").strip().upper()
+    if code in _ZERO_DECIMAL_CURRENCIES:
+        return 0
+    if code in _THREE_DECIMAL_CURRENCIES:
+        return 3
+    if doc is not None and callable(getattr(doc, "precision", None)):
+        try:
+            p = doc.precision("grand_total")
+            if isinstance(p, int) and not isinstance(p, bool) and p >= 0:
+                return p
+        except Exception:
+            pass
+    return 2
+
+
+@contextmanager
+def _with_currency_precision(doc, prec: int | None = None):
+    if _disc_with_currency_precision is not None:
+        with _disc_with_currency_precision(doc, prec):
+            yield
+        return
+    yield
 
 
 def _nowdate() -> str:
@@ -141,6 +200,19 @@ def _save_verified(doc) -> None:
         doc.flags.ury_privileged_action_verified = False
 
 
+def _insert_verified(doc) -> None:
+    doc.flags.ury_privileged_action_verified = True
+    try:
+        doc.insert()
+    finally:
+        doc.flags.ury_privileged_action_verified = False
+
+
+def _doc_conversion_rate(doc) -> float:
+    conv = flt(doc.get("conversion_rate")) if doc is not None else 0.0
+    return conv if conv > 0 else 1.0
+
+
 # =====================================================================
 # E1: Price Override (Matrix Row 11, privilege `price_override`)
 # =====================================================================
@@ -224,6 +296,11 @@ def override_line_price(
             frappe.ValidationError,
         )
 
+    prec = _doc_precision(doc, "rate")
+    rate_val = flt(rate_val, prec)
+    conv_rate = _doc_conversion_rate(doc)
+    base_rate_val = flt(rate_val * conv_rate)
+
     original_rate = flt(
         target_row.get("custom_original_price_list_rate")
         or target_row.get("price_list_rate")
@@ -236,7 +313,9 @@ def override_line_price(
         profile.get("buying_price_list"),
     )
     is_zero_override = original_rate > 0 and rate_val == 0
-    below_cost = item_cost > 0 and rate_val < item_cost
+    # item_cost (Bin.valuation_rate / Item.valuation_rate) is in company currency;
+    # compare against company-currency base_rate_val so USD/EUR/KWD checks never false-trigger below_cost.
+    below_cost = item_cost > 0 and base_rate_val < item_cost
     delta = abs(rate_val - original_rate)
     pct = (delta / original_rate * 100.0) if original_rate > 0 else 100.0
 
@@ -275,7 +354,8 @@ def override_line_price(
         target_row.custom_original_price_list_rate = original_rate
     target_row.rate = rate_val
     target_row.price_list_rate = rate_val
-    target_row.base_price_list_rate = rate_val
+    target_row.base_rate = base_rate_val
+    target_row.base_price_list_rate = base_rate_val
     target_row.ignore_pricing_rule = 1
     target_row.custom_price_overridden = 1
     target_row.custom_price_override_reason = (
@@ -283,15 +363,17 @@ def override_line_price(
     )
     target_row.custom_price_override_approver = auth["approver"]
 
-    sync_service_charge(doc, profile)
-    doc.calculate_taxes_and_totals()
-    _save_verified(doc)
+    with _with_currency_precision(doc, prec):
+        sync_service_charge(doc, profile)
+        doc.calculate_taxes_and_totals()
+        _save_verified(doc)
 
     return {
         "invoice": doc.name,
         "item_row_name": item_row_name,
         "original_rate": original_rate,
         "rate": rate_val,
+        "new_rate": rate_val,
         "below_cost": below_cost,
         "item_cost": item_cost,
         "approver": auth["approver"],
@@ -331,7 +413,7 @@ def build_open_item_claim(
 
 @frappe.whitelist(methods=["POST"])
 def add_open_item(
-    invoice: str,
+    invoice: str | None = None,
     pos_profile: str | None = None,
     item_code: str | None = None,
     rate: float | None = None,
@@ -341,6 +423,10 @@ def add_open_item(
     reason_note: str | None = None,
     approval_token: str | None = None,
     reference: str | None = None,
+    order_type: str | None = None,
+    table: str | None = None,
+    customer: str | None = None,
+    no_of_pax: int | None = None,
 ) -> dict[str, Any]:
     """Add an open-priced (market price / catch weight / special) or zero-price item."""
     assert_not_offline_replay()
@@ -359,13 +445,59 @@ def add_open_item(
             frappe.ValidationError,
         )
 
-    doc, profile = _load_invoice_and_profile(invoice, pos_profile, for_update=True)
-    if cint(doc.get("docstatus")) != 0:
-        frappe.throw(
-            coded_message("OPEN-ITEM-CHECK-CLOSED", _("Items can only be added to an open check.")),
-            frappe.ValidationError,
-        )
-    assert_not_efris_fiscalised(doc)
+    is_new_invoice = not (invoice and str(invoice).strip())
+    if not is_new_invoice:
+        doc, profile = _load_invoice_and_profile(invoice, pos_profile, for_update=True)
+        if cint(doc.get("docstatus")) != 0:
+            frappe.throw(
+                coded_message("OPEN-ITEM-CHECK-CLOSED", _("Items can only be added to an open check.")),
+                frappe.ValidationError,
+            )
+        assert_not_efris_fiscalised(doc)
+    else:
+        if not pos_profile:
+            frappe.throw(coded_message("POS-INVOICE-REQUIRED", _("Invoice or POS Profile is required.")), frappe.ValidationError)
+        if not frappe.has_permission("POS Invoice", "create"):
+            frappe.throw(_("Not permitted to create a check."), frappe.PermissionError)
+        profile = frappe.get_doc("POS Profile", pos_profile)
+        resolved_order_type = (order_type or ("Dine In" if table else "Take Away")).strip()
+        resolved_customer = (customer or "").strip() or (profile.get("customer") or "").strip()
+        if not resolved_customer:
+            try:
+                from ury.ury_pos.default_customer import resolve_default_customer
+
+                resolved_customer = resolve_default_customer(profile, resolved_order_type) or ""
+            except Exception:
+                resolved_customer = ""
+        if not resolved_customer:
+            frappe.throw(_("Customer is required to open a check."), frappe.ValidationError)
+        default_tpl = None
+        if profile.get("restaurant"):
+            default_tpl = frappe.db.get_value("URY Restaurant", profile.get("restaurant"), "default_tax_template")
+        if not default_tpl:
+            default_tpl = profile.get("taxes_and_charges")
+        doc = frappe.new_doc("POS Invoice")
+        doc.is_pos = 1
+        doc.pos_profile = profile.name
+        doc.company = profile.get("company")
+        doc.branch = profile.get("branch")
+        doc.restaurant = profile.get("restaurant")
+        doc.customer = resolved_customer
+        doc.order_type = resolved_order_type
+        if table:
+            doc.restaurant_table = table
+        doc.no_of_pax = max(1, cint(no_of_pax or 1))
+        doc.waiter = frappe.session.user
+        doc.cashier = frappe.session.user
+        doc.currency = profile.get("currency")
+        doc.selling_price_list = profile.get("selling_price_list")
+        if default_tpl:
+            doc.taxes_and_charges = default_tpl
+        if callable(getattr(doc, "set_missing_values", None)):
+            try:
+                doc.set_missing_values()
+            except Exception:
+                pass
 
     item_doc = frappe.get_doc("Item", item_code)
     is_open_priced = cint(item_doc.get("custom_is_open_priced")) == 1
@@ -379,6 +511,8 @@ def add_open_item(
             frappe.ValidationError,
         )
 
+    prec = _doc_precision(doc, "rate")
+    rate_val = flt(rate_val, prec)
     if rate_val == 0 and not allow_zero:
         frappe.throw(
             coded_message("OPEN-ITEM-PRICE-REQUIRED", _("Enter a positive price for this open item.")),
@@ -399,14 +533,17 @@ def add_open_item(
     min_price = flt(item_doc.get("custom_min_price"))
     priv_group = cint(item_doc.get("custom_privilege_group"))
     item_cost = _resolve_item_cost(item_code, profile.get("warehouse"), profile.get("buying_price_list"))
+    conv_rate = _doc_conversion_rate(doc)
+    base_rate_val = flt(rate_val * conv_rate)
 
     over_halo = halo_max > 0 and rate_val > halo_max
     below_min = min_price > 0 and rate_val < min_price and not (rate_val == 0 and allow_zero)
-    below_cost = item_cost > 0 and rate_val < item_cost and not (rate_val == 0 and allow_zero)
+    below_cost = item_cost > 0 and base_rate_val < item_cost and not (rate_val == 0 and allow_zero)
     line_total = rate_val * qty_val
 
+    ref_name = doc.get("name") or "NEW"
     claim = build_open_item_claim(
-        invoice_name=doc.name,
+        invoice_name=ref_name,
         item_code=item_code,
         rate=rate_val,
         qty=qty_val,
@@ -419,7 +556,7 @@ def add_open_item(
         privilege="open_item",
         pos_profile=profile.name,
         reference_doctype="POS Invoice",
-        reference_name=doc.name,
+        reference_name=ref_name,
         claim=claim,
         token=approval_token,
         amount=line_total,
@@ -443,7 +580,8 @@ def add_open_item(
             "qty": qty_val,
             "rate": rate_val,
             "price_list_rate": rate_val,
-            "base_price_list_rate": rate_val,
+            "base_rate": base_rate_val,
+            "base_price_list_rate": base_rate_val,
             "cost_center": profile.get("cost_center"),
             "warehouse": profile.get("warehouse"),
             "custom_is_open_item": 1,
@@ -452,9 +590,18 @@ def add_open_item(
         },
     )
 
-    sync_service_charge(doc, profile)
-    doc.calculate_taxes_and_totals()
-    _save_verified(doc)
+    with _with_currency_precision(doc, prec):
+        sync_service_charge(doc, profile)
+        doc.calculate_taxes_and_totals()
+        if is_new_invoice:
+            _insert_verified(doc)
+            if table:
+                try:
+                    frappe.db.set_value("URY Table", table, {"occupied": 1, "latest_invoice_time": doc.get("creation")})
+                except Exception:
+                    pass
+        else:
+            _save_verified(doc)
 
     return {
         "invoice": doc.name,
@@ -463,6 +610,7 @@ def add_open_item(
         "item_name": display_name,
         "rate": rate_val,
         "qty": qty_val,
+        "below_cost": below_cost,
         "approver": auth["approver"],
         "via_pin": auth["via_pin"],
         "grand_total": flt(doc.get("grand_total")),
@@ -1000,6 +1148,14 @@ def _set_row_attr(row: Any, key: str, value: Any) -> None:
 
 
 def _doc_precision(doc, fieldname: str = "total_taxes_and_charges") -> int:
+    code = (
+        (doc.get("currency") if doc is not None and callable(getattr(doc, "get", None)) else getattr(doc, "currency", None))
+        or ""
+    ).strip().upper()
+    if code in _ZERO_DECIMAL_CURRENCIES:
+        return 0
+    if code in _THREE_DECIMAL_CURRENCIES:
+        return 3
     fn = getattr(doc, "precision", None)
     if callable(fn):
         try:
@@ -1008,7 +1164,23 @@ def _doc_precision(doc, fieldname: str = "total_taxes_and_charges") -> int:
                 return p
         except Exception:
             pass
-    return 2
+    return _currency_precision(doc)
+
+
+def _effective_tax_row_amount(doc, row: Any) -> float:
+    """Return effective post-discount tax/charge amount (matching GL) with site-less fallback."""
+    get_r = row.get if callable(getattr(row, "get", None)) else (lambda k, d=None: getattr(row, k, d))
+    raw = flt(get_r("tax_amount"))
+    after = get_r("tax_amount_after_discount_amount")
+    if after is not None:
+        after_val = flt(after)
+        has_discount = bool(
+            doc is not None
+            and (flt(doc.get("discount_amount")) != 0 or flt(doc.get("additional_discount_percentage")) != 0)
+        )
+        if after_val != 0 or has_discount or raw == 0:
+            return after_val
+    return raw
 
 
 def resolve_service_charge_rules(profile) -> list[dict[str, Any]]:
@@ -1343,14 +1515,17 @@ def sync_service_charge(doc, profile=None) -> None:
 
     base_rows, tip_rows = _partition_tax_rows(doc, profile)
 
-    # On a brand-new check (e.g. sync_order before save/set_missing_values), doc.taxes is
-    # still empty even though taxes_and_charges is already set. Hydrate template VAT rows
-    # first so ERPNext set_taxes() is never suppressed and taxable SC can chain via row_id.
+    # On a brand-new check (e.g. sync_order or direct Desk insert before set_missing_values),
+    # doc.taxes may still be empty even though taxes_and_charges is set. Hydrate template VAT
+    # rows first so ERPNext set_taxes() is never suppressed and taxable SC can chain via row_id.
     if not base_rows and cint(doc.get("custom_tax_exempt")) != 1:
-        tpl_name = _clean_str(doc.get("taxes_and_charges"))
+        get_p = profile.get if callable(getattr(profile, "get", None)) else (lambda k, d=None: getattr(profile, k, d))
+        tpl_name = _clean_str(doc.get("taxes_and_charges")) or _clean_str(get_p("taxes_and_charges"))
         if tpl_name:
             try:
                 base_rows = _load_template_tax_rows(tpl_name)
+                if base_rows and not _clean_str(doc.get("taxes_and_charges")):
+                    doc.taxes_and_charges = tpl_name
             except Exception:
                 base_rows = []
 
@@ -1491,7 +1666,163 @@ def sync_service_charge(doc, profile=None) -> None:
     _normalize_tax_indices(doc)
 
 
-def prorate_return_service_charge(doc) -> None:
+def _sc_signature(inv_doc) -> list[tuple[str, str, float, float]]:
+    rows = []
+    for t in inv_doc.get("taxes") or []:
+        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge":
+            rows.append(
+                (
+                    _clean_str(t.get("charge_type")),
+                    _clean_str(t.get("account_head")),
+                    round(flt(t.get("rate")), 4),
+                    round(flt(t.get("tax_amount")), 4),
+                )
+            )
+    return rows
+
+
+def _sc_context_unchanged(doc, before) -> bool:
+    before_items = [
+        (r.get("item_code"), round(flt(r.get("qty")), 4), round(flt(r.get("rate")), 4))
+        for r in (before.get("items") or [])
+        if cint(r.get("is_disposable")) != 1
+    ]
+    curr_items = [
+        (r.get("item_code"), round(flt(r.get("qty")), 4), round(flt(r.get("rate")), 4))
+        for r in (doc.get("items") or [])
+        if cint(r.get("is_disposable")) != 1
+    ]
+    return (
+        _clean_str(doc.get("order_type")) == _clean_str(before.get("order_type"))
+        and cint(doc.get("no_of_pax")) == cint(before.get("no_of_pax"))
+        and _clean_str(doc.get("pos_profile")) == _clean_str(before.get("pos_profile"))
+        and round(flt(doc.get("additional_discount_percentage")), 4) == round(flt(before.get("additional_discount_percentage")), 4)
+        and round(flt(doc.get("discount_amount")), 4) == round(flt(before.get("discount_amount")), 4)
+        and before_items == curr_items
+    )
+
+
+def _is_unverified_sc_tamper(doc, before) -> bool:
+    """True when a direct REST/Desk save mutates SC flags or strips SC rows with unchanged context."""
+    if before is None:
+        return False
+    if getattr(getattr(doc, "flags", None), "ury_privileged_action_verified", False):
+        return False
+    if cint(doc.get("custom_service_charge_waived")) != cint(before.get("custom_service_charge_waived")):
+        return True
+    for ov_field in ("custom_service_charge_override_rate", "custom_service_charge_override_amount"):
+        if abs(flt(doc.get(ov_field)) - flt(before.get(ov_field))) > 1e-6:
+            return True
+    before_sc = _sc_signature(before)
+    curr_sc = _sc_signature(doc)
+    return bool(before_sc and before_sc != curr_sc and _sc_context_unchanged(doc, before))
+
+
+def sync_service_charge_on_before_validate(doc) -> None:
+    """Keep Service Charge in sync on direct Desk/REST saves (e.g. changing order_type/pax/items).
+
+    Skips syncing if the payload looks like an unverified REST tamper (flag flip or stripping SC rows
+    with unchanged context) so `validate_privileged_pricing_mutations` still refuses it with 403.
+    """
+    if not doc:
+        return
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if cint(doc.get("is_return")) == 1 or cint(doc.get("docstatus")) != 0:
+        return
+    before = doc.get_doc_before_save() if callable(getattr(doc, "get_doc_before_save", None)) else None
+    if _is_unverified_sc_tamper(doc, before):
+        return
+    sync_service_charge(doc)
+
+
+def calculate_taxes_and_totals_for_service_charge(doc, calculate_fn):
+    """Ensure partial-return SC proration and Grand-Total discount isolation around Actual SC rows.
+
+    1. On return checks (`is_return == 1`), prorates `Actual` Service Charge BEFORE ERPNext totals
+       are calculated so `grand_total` reflects the prorated refund prior to `POSInvoice.validate_pos()`.
+    2. On non-return checks with a header discount (`additional_discount_percentage` or `discount_amount`)
+       and an `Actual` Service Charge row (Pre-Discount percentage, Fixed Amount, floor-bound, or
+       fixed override), detaches `Actual` SC + chained `Service Charge Tax` during Pass 1 so ERPNext's
+       `set_discount_amount()` computes `discount_amount` on items + item VAT only (never inflating
+       the discount base by Service Charge), then reattaches SC + SC Tax in canonical order for Pass 2.
+    """
+    if getattr(doc, "_ury_sc_calc_guard", False):
+        return calculate_fn()
+
+    if cint(doc.get("is_return")) == 1:
+        doc._ury_sc_calc_guard = True
+        try:
+            prorate_return_service_charge(doc, recalc=False)
+            return calculate_fn()
+        finally:
+            doc._ury_sc_calc_guard = False
+
+    has_discount = bool(flt(doc.get("additional_discount_percentage")) or flt(doc.get("discount_amount")))
+    if not has_discount:
+        return calculate_fn()
+
+    taxes = list(doc.get("taxes") or [])
+    actual_sc_indices: set[str] = set()
+    for pos, row in enumerate(taxes, start=1):
+        if _clean_str(row.get("custom_pos_charge_kind")) == "Service Charge" and row.get("charge_type") == "Actual":
+            actual_sc_indices.add(str(cint(row.get("idx")) or pos))
+    if not actual_sc_indices:
+        return calculate_fn()
+
+    sc_rows: list[Any] = []
+    base_rows: list[Any] = []
+    tip_rows: list[Any] = []
+    for pos, row in enumerate(taxes, start=1):
+        kind = _clean_str(row.get("custom_pos_charge_kind"))
+        idx_str = str(cint(row.get("idx")) or pos)
+        if idx_str in actual_sc_indices:
+            sc_rows.append(row)
+        elif kind == "Service Charge Tax" or (
+            row.get("charge_type") == "On Previous Row Amount"
+            and str(row.get("row_id") or "").strip() in actual_sc_indices
+        ):
+            sc_rows.append(row)
+        elif kind == "Charged Tip":
+            tip_rows.append(row)
+        else:
+            base_rows.append(row)
+
+    def _reattach_canonical(current_taxes: list[Any]) -> None:
+        non_tip = [r for r in current_taxes if _clean_str(r.get("custom_pos_charge_kind")) != "Charged Tip"]
+        tips = [r for r in current_taxes if _clean_str(r.get("custom_pos_charge_kind")) == "Charged Tip"]
+        sc_idx = len(non_tip) + 1
+        for r in sc_rows:
+            if _clean_str(r.get("custom_pos_charge_kind")) == "Service Charge Tax" or r.get("charge_type") == "On Previous Row Amount":
+                _set_row_attr(r, "row_id", str(sc_idx))
+        combined = non_tip + sc_rows + tips
+        doc.set("taxes", combined)
+        _normalize_tax_indices(doc)
+
+    saved_pct = doc.get("additional_discount_percentage")
+    reattached = False
+    doc._ury_sc_calc_guard = True
+    try:
+        pass1_taxes = base_rows + tip_rows
+        doc.set("taxes", pass1_taxes)
+        _normalize_tax_indices(doc)
+        calculate_fn()
+
+        computed_discount = doc.get("discount_amount")
+        _reattach_canonical(list(doc.get("taxes") or []))
+        reattached = True
+
+        doc.additional_discount_percentage = 0
+        doc.discount_amount = computed_discount
+        return calculate_fn()
+    finally:
+        if not reattached:
+            _reattach_canonical(list(doc.get("taxes") or []))
+        doc.additional_discount_percentage = saved_pct
+        doc._ury_sc_calc_guard = False
+
+
+def prorate_return_service_charge(doc, *, recalc: bool = True) -> None:
     """Prorate Actual/Fixed Service Charge on partial returns and cap cumulative refunded SC at 100%."""
     if not doc or cint(doc.get("is_return")) != 1:
         return
@@ -1531,7 +1862,7 @@ def prorate_return_service_charge(doc) -> None:
                     _set_row_attr(row, "tax_amount", 0.0)
                     _set_row_attr(row, "rate", 0.0)
                     mutated = True
-        if mutated and callable(getattr(doc, "calculate_taxes_and_totals", None)):
+        if mutated and recalc and callable(getattr(doc, "calculate_taxes_and_totals", None)):
             doc.calculate_taxes_and_totals()
         return
 
@@ -1591,7 +1922,7 @@ def prorate_return_service_charge(doc) -> None:
                 _set_row_attr(row, "tax_amount", desired)
                 mutated = True
 
-    if mutated and callable(getattr(doc, "calculate_taxes_and_totals", None)):
+    if mutated and recalc and callable(getattr(doc, "calculate_taxes_and_totals", None)):
         doc.calculate_taxes_and_totals()
 
 
@@ -1605,12 +1936,12 @@ def get_service_charge_status(invoice: str, pos_profile: str | None = None) -> d
     profile = frappe.get_doc("POS Profile", eff_profile) if eff_profile else None
     matched = match_service_charge_rule(doc, profile) if profile else None
     sc_amount = sum(
-        flt(t.get("tax_amount"))
+        _effective_tax_row_amount(doc, t)
         for t in (doc.get("taxes") or [])
         if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge"
     )
     sc_tax_amount = sum(
-        flt(t.get("tax_amount"))
+        _effective_tax_row_amount(doc, t)
         for t in (doc.get("taxes") or [])
         if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge Tax"
     )
@@ -1765,13 +2096,28 @@ def adjust_service_charge(
         doc.custom_service_charge_reason = ""
         doc.custom_service_charge_approver = ""
 
-    sync_service_charge(doc, profile)
-    doc.calculate_taxes_and_totals()
-    _save_verified(doc)
+    prec = _doc_precision(doc, "total_taxes_and_charges")
+    with _with_currency_precision(doc, prec):
+        sync_service_charge(doc, profile)
+        doc.calculate_taxes_and_totals()
+        _save_verified(doc)
 
+    sc_amount = sum(
+        _effective_tax_row_amount(doc, t)
+        for t in (doc.get("taxes") or [])
+        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge"
+    )
+    sc_tax_amount = sum(
+        _effective_tax_row_amount(doc, t)
+        for t in (doc.get("taxes") or [])
+        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge Tax"
+    )
     return {
         "invoice": doc.name,
         "action": action,
+        "waived": cint(doc.get("custom_service_charge_waived")) == 1,
+        "service_charge_amount": sc_amount,
+        "service_charge_tax_amount": sc_tax_amount,
         "approver": auth["approver"],
         "via_pin": auth["via_pin"],
         "grand_total": flt(doc.get("grand_total")),
@@ -2033,7 +2379,6 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
     if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
         return
     if cint(doc.get("is_return")) == 1:
-        prorate_return_service_charge(doc)
         return
 
     # 1. Negative line rates are NEVER permitted on non-return checks.
@@ -2074,29 +2419,161 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
 
     if getattr(getattr(doc, "flags", None), "ury_privileged_action_verified", False):
         return
-    if getattr(frappe.flags, "ury_bill_split", False) or getattr(frappe.flags, "ury_qty_reduction", False):
+    if (
+        getattr(frappe.flags, "ury_bill_split", False)
+        or getattr(frappe.flags, "ury_qty_reduction", False)
+        or getattr(frappe.flags, "in_bill_merge_sync", False)
+    ):
         return
 
     before = doc.get_doc_before_save() if callable(getattr(doc, "get_doc_before_save", None)) else None
     if before is None:
         return
 
-    # 4. Prevent direct REST/Desk tampering with line rates, comp flags, tax-exempt flags, or service charge waive.
+    server_disc_write = bool(getattr(frappe.flags, "ury_server_discount_write", False))
+    has_disc_approval = bool(
+        getattr(getattr(doc, "flags", None), "discount_approval", None)
+        or getattr(getattr(doc, "flags", None), "discount_removal", None)
+    )
+    prec = _doc_precision(doc, "rate")
+    rate_tol = max(1e-2, 10 ** (-prec))
+    price_list = _clean_str(doc.get("selling_price_list"))
+
+    # 4. Prevent direct REST/Desk tampering with line rates, new rows, open items,
+    #    discount-percentage rate smuggling, header discounts, comp/exempt flags, or SC rows.
     before_items = {r.get("name"): r for r in (before.get("items") or []) if r.get("name")}
     for row in doc.get("items") or []:
         if cint(row.get("is_disposable")) == 1:
             continue
         prev = before_items.get(row.get("name"))
-        if prev is None:
-            continue
-        prev_rate = flt(prev.get("rate"))
         curr_rate = flt(row.get("rate"))
-        # Allow rate changes driven purely by an explicit discount_percentage or unchanged rate.
-        if abs(curr_rate - prev_rate) > 1e-6 and flt(row.get("discount_percentage")) == flt(prev.get("discount_percentage")):
+        curr_plr = flt(row.get("price_list_rate"))
+        curr_disc_pct = flt(row.get("discount_percentage"))
+        curr_disc_amt = flt(row.get("discount_amount"))
+
+        if prev is None:
+            # New row appended directly on an existing invoice via REST/Desk
+            if (
+                cint(row.get("custom_price_overridden")) == 1
+                or cint(row.get("custom_is_open_item")) == 1
+                or cint(row.get("custom_is_complimentary")) == 1
+            ):
+                frappe.throw(
+                    coded_message(
+                        "POS-AUTH-REQUIRED",
+                        _("Privileged item flags must go through the POS authorisation flow."),
+                    ),
+                    frappe.PermissionError,
+                )
+            item_code = _clean_str(row.get("item_code"))
+            if item_code and hasattr(frappe, "db") and callable(getattr(frappe.db, "get_value", None)):
+                try:
+                    raw_open = frappe.db.get_value("Item", item_code, "custom_is_open_priced")
+                except Exception:
+                    raw_open = 0
+                if isinstance(raw_open, (int, float, str, bool)) and cint(raw_open) == 1:
+                    frappe.throw(
+                        coded_message(
+                            "POS-AUTH-REQUIRED",
+                            _("Open-priced items must be added through the POS open-item flow."),
+                        ),
+                        frappe.PermissionError,
+                    )
+                if price_list and not server_disc_write:
+                    try:
+                        raw_ip = frappe.db.get_value(
+                            "Item Price",
+                            {"item_code": item_code, "price_list": price_list},
+                            "price_list_rate",
+                        )
+                    except Exception:
+                        raw_ip = None
+                    if isinstance(raw_ip, (int, float, str)) and flt(raw_ip) > 0:
+                        auth_plr = flt(raw_ip)
+                        valid_rates = [auth_plr]
+                        if callable(getattr(frappe, "get_all", None)):
+                            try:
+                                extra = frappe.get_all(
+                                    "Item Price",
+                                    filters={"item_code": item_code, "price_list": price_list},
+                                    pluck="price_list_rate",
+                                ) or []
+                                valid_rates.extend(flt(p) for p in extra if isinstance(p, (int, float, str)) and flt(p) > 0)
+                            except Exception:
+                                pass
+                        if curr_disc_pct == 0 and curr_disc_amt == 0:
+                            if not any(abs(curr_rate - vp) <= rate_tol for vp in valid_rates):
+                                frappe.throw(
+                                    coded_message(
+                                        "POS-AUTH-REQUIRED",
+                                        _("Price overrides must go through the POS price override authorisation flow."),
+                                    ),
+                                    frappe.PermissionError,
+                                )
+                        else:
+                            expected_ok = any(
+                                abs(curr_rate - flt(vp * (1.0 - curr_disc_pct / 100.0), prec)) <= rate_tol
+                                or (curr_disc_amt > 0 and abs(curr_rate - flt(vp - curr_disc_amt, prec)) <= rate_tol)
+                                for vp in valid_rates
+                            )
+                            if not expected_ok:
+                                frappe.throw(
+                                    coded_message(
+                                        "POS-AUTH-REQUIRED",
+                                        _("Price overrides must go through the POS price override authorisation flow."),
+                                    ),
+                                    frappe.PermissionError,
+                                )
+            if curr_plr > 0 and curr_disc_pct == 0 and curr_disc_amt == 0 and abs(curr_rate - curr_plr) > rate_tol:
+                frappe.throw(
+                    coded_message(
+                        "POS-AUTH-REQUIRED",
+                        _("Price overrides must go through the POS price override authorisation flow."),
+                    ),
+                    frappe.PermissionError,
+                )
+            continue
+
+        # Existing row: refuse unverified privileged item flag flips
+        for item_flag in ("custom_price_overridden", "custom_is_open_item", "custom_is_complimentary"):
+            if cint(row.get(item_flag)) != cint(prev.get(item_flag)):
+                frappe.throw(
+                    coded_message(
+                        "POS-AUTH-REQUIRED",
+                        _("Privileged item flags must go through the POS authorisation flow."),
+                    ),
+                    frappe.PermissionError,
+                )
+
+        prev_rate = flt(prev.get("rate"))
+        prev_plr = flt(prev.get("price_list_rate") if prev.get("price_list_rate") is not None else prev_rate)
+        if abs(curr_rate - prev_rate) > 1e-6 and not server_disc_write:
+            plr_unchanged = prev_plr > 0 and abs(curr_plr - prev_plr) <= rate_tol
+            expected_by_pct = flt(prev_plr * (1.0 - curr_disc_pct / 100.0), prec)
+            expected_by_amt = flt(prev_plr - curr_disc_amt, prec)
+            matches_discount = plr_unchanged and (
+                (curr_disc_pct > 0 and abs(curr_rate - expected_by_pct) <= rate_tol)
+                or (curr_disc_amt > 0 and abs(curr_rate - expected_by_amt) <= rate_tol)
+                or (curr_disc_pct == 0 and curr_disc_amt == 0 and abs(curr_rate - prev_plr) <= rate_tol)
+            )
+            if not matches_discount:
+                frappe.throw(
+                    coded_message(
+                        "POS-AUTH-REQUIRED",
+                        _("Price overrides must go through the POS price override authorisation flow."),
+                    ),
+                    frappe.PermissionError,
+                )
+
+    if not server_disc_write and not has_disc_approval:
+        if (
+            flt(doc.get("discount_amount")) > flt(before.get("discount_amount")) + 1e-6
+            or flt(doc.get("additional_discount_percentage")) > flt(before.get("additional_discount_percentage")) + 1e-6
+        ):
             frappe.throw(
                 coded_message(
                     "POS-AUTH-REQUIRED",
-                    _("Price overrides must go through the POS price override authorisation flow."),
+                    _("Discounts must go through the POS discount authorisation flow."),
                 ),
                 frappe.PermissionError,
             )
@@ -2123,36 +2600,13 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
 
     # Guard against direct REST/Desk stripping or mutating Service Charge rows without PIN
     # when the check's order_type, covers, profile, items, and discounts did not change.
-    def _sc_signature(inv_doc) -> list[tuple[str, str, float, float]]:
-        rows = []
-        for t in inv_doc.get("taxes") or []:
-            if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge":
-                rows.append(
-                    (
-                        _clean_str(t.get("charge_type")),
-                        _clean_str(t.get("account_head")),
-                        round(flt(t.get("rate")), 4),
-                        round(flt(t.get("tax_amount")), 4),
-                    )
-                )
-        return rows
-
     before_sc = _sc_signature(before)
     curr_sc = _sc_signature(doc)
-    if before_sc and before_sc != curr_sc:
-        context_unchanged = (
-            _clean_str(doc.get("order_type")) == _clean_str(before.get("order_type"))
-            and cint(doc.get("no_of_pax")) == cint(before.get("no_of_pax"))
-            and _clean_str(doc.get("pos_profile")) == _clean_str(before.get("pos_profile"))
-            and round(flt(doc.get("additional_discount_percentage")), 4) == round(flt(before.get("additional_discount_percentage")), 4)
-            and round(flt(doc.get("discount_amount")), 4) == round(flt(before.get("discount_amount")), 4)
-            and len(doc.get("items") or []) == len(before.get("items") or [])
+    if before_sc and before_sc != curr_sc and _sc_context_unchanged(doc, before):
+        frappe.throw(
+            coded_message(
+                "POS-AUTH-REQUIRED",
+                _("Service charge rows cannot be stripped or altered without POS manager authorisation."),
+            ),
+            frappe.PermissionError,
         )
-        if context_unchanged:
-            frappe.throw(
-                coded_message(
-                    "POS-AUTH-REQUIRED",
-                    _("Service charge rows cannot be stripped or altered without POS manager authorisation."),
-                ),
-                frappe.PermissionError,
-            )

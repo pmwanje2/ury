@@ -120,6 +120,27 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
         )
     } if courses else {}
 
+    item_codes = [item.item for item in menu_items if item.item]
+    open_item_flags = {}
+    if item_codes:
+        item_fields = ["name", "image"]
+        has_col = getattr(getattr(frappe, "db", None), "has_column", None)
+        has_open_col = not callable(has_col) or bool(has_col("Item", "custom_is_open_priced"))
+        has_zero_col = not callable(has_col) or bool(has_col("Item", "custom_allow_zero_price"))
+        if has_open_col:
+            item_fields.append("custom_is_open_priced")
+        if has_zero_col:
+            item_fields.append("custom_allow_zero_price")
+        try:
+            for row in frappe.get_all(
+                "Item",
+                filters={"name": ["in", item_codes]},
+                fields=item_fields,
+            ):
+                open_item_flags[row.name] = row
+        except Exception:
+            open_item_flags = {}
+
     menu_items_with_image = [
         {
             "item": item.item,
@@ -127,7 +148,17 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
             "rate": item.rate,
             "special_dish": item.special_dish,
             "disabled": item.disabled,
-            "item_image": frappe.db.get_value("Item", item.item, "image"),
+            "item_image": (
+                open_item_flags[item.item].get("image")
+                if item.item in open_item_flags
+                else frappe.db.get_value("Item", item.item, "image")
+            ),
+            "custom_is_open_priced": cint(
+                open_item_flags.get(item.item, {}).get("custom_is_open_priced")
+            ),
+            "custom_allow_zero_price": cint(
+                open_item_flags.get(item.item, {}).get("custom_allow_zero_price")
+            ),
             "course": item.course,
             "course_label": _(item.course) if item.course else item.course,
             "course_priority": course_priority.get(item.course),
@@ -1130,10 +1161,19 @@ def getPosInvoiceItems(invoice):
             }
         )
     taxDetail = orderdItems.taxes
+    has_discount = bool(
+        flt(getattr(orderdItems, "discount_amount", 0))
+        or flt(getattr(orderdItems, "additional_discount_percentage", 0))
+    )
     for tax in taxDetail:
         description = tax.description
-        rate = tax.tax_amount
         get_t = tax.get if callable(getattr(tax, "get", None)) else (lambda k, d=None: getattr(tax, k, d))
+        raw_amt = flt(get_t("tax_amount"))
+        after_amt = get_t("tax_amount_after_discount_amount")
+        if after_amt is not None and (flt(after_amt) != 0 or has_discount or raw_amt == 0):
+            rate = flt(after_amt)
+        else:
+            rate = raw_amt
         taxDetails.append(
             {
                 "description": description,
@@ -2710,7 +2750,7 @@ def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=
         assert_not_efris_fiscalised,
         assert_not_offline_replay,
         authorize_or_perform,
-        has_privilege_rules,
+        is_company_policy_active,
     )
 
     assert_not_offline_replay()
@@ -2775,7 +2815,7 @@ def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=
         pos_profile_name = getattr(primary_doc, "pos_profile", None)
         raw_company = getattr(primary_doc, "company", None)
         company = raw_company if _is_valid_str(raw_company) else None
-        policy_active = has_privilege_rules(company, "merge_checks")
+        policy_active = is_company_policy_active(company)
 
         # Determine legacy fallback when no POS Privilege Rule rows exist yet:
         # keep same-operator / elevated / billing merges usable, while cross-waiter
@@ -3277,10 +3317,11 @@ def print_bill_copy(
     from ury.ury.printing.service import submit_and_monitor_print_job
     from ury.ury_pos.privileged_auth import (
         DEFAULT_MANAGER_ROLES,
+        _doc_get,
         _is_valid_str,
         assert_not_offline_replay,
         authorize_or_perform,
-        has_privilege_rules,
+        is_company_policy_active,
     )
 
     assert_not_offline_replay()
@@ -3351,14 +3392,15 @@ def print_bill_copy(
                 # and `reprint_bill` privilege / Manager PIN + reason on every manual copy beyond the free cap.
                 # Automatic EFRIS post-fiscalisation dispatches (`efris-auto-<invoice>`) are exempt.
                 if not previous and not is_auto_fiscal:
+                    raw_profile = _doc_get(doc, 'pos_profile')
                     raw_max_free = (
-                        frappe.db.get_value('POS Profile', doc.pos_profile, 'custom_max_free_closed_copies')
-                        if _is_valid_str(doc.get('pos_profile'))
+                        frappe.db.get_value('POS Profile', raw_profile, 'custom_max_free_closed_copies')
+                        if _is_valid_str(raw_profile)
                         else None
                     )
-                    raw_company = doc.get('company')
+                    raw_company = _doc_get(doc, 'company')
                     company = raw_company if _is_valid_str(raw_company) else None
-                    policy_active = has_privilege_rules(company, 'reprint_bill')
+                    policy_active = is_company_policy_active(company)
 
                     if raw_max_free is not None or policy_active or approval_token:
                         max_free = max(0, cint(raw_max_free)) if raw_max_free is not None else 0

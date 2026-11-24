@@ -1,10 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { t } from '../i18n';
-import { Star, TrendingUp } from 'lucide-react';
+import { Sparkles, Star, TrendingUp } from 'lucide-react';
 import Sidebar from '../components/Sidebar';
 import OrderPanel from '../components/OrderPanel';
 import ProductDialog from '../components/ProductDialog';
 import MenuList from '../components/MenuList';
+import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
@@ -32,7 +33,33 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
     isInitializing,
     menuItems,
     posProfile,
+    orderId,
+    selectedOrderType,
+    selectedTable,
+    selectedCustomer,
+    noOfPax,
+    currency,
+    loadTableOrder,
   } = usePOSStore();
+  const openMenuItems = useMemo(
+    () =>
+      (menuItems ?? [])
+        .filter(
+          (item) =>
+            Number((item as { custom_is_open_priced?: number }).custom_is_open_priced || 0) === 1 ||
+            Number((item as { custom_allow_zero_price?: number }).custom_allow_zero_price || 0) === 1,
+        )
+        .map((item) => ({
+          item: item.item || item.id,
+          item_name: item.item_name || item.name,
+          rate: item.price,
+        })),
+    [menuItems],
+  );
+  const [openItemDialog, setOpenItemDialog] = useState<{
+    itemCode: string;
+    itemName: string;
+  } | null>(null);
   const { availabilityMap, availabilityStale, refetchAll } = useMenuAvailability(menuItems ?? EMPTY_MENU, posProfile?.branch, posProfile?.company);
   const user = useRootStore(state => state.user);
   const { canMark, canRestore, canRequestRestoreWithPin } = availabilityPermissions(user?.roles);
@@ -81,7 +108,18 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
 
   const handleItemClick = (item: any) => {
     if (isMenuInteractionDisabled()) return;
-    
+
+    if (
+      Number(item?.custom_is_open_priced || 0) === 1 ||
+      (Number(item?.custom_allow_zero_price || 0) === 1 && Number(item?.price || 0) === 0)
+    ) {
+      setOpenItemDialog({
+        itemCode: item.item || item.id,
+        itemName: item.item_name || item.name || item.item,
+      });
+      return;
+    }
+
     clickCountRef.current += 1;
     
     if (clickTimerRef.current) {
@@ -181,6 +219,26 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
               
               <QuickFilterButton filter="all" icon={Star} label={t('common.all')} />
               <QuickFilterButton filter="special" icon={TrendingUp} label={t('menu.special_items')} />
+              {openMenuItems.length > 0 && (
+                <button
+                  type="button"
+                  data-testid="register-open-item-btn"
+                  disabled={isMenuInteractionDisabled()}
+                  onClick={() =>
+                    setOpenItemDialog({
+                      itemCode: openMenuItems[0].item,
+                      itemName: openMenuItems[0].item_name,
+                    })
+                  }
+                  className={cn(
+                    'flex min-h-11 shrink-0 items-center gap-2 rounded-full bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-800 border border-amber-200 transition-colors hover:bg-amber-100',
+                    isMenuInteractionDisabled() && 'opacity-50 cursor-not-allowed pointer-events-none',
+                  )}
+                >
+                  <Sparkles className="w-4 h-4" />
+                  {t('privileged_actions.open_item')}
+                </button>
+              )}
               {branch && company && itemAvailabilityActions && <SoldOutSheet key={branch}
                 branch={branch} company={company} availability={availabilityMap} actions={itemAvailabilityActions} />}
             </div>
@@ -192,6 +250,29 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
       </div>
       <OrderPanel onCashierCheck={onCashierCheck} availabilityMap={availabilityMap} />
       {isDialogOpen && <ProductDialog onClose={() => setIsDialogOpen(false)} />}
+      {openItemDialog && posProfile && (
+        <PriceOverrideDialog
+          open
+          onOpenChange={(next) => !next && setOpenItemDialog(null)}
+          mode="open_item"
+          posProfile={posProfile.name}
+          invoiceName={orderId || ''}
+          itemCode={openItemDialog.itemCode}
+          itemName={openItemDialog.itemName}
+          currentRate={0}
+          currency={currency || posProfile.currency || 'UGX'}
+          openItems={openMenuItems}
+          orderType={selectedOrderType}
+          table={selectedTable}
+          customer={selectedCustomer?.id || null}
+          noOfPax={noOfPax}
+          onSuccess={async () => {
+            if (selectedTable && typeof loadTableOrder === 'function') {
+              await loadTableOrder(selectedTable);
+            }
+          }}
+        />
+      )}
       {pending86Approval && posProfile && (
         <ManagerApproval
           open

@@ -92,7 +92,8 @@ export async function overrideLinePrice(params: {
 }
 
 export async function addOpenItem(params: {
-  invoice: string;
+  invoice?: string;
+  posProfile?: string;
   itemCode: string;
   qty: number;
   rate: number;
@@ -100,12 +101,17 @@ export async function addOpenItem(params: {
   reason?: string;
   reasonNote?: string;
   approvalToken?: string;
+  orderType?: string;
+  table?: string;
+  customer?: string;
+  noOfPax?: number;
 }) {
   await assertOfflineActionAllowed('open item');
   const res = await call.post<{ message: Record<string, unknown> }>(
     'ury.ury_pos.pricing_actions.add_open_item',
     {
-      invoice: params.invoice,
+      invoice: params.invoice || undefined,
+      pos_profile: params.posProfile || undefined,
       item_code: params.itemCode,
       qty: params.qty,
       rate: params.rate,
@@ -113,6 +119,10 @@ export async function addOpenItem(params: {
       reason: params.reason || undefined,
       reason_note: params.reasonNote || undefined,
       approval_token: params.approvalToken || undefined,
+      order_type: params.orderType || undefined,
+      table: params.table || undefined,
+      customer: params.customer || undefined,
+      no_of_pax: params.noOfPax || undefined,
     },
   );
   return res.message;

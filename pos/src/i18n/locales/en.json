@@ -1177,6 +1177,8 @@
     "add_open_item": "Add Open Item",
     "price_override_saved": "Line price updated.",
     "open_item_added": "Open item added to check.",
+    "select_open_item": "Open item",
+    "no_open_items_configured": "No open-priced items are configured for this menu.",
     "invalid_price": "Enter a valid non-negative price.",
     "invalid_qty": "Enter a positive quantity.",
     "missing_line": "Select a check line to override.",

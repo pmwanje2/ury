@@ -226,6 +226,22 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     claim: Record<string, unknown>;
   } | null>(null);
   const [priceOverrideItem, setPriceOverrideItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
+  const [openItemDialogOpen, setOpenItemDialogOpen] = React.useState(false);
+  const openMenuItems = React.useMemo(
+    () =>
+      (posStore.menuItems || [])
+        .filter(
+          (item) =>
+            Number((item as { custom_is_open_priced?: number }).custom_is_open_priced || 0) === 1 ||
+            Number((item as { custom_allow_zero_price?: number }).custom_allow_zero_price || 0) === 1,
+        )
+        .map((item) => ({
+          item: item.item || item.id,
+          item_name: item.item_name || item.name,
+          rate: item.price,
+        })),
+    [posStore.menuItems],
+  );
   const [checkPrivTab, setCheckPrivTab] = React.useState<CheckPrivilegedTab | null>(null);
   const [pendingOrderApproval, setPendingOrderApproval] = React.useState<{
     privilege: 'reprint_bill' | 'reprint_kot' | 'split_check';
@@ -944,6 +960,16 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         showRefireKot={selectedOrderItems.length > 0}
                         onRefireKot={() => void handleRefireKot()}
                       />
+                      {openMenuItems.length > 0 && (
+                        <button
+                          type="button"
+                          data-testid="orders-open-item-btn"
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                          onClick={() => setOpenItemDialogOpen(true)}
+                        >
+                          {t('privileged_actions.open_item')}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="inline-flex items-center justify-center rounded-md p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1548,6 +1574,24 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           itemName={priceOverrideItem.item_name}
           currentRate={priceOverrideItem.rate}
           currency={selectedOrderCurrency}
+          onSuccess={async () => {
+            await fetchOrders();
+            await selectOrder(selectedOrder);
+          }}
+        />
+      )}
+      {selectedOrder && openItemDialogOpen && openMenuItems.length > 0 && (
+        <PriceOverrideDialog
+          open
+          onOpenChange={setOpenItemDialogOpen}
+          mode="open_item"
+          posProfile={posStore.posProfile?.name || ''}
+          invoiceName={selectedOrder.name}
+          itemCode={openMenuItems[0].item}
+          itemName={openMenuItems[0].item_name}
+          currentRate={0}
+          currency={selectedOrderCurrency}
+          openItems={openMenuItems}
           onSuccess={async () => {
             await fetchOrders();
             await selectOrder(selectedOrder);

@@ -19,7 +19,14 @@ import {
   type OverrideReason,
 } from '../lib/override-api';
 import { addOpenItem, extractAuthChallenge, overrideLinePrice } from '../lib/privileged-actions-api';
+import { currencyInputStep } from '../lib/service-charge';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
+
+export interface OpenItemOption {
+  item: string;
+  item_name: string;
+  rate?: number;
+}
 
 export interface PriceOverrideDialogProps {
   open: boolean;
@@ -32,7 +39,12 @@ export interface PriceOverrideDialogProps {
   itemName: string;
   currentRate: number;
   currency?: string;
-  onSuccess: () => void | Promise<void>;
+  openItems?: OpenItemOption[];
+  orderType?: string;
+  table?: string | null;
+  customer?: string | null;
+  noOfPax?: number;
+  onSuccess: (result?: Record<string, unknown>) => void | Promise<void>;
 }
 
 export default function PriceOverrideDialog({
@@ -46,9 +58,15 @@ export default function PriceOverrideDialog({
   itemName,
   currentRate,
   currency = 'UGX',
+  openItems,
+  orderType,
+  table,
+  customer,
+  noOfPax,
   onSuccess,
 }: PriceOverrideDialogProps) {
   const privilege = mode === 'override' ? 'price_override' : 'open_item';
+  const [selectedOpenItem, setSelectedOpenItem] = useState(itemCode || openItems?.[0]?.item || '');
   const [rateInput, setRateInput] = useState(String(currentRate || ''));
   const [qtyInput, setQtyInput] = useState('1');
   const [reference, setReference] = useState('');
@@ -69,6 +87,7 @@ export default function PriceOverrideDialog({
       setError(null);
       return;
     }
+    setSelectedOpenItem(itemCode || openItems?.[0]?.item || '');
     setRateInput(mode === 'override' ? String(currentRate ?? '') : '');
     setQtyInput('1');
     setReference('');
@@ -87,7 +106,16 @@ export default function PriceOverrideDialog({
     return () => {
       active = false;
     };
-  }, [open, mode, currentRate, privilege]);
+  }, [open, mode, currentRate, privilege, itemCode, openItems]);
+
+  const effectiveItemCode =
+    mode === 'open_item' ? selectedOpenItem || itemCode || openItems?.[0]?.item || '' : itemCode || '';
+  const effectiveItemName =
+    (mode === 'open_item' && openItems?.find((it) => it.item === effectiveItemCode)?.item_name) ||
+    itemName ||
+    effectiveItemCode;
+  const priceStep = currencyInputStep(currency);
+  const effectiveRefName = invoiceName || 'NEW';
 
   const selectedReasonObj = reasons.find((r) => r.code === selectedReason) ?? null;
   const needsNote = Boolean(selectedReasonObj && Number(selectedReasonObj.requires_note) === 1);
@@ -110,11 +138,12 @@ export default function PriceOverrideDialog({
     const effectiveNote = reasonNote.trim() || approval?.note || '';
 
     try {
+      let result: Record<string, unknown> | undefined;
       if (mode === 'override') {
         if (!itemRowName) {
           throw new Error(t('privileged_actions.missing_line'));
         }
-        await overrideLinePrice({
+        result = await overrideLinePrice({
           invoice: invoiceName,
           itemRowName,
           newRate: parsedRate,
@@ -123,18 +152,23 @@ export default function PriceOverrideDialog({
           approvalToken: approval?.token,
         });
       } else {
-        if (!itemCode) {
+        if (!effectiveItemCode) {
           throw new Error(t('privileged_actions.missing_item'));
         }
-        await addOpenItem({
-          invoice: invoiceName,
-          itemCode,
+        result = await addOpenItem({
+          invoice: invoiceName || undefined,
+          posProfile: posProfile || undefined,
+          itemCode: effectiveItemCode,
           qty: parsedQty,
           rate: parsedRate,
           reference: reference.trim(),
           reason: effectiveReason,
           reasonNote: effectiveNote,
           approvalToken: approval?.token,
+          orderType: orderType || undefined,
+          table: table || undefined,
+          customer: customer || undefined,
+          noOfPax: noOfPax || undefined,
         });
       }
       showToast.success(
@@ -142,7 +176,7 @@ export default function PriceOverrideDialog({
           ? t('privileged_actions.price_override_saved')
           : t('privileged_actions.open_item_added'),
       );
-      await onSuccess();
+      await onSuccess(result);
       onOpenChange(false);
     } catch (err) {
       if (!approval?.token && isAuthRequiredError(err)) {
@@ -160,15 +194,15 @@ export default function PriceOverrideDialog({
               }
             : {
                 action: 'open_item',
-                invoice: invoiceName,
-                item_code: itemCode || '',
+                invoice: effectiveRefName,
+                item_code: effectiveItemCode,
                 qty: parsedQty,
                 rate: parsedRate,
                 reference: reference.trim(),
               };
         setPendingApproval({
           claim: challenge?.claim ?? fallbackClaim,
-          amount: typeof challenge?.amount === 'number' ? challenge.amount : mode === 'override' ? delta : parsedRate,
+          amount: typeof challenge?.amount === 'number' ? challenge.amount : mode === 'override' ? delta : parsedRate * parsedQty,
           percent: typeof challenge?.percent === 'number' ? challenge.percent : pct,
         });
         return;
@@ -190,11 +224,34 @@ export default function PriceOverrideDialog({
                 : t('privileged_actions.open_item')}
             </DialogTitle>
             <DialogDescription>
-              {itemName} · {t('privileged_actions.current_price')}: {formatCurrency(currentRate, currency)}
+              {mode === 'override'
+                ? `${effectiveItemName} · ${t('privileged_actions.current_price')}: ${formatCurrency(currentRate, currency)}`
+                : effectiveItemName || t('privileged_actions.open_item')}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 px-6 pb-2">
+            {mode === 'open_item' && openItems && openItems.length > 0 && (
+              <div className="space-y-1.5">
+                <label htmlFor="open-item-select" className="block text-sm font-medium text-gray-900">
+                  {t('privileged_actions.select_open_item')}
+                </label>
+                <select
+                  id="open-item-select"
+                  value={effectiveItemCode}
+                  onChange={(e) => setSelectedOpenItem(e.target.value)}
+                  disabled={submitting}
+                  className="min-h-11 w-full rounded-md border border-border bg-white px-3 py-2 text-sm"
+                >
+                  {openItems.map((it) => (
+                    <option key={it.item} value={it.item}>
+                      {it.item_name || it.item}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {mode === 'open_item' && (
               <div className="space-y-1.5">
                 <label htmlFor="open-item-reference" className="block text-sm font-medium text-gray-900">
@@ -224,7 +281,7 @@ export default function PriceOverrideDialog({
                   type="number"
                   inputMode="decimal"
                   min={0}
-                  step="any"
+                  step={priceStep}
                   value={rateInput}
                   onChange={(e) => setRateInput(e.target.value)}
                   disabled={submitting}
@@ -328,10 +385,10 @@ export default function PriceOverrideDialog({
               : t('privileged_actions.open_item')
           }
           summaryLines={[
-            `${itemName}: ${formatCurrency(currentRate, currency)} → ${formatCurrency(Number(rateInput || 0), currency)}`,
-            `${t('privileged_actions.check_ref')}: ${invoiceName}`,
+            `${effectiveItemName}: ${formatCurrency(currentRate, currency)} → ${formatCurrency(Number(rateInput || 0), currency)}`,
+            `${t('privileged_actions.check_ref')}: ${effectiveRefName}`,
           ]}
-          reference={{ doctype: 'POS Invoice', name: invoiceName }}
+          reference={{ doctype: 'POS Invoice', name: effectiveRefName }}
           claim={pendingApproval.claim}
           amount={pendingApproval.amount}
           percent={pendingApproval.percent}

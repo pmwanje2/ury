@@ -737,7 +737,7 @@ def update_reservation_status(
             _table_exists,
             assert_not_offline_replay,
             authorize_or_perform,
-            has_privilege_rules,
+            is_company_policy_active,
             mark_verified_approval,
         )
 
@@ -752,7 +752,7 @@ def update_reservation_status(
                 raw_prof = frappe.db.get_value("POS Profile", {"branch": branch, "disabled": 0}, "name")
                 resolved_profile = raw_prof if _is_valid_str(raw_prof) else None
 
-        policy_active = has_privilege_rules(company, "reservation_cancel")
+        policy_active = is_company_policy_active(company)
         enforce_reason = bool(policy_active or approval_token or (status == "Cancelled" and _table_exists("POS Reason")))
 
         if policy_active or approval_token or not native_allowed or _table_exists("POS Authorisation Log"):

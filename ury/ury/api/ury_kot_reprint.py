@@ -12,7 +12,7 @@ def reprint_kot(invoice_number, approval_token=None, reason=None, reason_note=No
         _is_valid_str,
         assert_not_offline_replay,
         authorize_or_perform,
-        has_privilege_rules,
+        is_company_policy_active,
     )
 
     assert_not_offline_replay()
@@ -52,7 +52,7 @@ def reprint_kot(invoice_number, approval_token=None, reason=None, reason_note=No
         pos_invoice.get("custom_kot_reprint_count"), (int, float, str)
     ) else 0
     next_reprint_number = prior_reprints + 1
-    policy_active = has_privilege_rules(company, "reprint_kot")
+    policy_active = is_company_policy_active(company)
 
     auth = None
     if policy_active or approval_token or reason is not None or not legacy_allowed:

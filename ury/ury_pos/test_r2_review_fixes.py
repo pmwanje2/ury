@@ -950,7 +950,7 @@ class TestBlocker4MultiCurrencyCostAndRestTamper(unittest.TestCase):
             )
             self.assertFalse(res_usd["below_cost"], "12.34 USD (~52,206 UGX) must NOT be below 6,000 UGX cost")
             inv_usd = state["docs"][("POS Invoice", "INV-USD")]
-            self.assertAlmostEqual(inv_usd.items[0]["base_price_list_rate"], 12.34 * 4230.64, places=2)
+            self.assertAlmostEqual(inv_usd["items"][0]["base_price_list_rate"], 12.34 * 4230.64, places=2)
 
             # 12.345 KWD * 13637 = 168,348 UGX >> 6,000 UGX -> NOT below_cost & preserves 3dp 12.345
             res_kwd = pricing.override_line_price(

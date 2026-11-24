@@ -288,12 +288,14 @@ def qz_print_update(invoice, approval_token=None, reason=None, reason_note=None)
         from ury.ury.api.ury_fulfilment_posting_service import trigger_manufacture_on_bill_print
         trigger_manufacture_on_bill_print(invoice)
 
-        return {
-            "status": "Success",
-            "print_number": reprint_meta.get("print_number"),
-            "is_reprint": bool(reprint_meta.get("is_reprint")),
-            "reprint_label": reprint_meta.get("reprint_label") or "",
-        }
+        if reprint_meta and reprint_meta.get("is_reprint"):
+            return {
+                "status": "Success",
+                "print_number": reprint_meta.get("print_number"),
+                "is_reprint": True,
+                "reprint_label": reprint_meta.get("reprint_label") or "",
+            }
+        return {"status": "Success"}
         
     except (frappe.PermissionError, frappe.ValidationError):
         raise

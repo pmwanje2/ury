@@ -22,7 +22,21 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+try:
+    from frappe.utils import cint, flt
+except ImportError:  # pragma: no cover - partial frappe.utils stubs in site-less tests
+    def cint(value):
+        try:
+            return int(float(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def flt(value, precision=None):
+        try:
+            num = float(value or 0)
+        except (TypeError, ValueError):
+            num = 0.0
+        return round(num, int(precision)) if precision is not None else num
 
 DEFAULT_MANAGER_ROLES = frozenset({"URY Manager", "URY Admin"})
 
@@ -274,6 +288,34 @@ def validate_pos_reason(
             frappe.ValidationError,
         )
     return cleaned, note
+
+
+def is_company_policy_active(company: str | None) -> bool:
+    """True when `company` has ANY POS Privilege Rule row (company-wide policy active).
+
+    Once a company has configured privilege rules, EVERY privilege must fail closed
+    through B2a `override` rather than falling back to Path 4 when a single privilege's
+    rows are missing or deleted.
+    """
+    if not _is_valid_str(company) or not _table_exists("POS Privilege Rule"):
+        return False
+    override = _get_override_module()
+    if override is not None and callable(getattr(override, "is_policy_active", None)):
+        try:
+            res = override.is_policy_active(company)
+            if isinstance(res, bool):
+                return res
+            if res in (0, 1):
+                return bool(res)
+        except Exception:
+            pass
+    rows = frappe.get_all(
+        "POS Privilege Rule",
+        filters={"company": company},
+        fields=["name"],
+        limit=1,
+    )
+    return bool(rows)
 
 
 def has_privilege_rules(company: str | None, privilege: str) -> bool:
@@ -530,50 +572,56 @@ def authorize_or_perform(
             frappe.PermissionError,
         )
 
-    # Path 3: Company has explicit POS Privilege Rule rows -> B2a rules govern.
-    if has_privilege_rules(resolved_company, privilege):
-        if override is not None:
-            if required_privilege_group > 0 and not _check_privilege_group(
-                resolved_company, pos_profile, privilege, user, required_privilege_group
-            ):
-                _attach_auth_challenge(**challenge_kwargs)
+    # Path 3: Company-wide POS Privilege Policy is active -> B2a rules govern and fail closed.
+    # Never fall back to Path 4 when a single privilege's rule row is absent.
+    if is_company_policy_active(resolved_company):
+        if override is None:
+            _attach_auth_challenge(**challenge_kwargs)
+            frappe.throw(
+                _code("POS-AUTH-REQUIRED", auth_denied_msg),
+                frappe.PermissionError,
+            )
+        if required_privilege_group > 0 and not _check_privilege_group(
+            resolved_company, pos_profile, privilege, user, required_privilege_group
+        ):
+            _attach_auth_challenge(**challenge_kwargs)
+            frappe.throw(
+                _code("POS-AUTH-REQUIRED", auth_denied_msg),
+                frappe.PermissionError,
+            )
+        try:
+            override.require(
+                privilege,
+                pos_profile,
+                reference_name,
+                claim,
+                token=None,
+                percent=percent,
+                amount=amount,
+            )
+        except frappe.PermissionError:
+            _attach_auth_challenge(**challenge_kwargs)
+            if deny_message:
                 frappe.throw(
                     _code("POS-AUTH-REQUIRED", auth_denied_msg),
                     frappe.PermissionError,
                 )
-            try:
-                override.require(
-                    privilege,
-                    pos_profile,
-                    reference_name,
-                    claim,
-                    token=None,
-                    percent=percent,
-                    amount=amount,
-                )
-            except frappe.PermissionError:
-                _attach_auth_challenge(**challenge_kwargs)
-                if deny_message:
-                    frappe.throw(
-                        _code("POS-AUTH-REQUIRED", auth_denied_msg),
-                        frappe.PermissionError,
-                    )
-                raise
-            _record_self_performed_log(
-                privilege=privilege,
-                pos_profile=pos_profile,
-                company=resolved_company,
-                reference_doctype=reference_doctype,
-                reference_name=reference_name,
-                claim=claim,
-                reason=validated_reason,
-            )
-            return {
-                "approver": user,
-                "via_pin": False,
-                "reason": validated_reason,
-                "reason_note": validated_note,
-            }
+            raise
+        _record_self_performed_log(
+            privilege=privilege,
+            pos_profile=pos_profile,
+            company=resolved_company,
+            reference_doctype=reference_doctype,
+            reference_name=reference_name,
+            claim=claim,
+            reason=validated_reason,
+        )
+        return {
+            "approver": user,
+            "via_pin": False,
+            "reason": validated_reason,
+            "reason_note": validated_note,
+        }
 
     # Path 4: No POS Privilege Rule rows configured yet -> keep the till usable
     # with today's outlet/manager roles; everyone else needs a manager PIN.
