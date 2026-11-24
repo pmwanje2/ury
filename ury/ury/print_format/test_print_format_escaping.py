@@ -98,19 +98,26 @@ def merged_bill(text):
 
 def bill_copy(text):
 	partner = Doc(
-		name=text("partner.name"), docstatus=1, currency=text("partner.currency"), customer=text("partner.customer"),
+		name=text("partner.name"), docstatus=1, is_return=0, company="Demo Restaurant",
+		room_number=None, kamra_ref=None,
+		currency=text("partner.currency"), customer=text("partner.customer"),
 		items=[Doc(item_name=text("partner.item_name"), qty=1, amount=50)],
 		taxes=[Doc(description=text("partner.tax_description"), tax_amount=9)],
 		grand_total=59, rounded_total=59, outstanding_amount=0,
-		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59)],
+		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59, account=None)],
 	)
 	return Doc(
-		name=text("doc.name"), docstatus=1, copy_number=2, copy_timestamp="2026-11-23 20:15:00", posting_date="2026-11-23",
+		name=text("doc.name"), docstatus=1, is_return=0, company="Demo Restaurant",
+		room_number=text("doc.room_number"), custom_guest_label=text("doc.custom_guest_label"), kamra_ref=None,
+		copy_number=2, copy_timestamp="2026-11-23 20:15:00", posting_date="2026-11-23",
 		currency=text("doc.currency"), customer=text("doc.customer"),
 		items=[Doc(item_name=text("item.item_name"), qty=2, amount=100)],
 		taxes=[Doc(description=text("tax.description"), tax_amount=18)],
 		grand_total=118, rounded_total=118, outstanding_amount=60,
-		payments=[Doc(mode_of_payment=text("payment.mode_of_payment"), amount=58)],
+		payments=[
+			Doc(mode_of_payment=text("payment.mode_of_payment"), amount=38, account=None),
+			Doc(mode_of_payment="Room Charge", amount=20, account=None),
+		],
 		ury_print_partner=partner,
 	)
 
@@ -141,7 +148,8 @@ FORMATS = {
 		"partner.mode_of_payment", "partner.customer", "partner.currency",
 	)),
 	"ury_bill_copy": (bill_copy, (
-		"doc.name", "doc.currency", "item.item_name", "tax.description", "payment.mode_of_payment", "doc.customer",
+		"doc.name", "doc.currency", "doc.room_number", "doc.custom_guest_label",
+		"item.item_name", "tax.description", "payment.mode_of_payment", "doc.customer",
 		"partner.name", "partner.item_name", "partner.tax_description", "partner.mode_of_payment",
 	)),
 	"ury_waiter_order_slip": (waiter_slip, (
