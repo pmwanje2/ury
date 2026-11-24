@@ -251,3 +251,74 @@ class TestTillCashMovementsAPI(FrappeTestCase):
 		self.assertEqual(meta[till_fx.CARD]["type"], "Bank")
 		self.assertEqual(meta[till_fx.CARD]["overtender_rule"], "Post to Charged Tip")
 		self.assertEqual(meta[till_fx.WIRE]["overtender_rule"], "Refuse")
+		self.assertIn("require_over_short_reason", details)
+		self.assertIn("over_short_reason_tolerance", details)
+
+	def test_tip_payout_api_stores_tip_server_and_lists_servers_in_state(self):
+		from ury.ury_pos import cash_movements
+
+		till = till_fx.make_till(
+			"_Test Till Tip Server API",
+			holder=till_fx.PURE_CASHIER,
+			custom_enable_cash_movements=1,
+		)
+		frappe.set_user(till_fx.PURE_CASHIER)
+		state = cash_movements.get_till_cash_state(pos_profile=till.name)
+		server_emails = [s["user"] for s in state.get("servers") or []]
+		self.assertIn(till_fx.WAITER, server_emails)
+
+		row = cash_movements.record_till_cash_movement(
+			pos_profile=till.name,
+			movement_type="Paid Out",
+			amount=40,
+			reason="Server cash tips paid",
+			paid_out_target="tips",
+			tip_server=till_fx.WAITER,
+		)
+		self.assertEqual(row["docstatus"], 1)
+		self.assertEqual(row["tip_server"], till_fx.WAITER)
+		self.assertEqual(
+			frappe.db.get_value("Journal Entry", row["name"], "custom_tip_server"),
+			till_fx.WAITER,
+		)
+
+	def test_get_till_cash_state_distinguishes_zero_and_blank_threshold(self):
+		from ury.ury_pos import cash_movements
+
+		strict_till = till_fx.make_till(
+			"_Test Till API Halo Zero",
+			holder=till_fx.PURE_CASHIER,
+			custom_enable_cash_movements=1,
+			custom_paid_out_approval_threshold="0",
+		)
+		frappe.set_user(till_fx.PURE_CASHIER)
+		strict_state = cash_movements.get_till_cash_state(pos_profile=strict_till.name)
+		self.assertEqual(strict_state["paid_out_threshold"], 0.0)
+		pending = cash_movements.record_till_cash_movement(
+			pos_profile=strict_till.name,
+			movement_type="Paid Out",
+			amount=5,
+			reason="Tiny paid-out",
+		)
+		self.assertEqual(pending["docstatus"], 0)
+		cash_movements.discard_till_cash_movement(pending["name"])
+
+		frappe.set_user("Administrator")
+		till_fx.close_till(strict_till, counted=1000)
+
+		no_limit_till = till_fx.make_till(
+			"_Test Till API Halo Blank",
+			holder=till_fx.PURE_CASHIER,
+			custom_enable_cash_movements=1,
+			custom_paid_out_approval_threshold="",
+		)
+		frappe.set_user(till_fx.PURE_CASHIER)
+		blank_state = cash_movements.get_till_cash_state(pos_profile=no_limit_till.name)
+		self.assertIsNone(blank_state["paid_out_threshold"])
+		submitted = cash_movements.record_till_cash_movement(
+			pos_profile=no_limit_till.name,
+			movement_type="Paid Out",
+			amount=50000,
+			reason="Unlimited paid-out",
+		)
+		self.assertEqual(submitted["docstatus"], 1)

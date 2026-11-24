@@ -298,3 +298,131 @@ class TestChargedTip(FrappeTestCase):
 		self.assertEqual(ret.discount_amount, -10)
 		self.assertEqual(ret.grand_total, -110)
 		self.assertEqual([row.tax_amount for row in _tip_rows(ret)], [-20])
+
+	def test_partial_return_zeroing_tip_removes_copied_tips_payable_row_without_resurrection(self):
+		from erpnext.accounts.doctype.pos_invoice.pos_invoice import make_sales_return
+
+		frappe.set_user(self.till.holder)
+		try:
+			original = frappe.new_doc("POS Invoice")
+			original.pos_profile = self.till.name
+			original.company = till_fx.COMPANY
+			original.customer = till_fx.CUSTOMER
+			original.is_pos = 1
+			original.update_stock = 0
+			original.waiter = till_fx.WAITER
+			original.disable_rounded_total = 1
+			original.append(
+				"items",
+				{
+					"item_code": till_fx.ITEM,
+					"qty": 2,
+					"rate": 50,
+					"income_account": till_fx.INCOME_ACCOUNT,
+					"cost_center": till_fx.COST_CENTER,
+				},
+			)
+			original.custom_charged_tip = 20
+			original.append("payments", {"mode_of_payment": till_fx.CASH, "amount": 120})
+			original.insert(ignore_permissions=True)
+			original.submit()
+
+			# Partial return of 1 of 2 items where caller sets custom_charged_tip = 0
+			# without manually deleting the copied Tips Payable tax row.
+			ret = make_sales_return(original.name)
+			self.assertEqual(ret.custom_charged_tip, -20)
+			self.assertEqual(ret.custom_tip_server, till_fx.WAITER)
+			ret.items[0].qty = -1
+			ret.custom_charged_tip = 0
+			ret.payments[0].amount = -50
+			ret.insert(ignore_permissions=True)
+			ret.submit()
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(ret.custom_charged_tip, 0)
+		self.assertFalse(ret.custom_tip_server)
+		self.assertEqual(_tip_rows(ret), [])
+		self.assertEqual(ret.grand_total, -50)
+
+	def test_saved_draft_return_can_zero_tip_without_resurrection(self):
+		from erpnext.accounts.doctype.pos_invoice.pos_invoice import make_sales_return
+
+		original = till_fx.bill(self.till, 100, [(till_fx.CASH, 120)], tip=20, disable_rounded_total=1)
+		frappe.set_user(self.till.holder)
+		try:
+			ret = make_sales_return(original.name)
+			ret.insert(ignore_permissions=True)
+			self.assertEqual(ret.custom_charged_tip, -20)
+			ret.custom_charged_tip = 0
+			ret.payments[0].amount = -100
+			ret.save(ignore_permissions=True)
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual(ret.custom_charged_tip, 0)
+		self.assertFalse(ret.custom_tip_server)
+		self.assertEqual(_tip_rows(ret), [])
+		self.assertEqual(ret.grand_total, -100)
+
+	def test_amended_cancelled_pos_invoice_succeeds_without_order_number_crash(self):
+		original = till_fx.bill(self.till, 100, [(till_fx.CASH, 100)], disable_rounded_total=1)
+		frappe.set_user("Administrator")
+		frappe.get_doc("POS Invoice", original.name).cancel()
+
+		amended = frappe.copy_doc(frappe.get_doc("POS Invoice", original.name))
+		amended.docstatus = 0
+		amended.amended_from = original.name
+		amended.insert(ignore_permissions=True)
+		amended.submit()
+
+		self.assertTrue(amended.name.endswith("-1"), f"Expected amended name ending in -1, got {amended.name}")
+		self.assertEqual(amended.docstatus, 1)
+
+	def test_merged_pos_invoice_without_explicit_tip_keeps_card_overtender_per_tender_rule(self):
+		from ury.ury.doctype.ury_order import ury_order as order
+
+		m1 = till_fx.bill(self.till, 100, [(till_fx.CASH, 100)], waiter=self.till.holder, submit=False, disable_rounded_total=1)
+		m2 = till_fx.bill(self.till, 50, [(till_fx.CASH, 50)], waiter=self.till.holder, submit=False, disable_rounded_total=1)
+		frappe.db.set_value("POS Invoice", m1.name, {"custom_merged_pos_invoice": m2.name, "branch": till_fx.BRANCH})
+		frappe.db.set_value("POS Invoice", m2.name, {"custom_merged_pos_invoice": m1.name, "branch": till_fx.BRANCH})
+		frappe.get_doc("User", self.till.holder).add_roles("URY Cashier")
+		prof = frappe.get_doc("POS Profile", self.till.name)
+		if not any(r.role == "URY Cashier" for r in (prof.role_allowed_for_billing or [])):
+			prof.append("role_allowed_for_billing", {"role": "URY Cashier"})
+			prof.save(ignore_permissions=True)
+
+		till_fx.set_overtender_rule(till_fx.CARD, "Refuse")
+		frappe.set_user(self.till.holder)
+		try:
+			with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-TENDER-OVERTENDER\]"):
+				order.make_invoice(
+					till_fx.CUSTOMER,
+					[{"mode_of_payment": till_fx.CARD, "amount": 197}],
+					self.till.holder,
+					self.till.name,
+					till_fx.WAITER,
+					invoice=m1.name,
+					submit_invoice=1,
+				)
+
+			till_fx.set_overtender_rule(till_fx.CARD, "Post to Charged Tip")
+			order.make_invoice(
+				till_fx.CUSTOMER,
+				[{"mode_of_payment": till_fx.CARD, "amount": 197}],
+				self.till.holder,
+				self.till.name,
+				till_fx.WAITER,
+				invoice=m1.name,
+				submit_invoice=1,
+			)
+		finally:
+			frappe.set_user("Administrator")
+			till_fx.set_overtender_rule(till_fx.CARD, "Refuse")
+
+		m1_doc = frappe.get_doc("POS Invoice", m1.name)
+		m2_doc = frappe.get_doc("POS Invoice", m2.name)
+		self.assertEqual(m1_doc.custom_charged_tip, 47)
+		self.assertEqual(m1_doc.grand_total, 147)
+		self.assertEqual(m1_doc.change_amount, 0)
+		self.assertEqual(m2_doc.grand_total, 50)

@@ -221,6 +221,273 @@ class TestTillCashMovements(FrappeTestCase):
 				self.assertIn(["Account", "disabled", "=", 0], clauses)
 				self.assertIn(["Account", "root_type", root_clause[0], root_clause[1]], clauses)
 
+	def test_tip_payout_carries_tip_server_and_non_tip_movements_clear_it(self):
+		field = frappe.get_meta("Journal Entry").get_field("custom_tip_server")
+		self.assertIsNotNone(field, "Journal Entry needs custom_tip_server for Tip Payout attribution")
+		self.assertEqual((field.fieldtype, field.options), ("Link", "User"))
+
+		till = till_fx.make_till("_Test Till Tip Server")
+		tip_payout = movement(
+			till,
+			"Paid Out",
+			40,
+			counter=till_fx.TIPS_ACCOUNT,
+			reason="Server cash tips paid",
+			extra={"custom_tip_server": till_fx.WAITER},
+		)
+		self.assertEqual(tip_payout.custom_tip_server, till_fx.WAITER)
+
+		expense_po = movement(
+			till,
+			"Paid Out",
+			40,
+			counter=till_fx.PAID_OUT_ACCOUNT,
+			reason="Ice",
+			extra={"custom_tip_server": till_fx.WAITER},
+		)
+		self.assertFalse(expense_po.custom_tip_server)
+
+		pickup = movement(
+			till,
+			"Pickup",
+			50,
+			extra={"custom_tip_server": till_fx.WAITER},
+		)
+		self.assertFalse(pickup.custom_tip_server)
+
+	def test_paid_out_threshold_zero_requires_approval_while_blank_has_no_limit(self):
+		strict_till = till_fx.make_till(
+			"_Test Till Halo Zero",
+			custom_paid_out_approval_threshold="0",
+		)
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CASH-SECOND-PERSON\]"):
+			movement(strict_till, "Paid Out", 1, reason="Small paid-out at HALO 0")
+
+		draft = movement(strict_till, "Paid Out", 1, reason="Small paid-out at HALO 0", submit=False)
+		approved = submit_as(draft, till_fx.MANAGER)
+		self.assertEqual(approved.docstatus, 1)
+		self.assertEqual(approved.custom_cash_movement_approver, till_fx.MANAGER)
+
+		no_limit_till = till_fx.make_till(
+			"_Test Till Halo Blank",
+			custom_paid_out_approval_threshold="",
+		)
+		large = movement(no_limit_till, "Paid Out", 50000, reason="Bulk supplier cash")
+		self.assertEqual(large.docstatus, 1)
+		self.assertFalse(large.custom_cash_movement_approver)
+
+	def test_foreign_currency_till_cash_movements_and_over_short_post_multi_currency_gl(self):
+		from ury.ury.hooks.ury_cash_movement import till_cash_movements
+		from ury.ury_pos import cash_movements
+
+		usd_account = "_Test Cash USD - _TC"
+		if not frappe.db.exists("Account", usd_account):
+			frappe.get_doc(
+				{
+					"doctype": "Account",
+					"account_name": "_Test Cash USD",
+					"parent_account": "Cash In Hand - _TC",
+					"company": till_fx.COMPANY,
+					"is_group": 0,
+					"root_type": "Asset",
+					"account_type": "Cash",
+					"account_currency": "USD",
+				}
+			).insert(ignore_permissions=True)
+
+		usd_mode = "_Test Cash USD"
+		if not frappe.db.exists("Mode of Payment", usd_mode):
+			frappe.get_doc(
+				{
+					"doctype": "Mode of Payment",
+					"mode_of_payment": usd_mode,
+					"type": "Cash",
+					"accounts": [{"company": till_fx.COMPANY, "default_account": usd_account}],
+				}
+			).insert(ignore_permissions=True)
+
+		today = frappe.utils.nowdate()
+		existing_fx = frappe.db.get_value(
+			"Currency Exchange",
+			{"date": today, "from_currency": "USD", "to_currency": "INR"},
+			"name",
+		)
+		if existing_fx:
+			frappe.db.set_value("Currency Exchange", existing_fx, "exchange_rate", 80.0)
+		else:
+			frappe.get_doc(
+				{
+					"doctype": "Currency Exchange",
+					"date": today,
+					"from_currency": "USD",
+					"to_currency": "INR",
+					"exchange_rate": 80.0,
+					"for_buying": 1,
+					"for_selling": 1,
+				}
+			).insert(ignore_permissions=True)
+
+		# Foreign USD till under INR company (_Test Company)
+		profile_name = "_Test Till USD Foreign"
+		holder = "till-money-usd-cashier@example.com"
+		till_fx._make_role_only_user(holder, "URY Cashier")
+		till_fx.assign_branch_user(till_fx.BRANCH, holder)
+		if frappe.db.exists("POS Profile", profile_name):
+			frappe.delete_doc("POS Profile", profile_name, ignore_permissions=True, force=1)
+		profile = frappe.get_doc(
+			{
+				"doctype": "POS Profile",
+				"name": profile_name,
+				"company": till_fx.COMPANY,
+				"currency": "USD",
+				"warehouse": "_Test Warehouse - _TC",
+				"cost_center": till_fx.COST_CENTER,
+				"income_account": till_fx.INCOME_ACCOUNT,
+				"expense_account": "Cost of Goods Sold - _TC",
+				"write_off_account": "_Test Write Off - _TC",
+				"write_off_cost_center": till_fx.COST_CENTER,
+				"account_for_change_amount": usd_account,
+				"selling_price_list": "Standard Selling",
+				"branch": till_fx.BRANCH,
+				"restaurant": till_fx.RESTAURANT,
+				"custom_enable_cash_movements": 1,
+				"custom_tips_payable_account": till_fx.TIPS_ACCOUNT,
+				"custom_cash_safe_account": till_fx.SAFE_ACCOUNT,
+				"custom_paid_out_account": till_fx.PAID_OUT_ACCOUNT,
+				"custom_cash_over_short_account": till_fx.OVER_SHORT_ACCOUNT,
+				"custom_paid_out_approval_threshold": "20",
+				"custom_cash_movement_approver_role": till_fx.APPROVER_ROLE,
+			}
+		)
+		profile.append("payments", {"mode_of_payment": usd_mode, "default": 1})
+		for email in (holder, till_fx.PURE_MANAGER, till_fx.WAITER):
+			profile.append("applicable_for_users", {"user": email})
+		profile.insert(ignore_permissions=True)
+
+		opening = frappe.new_doc("POS Opening Entry")
+		opening.pos_profile = profile_name
+		opening.user = holder
+		opening.company = till_fx.COMPANY
+		opening.period_start_date = frappe.utils.add_to_date(frappe.utils.now_datetime(), minutes=-5)
+		opening.posting_date = today
+		opening.branch = till_fx.BRANCH
+		opening.restaurant = till_fx.RESTAURANT
+		opening.set("balance_details", [{"mode_of_payment": usd_mode, "opening_amount": 100}])
+		opening.insert(ignore_permissions=True)
+		opening.submit()
+
+		# Cash sale of $50 on USD till
+		inv = frappe.new_doc("POS Invoice")
+		inv.pos_profile = profile_name
+		inv.company = till_fx.COMPANY
+		inv.customer = till_fx.CUSTOMER
+		inv.currency = "USD"
+		inv.conversion_rate = 80.0
+		inv.is_pos = 1
+		inv.update_stock = 0
+		inv.waiter = till_fx.WAITER
+		inv.disable_rounded_total = 1
+		inv.append(
+			"items",
+			{
+				"item_code": till_fx.ITEM,
+				"qty": 1,
+				"rate": 50,
+				"income_account": till_fx.INCOME_ACCOUNT,
+				"cost_center": till_fx.COST_CENTER,
+			},
+		)
+		inv.append("payments", {"mode_of_payment": usd_mode, "amount": 50})
+		inv.insert(ignore_permissions=True)
+		inv.submit()
+
+		frappe.set_user(holder)
+		try:
+			pickup = cash_movements.record_till_cash_movement(
+				pos_profile=profile_name, movement_type="Pickup", amount=20, pos_opening_entry=opening.name
+			)
+			loan = cash_movements.record_till_cash_movement(
+				pos_profile=profile_name, movement_type="Loan", amount=30, pos_opening_entry=opening.name
+			)
+			# $10 <= $20 threshold (even though 800 INR > 20): must self-submit!
+			small_po = cash_movements.record_till_cash_movement(
+				pos_profile=profile_name,
+				movement_type="Paid Out",
+				amount=10,
+				reason="Ice",
+				paid_out_target="expense",
+				pos_opening_entry=opening.name,
+			)
+			# $25 > $20 threshold: must wait for second-person approval
+			large_po = cash_movements.record_till_cash_movement(
+				pos_profile=profile_name,
+				movement_type="Paid Out",
+				amount=25,
+				reason="Server tip payout",
+				paid_out_target="tips",
+				tip_server=till_fx.WAITER,
+				pos_opening_entry=opening.name,
+			)
+		finally:
+			frappe.set_user("Administrator")
+
+		self.assertEqual((pickup["docstatus"], pickup["amount"], pickup["drawer_change"]), (1, 20.0, -20.0))
+		self.assertEqual((loan["docstatus"], loan["amount"], loan["drawer_change"]), (1, 30.0, 30.0))
+		self.assertEqual((small_po["docstatus"], small_po["amount"]), (1, 10.0))
+		self.assertEqual((large_po["docstatus"], large_po["amount"], large_po["tip_server"]), (0, 25.0, till_fx.WAITER))
+
+		frappe.set_user(till_fx.PURE_MANAGER)
+		try:
+			approved = cash_movements.approve_till_cash_movement(large_po["name"])
+			self.assertEqual(approved["docstatus"], 1)
+			state = cash_movements.get_till_cash_state(profile_name)
+			totals = cash_movements.get_shift_cash_movement_totals(opening.name)
+		finally:
+			frappe.set_user("Administrator")
+
+		# Net drawer change in profile currency (USD): -20 + 30 - 10 - 25 = -25 USD
+		self.assertEqual(till_cash_movements(opening.name), {usd_account: -25.0})
+		self.assertEqual(state["net_drawer_movement"], -25.0)
+		self.assertEqual(totals["by_mode"], {usd_mode: -25.0})
+
+		# Verify multi_currency & balanced INR GL on Pickup ($20 * 80 = 1600 INR)
+		pickup_je = frappe.get_doc("Journal Entry", pickup["name"])
+		self.assertEqual(pickup_je.multi_currency, 1)
+		self.assertEqual(
+			till_fx.gl_by_account("Journal Entry", pickup["name"]),
+			{till_fx.SAFE_ACCOUNT: (1600.0, 0), usd_account: (0, 1600.0)},
+		)
+
+		# Close USD till counting $120 vs expected $125 ($100 open + $50 sale - $25 movements) -> -$5 short
+		closing = frappe.new_doc("POS Closing Entry")
+		closing.pos_opening_entry = opening.name
+		closing.pos_profile = profile_name
+		closing.company = till_fx.COMPANY
+		closing.user = holder
+		closing.period_start_date = opening.period_start_date
+		closing.period_end_date = frappe.utils.now_datetime()
+		closing.posting_date = today
+		closing.posting_time = frappe.utils.nowtime()
+		closing.append(
+			"payment_reconciliation",
+			{"mode_of_payment": usd_mode, "opening_amount": 100, "closing_amount": 120},
+		)
+		closing.insert(ignore_permissions=True)
+		closing.submit()
+		closing.reload()
+
+		row = closing.payment_reconciliation[0]
+		self.assertEqual((row.expected_amount, row.closing_amount, row.difference), (125.0, 120.0, -5.0))
+		entries = over_short_entries(closing)
+		self.assertEqual(len(entries), 1)
+		os_je = frappe.get_doc("Journal Entry", entries[0])
+		self.assertEqual(os_je.multi_currency, 1)
+		# $5 * 80 = 400 INR balanced in company GL
+		self.assertEqual(
+			till_fx.gl_by_account("Journal Entry", entries[0]),
+			{till_fx.OVER_SHORT_ACCOUNT: (400.0, 0), usd_account: (0, 400.0)},
+		)
+
 
 class TestCashOverShort(FrappeTestCase):
 	@classmethod
@@ -273,3 +540,52 @@ class TestCashOverShort(FrappeTestCase):
 		till = till_fx.make_till("_Test Till No Over Short", custom_cash_over_short_account=None)
 		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CLOSE-OVER-SHORT-ACCOUNT\]"):
 			till_fx.close_till(till, counted=990)
+
+	def test_over_short_reason_required_only_above_configured_tolerance(self):
+		self.assertIsNotNone(frappe.get_meta("POS Profile").get_field("custom_require_over_short_reason"))
+		self.assertIsNotNone(frappe.get_meta("POS Profile").get_field("custom_over_short_reason_tolerance"))
+		self.assertIsNotNone(frappe.get_meta("POS Closing Entry").get_field("custom_over_short_reason"))
+
+		# Within tolerance (|-8| <= 10): blank reason allowed.
+		till_within = till_fx.make_till(
+			"_Test Till Over Short Within Tol",
+			custom_require_over_short_reason=1,
+			custom_over_short_reason_tolerance=10,
+		)
+		closing_ok = till_fx.close_till(till_within, counted=992)
+		self.assertEqual(closing_ok.docstatus, 1)
+
+		# Above tolerance (|-25| > 10): blank reason refused, non-blank reason accepted and copied to JE remark.
+		till_above = till_fx.make_till(
+			"_Test Till Over Short Above Tol",
+			custom_require_over_short_reason=1,
+			custom_over_short_reason_tolerance=10,
+		)
+		with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CLOSE-OVER-SHORT-REASON\]"):
+			till_fx.close_till(till_above, counted=975)
+
+		frappe.set_user(till_above.holder)
+		try:
+			closing = frappe.new_doc("POS Closing Entry")
+			closing.pos_opening_entry = till_above.opening.name
+			closing.pos_profile = till_above.name
+			closing.company = till_fx.COMPANY
+			closing.user = till_above.holder
+			closing.period_start_date = till_above.opening.period_start_date
+			closing.period_end_date = frappe.utils.now_datetime()
+			closing.posting_date = frappe.utils.nowdate()
+			closing.posting_time = frappe.utils.nowtime()
+			closing.custom_over_short_reason = "Miscounted 25 note"
+			closing.append(
+				"payment_reconciliation",
+				{"mode_of_payment": till_fx.CASH, "opening_amount": 1000, "closing_amount": 975},
+			)
+			closing.insert(ignore_permissions=True)
+			closing.submit()
+		finally:
+			frappe.set_user("Administrator")
+
+		entries = over_short_entries(closing)
+		self.assertEqual(len(entries), 1)
+		remark = frappe.db.get_value("Journal Entry", entries[0], "user_remark") or ""
+		self.assertIn("Miscounted 25 note", remark)

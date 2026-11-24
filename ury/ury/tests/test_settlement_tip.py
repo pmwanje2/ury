@@ -104,3 +104,27 @@ class TestSettlementTip(unittest.TestCase):
 		with self.assertRaisesRegex(ValueError, r"\[POS-TIP-NEGATIVE\]"):
 			self.settle(tip=-5)
 		self.assertNotIn("save", self.events)
+
+	def test_merged_invoice_without_explicit_tip_keeps_overtender_on_primary_bill(self):
+		self.invoice.grand_total = 100
+		self.invoice.rounded_total = 100
+		self.invoice.custom_merged_pos_invoice = "B2"
+
+		target = self._bill()
+		target.name = "B2"
+		target.grand_total = 50
+		target.rounded_total = 50
+		self.f.get_doc.return_value = target
+
+		order.make_invoice(
+			"Walk-in",
+			[dict(mode_of_payment="Credit Card", amount=197)],
+			"cashier@example.com",
+			"Till",
+			"captain@example.com",
+			invoice="B1",
+			submit_invoice=0,
+		)
+
+		self.assertEqual([(r.mode_of_payment, r.amount) for r in target.payments], [("Credit Card", 50.0)])
+		self.assertEqual([(r.mode_of_payment, r.amount) for r in self.invoice.payments], [("Credit Card", 147.0)])
