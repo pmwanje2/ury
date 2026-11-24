@@ -26,6 +26,11 @@ vi.mock("@ury/ui", () => ({
     delete rest.size;
     return React.createElement("input", rest);
   },
+  Textarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) =>
+    React.createElement("textarea", props),
+  Spinner: ({ message }: { message?: string }) =>
+    React.createElement("span", null, message || "Loading"),
+  cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" "),
   Dialog: ({ children, open }: { children?: React.ReactNode; open?: boolean }) =>
     open ? React.createElement("div", { "data-testid": "discount-dialog" }, children) : null,
   DialogContent: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
@@ -81,8 +86,20 @@ vi.mock("../i18n", () => ({
       "discount.comp_100": "100% Comp",
       "discount.applied_toast": "Discount applied",
       "discount.removed_toast": "Discount removed",
+      "manager_approval.title": "Manager approval",
+      "manager_approval.subtitle": "Enter manager PIN to approve",
+      "manager_approval.manager": "Manager",
+      "manager_approval.select_manager": "Select manager",
+      "manager_approval.pin": "PIN",
+      "manager_approval.approve": "Approve",
+      "manager_approval.approving": "Approving…",
+      "manager_approval.no_approvers": "No approver available",
+      "floor_pin.clear": "Clear",
+      "floor_pin.delete": "Delete",
+      "common.dismiss": "Dismiss",
       "common.cancel": "Cancel",
       "common.clear": "Clear",
+      "common.loading": "Loading",
     };
     let text = map[key] ?? key;
     if (params) {
@@ -425,21 +442,28 @@ describe("DiscountPanel (Simphony / SAP / PMS parity)", () => {
     await waitFor(() => expect(screen.getByTestId("preview-after")).toHaveTextContent(/47,500/));
     expect(screen.queryByTestId("manager-approval-card")).toBeNull();
 
-    // 100% Comp -> inline ManagerApproval appears with privilege="complimentary"
+    // 100% Comp -> inline approval banner appears; clicking Authorise opens B2a ManagerApproval with privilege="complimentary"
     fireEvent.change(valueInput, { target: { value: "100" } });
     await waitFor(() => expect(screen.getByTestId("manager-approval-card")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Apply discount" })).toBeDisabled();
 
-    // Approve via Manager PIN
+    fireEvent.click(screen.getByRole("button", { name: "Authorise" }));
+    const modal = await screen.findByRole("dialog");
+
+    // Approve via B2a ManagerApproval PIN keypad
     await waitFor(() =>
       expect(call.get).toHaveBeenCalledWith(
-        expect.stringMatching(/list_approvers$/),
+        "ury.ury_pos.override.list_approvers",
         expect.objectContaining({ pos_profile: "Lakeside Till", privilege: "complimentary" }),
       ),
     );
-    fireEvent.change(screen.getByLabelText("Manager"), { target: { value: "manager@example.com" } });
-    fireEvent.change(screen.getByLabelText("Approval PIN"), { target: { value: "4321" } });
-    fireEvent.click(screen.getByRole("button", { name: "Authorise" }));
+    await waitFor(() => expect(within(modal).getByLabelText("Manager")).toBeInTheDocument());
+    fireEvent.change(within(modal).getByLabelText("Manager"), { target: { value: "manager@example.com" } });
+    fireEvent.click(within(modal).getByRole("button", { name: "4" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "3" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "2" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "1" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Approve" }));
 
     await waitFor(() => expect(screen.getByText(/Approved by Maya Manager/i)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Apply discount" })).not.toBeDisabled();
@@ -536,16 +560,20 @@ describe("DiscountPanel (Simphony / SAP / PMS parity)", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove discount" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Remove discount" }));
 
-    // Must prompt discount_remove approval rather than calling remove_check_discount directly
-    await waitFor(() => expect(screen.getByTestId("manager-approval-card")).toBeInTheDocument());
+    // Must open B2a ManagerApproval for discount_remove rather than calling remove_check_discount directly
+    const modal = await screen.findByRole("dialog");
     expect(call.post).not.toHaveBeenCalledWith(
       "ury.ury.doctype.ury_order.ury_order.remove_check_discount",
       expect.anything(),
     );
 
-    fireEvent.change(screen.getByLabelText("Manager"), { target: { value: "manager@example.com" } });
-    fireEvent.change(screen.getByLabelText("Approval PIN"), { target: { value: "4321" } });
-    fireEvent.click(screen.getByRole("button", { name: "Authorise" }));
+    await waitFor(() => expect(within(modal).getByLabelText("Manager")).toBeInTheDocument());
+    fireEvent.change(within(modal).getByLabelText("Manager"), { target: { value: "manager@example.com" } });
+    fireEvent.click(within(modal).getByRole("button", { name: "4" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "3" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "2" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "1" }));
+    fireEvent.click(within(modal).getByRole("button", { name: "Approve" }));
 
     await waitFor(() =>
       expect(call.post).toHaveBeenCalledWith(

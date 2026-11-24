@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Percent, Tag, CheckCircle2, Trash2, Delete } from 'lucide-react';
+import { X, Percent, Tag, CheckCircle2, Trash2, Delete, ShieldAlert } from 'lucide-react';
 import { Button, Dialog, DialogContent, showToast } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
 import { t } from '../i18n';
@@ -16,7 +16,7 @@ import {
   type DiscountPreviewResponse,
   type LineDiscountInput,
 } from '../lib/discount-api';
-import DiscountManagerApproval from './DiscountManagerApproval';
+import ManagerApproval from './ManagerApproval';
 
 export interface DiscountPanelProps {
   open: boolean;
@@ -73,6 +73,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
 
   // Approval state (cleared immediately whenever ANY discount field changes!)
   const [approved, setApproved] = useState<{ token: string; approverName: string } | null>(null);
+  const [applyApprovalOpen, setApplyApprovalOpen] = useState(false);
   const [removeApprovalOpen, setRemoveApprovalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -92,6 +93,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
     setLoadingOptions(true);
     setError(null);
     setApproved(null);
+    setApplyApprovalOpen(false);
     setRemoveApprovalOpen(false);
     setPreview(null);
 
@@ -204,6 +206,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   // Clear stored approval token immediately whenever ANY draft field changes
   const invalidateApproval = () => {
     setApproved(null);
+    setApplyApprovalOpen(false);
     setRemoveApprovalOpen(false);
   };
 
@@ -440,7 +443,12 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
   if (!open) return null;
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !applyApprovalOpen && !removeApprovalOpen) onClose();
+      }}
+    >
       <DialogContent
         variant="xlarge"
         showCloseButton={false}
@@ -906,21 +914,35 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                 )}
               </div>
 
-              {/* Inline ManagerApproval ONLY when preview says approval is needed */}
+              {/* Inline Manager Approval notice ONLY when preview says approval is needed */}
               {needsApproval && preview && !approved && !removeApprovalOpen && (
-                <DiscountManagerApproval
-                  open={true}
-                  posProfile={posProfile}
-                  privilege={preview.privilege}
-                  title={t('discount.manager_approval_title')}
-                  summaryLines={approvalSummaryLines}
-                  reference={{ doctype: 'POS Invoice', name: invoice }}
-                  claim={preview.claim as unknown as Record<string, unknown>}
-                  percent={preview.effective_percent}
-                  amount={preview.discount_total}
-                  onApproved={(res) => setApproved(res)}
-                  onCancel={() => setApproved(null)}
-                />
+                <div
+                  data-testid="manager-approval-card"
+                  className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3"
+                >
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-sm font-semibold text-amber-900">
+                        {t('discount.manager_approval_title')}
+                      </h4>
+                      {approvalSummaryLines.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 text-xs text-amber-800">
+                          {approvalSummaryLines.map((line, i) => (
+                            <li key={i}>{line}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    className="w-full min-h-12"
+                    onClick={() => setApplyApprovalOpen(true)}
+                  >
+                    {t('discount.authorise')}
+                  </Button>
+                </div>
               )}
 
               {approved && (
@@ -928,23 +950,6 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
                   <span>{t('discount.approved_by', { name: approved.approverName })}</span>
                 </div>
-              )}
-
-              {/* Inline ManagerApproval for discount_remove when required */}
-              {removeApprovalOpen && existingDiscounts && (
-                <DiscountManagerApproval
-                  open={true}
-                  posProfile={posProfile}
-                  privilege="discount_remove"
-                  title={t('discount.remove_approval_title')}
-                  summaryLines={[
-                    `${t('discount.discount_line')}: −${formatMoney(existingDiscounts.discount_amount)}`,
-                  ]}
-                  reference={{ doctype: 'POS Invoice', name: invoice }}
-                  claim={existingDiscounts.remove_claim || { action: 'remove', row: null }}
-                  onApproved={({ token }) => executeRemove(token)}
-                  onCancel={() => setRemoveApprovalOpen(false)}
-                />
               )}
             </div>
 
@@ -987,6 +992,41 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Shared B2a ManagerApproval PIN Modal */}
+        <ManagerApproval
+          open={applyApprovalOpen && needsApproval && Boolean(preview) && !approved}
+          posProfile={posProfile}
+          privilege={preview?.privilege || 'discount'}
+          title={t('discount.manager_approval_title')}
+          summaryLines={approvalSummaryLines}
+          reference={{ doctype: 'POS Invoice', name: invoice }}
+          claim={(preview?.claim as unknown as Record<string, unknown>) || {}}
+          percent={preview?.effective_percent}
+          amount={preview?.discount_total}
+          requireReason={false}
+          onApproved={(res) => {
+            setApproved({ token: res.token, approverName: res.approverName });
+            setApplyApprovalOpen(false);
+          }}
+          onCancel={() => setApplyApprovalOpen(false)}
+        />
+        <ManagerApproval
+          open={removeApprovalOpen && Boolean(existingDiscounts)}
+          posProfile={posProfile}
+          privilege="discount_remove"
+          title={t('discount.remove_approval_title')}
+          summaryLines={
+            existingDiscounts
+              ? [`${t('discount.discount_line')}: −${formatMoney(existingDiscounts.discount_amount)}`]
+              : []
+          }
+          reference={{ doctype: 'POS Invoice', name: invoice }}
+          claim={existingDiscounts?.remove_claim || { action: 'remove', row: null }}
+          requireReason={false}
+          onApproved={({ token }) => executeRemove(token)}
+          onCancel={() => setRemoveApprovalOpen(false)}
+        />
       </DialogContent>
     </Dialog>
   );
