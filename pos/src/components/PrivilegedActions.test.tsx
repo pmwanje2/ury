@@ -414,4 +414,67 @@ describe('Scope e+f Privileged POS Actions UI & Contracts (B5e+f)', () => {
       }
     }
   });
+
+  it('forwards exact server pos_auth_challenge claim to ManagerApproval on POS-AUTH-REQUIRED', async () => {
+    const serverClaim = {
+      action: 'price_override',
+      invoice: 'INV-CHAL',
+      item_row_name: 'ROW-CHAL',
+      item_code: 'STEAK-01',
+      original_rate: 25000,
+      new_rate: 12000,
+      amount: 13000,
+      percent: 52,
+      below_cost: true,
+      item_cost: 15000,
+      reason: 'PRICE_MATCH',
+      note: '',
+    };
+    callGetMock.mockResolvedValue({
+      message: [{ code: 'PRICE_MATCH', description: 'Price match', requires_note: 0 }],
+    });
+    const authErr = Object.assign(new Error('[POS-AUTH-REQUIRED] Manager approval required.'), {
+      response: {
+        data: {
+          pos_auth_challenge: {
+            privilege: 'price_override',
+            claim: serverClaim,
+            amount: 13000,
+            percent: 52,
+          },
+        },
+      },
+    });
+    callPostMock
+      .mockRejectedValueOnce(authErr)
+      .mockResolvedValueOnce({ message: { invoice: 'INV-CHAL', rate: 12000 } });
+
+    const api = await import('../lib/privileged-actions-api');
+    expect(typeof (api as Record<string, unknown>).extractAuthChallenge).toBe('function');
+
+    const { default: PriceOverrideDialog } = await import('./PriceOverrideDialog');
+    render(
+      <PriceOverrideDialog
+        open
+        mode="override"
+        posProfile="Main Till"
+        invoiceName="INV-CHAL"
+        itemRowName="ROW-CHAL"
+        itemName="Steak"
+        currentRate={25000}
+        currency="UGX"
+        onSuccess={vi.fn()}
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText(/new price|override price/i), { target: { value: '12000' } });
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: 'PRICE_MATCH' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply|save|confirm/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mock-manager-approval')).toBeInTheDocument();
+    });
+    expect(lastManagerApprovalProps.claim).toEqual(serverClaim);
+  });
 });
