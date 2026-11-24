@@ -464,6 +464,24 @@ class TestOverShortToleranceAndBlindClose(LoadedSlice2):
         )
         self.assertEqual(self.cs.closings[ok["name"]].docstatus, 1)
 
+    def test_close_period_end_date_preserves_subsecond_microseconds(self):
+        # ERPNext v16 POS Invoice.posting_time carries microseconds; truncating
+        # period_end_date to %Y-%m-%d %H:%M:%S drops same-second invoices.
+        subsec_now = datetime(2026, 11, 24, 18, 0, 5, 654321)
+        self.store.current_user = "cashier2@example.com"
+        with patch.object(self.tc, "now_datetime", return_value=subsec_now):
+            ok = self.tc.close_till_with_controls(
+                pos_profile="Pool Till",
+                pos_opening_entry="OPEN-POOL-1",
+                counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 50000}],
+            )
+        closing = self.cs.closings[ok["name"]]
+        self.assertGreaterEqual(
+            self.tc.get_datetime(closing.period_end_date),
+            subsec_now,
+            f"period_end_date {closing.period_end_date!r} truncated microseconds before {subsec_now!r}",
+        )
+
     def test_adversarial_blind_close_hides_expected_cash_even_on_variance_refusal(self):
         self.store.profiles["Main Till"]["custom_blind_cash_count"] = 1
         self.store.current_user = "cashier@example.com"
