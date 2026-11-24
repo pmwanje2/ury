@@ -37,7 +37,6 @@ import {
   submitSubPosClosing,
   createPosClosingEntry,
   submitPosClosingEntry,
-  type OpenPosOpeningEntry,
   type POSClosingInvoice,
   type POSClosingPayment,
   type ClosingPaymentSummary,
