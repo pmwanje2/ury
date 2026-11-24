@@ -2322,6 +2322,9 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
                 patch.object(api_mod, "_authorize_customer_for_pos_profile", MagicMock(return_value=Row(name="Walk In Guest"))),
             ):
                 res = api_mod.preview_order_totals(pos_profile="POS Profile A", invoice_name="MFUA00090")
+            # Also verify _build_preview_tax_rows never rewrites Service Charge Tax even when header_rate differs from item_tax_rate
+            preview_doc.taxes[-1]["rate"] = 10.0  # different from item's 18.0 VAT - MFU
+            rows_checked = api_mod._build_preview_tax_rows(preview_doc, 0)
 
         self.assertEqual(len(sc_calls), 1)
         self.assertEqual(sc_calls[0]["no_of_pax"], 4)
@@ -2330,9 +2333,6 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
         self.assertIn("Service Charge", descs)
         self.assertIn("VAT on Service Charge", descs)
         self.assertEqual(res["grand_total"], 61006.0)
-        # Also verify _build_preview_tax_rows never rewrites Service Charge Tax even when header_rate differs from item_tax_rate
-        preview_doc.taxes[-1]["rate"] = 10.0  # different from item's 18.0 VAT - MFU
-        rows_checked = api_mod._build_preview_tax_rows(preview_doc, 0)
         sc_tax_row = next(r for r in rows_checked if r["tax_amount"] == 846.0)
         self.assertEqual(sc_tax_row["description"], "VAT on Service Charge")
         self.assertFalse(sc_tax_row["item_rate_override"])
