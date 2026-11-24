@@ -527,6 +527,7 @@
     "take_away": "Para llevar",
     "delivery": "Domicilio",
     "phone_in": "Por teléfono",
+    "room_service": "Servicio a la habitación",
     "aggregators": "Agregadores"
   },
   "order_status_types": {

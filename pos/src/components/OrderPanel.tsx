@@ -280,7 +280,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
             claim: voidInfo.claim,
             summaryLines: [
               t('manager_approval.void_sent_order_summary', { count: voidInfo.linesCount }),
-              t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount) }),
+              t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount, currency) }),
               t('manager_approval.check_line', { check: orderId }),
             ],
           });
@@ -351,7 +351,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
           claim: voidInfo.claim,
           summaryLines: [
             t('manager_approval.void_sent_order_summary', { count: voidInfo.linesCount || 1 }),
-            t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount) }),
+            t('manager_approval.amount_line', { amount: formatCurrency(voidInfo.amount, currency) }),
             t('manager_approval.check_line', { check: orderId }),
           ],
         });

@@ -515,6 +515,26 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
     }
 
 
+def ensure_order_type_options() -> None:
+    """Ensure `Room Service` is an allowed Select option on POS/Sales Invoice `order_type`."""
+    for dt in ("POS Invoice", "Sales Invoice"):
+        cf_name = f"{dt}-order_type"
+        if not frappe.db.exists("Custom Field", cf_name):
+            continue
+        current = frappe.db.get_value("Custom Field", cf_name, "options") or ""
+        lines = current.splitlines()
+        if "Room Service" not in lines:
+            updated = (
+                f"{current}\nRoom Service"
+                if current
+                else "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators"
+            )
+            frappe.db.set_value("Custom Field", cf_name, "options", updated, update_modified=False)
+            clear_cache = getattr(frappe, "clear_cache", None)
+            if callable(clear_cache):
+                clear_cache(doctype=dt)
+
+
 def ensure_privileged_action_custom_fields() -> None:
     fields = get_privileged_action_custom_fields()
     filtered = {
@@ -524,3 +544,4 @@ def ensure_privileged_action_custom_fields() -> None:
     }
     if filtered:
         create_custom_fields(filtered, ignore_validate=True)
+    ensure_order_type_options()

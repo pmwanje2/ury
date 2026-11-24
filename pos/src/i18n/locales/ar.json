@@ -605,6 +605,7 @@
     "take_away": "سفري",
     "delivery": "توصيل",
     "phone_in": "طلب هاتفي",
+    "room_service": "خدمة الغرف",
     "aggregators": "منصات تجميع"
   },
   "order_status_types": {

@@ -598,6 +598,7 @@
     "take_away": "Take Away",
     "delivery": "Delivery",
     "phone_in": "Phone In",
+    "room_service": "Room Service",
     "aggregators": "Aggregators"
   },
   "order_status_types": {

@@ -506,6 +506,7 @@
     "take_away": "À emporter",
     "delivery": "Livraison",
     "phone_in": "Commande par téléphone",
+    "room_service": "Service en chambre",
     "aggregators": "Agrégateurs"
   },
   "order_status_types": {

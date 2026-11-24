@@ -116,7 +116,7 @@ def get_custom_fields():
 					"fieldtype": "Select",
 					"default": "Dine In",
 					"label": "Order Type",
-					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
 				},
@@ -295,7 +295,7 @@ def get_custom_fields():
 					"options": "URY Restaurant",
 					"fetch_from": "customer.mobile_number",
 					"label": "Order Type",
-					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nAggregators",
+					"options": "\nDine In\nTake Away\nDelivery\nPhone In\nRoom Service\nAggregators",
 					"insert_after": "order_info",
 					"translatable": 0
 				},
