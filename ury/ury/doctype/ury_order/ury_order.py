@@ -12,6 +12,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, flt, get_datetime, get_system_timezone, now_datetime
 from erpnext.controllers.queries import item_query
+from ury.brand import coded_message
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
@@ -573,7 +574,10 @@ def _guest_label(value):
     label = (value or "").strip()
     if len(label) > GUEST_LABEL_MAX:
         frappe.throw(
-            _("[URY-GUEST-LABEL-TOO-LONG] A guest label can be at most {0} characters.").format(GUEST_LABEL_MAX),
+            coded_message(
+                "GUEST-LABEL-TOO-LONG",
+                _("A guest label can be at most {0} characters.").format(GUEST_LABEL_MAX),
+            ),
             frappe.ValidationError,
         )
     return label or None
@@ -604,8 +608,10 @@ def _split_kots_to_move(source, move_map, reservations_enabled):
             row.reservation_line_key not in known and row.item in released_dishes for row in rows
         )):
             # Fulfilment looks up stock by the single invoice on the kitchen ticket.
-            frappe.throw(_("[URY-SPLIT-RESERVED-KOT] Move the entire released kitchen ticket together."),
-                         frappe.ValidationError)
+            frappe.throw(
+                coded_message("SPLIT-RESERVED-KOT", _("Move the entire released kitchen ticket together.")),
+                frappe.ValidationError,
+            )
     return movable
 
 
@@ -637,7 +643,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         source,
         pos_profile_name=source.get("pos_profile"),
         require_modify=True,
-        deny_message=_("[URY-SPLIT-NOT-PERMITTED] Not permitted to split this invoice."),
+        deny_message=coded_message("SPLIT-NOT-PERMITTED", _("Not permitted to split this invoice.")),
     )
 
     if source.docstatus != 0:
@@ -1115,7 +1121,10 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
 
         if not item_price:
             frappe.throw(
-                _("[URY-PRICE-NOT-VALID] No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
+                coded_message(
+                    "PRICE-NOT-VALID",
+                    _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
+                ),
                 frappe.ValidationError,
             )
 
@@ -2857,7 +2866,12 @@ def table_transfer(table, newTable, invoice):
     if new_table.occupied == 1:
         frappe.throw(f"Table {new_table.name} is already occupied")
 
-    from ury.ury.api.table_reservation import check_table_reservation, parse_to_datetime
+    from ury.ury.api.table_reservation import (
+        check_table_reservation,
+        parse_to_datetime,
+        transfer_seated_reservation,
+        validate_seated_reservation_transfer,
+    )
     active_res = check_table_reservation(new_table.name)
     if active_res and active_res.get("is_lock_window_active") and active_res.get("status") == "Confirmed":
         res_time_raw = active_res.get("reserved_at")
@@ -2874,20 +2888,30 @@ def table_transfer(table, newTable, invoice):
             )
         )
 
+    old_table_name = current_table.name if isinstance(current_table.name, str) else table
+    validate_seated_reservation_transfer(old_table_name, new_table.name, pos_invoice)
+
     frappe.db.set_value(
         "URY Table",
         new_table.name,
         {"occupied": 1, "latest_invoice_time": pos_invoice.creation},
     )
-    frappe.db.set_value(
-        "URY Table",
-        current_table.name,
-        {"occupied": 0, "latest_invoice_time": None},
+    other_open_on_old = frappe.db.exists(
+        "POS Invoice",
+        {"restaurant_table": old_table_name, "docstatus": 0, "name": ["!=", pos_invoice.name]},
     )
+    if not other_open_on_old:
+        frappe.db.set_value(
+            "URY Table",
+            current_table.name,
+            {"occupied": 0, "latest_invoice_time": None},
+        )
 
     pos_invoice.restaurant_table = new_table.name
     pos_invoice.custom_restaurant_room = new_table.restaurant_room
     pos_invoice.save()
+
+    transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
 
     # Do not swallow KOT-transfer failures: a raise here aborts the request
     # (and its transaction) so the table/invoice changes above are rolled
@@ -3190,19 +3214,25 @@ def _enforce_on_account(invoice, profile, customer_disabled, target=None):
         return
     customer = invoice.customer
     if not customer or not profile.customer or customer in default_accounts(profile):
-        _offline_refusal('URY-CREDIT-001', _('Select a named customer account.'))
+        frappe.throw(coded_message("CREDIT-001", _("Select a named customer account.")), frappe.ValidationError)
     require_credit_access(profile)
     if not frappe.has_permission('Customer', 'read', doc=customer):
         frappe.throw(_('Not permitted to use this account.'), frappe.PermissionError)
     if customer_disabled != 0:
-        _offline_refusal('URY-CREDIT-002', _('This customer is inactive.'))
+        frappe.throw(coded_message("CREDIT-002", _("This customer is inactive.")), frappe.ValidationError)
     limit = credit_limit(customer, invoice.company)
     if limit <= 0:
-        _offline_refusal('URY-CREDIT-003', _('This customer has no positive credit limit for the company.'))
+        frappe.throw(
+            coded_message("CREDIT-003", _("This customer has no positive credit limit for the company.")),
+            frappe.ValidationError,
+        )
     projected = balance(customer, invoice.company, invoice.name, current=True) + proposed
     precision = invoice.precision("base_grand_total")
     if flt(projected, precision) > flt(limit, precision):
-        _offline_refusal('URY-CREDIT-004', _('The charge exceeds the available credit.'))
+        frappe.throw(
+            coded_message("CREDIT-004", _("The charge exceeds the available credit.")),
+            frappe.ValidationError,
+        )
     return True
 
 

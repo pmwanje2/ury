@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Clock, Phone, Users } from 'lucide-react';
 
 import {
@@ -24,6 +24,7 @@ import {
   type Table,
   type TableReservation,
 } from '../lib/table-api';
+import { isInsideReservationNotice } from '../lib/table-utils';
 import type { Customer } from '../store/pos-store';
 import { usePOSStore } from '../store/pos-store';
 
@@ -44,13 +45,17 @@ interface TableReservationEditDialogProps {
   availableTables?: Table[];
   onOpenChange: (open: boolean) => void;
   onConfirm: (data: EditReservationFormData) => Promise<void>;
+  /** The branch's Minimum Reservation Notice; without it the server alone checks the time. */
+  minNoticeMinutes?: number | null;
 }
 
 const TableReservationEditDialog = ({
   open,
   reservation,
+  availableTables,
   onOpenChange,
   onConfirm,
+  minNoticeMinutes,
 }: TableReservationEditDialogProps) => {
   const { posProfile } = usePOSStore();
   const branch = posProfile?.branch ?? '';
@@ -61,6 +66,8 @@ const TableReservationEditDialog = ({
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customerPhone, setCustomerPhone] = useState('');
   const [noOfPax, setNoOfPax] = useState<number>(1);
+  // What the field shows; noOfPax follows it only while it holds a whole number of at least one.
+  const [paxInput, setPaxInput] = useState('1');
   const [reservationDate, setReservationDate] = useState('');
   const [reservationTime, setReservationTime] = useState('');
   const [notes, setNotes] = useState('');
@@ -82,6 +89,7 @@ const TableReservationEditDialog = ({
     });
     setCustomerPhone(reservation.customer_phone || '');
     setNoOfPax(reservation.no_of_pax || 1);
+    setPaxInput(String(reservation.no_of_pax || 1));
     setNotes(reservation.comments || '');
     setValidationError(null);
 
@@ -93,6 +101,12 @@ const TableReservationEditDialog = ({
       setReservationTime(parts[1] ? parts[1].slice(0, 5) : '19:00');
     }
   }, [open, reservation]);
+
+  const bookedAt = (reservation?.reserved_at || '').replace('T', ' ').slice(0, 16);
+  const timeMoved =
+    Boolean(reservationDate && reservationTime) &&
+    `${reservationDate} ${reservationTime}` !== bookedAt;
+  const paxChanged = noOfPax !== (reservation?.no_of_pax || 1);
 
   // Fetch available tables from backend when branch, date, time, or reservation changes
   useEffect(() => {
@@ -107,20 +121,24 @@ const TableReservationEditDialog = ({
     const formattedReservedAt = `${reservationDate} ${
       reservationTime.length === 5 ? reservationTime + ':00' : reservationTime
     }`;
+    const slotTimeMoved = `${reservationDate} ${reservationTime}` !== bookedAt;
 
     getAvailableTablesForReservation(
       targetBranch,
       formattedReservedAt,
-      reservation?.name
+      reservation?.name,
+      noOfPax
     )
       .then((tables) => {
         if (!isMounted) return;
         const list = tables || [];
         setAvailableTablesList(list);
 
-        // If the selected table becomes unavailable after date/time change, clear table selection
+        // Preserve the booking's existing table on non-time, same-party-size edits even if a walk-in
+        // overlaps its buffer; clear it when moving the booking time or party size makes it unavailable.
         setSelectedTable((prev) => {
           if (!prev) return '';
+          if (!slotTimeMoved && !paxChanged && prev === reservation?.reserved_table) return prev;
           const isStillAvailable = list.some((t) => t.name === prev);
           return isStillAvailable ? prev : '';
         });
@@ -137,9 +155,25 @@ const TableReservationEditDialog = ({
     return () => {
       isMounted = false;
     };
-  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name]);
+  }, [open, targetBranch, reservationDate, reservationTime, reservation?.name, reservation?.reserved_table, bookedAt, noOfPax, paxChanged]);
 
-  const tablesList = availableTablesList;
+  const tablesList = useMemo(() => {
+    if (!reservation?.reserved_table || timeMoved || paxChanged) return availableTablesList;
+    if (availableTablesList.some((t) => t.name === reservation.reserved_table)) {
+      return availableTablesList;
+    }
+    const existing = availableTables?.find((t) => t.name === reservation.reserved_table);
+    const preserved: Table = existing || {
+      name: reservation.reserved_table,
+      occupied: 0,
+      latest_invoice_time: null,
+      is_take_away: 0,
+      restaurant_room: '',
+      table_shape: 'Rectangle',
+      no_of_seats: 0,
+    };
+    return [preserved, ...availableTablesList];
+  }, [availableTablesList, availableTables, reservation, timeMoved, paxChanged]);
 
   const handleCustomerChange = (selected: Customer | null) => {
     setCustomer(selected);
@@ -174,7 +208,7 @@ const TableReservationEditDialog = ({
       return;
     }
 
-    if (!noOfPax || noOfPax < 1) {
+    if (!(parseInt(paxInput, 10) >= 1)) {
       setValidationError(t('reservations.valid_pax'));
       return;
     }
@@ -196,9 +230,14 @@ const TableReservationEditDialog = ({
     }
 
     const selectedDt = new Date(`${reservationDate}T${reservationTime}:00`);
-    const nowMargin = new Date(Date.now() - 60000); // 1-min grace margin
-    if (!isNaN(selectedDt.getTime()) && selectedDt < nowMargin) {
-      setValidationError(t('reservations.past_datetime'));
+    // The notice applies to the booking time, as in Simphony: only when this edit moves it.
+    const bookedAt = (reservation.reserved_at || '').replace('T', ' ').slice(0, 16);
+    const timeMoved = `${reservationDate} ${reservationTime}` !== bookedAt;
+    if (timeMoved && minNoticeMinutes != null && !isNaN(selectedDt.getTime())
+        && isInsideReservationNotice(selectedDt, minNoticeMinutes)) {
+      setValidationError(minNoticeMinutes > 0
+        ? t('reservations.min_notice', { minutes: minNoticeMinutes })
+        : t('reservations.past_datetime'));
       return;
     }
 
@@ -272,11 +311,14 @@ const TableReservationEditDialog = ({
                 value={selectedTable}
                 options={tablesList.map((tbl) => ({
                   value: tbl.name,
-                  label: t('reservations.table_option_label', {
-                    name: tbl.name,
-                    room: tbl.restaurant_room,
-                    seats: tbl.no_of_seats || 0,
-                  }),
+                  label:
+                    tbl.restaurant_room || tbl.no_of_seats
+                      ? t('reservations.table_option_label', {
+                          name: tbl.name,
+                          room: tbl.restaurant_room,
+                          seats: tbl.no_of_seats || 0,
+                        })
+                      : tbl.name,
                 }))}
                 placeholder={
                   loadingTables
@@ -340,8 +382,12 @@ const TableReservationEditDialog = ({
                     className="ps-10"
                     type="number"
                     min={1}
-                    value={noOfPax}
-                    onChange={(e) => setNoOfPax(Math.max(1, parseInt(e.target.value) || 1))}
+                    value={paxInput}
+                    onChange={(e) => {
+                      setPaxInput(e.target.value);
+                      const pax = parseInt(e.target.value, 10);
+                      if (pax >= 1) setNoOfPax(pax);
+                    }}
                     disabled={loading}
                   />
                 </div>
@@ -411,7 +457,7 @@ const TableReservationEditDialog = ({
 
           <Button
             onClick={handleSubmit}
-            disabled={loading || !customer || !customerPhone.trim() || !selectedTable}
+            disabled={loading || loadingTables || !customer || !customerPhone.trim() || !selectedTable}
           >
             {t('reservations.save_changes')}
           </Button>

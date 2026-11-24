@@ -4,6 +4,7 @@
 import os
 import frappe
 from frappe import _
+from ury.brand import coded_message
 from ury.ury.printing.file_store import get_job, save_job
 
 
@@ -19,7 +20,7 @@ def retry_print_job(print_job_id: str, target_printer: str = None) -> dict:
         frappe.throw(_("Print Job '{0}' not found.").format(print_job_id), frappe.DoesNotExistError)
 
     if job.get("job_type") == "BILL_COPY":
-        frappe.throw("URY-COPY-001: Retry from the closed check.", frappe.PermissionError)
+        frappe.throw(coded_message("COPY-001", "Retry from the closed check."), frappe.PermissionError)
 
     file_path = job.get("file_path")
     invoice = job.get("invoice") or job.get("reference_name")

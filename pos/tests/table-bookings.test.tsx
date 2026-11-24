@@ -19,7 +19,7 @@ vi.mock('../src/captain/hooks/useCaptainContext', () => ({
 const table = { name: 'Table 1', occupied: 0, latest_invoice_time: null,
   is_take_away: 0, restaurant_room: 'Dining', table_shape: 'Square' as const, no_of_seats: 4 };
 const booking = { scheduled_time: '2026-10-14 19:00:00', party_size: 4,
-  customer_name: 'Grace Hopper', server_now: '2026-10-14 18:30:00' };
+  customer_name: 'Grace Hopper', status: 'Confirmed' as const, server_now: '2026-10-14 18:30:00' };
 const method = 'ury.ury.api.ury_table_bookings.get_upcoming_bookings';
 let container: HTMLDivElement;
 let root: Root;
@@ -83,6 +83,26 @@ it('omits optional party size cleanly and translates the reservation label', asy
     {...{ booking: { ...booking, party_size: null } }} onTap={() => {}} />));
   expect(container.textContent).toContain('Réservé 19:00 · Grace');
   expect(container.textContent).not.toMatch(/null|undefined|Hopper/);
+});
+
+it('labels a seated party on its occupied table as seated, never as reserved', async () => {
+  // Seated at 19:00 and still at the table at 19:40; another, seated early for 21:00.
+  for (const scheduled_time of ['2026-10-14 19:00:00', '2026-10-14 21:00:00']) {
+    await act(async () => root.render(<CaptainTableCard table={{ ...table, occupied: 1 }} ownership="mine"
+      booking={{ ...booking, status: 'Seated', scheduled_time, server_now: '2026-10-14 19:40:00' }}
+      onTap={() => {}} />));
+    expect(container.textContent).toContain('Seated · 4 · Grace');
+    expect(container.textContent).not.toContain('Reserved');
+    expect(container.textContent).not.toContain('Hopper');
+  }
+});
+
+it('never shows a seated party beside Free once its table is no longer occupied', async () => {
+  // The floor released the table (no order for 30 minutes, or cleared without a bill).
+  await act(async () => root.render(<CaptainTableCard table={table} ownership="free"
+    booking={{ ...booking, status: 'Seated', server_now: '2026-10-14 19:40:00' }} onTap={() => {}} />));
+  expect(container.textContent).toContain('Free');
+  expect(container.textContent).not.toContain('Seated');
 });
 
 it('renders no reservation badge when a table has no booking', async () => {

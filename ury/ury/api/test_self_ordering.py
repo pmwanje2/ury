@@ -1243,7 +1243,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         mock_get_doc.return_value = profile
 
         self.assert_refusal_keeps_translation(
-            "URY-PAYMENT-DISABLED", lambda: create_payment_request("session-token"))
+            "POS-PAYMENT-DISABLED", lambda: create_payment_request("session-token"))
 
     @patch(f"{MOD}.frappe.get_doc")
     @patch(f"{MOD}._resolve_session")
@@ -1258,7 +1258,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         mock_get_doc.return_value = profile
 
         self.assert_refusal_keeps_translation(
-            "URY-PAYMENT-NO-ORDER", lambda: create_payment_request("session-token"))
+            "POS-PAYMENT-NO-ORDER", lambda: create_payment_request("session-token"))
         with self.assertRaises(frappe.ValidationError) as ctx:
             create_payment_request("session-token")
         self.assertNotIsInstance(ctx.exception, frappe.PermissionError)
@@ -1289,7 +1289,7 @@ class TestCreatePaymentRequest(unittest.TestCase):
         mock_get_doc.side_effect = get_doc_side_effect
 
         self.assert_refusal_keeps_translation(
-            "URY-PAYMENT-SETTLED", lambda: create_payment_request("session-token"))
+            "POS-PAYMENT-SETTLED", lambda: create_payment_request("session-token"))
         mock_make_pr.assert_not_called()
 
     @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")

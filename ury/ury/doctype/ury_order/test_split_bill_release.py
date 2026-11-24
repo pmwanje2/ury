@@ -237,7 +237,7 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
         invoice = self._invoice(waiter="captain_b@example.com")
         self._wire_invoice(invoice)
 
-        with self.assertRaisesRegex(PermissionError, r"\[URY-SPLIT-NOT-PERMITTED\]"):
+        with self.assertRaisesRegex(PermissionError, r"\[POS-SPLIT-NOT-PERMITTED\]"):
             self.order.split_bill(invoice.name, [{"name": "line-1", "qty": 1}])
 
     def test_without_reservation_control_whole_ticket_moves_and_mixed_ticket_stays(self):
@@ -262,7 +262,7 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
         self.framework.get_all.side_effect = lambda dt, **kw: (
             ['ticket'] if dt == 'URY KOT' else [Row(item='FOOD', reservation_line_key=None)]
         )
-        with self.assertRaisesRegex(ValueError, 'URY-SPLIT-RESERVED-KOT'):
+        with self.assertRaisesRegex(ValueError, r"\[POS-SPLIT-RESERVED-KOT\]"):
             self.order.split_bill(invoice.name, [{'name': 'line-1', 'qty': 1}])
         self.framework.new_doc.assert_not_called()
 
