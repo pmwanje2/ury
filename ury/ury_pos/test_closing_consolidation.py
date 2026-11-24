@@ -699,8 +699,14 @@ class TestClosingConsolidation(unittest.TestCase):
         self.assertEqual(events["on_submit"], [
             "ury.ury.hooks.ury_pos_closing_entry.submit_stock_correction",
             "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
+            # The counted-against-expected cash variance posts to Over/Short.
+            "ury.ury.hooks.ury_cash_movement.post_cash_over_short",
         ])
-        self.assertEqual(events["on_cancel"], ["ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times"])
+        self.assertEqual(events["on_cancel"], [
+            "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
+            # A cancelled closing takes its Over/Short journal with it.
+            "ury.ury.hooks.ury_cash_movement.cancel_cash_over_short",
+        ])
 
     def _validate_calls(self):
         calls = []

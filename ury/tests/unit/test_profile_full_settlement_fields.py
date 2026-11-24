@@ -53,6 +53,13 @@ class ProfileFullSettlementFieldsTest(unittest.TestCase):
 		self.assertIn("custom_void_reasons", payload)
 		self.assertIsNone(payload["custom_void_reasons"])
 
+	def test_allow_discount_change_is_returned_strictly(self):
+		for stored, expected in ((1, 1), (0, 0), (None, 0)):
+			with self.subTest(stored=stored):
+				payload = self.full(_profile(allow_discount_change=stored))
+				self.assertIn("allow_discount_change", payload)
+				self.assertEqual(payload["allow_discount_change"], expected)
+
 
 if __name__ == "__main__":
 	unittest.main()

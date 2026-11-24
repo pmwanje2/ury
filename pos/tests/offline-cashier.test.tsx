@@ -194,10 +194,17 @@ test('opening screen logout keeps a pending queue and does not end the server se
 });
 
 test('applying a discount is refused offline before the total changes', async () => {
-  usePOSStore.setState({ paymentModes: ['Cash'], fetchPaymentModes: vi.fn(), posProfile: { ...usePOSStore.getState().posProfile!, enable_discount: 1 } });
-  await act(async () => root.render(<PaymentDialog order={{invoice_printed: 1}} onClose={vi.fn()} grandTotal={100} roundedTotal={100} invoice="INV-A" customer="Guest A" posProfile="Till A" table={null} cashier="Cashier" owner="Cashier" fetchOrders={vi.fn()} clearSelectedOrder={vi.fn()} />));
-  await act(async () => button(/^Apply$/).click());
-  expect(container.textContent).toMatch(/refused offline/i);
+  const { applyCheckDiscount } = await import('../src/lib/discount-api');
+  const post = vi.spyOn(call, 'post');
+  await expect(
+    applyCheckDiscount({
+      invoice: 'INV-A',
+      pos_profile: 'Till A',
+      discount_percent: 10,
+      discount_reason: 'Complaint',
+    }),
+  ).rejects.toThrow(/refused offline/i);
+  expect(post).not.toHaveBeenCalled();
 });
 
 test('a server logout failure keeps the opening screen and confirmed opening for a retry', async () => {

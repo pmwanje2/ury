@@ -168,7 +168,6 @@ class TestRoomChargeSettlement(unittest.TestCase):
             self.invoice.__dict__.get("room_number")
         )
         for target, value in (
-            ("_validate_additional_discount", MagicMock(return_value=0)),
             ("get_order_invoice", MagicMock(return_value=self.invoice)),
             ("_submit_and_release_tables", MagicMock()),
         ):

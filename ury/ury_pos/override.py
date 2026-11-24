@@ -827,12 +827,15 @@ def _validate_reason(pos_profile: str, privilege: str, parsed_claim: dict[str, A
     if not requires_reason(pos_profile, privilege):
         return raw_reason or raw_code
 
-    # Discounts use siteops Discount Reason (Amendment 1 #4), not POS Reason.
-    if privilege == "discount":
+    # Discounts & complimentary checks use siteops Discount Reason (Amendment 1 #4), not POS Reason.
+    if privilege in ("discount", "complimentary"):
         candidate = raw_reason or raw_code
         if not candidate:
             _refuse("POS-AUTH-REASON", "Select a reason for this discount.", frappe.ValidationError)
         return candidate
+
+    if privilege == "discount_remove":
+        return raw_reason or raw_code or "Remove discount"
 
     active_reasons = list_reasons(privilege)
     if not active_reasons:
@@ -1031,6 +1034,36 @@ def _matching_authorise_rules(
         if not matched and has_al and approver_role and approver_role in roles:
             matched.append(frappe._dict(allow_self_approval=0))
         return matched
+
+    if privilege == "complimentary":
+        al_limit, approver_role, has_al = _discount_limit_for_user(profile.company, roles)
+        if has_al:
+            effective_approver_role = approver_role
+            if not effective_approver_role or effective_approver_role in (
+                "All", "Guest", "Desk User", "Administrator", "System Manager"
+            ):
+                effective_approver_role = "Owner Approver"
+            is_top_approver = effective_approver_role in roles
+            has_full_comp_authority = is_top_approver or al_limit >= 100.0 - 1e-9
+            if not has_full_comp_authority:
+                return []
+            matched = [
+                rule
+                for rule in effective.values()
+                if cint(rule.get("may_authorise")) == 1
+                and _rule_matches_group_and_clock(rule, approver, profile.company, privilege_group)
+                and _rule_covers_limits(rule, 100.0, amt)
+            ]
+            if not matched and is_top_approver:
+                matched.append(frappe._dict(allow_self_approval=0))
+            return matched
+        return [
+            rule
+            for rule in effective.values()
+            if cint(rule.get("may_authorise")) == 1
+            and _rule_matches_group_and_clock(rule, approver, profile.company, privilege_group)
+            and _rule_covers_limits(rule, 100.0, amt)
+        ]
 
     return [
         rule

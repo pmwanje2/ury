@@ -107,10 +107,10 @@ export function resolveOfflineTender(
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
-  clientOrderId, amount, due, modeOfPayment, reference, roomNumber, discount, orderType, onlineSettle }: {
+  clientOrderId, amount, due, modeOfPayment, reference, roomNumber, discount, tip, orderType, onlineSettle }: {
   profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
   cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; due: number; modeOfPayment: string;
-  reference?: string; roomNumber?: string; discount?: number; orderType?: string;
+  reference?: string; roomNumber?: string; discount?: number; tip?: number; orderType?: string;
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
@@ -119,7 +119,9 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
   // A short named-account settlement (#44) leaves a balance owed. It is not a
   // cash settlement and stays online-only, so the tender must cover the bill.
   const paidInFull = Number.isFinite(due) && amount >= due - 0.005;
-  const queueable = !!kind && paidInFull && canCaptureOffline(profile, user) && !(discount && discount > 0);
+  // Discounts and tips stay online: the outbox replays neither.
+  const queueable = !!kind && paidInFull && canCaptureOffline(profile, user) && !(discount && discount > 0)
+    && !(tip && tip > 0);
   if (!queueable) return { offline: false as const, response: await onlineSettle() };
   const existing = clientOrderId
     ? (await queue.list()).find((row) => row.client_order_id === clientOrderId && row.state === 'pending')

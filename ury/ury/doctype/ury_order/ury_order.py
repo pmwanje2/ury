@@ -15,6 +15,29 @@ from erpnext.controllers.queries import item_query
 from ury.brand import coded_message
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
+from ury.ury_pos.discount import (
+    apply_discount_to_invoice,
+    canonical_split_discount_claim,
+    currency_precision,
+    enforce_remove_discount_auth,
+    get_check_discounts as _get_check_discounts_impl,
+    list_discount_options as _list_discount_options_impl,
+    parse_discount_request,
+    user_discount_limit,
+    with_currency_precision,
+    _above_limit,
+    _approver_discount_ceiling,
+    _compute_manual_discount_summary,
+    _exceeds_approved_percent,
+    _get_override_module,
+    _is_auto_pricing_rule_row,
+    _read_meta as _read_discount_meta,
+    _resolve_reason,
+    _restore_doc_discount_state,
+    _set_row_field,
+    _snapshot_doc_discount_state,
+    _write_discount_audit_fields,
+)
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
 from ury.ury.api.ury_order_reservation_service import (
@@ -29,6 +52,7 @@ from ury.ury.api.ury_stock_policy import get_branch_stock_policy
 from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
+from ury.ury.hooks.ury_pos_tender import sync_charged_tip
 
 from frappe import cache
 
@@ -535,13 +559,15 @@ def _free_tables_if_no_open_invoices(
 
 
 def _copy_invoice_item_fields(item_row, qty):
-    return dict(
+    data = dict(
         item_code=item_row.item_code,
         item_name=item_row.item_name,
         qty=qty,
         rate=item_row.rate,
         price_list_rate=item_row.price_list_rate,
         base_price_list_rate=item_row.base_price_list_rate,
+        discount_percentage=flt(item_row.get("discount_percentage")),
+        discount_amount=flt(item_row.get("discount_amount")),
         comment=item_row.get("comment"),
         custom_course=item_row.get("custom_course"),
         ury_held=cint(item_row.get("ury_held")),
@@ -562,6 +588,10 @@ def _copy_invoice_item_fields(item_row, qty):
         # the same way an un-split legacy invoice already gets rescued.
         reservation_line_key=item_row.get("reservation_line_key") or None,
     )
+    if item_row.get("margin_type"):
+        data["margin_type"] = item_row.get("margin_type")
+        data["margin_rate_or_amount"] = flt(item_row.get("margin_rate_or_amount"))
+    return data
 
 
 GUEST_LABEL_MAX = 40
@@ -614,8 +644,22 @@ def _split_kots_to_move(source, move_map, reservations_enabled):
     return movable
 
 
+def _has_manual_line_discount(rows):
+    """True when any active non-automatic item row carries a manual line discount."""
+    for r in rows or []:
+        if cint(r.get("is_disposable")) or flt(r.get("qty")) <= 0 or _is_auto_pricing_rule_row(r):
+            continue
+        if flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0:
+            return True
+        plr = flt(r.get("price_list_rate"))
+        rate = flt(r.get("rate"))
+        if plr > 0 and rate >= 0 and plr > rate + 1e-9:
+            return True
+    return False
+
+
 @frappe.whitelist()
-def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
+def split_bill(source_invoice, items_to_move, customer=None, guest_label=None, approval=None):
     """Move selected line items from a printed draft bill to a new sibling POS Invoice."""
     if isinstance(items_to_move, str):
         items_to_move = json.loads(items_to_move)
@@ -736,6 +780,21 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         for item in source.items
     ]
 
+    # Snapshot pre-split header discount and gross shares for exact proration on flat discounts.
+    orig_pct = flt(source.get("additional_discount_percentage"))
+    orig_flat = flt(source.get("discount_amount")) if not orig_pct else 0.0
+    orig_basis = source.get("apply_discount_on") or "Grand Total"
+    orig_total_gross = sum(
+        flt(item.get("rate")) * flt(item.get("qty"))
+        for item in source.items
+        if not cint(item.get("is_disposable")) and flt(item.get("qty")) > 0
+    )
+    moved_gross = sum(
+        flt(item.get("rate")) * min(flt(move_map.get(item.name, 0)), flt(item.get("qty")))
+        for item in source.items
+        if move_map.get(item.name, 0) > 0 and not cint(item.get("is_disposable"))
+    )
+
     items_to_remove = []
     for item in source.items:
         move_qty = move_map.get(item.name, 0)
@@ -751,12 +810,80 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     for item in items_to_remove:
         source.remove(item)
 
+    # Carry bill-level discount & audit metadata cleanly across the split halves.
+    has_header_discount = orig_pct > 0 or orig_flat > 0
+    has_moved_line_discount = _has_manual_line_discount(new_invoice.items)
+    source_has_remaining_line_discount = _has_manual_line_discount(source.items)
+    source_has_remaining_discount = has_header_discount or source_has_remaining_line_discount
+    if source.get("owner"):
+        new_invoice.owner = source.get("owner")
+
+    if has_header_discount:
+        new_invoice.apply_discount_on = orig_basis
+        if orig_pct > 0:
+            new_invoice.additional_discount_percentage = orig_pct
+            new_invoice.discount_amount = 0
+        elif orig_flat > 0 and orig_total_gross > 0:
+            prec = currency_precision(source)
+            child_disc = flt(orig_flat * (moved_gross / orig_total_gross), prec)
+            source_disc = flt(orig_flat - child_disc, prec)
+            new_invoice.additional_discount_percentage = 0
+            new_invoice.discount_amount = child_disc
+            source.additional_discount_percentage = 0
+            source.discount_amount = source_disc
+            # Avoid double-counting a coupon use on split children
+            if hasattr(new_invoice, "coupon_code"):
+                new_invoice.coupon_code = None
+
+    src_meta = _read_discount_meta(source)
+    carry_approver = source.get("custom_discount_approver") or src_meta.get("approver")
+    carry_approved_pct = flt(source.get("custom_discount_approved_percent")) or flt(src_meta.get("approved_percent"))
+    source_had_db_approver = bool(source.get("custom_discount_approver"))
+
+    if has_header_discount or has_moved_line_discount:
+        for field in (
+            "custom_discount_reason",
+            "custom_discount_note",
+            "custom_discount_approver",
+            "custom_discount_approved_percent",
+            "ury_discount_meta",
+        ):
+            val = source.get(field)
+            if val not in (None, "", 0, 0.0):
+                new_invoice.set(field, val)
+        if not new_invoice.get("custom_discount_reason") and src_meta.get("reason"):
+            if frappe.get_meta("POS Invoice").has_field("custom_discount_reason"):
+                new_invoice.set("custom_discount_reason", src_meta.get("reason"))
+        if not new_invoice.get("custom_discount_note") and src_meta.get("note"):
+            if frappe.get_meta("POS Invoice").has_field("custom_discount_note"):
+                new_invoice.set("custom_discount_note", src_meta.get("note"))
+        if carry_approver:
+            approval_payload = frappe._dict(
+                approver=carry_approver,
+                percent=carry_approved_pct or orig_pct,
+            )
+            new_invoice.flags.discount_approval = approval_payload
+            # Only set source.flags.discount_approval when source lacked DB custom_discount_approver
+            # (pre-B1 meta-only carry); when source ALREADY has custom_discount_approver in DB,
+            # leaving flags.discount_approval unset lets siteops#8620 take its has_prior_approval
+            # path so an approving owner splitting the check does not hit SUPERVISOR_SELF_APPROVAL.
+            if source_has_remaining_discount and not source_had_db_approver:
+                source.flags.discount_approval = approval_payload
+
+    if not source_has_remaining_discount and (source_had_db_approver or carry_approver):
+        removal_actor = carry_approver or frappe.session.user
+        source.flags.discount_removal = frappe._dict(approver=removal_actor, action="remove")
+        source.flags.discount_approval = frappe._dict(approver=removal_actor, percent=0.0, action="remove")
+        _write_discount_audit_fields(source)
+
     payment_mode = source.payments[0].mode_of_payment if source.payments else None
     source_received = _received_payment_rows(source)
     received_total = sum(flt(row.get("amount")) for row in source_received)
 
     frappe.flags.ury_bill_split = True
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+    prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
+    frappe.flags.ury_server_discount_write = True
     try:
         source.set_missing_values()
         source.run_method("set_missing_values")
@@ -793,6 +920,131 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         new_invoice.run_method("set_missing_values")
         new_invoice.calculate_taxes_and_totals()
 
+        # P1: Guard against discount-% inflation on BOTH split halves (standalone and under #8620).
+        if has_header_discount or has_moved_line_discount or source_has_remaining_line_discount or carry_approver:
+            split_prec = currency_precision(source)
+            source_post_summary = _compute_manual_discount_summary(source, split_prec)
+            child_post_summary = _compute_manual_discount_summary(new_invoice, split_prec)
+            caller_limit_pct = user_discount_limit(frappe.session.user, company, source.get("pos_profile"))
+            prior_approved_pct = carry_approved_pct if carry_approver else 0.0
+            reason_code_for_split = source.get("custom_discount_reason") or src_meta.get("reason")
+            reason_requires_sup = False
+            if reason_code_for_split and (
+                source_post_summary["discount_total"] > 0 or child_post_summary["discount_total"] > 0
+            ):
+                try:
+                    r_doc = _resolve_reason(reason_code_for_split, required=False)
+                    reason_requires_sup = bool(r_doc and cint(r_doc.get("requires_supervisor")) == 1)
+                except Exception:
+                    reason_requires_sup = False
+
+            def _check_split_half(half_doc, half_sum):
+                if half_sum["discount_total"] <= 0:
+                    return False, False, False, 0.0
+                half_eff = half_sum["effective_percent"]
+                half_req = max(half_eff, flt(half_doc.get("additional_discount_percentage")))
+                is_comp_half = bool(
+                    half_eff >= 100.0
+                    or (half_sum["discount_basis"] > 0 and flt(half_sum["after_total"], split_prec) <= 0)
+                )
+                exceeds_self = bool(
+                    is_comp_half
+                    or reason_requires_sup
+                    or _above_limit(
+                        half_sum["discount_total"],
+                        half_sum["discount_basis"],
+                        half_doc.get("additional_discount_percentage"),
+                        caller_limit_pct,
+                        split_prec,
+                    )
+                )
+                exceeds_prior = bool(
+                    not carry_approver
+                    or _exceeds_approved_percent(half_sum, half_doc, prior_approved_pct, split_prec)
+                )
+                return exceeds_prior, (exceeds_self and exceeds_prior), is_comp_half, half_req
+
+            src_over_prior, src_needs_reauth, src_comp, src_req_pct = _check_split_half(source, source_post_summary)
+            chd_over_prior, chd_needs_reauth, chd_comp, chd_req_pct = _check_split_half(new_invoice, child_post_summary)
+
+            if src_needs_reauth or chd_needs_reauth:
+                elevated_pct = max(
+                    src_req_pct if src_needs_reauth else 0.0,
+                    chd_req_pct if chd_needs_reauth else 0.0,
+                )
+                split_privilege = "complimentary" if (src_comp or chd_comp) else "discount"
+                token = str(approval).strip() if approval is not None and str(approval).strip() else None
+                if not token:
+                    frappe.throw(
+                        coded_message(
+                            "POS-AUTH-REQUIRED",
+                            _(
+                                "Manager approval is required because splitting this check raises the discount percentage to {0}%."
+                            ).format(round(elevated_pct, 2)),
+                        ),
+                        frappe.PermissionError,
+                    )
+                split_claim = canonical_split_discount_claim(
+                    source.name, items_to_move, percent=elevated_pct, reason=reason_code_for_split
+                )
+                override_mod = _get_override_module()
+                consumed = override_mod.consume(
+                    token,
+                    split_privilege,
+                    source.get("pos_profile") or "",
+                    source.name,
+                    split_claim,
+                )
+                new_approver = consumed.get("approver")
+                if not new_approver or new_approver == frappe.session.user:
+                    frappe.throw(
+                        coded_message("POS-AUTH-SELF", _("You cannot approve your own discount.")),
+                        frappe.PermissionError,
+                    )
+                approver_ceiling = _approver_discount_ceiling(
+                    new_approver, company, pos_profile=source.get("pos_profile"), privilege=split_privilege
+                )
+                new_approved_pct = elevated_pct
+                if approver_ceiling is not None and new_approved_pct > approver_ceiling:
+                    new_approved_pct = approver_ceiling
+                reauth_payload = frappe._dict(approver=new_approver, percent=new_approved_pct)
+                for half_doc, half_needs in (
+                    (source, src_needs_reauth or src_over_prior),
+                    (new_invoice, chd_needs_reauth or chd_over_prior),
+                ):
+                    if not half_needs:
+                        continue
+                    h_meta = _read_discount_meta(half_doc)
+                    half_doc.flags.discount_approval = reauth_payload
+                    _write_discount_audit_fields(
+                        half_doc,
+                        reason=half_doc.get("custom_discount_reason") or h_meta.get("reason") or reason_code_for_split,
+                        reason_description=h_meta.get("reason_description") or reason_code_for_split,
+                        note=half_doc.get("custom_discount_note") or h_meta.get("note") or src_meta.get("note"),
+                        coupon=half_doc.get("coupon_code") if hasattr(half_doc, "coupon_code") else None,
+                        approver=new_approver,
+                        approved_percent=new_approved_pct,
+                        line_reasons=h_meta.get("line_reasons") or src_meta.get("line_reasons") or {},
+                    )
+                carry_approver = new_approver
+                carry_approved_pct = new_approved_pct
+            elif carry_approver:
+                for half_doc, half_over in ((source, src_over_prior), (new_invoice, chd_over_prior)):
+                    if not half_over:
+                        continue
+                    h_meta = _read_discount_meta(half_doc)
+                    half_doc.flags.discount_approval = None
+                    _write_discount_audit_fields(
+                        half_doc,
+                        reason=half_doc.get("custom_discount_reason") or h_meta.get("reason") or reason_code_for_split,
+                        reason_description=h_meta.get("reason_description") or reason_code_for_split,
+                        note=half_doc.get("custom_discount_note") or h_meta.get("note") or src_meta.get("note"),
+                        coupon=half_doc.get("coupon_code") if hasattr(half_doc, "coupon_code") else None,
+                        approver=None,
+                        approved_percent=0.0,
+                        line_reasons=h_meta.get("line_reasons") or src_meta.get("line_reasons") or {},
+                    )
+
         # Never copy received tenders onto the split child check.
         for row in new_invoice.get("payments") or []:
             row.amount = 0
@@ -804,7 +1056,27 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             )
             new_invoice.invoice_created = 1
 
-        new_invoice.insert()
+        # When the approving supervisor splits a check they previously approved for another
+        # owner, siteops#8620 checks `approver != frappe.session.user` on new_invoice.insert().
+        # Caller write/access checks already passed above, so preserve original check ownership
+        # across the insert/save of the inherited approval.
+        orig_session_user = frappe.session.user
+        swap_for_inherited_approval = bool(
+            carry_approver
+            and carry_approver == orig_session_user
+            and source.get("owner")
+            and source.get("owner") != carry_approver
+        )
+        if swap_for_inherited_approval:
+            frappe.session.user = source.get("owner")
+        try:
+            if swap_for_inherited_approval:
+                new_invoice.insert(ignore_permissions=True)
+            else:
+                new_invoice.insert()
+        finally:
+            if swap_for_inherited_approval:
+                frappe.session.user = orig_session_user
         new_invoice.reload()
         frappe.db.set_value(
             "POS Invoice",
@@ -817,7 +1089,19 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
         )
         if source_received:
             frappe.flags.ury_server_tender_received = True
-        source.save()
+        swap_source_save = bool(
+            swap_for_inherited_approval and getattr(source.flags, "discount_approval", None) is not None
+        )
+        if swap_source_save:
+            frappe.session.user = source.get("owner")
+        try:
+            if swap_source_save:
+                source.save(ignore_permissions=True)
+            else:
+                source.save()
+        finally:
+            if swap_source_save:
+                frappe.session.user = orig_session_user
 
         # Reconcile reservations for both sides of the split, reusing the
         # same reconcile_order_reservations() primitive sync_order already
@@ -871,6 +1155,7 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
             frappe.db.set_value("URY KOT", ticket, "invoice", new_invoice.name, update_modified=False)
     finally:
         frappe.flags.ury_server_tender_received = prev_tender_flag
+        frappe.flags.ury_server_discount_write = prev_disc_flag
         frappe.flags.ury_bill_split = False
 
     return {
@@ -893,15 +1178,19 @@ def _reservation_lines(rows):
 
 
 def _prepare_consolidated_discount(destination, sources):
-    """Resolve ONE bill-level discount for the consolidated check (Simphony Add Check).
+    """Resolve ONE bill-level discount and preserve line/header discount metadata for the
+    consolidated check (Simphony Add Check).
 
     Matching percentages keep that percentage; differing discounts (such as merging a 0%
     check with a 10%-discounted check) sum their exact discount amounts on the shared
     apply_discount_on basis so neither an overcharge nor an unintended discount expansion
     occurs. Conflicting apply_discount_on bases (Net Total vs Grand Total) are refused.
+    Line-only discounted checks still carry their discount reason, note, approver, and
+    ury_discount_meta onto the consolidated check.
     """
     all_bills = [destination, *sources]
     discounted = []
+    line_discounted = []
     for bill in all_bills:
         pct = flt(bill.get("additional_discount_percentage"))
         amt = flt(bill.get("discount_amount"))
@@ -910,11 +1199,62 @@ def _prepare_consolidated_discount(destination, sources):
             amt = flt(bill.get("discount_amount"))
         if pct > 0 or amt > 0:
             discounted.append((bill, pct, amt))
+        if _has_manual_line_discount(bill.get("items")):
+            line_discounted.append(bill)
 
-    if not discounted:
+    if not discounted and not line_discounted:
         return None
 
-    bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _, _ in discounted}
+    metadata_bills = []
+    seen_bill_ids = set()
+    for bill in [b for b, _pct, _amt in discounted] + line_discounted:
+        if id(bill) not in seen_bill_ids:
+            seen_bill_ids.add(id(bill))
+            metadata_bills.append(bill)
+
+    reasons = []
+    reason_descriptions = []
+    notes = []
+    approvers = []
+    merged_line_reasons = {}
+    for bill in metadata_bills:
+        bmeta = _read_discount_meta(bill)
+        r = bill.get("custom_discount_reason") or bmeta.get("reason")
+        if r:
+            reasons.append(r)
+            reason_descriptions.append(bmeta.get("reason_description") or r)
+        n = bill.get("custom_discount_note") or bmeta.get("note")
+        if n:
+            notes.append(n)
+        ap = bill.get("custom_discount_approver") or bmeta.get("approver")
+        if ap:
+            ap_pct = flt(bill.get("custom_discount_approved_percent")) or flt(bmeta.get("approved_percent"))
+            if ap_pct <= 0:
+                ap_pct = _compute_manual_discount_summary(bill, currency_precision(bill))["effective_percent"]
+            approvers.append((ap, ap_pct))
+        if isinstance(bmeta.get("line_reasons"), dict):
+            merged_line_reasons.update(bmeta["line_reasons"])
+    carry_reason = reasons[0] if reasons else None
+    carry_reason_desc = reason_descriptions[0] if reason_descriptions else carry_reason
+    carry_note = "; ".join(dict.fromkeys(notes)) if notes else None
+    carry_approver, carry_approved_pct = max(approvers, key=lambda pair: pair[1]) if approvers else (None, 0.0)
+
+    if not discounted:
+        return {
+            "has_header_discount": False,
+            "apply_discount_on": None,
+            "additional_discount_percentage": None,
+            "discount_amount": None,
+            "clear_coupon": False,
+            "reason": carry_reason,
+            "reason_description": carry_reason_desc,
+            "note": carry_note,
+            "approver": carry_approver,
+            "approved_percent": carry_approved_pct,
+            "line_reasons": merged_line_reasons,
+        }
+
+    bases = {bill.get("apply_discount_on") or "Grand Total" for bill, _pct, _amt in discounted}
     if len(bases) > 1:
         frappe.throw(
             _("Cannot merge checks with bill discounts applied on different bases ({0}).").format(
@@ -924,13 +1264,35 @@ def _prepare_consolidated_discount(destination, sources):
     basis = next(iter(bases))
 
     all_pcts = [flt(bill.get("additional_discount_percentage")) for bill in all_bills]
+    coupons = {bill.get("coupon_code") for bill in all_bills if bill.get("coupon_code")}
+
     if all(p > 0 for p in all_pcts) and len({round(p, 6) for p in all_pcts}) == 1:
-        return {"apply_discount_on": basis, "additional_discount_percentage": all_pcts[0], "discount_amount": None}
+        return {
+            "has_header_discount": True,
+            "apply_discount_on": basis,
+            "additional_discount_percentage": all_pcts[0],
+            "discount_amount": None,
+            "clear_coupon": len(coupons) > 1,
+            "reason": carry_reason,
+            "reason_description": carry_reason_desc,
+            "note": carry_note,
+            "approver": carry_approver,
+            "approved_percent": carry_approved_pct,
+            "line_reasons": merged_line_reasons,
+        }
 
     return {
+        "has_header_discount": True,
         "apply_discount_on": basis,
         "additional_discount_percentage": 0,
         "discount_amount": sum(amt for _, _, amt in discounted),
+        "clear_coupon": True,
+        "reason": carry_reason,
+        "reason_description": carry_reason_desc,
+        "note": carry_note,
+        "approver": carry_approver,
+        "approved_percent": carry_approved_pct,
+        "line_reasons": merged_line_reasons,
     }
 
 
@@ -1041,10 +1403,34 @@ def consolidate_checks(destination, sources):
             )
 
     if discount_plan is not None:
-        destination.apply_discount_on = discount_plan["apply_discount_on"]
-        destination.additional_discount_percentage = discount_plan["additional_discount_percentage"]
-        if discount_plan["discount_amount"] is not None:
-            destination.discount_amount = discount_plan["discount_amount"]
+        if discount_plan.get("has_header_discount"):
+            destination.apply_discount_on = discount_plan["apply_discount_on"]
+            destination.additional_discount_percentage = discount_plan["additional_discount_percentage"]
+            if discount_plan["discount_amount"] is not None:
+                destination.discount_amount = discount_plan["discount_amount"]
+            if discount_plan.get("clear_coupon") and hasattr(destination, "coupon_code"):
+                destination.coupon_code = None
+        if (
+            discount_plan.get("reason")
+            or discount_plan.get("note")
+            or discount_plan.get("approver")
+            or discount_plan.get("line_reasons")
+        ):
+            _write_discount_audit_fields(
+                destination,
+                reason=discount_plan.get("reason"),
+                reason_description=discount_plan.get("reason_description"),
+                note=discount_plan.get("note"),
+                coupon=destination.get("coupon_code") if hasattr(destination, "coupon_code") else None,
+                approver=discount_plan.get("approver"),
+                approved_percent=discount_plan.get("approved_percent") or 0.0,
+                line_reasons=discount_plan.get("line_reasons") or {},
+            )
+        if discount_plan.get("approver"):
+            destination.flags.discount_approval = frappe._dict(
+                approver=discount_plan["approver"],
+                percent=discount_plan.get("approved_percent") or 0.0,
+            )
 
     if source_tenders:
         by_mode = {}
@@ -1075,11 +1461,32 @@ def consolidate_checks(destination, sources):
     destination.set_paid_amount()
     destination.set_outstanding_amount()
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+    prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
+    prev_merge_flag = getattr(frappe.flags, "in_bill_merge_sync", False)
     frappe.flags.ury_server_tender_received = True
+    frappe.flags.ury_server_discount_write = True
+    frappe.flags.in_bill_merge_sync = True
+    orig_session_user = frappe.session.user
+    swap_for_inherited_approval = bool(
+        discount_plan
+        and discount_plan.get("approver")
+        and discount_plan.get("approver") == orig_session_user
+        and destination.get("owner")
+        and destination.get("owner") != discount_plan.get("approver")
+    )
+    if swap_for_inherited_approval:
+        frappe.session.user = destination.get("owner")
     try:
-        destination.save()
+        if swap_for_inherited_approval:
+            destination.save(ignore_permissions=True)
+        else:
+            destination.save()
     finally:
+        if swap_for_inherited_approval:
+            frappe.session.user = orig_session_user
         frappe.flags.ury_server_tender_received = prev_tender_flag
+        frappe.flags.ury_server_discount_write = prev_disc_flag
+        frappe.flags.in_bill_merge_sync = prev_merge_flag
 
     for source in sources:
         for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
@@ -3464,59 +3871,6 @@ def cancel_order(invoice_id, reason):
         pos_invoice.cancel()
     pos_invoice.db_set("cancel_reason", reason)
 
-# Roles permitted to authorize an additional discount when settling an order.
-DISCOUNT_ALLOWED_ROLES = frozenset(
-    {"URY Manager", "URY Cashier", "System Manager", "Administrator"}
-)
-MAX_DISCOUNT_PERCENTAGE = 100
-
-
-def _validate_additional_discount(additional_discount, pos_profile):
-    """Server-side authorization for the discount applied in make_invoice.
-
-    The client-side gate (POS Profile "Enable Discount" checkbox) is only a
-    UI convenience; this check is authoritative. Returns the sanitized
-    discount percentage (0 when no discount is applied). Raises before any
-    invoice state is mutated on failure.
-    """
-    if additional_discount in (None, ""):
-        return 0
-
-    try:
-        discount = flt(additional_discount)
-    except (TypeError, ValueError):
-        frappe.throw(
-            _("Invalid discount value: {0}").format(additional_discount),
-            frappe.ValidationError,
-        )
-
-    if discount <= 0:
-        return 0
-
-    profile = frappe.get_doc("POS Profile", pos_profile)
-
-    if not profile.custom_enable_discount:
-        frappe.throw(
-            _("Discounts are not enabled for POS Profile {0}.").format(pos_profile),
-            frappe.PermissionError,
-        )
-
-    if discount > MAX_DISCOUNT_PERCENTAGE:
-        frappe.throw(
-            _("Discount of {0}% exceeds the maximum allowed discount of {1}%.").format(
-                discount, MAX_DISCOUNT_PERCENTAGE
-            )
-        )
-
-    if not DISCOUNT_ALLOWED_ROLES.intersection(frappe.get_roles()):
-        frappe.throw(
-            _("You do not have permission to apply a discount on this order."),
-            frappe.PermissionError,
-        )
-
-    return discount
-
-
 def _set_settlement_customer(invoice, customer):
     if invoice.customer != customer:
         invoice.customer = customer
@@ -3641,35 +3995,215 @@ def _enforce_on_account(
 
 
 @frappe.whitelist()
-def preview_settlement_totals(invoice, pos_profile, additionalDiscount=None):
-    """The totals make_invoice charges for this check at this discount, computed by the native
-    controller (currency precision, smallest currency fraction, system rounding, the profile's
-    rounded-total setting), so the till never rounds money itself. Nothing is saved."""
-    discount = _validate_additional_discount(additionalDiscount, pos_profile)
+def list_discount_options(pos_profile, invoice=None):
+    """Active POS Discount Reasons (in sort_order), valid Coupon Code presets,
+    allow_discount_change, and the session user's discount limit %."""
+    return _list_discount_options_impl(pos_profile, invoice=invoice)
+
+
+@frappe.whitelist()
+def get_check_discounts(invoice):
+    """Read-only discount summary (check + line discounts, reason, note, coupon) for a check."""
+    return _get_check_discounts_impl(invoice)
+
+
+@frappe.whitelist()
+def preview_settlement_totals(
+    invoice,
+    pos_profile,
+    additionalDiscount=None,
+    discount_percent=None,
+    discount_amount=None,
+    discount_reason=None,
+    discount_note=None,
+    coupon_code=None,
+    line_discounts=None,
+    approval=None,
+    clear_discount=0,
+    complimentary=0,
+):
+    """The totals make_invoice / apply_check_discount charges for this check at this discount,
+    computed by the native controller (currency precision, smallest currency fraction, system
+    rounding, tax-inclusive/exclusive handling). Nothing is saved."""
+    spec = parse_discount_request(
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        discount_reason=discount_reason,
+        discount_note=discount_note,
+        coupon_code=coupon_code,
+        line_discounts=line_discounts,
+        approval=approval,
+        additionalDiscount=additionalDiscount,
+        clear_discount=clear_discount,
+        complimentary=complimentary,
+    )
     bill = frappe.get_doc("POS Invoice", invoice)
     bill.check_permission("read")
     _enforce_order_access(bill)
     if bill.pos_profile and bill.pos_profile != pos_profile:
         frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
 
-    bills = [bill]
-    if bill.custom_merged_pos_invoice:
-        bills.append(frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice))
+    profile = frappe.get_cached_doc("POS Profile", pos_profile)
+    partner = frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice) if bill.custom_merged_pos_invoice else None
 
-    totals = {"grand_total": 0, "rounded_total": 0}
-    for row in bills:
-        if discount:
-            row.additional_discount_percentage = discount
-            row.discount_amount = 0
-        elif flt(row.get("additional_discount_percentage")):
-            row.additional_discount_percentage = 0
-            row.discount_amount = 0
+    bill_snap = _snapshot_doc_discount_state(bill)
+    partner_snap = _snapshot_doc_discount_state(partner) if partner is not None else None
+    try:
+        return apply_discount_to_invoice(
+            bill,
+            profile,
+            spec,
+            require_reason=False,
+            enforce_auth=False,
+            linked_partner=partner,
+        )
+    finally:
+        _restore_doc_discount_state(bill, bill_snap)
+        if partner is not None and partner_snap is not None:
+            _restore_doc_discount_state(partner, partner_snap)
+
+
+@frappe.whitelist()
+def apply_check_discount(
+    invoice,
+    pos_profile,
+    discount_percent=None,
+    discount_amount=None,
+    discount_reason=None,
+    discount_note=None,
+    coupon_code=None,
+    line_discounts=None,
+    approval=None,
+    additionalDiscount=None,
+    complimentary=0,
+):
+    """Apply a check, preset, or line discount onto an open (draft) check before settlement."""
+    spec = parse_discount_request(
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        discount_reason=discount_reason,
+        discount_note=discount_note,
+        coupon_code=coupon_code,
+        line_discounts=line_discounts,
+        approval=approval,
+        additionalDiscount=additionalDiscount,
+        complimentary=complimentary,
+    )
+    bill = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    bill.check_permission("write")
+    _enforce_order_access(bill)
+    if bill.docstatus != 0:
+        frappe.throw(_("Discounts can only be applied before settlement."), frappe.ValidationError)
+    if bill.pos_profile and bill.pos_profile != pos_profile:
+        frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
+
+    profile = frappe.get_cached_doc("POS Profile", pos_profile)
+    partner = (
+        frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice, for_update=True)
+        if bill.custom_merged_pos_invoice
+        else None
+    )
+    summary = apply_discount_to_invoice(
+        bill,
+        profile,
+        spec,
+        require_reason=True,
+        enforce_auth=True,
+        linked_partner=partner,
+    )
+    prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
+    frappe.flags.ury_server_discount_write = True
+    try:
+        if partner is not None:
+            with with_currency_precision(partner):
+                partner.save(ignore_permissions=True)
+        with with_currency_precision(bill):
+            bill.save()
+    finally:
+        frappe.flags.ury_server_discount_write = prev_disc_flag
+    return summary
+
+
+@frappe.whitelist()
+def remove_check_discount(invoice, pos_profile, row=None, approval=None):
+    """Remove a discount (all discounts or a single line discount) before settlement."""
+    bill = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    bill.check_permission("write")
+    _enforce_order_access(bill)
+    if bill.docstatus != 0:
+        frappe.throw(_("Discounts can only be removed before settlement."), frappe.ValidationError)
+    if bill.pos_profile and bill.pos_profile != pos_profile:
+        frappe.throw(_('Use the order’s own POS Profile.'), frappe.PermissionError)
+
+    profile = frappe.get_cached_doc("POS Profile", pos_profile)
+    consumed = enforce_remove_discount_auth(bill, profile, row=row, approval=approval)
+    removal_actor = (consumed.get("approver") if isinstance(consumed, dict) else None) or frappe.session.user
+    bill.flags.discount_removal = frappe._dict(approver=removal_actor, action="remove")
+    partner = (
+        frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice, for_update=True)
+        if bill.custom_merged_pos_invoice
+        else None
+    )
+    if row:
+        target_row = next((r for r in (bill.get("items") or []) if str(r.get("name")) == str(row)), None)
+        if not target_row:
+            frappe.throw(_("Line item {0} is not on this check.").format(row), frappe.ValidationError)
+        _set_row_field(target_row, "discount_percentage", 0)
+        _set_row_field(target_row, "discount_amount", 0)
+        if target_row.get("price_list_rate") is not None:
+            _set_row_field(target_row, "rate", target_row.get("price_list_rate"))
+        bill.calculate_taxes_and_totals()
+        has_remaining = bool(
+            flt(bill.get("discount_amount")) > 0
+            or flt(bill.get("additional_discount_percentage")) > 0
+            or any(
+                flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
+                for r in (bill.get("items") or [])
+            )
+        )
+        if not has_remaining:
+            spec = parse_discount_request(clear_discount=1)
+            summary = apply_discount_to_invoice(
+                bill, profile, spec, require_reason=False, enforce_auth=True, linked_partner=partner
+            )
         else:
-            row.additional_discount_percentage = 0
-        row.calculate_taxes_and_totals()
-        totals["grand_total"] += flt(row.grand_total)
-        totals["rounded_total"] += flt(row.rounded_total)
-    return totals
+            from ury.ury_pos.discount import _compute_manual_discount_summary, _read_meta, _write_discount_audit_fields
+
+            prec = currency_precision(bill, bill.get("currency") or profile.get("currency"))
+            meta_data = _read_meta(bill)
+            line_reasons = dict(meta_data.get("line_reasons") or {})
+            line_reasons.pop(str(row), None)
+            _write_discount_audit_fields(
+                bill,
+                reason=bill.get("custom_discount_reason") or meta_data.get("reason"),
+                reason_description=meta_data.get("reason_description"),
+                note=bill.get("custom_discount_note") or meta_data.get("note"),
+                coupon=bill.get("coupon_code") or meta_data.get("coupon_code"),
+                approver=bill.get("custom_discount_approver") or meta_data.get("approver"),
+                approved_percent=bill.get("custom_discount_approved_percent") or meta_data.get("approved_percent"),
+                line_reasons=line_reasons,
+                c_hash=meta_data.get("claim_hash"),
+            )
+            summary = _compute_manual_discount_summary(bill, prec)
+            summary["currency"] = bill.get("currency") or profile.get("currency") or ""
+            summary["precision"] = prec
+    else:
+        spec = parse_discount_request(clear_discount=1)
+        summary = apply_discount_to_invoice(
+            bill, profile, spec, require_reason=False, enforce_auth=True, linked_partner=partner
+        )
+
+    prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
+    frappe.flags.ury_server_discount_write = True
+    try:
+        if partner is not None:
+            with with_currency_precision(partner):
+                partner.save(ignore_permissions=True)
+        with with_currency_precision(bill):
+            bill.save()
+    finally:
+        frappe.flags.ury_server_discount_write = prev_disc_flag
+    return summary
 
 
 def _confirmed_phone_payment_requests(invoice_name, company=None):
@@ -4064,9 +4598,35 @@ def make_invoice(
     offline_replay=0,
     offline_approval=None,
     offline_reason=None,
+    tip=None,
+    tip_server=None,
+    discount_percent=None,
+    discount_amount=None,
+    discount_reason=None,
+    discount_note=None,
+    coupon_code=None,
+    line_discounts=None,
+    approval=None,
+    clear_discount=0,
+    complimentary=0,
 ):
     submit_invoice = frappe.utils.cint(submit_invoice) if submit_invoice is not None else 1
+    tip = flt(tip)
+    if tip < 0:
+        frappe.throw(coded_message("TIP-NEGATIVE", _("A tip cannot be negative.")))
     client_order_id = _validate_client_ids(client_order_id, round_id)
+    discount_spec = parse_discount_request(
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        discount_reason=discount_reason,
+        discount_note=discount_note,
+        coupon_code=coupon_code,
+        line_discounts=line_discounts,
+        approval=approval,
+        additionalDiscount=additionalDiscount,
+        clear_discount=clear_discount,
+        complimentary=complimentary,
+    )
     pos_prof = frappe.get_cached_doc("POS Profile", pos_profile)
     customer_disabled = _lock_settlement_customer(customer, pos_prof)
     existing_invoice = _client_order_invoice(client_order_id, invoice, table)
@@ -4084,7 +4644,6 @@ def make_invoice(
         if settled.branch != getBranch():
             frappe.throw(_('Not permitted outside your branch.'), frappe.PermissionError)
         return {'name': settled.name, 'status': 'Submitted'}
-    additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
@@ -4133,40 +4692,34 @@ def make_invoice(
     
     invoice.company = pos_prof.company
     invoice.currency = pos_prof.currency
-    
-    if additionalDiscount:
-        discount_val = frappe.utils.flt(additionalDiscount)
-        if discount_val < 0 or discount_val > 100:
-            frappe.throw(_("Discount percentage must be between 0 and 100"))
-        
-        if not pos_prof.get("allow_discount_change") and not pos_prof.get("custom_enable_discount"):
-            frappe.throw(_("Discount is not allowed for this POS Profile"))
-        
-        allowed_roles = {"Administrator", "System Manager", "URY Admin", "URY Manager", "URY Cashier"}
-        user_roles = set(frappe.get_roles(frappe.session.user))
-        if not allowed_roles.intersection(user_roles):
-            frappe.throw(_("Not permitted to apply discounts"), frappe.PermissionError)
 
-        invoice.additional_discount_percentage = discount_val
-        invoice.discount_amount = 0
-    else:
-        if flt(invoice.get("additional_discount_percentage")):
-            invoice.additional_discount_percentage = 0
-            invoice.discount_amount = 0
-        else:
-            invoice.additional_discount_percentage = 0
-        
-    invoice.calculate_taxes_and_totals()
+    # The cashier's tip (cash, or charged on a card or room-charge tender):
+    # its Tips Payable line is on the bill before the totals the tenders are
+    # allocated against. Owed to the bill's server unless another is named.
+    invoice.custom_charged_tip = tip
+    invoice.custom_tip_server = (tip_server or invoice.waiter) if tip else None
+    sync_charged_tip(invoice)
 
     target = None
     if invoice.custom_merged_pos_invoice:
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
         target.cashier = frappe.session.user
-        # One guest bill, one discount: a bill linked before Add Check consolidated lines
-        # takes the bill's discount on both halves.
-        target.additional_discount_percentage = invoice.additional_discount_percentage
-        target.calculate_taxes_and_totals()
 
+    if discount_spec["has_any_arg"]:
+        apply_discount_to_invoice(
+            invoice,
+            pos_prof,
+            discount_spec,
+            require_reason=True,
+            enforce_auth=True,
+            linked_partner=target,
+        )
+    else:
+        invoice.calculate_taxes_and_totals()
+        if target is not None:
+            target.calculate_taxes_and_totals()
+
+    if target is not None:
         doc_existing = _received_payment_rows(invoice)
         target_existing = _received_payment_rows(target)
         if doc_existing or target_existing:
@@ -4213,6 +4766,19 @@ def make_invoice(
                 target.append("payments", dict(mode_of_payment=mode, amount=give))
                 amt -= give
                 target_req -= give
+
+            if amt > 0:
+                # Preserve any remaining over-tender on the primary bill so
+                # ury_pos_tender.before_validate applies the tender's over-tender
+                # rule (Refuse / Post to Charged Tip) or cash change.
+                existing = next(
+                    (row for row in reversed(invoice.payments) if row.mode_of_payment == mode),
+                    None,
+                )
+                if existing:
+                    existing.amount = flt(existing.amount) + amt
+                else:
+                    invoice.append("payments", dict(mode_of_payment=mode, amount=amt))
                 
         if not target.payments and payments:
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
@@ -4237,14 +4803,18 @@ def make_invoice(
         frappe.flags.in_bill_merge_sync = True
         prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
         prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
+        prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
         if target_existing:
             frappe.flags.ury_server_tender_received = True
         frappe.flags.pos_server_override_fields = True
+        if discount_spec["has_any_arg"]:
+            frappe.flags.ury_server_discount_write = True
         try:
             target.save(ignore_permissions=True)
         finally:
             frappe.flags.ury_server_tender_received = prev_tender_flag
             frappe.flags.pos_server_override_fields = prev_override_flag
+            frappe.flags.ury_server_discount_write = prev_disc_flag
             frappe.flags.in_bill_merge_sync = False
             
         invoice.flags.ignore_payment_sync = True
@@ -4297,14 +4867,19 @@ def make_invoice(
     # invoice.owner = owner
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
+    prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
     if existing_received_tenders:
         frappe.flags.ury_server_tender_received = True
     frappe.flags.pos_server_override_fields = True
+    if discount_spec["has_any_arg"]:
+        frappe.flags.ury_server_discount_write = True
     try:
-        invoice.save()
+        with with_currency_precision(invoice):
+            invoice.save()
     finally:
         frappe.flags.ury_server_tender_received = prev_tender_flag
         frappe.flags.pos_server_override_fields = prev_override_flag
+        frappe.flags.ury_server_discount_write = prev_disc_flag
 
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}

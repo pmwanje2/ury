@@ -4,6 +4,7 @@ from frappe import _
 from datetime import datetime
 
 from ury.brand import coded_message
+from ury.ury.hooks.ury_cash_movement import till_cash_movements, validate_closing_cash
 from ury.ury_pos.api import (
 	_goal_submitted_since,
 	_phase_dependent_rows,
@@ -22,6 +23,9 @@ def before_validate(doc, method):
 
 
 def before_submit(doc, method):
+    # Either invoice mode: the shift's cash movements are decided and a cash
+    # difference has the till's Over/Short account.
+    validate_closing_cash(doc)
     if not _is_pos_invoice_mode():
         return
 
@@ -162,6 +166,21 @@ def _set_expected_amounts(doc):
         expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) + amount, precision)
     for mode, change_amount in fallback_changes.items():
         expected_by_mode[mode] = _currency_flt(expected_by_mode.get(mode, 0) - change_amount, precision)
+    # Pickups, loans and paid-outs of the shift move the cash tender's drawer.
+    for account, amount in till_cash_movements(doc.pos_opening_entry).items():
+        modes = [
+            mode for mode in till_modes_by_account.get(account, [])
+            if frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
+        ]
+        if not modes:
+            continue
+        if len(modes) != 1:
+            frappe.throw(coded_message(
+                "CLOSE-MOVEMENT-NO-TILL-MODE",
+                "Map exactly one cash till payment mode "
+                f"to the drawer account {account} before closing.",
+            ))
+        expected_by_mode[modes[0]] = _currency_flt(expected_by_mode.get(modes[0], 0) + amount, precision)
 
     client_rows = {row.mode_of_payment: row for row in doc.payment_reconciliation or []}
     # Existing rows keep their place (and their names); only missing modes are

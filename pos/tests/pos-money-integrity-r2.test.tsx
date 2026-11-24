@@ -180,19 +180,15 @@ describe('POS-PR-2 R2 hermetic checks', () => {
         />,
       ),
     );
-    const discountBox = container.querySelector<HTMLInputElement>('input[type="number"]:not([step])')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(discountBox, '10');
-      discountBox.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    expect(container.querySelector('input[type="number"]:not([step])')).toBeNull();
     await act(async () => button(/^Pay /).click());
     expect(post).toHaveBeenCalledWith(
       'ury.ury.doctype.ury_order.ury_order.make_invoice',
       expect.objectContaining({
-        additionalDiscount: null,
         payments: [{ mode_of_payment: 'Cash', amount: 35.4 }],
       }),
     );
+    expect(post.mock.calls[0][1]).not.toHaveProperty('additionalDiscount');
   });
 
   it('renders the full return amount on the Return tab even when rounded_total is 0 and avoids Math.round on merged totals', async () => {

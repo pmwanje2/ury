@@ -218,4 +218,5 @@ def coded_message(key, message=""):
         r"ury|frappe|erpnext|kamra|huf|tridz|heykoala", prefix, re.I
     ):
         prefix = DEFAULT_MESSAGE_CODE_PREFIX
-    return f"[{prefix}-{key}] {message}" if message else f"[{prefix}-{key}]"
+    code = key if isinstance(key, str) and key.startswith(f"{prefix}-") else f"{prefix}-{key}"
+    return f"[{code}] {message}" if message else f"[{code}]"
