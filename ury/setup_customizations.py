@@ -7,6 +7,8 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def after_install():
     create_custom_fields(get_custom_fields())
+    from ury.ury_pos.kds_device_fields import ensure_kds_device_custom_fields
+    ensure_kds_device_custom_fields()
     from ury.ury_pos.privileged_fields import ensure_privileged_action_custom_fields
     ensure_privileged_action_custom_fields()
     add_roles_to_administrator()

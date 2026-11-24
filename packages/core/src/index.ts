@@ -43,7 +43,17 @@ export {
   MIXED_CURRENCY,
 } from './format';
 export type { CurrencyInfo } from './format';
-export { initPrinting, loadQzPrinter, disconnectQzPrinter, printWithQz } from './print/qz';
+export {
+  ESC_POS_DRAWER_KICK_PIN_2,
+  ESC_POS_DRAWER_KICK_PIN_5,
+  initPrinting,
+  loadQzPrinter,
+  disconnectQzPrinter,
+  printWithQz,
+  resolveDrawerKickHex,
+  kickDrawerQz,
+} from './print/qz';
+export type { DrawerPin, QzPrinterTarget, KickDrawerQzResult } from './print/qz';
 export {
   MERGED_POS_INVOICE_PRINT_FORMAT,
   UNSAFE_POS_INVOICE_PRINT_FORMATS,

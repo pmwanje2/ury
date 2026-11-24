@@ -237,6 +237,13 @@ def bill(
 			invoice.additional_discount_percentage = additional_discount_percentage
 		if discount_amount is not None:
 			invoice.discount_amount = discount_amount
+		if additional_discount_percentage is not None or discount_amount is not None:
+			invoice.custom_discount_reason = "Test Discount"
+			approver = MANAGER if till.holder != MANAGER else MANAGER_2
+			invoice.flags.discount_approval = {
+				"approver": approver,
+				"percent": additional_discount_percentage or 0,
+			}
 		if disable_rounded_total is not None:
 			invoice.disable_rounded_total = disable_rounded_total
 		invoice.append(

@@ -113,6 +113,39 @@
             <option value="raster">Raster (GS v 0)</option>
           </select>
         </label>
+        <label class="mt-3 block font-semibold">{{ __("Backup printer") }}
+          <input
+            v-model="stationSettings.backupPrinter"
+            @input="onBackupPrinterInput"
+            data-testid="backup-printer-input"
+            class="mt-1 w-full rounded border p-2"
+            type="text"
+            autocomplete="off"
+            :placeholder="__('None')"
+          >
+        </label>
+        <template v-if="!stationSettings.backupPrinter">
+          <label class="mt-3 block font-semibold">{{ __("Backup printer host") }}
+            <input
+              v-model="stationSettings.backupHost"
+              data-testid="backup-host-input"
+              class="mt-1 w-full rounded border p-2"
+              type="text"
+              autocomplete="off"
+              :placeholder="__('None')"
+            >
+          </label>
+          <label class="mt-3 block font-semibold">{{ __("Backup printer port") }}
+            <input
+              v-model.number="stationSettings.backupPort"
+              data-testid="backup-port-input"
+              class="mt-1 w-full rounded border p-2"
+              type="number"
+              min="1"
+              max="65535"
+            >
+          </label>
+        </template>
         <label class="mt-4 flex items-center gap-2 font-semibold">
           <input v-model="stationSettings.enabled" type="checkbox"> {{ __("Enable station printing") }}
         </label>
@@ -129,7 +162,7 @@
         {{ loadingServed ? __("Loading…") : __("Recently served · Recall") }}
       </button>
       <div v-if="showRecentServed" class="mt-3 rounded-lg border p-3" style="border-color: var(--hair)">
-        <p class="mb-2" style="color: var(--t3)">{{ __("Recall is available for 15 minutes after serving.") }}</p>
+        <p class="mb-2" style="color: var(--t3)">{{ __("Recall is available for {0} minutes after serving.", recallWindowMinutes) }}</p>
         <p v-if="!recentServed.length && !loadingServed" style="color: var(--t3)">{{ __("No recently served tickets.") }}</p>
         <div v-for="served in recentServed" :key="served.name" class="flex justify-between items-center py-2">
           <span>{{ served.table_takeaway || !served.restaurant_table ? __("Takeaway") : served.restaurant_table }} · {{ daily_order_number ? served.order_no : served.invoice.slice(-4) }}</span>
@@ -140,15 +173,129 @@
       </div>
     </div>
 
-    <div v-if="kot.filter(k => k.production === production).length === 0 && !loadingKots" class="text-center py-10 text-xl" style="color: var(--t3)">
+    <!-- Sticky collapsible All-Day production summary bar -->
+    <div
+      v-if="allDaySummary.length"
+      data-testid="all-day-summary"
+      class="sticky top-12 z-20 mb-4 rounded-lg border p-3"
+      style="background: var(--panel); border-color: var(--hair2)"
+    >
+      <div class="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          @click="allDayExpanded = !allDayExpanded"
+          class="flex items-center gap-2 font-bold text-sm"
+          style="color: var(--t1); min-height: 36px"
+        >
+          <span>{{ __("All-Day ({0})", allDaySummary.length) }}</span>
+          <span aria-hidden="true">{{ allDayExpanded ? "▾" : "▸" }}</span>
+        </button>
+        <span v-if="isExpo" class="rounded px-2 py-0.5 text-xs font-bold uppercase" style="background: var(--ac); color: #fff">
+          {{ __("Expo Station") }}
+        </span>
+      </div>
+      <div v-if="allDayExpanded" class="mt-2 flex flex-wrap gap-2">
+        <span
+          v-for="row in allDaySummary"
+          :key="`${row.item_name}-${row.course}`"
+          class="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm font-semibold"
+          :style="row.rush_qty > 0 ? { background: 'var(--rd-t)', borderColor: 'var(--rd)', color: 'var(--rd)' } : { background: 'var(--bg)', borderColor: 'var(--hair)', color: 'var(--t1)' }"
+        >{{ row.total_qty }}× {{ row.item_name }}</span>
+      </div>
+    </div>
+
+    <!-- Expo Mode Board: unified multi-station cards per check -->
+    <div v-if="isExpo" data-testid="expo-board">
+      <div v-if="expoOrders.length === 0 && !loadingKots" class="text-center py-10 text-xl" style="color: var(--t3)">
+        {{ __("No active orders for {0}", production) }}
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div
+          v-for="order in expoOrders"
+          :key="order.invoice"
+          data-testid="expo-order-card"
+          :class="[{ 'ring-4 ring-red-600': Number(order.custom_is_rush) === 1 || order.late }]"
+          class="kot-card rounded-lg border"
+          style="background: var(--panel); border-color: var(--hair2)"
+        >
+          <div class="kot-header flex justify-between items-start">
+            <div class="kot-identity text-sm">
+              <div v-if="Number(order.custom_is_rush) === 1 || Number(order.custom_is_vip) === 1" class="mb-1 flex flex-wrap gap-1">
+                <span v-if="Number(order.custom_is_rush) === 1" data-testid="kot-rush-badge" class="inline-block rounded px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide" style="background: var(--rd); color: #fff">{{ __("RUSH") }}</span>
+                <span v-if="Number(order.custom_is_vip) === 1" data-testid="kot-vip-badge" class="inline-block rounded px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide" style="background: #d97706; color: #fff">{{ __("VIP") }}</span>
+              </div>
+              <span class="kot-table font-semibold" style="color: var(--t1)">
+                {{ order.tableortakeaway === "Takeaway" || order.table_takeaway == 1 || !order.restaurant_table ? __("Takeaway") : order.tableortakeaway || order.restaurant_table }}
+              </span>
+              <span class="ms-2 text-sm font-semibold" style="color: var(--t2); font-family: var(--m)">
+                {{ daily_order_number ? order.order_no : String(order.invoice || "").slice(-4) }}
+              </span>
+              <div v-if="order.custom_guest_label" class="text-sm font-semibold" style="color: var(--t1)">
+                {{ __("Guest") }}: {{ order.custom_guest_label }}
+              </div>
+            </div>
+            <span
+              class="rounded px-2 py-1 text-xs font-bold"
+              :style="order.all_stations_ready ? { background: 'var(--gr-t)', color: 'var(--gr)' } : { background: 'var(--am-t)', color: 'var(--am)' }"
+            >
+              {{ order.all_stations_ready ? __("All stations ready") : __("Waiting on stations") }}
+            </span>
+          </div>
+
+          <div class="mt-3 flex flex-wrap gap-2">
+            <span
+              v-for="station in order.stations"
+              :key="station.kot_name"
+              data-testid="expo-station-chip"
+              class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-bold border"
+              :style="expoStationChipStyle(station.status)"
+            >
+              <span>{{ station.production }}:</span>
+              <span>{{ __(station.status) }}</span>
+            </span>
+          </div>
+
+          <div class="mt-3 space-y-2">
+            <div v-for="station in order.stations" :key="`items-${station.kot_name}`" class="rounded border p-2" style="border-color: var(--hair)">
+              <div class="text-xs font-bold uppercase tracking-wide mb-1" style="color: var(--t3)">{{ station.production }}</div>
+              <template v-for="group in station.course_groups" :key="`${station.kot_name}-${group.course}`">
+                <div v-if="group.course" data-testid="kot-course-header" class="text-xs font-bold uppercase tracking-wide px-1.5 py-0.5 rounded my-1" style="background: var(--bg); color: var(--t2)">
+                  {{ group.course }}
+                </div>
+                <div v-for="kotitem in group.items" :key="kotitem.name" class="flex items-center justify-between text-base font-semibold py-0.5" style="color: var(--t1)">
+                  <span><span dir="ltr" style="font-family: var(--m)">{{ kotitem.qty ?? kotitem.quantity }}</span> {{ kotitem.item_name }}</span>
+                  <span class="px-1.5 py-0.5 rounded text-xs font-semibold" :style="itemStatusStyle(kotitem.state)">{{ itemStatusLabel(kotitem.state) }}</span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <footer class="kot-actions mt-4 border-t pt-3" style="border-color: var(--hair)">
+            <button
+              type="button"
+              data-testid="expo-bump-btn"
+              @click.stop="expoBumpOrder(order)"
+              :disabled="!!bumpingExpo[order.invoice]"
+              class="w-full py-2 px-6 rounded-md font-semibold disabled:opacity-50"
+              style="background: var(--gr); color: #fff"
+            >
+              {{ bumpingExpo[order.invoice] ? __("Bumping…") : __("Expo Bump") }}
+            </button>
+          </footer>
+        </div>
+      </div>
+    </div>
+
+    <template v-else>
+    <div v-if="visibleKots.length === 0 && !loadingKots" class="text-center py-10 text-xl" style="color: var(--t3)">
       {{ __("No active orders for {0}", production) }}
     </div>
 
     <div class="grid kot-grid">
-      <template v-for="kot in this.kot" :key="kot.name">
-        <div v-if="!kot.showDiv && kot.production === production" class="kot-ticket masonry-item">
+      <template v-for="kot in visibleKots" :key="kot.name">
+        <div class="kot-ticket masonry-item">
         <div
-          :class="[kot.color, { 'ring-4 ring-red-600': kot.late }]"
+          :class="[kot.color, { 'ring-4 ring-red-600': kot.late || Number(kot.custom_is_rush) === 1, 'ring-2 ring-amber-500': !kot.late && Number(kot.custom_is_rush) !== 1 && Number(kot.custom_is_vip) === 1 }]"
           class="kot-card rounded-lg border"
           style="border-color: var(--hair2)"
         >
@@ -156,6 +303,10 @@
               <!-- Card Header: Table Name and Order Number -->
               <div class="kot-header flex justify-between" @click="rotateCard(kot)">
                 <div class="kot-identity text-sm" style="font-family: var(--s)">
+                  <div v-if="Number(kot.custom_is_rush) === 1 || Number(kot.custom_is_vip) === 1" class="mb-1 flex flex-wrap gap-1">
+                    <span v-if="Number(kot.custom_is_rush) === 1" data-testid="kot-rush-badge" class="inline-block rounded px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide" style="background: var(--rd); color: #fff">{{ __("RUSH") }}</span>
+                    <span v-if="Number(kot.custom_is_vip) === 1" data-testid="kot-vip-badge" class="inline-block rounded px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide" style="background: #d97706; color: #fff">{{ __("VIP") }}</span>
+                  </div>
                   <span
                     v-if="kot.tableortakeaway !== 'Takeaway'"
                     class="text-sm font-medium me-1"
@@ -217,88 +368,98 @@
                 ( {{ kot.comments }} )
               </div>
               <div>
-                <div
-                  class="font-semibold"
-                  v-for="kotitem in sortedKotItems(kot)"
-                  :key="kotitem.name"
-                >
+                <template v-for="group in groupedKotItems(kot)" :key="`${kot.name}-course-${group.course}`">
                   <div
-                    @click="
-                      () => {
-                        toggleItemStrikeThrough(kotitem, kot);
-                      }
-                    "
-                    :class="{
-                      'line-through': kotitem.striked,
-                    }"
-                    :style="{ color: kotitem.striked ? 'var(--gr)' : 'var(--t1)' }"
-                    class="kot-item flex font-semibold items-start"
+                    v-if="group.course"
+                    data-testid="kot-course-header"
+                    class="mt-2 mb-1 rounded px-2 py-0.5 text-xs font-bold uppercase tracking-wide"
+                    style="background: var(--bg); color: var(--t2); border-left: 3px solid var(--ac)"
                   >
-                    <div class="kot-quantity" dir="ltr" style="font-family: var(--m); font-variant-numeric: tabular-nums">
-                      <span>{{ kotitem.qty }}</span>
-                    </div>
-                    <div class="kot-dish-detail">
-                      <span class="kot-dish">{{
-                        kotitem.item_name
-                      }}<span v-show="kotitem.indicate_course" class="text-sm ms-1" style="color: var(--t3)"> ( {{kotitem.course}} )</span>
-                      </span
-                      ><br />
+                    {{ group.course }}
+                  </div>
+                  <div
+                    class="font-semibold"
+                    v-for="kotitem in group.items"
+                    :key="kotitem.name"
+                  >
+                    <div
+                      @click="
+                        () => {
+                          toggleItemStrikeThrough(kotitem, kot);
+                        }
+                      "
+                      :class="{
+                        'line-through': kotitem.striked,
+                      }"
+                      :style="{ color: kotitem.striked ? 'var(--gr)' : 'var(--t1)' }"
+                      class="kot-item flex font-semibold items-start"
+                    >
+                      <div class="kot-quantity" dir="ltr" style="font-family: var(--m); font-variant-numeric: tabular-nums">
+                        <span>{{ kotitem.qty }}</span>
+                      </div>
+                      <div class="kot-dish-detail">
+                        <span class="kot-dish">{{
+                          kotitem.item_name
+                        }}<span v-if="kotitem.seat_no" class="text-xs ms-1 px-1 rounded" style="background: var(--bg); color: var(--t2)">S{{ kotitem.seat_no }}</span><span v-show="kotitem.indicate_course" class="text-sm ms-1" style="color: var(--t3)"> ( {{kotitem.course}} )</span>
+                        </span
+                        ><br />
+                        <span
+                          class="ms-2"
+                          v-if="
+                            kot.type === 'Partially cancelled' ||
+                            kot.type === 'Cancelled'
+                          "
+                          >[{{ __("Old Qty = {0}", kotitem.quantity) }}]</span
+                        >
+                      </div>
                       <span
-                        class="ms-2"
-                        v-if="
-                          kot.type === 'Partially cancelled' ||
-                          kot.type === 'Cancelled'
-                        "
-                        >[{{ __("Old Qty = {0}", kotitem.quantity) }}]</span
+                        data-testid="kot-item-status"
+                        class="ms-auto px-1.5 py-0.5 rounded text-xs font-semibold"
+                        :style="itemStatusStyle(kotitem.state)"
+                        >{{ itemStatusLabel(kotitem.state) }}</span
                       >
                     </div>
-                    <span
-                      data-testid="kot-item-status"
-                      class="ms-auto px-1.5 py-0.5 rounded text-xs font-semibold"
-                      :style="itemStatusStyle(kotitem.state)"
-                      >{{ itemStatusLabel(kotitem.state) }}</span
-                    >
+                    <div>
+                      <p
+                        v-show="kotitem.comments"
+                        class="kot-note"
+                      >
+                        <span class="kot-note-label">{{ kot.type === 'Cancelled' || kot.type === 'Partially cancelled' ? __("Cancellation remarks") : __("Special request") }}</span>
+                        {{ kotitem.comments }}
+                      </p>
+                      <!-- Cancellation disposition: return-to-stock vs waste -->
+                      <div
+                        v-if="Number(kotitem.cancelled_qty) > 0 && (!kotitem.disposition || kotitem.disposition === 'Pending')"
+                        class="ms-2 mt-1 flex gap-2"
+                        @click.stop
+                      >
+                        <span class="text-sm font-medium" style="color: var(--t2)">{{ __("Disposition:") }}</span>
+                        <button
+                          @click="resolveDisposition(kot, kotitem, 'return_to_stock')"
+                          class="px-2 py-1 rounded text-xs font-semibold"
+                          style="background: var(--gr); color: #fff"
+                        >
+                          {{ __("Return to Stock") }}
+                        </button>
+                        <button
+                          @click="resolveDisposition(kot, kotitem, 'waste')"
+                          class="px-2 py-1 rounded text-xs font-semibold"
+                          style="background: var(--rd); color: #fff"
+                        >
+                          {{ __("Mark as Wasted") }}
+                        </button>
+                      </div>
+                      <div
+                        v-else-if="kotitem.disposition && kotitem.disposition !== 'Pending'"
+                        class="ms-2 mt-1 text-sm font-medium"
+                        style="color: var(--t2)"
+                      >
+                        ( {{ __("Disposition: {0}", __(kotitem.disposition)) }} )
+                      </div>
+                      <hr class="my-1 mt-2" style="border-color: var(--hair)" />
+                    </div>
                   </div>
-                  <div>
-                    <p
-                      v-show="kotitem.comments"
-                      class="kot-note"
-                    >
-                      <span class="kot-note-label">{{ kot.type === 'Cancelled' || kot.type === 'Partially cancelled' ? __("Cancellation remarks") : __("Special request") }}</span>
-                      {{ kotitem.comments }}
-                    </p>
-                    <!-- Cancellation disposition: return-to-stock vs waste -->
-                    <div
-                      v-if="Number(kotitem.cancelled_qty) > 0 && (!kotitem.disposition || kotitem.disposition === 'Pending')"
-                      class="ms-2 mt-1 flex gap-2"
-                      @click.stop
-                    >
-                      <span class="text-sm font-medium" style="color: var(--t2)">{{ __("Disposition:") }}</span>
-                      <button
-                        @click="resolveDisposition(kot, kotitem, 'return_to_stock')"
-                        class="px-2 py-1 rounded text-xs font-semibold"
-                        style="background: var(--gr); color: #fff"
-                      >
-                        {{ __("Return to Stock") }}
-                      </button>
-                      <button
-                        @click="resolveDisposition(kot, kotitem, 'waste')"
-                        class="px-2 py-1 rounded text-xs font-semibold"
-                        style="background: var(--rd); color: #fff"
-                      >
-                        {{ __("Mark as Wasted") }}
-                      </button>
-                    </div>
-                    <div
-                      v-else-if="kotitem.disposition && kotitem.disposition !== 'Pending'"
-                      class="ms-2 mt-1 text-sm font-medium"
-                      style="color: var(--t2)"
-                    >
-                      ( {{ __("Disposition: {0}", __(kotitem.disposition)) }} )
-                    </div>
-                    <hr class="my-1 mt-2" style="border-color: var(--hair)" />
-                  </div>
-                </div>
+                </template>
               </div>
           </div>
           <footer @click.self="kot.isRotated && rotateCard(kot)" class="kot-actions mt-4 border-t pt-4" style="border-color: var(--hair)" :class="{ 'ring-2 ring-blue-600 rounded-lg': kot.isRotated }">
@@ -325,6 +486,7 @@
         </div>
       </template>
     </div>
+    </template>
 
     <!-- Audio Alert Message -->
     <div
@@ -467,6 +629,8 @@ export default {
       availabilityRoles: [],
       kot_channel: "",
       kot_error_channel: "",
+      kot_priority_channel: "",
+      kot_branch_priority_channel: "",
       clickedItems: new Set(),
       struckThroughItems: {},
       loggeduser: "",
@@ -495,7 +659,7 @@ export default {
       loadingServed: false,
       timeInterval: null,
       stationPrinter: null,
-      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576, commandMode: "standard" },
+      stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, backupPrinter: "", backupHost: "", backupPort: 9100, printFormat: "", pageWidth: 576, commandMode: "standard" },
       installedPrinters: [],
       printerListError: "",
       failedPrints: [],
@@ -505,6 +669,12 @@ export default {
       canManagePrintSettings: false,
       showPrintSettings: false,
       stationSettingsError: "",
+      recallWindowMinutes: 15,
+      isExpo: false,
+      allDayExpanded: true,
+      bumpingExpo: {},
+      serverDeviceConfig: null,
+      heartbeatInterval: null,
     };
   },
   methods: {
@@ -514,6 +684,7 @@ export default {
       if (!this.stationPrinter) {
         this.stationPrinter = createStationPrinter({
           production: this.production, user: this.loggeduser, call: this.call,
+          serverSettings: this.serverDeviceConfig,
           now: () => Date.now() + this.serverTimeOffset,
           onChange: state => {
             this.failedPrints = state.failed;
@@ -522,6 +693,8 @@ export default {
             if (state.error) this.printError = state.error;
           },
         });
+      } else if (this.serverDeviceConfig && typeof this.stationPrinter.hydrateFromServer === "function") {
+        this.stationPrinter.hydrateFromServer(this.serverDeviceConfig);
       }
       this.stationSettings = this.stationPrinter.settings;
     },
@@ -565,15 +738,51 @@ export default {
         this.printerListError = kitchenErrorMessage(error, t("Installed printers are unavailable. Start QZ Tray, or use a network printer."));
       }
     },
+    onBackupPrinterInput() {
+      if (this.stationSettings.backupPrinter && this.stationSettings.backupPrinter.trim()) {
+        this.stationSettings.backupHost = "";
+      }
+    },
     savePrintSettings() {
       if (!this.canManagePrintSettings) return;
       try {
         const next = { ...this.stationSettings };
         if (next.printer) next.host = "";
+        if (String(next.backupPrinter || "").trim()) next.backupHost = "";
         this.stationSettings = this.stationPrinter.configure(next);
         this.showPrintSettings = false;
+        if (this.call && typeof this.call.post === "function" && this.production) {
+          this.call.post("ury.ury.api.ury_kot_display.save_station_device_config", {
+            production_unit: this.production,
+            config: JSON.stringify(this.stationSettings),
+          }).catch(() => {});
+        }
       } catch (error) {
         this.stationSettingsError = clientMessage(error.message || t("Could not load printer settings."));
+      }
+    },
+    sendStationHeartbeat() {
+      if (!this.production || !this.call || typeof this.call.post !== "function") return;
+      return this.call
+        .post("ury.ury.api.ury_kot_display.record_station_heartbeat", {
+          production_unit: this.production,
+        })
+        .catch(() => {});
+    },
+    startStationHeartbeat() {
+      this.stopStationHeartbeat();
+      if (!this.production || !this.serverDeviceConfig?.auto_failover_enabled) return;
+      const timeoutSec = Number(this.serverDeviceConfig.heartbeat_timeout_seconds) || 120;
+      const intervalMs = Math.max(10000, Math.min(30000, Math.floor((timeoutSec * 1000) / 3)));
+      this.sendStationHeartbeat();
+      this.heartbeatInterval = setInterval(() => {
+        if (this.socketActive) this.sendStationHeartbeat();
+      }, intervalMs);
+    },
+    stopStationHeartbeat() {
+      if (this.heartbeatInterval) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
       }
     },
     playAlertSound(path) {
@@ -690,8 +899,22 @@ export default {
               this.kot_alert_time = result.message.kot_alert_time;
               this.audio_alert = result.message.audio_alert;
               this.daily_order_number = result.message.daily_order_number;
+              const configuredRecall = Number(result.message.recall_window_minutes);
+              if (Number.isFinite(configuredRecall) && configuredRecall > 0) {
+                this.recallWindowMinutes = Math.max(1, Math.min(240, Math.floor(configuredRecall)));
+              }
+              this.isExpo = Boolean(result.message.is_expo);
+              if (result.message.station_device_config) {
+                this.serverDeviceConfig = result.message.station_device_config;
+                if (this.stationPrinter && typeof this.stationPrinter.hydrateFromServer === "function") {
+                  this.stationSettings = this.stationPrinter.hydrateFromServer(this.serverDeviceConfig);
+                }
+              }
               this.kot_channel = `kot_update_${this.branch}_${this.production}`;
               this.kot_error_channel = `kot_error_${this.branch}_${this.production}`;
+              const priorityBranch = this.branch || this.availabilityBranch;
+              this.kot_priority_channel = priorityBranch ? `kot_priority_${priorityBranch}_${this.production}` : "";
+              this.kot_branch_priority_channel = priorityBranch ? `kot_priority_${priorityBranch}` : "";
               this.kot = result.message.KOT;
               this.kot.forEach(kot => this.knownKots.add(kot.name));
               this.loadingKots = false;
@@ -810,13 +1033,61 @@ export default {
       this.actionError = "";
       try {
         const now = new Date(Date.now() + this.serverTimeOffset);
-        const result = await this.call.get("frappe.client.get_list", recentServedQuery(this.branch, this.production, now));
-        this.recentServed = result.message.filter(kot => canRecallKot(kot, now));
+        const query = recentServedQuery(
+          this.branch,
+          this.isExpo ? null : this.production,
+          now,
+          this.recallWindowMinutes,
+        );
+        const result = await this.call.get("frappe.client.get_list", query);
+        this.recentServed = result.message.filter(kot => canRecallKot(kot, now, this.recallWindowMinutes));
       } catch (error) {
         this.actionError = kitchenErrorMessage(error, t("Could not load recently served tickets. Please try again."));
       } finally {
         this.loadingServed = false;
       }
+    },
+    async expoBumpOrder(order) {
+      if (!order?.invoice || this.bumpingExpo[order.invoice]) return;
+      this.bumpingExpo[order.invoice] = true;
+      this.actionError = "";
+      try {
+        await this.call.post("ury.ury.api.ury_kot_display.expo_bump_order", {
+          invoice: order.invoice,
+          production_unit: this.production,
+        });
+        this.kot = this.kot.filter(card => card.invoice !== order.invoice);
+        if (this.showRecentServed) await this.fetchRecentServed();
+      } catch (error) {
+        this.actionError = kitchenErrorMessage(error, t("Could not bump order {0}. Please try again.", order.invoice));
+      } finally {
+        delete this.bumpingExpo[order.invoice];
+      }
+    },
+    expoStationChipStyle(status) {
+      if (status === "Ready") return { background: "#EAF2FB", color: "#1D5FA8", borderColor: "#C3D9F0" };
+      if (status === "Served") return { background: "var(--gr-t)", color: "var(--gr)", borderColor: "var(--gr-b)" };
+      if (status === "Preparing") return { background: "var(--am-t)", color: "var(--am)", borderColor: "var(--am-b)" };
+      return { background: "var(--rd-t)", color: "var(--rd)", borderColor: "var(--rd-b)" };
+    },
+    groupedKotItems(kot) {
+      const sorted = [...(kot?.kot_items || [])].sort(
+        (a, b) => (Number(a?.serve_priority) || 0) - (Number(b?.serve_priority) || 0),
+      );
+      const groups = [];
+      const byKey = new Map();
+      for (const item of sorted) {
+        const course = String(item?.course || "").trim();
+        const prio = Number(item?.serve_priority) || 0;
+        const key = `${prio}::${course}`;
+        if (!byKey.has(key)) {
+          const entry = { course, serve_priority: prio, items: [] };
+          byKey.set(key, entry);
+          groups.push(entry);
+        }
+        byKey.get(key).items.push(item);
+      }
+      return groups;
     },
     async recallOrder(kot) {
       if (this.recalling[kot.name]) return;
@@ -1079,6 +1350,7 @@ export default {
           // Leaving the station during authentication or the first snapshot installs no listeners.
           if (!this.socketActive) return;
           this.startServiceRequests();
+          this.startStationHeartbeat();
           this.socketStale = !socket?.connected;
           if (this.audio_alert === 1) {
             this.showAudioAlertMessage = true;
@@ -1141,6 +1413,19 @@ export default {
               this.hideKotErrorAlert();
             }, 8000);
           };
+          const handlePriorityUpdate = () => {
+            this.fetchKOT()
+              .then(() => {
+                this.masonryLoading();
+              })
+              .catch(console.error);
+          };
+          if (this.kot_priority_channel) {
+            this.socketHandlers[this.kot_priority_channel] = handlePriorityUpdate;
+          }
+          if (this.isExpo && this.kot_branch_priority_channel) {
+            this.socketHandlers[this.kot_branch_priority_channel] = handlePriorityUpdate;
+          }
           if (socket) {
             for (const [channel, handler] of Object.entries(this.socketHandlers)) socket.on(channel, handler);
           }
@@ -1161,6 +1446,7 @@ export default {
     this.stopServiceRequests();
     this.cancelPendingServes();
     clearInterval(this.timeInterval);
+    this.stopStationHeartbeat();
     window.removeEventListener("resize", this.masonryLoading);
     window.removeEventListener("online", this.handleOnline);
     window.removeEventListener("offline", this.handleOffline);
@@ -1170,9 +1456,110 @@ export default {
     availabilitySocket() {
       return this.availabilityBranch ? socket : undefined;
     },
+    visibleKots() {
+      const filtered = (this.kot || []).filter(k => !k.showDiv && k.production === this.production);
+      return [...filtered].sort((a, b) => {
+        const aRush = Number(a?.custom_is_rush) === 1 ? 0 : 1;
+        const bRush = Number(b?.custom_is_rush) === 1 ? 0 : 1;
+        if (aRush !== bRush) return aRush - bRush;
+        const aVip = Number(a?.custom_is_vip) === 1 ? 0 : 1;
+        const bVip = Number(b?.custom_is_vip) === 1 ? 0 : 1;
+        return aVip - bVip;
+      });
+    },
+    allDaySummary() {
+      const source = this.isExpo ? (this.kot || []).filter(k => !k.showDiv) : this.visibleKots;
+      const totals = new Map();
+      for (const kot of source) {
+        if (kot?.type === "Cancelled" || kot?.type === "Partially cancelled") continue;
+        const isRush = Number(kot?.custom_is_rush) === 1;
+        const isVip = Number(kot?.custom_is_vip) === 1;
+        for (const item of kot?.kot_items || []) {
+          if (item?.state === "SERVED") continue;
+          const rawQty = item?.qty !== undefined ? Number(item.qty) : Number(item?.quantity) - Number(item?.cancelled_qty || 0);
+          if (!Number.isFinite(rawQty) || rawQty <= 0) continue;
+          const itemName = String(item?.item_name || item?.item || "").trim();
+          if (!itemName) continue;
+          const course = String(item?.course || "").trim();
+          const key = `${itemName}::${course}`;
+          if (!totals.has(key)) {
+            totals.set(key, { item_name: itemName, course, total_qty: 0, rush_qty: 0, vip_qty: 0 });
+          }
+          const entry = totals.get(key);
+          entry.total_qty = Math.round((entry.total_qty + rawQty) * 1e4) / 1e4;
+          if (isRush) entry.rush_qty = Math.round((entry.rush_qty + rawQty) * 1e4) / 1e4;
+          if (isVip) entry.vip_qty = Math.round((entry.vip_qty + rawQty) * 1e4) / 1e4;
+        }
+      }
+      return [...totals.values()].sort(
+        (a, b) => (b.rush_qty - a.rush_qty) || (b.total_qty - a.total_qty) || a.item_name.localeCompare(b.item_name),
+      );
+    },
+    expoOrders() {
+      if (!this.isExpo) return [];
+      const byInvoice = new Map();
+      for (const kot of this.kot || []) {
+        if (kot?.showDiv || kot?.type === "Cancelled" || kot?.type === "Partially cancelled") continue;
+        const invoice = kot?.invoice || kot?.name;
+        if (!invoice) continue;
+        if (!byInvoice.has(invoice)) {
+          byInvoice.set(invoice, {
+            invoice,
+            restaurant_table: kot.restaurant_table,
+            table_takeaway: kot.table_takeaway,
+            tableortakeaway: kot.tableortakeaway,
+            custom_guest_label: kot.custom_guest_label,
+            order_no: kot.order_no,
+            user: kot.user,
+            late: Boolean(kot.late),
+            custom_is_rush: 0,
+            custom_is_vip: 0,
+            stations: [],
+          });
+        }
+        const order = byInvoice.get(invoice);
+        if (Number(kot.custom_is_rush) === 1) order.custom_is_rush = 1;
+        if (Number(kot.custom_is_vip) === 1) order.custom_is_vip = 1;
+        if (kot.late) order.late = true;
+        const items = kot.kot_items || [];
+        const states = items.map(it => String(it?.state || "QUEUED").toUpperCase());
+        const readyCount = states.filter(st => st === "READY" || st === "SERVED").length;
+        let status = "Queued";
+        let allItemsReady = false;
+        if (kot.order_status === "Served") {
+          status = "Served";
+          allItemsReady = true;
+        } else if (!items.length || readyCount === items.length) {
+          status = "Ready";
+          allItemsReady = true;
+        } else if (states.some(st => st === "IN_PREPARATION" || st === "READY" || st === "SERVED")) {
+          status = "Preparing";
+        }
+        order.stations.push({
+          kot_name: kot.name,
+          production: kot.production || "",
+          status,
+          all_items_ready: allItemsReady,
+          course_groups: this.groupedKotItems(kot),
+        });
+      }
+      return [...byInvoice.values()]
+        .map(order => ({
+          ...order,
+          all_stations_ready: order.stations.length > 0 && order.stations.every(st => st.all_items_ready),
+        }))
+        .sort((a, b) => {
+          const aRush = Number(a.custom_is_rush) === 1 ? 0 : 1;
+          const bRush = Number(b.custom_is_rush) === 1 ? 0 : 1;
+          if (aRush !== bRush) return aRush - bRush;
+          const aVip = Number(a.custom_is_vip) === 1 ? 0 : 1;
+          const bVip = Number(b.custom_is_vip) === 1 ? 0 : 1;
+          return aVip - bVip;
+        });
+    },
     sortedKotItems() {
       return (kot) => {
-        return kot.kot_items.sort((a, b) => a.serve_priority - b.serve_priority);
+        return [...(kot.kot_items || [])].sort((a, b) => (a.serve_priority || 0) - (b.serve_priority || 0));
       };
     },
   },

@@ -4,6 +4,7 @@
 import hashlib
 import json
 from collections import defaultdict
+from datetime import date, datetime
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -5006,6 +5007,8 @@ def make_invoice(
     round_id=None,
     tip=None,
     tip_server=None,
+    halo_approval_token=None,
+    halo_approval_reason=None,
     discount_percent=None,
     discount_amount=None,
     discount_reason=None,
@@ -5239,6 +5242,12 @@ def make_invoice(
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:
             _record_round(invoice, round_id)
+    # Consume optional Manager PIN token for Over-HALO tenders before invoice.save() triggers before_validate
+    if halo_approval_token:
+        from ury.ury_pos.till_controls import apply_halo_approval_token
+
+        apply_halo_approval_token(invoice, halo_approval_token, reason=halo_approval_reason)
+
     # invoice.owner = owner
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
@@ -5255,6 +5264,25 @@ def make_invoice(
 
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}
+
+    # Serialize bill settlement with till closing (FOR UPDATE on open shift) and refuse
+    # offline replays arriving after the shift closed.
+    from ury.ury_pos.till_controls import lock_open_shift_for_settlement, validate_offline_settlement_shift
+
+    raw_offline_captured = invoice.get("ury_offline_captured_at")
+    offline_captured_at = (
+        raw_offline_captured
+        if isinstance(raw_offline_captured, (str, date, datetime)) and raw_offline_captured
+        else None
+    )
+    if client_order_id or offline_captured_at:
+        validate_offline_settlement_shift(
+            pos_profile,
+            offline_captured_at=offline_captured_at,
+            client_order_id=client_order_id,
+        )
+    else:
+        lock_open_shift_for_settlement(pos_profile)
 
     if target:
         # Saving the primary runs on_update, which saves a separate copy of the partner.
