@@ -49,7 +49,6 @@ vi.mock("@ury/ui", () => ({
 }));
 vi.mock("../i18n", () => ({ t: (key: string) => key }));
 
-const PREVIEW = "ury.ury.doctype.ury_order.ury_order.preview_settlement_totals";
 const MAKE_INVOICE = "ury.ury.doctype.ury_order.ury_order.make_invoice";
 const SUBMIT_INVOICE = "ury.ury.doctype.ury_order.ury_order.submit_order_invoice";
 
