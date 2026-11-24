@@ -193,4 +193,96 @@ describe('TillCashDialog cashier touchscreen movements', () => {
       }),
     );
   });
+
+  it('captures tip_server on Tip Payout and displays server attribution on movement rows', async () => {
+    const stateWithServers = {
+      ...SAMPLE_STATE,
+      servers: [
+        { user: 'waiter@example.com', full_name: 'Alice Server' },
+        { user: 'runner@example.com', full_name: 'Bob Runner' },
+      ],
+      movements: [
+        ...SAMPLE_STATE.movements,
+        {
+          name: 'ACC-JV-3',
+          movement_type: 'Paid Out' as const,
+          amount: 4000,
+          drawer_change: -4000,
+          reason: 'Shift tip payout',
+          target_kind: 'tips' as const,
+          tip_server: 'waiter@example.com',
+          tip_server_name: 'Alice Server',
+          status: 'Submitted' as const,
+          docstatus: 1,
+          owner: 'cashier@example.com',
+          owner_name: 'Shift Cashier',
+          approver: '',
+          approver_name: '',
+          creation: '2026-11-24 10:30:00',
+          can_approve: false,
+          can_discard: false,
+        },
+      ],
+    };
+    vi.spyOn(call, 'get').mockResolvedValue({ message: stateWithServers });
+    const postSpy = vi.spyOn(call, 'post').mockResolvedValue({
+      message: { name: 'ACC-JV-4', status: 'Submitted', docstatus: 1 },
+    });
+
+    useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Shift Cashier', roles: ['URY Cashier'] } });
+    usePOSStore.setState({
+      posProfile: { name: 'Main Till', enable_cash_movements: 1, currency: 'UGX' } as ReturnType<typeof usePOSStore.getState>['posProfile'],
+    });
+
+    render(<TillCashDialog open onOpenChange={vi.fn()} />);
+    expect(await screen.findByText(/Alice Server/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Paid Out$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Tip Payout/i }));
+    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '3500' } });
+    fireEvent.change(screen.getByLabelText(/Server/i), { target: { value: 'runner@example.com' } });
+    fireEvent.change(screen.getByLabelText(/Reason/i), { target: { value: 'Cash tips paid' } });
+    fireEvent.click(screen.getByRole('button', { name: /Record Paid Out/i }));
+
+    await waitFor(() =>
+      expect(postSpy).toHaveBeenCalledWith('ury.ury_pos.cash_movements.record_till_cash_movement', {
+        pos_profile: 'Main Till',
+        movement_type: 'Paid Out',
+        amount: 3500,
+        reason: 'Cash tips paid',
+        paid_out_target: 'tips',
+        tip_server: 'runner@example.com',
+      }),
+    );
+  });
+
+  it('distinguishes threshold 0 (every paid-out needs approval) from blank/null (no limit)', async () => {
+    const getSpy = vi.spyOn(call, 'get');
+    getSpy.mockResolvedValueOnce({
+      message: { ...SAMPLE_STATE, currency: 'USD', paid_out_threshold: 0, movements: [] },
+    });
+
+    useRootStore.setState({ user: { name: 'cashier@example.com', full_name: 'Shift Cashier', roles: ['URY Cashier'] } });
+    usePOSStore.setState({
+      posProfile: { name: 'USD Till', enable_cash_movements: 1, currency: 'USD' } as ReturnType<typeof usePOSStore.getState>['posProfile'],
+    });
+
+    const { unmount } = render(<TillCashDialog open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(getSpy).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Paid Out$/i }));
+    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '1' } });
+    expect(screen.getByText(/every paid-out requires second-person approval/i)).toBeInTheDocument();
+    unmount();
+
+    getSpy.mockResolvedValueOnce({
+      message: { ...SAMPLE_STATE, currency: 'USD', paid_out_threshold: null, movements: [] },
+    });
+    render(<TillCashDialog open onOpenChange={vi.fn()} />);
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole('button', { name: /^Paid Out$/i }));
+    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '999999' } });
+    expect(screen.queryByText(/second-person approval/i)).toBeNull();
+  });
 });
