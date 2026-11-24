@@ -516,6 +516,11 @@ class TestServiceChargeSchemaAndFields(unittest.TestCase):
         kind = tax_fields["custom_pos_charge_kind"]
         self.assertEqual(kind["fieldtype"], "Select")
         self.assertEqual(kind.get("hidden"), 1)
+        self.assertEqual(
+            kind.get("no_copy"),
+            0,
+            "custom_pos_charge_kind must have no_copy=0 so make_sales_return and POS Invoice Merge Log preserve it",
+        )
         for opt in ("Service Charge", "Service Charge Tax", "Charged Tip"):
             self.assertIn(opt, kind["options"])
 
