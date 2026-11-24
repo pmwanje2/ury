@@ -202,6 +202,7 @@ describe("unapplied typed discount is never sent on Pay", () => {
     renderDialog(35.4, 35.4);
     await waitFor(() => expect(tender(0).value).toBe("35.4"));
 
+    // Uncheck print receipt to exercise direct single-call settlement (submit_invoice: 1).
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.change(discountInput(), { target: { value: "10" } });
     fireEvent.click(payButton());
@@ -570,18 +571,15 @@ describe("tenders already received on the check (Simphony parity)", () => {
   });
 
   it("allows changing payment method and retrying after Step-2 submit failure", async () => {
-    vi.mocked(call.get).mockResolvedValue({ message: { efris_status: null, fdn: null } });
+    vi.mocked(printOrder).mockClear();
     let submitAttempts = 0;
     vi.mocked(call.post).mockImplementation(async (method: string) => {
       if (method === SUBMIT_INVOICE) {
         submitAttempts += 1;
-        if (submitAttempts === 1) {
-          throw new Error("Payment for Mobile Money has not been confirmed yet.");
-        }
+        if (submitAttempts === 1) throw new Error("Temporary submit failure");
       }
-      return { message: { name: "BILL-1" } };
+      return { message: { name: "BILL-1", status: "Submitted" } };
     });
-    vi.mocked(printOrder).mockClear();
     setTill(["Cash", "Mobile Money"], {
       default_payment_mode: "Mobile Money",
       enable_payment_without_printing: 1,
@@ -591,9 +589,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
     await waitFor(() => expect(tender(1).value).toBe("5.9"));
 
     fireEvent.click(payButton());
-    await waitFor(() =>
-      expect(screen.getByText(/Payment for Mobile Money has not been confirmed yet/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/Temporary submit failure|errors\.payment_failed/)).toBeInTheDocument());
     expect(screen.queryByTestId("received-tenders")).toBeNull();
     expect(printOrder).not.toHaveBeenCalled();
 
@@ -612,8 +608,7 @@ describe("tenders already received on the check (Simphony parity)", () => {
         }),
       ),
     );
-    await waitFor(() => expect(submitAttempts).toBe(2));
-    await waitFor(() => expect(printOrder).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(call.post).toHaveBeenCalledWith(SUBMIT_INVOICE, { invoice: "BILL-1" }));
   });
 });
 

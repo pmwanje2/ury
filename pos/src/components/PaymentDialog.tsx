@@ -41,7 +41,7 @@ function roundToCurrency(amount: number, code?: string | null): number {
 type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'currency' | 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
   existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
@@ -79,9 +79,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
 }) => {
   const user = useRootStore((state) => state.user);
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
-  const currencyCode = storePosProfile?.currency || storeCurrency || '';
-  const formatMoney = (amount: number) =>
-    currencyCode ? formatCurrency(amount, currencyCode) : formatCurrency(amount);
+  const currencyCode = order?.currency || storePosProfile?.currency || storeCurrency || '';
+  const formatMoney = (amount: number) => formatCurrency(amount, currencyCode || undefined);
   const enablePaymentWithoutPrinting = Boolean(
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1
@@ -508,7 +507,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                     <div
                       key={`${row.mode_of_payment}-${idx}`}
                       data-testid="received-tender-row"
-                      className="flex items-center justify-between text-sm text-emerald-900"
+                      className="flex items-center justify-between gap-2 text-sm text-emerald-900"
                     >
                       <span className="font-medium">
                         {row.mode_of_payment}

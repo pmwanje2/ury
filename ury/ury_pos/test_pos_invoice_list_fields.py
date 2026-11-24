@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 ROOT = Path(__file__).resolve().parents[2]
 
 ROW = {
-	"name": "POS-INV-0001", "currency": "USD", "docstatus": 0, "invoice_printed": 1, "custom_printing_time": None,
+	"name": "POS-INV-0001", "docstatus": 0, "invoice_printed": 1, "custom_printing_time": None,
 	"grand_total": 100.0, "restaurant_table": "T-1", "custom_merged_tables": None, "cashier": "cashier@example.test",
 	"waiter": "waiter@example.test", "net_total": 100.0, "posting_time": "10:00:00", "total_taxes_and_charges": 0.0,
 	"customer": "CUST-0001", "customer_name": "Dr. Elena Rostova", "status": "Draft", "mobile_number": "",
@@ -30,6 +30,7 @@ ROW = {
 	"custom_split_from": None, "custom_guest_label": "Rm 408", "custom_merged_pos_invoice": None,
 	"custom_merged_total": None, "additional_discount_percentage": 0, "discount_amount": 0,
 	"ury_client_order_id": None, "no_of_pax": 3, "creation": "2026-10-02 10:00:00", "branch": "Branch A",
+	"currency": "USD",
 }
 
 
@@ -102,6 +103,7 @@ class TestPosInvoiceListFields(unittest.TestCase):
 				self.assertEqual(len(rows), 1)
 				self.assertEqual(rows[0].get("customer_name"), "Dr. Elena Rostova")
 				self.assertEqual(rows[0].get("no_of_pax"), 3)
+				self.assertEqual(rows[0].get("currency"), "USD")
 
 	def test_open_check_lists_carry_when_the_check_was_opened(self):
 		for status in ("Draft", "Unbilled"):
@@ -114,6 +116,7 @@ class TestPosInvoiceListFields(unittest.TestCase):
 		self.assertEqual(rows[0].get("customer_name"), "Dr. Elena Rostova")
 		self.assertEqual(rows[0].get("no_of_pax"), 3)
 		self.assertEqual(rows[0].get("creation"), "2026-10-02 10:00:00")
+		self.assertEqual(rows[0].get("currency"), "USD")
 		search = next(call for call in self.all_calls if call.get("or_filters"))
 		self.assertIn(["customer_name", "like", "%elena%"], search["or_filters"])
 
@@ -122,6 +125,7 @@ class TestPosInvoiceListFields(unittest.TestCase):
 		self.frappe.get_doc.return_value = invoice
 		result = self.api.get_split_group("POS-INV-0001")
 		self.assertEqual([row.get("no_of_pax") for row in result["invoices"]], [3])
+		self.assertEqual([row.get("currency") for row in result["invoices"]], ["USD"])
 
 
 if __name__ == "__main__":

@@ -1083,7 +1083,7 @@ def getPosInvoiceItems(invoice):
         "docstatus": 1,
         "payment_channel": "Phone",
         "payment_request_type": "Inward",
-        "status": ["in", ["Paid", "Partially Paid"]],
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
     }
     if orderdItems.get("company"):
         pr_filters["company"] = orderdItems.get("company")
@@ -1110,7 +1110,7 @@ def getPosInvoiceItems(invoice):
 
     received_rows = []
     matched_pr_names = set()
-    matched_phone_modes = {}
+    matched_unreferenced_phone_modes = {}
     for payment in orderdItems.get("payments") or []:
         amt = frappe.utils.flt(payment.get("amount"))
         if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
@@ -1123,16 +1123,47 @@ def getPosInvoiceItems(invoice):
         )
         if is_phone:
             if ref:
-                if ref not in live_pr_by_name:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                # Rounded so binary float noise (5.9 - 2.0) never reaches the payment screen.
+                live_amt = round(
+                    frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount")), 9
+                )
+                if live_amt <= 0:
                     continue
                 matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": live_amt,
+                        "reference_no": ref,
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
             else:
-                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
                     continue
-                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
-            if mode:
-                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-            received_rows.append(payment)
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                received_rows.append(
+                    {
+                        "mode_of_payment": mode,
+                        "amount": used,
+                        "reference_no": payment.get("reference_no"),
+                        "reference_date": payment.get("reference_date"),
+                        "clearance_date": payment.get("clearance_date"),
+                        "type": "Phone",
+                        "custom_tender_received": 1,
+                    }
+                )
             continue
 
         received_rows.append(payment)
@@ -1147,8 +1178,8 @@ def getPosInvoiceItems(invoice):
         mode = pr.get("mode_of_payment")
         if not mode or paid_amt <= 0:
             continue
-        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-            matched_phone_modes[mode] -= paid_amt
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
             continue
         received_rows.append(
             {
@@ -1711,10 +1742,28 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
     """
     user = frappe.session.user
 
-    # Company resolution: user default first, then global default.
-    company = frappe.defaults.get_user_default("Company")
+    # Resolve the cashier's branch-assigned POS Profile first so multi-company
+    # tills (e.g. a UGX branch on a USD-default site, or a cashier without a
+    # User Default Company) bind to their own profile's company and currency.
+    branch_profile_data = None
+    try:
+        branch_profile_data = getPosProfile()
+    except Exception:
+        branch_profile_data = None
+
+    branch_company = (
+        branch_profile_data.get("company")
+        if isinstance(branch_profile_data, dict)
+        else None
+    )
+
+    # Company resolution: assigned branch POS Profile company first, then user
+    # default, then global default (Frappe stores Global Defaults under "company").
+    company = branch_company
     if not company:
-        company = frappe.db.get_default("Company")
+        company = frappe.defaults.get_user_default("Company")
+    if not company:
+        company = frappe.db.get_default("Company") or frappe.db.get_default("company")
 
     allowed_profiles = _get_allowed_pos_profiles(company, user)
 
@@ -1729,38 +1778,51 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
                 frappe.PermissionError,
             )
         pos_profile_name = pos_profile
-    else:
-        try:
-            pos_profile_data = getPosProfile()
-            pos_profile_name = pos_profile_data.get("pos_profile")
-        except Exception:
-            pos_profile_data = None
-            pos_profile_name = None
+        if (
+            isinstance(branch_profile_data, dict)
+            and branch_profile_data.get("pos_profile") == pos_profile
+        ):
+            pos_profile_data = branch_profile_data
+    elif isinstance(branch_profile_data, dict):
+        pos_profile_data = branch_profile_data
+        pos_profile_name = branch_profile_data.get("pos_profile")
 
     if not pos_profile_name and allowed_profiles:
         pos_profile_name = allowed_profiles[0]["name"]
 
-    if pos_profile_name and not pos_profile_data:
-        try:
-            pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
-            pos_profile_data = {
-                "pos_profile": pos_profile_doc.name,
-                "branch": pos_profile_doc.branch,
-                "company": pos_profile_doc.company,
-                "restaurant": pos_profile_doc.restaurant,
-                "warehouse": pos_profile_doc.warehouse,
-                "cashier": user,
-                "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
-                "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
-            }
-        except Exception:
-            pos_profile_data = None
-
-    # Payment modes with opening_amount default 0.
-    payment_modes = []
+    pos_profile_doc = None
     if pos_profile_name:
         try:
             pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+        except Exception:
+            pos_profile_doc = None
+
+    if pos_profile_name and not pos_profile_data and pos_profile_doc is not None:
+        pos_profile_data = {
+            "pos_profile": pos_profile_doc.name,
+            "branch": pos_profile_doc.branch,
+            "company": pos_profile_doc.company,
+            "currency": (
+                pos_profile_doc.get("currency")
+                if callable(getattr(pos_profile_doc, "get", None))
+                else getattr(pos_profile_doc, "currency", None)
+            ),
+            "restaurant": pos_profile_doc.restaurant,
+            "warehouse": pos_profile_doc.warehouse,
+            "cashier": user,
+            "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
+            "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
+        }
+
+    doc_company = getattr(pos_profile_doc, "company", None) if pos_profile_doc is not None else None
+    if not company and isinstance(doc_company, str) and doc_company:
+        company = doc_company
+        allowed_profiles = _get_allowed_pos_profiles(company, user)
+
+    # Payment modes with opening_amount default 0.
+    payment_modes = []
+    if pos_profile_doc is not None:
+        try:
             payment_modes = [
                 {"mode_of_payment": mop.mode_of_payment, "opening_amount": 0.0}
                 for mop in pos_profile_doc.payments
@@ -1804,10 +1866,33 @@ def get_pos_opening_screen_data(pos_profile: str | None = None) -> dict:
 
     occupied_entry = _occupied_entry(pos_profile_name, allowed_profiles, multi_cashier, user)
 
-    # Currency information for display.
+    # Currency information for display: prefer the selected POS Profile's own
+    # currency, falling back to the resolved Company's default currency.
     company_currency = None
     currency_symbol = None
-    if company:
+    profile_currency = None
+    if pos_profile_doc is not None:
+        candidate = (
+            pos_profile_doc.get("currency")
+            if callable(getattr(pos_profile_doc, "get", None))
+            else getattr(pos_profile_doc, "currency", None)
+        )
+        if isinstance(candidate, str) and candidate:
+            profile_currency = candidate
+    if not profile_currency and isinstance(pos_profile_data, dict):
+        candidate = pos_profile_data.get("currency")
+        if isinstance(candidate, str) and candidate:
+            profile_currency = candidate
+
+    if profile_currency:
+        company_currency = profile_currency
+        try:
+            currency_symbol = frappe.db.get_value(
+                "Currency", company_currency, "symbol"
+            )
+        except Exception:
+            currency_symbol = None
+    elif company:
         try:
             company_doc = frappe.get_doc("Company", company)
             company_currency = company_doc.default_currency

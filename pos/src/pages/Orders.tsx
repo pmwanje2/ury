@@ -946,11 +946,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
+                currency={selectedOrderCurrency}
                 onOpenInvoice={openRelatedInvoice}
               />
 
               <MergedBillPanel
                 order={selectedOrder}
+                currency={selectedOrderCurrency}
                 onOpenSecondary={openSecondaryInvoice}
               />
 
@@ -1160,6 +1162,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showMergeDialog}
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
+          currency={selectedOrderCurrency}
           onConfirm={handleMergeBill}
         />
       )}
@@ -1190,7 +1193,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               from: pendingVoidApproval.item.qty,
               to: pendingVoidApproval.newQty,
             }),
-            t('manager_approval.amount_line', { amount: formatCurrency(pendingVoidApproval.amount) }),
+            t('manager_approval.amount_line', {
+              amount: formatCurrency(
+                pendingVoidApproval.amount,
+                pendingVoidApproval.order.currency || profileCurrency,
+              ),
+            }),
             t('manager_approval.check_line', { check: pendingVoidApproval.order.name }),
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}
