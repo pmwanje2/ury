@@ -84,7 +84,12 @@ class CustomPOSInvoice(POSInvoice):
 				if requested > 0:
 					self.copy_number = requested
 				else:
-					logged = frappe.db.get_value("URY Bill Reprint Log", {"invoice": self.name}, "max(copy_number)")
+					logged = frappe.db.get_value(
+						"URY Bill Reprint Log",
+						{"invoice": self.name},
+						"copy_number",
+						order_by="copy_number desc",
+					)
 					self.copy_number = cint(logged) or 1
 		super().before_print(settings)
 		if flt(getattr(self, "outstanding_amount", 0)) > 0:
