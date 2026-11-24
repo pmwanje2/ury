@@ -951,6 +951,46 @@ class TestServiceChargeEngineAndHooks(unittest.TestCase):
         self.assertEqual(sc_rows[0].rate, 10.0)
         self.assertEqual(sc_rows[0].tax_amount, 10000)
 
+    def test_new_invoice_with_empty_taxes_loads_template_before_chaining_taxable_service_charge(self):
+        """Live ERPNext sync_order creates a new POS Invoice with taxes=[] and taxes_and_charges set.
+
+        sync_service_charge MUST hydrate base VAT rows from taxes_and_charges before appending
+        Service Charge + Service Charge Tax so ERPNext set_taxes() is never suppressed and
+        taxable SC chains cleanly via row_id.
+        """
+        prof = self._make_profile(rules=[
+            {
+                "order_type": "Dine In",
+                "enabled": 1,
+                "charge_mode": "Percentage",
+                "rate": 10,
+                "min_pax": 6,
+                "calculation_basis": "Post-Discount Subtotal",
+                "taxable": 1,
+                "account_head": "Service Charge Payable - TC",
+                "description": "Service Charge",
+            }
+        ])
+        inv = self._make_invoice(
+            name="INV-BRAND-NEW",
+            taxes=[],
+            taxes_and_charges="Standard VAT 18%",
+            order_type="Dine In",
+            no_of_pax=6,
+        )
+        self.pricing.sync_service_charge(inv, prof)
+        inv.calculate_taxes_and_totals()
+
+        self.assertEqual(len(inv.taxes), 3, f"Expected [VAT, SC, SC Tax], got {inv.taxes}")
+        self.assertEqual(inv.taxes[0].account_head, "Output VAT 18% - TC")
+        self.assertEqual(inv.taxes[0].tax_amount, 18000)
+        self.assertEqual(inv.taxes[1].custom_pos_charge_kind, "Service Charge")
+        self.assertEqual(inv.taxes[1].tax_amount, 10000)
+        self.assertEqual(inv.taxes[2].custom_pos_charge_kind, "Service Charge Tax")
+        self.assertEqual(str(inv.taxes[2].row_id), "2")
+        self.assertEqual(inv.taxes[2].tax_amount, 1800)
+        self.assertEqual(inv.grand_total, 129800)
+
 
 class TestServiceChargeLifecycleAndPrintTemplates(unittest.TestCase):
     """Static + contract checks for unconditional lifecycle triggers, API payload, and print formats."""
