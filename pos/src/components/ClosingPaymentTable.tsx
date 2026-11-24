@@ -16,6 +16,7 @@ interface ClosingPaymentTableProps {
   hideExpected?: boolean;
   /** Blind cash count: omit the Expected and Difference columns entirely. */
   blindCashCount?: boolean;
+  /** POS Profile currency code for formatting foreign-currency tills accurately. */
   currency?: string;
 }
 

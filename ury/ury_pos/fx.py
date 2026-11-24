@@ -736,7 +736,8 @@ def post_fx_vault_sweep_journal_entry(doc, method=None) -> str | None:
 
     cost_center = (profile.get("cost_center") if profile else None) or company_info.get("cost_center")
     variance_account = (
-        (profile.get("write_off_account") if profile else None)
+        (profile.get("custom_cash_over_short_account") if profile else None)
+        or (profile.get("write_off_account") if profile else None)
         or company_info.get("write_off_account")
     )
     rounding_account = (

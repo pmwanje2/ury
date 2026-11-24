@@ -9,7 +9,7 @@ import {
   DialogTitle,
   messageToPlainText,
 } from '@ury/ui';
-import { Button } from '@ury/ui';
+import { Button, Input } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { call, db, formatCurrency, shouldMaskAmounts } from '@ury/core';
 import { t } from '../i18n';
@@ -19,6 +19,7 @@ import ClosingPaymentTable from './ClosingPaymentTable';
 import { isBlindCashCount } from '../lib/pos-closing-visibility';
 import ChecklistGateDialog from './ChecklistGateDialog';
 import { getChecklist } from '../lib/checklist-api';
+import { getShiftCashMovementTotals } from '../lib/till-cash-api';
 import {
   getOpenPosOpeningEntries,
   getSubCashierPosInvoices,
@@ -391,6 +392,8 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [hiddenRows, setHiddenRows] = useState<ClosingPaymentSummary[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [pendingCashMovements, setPendingCashMovements] = useState(0);
+  const [overShortReason, setOverShortReason] = useState('');
   // Set once the close submission (Sub POS Closing / POS Closing Entry) has
   // succeeded. Per plan decision D8, the Closing checklist gate hangs off
   // this success -- not off validatePOSClose() -- so it renders in place of
@@ -468,16 +471,20 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPeriodEndDate(now);
       const end = formatDateTime(now);
 
-      const [invoiceResult, openingDoc] = await Promise.all([
+      const [invoiceResult, openingDoc, cashMovements] = await Promise.all([
         subCashier
           ? getSubCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name)
           : getMainCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name),
         db.getDoc<OpeningEntryDoc>('POS Opening Entry', ownEntry.name),
+        subCashier
+          ? Promise.resolve({ by_mode: {}, pending_count: 0 })
+          : getShiftCashMovementTotals(ownEntry.name),
       ]);
 
       const invoices = Array.isArray(invoiceResult) ? invoiceResult : (invoiceResult?.invoices || []);
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
+      setPendingCashMovements(cashMovements.pending_count);
       const {
         totals: aggregatedTotals,
         expectedByMode,
@@ -494,6 +501,12 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           fxCurrencyByMode[cfg.mode_of_payment] = cfg.custom_tender_currency;
         }
       });
+      Object.entries(cashMovements.by_mode).forEach(([mode, delta]) => {
+        const movementAmount = Number(delta) || 0;
+        if (movementAmount !== 0) {
+          expectedByMode[mode] = (expectedByMode[mode] || 0) + movementAmount;
+        }
+      });
       setTotals(aggregatedTotals);
       const { visible, hidden } = buildRows(
         openingDoc?.balance_details ?? [],
@@ -507,6 +520,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setRows(visible);
       setHiddenRows(hidden);
       setTouchedModes(new Set());
+      setOverShortReason('');
     } catch (error) {
       console.error('Failed to load POS closing details:', error);
       setLoadError(extractServerErrorMessage(error, t('pos_closing.load_failed')));
@@ -571,15 +585,42 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPendingCloseDoc(null);
       setShowConfirm(false);
       setPreCloseGate(false);
+      setOverShortReason('');
     }
     onOpenChange(next);
   };
+
+  const requireOverShortReason = Number(posProfile?.require_over_short_reason ?? 0) === 1;
+  const overShortTolerance = Number(posProfile?.over_short_reason_tolerance ?? 0) || 0;
+  const needsOverShortReason = useMemo(() => {
+    if (!requireOverShortReason || blindCashCount || maskAmounts || rows.length === 0) {
+      return false;
+    }
+    const meta = posProfile?.payment_mode_meta;
+    const hasMeta = Boolean(meta && Object.keys(meta).length > 0);
+    const cashRows = hasMeta
+      ? rows.filter((row) => meta?.[row.mode_of_payment]?.type === 'Cash')
+      : rows;
+    return cashRows.some(
+      (row) => Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001,
+    );
+  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance]);
 
   // Closing may be submitted with blank or zero amount fields. Blank inputs
   // count as 0; rows that had activity but a zero close only show a warning.
   const validation = useMemo(() => {
     if (rows.length === 0) {
       return { isValid: false, blockingMessage: null as string | null, warningMessage: null as string | null };
+    }
+
+    if (needsOverShortReason && !overShortReason.trim()) {
+      return {
+        isValid: false,
+        blockingMessage: t('pos_closing.over_short_reason_required', {
+          tolerance: formatCurrency(overShortTolerance, posProfile?.currency),
+        }),
+        warningMessage: null as string | null,
+      };
     }
 
     const zeroRowsWithActivity = rows.filter(
@@ -594,7 +635,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       zeroRowsWithActivity.length > 0 ? t('pos_closing.validation_zero_row_warning') : null;
 
     return { isValid: true, blockingMessage: null as string | null, warningMessage };
-  }, [rows, touchedModes, blindCashCount]);
+  }, [rows, touchedModes, blindCashCount, needsOverShortReason, overShortReason, overShortTolerance, posProfile?.currency]);
 
   const handleRequestSubmit = () => {
     if (!validation.isValid) return;
@@ -684,6 +725,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             grand_total: totals.grandTotal,
             net_total: totals.netTotal,
             total_quantity: totals.totalQty,
+            ...(overShortReason.trim() ? { custom_over_short_reason: overShortReason.trim() } : {}),
           });
           docName = doc.name;
         }
@@ -855,6 +897,27 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                 </p>
               )}
 
+              {hasRows && needsOverShortReason && (
+                <div className="mt-4 space-y-1.5">
+                  <label htmlFor="pos-closing-over-short-reason" className="text-sm font-medium text-gray-800">
+                    {t('pos_closing.over_short_reason_label')}
+                  </label>
+                  <Input
+                    id="pos-closing-over-short-reason"
+                    type="text"
+                    value={overShortReason}
+                    onChange={(e) => setOverShortReason(e.target.value)}
+                    placeholder={t('pos_closing.over_short_reason_placeholder')}
+                    disabled={isSubmitting}
+                  />
+                </div>
+              )}
+
+              {hasRows && pendingCashMovements > 0 && (
+                <p className="mt-3 text-sm font-medium text-amber-700">
+                  {t('pos_closing.pending_cash_movements', { count: pendingCashMovements })}
+                </p>
+              )}
               {hasRows && validation.blockingMessage && (
                 <p className="mt-3 text-sm font-medium text-amber-700">
                   {validation.blockingMessage}

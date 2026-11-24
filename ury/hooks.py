@@ -271,6 +271,10 @@ doc_events = {
         "on_trash": "ury.ury.api.chairman_wa_identity.on_user_trash",
     },
     "POS Invoice": {
+        # Simphony tender rules: non-cash over-tender is refused or becomes a
+        # charged tip; tips are a Tips Payable line. Runs before the native
+        # validate computes change, so change only ever comes from cash.
+        "before_validate": "ury.ury.hooks.ury_pos_tender.before_validate",
         "before_insert": "ury.ury.hooks.ury_pos_invoice.before_insert",
         "validate": "ury.ury.hooks.ury_pos_invoice.validate",
         "after_insert": [
@@ -354,14 +358,24 @@ doc_events = {
             "ury.ury.hooks.ury_pos_closing_entry.submit_stock_correction",
             "ury.ury.hooks.ury_pos_closing_entry.post_fx_vault_sweep_journal_entry",
             "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
+            # Cash Management: the cash variance posts to Over/Short.
+            "ury.ury.hooks.ury_cash_movement.post_cash_over_short",
         ],
         "on_cancel": [
             "ury.ury.hooks.ury_pos_closing_entry.cancel_fx_vault_sweep_journal_entry",
             "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
+            "ury.ury.hooks.ury_cash_movement.cancel_cash_over_short",
         ],
         },
     "Quality Review": {
         "on_update": "ury.ury.hooks.update_accounts.checklist",
+    },
+    # Till cash management: pickup, loan and paid-out as native Journal
+    # Entries linked to the POS Opening Entry.
+    "Journal Entry": {
+        "validate": "ury.ury.hooks.ury_cash_movement.validate",
+        "before_submit": "ury.ury.hooks.ury_cash_movement.before_submit",
+        "before_cancel": "ury.ury.hooks.ury_cash_movement.before_cancel",
     },
     "URY Menu Course": {
 		"validate": "ury.ury.api.ury_menu_course_validation.validate_priority",
@@ -772,6 +786,28 @@ fixtures = [
                     "POS Profile-custom_wastage_time",
                     "Cost Center-branch",
                     "Journal Entry-branch",
+                    "Mode of Payment-custom_overtender_rule",
+                    "POS Profile-custom_tips_cash_section",
+                    "POS Profile-custom_enable_cash_movements",
+                    "POS Profile-custom_tips_payable_account",
+                    "POS Profile-custom_cash_over_short_account",
+                    "POS Profile-custom_cash_safe_account",
+                    "POS Profile-custom_tips_cash_column",
+                    "POS Profile-custom_paid_out_account",
+                    "POS Profile-custom_paid_out_approval_threshold",
+                    "POS Profile-custom_cash_movement_approver_role",
+                    "POS Profile-custom_require_over_short_reason",
+                    "POS Profile-custom_over_short_reason_tolerance",
+                    "POS Invoice-custom_charged_tip",
+                    "POS Invoice-custom_tip_server",
+                    "Journal Entry-custom_till_cash_section",
+                    "Journal Entry-custom_pos_opening_entry",
+                    "Journal Entry-custom_cash_movement_type",
+                    "Journal Entry-custom_cash_movement_reason",
+                    "Journal Entry-custom_tip_server",
+                    "Journal Entry-custom_cash_movement_approver",
+                    "Journal Entry-custom_pos_closing_entry",
+                    "POS Closing Entry-custom_over_short_reason",
                     "Employee-payment_amount",
                     "Employee-payment_type",
                     "Employee-permit_to_view",

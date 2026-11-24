@@ -486,6 +486,30 @@ class TestFxVaultSweepJournalEntry(unittest.TestCase):
         self.assertEqual(var_line.debit, 18500.0)
         self.assertEqual(sum(r.get("debit", 0) for r in je.accounts), sum(r.get("credit", 0) for r in je.accounts))
 
+    def test_cash_over_short_skips_fx_rows_avoiding_double_posting(self):
+        # Ensure #145's post_cash_over_short never double-posts variance for FX rows
+        # already handled by post_fx_vault_sweep_journal_entry, while keeping local Cash.
+        self.frappe.get_precision = MagicMock(return_value=2)
+        self.frappe.get_cached_value = MagicMock(return_value="Cash")
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, as_dict=False: (
+            "UGX" if dt == "POS Profile" and field == "currency" else None
+        )
+        cm = importlib.import_module("ury.ury.hooks.ury_cash_movement")
+        try:
+            closing = _Dict(
+                pos_profile="Main POS",
+                company="Grand Hotel",
+                payment_reconciliation=[
+                    _Dict(mode_of_payment="USD Cash", difference=-18500.0, custom_tender_currency="USD"),
+                    _Dict(mode_of_payment="Cash", difference=-5000.0, custom_tender_currency=""),
+                ],
+            )
+            diffs = cm._cash_differences(closing)
+            self.assertEqual(diffs, [("Cash", -5000.0)])
+        finally:
+            if self._stubbed:
+                sys.modules.pop("ury.ury.hooks.ury_cash_movement", None)
+
 
 class TestFxReceiptTemplates(unittest.TestCase):
     def test_receipt_print_formats_render_fx_tender_and_local_change(self):

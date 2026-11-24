@@ -51,6 +51,8 @@ export interface POSInvoice {
   split_total?: number;
   split_siblings?: string[];
   custom_merged_pos_invoice?: string | null;
+  custom_charged_tip?: number | null;
+  custom_tip_server?: string | null;
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
