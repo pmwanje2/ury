@@ -731,6 +731,70 @@ class TestFxVaultSweepJournalEntry(unittest.TestCase):
             if self._stubbed:
                 sys.modules.pop("ury.ury.hooks.ury_cash_movement", None)
 
+    def test_till_controls_expected_drawer_cash_excludes_fx_cash_modes(self):
+        """#151 + G22 compatibility: _compute_expected_drawer_cash must exclude foreign-currency Cash modes."""
+        sys.modules.pop("ury.ury_pos.till_controls", None)
+        sys.modules.pop("ury.ury.hooks.ury_cash_movement", None)
+        self.frappe.get_cached_value.side_effect = lambda dt, name, field=None: {
+            ("Mode of Payment", "Cash", "type"): "Cash",
+            ("Mode of Payment", "USD Cash", "type"): "Cash",
+            ("Company", "Grand Hotel", "default_currency"): "UGX",
+        }.get((dt, name, field))
+        self.frappe.db.get_value.side_effect = lambda dt, filters, field=None, *a, **kw: (
+            {
+                ("Mode of Payment", "Cash", "custom_tender_currency"): "",
+                ("Mode of Payment", "USD Cash", "custom_tender_currency"): "USD",
+                ("Company", "Grand Hotel", "default_currency"): "UGX",
+            }.get((dt, filters if isinstance(filters, str) else None, field))
+            if isinstance(field, str)
+            else None
+        )
+        opening_doc = _Dict(
+            name="POE-FX-1",
+            balance_details=[
+                _Dict(mode_of_payment="Cash", opening_amount=100000.0),
+                _Dict(mode_of_payment="USD Cash", opening_amount=0.0),
+            ],
+        )
+        fx_inv = _Dict(
+            name="INV-FX-1",
+            change_amount=20000.0,
+            is_return=0,
+            payments=[
+                _Dict(mode_of_payment="USD Cash", amount=370000.0),
+                _Dict(mode_of_payment="Cash", amount=0.0),
+            ],
+        )
+        self.frappe.get_doc.side_effect = lambda dt, name=None: opening_doc if dt == "POS Opening Entry" else fx_inv
+        self.frappe.get_all.return_value = [_Dict(name="INV-FX-1", posting_date=None, posting_time=None, change_amount=20000.0, is_return=0)]
+
+        fake_api = types.ModuleType("ury.ury_pos.api")
+        fake_api.getBranch = MagicMock(return_value="Main")
+        prev_api = sys.modules.get("ury.ury_pos.api")
+        sys.modules["ury.ury_pos.api"] = fake_api
+        try:
+            import ury.ury_pos.till_controls as tc
+            with patch.object(tc, "_drawer_accounts", return_value={"Cash Drawer - GH"}), \
+                 patch.object(tc, "till_cash_movements", return_value={}):
+                profile = _Dict(
+                    name="KH154 POS",
+                    company="Grand Hotel",
+                    currency="UGX",
+                    payments=[_Dict(mode_of_payment="Cash"), _Dict(mode_of_payment="USD Cash")],
+                )
+                opening = _Dict(name="POE-FX-1", period_start_date=None)
+                expected = tc._compute_expected_drawer_cash(profile, opening)
+                # Opening 100,000 UGX - 20,000 UGX local cash change = 80,000 UGX (NOT 450,000 UGX!)
+                self.assertEqual(expected, 80000.0)
+        finally:
+            if prev_api is not None:
+                sys.modules["ury.ury_pos.api"] = prev_api
+            else:
+                sys.modules.pop("ury.ury_pos.api", None)
+            if self._stubbed:
+                sys.modules.pop("ury.ury_pos.till_controls", None)
+                sys.modules.pop("ury.ury.hooks.ury_cash_movement", None)
+
 
 class TestDirectRestFxInvoiceValidation(unittest.TestCase):
     """Finding 4: Direct REST POS Invoice saves/submits must never bypass G22 FX rate or #147 Manager PIN."""
