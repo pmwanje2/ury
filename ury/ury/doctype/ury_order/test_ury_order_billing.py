@@ -814,14 +814,17 @@ class TestMakeInvoice(FrappeTestCase):
         paid_invoice.save.assert_not_called()
         paid_invoice.submit.assert_not_called()
 
-    def test_a_discount_from_an_unauthorized_role_is_rejected_before_any_mutation(self):
+    def test_a_discount_without_reason_or_approval_is_rejected_before_any_mutation(self):
         invoice = self._invoice()
         profile = MagicMock()
+        profile.allow_discount_change = 1
         profile.custom_enable_discount = 1
+        profile.company = "Test Company"
+        profile.currency = "USD"
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=profile))
             stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
-            with self.assertRaises(frappe.PermissionError):
+            with self.assertRaises((frappe.ValidationError, frappe.PermissionError)):
                 self._run(
                     invoice,
                     [{"mode_of_payment": "Cash", "amount": 200}],
@@ -833,41 +836,70 @@ class TestMakeInvoice(FrappeTestCase):
         invoice.submit.assert_not_called()
         self.assertEqual(invoice.payments, [])
 
-    def test_a_discount_on_a_profile_without_discounts_enabled_is_rejected(self):
+    def test_a_discount_on_a_profile_without_open_discounts_enabled_is_rejected(self):
         invoice = self._invoice()
-        profile = MagicMock()
-        profile.custom_enable_discount = 0
+        profile = frappe._dict(
+            company="Test Company",
+            currency="USD",
+            customer="Walk In",
+            allow_discount_change=0,
+            custom_enable_discount=0,
+        )
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=profile))
-            with self.assertRaises(frappe.PermissionError):
+            stack.enter_context(patch(f"{MODULE}.frappe.get_cached_doc", return_value=profile))
+            with self.assertRaises((frappe.ValidationError, frappe.PermissionError)):
                 self._run(
                     invoice, [{"mode_of_payment": "Cash", "amount": 200}], stack, discount=20
                 )
         invoice.submit.assert_not_called()
 
     def test_an_authorized_discount_is_written_onto_the_invoice(self):
-        invoice = self._invoice(rounded_total=200)
-        profile = MagicMock()
-        profile.custom_enable_discount = 1
-        profile.get.return_value = 1
+        invoice = self._invoice(rounded_total=200, grand_total=200)
+        profile = frappe._dict(
+            name="Test Profile",
+            company="Test Company",
+            currency="USD",
+            customer="Walk In",
+            allow_discount_change=1,
+            custom_enable_discount=1,
+        )
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}.frappe.get_doc", return_value=profile))
             stack.enter_context(patch(f"{MODULE}.frappe.get_cached_doc", return_value=profile))
             stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
-            self._run(
-                invoice, [{"mode_of_payment": "Cash", "amount": 200}], stack, discount=20
+            stack.enter_context(patch("ury.ury_pos.discount.user_discount_limit", return_value=25.0))
+            stack.enter_context(patch("ury.ury_pos.discount._resolve_reason", return_value=frappe._dict(
+                name="Complaint", code="Complaint", description="Complaint",
+                applies_to="Both", requires_supervisor=0, requires_note=0, disabled=0,
+            )))
+            stack.enter_context(patch(f"{MODULE}.get_order_invoice", return_value=invoice))
+            stack.enter_context(patch(f"{MODULE}.frappe.get_value", return_value="Dine In"))
+            stack.enter_context(patch(f"{MODULE}.get_restaurant_and_menu_name", return_value="Test Restaurant"))
+            stack.enter_context(patch(f"{MODULE}.frappe.get_roles", return_value=["URY Cashier"]))
+            stack.enter_context(patch(f"{MODULE}.frappe.session", MagicMock(user="cashier@example.com")))
+            make_invoice(
+                customer="Walk In",
+                payments=[{"mode_of_payment": "Cash", "amount": 200}],
+                cashier="cashier@example.com",
+                pos_profile="Test Profile",
+                owner="cashier@example.com",
+                table="T1",
+                submit_invoice=1,
+                discount_percent=20,
+                discount_reason="Complaint",
             )
         self.assertEqual(invoice.additional_discount_percentage, 20)
         invoice.submit.assert_called_once()
 
-    def test_no_discount_explicitly_zeroes_the_field(self):
-        """An invoice carrying a stale `additional_discount_percentage` must
-        be reset rather than silently settling at the old discount."""
-        invoice = self._invoice(additional_discount_percentage=30)
+    def test_settling_without_discount_args_preserves_open_check_discount(self):
+        """A discount applied earlier on the open check stays on the invoice when
+        PaymentDialog settles without sending new discount arguments."""
+        invoice = self._invoice(additional_discount_percentage=10, discount_amount=25)
         with ExitStack() as stack:
             stack.enter_context(patch(f"{MODULE}._free_tables_if_no_open_invoices"))
-            self._run(invoice, [{"mode_of_payment": "Cash", "amount": 250}], stack)
-        self.assertEqual(invoice.additional_discount_percentage, 0)
+            self._run(invoice, [{"mode_of_payment": "Cash", "amount": 225}], stack)
+        self.assertEqual(invoice.additional_discount_percentage, 10)
 
     def test_a_failure_during_submit_is_surfaced_not_swallowed(self):
         invoice = self._invoice()

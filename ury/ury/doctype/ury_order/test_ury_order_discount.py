@@ -1,0 +1,1470 @@
+"""Server-side POS discount governance, preview, check mutations, split/merge/return, and REST guard (site-less).
+
+Matches pos-override-contract.md and pos-pms-side-gaps.md §4.1–4.7:
+- DISCOUNT_ALLOWED_ROLES and MAX_DISCOUNT_PERCENTAGE are deleted.
+- Blank limit is 0% (with or without siteops sales-discount-control@3 installed).
+- Reason is mandatory (active, POS/Both, note when requires_note, approval when requires_supervisor).
+- 100% comp ALWAYS requires a second person, even for a manager with a 100% role limit.
+- Consumed single-use approval token alone sets doc.flags.discount_approval = {approver, percent}.
+- Changed claim after approval, removed then re-added, partial tender floor, UGX 0-decimal rounding,
+  tax-inclusive & tax-exclusive preview, line + check discount together, negative/NaN/huge inputs,
+  REST straight to save, split/merge checks with discount, and partial return flat-discount proration.
+"""
+
+import importlib.util
+import json
+import math
+import sys
+import unittest
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+ROOT = Path(__file__).resolve().parents[4]  # repo root
+URY_PKG = ROOT / "ury"
+ORDER_PATH = URY_PKG / "ury/doctype/ury_order/ury_order.py"
+DISCOUNT_PATH = URY_PKG / "ury_pos/discount.py"
+HOOK_PATH = URY_PKG / "ury/hooks/ury_pos_invoice.py"
+API_PATH = URY_PKG / "ury_pos/api.py"
+
+
+class Row(dict):
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            return None
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+    def as_dict(self, no_default_fields=False, no_child_table_fields=False, no_private_properties=False, **kw):
+        row = dict(self)
+        if no_default_fields:
+            for key in ("doctype", "name", "owner", "creation", "modified", "modified_by", "docstatus", "idx"):
+                row.pop(key, None)
+        if no_child_table_fields:
+            for key in ("parent", "parentfield", "parenttype"):
+                row.pop(key, None)
+        return row
+
+
+class Refused(Exception):
+    pass
+
+
+class NotPermitted(Exception):
+    pass
+
+
+def _stub(name, **attrs):
+    mod = ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    return mod
+
+
+def _precision_for_currency(currency):
+    if currency in ("UGX", "JPY", "KRW", "RWF", "TZS", "XAF", "XOF"):
+        return 0
+    if currency in ("KWD", "BHD", "OMR"):
+        return 3
+    return 2
+
+
+def _make_frappe_double():
+    framework = MagicMock()
+    framework.PermissionError = NotPermitted
+    framework.ValidationError = Refused
+    framework._ = lambda *messages: messages[0]
+    framework.whitelist = lambda *args, **kwargs: (lambda fn: fn)
+    framework._dict = Row
+    framework.flags = SimpleNamespace()
+    framework.session = SimpleNamespace(user="cashier@example.com")
+    framework.request = SimpleNamespace(path="/api/method/ury.ury.doctype.ury_order.ury_order.make_invoice")
+
+    cache_store = {}
+
+    class FakeCache:
+        def get_value(self, key):
+            return cache_store.get(key)
+
+        def set_value(self, key, value, expires_in_sec=None):
+            cache_store[key] = value
+
+        def delete_value(self, key):
+            cache_store.pop(key, None)
+
+        def delete_key(self, key):
+            cache_store.pop(key, None)
+
+    fake_cache = FakeCache()
+    framework.cache = lambda: fake_cache
+    framework._cache_store = cache_store
+
+    def throw(message, exception=None, **kwargs):
+        raise (exception or Refused)(message)
+
+    framework.throw = throw
+    framework.parse_json = lambda value: json.loads(value) if isinstance(value, str) else value
+    framework.as_json = lambda value: json.dumps(value)
+
+    def flt_fn(value, precision=None):
+        if value is None or value == "":
+            num = 0.0
+        else:
+            num = float(value)
+        if precision is not None:
+            return round(num, int(precision))
+        return num
+
+    def cint_fn(value):
+        try:
+            return int(float(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    utils = _stub(
+        "frappe.utils",
+        cint=cint_fn,
+        flt=flt_fn,
+        get_datetime=lambda v=None: v,
+        getdate=lambda v=None: v,
+        today=lambda: "2026-11-24",
+        get_system_timezone=lambda: "Africa/Kampala",
+        now_datetime=lambda: None,
+        now=lambda: "2026-11-24 12:00:00",
+        get_time=lambda v=None: v,
+        get_first_day=lambda v=None: v,
+        get_last_day=lambda v=None: v,
+    )
+    framework.utils = utils
+    return framework, utils
+
+
+class FakePOSInvoice:
+    """Realistic ERPNext v16 POS Invoice double supporting line discounts, header %/flat
+    discounts, tax-inclusive and tax-exclusive VAT, currency precision, and Item.max_discount."""
+
+    def __init__(
+        self,
+        name="CHK-1",
+        items=(),
+        taxes=(),
+        payments=(),
+        currency="UGX",
+        company="Lakeside Hotel",
+        pos_profile="Lakeside Till",
+        apply_discount_on="Grand Total",
+        owner="waiter@example.com",
+        docstatus=0,
+        **extra,
+    ):
+        self.doctype = "POS Invoice"
+        self.name = name
+        self.items = [Row(i) for i in items]
+        self.taxes = [Row(t) for t in taxes]
+        self.payments = [Row(p) for p in payments]
+        self.currency = currency
+        self.company = company
+        self.branch = "Lakeside"
+        self.pos_profile = pos_profile
+        self.customer = "Walk-in"
+        self.order_type = "Dine In"
+        self.apply_discount_on = apply_discount_on
+        self.additional_discount_percentage = 0.0
+        self.discount_amount = 0.0
+        self.coupon_code = None
+        self.custom_discount_reason = None
+        self.custom_discount_note = None
+        self.custom_discount_approver = None
+        self.custom_discount_approved_percent = 0.0
+        self.ury_discount_meta = None
+        self.custom_merged_pos_invoice = None
+        self.custom_merged_tables = None
+        self.restaurant_table = None
+        self.invoice_printed = 0
+        self.docstatus = docstatus
+        self.is_return = 0
+        self.return_against = None
+        self.is_consolidated = 0
+        self.owner = owner
+        self.waiter = owner
+        self.cashier = "cashier@example.com"
+        self.room_number = None
+        self.conversion_rate = 1.0
+        self.pricing_rules = []
+        self.flags = SimpleNamespace()
+        self.events = []
+        self._is_new = False
+        self._doc_before_save = None
+        self.total = 0.0
+        self.net_total = 0.0
+        self.total_taxes_and_charges = 0.0
+        self.grand_total = 0.0
+        self.rounded_total = 0.0
+        self.paid_amount = 0.0
+        self.outstanding_amount = 0.0
+        for k, v in extra.items():
+            setattr(self, k, v)
+        self.calculate_taxes_and_totals()
+
+    def precision(self, fieldname, parentfield=None):
+        return _precision_for_currency(self.currency)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def set(self, key, value):
+        setattr(self, key, value)
+
+    def append(self, key, row):
+        getattr(self, key).append(Row(row))
+
+    def remove(self, item):
+        self.items.remove(item)
+
+    def is_new(self):
+        return self._is_new
+
+    def get_doc_before_save(self):
+        return self._doc_before_save
+
+    def check_permission(self, permtype="read"):
+        self.events.append(("permission", permtype))
+
+    def set_missing_values(self, for_validate=False):
+        pass
+
+    def run_method(self, name, *args, **kwargs):
+        if name == "calculate_taxes_and_totals":
+            self.calculate_taxes_and_totals()
+
+    def calculate_taxes_and_totals(self):
+        prec = self.precision("grand_total")
+        inclusive_rate = sum(float(t.get("rate") or 0) for t in self.taxes if int(t.get("included_in_print_rate") or 0))
+        exclusive_rate = sum(float(t.get("rate") or 0) for t in self.taxes if not int(t.get("included_in_print_rate") or 0))
+
+        # 1) Item-level discounts
+        gross_items = 0.0
+        for item in self.items:
+            qty = float(item.get("qty") or 0)
+            plr = float(item.get("price_list_rate") if item.get("price_list_rate") is not None else item.get("rate") or 0)
+            item["price_list_rate"] = plr
+            pct = float(item.get("discount_percentage") or 0)
+            amt = float(item.get("discount_amount") or 0)
+            if pct:
+                amt = round(plr * pct / 100.0, prec)
+                item["discount_amount"] = amt
+            elif amt and plr > 0:
+                item["discount_percentage"] = round(amt * 100.0 / plr, 4)
+            rate = round(plr - amt, prec)
+            item["rate"] = rate
+            item["amount"] = round(rate * qty, prec)
+            gross_items += item["amount"]
+
+        self.total = round(gross_items, prec)
+        # Pre-header-discount net & tax
+        if inclusive_rate > 0:
+            pre_net = round(self.total / (1.0 + inclusive_rate / 100.0), prec)
+            pre_tax = round(self.total - pre_net, prec)
+            pre_grand = self.total
+        else:
+            pre_net = self.total
+            pre_tax = round(pre_net * exclusive_rate / 100.0, prec)
+            pre_grand = round(pre_net + pre_tax, prec)
+
+        # 2) Header-level discount
+        basis = pre_net if self.apply_discount_on == "Net Total" else pre_grand
+        if float(self.additional_discount_percentage or 0) > 0:
+            self.discount_amount = round(basis * float(self.additional_discount_percentage) / 100.0, prec)
+        else:
+            self.discount_amount = round(float(self.discount_amount or 0), prec)
+
+        if self.apply_discount_on == "Net Total":
+            self.net_total = round(pre_net - self.discount_amount, prec)
+            if inclusive_rate > 0:
+                self.total_taxes_and_charges = round(self.net_total * inclusive_rate / 100.0, prec)
+                self.grand_total = round(self.net_total + self.total_taxes_and_charges, prec)
+            else:
+                self.total_taxes_and_charges = round(self.net_total * exclusive_rate / 100.0, prec)
+                self.grand_total = round(self.net_total + self.total_taxes_and_charges, prec)
+        else:
+            # Grand Total basis
+            self.grand_total = round(pre_grand - self.discount_amount, prec)
+            if inclusive_rate > 0:
+                self.net_total = round(self.grand_total / (1.0 + inclusive_rate / 100.0), prec)
+                self.total_taxes_and_charges = round(self.grand_total - self.net_total, prec)
+            elif exclusive_rate > 0:
+                self.net_total = round(self.grand_total / (1.0 + exclusive_rate / 100.0), prec)
+                self.total_taxes_and_charges = round(self.grand_total - self.net_total, prec)
+            else:
+                self.net_total = self.grand_total
+                self.total_taxes_and_charges = 0.0
+
+        self.rounded_total = self.grand_total
+        self.events.append(("totals", self.additional_discount_percentage, self.discount_amount, self.grand_total))
+
+    def set_paid_amount(self):
+        self.paid_amount = round(sum(float(p.get("amount") or 0) for p in self.payments), self.precision("paid_amount"))
+
+    def set_outstanding_amount(self):
+        self.outstanding_amount = round(max(0.0, (self.rounded_total or self.grand_total) - self.paid_amount), self.precision("outstanding_amount"))
+
+    def save(self, **kwargs):
+        self.events.append(("save", self.additional_discount_percentage, self.discount_amount, self.grand_total))
+
+    def insert(self, **kwargs):
+        self.events.append(("insert", self.additional_discount_percentage, self.discount_amount, self.grand_total))
+
+    def reload(self):
+        pass
+
+    def discard(self):
+        self.docstatus = 2
+        self.events.append(("discard",))
+
+    def db_set(self, field, value, *args, **kwargs):
+        setattr(self, field, value)
+
+    def submit(self):
+        self.docstatus = 1
+        self.events.append(("submit",))
+
+
+def _load_modules():
+    framework, utils = _make_frappe_double()
+    brand_mod = _stub(
+        "ury.brand",
+        coded_message=lambda key, msg="": f"[{key}] {msg}".strip(),
+    )
+    modules = {
+        "frappe": framework,
+        "frappe.utils": utils,
+        "frappe.model.document": _stub("frappe.model.document", Document=object),
+        "erpnext.controllers.queries": _stub("erpnext.controllers.queries", item_query=MagicMock()),
+        "ury.brand": brand_mod,
+        "ury.ury_pos.api": _stub(
+            "ury.ury_pos.api",
+            getBranch=MagicMock(return_value="Lakeside"),
+            getBranchRoom=MagicMock(return_value=[]),
+            getRoom=MagicMock(return_value=[]),
+            posOpening=MagicMock(),
+        ),
+        "ury.ury_pos.default_customer": _stub(
+            "ury.ury_pos.default_customer",
+            get_default_customer_config=MagicMock(return_value={}),
+            resolve_default_customer=MagicMock(),
+        ),
+        "ury.ury.api.ury_kot_generate": _stub(
+            "ury.ury.api.ury_kot_generate",
+            _execute_kot=MagicMock(),
+            process_items_for_cancel_kot=MagicMock(),
+        ),
+        "ury.ury.api.ury_order_reservation_service": _stub(
+            "ury.ury.api.ury_order_reservation_service",
+            _line_key=MagicMock(),
+            _line_ref=MagicMock(),
+            reconcile_order_reservations=MagicMock(),
+            release_order_reservations=MagicMock(),
+            resolve_production_context=MagicMock(return_value=None),
+            _warehouse_for_context=MagicMock(),
+        ),
+        "ury.ury.api.ury_stock_policy": _stub(
+            "ury.ury.api.ury_stock_policy",
+            get_branch_stock_policy=MagicMock(return_value=SimpleNamespace(reservation_control_enabled=False)),
+        ),
+        "ury.ury.doctype.alert_settings.alert_settings": _stub(
+            "ury.ury.doctype.alert_settings.alert_settings",
+            get_alert_rule=MagicMock(return_value=None),
+        ),
+        "ury.ury.api.ury_kot_notification": _stub(
+            "ury.ury.api.ury_kot_notification",
+            create_system_notification=MagicMock(),
+            get_users_with_role=MagicMock(return_value=[]),
+        ),
+        "ury.ury.api.item_price": _stub(
+            "ury.ury.api.item_price",
+            item_price_release_states=MagicMock(),
+            price_valid_on=MagicMock(),
+        ),
+        "ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+            "ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+            get_applicable_policy=MagicMock(return_value=None),
+        ),
+    }
+
+    # Load override (or temporary stub) and discount modules if they exist yet (RED expects failure when absent)
+    with patch.dict(sys.modules, modules):
+        for stale in ("ury.ury_pos.discount", "ury.ury_pos._discount_override_stub", "ury.ury_pos.override"):
+            sys.modules.pop(stale, None)
+        for mod_name, rel_path in (
+            ("ury.ury_pos.override", URY_PKG / "ury_pos/override.py"),
+            ("ury.ury_pos._discount_override_stub", URY_PKG / "ury_pos/_discount_override_stub.py"),
+        ):
+            if rel_path.exists():
+                mspec = importlib.util.spec_from_file_location(mod_name, rel_path)
+                mmod = importlib.util.module_from_spec(mspec)
+                sys.modules[mspec.name] = mmod
+                mspec.loader.exec_module(mmod)
+        discount_mod = None
+        if DISCOUNT_PATH.exists():
+            dspec = importlib.util.spec_from_file_location("ury.ury_pos.discount", DISCOUNT_PATH)
+            discount_mod = importlib.util.module_from_spec(dspec)
+            sys.modules[dspec.name] = discount_mod
+            dspec.loader.exec_module(discount_mod)
+
+        ospec = importlib.util.spec_from_file_location("ury.ury.doctype.ury_order.ury_order", ORDER_PATH)
+        order_mod = importlib.util.module_from_spec(ospec)
+        sys.modules[ospec.name] = order_mod
+        ospec.loader.exec_module(order_mod)
+
+        hspec = importlib.util.spec_from_file_location("ury.ury.hooks.ury_pos_invoice", HOOK_PATH)
+        hook_mod = importlib.util.module_from_spec(hspec)
+        sys.modules[hspec.name] = hook_mod
+        hspec.loader.exec_module(hook_mod)
+
+    return framework, order_mod, discount_mod, hook_mod
+
+
+def _item(row_id, code, qty, rate, **extra):
+    d = dict(
+        name=row_id,
+        item_code=code,
+        item_name=code.title(),
+        qty=qty,
+        price_list_rate=rate,
+        base_price_list_rate=rate,
+        rate=rate,
+        amount=qty * rate,
+        discount_percentage=0.0,
+        discount_amount=0.0,
+        margin_type="",
+        margin_rate_or_amount=0.0,
+        pricing_rules=None,
+        reservation_line_key=f"key-{row_id}",
+        cost_center="Main - LH",
+        uom="Nos",
+        conversion_factor=1.0,
+        warehouse="Stores - LH",
+        ury_held=0,
+    )
+    d.update(extra)
+    return Row(d)
+
+
+class DiscountBase(unittest.TestCase):
+    def setUp(self):
+        self.frappe, self.order, self.discount, self.hook = _load_modules()
+        self.roles_by_user = {
+            "cashier@example.com": ["URY Cashier"],
+            "manager@example.com": ["URY Manager"],
+            "waiter@example.com": ["URY Captain"],
+            "Administrator": ["Administrator", "System Manager"],
+            "sysman@example.com": ["System Manager"],
+        }
+        self.approval_limits = {}  # company -> dict(max_document_discount_percent, discount_limits_by_role, discount_approver_role)
+        self.has_approval_limit_doctype = True
+        self.has_discount_reason_doctype = True
+        self.reasons = {
+            "Corporate rate": Row(name="Corporate rate", code="Corporate rate", description="Corporate rate", applies_to="POS", requires_supervisor=0, requires_note=0, sort_order=10, disabled=0),
+            "Complaint": Row(name="Complaint", code="Complaint", description="Guest complaint", applies_to="Both", requires_supervisor=0, requires_note=0, sort_order=20, disabled=0),
+            "VIP Comp": Row(name="VIP Comp", code="VIP Comp", description="VIP complimentary", applies_to="POS", requires_supervisor=1, requires_note=0, sort_order=25, disabled=0),
+            "Staff": Row(name="Staff", code="Staff", description="Staff meal", applies_to="POS", requires_supervisor=0, requires_note=0, sort_order=30, disabled=0),
+            "Sales only": Row(name="Sales only", code="Sales only", description="B2B agreement", applies_to="Sales documents", requires_supervisor=0, requires_note=0, sort_order=40, disabled=0),
+            "Retired": Row(name="Retired", code="Retired", description="Old promo", applies_to="POS", requires_supervisor=0, requires_note=0, sort_order=50, disabled=1),
+            "Other": Row(name="Other", code="Other", description="Other reason", applies_to="Both", requires_supervisor=0, requires_note=1, sort_order=60, disabled=0),
+        }
+        self.coupons = {}  # coupon_name -> Row
+        self.pricing_rules = {}  # rule_name -> Row
+        self.item_max_discount = {}  # item_code -> float
+        self.invoice_fields = {
+            "custom_discount_reason",
+            "custom_discount_note",
+            "custom_discount_approver",
+            "custom_discount_approved_percent",
+            "ury_discount_meta",
+            "room_number",
+            "coupon_code",
+        }
+        self.coupon_fields = {"custom_discount_reason"}
+        self.profile = Row(
+            name="Lakeside Till",
+            company="Lakeside Hotel",
+            branch="Lakeside",
+            currency="UGX",
+            customer="Walk-in",
+            allow_discount_change=1,
+            custom_enable_discount=1,
+            apply_discount_on="Grand Total",
+            ignore_pricing_rule=0,
+            selling_price_list="Standard Selling",
+            applicable_for_users=[
+                Row(user="cashier@example.com"),
+                Row(user="manager@example.com"),
+            ],
+        )
+        self.docs = {}  # (doctype, name) -> doc
+
+        self.frappe.get_roles.side_effect = lambda user=None: list(
+            self.roles_by_user.get(user or self.frappe.session.user, [])
+        )
+        self.frappe.get_meta.side_effect = self._get_meta
+        self.frappe.db.exists.side_effect = self._db_exists
+        self.frappe.db.get_value.side_effect = self._db_get_value
+        self.frappe.get_cached_value.side_effect = self._get_cached_value
+        self.frappe.get_cached_doc.side_effect = self._get_cached_doc
+        self.frappe.get_doc.side_effect = self._get_doc
+        self.frappe.get_all.side_effect = self._get_all
+        self.frappe.get_value.side_effect = self._get_value
+        self.frappe.has_permission.return_value = True
+        self.frappe.get_hooks.side_effect = lambda hook=None, *a, **k: (
+            ["test.pin_verifier"] if hook == "pos_override_pin_verifier" else []
+        )
+        self.frappe.get_attr.side_effect = lambda path: (
+            (lambda user, pin, **kw: pin == "4321") if path == "test.pin_verifier" else None
+        )
+
+    def _get_meta(self, doctype):
+        if doctype == "POS Invoice":
+            return SimpleNamespace(has_field=lambda f: f in self.invoice_fields)
+        if doctype == "Coupon Code":
+            return SimpleNamespace(has_field=lambda f: f in self.coupon_fields)
+        if doctype == "Approval Limit":
+            return SimpleNamespace(has_field=lambda f: f in ("max_document_discount_percent", "discount_limits_by_role", "discount_approver_role"))
+        if doctype == "POS Profile":
+            return SimpleNamespace(has_field=lambda f: f in ("allow_discount_change", "custom_enable_discount", "apply_discount_on"))
+        return SimpleNamespace(has_field=lambda f: False)
+
+    def _db_exists(self, doctype, name=None):
+        if doctype == "DocType":
+            if name == "Approval Limit":
+                return self.has_approval_limit_doctype
+            if name == "Discount Reason":
+                return self.has_discount_reason_doctype
+            return True
+        if doctype == "Discount Reason":
+            return name in self.reasons
+        if doctype == "Coupon Code":
+            return name in self.coupons
+        if doctype == "Approval Limit":
+            return self.has_approval_limit_doctype and name in self.approval_limits
+        return (doctype, name) in self.docs
+
+    def _db_get_value(self, doctype, filters, fieldname=None, as_dict=False, **kw):
+        if doctype == "Approval Limit":
+            if not self.has_approval_limit_doctype:
+                return None
+            row = self.approval_limits.get(filters)
+            if not row:
+                return None
+            if isinstance(fieldname, (list, tuple)):
+                out = Row({f: row.get(f) for f in fieldname})
+                return out if as_dict else tuple(row.get(f) for f in fieldname)
+            return row.get(fieldname)
+        if doctype == "Discount Reason":
+            row = self.reasons.get(filters)
+            if not row:
+                return None
+            if isinstance(fieldname, (list, tuple)):
+                out = Row({f: row.get(f) for f in fieldname})
+                return out if as_dict else tuple(row.get(f) for f in fieldname)
+            return row.get(fieldname)
+        if doctype == "Coupon Code":
+            row = self.coupons.get(filters)
+            if not row and isinstance(filters, dict):
+                code = filters.get("coupon_code")
+                row = next((c for c in self.coupons.values() if c.get("coupon_code") == code), None)
+            if not row:
+                return None
+            if isinstance(fieldname, (list, tuple)):
+                out = Row({f: row.get(f) for f in fieldname})
+                return out if as_dict else tuple(row.get(f) for f in fieldname)
+            return row.get(fieldname)
+        if doctype == "Pricing Rule":
+            row = self.pricing_rules.get(filters)
+            if not row:
+                return None
+            if isinstance(fieldname, (list, tuple)):
+                out = Row({f: row.get(f) for f in fieldname})
+                return out if as_dict else tuple(row.get(f) for f in fieldname)
+            return row.get(fieldname)
+        if doctype == "Item":
+            if fieldname == "max_discount":
+                return self.item_max_discount.get(filters, 0)
+            return None
+        if doctype == "User":
+            if fieldname == "enabled":
+                return 1
+            if fieldname == "full_name":
+                return filters
+            return 1
+        if doctype == "POS Invoice":
+            doc = self.docs.get(("POS Invoice", filters))
+            if not doc:
+                return None
+            if fieldname == "docstatus":
+                return doc.docstatus
+            if isinstance(fieldname, (list, tuple)):
+                out = Row({f: doc.get(f) for f in fieldname})
+                return out if as_dict else tuple(doc.get(f) for f in fieldname)
+            return doc.get(fieldname)
+        return None
+
+    def _get_cached_value(self, doctype, name, fieldname):
+        return self._db_get_value(doctype, name, fieldname)
+
+    def _get_value(self, doctype, name, fieldname=None, **kw):
+        if doctype == "POS Invoice" and fieldname == "order_type":
+            return "Dine In"
+        return self._db_get_value(doctype, name, fieldname, **kw)
+
+    def _get_cached_doc(self, doctype, name):
+        if doctype == "POS Profile":
+            return self.profile
+        return self._get_doc(doctype, name)
+
+    def _get_doc(self, doctype, name=None, **kw):
+        if doctype == "POS Profile":
+            return self.profile
+        if doctype == "Coupon Code" and name in self.coupons:
+            return self.coupons[name]
+        if doctype == "Pricing Rule" and name in self.pricing_rules:
+            return self.pricing_rules[name]
+        if doctype == "Discount Reason" and name in self.reasons:
+            return self.reasons[name]
+        if (doctype, name) in self.docs:
+            return self.docs[(doctype, name)]
+        raise KeyError((doctype, name))
+
+    def _get_all(self, doctype, filters=None, fields=None, order_by=None, pluck=None, **kw):
+        filters = filters or {}
+        if doctype == "Discount Reason":
+            rows = list(self.reasons.values())
+            if "disabled" in filters:
+                rows = [r for r in rows if int(r.get("disabled") or 0) == int(filters["disabled"])]
+            if "applies_to" in filters:
+                cond = filters["applies_to"]
+                if isinstance(cond, (list, tuple)) and cond[0] == "in":
+                    rows = [r for r in rows if r.get("applies_to") in cond[1]]
+            rows.sort(key=lambda r: (int(r.get("sort_order") or 0), r.get("code") or r.get("name") or ""))
+            return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "Coupon Code":
+            rows = list(self.coupons.values())
+            return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "Pricing Rule":
+            rows = list(self.pricing_rules.values())
+            if "disable" in filters:
+                rows = [r for r in rows if int(r.get("disable") or 0) == int(filters["disable"])]
+            if "coupon_code_based" in filters:
+                rows = [r for r in rows if int(r.get("coupon_code_based") or 0) == int(filters["coupon_code_based"])]
+            return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "POS Invoice":
+            out = []
+            for (dt, _), doc in self.docs.items():
+                if dt != "POS Invoice":
+                    continue
+                ok = True
+                for k, v in filters.items():
+                    if isinstance(v, (list, tuple)) and v[0] == "!=":
+                        if doc.get(k) == v[1]:
+                            ok = False
+                    elif doc.get(k) != v:
+                        ok = False
+                if ok:
+                    out.append(doc)
+            return out
+        return []
+
+    def _register_check(self, check):
+        self.docs[("POS Invoice", check.name)] = check
+        return check
+
+    def _patch_settlement_helpers(self, check):
+        for helper in (
+            "_validate_client_ids",
+            "_lock_settlement_customer",
+            "_client_order_invoice",
+            "_check_held_before_settlement",
+            "_refuse_client_order_rebind",
+            "_set_settlement_customer",
+            "_enforce_on_account",
+            "_enforce_order_access",
+            "_free_tables_if_no_open_invoices",
+        ):
+            self.enterContext(patch.object(self.order, helper, return_value=None))
+        self.enterContext(patch.object(self.order, "get_order_invoice", return_value=check))
+
+    def _issue_override_token(self, check, claim, approver="manager@example.com", percent=None, amount=None):
+        """Mint a real single-use approval token through the override contract's public authorise()."""
+        self.assertIsNotNone(self.discount, "ury.ury_pos.discount module does not exist yet")
+        override_mod = self.discount._get_override_module()
+        res = override_mod.authorise(
+            pos_profile=self.profile.name,
+            privilege="discount",
+            approver=approver,
+            pin="4321",
+            reference_doctype="POS Invoice",
+            reference_name=check.name,
+            claim=claim,
+        )
+        return res["token"]
+
+
+class TestLegacyConstantsRemoved(DiscountBase):
+    def test_legacy_discount_role_and_100_percent_constants_are_deleted(self):
+        self.assertFalse(hasattr(self.order, "DISCOUNT_ALLOWED_ROLES"))
+        self.assertFalse(hasattr(self.order, "MAX_DISCOUNT_PERCENTAGE"))
+        self.assertFalse(hasattr(self.order, "_validate_additional_discount"))
+
+    def test_old_client_sending_additionalDiscount_is_refused_never_old_100_percent(self):
+        check = self._register_check(FakePOSInvoice("CHK-OLD", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+        with self.assertRaises((Refused, NotPermitted)):
+            self.order.make_invoice(
+                customer="Walk-in",
+                payments=[{"mode_of_payment": "Cash", "amount": 0}],
+                cashier="cashier@example.com",
+                pos_profile="Lakeside Till",
+                owner="cashier@example.com",
+                additionalDiscount=100,
+                invoice="CHK-OLD",
+                submit_invoice=0,
+            )
+        self.assertEqual(check.additional_discount_percentage, 0)
+        self.assertFalse([e for e in check.events if e[0] == "save"])
+
+
+class TestLimitsAndGovernance(DiscountBase):
+    def test_blank_limit_is_zero_without_sales_discount_control_installed(self):
+        self.has_approval_limit_doctype = False
+        self.invoice_fields = {"room_number", "coupon_code", "ury_discount_meta"}
+        check = self._register_check(FakePOSInvoice("CHK-NO-B1", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.make_invoice(
+                customer="Walk-in",
+                payments=[{"mode_of_payment": "Cash", "amount": 45000}],
+                cashier="cashier@example.com",
+                pos_profile="Lakeside Till",
+                owner="cashier@example.com",
+                invoice="CHK-NO-B1",
+                submit_invoice=0,
+                discount_percent=10,
+                discount_reason="Complaint",
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+
+    def test_highest_role_line_wins_and_non_finite_ignored_and_admin_gets_no_free_pass(self):
+        self.assertIsNotNone(self.discount, "ury.ury_pos.discount module does not exist yet")
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="",
+            discount_limits_by_role=(
+                "URY Cashier: 5\n"
+                "URY Manager: 20\n"
+                "Bad Line\n"
+                "URY Cashier: nan\n"
+                "URY Cashier: inf\n"
+                "URY Cashier: -10\n"
+                "URY Cashier: 150\n"
+            ),
+            discount_approver_role="Accounts Manager",
+        )
+        self.roles_by_user["dual@example.com"] = ["URY Cashier", "URY Manager"]
+        self.assertEqual(self.discount.user_discount_limit("cashier@example.com", "Lakeside Hotel"), 5.0)
+        self.assertEqual(self.discount.user_discount_limit("dual@example.com", "Lakeside Hotel"), 20.0)
+        # Administrator and System Manager get NO free pass when not listed and base is blank
+        self.assertEqual(self.discount.user_discount_limit("Administrator", "Lakeside Hotel"), 0.0)
+        self.assertEqual(self.discount.user_discount_limit("sysman@example.com", "Lakeside Hotel"), 0.0)
+
+    def test_within_limit_succeeds_without_approval_and_over_limit_requires_approval(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 10\nURY Manager: 50",
+            discount_approver_role="URY Manager",
+        )
+        check = self._register_check(FakePOSInvoice("CHK-LIM", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        # 10% within cashier limit succeeds without token
+        res = self.order.apply_check_discount(
+            invoice="CHK-LIM",
+            pos_profile="Lakeside Till",
+            discount_percent=10,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(res["after_total"], 45000)
+        self.assertEqual(check.additional_discount_percentage, 10)
+        self.assertEqual(check.custom_discount_reason, "Complaint")
+        self.assertIsNone(getattr(check.flags, "discount_approval", None))
+
+        # 15% over cashier limit fails without token
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.apply_check_discount(
+                invoice="CHK-LIM",
+                pos_profile="Lakeside Till",
+                discount_percent=15,
+                discount_reason="Complaint",
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+
+    def test_100_percent_comp_needs_second_person_even_for_manager_with_100_limit(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Manager: 100",
+            discount_approver_role="URY Manager",
+        )
+        self.frappe.session.user = "manager@example.com"
+        check = self._register_check(FakePOSInvoice("CHK-COMP", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        preview = self.order.preview_settlement_totals(
+            invoice="CHK-COMP",
+            pos_profile="Lakeside Till",
+            discount_percent=100,
+            discount_reason="Complaint",
+        )
+        self.assertTrue(preview["needs_approval"])
+        self.assertTrue(preview["is_comp"])
+
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.apply_check_discount(
+                invoice="CHK-COMP",
+                pos_profile="Lakeside Till",
+                discount_percent=100,
+                discount_reason="Complaint",
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+
+        # A second person (another manager) CAN authorise it
+        self.roles_by_user["gm@example.com"] = ["URY Manager"]
+        token = self._issue_override_token(check, preview["claim"], approver="gm@example.com", percent=100)
+        applied = self.order.apply_check_discount(
+            invoice="CHK-COMP",
+            pos_profile="Lakeside Till",
+            discount_percent=100,
+            discount_reason="Complaint",
+            approval=token,
+        )
+        self.assertEqual(applied["after_total"], 0)
+        self.assertEqual(check.flags.discount_approval["approver"], "gm@example.com")
+        self.assertEqual(check.flags.discount_approval["percent"], 100)
+
+
+class TestReasonsPresetsAndFields(DiscountBase):
+    def setUp(self):
+        super().setUp()
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 20\nURY Manager: 80",
+            discount_approver_role="URY Manager",
+        )
+
+    def test_no_reason_or_inactive_or_non_pos_reason_refused(self):
+        check = self._register_check(FakePOSInvoice("CHK-R", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        for bad_reason in (None, "", "   ", "Retired", "Sales only", "Nonexistent"):
+            with self.subTest(reason=bad_reason):
+                with self.assertRaises(Refused):
+                    self.order.apply_check_discount(
+                        invoice="CHK-R",
+                        pos_profile="Lakeside Till",
+                        discount_percent=10,
+                        discount_reason=bad_reason,
+                    )
+
+    def test_reason_requiring_note_refuses_blank_note_and_accepts_note(self):
+        check = self._register_check(FakePOSInvoice("CHK-NOTE", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        with self.assertRaises(Refused):
+            self.order.apply_check_discount(
+                invoice="CHK-NOTE",
+                pos_profile="Lakeside Till",
+                discount_percent=10,
+                discount_reason="Other",
+                discount_note="   ",
+            )
+
+        res = self.order.apply_check_discount(
+            invoice="CHK-NOTE",
+            pos_profile="Lakeside Till",
+            discount_percent=10,
+            discount_reason="Other",
+            discount_note="Long wait for mains",
+        )
+        self.assertEqual(res["after_total"], 45000)
+        self.assertEqual(check.custom_discount_reason, "Other")
+        self.assertEqual(check.custom_discount_note, "Long wait for mains")
+
+    def test_reason_requiring_supervisor_needs_approval_even_within_cashier_limit(self):
+        check = self._register_check(FakePOSInvoice("CHK-SUP-R", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        preview = self.order.preview_settlement_totals(
+            invoice="CHK-SUP-R",
+            pos_profile="Lakeside Till",
+            discount_percent=5,
+            discount_reason="VIP Comp",
+        )
+        self.assertTrue(preview["needs_approval"])
+        self.assertIn("reason_requires_supervisor", preview["approval_reasons"])
+
+        with self.assertRaises((Refused, NotPermitted)):
+            self.order.apply_check_discount(
+                invoice="CHK-SUP-R",
+                pos_profile="Lakeside Till",
+                discount_percent=5,
+                discount_reason="VIP Comp",
+            )
+
+    def test_flat_amount_reaches_discount_amount_and_open_gated_by_allow_discount_change(self):
+        check = self._register_check(FakePOSInvoice("CHK-FLAT", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        self.profile.allow_discount_change = 0
+        with self.assertRaises((Refused, NotPermitted)):
+            self.order.apply_check_discount(
+                invoice="CHK-FLAT",
+                pos_profile="Lakeside Till",
+                discount_amount=5000,
+                discount_reason="Complaint",
+            )
+
+        self.profile.allow_discount_change = 1
+        res = self.order.apply_check_discount(
+            invoice="CHK-FLAT",
+            pos_profile="Lakeside Till",
+            discount_amount=5000,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(check.additional_discount_percentage, 0)
+        self.assertEqual(check.discount_amount, 5000)
+        self.assertEqual(res["before_total"], 50000)
+        self.assertEqual(res["discount_total"], 5000)
+        self.assertEqual(res["after_total"], 45000)
+
+    def test_coupon_preset_sets_coupon_code_auto_fills_reason_and_works_when_open_disabled(self):
+        self.profile.allow_discount_change = 0
+        self.pricing_rules["PR-HAPPY15"] = Row(
+            name="PR-HAPPY15",
+            title="Happy Hour 15%",
+            apply_on="Transaction",
+            selling=1,
+            disable=0,
+            coupon_code_based=1,
+            price_or_product_discount="Price",
+            rate_or_discount="Discount Percentage",
+            discount_percentage=15.0,
+            discount_amount=0.0,
+            apply_discount_on="Grand Total",
+            company="Lakeside Hotel",
+            valid_from="2026-01-01",
+            valid_upto="2026-12-31",
+        )
+        self.coupons["Happy Hour 15"] = Row(
+            name="Happy Hour 15",
+            coupon_name="Happy Hour 15",
+            coupon_code="HAPPY15",
+            coupon_type="Promotional",
+            pricing_rule="PR-HAPPY15",
+            custom_discount_reason="Corporate rate",
+            valid_from="2026-01-01",
+            valid_upto="2026-12-31",
+            maximum_use=0,
+            used=0,
+        )
+        check = self._register_check(FakePOSInvoice("CHK-COUP", items=[_item("r1", "FISH", 1, 40000)]))
+        self._patch_settlement_helpers(check)
+
+        res = self.order.apply_check_discount(
+            invoice="CHK-COUP",
+            pos_profile="Lakeside Till",
+            coupon_code="Happy Hour 15",
+        )
+        self.assertEqual(check.coupon_code, "Happy Hour 15")
+        self.assertEqual(check.custom_discount_reason, "Corporate rate")
+        self.assertEqual(check.additional_discount_percentage, 15.0)
+        self.assertEqual(res["discount_total"], 6000)
+        self.assertEqual(res["after_total"], 34000)
+
+    def test_line_discounts_reach_rows_capped_by_item_max_discount_and_combine_with_check_discount(self):
+        self.item_max_discount["STEAK"] = 15.0
+        check = self._register_check(
+            FakePOSInvoice(
+                "CHK-LINE",
+                items=[
+                    _item("r1", "STEAK", 1, 40000),
+                    _item("r2", "SODA", 2, 5000),
+                ],
+            )
+        )
+        self._patch_settlement_helpers(check)
+
+        # Exceeding Item.max_discount is refused cleanly
+        with self.assertRaises(Refused):
+            self.order.apply_check_discount(
+                invoice="CHK-LINE",
+                pos_profile="Lakeside Till",
+                line_discounts=[{"row": "r1", "percent": 20}],
+                discount_reason="Complaint",
+            )
+
+        # Line discount 10% on STEAK (4,000) + Check flat discount 2,000 = 6,000 off 50,000 (12%, within 20% limit)
+        res = self.order.apply_check_discount(
+            invoice="CHK-LINE",
+            pos_profile="Lakeside Till",
+            line_discounts=[{"row": "r1", "percent": 10}],
+            discount_amount=2000,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(check.items[0].discount_percentage, 10)
+        self.assertEqual(check.items[0].rate, 36000)
+        self.assertEqual(check.discount_amount, 2000)
+        self.assertEqual(res["before_total"], 50000)
+        self.assertEqual(res["discount_total"], 6000)
+        self.assertEqual(res["after_total"], 44000)
+        self.assertAlmostEqual(res["effective_percent"], 12.0, places=2)
+
+
+class TestTokenLifecyclePartialTenderAndInputs(DiscountBase):
+    def setUp(self):
+        super().setUp()
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 80",
+            discount_approver_role="URY Manager",
+        )
+
+    def test_token_single_use_and_changed_after_approval_refused(self):
+        check = self._register_check(FakePOSInvoice("CHK-TOK", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        preview = self.order.preview_settlement_totals(
+            invoice="CHK-TOK",
+            pos_profile="Lakeside Till",
+            discount_percent=25,
+            discount_reason="Complaint",
+        )
+        token = self._issue_override_token(check, preview["claim"], approver="manager@example.com", percent=25)
+
+        # Changed after approval (30% instead of 25%) MUST refuse with POS-AUTH-CHANGED
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.apply_check_discount(
+                invoice="CHK-TOK",
+                pos_profile="Lakeside Till",
+                discount_percent=30,
+                discount_reason="Complaint",
+                approval=token,
+            )
+        self.assertIn("POS-AUTH-CHANGED", str(ctx.exception))
+
+        # Exact approved claim succeeds once
+        res = self.order.apply_check_discount(
+            invoice="CHK-TOK",
+            pos_profile="Lakeside Till",
+            discount_percent=25,
+            discount_reason="Complaint",
+            approval=token,
+        )
+        self.assertEqual(res["after_total"], 37500)
+        self.assertEqual(check.flags.discount_approval["approver"], "manager@example.com")
+
+        # Replaying the same token is refused (single-use)
+        with self.assertRaises((Refused, NotPermitted)):
+            self.order.apply_check_discount(
+                invoice="CHK-TOK",
+                pos_profile="Lakeside Till",
+                discount_percent=25,
+                discount_reason="Complaint",
+                approval=token,
+            )
+
+    def test_removed_then_re_added_requires_fresh_approval(self):
+        check = self._register_check(FakePOSInvoice("CHK-REM", items=[_item("r1", "FISH", 1, 50000)]))
+        self._patch_settlement_helpers(check)
+
+        preview = self.order.preview_settlement_totals(
+            invoice="CHK-REM",
+            pos_profile="Lakeside Till",
+            discount_percent=25,
+            discount_reason="Complaint",
+        )
+        token = self._issue_override_token(check, preview["claim"], approver="manager@example.com", percent=25)
+        self.order.apply_check_discount(
+            invoice="CHK-REM",
+            pos_profile="Lakeside Till",
+            discount_percent=25,
+            discount_reason="Complaint",
+            approval=token,
+        )
+        self.assertEqual(check.additional_discount_percentage, 25)
+        self.assertEqual(check.custom_discount_approver, "manager@example.com")
+
+        # Remove before settlement clears discount AND approval metadata
+        removed = self.order.remove_check_discount(invoice="CHK-REM", pos_profile="Lakeside Till")
+        self.assertEqual(removed["after_total"], 50000)
+        self.assertEqual(check.additional_discount_percentage, 0)
+        self.assertEqual(check.discount_amount, 0)
+        self.assertFalse(check.custom_discount_reason)
+        self.assertFalse(check.custom_discount_approver)
+
+        # Re-adding 25% without a fresh approval MUST fail!
+        with self.assertRaises((Refused, NotPermitted)) as ctx:
+            self.order.apply_check_discount(
+                invoice="CHK-REM",
+                pos_profile="Lakeside Till",
+                discount_percent=25,
+                discount_reason="Complaint",
+            )
+        self.assertIn("POS-AUTH-REQUIRED", str(ctx.exception))
+
+    def test_discount_after_partial_tender_allowed_above_tender_and_refused_below_tender(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 80",
+            discount_approver_role="URY Manager",
+        )
+        check = self._register_check(
+            FakePOSInvoice(
+                "CHK-PART",
+                items=[_item("r1", "FISH", 1, 100000)],
+                payments=[Row(mode_of_payment="Cash", amount=40000, custom_tender_received=1)],
+            )
+        )
+        self._patch_settlement_helpers(check)
+
+        # 10% off -> 90,000 >= 40,000 received tender -> allowed
+        ok = self.order.apply_check_discount(
+            invoice="CHK-PART",
+            pos_profile="Lakeside Till",
+            discount_percent=10,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(ok["after_total"], 90000)
+
+        # 70% off -> 30,000 < 40,000 received tender -> refused
+        with self.assertRaises(Refused) as ctx:
+            self.order.apply_check_discount(
+                invoice="CHK-PART",
+                pos_profile="Lakeside Till",
+                discount_percent=70,
+                discount_reason="Complaint",
+            )
+        self.assertIn("POS-DISC-BELOW-TENDER", str(ctx.exception))
+
+    def test_negative_nan_inf_huge_inputs_refused(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 50",
+            discount_approver_role="URY Manager",
+        )
+        check = self._register_check(FakePOSInvoice("CHK-BAD", items=[_item("r1", "FISH", 1, 20000)]))
+        self._patch_settlement_helpers(check)
+
+        for kwargs in (
+            {"discount_percent": -5},
+            {"discount_percent": float("nan")},
+            {"discount_percent": float("inf")},
+            {"discount_percent": "NaN"},
+            {"discount_percent": 101},
+            {"discount_percent": 999999},
+            {"discount_amount": -100},
+            {"discount_amount": float("nan")},
+            {"discount_amount": float("inf")},
+            {"discount_amount": 25000},  # > 20000 check total
+            {"discount_percent": 10, "discount_amount": 1000},  # both header modes
+            {"line_discounts": [{"row": "r1", "percent": -10}]},
+            {"line_discounts": [{"row": "r1", "amount": 999999}]},
+            {"line_discounts": [{"row": "nonexistent", "percent": 10}]},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(Refused):
+                    self.order.preview_settlement_totals(
+                        invoice="CHK-BAD",
+                        pos_profile="Lakeside Till",
+                        discount_reason="Complaint",
+                        **kwargs,
+                    )
+
+
+class TestRoundingAndTaxPreview(DiscountBase):
+    def test_zero_decimal_ugx_and_inclusive_vs_exclusive_tax_preview(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 20",
+            discount_approver_role="URY Manager",
+        )
+        # UGX (0 decimals), 18% VAT inclusive
+        ugx_inc = self._register_check(
+            FakePOSInvoice(
+                "CHK-UGX-INC",
+                currency="UGX",
+                items=[_item("r1", "PLATTER", 1, 37000)],
+                taxes=[Row(description="VAT 18%", rate=18.0, included_in_print_rate=1)],
+            )
+        )
+        self._patch_settlement_helpers(ugx_inc)
+        p_inc = self.order.preview_settlement_totals(
+            invoice="CHK-UGX-INC",
+            pos_profile="Lakeside Till",
+            discount_amount=5000,
+            discount_reason="Complaint",
+        )
+        self.assertEqual(p_inc["currency"], "UGX")
+        self.assertEqual(p_inc["precision"], 0)
+        self.assertEqual(p_inc["before_total"], 37000)
+        self.assertEqual(p_inc["discount_total"], 5000)
+        self.assertEqual(p_inc["after_total"], 32000)
+        self.assertEqual(p_inc["tax_total"], round(32000 - round(32000 / 1.18, 0), 0))
+        self.assertIsInstance(p_inc["after_total"], (int, float))
+        self.assertEqual(p_inc["after_total"], round(p_inc["after_total"], 0))
+
+        # USD (2 decimals), 18% VAT exclusive
+        self.profile.currency = "USD"
+        usd_exc = self._register_check(
+            FakePOSInvoice(
+                "CHK-USD-EXC",
+                currency="USD",
+                items=[_item("r1", "STEAK", 1, 100.00)],
+                taxes=[Row(description="VAT 18%", rate=18.0, included_in_print_rate=0)],
+            )
+        )
+        with patch.object(self.order, "get_order_invoice", return_value=usd_exc):
+            p_exc = self.order.preview_settlement_totals(
+                invoice="CHK-USD-EXC",
+                pos_profile="Lakeside Till",
+                discount_percent=10,
+                discount_reason="Complaint",
+            )
+        self.assertEqual(p_exc["currency"], "USD")
+        self.assertEqual(p_exc["precision"], 2)
+        self.assertEqual(p_exc["before_total"], 118.00)
+        self.assertEqual(p_exc["discount_total"], 11.80)
+        self.assertEqual(p_exc["after_total"], 106.20)
+        self.assertEqual(p_exc["tax_total"], 16.20)
+
+
+class TestRestStraightToSaveAndReturnProration(DiscountBase):
+    def test_rest_straight_to_save_without_flag_refused_even_without_b1(self):
+        self.has_approval_limit_doctype = False
+        self.invoice_fields = {"room_number", "coupon_code", "ury_discount_meta"}
+        self.frappe.request = SimpleNamespace(path="/api/resource/POS Invoice/CHK-REST")
+        prev = FakePOSInvoice("CHK-REST", items=[_item("r1", "FISH", 1, 50000)])
+        doc = FakePOSInvoice("CHK-REST", items=[_item("r1", "FISH", 1, 50000)])
+        doc._doc_before_save = prev
+        doc.additional_discount_percentage = 30
+        doc.calculate_taxes_and_totals()
+
+        self.assertTrue(hasattr(self.hook, "validate_pos_discount"), "validate_pos_discount hook missing")
+        with self.assertRaises((Refused, NotPermitted)):
+            self.hook.validate_pos_discount(doc)
+
+    def test_rest_cannot_forge_approver_or_raise_approved_discount(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 5\nURY Manager: 80",
+            discount_approver_role="URY Manager",
+        )
+        # 1) Forging custom_discount_approver directly on save
+        prev = FakePOSInvoice("CHK-FORGE", items=[_item("r1", "FISH", 1, 50000)])
+        doc = FakePOSInvoice("CHK-FORGE", items=[_item("r1", "FISH", 1, 50000)])
+        doc._doc_before_save = prev
+        doc.additional_discount_percentage = 20
+        doc.custom_discount_reason = "Complaint"
+        doc.custom_discount_approver = "manager@example.com"
+        doc.custom_discount_approved_percent = 20
+        doc.calculate_taxes_and_totals()
+        with self.assertRaises((Refused, NotPermitted)):
+            self.hook.validate_pos_discount(doc)
+
+        # 2) Previously approved at 20%, later save tries to raise to 35% without fresh flag
+        prev_ok = FakePOSInvoice("CHK-RAISE", items=[_item("r1", "FISH", 1, 50000)])
+        prev_ok.additional_discount_percentage = 20
+        prev_ok.custom_discount_reason = "Complaint"
+        prev_ok.custom_discount_approver = "manager@example.com"
+        prev_ok.custom_discount_approved_percent = 20
+        prev_ok.calculate_taxes_and_totals()
+
+        raised = FakePOSInvoice("CHK-RAISE", items=[_item("r1", "FISH", 1, 50000)])
+        raised._doc_before_save = prev_ok
+        raised.additional_discount_percentage = 35
+        raised.custom_discount_reason = "Complaint"
+        raised.custom_discount_approver = "manager@example.com"
+        raised.custom_discount_approved_percent = 20
+        raised.calculate_taxes_and_totals()
+        with self.assertRaises((Refused, NotPermitted)):
+            self.hook.validate_pos_discount(raised)
+
+        # 3) Unchanged already-approved save (e.g. settle / print) succeeds
+        same = FakePOSInvoice("CHK-RAISE", items=[_item("r1", "FISH", 1, 50000)])
+        same._doc_before_save = prev_ok
+        same.additional_discount_percentage = 20
+        same.custom_discount_reason = "Complaint"
+        same.custom_discount_approver = "manager@example.com"
+        same.custom_discount_approved_percent = 20
+        same.calculate_taxes_and_totals()
+        self.hook.validate_pos_discount(same)  # must not raise
+
+    def test_partial_return_prorates_flat_header_discount_as_sap_copy_control(self):
+        self.assertTrue(hasattr(self.hook, "prorate_return_discount"), "prorate_return_discount hook missing")
+        source = self._register_check(
+            FakePOSInvoice(
+                "CHK-ORIG",
+                currency="UGX",
+                items=[
+                    _item("r1", "FISH", 2, 10000),
+                    _item("r2", "SODA", 1, 10000),
+                ],
+                docstatus=1,
+            )
+        )
+        source.additional_discount_percentage = 0
+        source.discount_amount = 6000  # flat 6,000 off 30,000
+        source.calculate_taxes_and_totals()
+
+        # Partial return #1: 1x FISH (10,000 / 30,000 = 1/3 -> -2,000 discount)
+        ret1 = FakePOSInvoice(
+            "CHK-RET-1",
+            currency="UGX",
+            is_return=1,
+            return_against="CHK-ORIG",
+            items=[_item("rr1", "FISH", -1, 10000)],
+        )
+        ret1.additional_discount_percentage = 0
+        ret1.discount_amount = -6000  # what native make_sales_return copies!
+        self.hook.prorate_return_discount(ret1)
+        ret1.calculate_taxes_and_totals()
+        self.assertEqual(ret1.discount_amount, -2000)
+        self.assertEqual(ret1.grand_total, -8000)
+
+        # Mark ret1 submitted, then return the remaining 2 items (20,000 -> -4,000 exact remainder)
+        ret1.docstatus = 1
+        self._register_check(ret1)
+
+        ret2 = FakePOSInvoice(
+            "CHK-RET-2",
+            currency="UGX",
+            is_return=1,
+            return_against="CHK-ORIG",
+            items=[_item("rr2", "FISH", -1, 10000), _item("rr3", "SODA", -1, 10000)],
+        )
+        ret2.additional_discount_percentage = 0
+        ret2.discount_amount = -6000
+        self.hook.prorate_return_discount(ret2)
+        ret2.calculate_taxes_and_totals()
+        self.assertEqual(ret2.discount_amount, -4000)
+        self.assertEqual(ret2.grand_total, -16000)
+
+
+class TestSplitMergeAndOptions(DiscountBase):
+    def test_split_bill_preserves_line_discount_and_prorates_flat_header_discount(self):
+        self.enterContext(patch.object(self.order, "_enforce_order_access"))
+        self.enterContext(patch.object(self.order, "_split_kots_to_move", return_value=[]))
+        self.frappe.generate_hash.return_value = "GRP-DISC-1"
+
+        source = self._register_check(
+            FakePOSInvoice(
+                "CHK-SP-1",
+                currency="UGX",
+                items=[
+                    _item("i1", "FISH", 1, 30000, discount_percentage=10, discount_amount=3000),
+                    _item("i2", "STEAK", 1, 20000),
+                ],
+                custom_discount_reason="Complaint",
+                custom_discount_approver="manager@example.com",
+                custom_discount_approved_percent=20,
+            )
+        )
+        source.discount_amount = 4700  # flat header discount on 27,000 + 20,000 = 47,000 (10%)
+        source.calculate_taxes_and_totals()
+
+        child = FakePOSInvoice("CHK-SP-CHILD", currency="UGX", items=[])
+        self.frappe.new_doc.return_value = child
+
+        self.order.split_bill("CHK-SP-1", [{"name": "i1", "qty": 1}])
+
+        # Moved line kept its 10% line discount
+        self.assertEqual(child.items[0].discount_percentage, 10)
+        self.assertEqual(child.items[0].discount_amount, 3000)
+        # Flat header discount prorated cleanly: 27,000/47,000 * 4700 = 2700 on child, 2000 on source
+        self.assertEqual(child.discount_amount, 2700)
+        self.assertEqual(source.discount_amount, 2000)
+        self.assertEqual(child.discount_amount + source.discount_amount, 4700)
+        self.assertEqual(child.custom_discount_reason, "Complaint")
+        self.assertEqual(child.custom_discount_approver, "manager@example.com")
+
+    def test_list_discount_options_orders_reasons_by_sort_order_and_filters_presets(self):
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 10",
+            discount_approver_role="URY Manager",
+        )
+        self.pricing_rules["PR-OK"] = Row(
+            name="PR-OK",
+            title="10% Lunch Promo",
+            apply_on="Transaction",
+            selling=1,
+            disable=0,
+            coupon_code_based=1,
+            price_or_product_discount="Price",
+            discount_percentage=10.0,
+            discount_amount=0.0,
+            company="Lakeside Hotel",
+            valid_from="2026-01-01",
+            valid_upto="2026-12-31",
+        )
+        self.pricing_rules["PR-OTHER-CO"] = Row(
+            name="PR-OTHER-CO",
+            title="Other Co Promo",
+            apply_on="Transaction",
+            selling=1,
+            disable=0,
+            coupon_code_based=1,
+            price_or_product_discount="Price",
+            discount_percentage=10.0,
+            discount_amount=0.0,
+            company="Other Hotel",
+        )
+        self.coupons["LUNCH10"] = Row(
+            name="LUNCH10",
+            coupon_name="LUNCH10",
+            coupon_code="LUNCH10",
+            coupon_type="Promotional",
+            pricing_rule="PR-OK",
+            custom_discount_reason="Corporate rate",
+            valid_from="2026-01-01",
+            valid_upto="2026-12-31",
+            maximum_use=0,
+            used=0,
+        )
+        self.coupons["EXHAUSTED"] = Row(
+            name="EXHAUSTED",
+            coupon_name="EXHAUSTED",
+            coupon_code="USEDUP",
+            coupon_type="Promotional",
+            pricing_rule="PR-OK",
+            maximum_use=5,
+            used=5,
+        )
+        self.coupons["OTHERCO"] = Row(
+            name="OTHERCO",
+            coupon_name="OTHERCO",
+            coupon_code="OTHERCO",
+            coupon_type="Promotional",
+            pricing_rule="PR-OTHER-CO",
+            maximum_use=0,
+            used=0,
+        )
+
+        opts = self.order.list_discount_options(pos_profile="Lakeside Till")
+        self.assertEqual([r["code"] for r in opts["reasons"]], ["Corporate rate", "Complaint", "VIP Comp", "Staff", "Other"])
+        self.assertEqual([p["name"] for p in opts["presets"]], ["LUNCH10"])
+        self.assertEqual(opts["presets"][0]["discount_reason"], "Corporate rate")
+        self.assertTrue(opts["allow_discount_change"])
+        self.assertEqual(opts["limit_percent"], 10.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
