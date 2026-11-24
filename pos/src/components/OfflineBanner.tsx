@@ -2,7 +2,7 @@ import { usePOSStore } from '../store/pos-store';
 import { useRootStore } from '../store/root-store';
 import { useOutbox } from '../offline/use-outbox';
 import { t } from '../i18n';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, showToast } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
 import {
@@ -11,6 +11,7 @@ import {
   type OfflineOutbox,
   type OfflinePaymentModeConfig,
 } from '../offline/outbox';
+import { flushPendingFiscalReprints } from '../lib/efris-print';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 function PendingOrder({
@@ -168,6 +169,20 @@ export default function OfflineBanner() {
   const { rows, replaying, offline, queue } = useOutbox(posProfile, user, true);
   const [approvalRow, setApprovalRow] = useState<OfflineEntry | null>(null);
 
+  useEffect(() => {
+    if (!posProfile) return;
+    const run = () => {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      void flushPendingFiscalReprints(posProfile);
+    };
+    window.addEventListener('online', run);
+    const timer = window.setInterval(run, 5000);
+    run();
+    return () => {
+      window.removeEventListener('online', run);
+      window.clearInterval(timer);
+    };
+  }, [posProfile]);
   const pending = rows.filter((row) => row.state === 'pending').length;
   const review = rows.filter((row) => row.state === 'review');
   if (!rows.length && (!offline || !canCaptureOffline(posProfile, user))) return null;

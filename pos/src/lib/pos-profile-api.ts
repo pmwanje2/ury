@@ -20,6 +20,7 @@ export interface PosProfileLimited {
   warehouse: string;
   cashier: string;
   print_format: string | null;
+  letter_head?: string | null;
   qz_print: number;
   qz_host: string | null;
   printer: string | null;
@@ -52,6 +53,8 @@ export interface PosProfileLimited {
   offline_tender_limit?: number;
   /** Mode of Payment offline eligibility flags from server configuration (never tender-name regex). */
   offline_payment_modes?: OfflinePaymentMode[];
+  /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
+  efris_print_wait_seconds?: number;
 }
 
 export interface PosProfileLimitedResponse {
@@ -91,6 +94,7 @@ export interface PosProfileFull {
   warehouse: string;
   campaign: string | null;
   company_address: string | null;
+  letter_head?: string | null;
   restaurant: string;
   branch: string;
   currency: string;
@@ -113,6 +117,7 @@ export interface PosProfileFull {
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   offline_tender_limit?: number;
   offline_payment_modes?: OfflinePaymentMode[];
+  efris_print_wait_seconds?: number;
 }
 
 // Combined POS Profile with both limited and full fields
@@ -122,6 +127,7 @@ export interface PosProfileCombined extends PosProfileFull {
   waiter: string;
   cashier: string;
   print_format: string | null;
+  letter_head?: string | null;
   qz_print: number;
   qz_host: string | null;
   printer: string | null;
@@ -147,6 +153,7 @@ export interface PosProfileCombined extends PosProfileFull {
   room_charge_unconfigured?: boolean;
   offline_tender_limit?: number;
   offline_payment_modes?: OfflinePaymentMode[];
+  efris_print_wait_seconds?: number;
 }
 
 export interface Currency {
@@ -201,6 +208,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     waiter: limitedProfile.waiter,
     cashier: limitedProfile.cashier,
     print_format: limitedProfile.print_format,
+    letter_head: limitedProfile.letter_head ?? fullProfile.letter_head ?? null,
     qz_print: limitedProfile.qz_print,
     qz_host: limitedProfile.qz_host,
     printer: limitedProfile.printer,
@@ -225,6 +233,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
     offline_tender_limit: Number(limitedProfile.offline_tender_limit ?? fullProfile.offline_tender_limit ?? 0),
     offline_payment_modes: limitedProfile.offline_payment_modes ?? fullProfile.offline_payment_modes ?? [],
+    efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
   };
 
   return combinedProfile;

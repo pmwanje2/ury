@@ -2748,16 +2748,15 @@ def sync_order(
 
     # Authorize before changing headers, payments or lines. Reducing a sent
     # dish+note quantity emits a kitchen cancellation even if the dish total
-    # stays unchanged. When POS Privilege Rules are active for the company,
-    # enforce `void_sent_item` via manager PIN authorisation; otherwise keep
-    # the legacy remove_items / elevated-role fallback.
+    # stays unchanged. Unsent held items (`ury_held=1`) are always freely
+    # editable/removable even when `remove_items=0` (Amendment 1 + R2 P1 #9).
     if not append and past_item:
         requested_qty_by_item = {}
-        for item in items:
-            code = item.get("item")
-            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item.get("qty"))
+        for item in _kitchen_snapshot(items):
+            code = item["item_code"]
+            requested_qty_by_item[code] = requested_qty_by_item.get(code, 0) + flt(item["qty"])
         previous_qty_by_item = {}
-        for item in past_item:
+        for item in _kitchen_snapshot(past_item):
             code = item["item_code"]
             previous_qty_by_item[code] = previous_qty_by_item.get(code, 0) + flt(item["qty"])
 
@@ -2802,10 +2801,9 @@ def sync_order(
             requested_qty_by_item.get(code, 0) < qty for code, qty in previous_qty_by_item.items()
         )
         if void_lines or any_total_reduced:
-            company = getattr(posprofile, "company", None) or getattr(invoice, "company", None)
             from ury.ury_pos import override
 
-            if void_lines and override.is_policy_active(company):
+            if void_lines:
                 claim = {
                     "action": "sync_order_void_sent_item",
                     "lines": void_lines,
@@ -2820,6 +2818,7 @@ def sync_order(
                 elif override.may_perform(
                     frappe.session.user, pos_profile, "void_sent_item", amount=voided_amount
                 ):
+                    override._validate_reason(pos_profile, "void_sent_item", claim)
                     override.mark_verified_approval(invoice, "void_sent_item")
                 else:
                     frappe.throw(
@@ -3009,21 +3008,29 @@ def sync_order(
     except Exception as e:
         frappe.throw(f"Error while updating order: {e}")   
 
-    try:
-        kot_execute(
-            invoice.name, customer, table, _kitchen_snapshot(items), [] if append else _kitchen_snapshot(past_item), invoice.custom_comments,
-            offline_printed=offline_printed,
-        )
-    except Exception as e:
-        # KOT creation/routing failing is not a side detail to swallow: a
-        # customer must never be charged for an item the kitchen never
-        # receives. Log for diagnostics, then re-raise so the whole request
-        # (including the invoice.save() above) rolls back and the caller
-        # sees a real failure instead of a silently accepted order.
-        # See sa-post-373-review-fixes Blocker 2.
-        error_msg = f"KOT Creation Failed: {str(e)}"
-        frappe.log_error(error_msg, "KOT Error")
-        frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
+    current_kitchen = _kitchen_snapshot(items)
+    previous_kitchen = [] if append else _kitchen_snapshot(past_item)
+    held_only_edit = (
+        not append
+        and current_kitchen == previous_kitchen
+        and (any(cint(row.get("ury_held")) for row in past_item) or any(cint(row.get("ury_held")) for row in items))
+    )
+    if not held_only_edit:
+        try:
+            kot_execute(
+                invoice.name, customer, table, current_kitchen, previous_kitchen, invoice.custom_comments,
+                offline_printed=offline_printed,
+            )
+        except Exception as e:
+            # KOT creation/routing failing is not a side detail to swallow: a
+            # customer must never be charged for an item the kitchen never
+            # receives. Log for diagnostics, then re-raise so the whole request
+            # (including the invoice.save() above) rolls back and the caller
+            # sees a real failure instead of a silently accepted order.
+            # See sa-post-373-review-fixes Blocker 2.
+            error_msg = f"KOT Creation Failed: {str(e)}"
+            frappe.log_error(error_msg, "KOT Error")
+            frappe.throw(_("Failed to create kitchen order ticket(s) for this order: {0}").format(str(e)))
 
     # table status
     if invoice.invoice_printed == 0:
@@ -3664,7 +3671,7 @@ def _confirmed_phone_payment_requests(invoice_name, company=None):
         "docstatus": 1,
         "payment_channel": "Phone",
         "payment_request_type": "Inward",
-        "status": ["in", ["Paid", "Partially Paid"]],
+        "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
     }
     if company:
         filters["company"] = company
@@ -3687,9 +3694,10 @@ def _received_payment_rows(invoice):
     """Return payment rows that represent money genuinely received on an open check.
 
     Only rows explicitly marked custom_tender_received=1 by a confirmed server flow, or
-    backed by a confirmed Paid/Partially Paid Phone Payment Request, are received.
-    Phone rows are always re-checked against live Payment Request status so cancelled,
-    failed, expired, or refunded requests never deadlock the check.
+    backed by a confirmed Paid/Partially Paid/Partially Refunded Phone Payment Request,
+    are received. Phone rows are always re-checked and capped against live Payment Request
+    paid amounts so cancelled, failed, expired, or partially/fully refunded requests never
+    deadlock the check.
     """
     confirmed_prs = _confirmed_phone_payment_requests(invoice.get("name"), invoice.get("company"))
     live_pr_by_name = {pr.get("name"): pr for pr in confirmed_prs if pr.get("name")}
@@ -3702,7 +3710,7 @@ def _received_payment_rows(invoice):
 
     rows = []
     matched_pr_names = set()
-    matched_phone_modes = {}
+    matched_unreferenced_phone_modes = {}
 
     for row in invoice.get("payments") or []:
         amt = flt(row.get("amount"))
@@ -3712,16 +3720,28 @@ def _received_payment_rows(invoice):
         ref = (row.get("reference_no") or "").strip()
         if _is_phone_mode(row):
             if ref:
-                if ref not in live_pr_by_name:
+                pr = live_pr_by_name.get(ref)
+                if not pr:
+                    continue
+                live_amt = round(flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")), 9)
+                if live_amt <= 0:
                     continue
                 matched_pr_names.add(ref)
+                if mode:
+                    live_paid_by_mode[mode] = max(0.0, live_paid_by_mode.get(mode, 0.0) - live_amt)
+                copied = _copy_payment_row(row)
+                copied["amount"] = live_amt
+                rows.append(copied)
             else:
-                if not mode or live_paid_by_mode.get(mode, 0.0) <= 0:
+                avail = live_paid_by_mode.get(mode, 0.0) if mode else 0.0
+                if not mode or avail <= 0:
                     continue
-                live_paid_by_mode[mode] = max(0.0, live_paid_by_mode[mode] - amt)
-            if mode:
-                matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
-            rows.append(row)
+                used = min(amt, avail)
+                live_paid_by_mode[mode] = max(0.0, avail - used)
+                matched_unreferenced_phone_modes[mode] = matched_unreferenced_phone_modes.get(mode, 0.0) + used
+                copied = _copy_payment_row(row)
+                copied["amount"] = used
+                rows.append(copied)
             continue
 
         rows.append(row)
@@ -3736,8 +3756,8 @@ def _received_payment_rows(invoice):
         mode = pr.get("mode_of_payment")
         if not mode or paid_amt <= 0:
             continue
-        if matched_phone_modes.get(mode, 0.0) >= paid_amt:
-            matched_phone_modes[mode] -= paid_amt
+        if matched_unreferenced_phone_modes.get(mode, 0.0) >= paid_amt:
+            matched_unreferenced_phone_modes[mode] -= paid_amt
             continue
         rows.append(
             {
@@ -3792,7 +3812,7 @@ def _validate_confirmed_phone_payments(invoice, payment_rows):
                 "reference_name": invoice.name,
                 "mode_of_payment": mode,
                 "docstatus": 1,
-                "status": ["in", ["Paid", "Partially Paid"]],
+                "status": ["in", ["Paid", "Partially Paid", "Partially Refunded"]],
             },
             fields=["name", "grand_total", "outstanding_amount"],
         )
@@ -4314,6 +4334,8 @@ def _submit_and_release_tables(
     on_account_reason=None,
 ):
     credit_partner = None
+    if target:
+        invoice.flags.ignore_payment_sync = True
     if (
         _enforce_on_account(
             invoice,
@@ -4414,6 +4436,8 @@ def submit_order_invoice(
         _frappe=frappe,
     )
     target = frappe.get_doc('POS Invoice', doc.custom_merged_pos_invoice, for_update=True) if doc.custom_merged_pos_invoice else None
+    if target:
+        doc.flags.ignore_payment_sync = True
     prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
     if rc_outcome and rc_outcome.get("override_approver"):
         frappe.flags.kamra_room_charge_override = {

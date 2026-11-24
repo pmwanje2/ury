@@ -18,6 +18,10 @@ export interface OfflineProfile extends DefaultCustomerConfig {
   offline_tender_limit?: number;
   offline_payment_modes?: OfflinePaymentModeConfig[];
   room_charge_modes?: string[];
+  print_type?: string;
+  qz_host?: string | null;
+  print_format?: string | null;
+  efris_print_wait_seconds?: number;
 }
 
 export function resolveOfflineModeConfig(
@@ -55,6 +59,7 @@ export interface OfflineSettlement {
   mode_of_payment: string;
   amount: number;
   reference?: string;
+  room_number?: string;
   needs_online_approval?: boolean;
 }
 export interface OfflineEntry {
@@ -65,7 +70,8 @@ export interface OfflineEntry {
   needs_approval?: boolean; offline_approval?: string; offline_reason?: string;
 }
 export type OfflinePrint = (entry: OfflineEntry, kind: 'kot' | 'bill') => boolean | Promise<boolean>;
-interface Options { profile: OfflineProfile; user: OfflineUser; request?: typeof fetch; print?: OfflinePrint }
+export type OfflineSettledHook = (settled: { invoice: string; entry: OfflineEntry }) => void | Promise<void>;
+interface Options { profile: OfflineProfile; user: OfflineUser; request?: typeof fetch; print?: OfflinePrint; onSettled?: OfflineSettledHook }
 
 const DB = 'ury-pos-offline-capture';
 const LOCK = 'ury-pos-offline-capture';
@@ -151,10 +157,12 @@ export class OfflineOutbox {
   private scope: string;
   private request: typeof fetch;
   private print: OfflinePrint;
+  private onSettled?: OfflineSettledHook;
   constructor(private options: Options) {
     this.scope = JSON.stringify([options.user.name, options.profile.name]);
     this.request = options.request || ((url, init) => fetch(url, init));
     this.print = options.print || (() => false);
+    this.onSettled = options.onSettled;
   }
   private get sessionBlockKey() { return `ury_offline_session_blocked:${this.options.user.name}`; }
   get sessionBlocked() { return sessionStorage.getItem(this.sessionBlockKey) !== null; }
@@ -434,11 +442,20 @@ export class OfflineOutbox {
               additionalDiscount: null,
               offline_replay: 1,
               ...(entry.offline_approval ? { offline_approval: entry.offline_approval, offline_reason: entry.offline_reason || '' } : {}),
+              ...(entry.settlement.room_number ? { room_number: entry.settlement.room_number } : {}),
             });
             // v16 make_invoice answers {name, status}; a settled retry answers the same.
             if (!reply || typeof reply !== 'object' || !('status' in reply) || reply.status !== 'Submitted') throw new NotReady('Settlement acknowledgement is incomplete');
+            const settledInvoice = ('name' in reply && typeof reply.name === 'string' && reply.name) || entry.server_invoice;
             forgetOpenTableCheck(entry.owner, entry.order.table);
             await remove(entry);
+            if (this.onSettled && settledInvoice) {
+              try {
+                await this.onSettled({ invoice: settledInvoice, entry });
+              } catch {
+                // Settlement already committed; post-replay fiscal print errors stay non-blocking.
+              }
+            }
           } catch (error) {
             if (!(error instanceof Refused)) { this.replayFailure(error); break; }
             if (error instanceof OrderPermission) {

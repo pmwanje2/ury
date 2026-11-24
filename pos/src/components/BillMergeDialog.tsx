@@ -25,6 +25,7 @@ interface BillMergeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   invoiceName: string;
+  currency?: string;
   onConfirm: (secondaryInvoice: string) => Promise<void>;
 }
 
@@ -34,6 +35,7 @@ const BillMergeDialog = ({
   open,
   onOpenChange,
   invoiceName,
+  currency,
   onConfirm,
 }: BillMergeDialogProps) => {
   const [candidates, setCandidates] = useState<MergeBillCandidate[]>([]);
@@ -226,7 +228,7 @@ const BillMergeDialog = ({
                 </p>
               </div>
               <span className="ms-3 shrink-0 text-sm font-semibold text-gray-900 tabular-nums">
-                {formatCurrency(row.rounded_total ?? row.grand_total)}
+                {formatCurrency(row.rounded_total ?? row.grand_total, row.currency || currency)}
               </span>
             </button>
           );

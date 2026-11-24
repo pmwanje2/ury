@@ -50,11 +50,11 @@ def get_agent_config():
 	require_manager()
 
 	if not _huf_installed():
-		return {"available": False, "reason": "huf app is not installed on this site"}
+		return {"available": False, "reason": "The assistant app is not installed on this site"}
 
 	agent_name = _get_agent_name()
 	if not frappe.db.exists("Agent", agent_name):
-		return {"available": False, "reason": f"HUF Agent {agent_name!r} does not exist"}
+		return {"available": False, "reason": f"Assistant agent {agent_name!r} does not exist"}
 
 	doc = frappe.get_doc("Agent", agent_name)
 	return {
@@ -74,13 +74,13 @@ def update_agent_config(provider=None, model=None, temperature=None, top_p=None,
 	require_manager()
 
 	if not _huf_installed():
-		frappe.throw(_("HUF is not installed on this site"))
+		frappe.throw(_("The assistant app is not installed on this site"))
 
 	agent_name = _get_agent_name()
 	if not frappe.db.exists("Agent", agent_name):
 		frappe.throw(
 			_(
-				"HUF Agent {0} does not exist yet. Wait for the next bench migrate "
+				"Assistant agent {0} does not exist yet. Wait for the next bench migrate "
 				"(agent seeding may not have run) before configuring it."
 			).format(frappe.bold(agent_name))
 		)
@@ -152,7 +152,7 @@ def set_provider_api_key(provider, api_key):
 	require_manager()
 
 	if not _huf_installed():
-		frappe.throw(_("HUF is not installed on this site"))
+		frappe.throw(_("The assistant app is not installed on this site"))
 
 	if not api_key or not api_key.strip():
 		frappe.throw(_("API key cannot be empty"))

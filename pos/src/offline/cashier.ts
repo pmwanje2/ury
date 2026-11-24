@@ -4,6 +4,7 @@ import { v4 as uuid } from 'uuid';
 import { OfflineOutbox, canCaptureOffline, openTableRow, resolveOfflineModeConfig, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
 import { gatewayStatusOf } from './gateway';
 import { readOpenTableCheck } from './open-table-checks';
+import { triggerPostReplayFiscalPrint } from '../lib/efris-print';
 
 const queues = new WeakMap<OfflineProfile, WeakMap<OfflineUser, OfflineOutbox>>();
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
@@ -20,7 +21,7 @@ function stationPrint(entry: OfflineEntry, kind: 'kot' | 'bill'): boolean {
   popup.document.write(`<html><head><title>${title}</title><style>body{font:16px sans-serif;max-width:360px;margin:24px}li{margin:12px 0}</style></head><body>
     <h1>${title}</h1><p>${escape(entry.order.table || entry.order.order_type)} · ${escape(entry.order.customer)}</p>
     <p>${escape(t('offline.client_order'))}: ${escape(entry.client_order_id)}</p><ul>${items}</ul>
-    ${kind === 'bill' ? `<p>${escape(t('payment.total'))}: ${escape(lastRound.expected_total)}</p><p>${escape(entry.settlement?.mode_of_payment)} ${escape(entry.settlement?.reference)}</p>` : ''}
+    ${kind === 'bill' ? `<p>${escape(t('payment.total'))}: ${escape(lastRound.expected_total)}</p><p>${escape(entry.settlement?.mode_of_payment)} ${escape(entry.settlement?.reference)}</p>${entry.settlement?.room_number ? `<p>${escape(t('payment.room_folio'))}: ${escape(entry.settlement.room_number)}</p>` : ''}` : ''}
     <p>${escape(t('offline.captured'))}: ${escape(lastRound.captured_at)}</p><p>${escape(t('offline.no_fdn'))}</p></body></html>`);
   popup.document.close(); popup.focus(); popup.print(); return true;
 }
@@ -45,7 +46,18 @@ export async function clearCashierStorage(signOut = false): Promise<void> {
 
 export function cashierOutbox(profile: OfflineProfile, user: OfflineUser): OfflineOutbox {
   let users = queues.get(profile); if (!users) { users = new WeakMap(); queues.set(profile, users); }
-  let queue = users.get(user); if (!queue) { queue = new OfflineOutbox({ profile, user, print: stationPrint }); users.set(user, queue); }
+  let queue = users.get(user);
+  if (!queue) {
+    queue = new OfflineOutbox({
+      profile,
+      user,
+      print: stationPrint,
+      onSettled: async ({ invoice }) => {
+        await triggerPostReplayFiscalPrint({ invoice, posProfile: profile });
+      },
+    });
+    users.set(user, queue);
+  }
   return queue;
 }
 
@@ -95,10 +107,10 @@ export function resolveOfflineTender(
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
-  clientOrderId, amount, due, modeOfPayment, reference, discount, orderType, onlineSettle }: {
+  clientOrderId, amount, due, modeOfPayment, reference, roomNumber, discount, orderType, onlineSettle }: {
   profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
   cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; due: number; modeOfPayment: string;
-  reference?: string; discount?: number; orderType?: string;
+  reference?: string; roomNumber?: string; discount?: number; orderType?: string;
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
@@ -121,7 +133,11 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
   } catch (error) {
     if (!gatewayStatusOf(error)) throw error;
     queue.reachable = false;
-    const settlement: OfflineSettlement = { kind: kind!, mode_of_payment: modeOfPayment, amount, reference };
+    const cleanedRoom = roomNumber?.trim() || undefined;
+    const settlement: OfflineSettlement = {
+      kind: kind!, mode_of_payment: modeOfPayment, amount, reference,
+      ...(cleanedRoom ? { room_number: cleanedRoom } : {}),
+    };
     if (existing && !existing.settlement && !existing.next_round) {
       const entry = await queue.settle(existing.client_order_id, settlement);
       return { offline: true as const, entry };

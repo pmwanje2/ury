@@ -1605,6 +1605,383 @@ class TestCreatePaymentRequest(unittest.TestCase):
                 self.assertEqual(paid_row.reference_no, "PR-REALLY-PAID")
                 self.assertEqual(paid_row.amount, 50.0 - outstanding)
 
+    def test_sync_phone_payment_received_handles_partially_refunded_live_amount_and_zero_clear(self):
+        """R6 P1 #2: Partially Refunded updates draft Phone row to live paid amount (>0) or
+        clears custom_tender_received when live paid drops to 0."""
+        from ury.ury.api import self_ordering
+
+        sync_fn = self_ordering.sync_phone_payment_received
+
+        phone_row = frappe._dict(
+            mode_of_payment="P2 Phone",
+            account="P2 Bank",
+            type="Phone",
+            amount=50.0,
+            reference_no="PR-PART-REF",
+            custom_tender_received=1,
+        )
+        invoice = MagicMock()
+        invoice.docstatus = 0
+        invoice.name = "POS-INV-100"
+        invoice.grand_total = 50.0
+        invoice.rounded_total = 50.0
+        invoice.payments = [phone_row]
+
+        part_pr = frappe._dict(
+            name="PR-PART-REF",
+            reference_doctype="POS Invoice",
+            reference_name="POS-INV-100",
+            payment_channel="Phone",
+            payment_request_type="Inward",
+            mode_of_payment="P2 Phone",
+            payment_account="P2 Bank",
+            grand_total=50.0,
+            outstanding_amount=20.0,
+            docstatus=1,
+            status="Partially Refunded",
+        )
+        with patch(f"{MOD}.frappe.get_doc", return_value=invoice), patch(f"{MOD}.frappe.set_user"):
+            sync_fn(part_pr, "on_update_after_submit")
+        self.assertEqual(phone_row.custom_tender_received, 1)
+        self.assertAlmostEqual(float(phone_row.amount), 30.0, places=2)
+        self.assertEqual(phone_row.reference_no, "PR-PART-REF")
+
+        # When live paid drops to 0 (fully refunded), the stale flag must be cleared.
+        part_pr.outstanding_amount = 50.0
+        with patch(f"{MOD}.frappe.get_doc", return_value=invoice), patch(f"{MOD}.frappe.set_user"):
+            sync_fn(part_pr, "on_update_after_submit")
+        self.assertEqual(phone_row.custom_tender_received, 0)
+        self.assertEqual(phone_row.amount, 0)
+        self.assertFalse(phone_row.reference_no)
+
+    def test_late_phone_payment_after_settled_check_records_unapplied_receipt_and_manager_alert(self):
+        """R6 P1 #2: late success after a failure must not lose money or double-settle:
+        accept on an open unsettled check, or record an idempotent unapplied Payment Entry
+        with a manager refund alert when the check is already settled (or PR was cancelled)."""
+        from ury.ury.api import self_ordering
+
+        mark_fn = self_ordering.mark_phone_payment_received
+
+        # Case 1: Check already settled (docstatus=1) -> leave invoice untouched, create ONE
+        # unapplied Payment Entry (references=[]) and notify managers to refund.
+        settled_invoice = MagicMock()
+        settled_invoice.docstatus = 1
+        settled_invoice.name = "POS-INV-SETTLED"
+        settled_invoice.company = "Lakeside Hospitality"
+        settled_invoice.customer = "Walk-in Guest"
+        settled_invoice.customer_name = "Walk-in Guest"
+        settled_invoice.currency = "USD"
+        settled_invoice.party_account_currency = "USD"
+        settled_invoice.debit_to = "Debtors - LH"
+        settled_invoice.grand_total = 50.0
+        settled_invoice.rounded_total = 50.0
+        settled_invoice.payments = [
+            frappe._dict(mode_of_payment="Cash", amount=50.0, custom_tender_received=1)
+        ]
+
+        late_pr = frappe._dict(
+            name="PR-LATE-1",
+            reference_doctype="POS Invoice",
+            reference_name="POS-INV-SETTLED",
+            payment_channel="Phone",
+            payment_request_type="Inward",
+            mode_of_payment="Online Mobile Money",
+            payment_account="MoMo - LH",
+            company="Lakeside Hospitality",
+            party="Walk-in Guest",
+            party_name="Walk-in Guest",
+            currency="USD",
+            grand_total=50.0,
+            outstanding_amount=0.0,
+            docstatus=1,
+            status="Paid",
+        )
+
+        created_docs = []
+
+        class FakeDoc(frappe._dict):
+            def __init__(self, doctype):
+                super().__init__(doctype=doctype, references=[])
+                self.inserted = False
+                self.submitted = False
+
+            def insert(self, ignore_permissions=False):
+                self.inserted = True
+                self.name = f"{self.doctype.replace(' ', '-').upper()}-{len(created_docs) + 1}"
+                created_docs.append(self)
+                return self
+
+            def submit(self):
+                self.submitted = True
+                self.docstatus = 1
+                return self
+
+        existing_pes = []
+
+        def fake_exists(doctype, filters=None):
+            if doctype == "Payment Entry" and isinstance(filters, dict):
+                ref = filters.get("reference_no")
+                for d in existing_pes:
+                    if d.reference_no == ref:
+                        return d.name
+            return None
+
+        def fake_new_doc(doctype):
+            doc = FakeDoc(doctype)
+            if doctype == "Payment Entry":
+                existing_pes.append(doc)
+            return doc
+
+        def fake_get_all(doctype, filters=None, pluck=None, **kw):
+            if doctype == "Has Role":
+                return ["manager@example.test"]
+            if doctype == "User":
+                return ["manager@example.test"]
+            return []
+
+        with (
+            patch(f"{MOD}.frappe.get_doc", return_value=settled_invoice),
+            patch(f"{MOD}.frappe.set_user"),
+            patch(f"{MOD}.frappe.db.exists", side_effect=fake_exists),
+            patch(f"{MOD}.frappe.db.get_value", return_value="USD"),
+            patch(f"{MOD}.frappe.new_doc", side_effect=fake_new_doc),
+            patch(f"{MOD}.frappe.get_all", side_effect=fake_get_all),
+        ):
+            mark_fn(late_pr, "on_payment_authorized", "Completed")
+            # Duplicate webhook must be idempotent (no second Payment Entry!).
+            mark_fn(late_pr, "on_payment_authorized", "Completed")
+
+        settled_invoice.save.assert_not_called()
+        pes = [d for d in created_docs if d.doctype == "Payment Entry"]
+        self.assertEqual(len(pes), 1)
+        pe = pes[0]
+        self.assertTrue(pe.inserted and pe.submitted)
+        self.assertEqual(pe.payment_type, "Receive")
+        self.assertEqual(pe.party_type, "Customer")
+        self.assertEqual(pe.party, "Walk-in Guest")
+        self.assertEqual(pe.paid_amount, 50.0)
+        self.assertEqual(pe.received_amount, 50.0)
+        self.assertEqual(pe.reference_no, "PR-LATE-1")
+        self.assertEqual(pe.references, [])
+
+        alerts = [d for d in created_docs if d.doctype in ("Notification Log", "ToDo")]
+        self.assertTrue(alerts, "Late payment on already-settled check must raise a manager alert to refund")
+        self.assertTrue(any("refund" in str(a.get("subject") or a.get("description") or "").lower() for a in alerts))
+
+        # Case 2: Late authorization on a cancelled PR (docstatus=2) must NOT mark draft invoice paid,
+        # and must also record an unapplied receipt + manager alert so real money is never lost.
+        draft_invoice = MagicMock()
+        draft_invoice.docstatus = 0
+        draft_invoice.name = "POS-INV-DRAFT"
+        draft_invoice.company = "Lakeside Hospitality"
+        draft_invoice.customer = "Walk-in Guest"
+        draft_invoice.customer_name = "Walk-in Guest"
+        draft_invoice.currency = "USD"
+        draft_invoice.party_account_currency = "USD"
+        draft_invoice.debit_to = "Debtors - LH"
+        draft_invoice.grand_total = 50.0
+        draft_invoice.rounded_total = 50.0
+        draft_row = frappe._dict(mode_of_payment="Online Mobile Money", type="Phone", amount=0.0, custom_tender_received=0)
+        draft_invoice.payments = [draft_row]
+
+        cancelled_late_pr = frappe._dict(
+            late_pr,
+            name="PR-LATE-CANCELLED",
+            reference_name="POS-INV-DRAFT",
+            docstatus=2,
+            status="Paid",
+            outstanding_amount=0.0,
+        )
+        with (
+            patch(f"{MOD}.frappe.get_doc", return_value=draft_invoice),
+            patch(f"{MOD}.frappe.set_user"),
+            patch(f"{MOD}.frappe.db.exists", side_effect=fake_exists),
+            patch(f"{MOD}.frappe.db.get_value", return_value="USD"),
+            patch(f"{MOD}.frappe.new_doc", side_effect=fake_new_doc),
+            patch(f"{MOD}.frappe.get_all", side_effect=fake_get_all),
+        ):
+            mark_fn(cancelled_late_pr, "on_payment_authorized", "Completed")
+
+        self.assertEqual(draft_row.custom_tender_received, 0)
+        draft_invoice.save.assert_not_called()
+        self.assertEqual(len([d for d in created_docs if d.doctype == "Payment Entry" and d.reference_no == "PR-LATE-CANCELLED"]), 1)
+
+    @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
+    @patch(f"{MOD}.frappe.get_all")
+    @patch(f"{MOD}.frappe.db.get_value")
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._phone_gateway")
+    @patch(f"{MOD}._resolve_session")
+    @patch(f"{MOD}.frappe.set_user")
+    def test_create_payment_request_on_grown_check_creates_new_request_for_remaining_amount(
+        self,
+        mock_set_user,
+        mock_resolve_session,
+        mock_phone_gateway,
+        mock_get_doc,
+        mock_db_get_value,
+        mock_get_all,
+        mock_make_pr,
+    ):
+        """R6 P1 #2: after PR-1 is Paid for 100 and the check grows to 200, create_payment_request
+        must make a NEW Payment Request for the remaining 100 (placing the provisional row first
+        for ERPNext get_amount()), not return PR-1."""
+        session = MagicMock()
+        session.name = "SESS-GROW"
+        session.invoice = "POS-INV-GROW"
+        session.ordering_profile = "Profile A"
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock()
+        profile.enable_customer_payment = 1
+        profile.enable_payment_link = 0
+        profile.pos_profile = "Till A"
+
+        mock_phone_gateway.return_value = (
+            frappe._dict(name="PGA-1", payment_account="MoMo - LH"),
+            "Online Mobile Money",
+            "MoMo - LH",
+        )
+
+        paid_row = frappe._dict(
+            name="sip-paid-1",
+            mode_of_payment="Online Mobile Money",
+            account="MoMo - LH",
+            type="Phone",
+            amount=100.0,
+            reference_no="PR-PAID-1",
+            custom_tender_received=1,
+            idx=1,
+        )
+        invoice = MagicMock()
+        invoice.docstatus = 0
+        invoice.name = "POS-INV-GROW"
+        invoice.company = "Lakeside"
+        invoice.currency = "USD"
+        invoice.payments = [paid_row]
+        invoice.get.side_effect = lambda key, default=None: {
+            "grand_total": 200.0,
+            "rounded_total": 200.0,
+            "outstanding_amount": 0.0,
+        }.get(key, default)
+        invoice.precision.return_value = 2
+
+        def fake_append(key, row):
+            new_row = frappe._dict(row)
+            invoice.payments.append(new_row)
+            return new_row
+
+        invoice.append.side_effect = fake_append
+        mock_get_doc.side_effect = lambda dt, name=None, **kw: (
+            profile if dt == "URY Self Ordering Profile" else invoice
+        )
+        mock_db_get_value.return_value = None
+
+        paid_pr = frappe._dict(
+            name="PR-PAID-1",
+            currency="USD",
+            grand_total=100.0,
+            outstanding_amount=0.0,
+            status="Paid",
+        )
+
+        def fake_get_all(doctype, filters=None, **kw):
+            f = filters or {}
+            if doctype == "Payment Request" and isinstance(f.get("status"), list):
+                if f["status"][0] == "in":
+                    return [paid_pr]
+            return []
+
+        mock_get_all.side_effect = fake_get_all
+
+        pr2 = MagicMock(grand_total=100.0, currency="USD", status="Requested")
+        pr2.name = "PR-REMAINDER-2"
+        pr2.get_payment_url.return_value = "https://pay.example/PR-REMAINDER-2"
+        mock_make_pr.return_value = pr2
+
+        res = create_payment_request("session-token")
+        mock_make_pr.assert_called_once()
+        self.assertEqual(res["payment_request"], "PR-REMAINDER-2")
+        self.assertEqual(res["amount"], 100.0)
+        self.assertEqual(res["paid_amount"], 100.0)
+        self.assertEqual(res["remaining_amount"], 100.0)
+        self.assertEqual(res["status"], "Requested")
+        self.assertEqual(res["payment_url"], "https://pay.example/PR-REMAINDER-2")
+        # Provisional Phone row for remaining 100 must be placed first so ERPNext get_amount() reads 100,
+        # while keeping PR-PAID-1's received row intact!
+        self.assertEqual(len(invoice.payments), 2)
+        self.assertEqual(invoice.payments[0].amount, 100.0)
+        self.assertEqual(invoice.payments[0].custom_tender_received, 0)
+        self.assertEqual(invoice.payments[1].reference_no, "PR-PAID-1")
+        self.assertEqual(invoice.payments[1].custom_tender_received, 1)
+
+    @patch("erpnext.accounts.doctype.payment_request.payment_request.make_payment_request")
+    @patch(f"{MOD}.frappe.get_all")
+    @patch(f"{MOD}.frappe.db.get_value")
+    @patch(f"{MOD}.frappe.get_doc")
+    @patch(f"{MOD}._phone_gateway")
+    @patch(f"{MOD}._resolve_session")
+    @patch(f"{MOD}.frappe.set_user")
+    def test_create_payment_request_blocks_second_gateway_after_default_changes(
+        self,
+        mock_set_user,
+        mock_resolve_session,
+        mock_phone_gateway,
+        mock_get_doc,
+        mock_db_get_value,
+        mock_get_all,
+        mock_make_pr,
+    ):
+        """R7 P0-2: if a Paid Phone PR exists on gateway A and the default gateway changes to B
+        before the grown check requests payment again, keep the check blocked on gateway A."""
+        session = MagicMock(name="SESS-GW", invoice="POS-INV-GW", ordering_profile="Profile A")
+        session.name = "SESS-GW"
+        mock_resolve_session.return_value = session
+
+        profile = MagicMock(enable_customer_payment=1, enable_payment_link=0, pos_profile="Till A")
+        mock_phone_gateway.return_value = (
+            frappe._dict(name="P2 Preferred - URY", payment_account="P2 Preferred - URY"),
+            "P2 Preferred",
+            "P2 Preferred - URY",
+        )
+
+        invoice = MagicMock(docstatus=0, name="POS-INV-GW", company="URY", currency="USD", payments=[])
+        invoice.get.side_effect = lambda key, default=None: {
+            "grand_total": 200.0,
+            "rounded_total": 200.0,
+            "outstanding_amount": 0.0,
+        }.get(key, default)
+        invoice.precision.return_value = 2
+        mock_get_doc.side_effect = lambda dt, name=None, **kw: (
+            profile if dt == "URY Self Ordering Profile" else invoice
+        )
+        mock_db_get_value.return_value = None
+
+        paid_pr = frappe._dict(
+            name="PR-PAID-OLD",
+            currency="USD",
+            grand_total=100.0,
+            outstanding_amount=0.0,
+            status="Paid",
+            payment_gateway_account="P2 Test - URY",
+            mode_of_payment="P2 Phone",
+        )
+        mock_get_all.side_effect = lambda doctype, filters=None, **kw: (
+            [paid_pr]
+            if doctype == "Payment Request"
+            and isinstance((filters or {}).get("status"), list)
+            and filters["status"][0] == "in"
+            else []
+        )
+
+        res = create_payment_request("session-token")
+        mock_make_pr.assert_not_called()
+        self.assertEqual(
+            (res["payment_request"], res["status"], res["payment_url"]),
+            ("PR-PAID-OLD", "Paid", None),
+        )
+        self.assertEqual((res["paid_amount"], res["remaining_amount"]), (100.0, 100.0))
+
 
 class TestSharePaymentLink(unittest.TestCase):
     def tearDown(self):

@@ -51,7 +51,7 @@ export default function ApprovalPinDialog({
   const [staffLoading, setStaffLoading] = useState(false);
   const [clearingUser, setClearingUser] = useState<string | null>(null);
 
-  const showStaffTab = Boolean(canManagePins && posProfile);
+  const showStaffTab = Boolean(canManagePins && posProfile && !status.external_verifier);
 
   useEffect(() => {
     if (!open) {

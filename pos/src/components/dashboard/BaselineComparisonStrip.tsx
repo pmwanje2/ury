@@ -18,6 +18,7 @@ interface BaselineComparison {
 }
 
 interface BaselineComparisonStripProps {
+  currency?: string;
   branch?: string;
 }
 
@@ -37,7 +38,7 @@ function DeltaLabel({ pct, positiveIsGood = true }: { pct: number | null; positi
 // card language: current value, delta vs a rolling same-weekday/same-time
 // baseline. Renders standalone; a missing/zero-sample baseline degrades to
 // "no baseline yet" rather than blocking the strip.
-export default function BaselineComparisonStrip({ branch }: BaselineComparisonStripProps) {
+export default function BaselineComparisonStrip({ branch, currency }: BaselineComparisonStripProps) {
   const [comparison, setComparison] = useState<BaselineComparison | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,11 +100,11 @@ export default function BaselineComparisonStrip({ branch }: BaselineComparisonSt
             <div className="p-3 bg-gray-50 rounded-lg">
               <p className="text-xs text-gray-600 mb-1">{t('dash_cards.sales_so_far')}</p>
               <p className="font-mono text-xl font-semibold text-gray-900">
-                {formatCurrency(comparison.current.sales)}
+                {formatCurrency(comparison.current.sales, currency)}
               </p>
               <p className="text-xs mt-1">
                 <DeltaLabel pct={comparison.delta.sales_pct} />
-                <span className="text-gray-500"> {t('dash_cards.vs_usual', { value: formatCurrency(comparison.baseline.sales) })}</span>
+                <span className="text-gray-500"> {t('dash_cards.vs_usual', { value: formatCurrency(comparison.baseline.sales, currency) })}</span>
               </p>
             </div>
             <div className="p-3 bg-gray-50 rounded-lg">

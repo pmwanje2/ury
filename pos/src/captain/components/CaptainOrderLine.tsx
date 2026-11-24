@@ -14,6 +14,7 @@ interface CaptainOrderLineProps {
   onRemove?: () => void;
   onRestore?: () => void;
   onEditNote?: () => void;
+  currency?: string;
 }
 
 /**
@@ -30,6 +31,7 @@ const CaptainOrderLine: React.FC<CaptainOrderLineProps> = ({
   onRemove,
   onRestore,
   onEditNote,
+  currency,
 }) => {
   const displayQty = variant === 'confirmed' ? line.confirmedQty : variant === 'reduction' ? Math.abs(line.delta) : line.delta;
   const sign = variant === 'delta' ? '+' : variant === 'reduction' ? '−' : '';
@@ -68,7 +70,7 @@ const CaptainOrderLine: React.FC<CaptainOrderLineProps> = ({
             {line.comment}
           </p>
         )}
-        <p className="text-xs text-gray-500 mt-0.5">{formatCurrency(line.price * displayQty)}</p>
+        <p className="text-xs text-gray-500 mt-0.5">{formatCurrency(line.price * displayQty, currency)}</p>
       </button>
 
       <div className="flex items-center gap-1 shrink-0">

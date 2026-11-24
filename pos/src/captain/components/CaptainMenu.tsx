@@ -32,6 +32,8 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
     fetchMenuItems,
     addToOrder,
     isOrderInteractionDisabled,
+    posProfile,
+    currency,
   } = usePOSStore();
 
   useEffect(() => {
@@ -116,6 +118,7 @@ const CaptainMenu: React.FC<CaptainMenuProps> = ({ canAddItems }) => {
             {filteredItems.map((item) => (
               <MenuCard
                 key={item.id}
+                currency={posProfile?.currency || currency}
                 id={item.id}
                 name={item.name}
                 price={item.price}
