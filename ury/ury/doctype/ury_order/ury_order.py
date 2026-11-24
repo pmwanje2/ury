@@ -4359,8 +4359,19 @@ def _lock_settlement_customer(customer, profile):
         return row[0][1] if row else None
 
 
-def _enforce_on_account(invoice, profile, customer_disabled, target=None):
+def _enforce_on_account(
+    invoice,
+    profile,
+    customer_disabled,
+    target=None,
+    *,
+    on_account_approval=None,
+    on_account_reason=None,
+    consume_token=True,
+):
+    from ury.ury_pos import override
     from ury.ury_pos.credit import balance, credit_limit, default_accounts, require_credit_access
+    from ury.ury_pos.offline_tenders import currency_precision
 
     bills = (invoice, target) if target else (invoice,)
     proposed = 0
@@ -4371,6 +4382,9 @@ def _enforce_on_account(invoice, profile, customer_disabled, target=None):
                 frappe.throw(_("Missing invoice conversion rate."))
             proposed += remaining * flt(bill.conversion_rate)
     if not proposed:
+        invoice.flags.pos_verified_on_account_checked = True
+        if target:
+            target.flags.pos_verified_on_account_checked = True
         return
     customer = invoice.customer
     if not customer or not profile.customer or customer in default_accounts(profile):
@@ -4387,12 +4401,71 @@ def _enforce_on_account(invoice, profile, customer_disabled, target=None):
             frappe.ValidationError,
         )
     projected = balance(customer, invoice.company, invoice.name, current=True) + proposed
-    precision = invoice.precision("base_grand_total")
+    raw_company_currency = frappe.get_cached_value("Company", invoice.company, "default_currency")
+    acct_currency = (
+        raw_company_currency.strip()
+        if isinstance(raw_company_currency, str) and raw_company_currency.strip()
+        else (invoice.get("currency") or profile.get("currency") or "")
+    )
+    claim_prec = currency_precision(acct_currency)
+    precision = max(invoice.precision("base_grand_total"), claim_prec)
     if flt(projected, precision) > flt(limit, precision):
-        frappe.throw(
-            coded_message("CREDIT-004", _("The charge exceeds the available credit.")),
-            frappe.ValidationError,
+        rounded_proposed = round(flt(proposed), claim_prec)
+        rounded_limit = round(flt(limit), claim_prec)
+        approval_key = (customer, rounded_proposed, rounded_limit)
+        already_verified = getattr(getattr(invoice, "flags", None), "pos_verified_on_account_override", None)
+        if already_verified == approval_key:
+            invoice.flags.pos_verified_on_account_checked = True
+            if target:
+                target.flags.pos_verified_on_account_checked = True
+            return True
+        # Native Customer Credit Limit / bypass_credit_limit_check / credit_controller
+        # NEVER silently bypass at the till: an over-limit charge requires consumed
+        # `on_account_over_limit` manager PIN approval.
+        if not on_account_approval:
+            frappe.throw(
+                coded_message("CREDIT-004", _("The charge exceeds the available credit."))
+                + " [POS-AUTH-REQUIRED]",
+                frappe.ValidationError,
+            )
+        # Two-step draft save (`make_invoice(..., submit_invoice=0)`): defer consuming
+        # the single-use approval token until actual submission (`submit_order_invoice`).
+        if not consume_token:
+            return True
+        claim = {
+            "customer": customer,
+            "company": invoice.company,
+            "proposed": rounded_proposed,
+            "limit": rounded_limit,
+            "currency": acct_currency,
+            "reason": (on_account_reason or "").strip(),
+        }
+        consumed = override.consume(
+            on_account_approval,
+            "on_account_over_limit",
+            profile.name,
+            invoice.name,
+            claim,
         )
+        approver = consumed.get("approver") if isinstance(consumed, dict) else getattr(consumed, "approver", None)
+        approved_reason = (
+            (
+                (consumed.get("claim") or {}).get("reason")
+                if isinstance(consumed, dict)
+                else (getattr(consumed, "claim", None) or {}).get("reason")
+            )
+            or (on_account_reason or "").strip()
+        )
+        invoice.custom_override_approver = approver
+        invoice.custom_override_reason = str(approved_reason)[:200]
+        invoice.flags.pos_verified_on_account_override = approval_key
+        if target:
+            target.custom_override_approver = approver
+            target.custom_override_reason = str(approved_reason)[:200]
+            target.flags.pos_verified_on_account_override = approval_key
+    invoice.flags.pos_verified_on_account_checked = True
+    if target:
+        target.flags.pos_verified_on_account_checked = True
     return True
 
 
@@ -5005,6 +5078,14 @@ def make_invoice(
     room_number=None,
     client_order_id=None,
     round_id=None,
+    room_charge_stay=None,
+    room_charge_approval=None,
+    room_charge_reason=None,
+    on_account_approval=None,
+    on_account_reason=None,
+    offline_replay=0,
+    offline_approval=None,
+    offline_reason=None,
     tip=None,
     tip_server=None,
     halo_approval_token=None,
@@ -5204,7 +5285,15 @@ def make_invoice(
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
         _validate_confirmed_phone_payments(invoice, invoice.payments)
         _validate_confirmed_phone_payments(target, target.payments)
-        if _enforce_on_account(invoice, pos_prof, customer_disabled, target):
+        if _enforce_on_account(
+            invoice,
+            pos_prof,
+            customer_disabled,
+            target,
+            on_account_approval=on_account_approval,
+            on_account_reason=on_account_reason,
+            consume_token=bool(submit_invoice),
+        ):
             if target.company != invoice.company or target.pos_profile != invoice.pos_profile or target.docstatus != 0:
                 frappe.throw(_('Merged credit bills must be open on the same till.'))
             _set_settlement_customer(target, customer)
@@ -5214,15 +5303,18 @@ def make_invoice(
         
         frappe.flags.in_bill_merge_sync = True
         prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
         prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
         if target_existing:
             frappe.flags.ury_server_tender_received = True
+        frappe.flags.pos_server_override_fields = True
         if discount_spec["has_any_arg"]:
             frappe.flags.ury_server_discount_write = True
         try:
             target.save(ignore_permissions=True)
         finally:
             frappe.flags.ury_server_tender_received = prev_tender_flag
+            frappe.flags.pos_server_override_fields = prev_override_flag
             frappe.flags.ury_server_discount_write = prev_disc_flag
             frappe.flags.in_bill_merge_sync = False
             
@@ -5234,9 +5326,40 @@ def make_invoice(
         for row_dict in reconciled_payments:
             invoice.append("payments", row_dict)
 
+    from ury.ury_pos import offline_tenders, room_charge
+
+    offline_tenders.enforce_offline_tender_replay(
+        invoice,
+        pos_prof,
+        invoice.payments,
+        offline_replay=offline_replay,
+        offline_approval=offline_approval,
+        offline_reason=offline_reason,
+        consume_token=bool(submit_invoice),
+        _frappe=frappe,
+    )
+    rc_outcome = room_charge.enforce_room_charge_settlement(
+        invoice,
+        pos_prof,
+        invoice.payments,
+        room_number=incoming_room or None,
+        room_charge_stay=room_charge_stay,
+        room_charge_approval=room_charge_approval,
+        room_charge_reason=room_charge_reason,
+        consume_token=bool(submit_invoice),
+        _frappe=frappe,
+    )
+
     invoice.set_paid_amount()
     if not target:
-        _enforce_on_account(invoice, pos_prof, customer_disabled)
+        _enforce_on_account(
+            invoice,
+            pos_prof,
+            customer_disabled,
+            on_account_approval=on_account_approval,
+            on_account_reason=on_account_reason,
+            consume_token=bool(submit_invoice),
+        )
     invoice.set_outstanding_amount()
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
@@ -5250,9 +5373,11 @@ def make_invoice(
 
     # invoice.owner = owner
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+    prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
     if existing_received_tenders:
         frappe.flags.ury_server_tender_received = True
+    frappe.flags.pos_server_override_fields = True
     if discount_spec["has_any_arg"]:
         frappe.flags.ury_server_discount_write = True
     try:
@@ -5260,6 +5385,7 @@ def make_invoice(
             invoice.save()
     finally:
         frappe.flags.ury_server_tender_received = prev_tender_flag
+        frappe.flags.pos_server_override_fields = prev_override_flag
         frappe.flags.ury_server_discount_write = prev_disc_flag
 
     if not submit_invoice:
@@ -5287,7 +5413,20 @@ def make_invoice(
     if target:
         # Saving the primary runs on_update, which saves a separate copy of the partner.
         target.reload()
-    _submit_and_release_tables(invoice, pos_prof, customer_disabled, target)
+    prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
+    if rc_outcome and rc_outcome.get("override_approver"):
+        frappe.flags.kamra_room_charge_override = {
+            "reservation": rc_outcome.get("reservation"),
+            "room": rc_outcome.get("room_number"),
+            "amount": rc_outcome.get("amount"),
+            "currency": rc_outcome.get("currency"),
+            "approver": rc_outcome.get("override_approver"),
+            "reason": rc_outcome.get("override_reason"),
+        }
+    try:
+        _submit_and_release_tables(invoice, pos_prof, customer_disabled, target)
+    finally:
+        frappe.flags.kamra_room_charge_override = prev_rc_flag
     return {"name": invoice.name, "status": "Submitted"}
 
 
@@ -5302,16 +5441,36 @@ def _check_held_before_settlement(invoice, preserve_resolved=False):
         frappe.throw(_("URY_HELD_NOT_FIRED: Fire or remove held items before settlement."))
 
 
-def _submit_and_release_tables(invoice, profile, customer_disabled, target=None):
+def _submit_and_release_tables(
+    invoice,
+    profile,
+    customer_disabled,
+    target=None,
+    *,
+    on_account_approval=None,
+    on_account_reason=None,
+):
     credit_partner = None
     if target:
         invoice.flags.ignore_payment_sync = True
-    if _enforce_on_account(invoice, profile, customer_disabled, target) and target:
+    if (
+        _enforce_on_account(
+            invoice,
+            profile,
+            customer_disabled,
+            target,
+            on_account_approval=on_account_approval,
+            on_account_reason=on_account_reason,
+        )
+        and target
+    ):
         if (target.customer, target.company, target.pos_profile, target.docstatus) != (
             invoice.customer, invoice.company, invoice.pos_profile, 0
         ):
             frappe.throw(_('Merged credit bills must belong to the same account and till.'))
         credit_partner = target
+    prev_override_flag = getattr(frappe.flags, "pos_server_override_fields", False)
+    frappe.flags.pos_server_override_fields = True
     try:
         if credit_partner:
             # Both halves must post in this transaction with the allocated tenders.
@@ -5325,8 +5484,12 @@ def _submit_and_release_tables(invoice, profile, customer_disabled, target=None)
                 frappe.flags.in_bill_merge_sync = previous
         else:
             invoice.submit()
+    except frappe.PermissionError:
+        raise
     except Exception as e:
         frappe.throw(f"Error while settling order: {e}")
+    finally:
+        frappe.flags.pos_server_override_fields = prev_override_flag
 
     # Free the table when no other open drafts remain on this table group
     release_invoice = invoice
@@ -5350,7 +5513,15 @@ def _submit_and_release_tables(invoice, profile, customer_disabled, target=None)
 
 
 @frappe.whitelist()
-def submit_order_invoice(invoice):
+def submit_order_invoice(
+    invoice,
+    on_account_approval=None,
+    on_account_reason=None,
+    room_charge_approval=None,
+    room_charge_reason=None,
+    offline_approval=None,
+    offline_reason=None,
+):
     doc = frappe.get_doc("POS Invoice", invoice)
     if doc.docstatus == 1:
         return {"name": doc.name, "status": "Submitted"}
@@ -5363,10 +5534,48 @@ def submit_order_invoice(invoice):
         return {'name': doc.name, 'status': 'Submitted'}
     if (doc.customer, doc.pos_profile) != (customer, profile_name):
         frappe.throw(_('The order changed; reopen settlement.'))
+    from ury.ury_pos import offline_tenders, room_charge
+
+    offline_tenders.enforce_offline_tender_replay(
+        doc,
+        profile,
+        doc.payments,
+        offline_approval=offline_approval,
+        offline_reason=offline_reason,
+        _frappe=frappe,
+    )
+    rc_outcome = room_charge.enforce_room_charge_settlement(
+        doc,
+        profile,
+        doc.payments,
+        room_charge_approval=room_charge_approval,
+        room_charge_reason=room_charge_reason,
+        _frappe=frappe,
+    )
     target = frappe.get_doc('POS Invoice', doc.custom_merged_pos_invoice, for_update=True) if doc.custom_merged_pos_invoice else None
     if target:
         doc.flags.ignore_payment_sync = True
-    _submit_and_release_tables(doc, profile, customer_disabled, target)
+    prev_rc_flag = getattr(frappe.flags, "kamra_room_charge_override", None)
+    if rc_outcome and rc_outcome.get("override_approver"):
+        frappe.flags.kamra_room_charge_override = {
+            "reservation": rc_outcome.get("reservation"),
+            "room": rc_outcome.get("room_number"),
+            "amount": rc_outcome.get("amount"),
+            "currency": rc_outcome.get("currency"),
+            "approver": rc_outcome.get("override_approver"),
+            "reason": rc_outcome.get("override_reason"),
+        }
+    try:
+        _submit_and_release_tables(
+            doc,
+            profile,
+            customer_disabled,
+            target,
+            on_account_approval=on_account_approval,
+            on_account_reason=on_account_reason,
+        )
+    finally:
+        frappe.flags.kamra_room_charge_override = prev_rc_flag
     return {"name": doc.name, "status": "Submitted"}
         
         

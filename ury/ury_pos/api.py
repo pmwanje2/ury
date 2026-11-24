@@ -304,14 +304,28 @@ def getRoom():
 
 @frappe.whitelist()
 def getModeOfPayment():
+    from ury.ury_pos.offline_tenders import profile_offline_payment_modes
+
     posDetails = getPosProfile()
     posProfile = posDetails["pos_profile"]
     posProfiles = frappe.get_doc("POS Profile", posProfile)
     mode_of_payments = posProfiles.payments
+    offline_by_mode = {
+        row["mode_of_payment"]: row
+        for row in profile_offline_payment_modes(
+            posProfiles, posDetails.get("room_charge_modes"), _frappe=frappe
+        )
+    }
     modeOfPayments = []
     for mop in mode_of_payments:
+        meta = offline_by_mode.get(mop.mode_of_payment, {})
         modeOfPayments.append(
-            {"mode_of_payment": mop.mode_of_payment, "opening_amount": float(0)}
+            {
+                "mode_of_payment": mop.mode_of_payment,
+                "opening_amount": float(0),
+                "allow_offline": bool(meta.get("allow_offline")),
+                "requires_reference": bool(meta.get("requires_reference")),
+            }
         )
     return modeOfPayments
 
@@ -464,6 +478,7 @@ def get_split_group(invoice):
         "name",
         "ury_client_order_id",
         "currency",
+        "conversion_rate",
         "custom_split_from",
         "custom_split_group",
         "invoice_printed",
@@ -658,7 +673,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -681,7 +696,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type,
@@ -703,7 +718,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -723,7 +738,7 @@ def getPosInvoice(status, limit, limit_start):
         invoices = frappe.db.sql(
             """
             SELECT 
-                name, currency, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
+                name, currency, conversion_rate, invoice_printed, custom_printing_time, grand_total, restaurant_table, custom_merged_tables,
                 cashier, waiter, net_total, posting_time, 
                 total_taxes_and_charges, customer, customer_name, no_of_pax, creation, status, mobile_number,
                 posting_date, rounded_total, order_type, additional_discount_percentage,
@@ -785,6 +800,7 @@ def searchPosInvoice(query,status):
         fields=[
             "name",
             "currency",
+            "conversion_rate",
             "customer",
             "customer_name",
             "no_of_pax",
@@ -987,6 +1003,12 @@ def getPosProfile():
     room_charge_modes, room_charge_unconfigured = _room_charge_config(
         payment_mode_accounts, company, room_lookup_method
     )
+    from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
+
+    offline_payment_modes = profile_offline_payment_modes(
+        pos_profiles, room_charge_modes, _frappe=frappe
+    )
+    till_offline_limit = offline_tender_limit(pos_profiles)
 
     invoice_details = {
         "pos_profile": pos_profile_name,
@@ -1057,6 +1079,8 @@ def getPosProfile():
         "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": room_lookup_method,
+        "offline_tender_limit": till_offline_limit,
+        "offline_payment_modes": offline_payment_modes,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),
         **_drawer_kick_profile_fields(pos_profiles),
         **get_default_customer_config(pos_profiles),
@@ -1107,6 +1131,8 @@ def getPosProfileFull(pos_profile):
     if profile.branch != branch_name:
         frappe.throw(frappe._("Not permitted to view this POS Profile"), frappe.PermissionError)
 
+    from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
+
     return {
         "name": profile.name,
         "owner": profile.owner,
@@ -1141,6 +1167,8 @@ def getPosProfileFull(pos_profile):
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
+        "offline_tender_limit": offline_tender_limit(profile),
+        "offline_payment_modes": profile_offline_payment_modes(profile, _frappe=frappe),
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # native ERPNext open-discount switch (default 0); gates Open amount/percent keypad
@@ -3695,9 +3723,27 @@ def credit_accounts(pos_profile: str, query: str):
         fields=['name','customer_name','credit_limits.credit_limit as limit_amount'],
         order_by='customer_name asc, name asc', page_length=20)
     currency = frappe.get_cached_value('Company', profile.company, 'default_currency')
+    profile_currency = (profile.get('currency') or currency or '').strip()
+    conversion_rate = 1.0
+    if profile_currency and currency and profile_currency.upper() != str(currency).strip().upper():
+        try:
+            from erpnext.setup.utils import get_exchange_rate
+
+            conversion_rate = frappe.utils.flt(get_exchange_rate(profile_currency, currency)) or 0.0
+        except Exception:
+            conversion_rate = 0.0
+        if conversion_rate <= 0:
+            conversion_rate = frappe.utils.flt(
+                frappe.db.get_value(
+                    'Currency Exchange',
+                    {'from_currency': profile_currency, 'to_currency': currency},
+                    'exchange_rate',
+                )
+            ) or 0.0
     result = []
     for row in accounts:
         outstanding = balance(row.name, profile.company)
         result.append(dict(name=row.name, customer_name=row.customer_name, balance=outstanding,
-                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding, currency=currency))
+                           limit=row.limit_amount, available=frappe.utils.flt(row.limit_amount)-outstanding,
+                           currency=currency, conversion_rate=conversion_rate))
     return result

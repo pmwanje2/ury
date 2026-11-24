@@ -19,6 +19,7 @@ export interface POSInvoice {
   ury_client_order_id?: string | null;
   name: string;
   currency?: string;
+  conversion_rate?: number | null;
   invoice_printed: number;
   custom_printing_time?: string | null;
   grand_total: number;
