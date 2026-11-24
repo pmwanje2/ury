@@ -1752,6 +1752,58 @@ class TestAmendment1PrivilegesAndRuleMin(DiscountBase):
         )
         self.assertEqual(p100.get("privilege"), "complimentary")
 
+    def test_frappe_document_child_rows_without_dict_item_assignment_work_on_preview_apply_and_remove(self):
+        """Real Frappe POSInvoiceItem rows are Document objects (have .get/.set, NOT __setitem__)."""
+        class _FrappeChildRow:
+            def __init__(self, data):
+                self.__dict__.update(data)
+
+            def get(self, key, default=None):
+                return self.__dict__.get(key, default)
+
+            def set(self, key, value):
+                self.__dict__[key] = value
+
+            def __getitem__(self, key):
+                raise TypeError("'POSInvoiceItem' object is not subscriptable")
+
+            def __setitem__(self, key, value):
+                raise TypeError("'POSInvoiceItem' object does not support item assignment")
+
+        self.approval_limits["Lakeside Hotel"] = Row(
+            max_document_discount_percent="0",
+            discount_limits_by_role="URY Cashier: 20",
+            discount_approver_role="URY Manager",
+        )
+        check = self._register_check(FakePOSInvoice("CHK-DOCROW", items=[]))
+        check.items = [_FrappeChildRow(dict(_item("r1", "FISH", 1, 50000)))]
+        check.calculate_taxes_and_totals = lambda: (
+            setattr(check, "grand_total", 50000 - (5000 if check.items[0].get("discount_percentage") == 10 else 0)),
+            setattr(check, "rounded_total", check.grand_total),
+            setattr(check, "net_total", check.grand_total),
+        )
+        self._patch_settlement_helpers(check)
+
+        # Preview restores snapshot without TypeError
+        prev = self.order.preview_settlement_totals(
+            invoice="CHK-DOCROW",
+            pos_profile="Lakeside Till",
+            line_discounts=[{"row": "r1", "percent": 10}],
+            discount_reason="Complaint",
+        )
+        self.assertEqual(prev["after_total"], 45000)
+
+        # Apply line discount and then remove single row without TypeError
+        self.order.apply_check_discount(
+            invoice="CHK-DOCROW",
+            pos_profile="Lakeside Till",
+            line_discounts=[{"row": "r1", "percent": 10}],
+            discount_reason="Complaint",
+        )
+        self.assertEqual(check.items[0].get("discount_percentage"), 10)
+        self.order.remove_check_discount(invoice="CHK-DOCROW", pos_profile="Lakeside Till", row="r1")
+        self.assertEqual(check.items[0].get("discount_percentage"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
