@@ -148,7 +148,7 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
     } finally {
       setLoading(false);
     }
-  }, [posProfileName, paidOutTarget]);
+  }, [posProfileName, paidOutTarget, posProfile?.cash_pull_threshold]);
 
   const loadClosedTills = useCallback(async () => {
     if (!posProfileName) return;
@@ -964,26 +964,27 @@ const TillCashDialog = ({ open, onOpenChange }: TillCashDialogProps) => {
                     <>
                       <div className="space-y-2">
                         {closedTills.map((row) => (
-                          <button
+                          <Button
                             key={row.name}
                             type="button"
+                            variant="outline"
                             onClick={() => setSelectedClosing(row.name)}
-                            className={`w-full text-start rounded-lg border p-3 transition-colors min-h-11 ${
+                            className={`h-auto w-full flex-col items-stretch justify-start text-start rounded-lg border p-3 transition-colors min-h-11 ${
                               selectedClosing === row.name
-                                ? 'border-blue-600 bg-blue-50'
+                                ? 'border-blue-600 bg-blue-50 hover:bg-blue-50'
                                 : 'border-border hover:bg-gray-50'
                             }`}
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex w-full flex-wrap items-center justify-between gap-2">
                               <span className="font-semibold text-sm text-gray-900">{row.name}</span>
                               <span className="text-xs text-gray-600">
                                 {row.period_end_date || row.posting_date}
                               </span>
                             </div>
-                            <p className="text-xs text-gray-600 mt-0.5">
+                            <p className="text-xs text-gray-600 mt-0.5 font-normal">
                               {row.user_name || row.user} · {row.pos_opening_entry}
                             </p>
-                          </button>
+                          </Button>
                         ))}
                       </div>
 

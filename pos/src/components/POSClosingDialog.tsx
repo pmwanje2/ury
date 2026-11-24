@@ -9,7 +9,7 @@ import {
   DialogTitle,
   messageToPlainText,
 } from '@ury/ui';
-import { Button, Input } from '@ury/ui';
+import { Button, Checkbox, Input, Select, SelectItem } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { call, db, formatCurrency, shouldMaskAmounts } from '@ury/core';
 import { t } from '../i18n';
@@ -470,6 +470,8 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setHiddenRows(hidden);
       setTouchedModes(new Set());
       setOverShortReason('');
+      setCloseOtherToken(null);
+      setCloseOtherReason(null);
     },
     [posProfile, user, blindCashCount, paymentModes],
   );
@@ -544,6 +546,8 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setBlindVarianceMessage(null);
       setShowForceClose(false);
       setOverShortReason('');
+      setCloseOtherToken(null);
+      setCloseOtherReason(null);
     }
     onOpenChange(next);
   };
@@ -752,12 +756,22 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         rawMsg.includes('POS-CLOSE-VARIANCE-APPROVAL') ||
         /outside this till's allowed variance/i.test(rawMsg)
       ) {
+        // Backend defers consuming close_other_approval_token until variance checks pass;
+        // retain the unburned token so the subsequent over_short_close PIN retry succeeds.
+        const retainedOtherToken = tokens?.closeOtherToken ?? closeOtherToken;
+        const retainedOtherReason = tokens?.closeOtherReasonOverride ?? closeOtherReason;
+        if (retainedOtherToken) {
+          setCloseOtherToken(retainedOtherToken);
+          setCloseOtherReason(retainedOtherReason ?? null);
+        }
         setBlindVarianceMessage(
           rawText.includes('POS-CLOSE-VARIANCE-APPROVAL')
             ? messageToPlainText(rawText)
             : rawMsg,
         );
       } else {
+        setCloseOtherToken(null);
+        setCloseOtherReason(null);
         setSubmitError(rawMsg);
       }
     } finally {
@@ -1110,7 +1124,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                     </span>
                   </div>
                   {availableOpenTills.length > 1 && (
-                    <select
+                    <Select
                       id="pos-closing-till-select"
                       value={openingEntry.name}
                       disabled={isSubmitting}
@@ -1118,14 +1132,14 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                         const found = availableOpenTills.find((entry) => entry.name === e.target.value);
                         if (found) void loadEntryDetails(found);
                       }}
-                      className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+                      className="min-h-11"
                     >
                       {availableOpenTills.map((entry) => (
-                        <option key={entry.name} value={entry.name}>
+                        <SelectItem key={entry.name} value={entry.name}>
                           {(entry.user_name || entry.user)} — {entry.name}
-                        </option>
+                        </SelectItem>
                       ))}
-                    </select>
+                    </Select>
                   )}
                   {isClosingOther && (
                     <p className="text-xs font-medium text-amber-800">
@@ -1303,8 +1317,8 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   )}
                   {(pendingCashMovements > 0 || (closePreview?.pending_movements_count ?? 0) > 0) && (
                     <label className="flex items-center gap-2 text-xs text-red-900">
-                      <input
-                        type="checkbox"
+                      <Checkbox
+                        size="sm"
                         checked={discardPendingOnForce}
                         onChange={(e) => setDiscardPendingOnForce(e.target.checked)}
                       />

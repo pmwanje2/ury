@@ -332,7 +332,14 @@ def record_till_cash_movement(
 	reference=None,
 	approval_token=None,
 ):
-	"""Create (and submit if within threshold or Manager PIN approved) a native Cash Entry Journal Entry."""
+	"""Create (and submit if within threshold or Manager PIN approved) a native Cash Entry Journal Entry.
+
+	Delegates ALL movement types (Pickup, Loan, Paid Out, Paid In) through
+	``till_controls._record_cash_movement_impl`` so currency decimal precision (0/2/3dp),
+	drawer collision checks, privilege/PIN gates (including ``cash_loan``), Paid-Out
+	Data threshold semantics (None vs 0), ``tip_server`` attribution, and multi-currency
+	FX rules are enforced identically across every entry point.
+	"""
 	profile = frappe.get_doc("POS Profile", pos_profile)
 	_check_profile_access(profile)
 
@@ -341,83 +348,22 @@ def record_till_cash_movement(
 			coded_message("CASH-DISABLED", _("Till cash movements are not enabled on this POS Profile."))
 		)
 
-	movement_type = (movement_type or "").strip()
-	if approval_token or movement_type == "Paid In":
-		from ury.ury_pos.till_controls import record_cash_movement
+	from ury.ury_pos.till_controls import _record_cash_movement_impl
 
-		return record_cash_movement(
-			pos_profile=pos_profile,
-			movement_type=movement_type,
-			amount=amount,
-			reason=reason,
-			reference=reference,
-			paid_out_target=paid_out_target,
-			pos_opening_entry=pos_opening_entry,
-			approval_token=approval_token,
-			tip_server=tip_server,
-		)
-
-	if movement_type not in LEAVES_DRAWER:
-		frappe.throw(
-			coded_message("CASH-TYPE", _("Choose Pickup, Loan, Paid Out or Paid In for a till cash movement."))
-		)
-
-	precision = frappe.get_precision("Journal Entry Account", "debit_in_account_currency") or 2
-	amount_val = flt(amount, precision)
-	if amount_val <= 0:
-		frappe.throw(coded_message("CASH-AMOUNT", _("Amount must be greater than zero.")))
-
-	opening = _resolve_open_shift(profile, pos_opening_entry=pos_opening_entry, required=True)
-	drawer = _single_cash_drawer(profile)
-	counter = _counter_account(profile, movement_type, paid_out_target)
-	leaves = LEAVES_DRAWER[movement_type]
-	clean_reason = (reason or "").strip() or None
-	clean_ref = (reference or "").strip() or None
-	clean_server = (
-		(tip_server or "").strip() or None
-		if movement_type == "Paid Out" and (paid_out_target or "expense").strip().lower() == "tips"
-		else None
+	entry, resolved_profile = _record_cash_movement_impl(
+		pos_profile=pos_profile,
+		movement_type=movement_type,
+		amount=amount,
+		reason=reason,
+		reference=reference,
+		paid_out_target=paid_out_target,
+		pos_opening_entry=pos_opening_entry,
+		approval_token=approval_token,
+		tip_server=tip_server,
+		allow_pending_draft=not bool(approval_token),
+		return_entry=True,
 	)
-
-	posting_date = frappe.utils.nowdate()
-	company_currency = frappe.get_cached_value("Company", profile.company, "default_currency") or profile.currency
-	multi_currency, accounts = build_movement_je_accounts(
-		drawer=drawer,
-		counter=counter,
-		drawer_leaves=leaves,
-		profile_amount=amount_val,
-		profile_currency=profile.currency or company_currency,
-		company_currency=company_currency,
-		posting_date=posting_date,
-		cost_center=profile.cost_center,
-	)
-
-	entry = frappe.get_doc(
-		{
-			"doctype": "Journal Entry",
-			"voucher_type": "Cash Entry",
-			"company": profile.company,
-			"posting_date": posting_date,
-			"multi_currency": multi_currency,
-			"custom_pos_opening_entry": opening.name,
-			"custom_cash_movement_type": movement_type,
-			"custom_cash_movement_reason": clean_reason,
-			"custom_cash_movement_reference": clean_ref,
-			"custom_tip_server": clean_server,
-			"user_remark": clean_reason or _("{0} on shift {1}").format(movement_type, opening.name),
-			"accounts": accounts,
-		}
-	)
-	entry.flags.ignore_permissions = True
-	entry.insert()
-
-	threshold = paid_out_threshold(profile)
-	needs_second_person = movement_type == "Paid Out" and threshold is not None and amount_val > threshold
-	if not needs_second_person:
-		entry.flags.ignore_permissions = True
-		entry.submit()
-
-	return _serialize_movement(entry, profile, _can_approve_for_profile(profile))
+	return _serialize_movement(entry, resolved_profile, _can_approve_for_profile(resolved_profile))
 
 
 @frappe.whitelist()

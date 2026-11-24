@@ -34,7 +34,6 @@ let root: Root;
 type AnyDoc = never;
 const openingDoc = (balance_details: Array<{ mode_of_payment: string; opening_amount: number }>) =>
   ({ name: 'POS-OPE-1', balance_details }) as AnyDoc;
-const savedDoc = { name: 'POS-CLO-1' } as AnyDoc;
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
@@ -141,8 +140,9 @@ describe('blind cash count reconciliation', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     // The browser clock precedes opening; both blind-close payloads must still use server time.
     vi.setSystemTime(new Date('2026-10-01T06:31:00'));
-    const createDoc = vi.spyOn(db, 'createDoc').mockResolvedValue(savedDoc);
-    const updateDoc = vi.spyOn(db, 'updateDoc').mockResolvedValue(savedDoc);
+    const postSpy = vi.spyOn(call, 'post').mockResolvedValue({
+      message: { name: 'POS-CLO-1', docstatus: 1 },
+    });
 
     const dialogMarkup = () => {
       // Remounting changes React's generated title ID, not the cashier-visible UI.
@@ -174,33 +174,28 @@ describe('blind cash count reconciliation', () => {
     expect(getMainCashierPosInvoices).toHaveBeenLastCalledWith(
       '2026-10-01 08:10:00', '2026-10-01 10:12:13', 'POS-1', 'cashier@example.com'
     );
-    expect(createDoc).toHaveBeenCalledTimes(2);
-    expect(updateDoc).toHaveBeenCalledTimes(2);
-    expect(updateDoc).toHaveBeenLastCalledWith('POS Closing Entry', 'POS-CLO-1', { docstatus: 1 });
-    expect(createDoc.mock.calls[0]).toEqual(['POS Closing Entry', expect.objectContaining({
-      docstatus: 0,
-      period_end_date: '2026-10-01 10:12:13',
-      posting_date: '2026-10-01',
-      posting_time: '10:12:13',
-      payment_reconciliation: [{
-        mode_of_payment: 'Cash', opening_amount: 10, expected_amount: 110,
-        closing_amount: 100, difference: -10,
-      }],
-    })]);
-    expect(createDoc.mock.calls[1]).toEqual(['POS Closing Entry', expect.objectContaining({
-      docstatus: 0,
-      period_end_date: '2026-10-01 10:12:13',
-      payment_reconciliation: [
-        {
-          mode_of_payment: 'Cash', opening_amount: 10, expected_amount: 110,
-          closing_amount: 100, difference: -10,
-        },
-        {
-          mode_of_payment: 'Card', opening_amount: 0, expected_amount: 50,
-          closing_amount: 0, difference: -50,
-        },
-      ],
-    })]);
+    expect(postSpy).toHaveBeenCalledTimes(2);
+    expect(postSpy.mock.calls[0]).toEqual([
+      'ury.ury_pos.till_controls.close_till_with_controls',
+      expect.objectContaining({
+        pos_profile: 'POS-1',
+        pos_opening_entry: 'POS-OPE-1',
+        period_end_date: '2026-10-01 10:12:13',
+        counted_payments: [{ mode_of_payment: 'Cash', closing_amount: 100 }],
+      }),
+    ]);
+    expect(postSpy.mock.calls[1]).toEqual([
+      'ury.ury_pos.till_controls.close_till_with_controls',
+      expect.objectContaining({
+        pos_profile: 'POS-1',
+        pos_opening_entry: 'POS-OPE-1',
+        period_end_date: '2026-10-01 10:12:13',
+        counted_payments: [
+          { mode_of_payment: 'Cash', closing_amount: 100 },
+          { mode_of_payment: 'Card', closing_amount: 0 },
+        ],
+      }),
+    ]);
   });
 });
 
