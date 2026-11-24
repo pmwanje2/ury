@@ -55,6 +55,21 @@ import Notifications from '../components/Notifications';
 import { formatGuestSubtitle, formatStaffDisplayName } from '../lib/order-display';
 import { useStaffNames } from '../lib/use-staff-names';
 import type { OrderStatusType } from '../data/order-types';
+import type { BundleOverride, SelectedModifier } from '../lib/menu-api';
+
+function parseJsonArray<T>(raw: unknown): T[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as T[];
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as T[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 function getOrderTableLabel(order: Pick<POSInvoice, 'restaurant_table' | 'custom_merged_tables'>) {
   if (!order.restaurant_table) return null;
@@ -405,7 +420,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       }
       posStore.setSelectedCustomer({ id: order.customer, name: order.customer_name, phone: order.mobile_number });
       posStore.setGuestLabel(order.custom_guest_label || '');
-      // Fill cart
+      // Fill cart (preserving modifier & Product Bundle combo linkage/overrides)
       const items = (order.items || []).map((item: any) => ({
         id: item.item_code,
         name: item.item_name,
@@ -423,8 +438,18 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         ury_held: item.ury_held || 0,
         comment: item.comment || '',
         description: item.description || '',
-        special_dish: 0,
+        special_dish: 0 as 0 | 1,
         tax_rate: 0,
+        parentLineKey: item.custom_parent_line_key || null,
+        lineRole: item.custom_line_role || 'Standard',
+        isModifier: Number(item.custom_is_modifier || 0) === 1,
+        modifierPrefix: item.custom_modifier_prefix || null,
+        modifierGroup: item.custom_modifier_group || null,
+        modifierOption: item.custom_modifier_option || null,
+        selectedModifiers: parseJsonArray<SelectedModifier>(item.custom_modifiers_json),
+        bundleOverrides: parseJsonArray<BundleOverride>(item.custom_bundle_overrides_json),
+        inheritParentRouting: item.custom_inherit_parent_routing !== 0,
+        hideUnpricedOnReceipt: Number(item.custom_hide_unpriced_on_receipt || 0) === 1,
       }));
       for (const cartItem of items) {
         await posStore.addToOrder(cartItem);
@@ -465,7 +490,34 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       const parsedMessage = parseFrappeError(err) || (err instanceof Error ? err.message : null);
       if (!approval?.token && isAuthRequiredError(parsedMessage || err)) {
         const deltaQty = item.qty - newQty;
-        const amount = Math.round(Number(item.rate || 0) * deltaQty * 10000) / 10000;
+        let rawAmount = Number(item.rate || 0) * deltaQty;
+        // Include proportionally scaled linked child modifiers / combo upcharges
+        // to match `ury_pos_invoice_qty_reduction.reduce_order_item_qty` voided_amount.
+        const parentLineKey = item.reservation_line_key;
+        if (parentLineKey && Number(item.custom_is_modifier || 0) !== 1) {
+          for (const child of selectedOrderItems) {
+            if (
+              child.name === item.name ||
+              Number(child.custom_is_modifier || 0) !== 1 ||
+              child.custom_parent_line_key !== parentLineKey ||
+              Number(child.qty || 0) <= 0
+            ) {
+              continue;
+            }
+            const childQty = Number(child.qty || 0);
+            let childNewQty = childQty;
+            if (newQty === 0) {
+              childNewQty = 0;
+            } else if (item.qty > 0) {
+              const scaled = (childQty * newQty) / item.qty;
+              childNewQty = Math.abs(scaled - Math.round(scaled)) < 1e-6 ? Math.round(scaled) : childQty;
+            }
+            if (childNewQty < childQty) {
+              rawAmount += Number(child.rate || 0) * (childQty - childNewQty);
+            }
+          }
+        }
+        const amount = Math.round(rawAmount * 10000) / 10000;
         setPendingVoidApproval({
           order,
           item,
@@ -1017,7 +1069,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                     const discountPercentage = item.rate < item.price_list_rate
                       ? Math.round(((item.price_list_rate - item.rate) / item.price_list_rate) * 100)
                       : null;
+                    const isModifierRow = Number(item.custom_is_modifier || 0) === 1;
                     const canReduceQty =
+                      !isModifierRow &&
                       String(selectedOrder.invoice_printed) === '1' &&
                       isOrderEditable(selectedOrder.status) &&
                       !isMergedBill(selectedOrder) &&
@@ -1034,11 +1088,22 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                         : 0);
 
                     return (
-                      <div key={index} className="py-2 border-b border-gray-100">
+                      <div
+                        key={index}
+                        className={
+                          isModifierRow
+                            ? 'ms-4 ps-3 pe-1 py-1.5 border-b border-s-2 border-gray-100 border-s-blue-200 bg-gray-50/70 rounded-e text-xs'
+                            : 'py-2 border-b border-gray-100'
+                        }
+                      >
                         <div className="flex justify-between items-start gap-3">
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
-                              <p className="break-words text-sm font-medium text-gray-900">{item.item_name}</p>
+                              <p className={isModifierRow ? 'break-words text-xs font-medium text-gray-700' : 'break-words text-sm font-medium text-gray-900'}>
+                                {isModifierRow
+                                  ? `+ ${item.custom_modifier_prefix ? `${item.custom_modifier_prefix} ` : ''}${item.item_name}`
+                                  : item.item_name}
+                              </p>
                               {discountPercentage !== null && (
                                 <Badge className="shrink-0 bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50 text-xs">
                                   -{discountPercentage}%

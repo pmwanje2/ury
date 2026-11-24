@@ -231,7 +231,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         if (opt.price_mode === 'Menu Item Price') {
           sum += Number(opt.unit_price || 0) * (opt.qty || 1);
         } else if (opt.price_mode === 'Combo Upcharge') {
-          sum += Number(opt.upcharge_amount || opt.unit_price || 0) * (opt.qty || 1);
+          sum += Number(opt.unit_price ?? opt.upcharge_amount ?? 0) * (opt.qty || 1);
         }
       }
     }
@@ -257,7 +257,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
           const picked = chosenByCode.get(opt.option_code);
           const extraPrice =
             opt.price_mode === 'Combo Upcharge'
-              ? Number(opt.upcharge_amount || opt.unit_price || 0)
+              ? Number(opt.unit_price ?? opt.upcharge_amount ?? 0)
               : opt.price_mode === 'Menu Item Price'
                 ? Number(opt.unit_price || 0)
                 : 0;
@@ -368,7 +368,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
               inherit_parent_routing: grp.inherit_parent_routing ? 1 : 0,
               hide_on_receipt: grp.hide_unpriced_on_receipt ? 1 : 0,
             });
-            const upcharge = Number(opt.upcharge_amount || opt.unit_price || 0);
+            const upcharge = Number(opt.unit_price ?? opt.upcharge_amount ?? 0);
             if (opt.price_mode === 'Combo Upcharge' && upcharge > 0) {
               const feeItemCode = opt.upcharge_item || chosenItemCode;
               childRows.push({
@@ -433,8 +433,11 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
         modifier_groups: modifierGroups,
         quantity: numericQuantity,
         price: basePrice,
-        uniqueId: parentKey,
+        uniqueId: (editMode && itemToReplace?.uniqueId) || parentKey,
         reservationLineKey: parentKey,
+        ...(editMode && itemToReplace?.invoiceItemName
+          ? { invoiceItemName: itemToReplace.invoiceItemName }
+          : {}),
         comment: comments || undefined,
         isModifier: false,
         lineRole: isCombo ? 'Combo Header' : 'Standard',

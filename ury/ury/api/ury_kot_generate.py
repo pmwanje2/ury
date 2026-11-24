@@ -335,9 +335,11 @@ def _route_items_with_modifiers_and_combos(
         for production_unit in resolved_units:
             _add_to_station(production_unit, item)
 
-        # G4 Combo expansion: route chosen components (inheriting parent station or routing to own station e.g. Bar)
+        # G4 Combo expansion: route chosen components for BOTH forward and cancel KOTs so
+        # every station that received swapped components (e.g. Hot Kitchen + Bar) also receives
+        # matching cancel KOTs when the parent combo is reduced or cancelled.
         raw_overrides = item.get("custom_bundle_overrides_json")
-        if raw_overrides and not is_cancel:
+        if raw_overrides:
             overrides = parse_bundle_overrides(raw_overrides)
             for ov in overrides:
                 chosen_code = ov["chosen_item"]
@@ -346,11 +348,13 @@ def _route_items_with_modifiers_and_combos(
                     or ov.get("label")
                     or chosen_code
                 )
-                comp_qty = flt(ov.get("qty") or 1) * flt(item.get("qty") or 1)
+                unit_qty = flt(ov.get("qty") or 1)
+                comp_qty = unit_qty * flt(item.get("qty") or 1)
                 comp_row = {
                     "item_code": chosen_code,
                     "item_name": comp_name,
                     "qty": comp_qty,
+                    "combo_unit_qty": unit_qty,
                     "comments": ov.get("group") or "",
                     "reservation_line_key": f"{raw_key}::combo::{chosen_code}" if raw_key else None,
                     "custom_parent_line_key": raw_key or item.get("reservation_line_key"),
@@ -669,6 +673,24 @@ def create_cancel_kot_doc(
                         and not (cancel_line_key and item.get("reservation_line_key"))):
                     matched_item = item
                     break
+        if matched_item is None and cancelItem.get("custom_line_role") == "Combo Component":
+            parent_key = cancelItem.get("custom_parent_line_key")
+            parent_match = None
+            if parent_key:
+                for item in invoiceItems:
+                    if (
+                        item.get("reservation_line_key") == parent_key
+                        or _extract_raw_line_key(item) == parent_key
+                    ):
+                        parent_match = item
+                        break
+            unit_qty = flt(cancelItem.get("combo_unit_qty") or 1)
+            orig_qty = (
+                flt(parent_match["qty"]) * unit_qty
+                if parent_match is not None
+                else abs(flt(cancelItem["qty"]))
+            )
+            matched_item = {"qty": orig_qty}
         if matched_item is None:
             continue
         kot_cancel_doc.append(
@@ -725,19 +747,54 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
     if desk:
         previous_items = [row for row in previous_items or [] if not cint(row.get("ury_held"))]
         saved = pos_invoice.get("items") or []
-        if any(row.get("reservation_line_key") or cint(row.get("ury_held")) for row in saved):
+        if any(
+            row.get("reservation_line_key")
+            or cint(row.get("ury_held"))
+            or cint(row.get("custom_is_modifier"))
+            or row.get("custom_modifiers_json")
+            or row.get("custom_bundle_overrides_json")
+            for row in saved
+        ):
             by_name = {row.name: row for row in saved}
-            current_items = [dict(item_code=row.item_code, item_name=row.item_name, qty=row.qty,
-                                  comments=row.get("comment") or "",
-                                  reservation_line_key=row.get("reservation_line_key") or row.name)
-                             for row in saved if not cint(row.get("ury_held"))]
+            current_items = [
+                dict(
+                    item_code=row.item_code,
+                    item_name=row.item_name,
+                    qty=row.qty,
+                    comments=row.get("comment") or "",
+                    reservation_line_key=row.get("reservation_line_key") or row.name,
+                    custom_parent_line_key=row.get("custom_parent_line_key") or None,
+                    custom_line_role=row.get("custom_line_role") or "Standard",
+                    custom_is_modifier=cint(row.get("custom_is_modifier")),
+                    custom_modifier_prefix=row.get("custom_modifier_prefix") or "",
+                    custom_modifiers_json=row.get("custom_modifiers_json") or "",
+                    custom_bundle_overrides_json=row.get("custom_bundle_overrides_json") or "",
+                    custom_inherit_parent_routing=cint(row.get("custom_inherit_parent_routing", 1)),
+                )
+                for row in saved
+                if not cint(row.get("ury_held"))
+            ]
             baseline = []
             for row in previous_items:
                 child = by_name.get(row.get("name"))
                 if child and cint(child.get("ury_held")):
                     continue
                 key = child.get("reservation_line_key") if child else None
-                baseline.append(dict(row, reservation_line_key=key or _line_ref(row)))
+                merged = dict(row, reservation_line_key=key or _line_ref(row))
+                if child:
+                    for fld, default in (
+                        ("custom_parent_line_key", None),
+                        ("custom_line_role", "Standard"),
+                        ("custom_is_modifier", 0),
+                        ("custom_modifier_prefix", ""),
+                        ("custom_modifiers_json", ""),
+                        ("custom_bundle_overrides_json", ""),
+                        ("custom_inherit_parent_routing", 1),
+                    ):
+                        if fld not in merged or merged[fld] in (None, ""):
+                            val = child.get(fld)
+                            merged[fld] = default if val is None else val
+                baseline.append(merged)
             previous_items = baseline
 
     # Diff current vs previous items PER STABLE LINE (see _line_keyed_items),

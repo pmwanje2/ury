@@ -622,6 +622,9 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       }
       const current = get().activeOrders;
       let parentKey = parent.reservationLineKey || parent.uniqueId || uuidv4();
+      let parentUniqueId = parent.uniqueId || parentKey;
+      let parentInvoiceItemName = parent.invoiceItemName;
+      let oldChildren: OrderItem[] = [];
       let baseOrders = current;
       let insertAt = current.length;
 
@@ -632,6 +635,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           const oldParent = current[oldIdx];
           const oldKey = oldParent.reservationLineKey || oldParent.uniqueId;
           parentKey = oldKey || parentKey;
+          parentUniqueId = oldParent.uniqueId || parentKey;
+          parentInvoiceItemName = oldParent.invoiceItemName ?? parentInvoiceItemName;
+          oldChildren = oldKey
+            ? current.filter((o) => o.uniqueId !== replaceParentUniqueId && o.parentLineKey === oldKey)
+            : [];
           baseOrders = current.filter(
             (o) => o.uniqueId !== replaceParentUniqueId && (!oldKey || o.parentLineKey !== oldKey)
           );
@@ -640,16 +648,38 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
       const normalizedParent: OrderItem = {
         ...parent,
-        uniqueId: parentKey,
+        uniqueId: parentUniqueId,
         reservationLineKey: parentKey,
+        ...(parentInvoiceItemName ? { invoiceItemName: parentInvoiceItemName } : {}),
         isModifier: false,
       };
+      const remainingOldChildren = [...oldChildren];
       const normalizedChildren: OrderItem[] = children.map((child, idx) => {
-        const childKey = child.reservationLineKey || child.uniqueId || `${parentKey}-m-${idx + 1}-${uuidv4().slice(0, 6)}`;
+        let matchedIdx = remainingOldChildren.findIndex(
+          (prev) =>
+            prev.item === child.item &&
+            (prev.modifierGroup || '') === (child.modifierGroup || '') &&
+            (prev.modifierOption || '') === (child.modifierOption || '')
+        );
+        if (matchedIdx === -1) {
+          matchedIdx = remainingOldChildren.findIndex(
+            (prev) => prev.item === child.item && (prev.lineRole || '') === (child.lineRole || '')
+          );
+        }
+        const matchedPrev = matchedIdx !== -1 ? remainingOldChildren.splice(matchedIdx, 1)[0] : undefined;
+        const childResKey =
+          matchedPrev?.reservationLineKey ||
+          child.reservationLineKey ||
+          matchedPrev?.uniqueId ||
+          child.uniqueId ||
+          `${parentKey}-m-${idx + 1}-${uuidv4().slice(0, 6)}`;
+        const childUniqueId = matchedPrev?.uniqueId || child.uniqueId || childResKey;
+        const childInvoiceItemName = matchedPrev?.invoiceItemName ?? child.invoiceItemName;
         return {
           ...child,
-          uniqueId: childKey,
-          reservationLineKey: childKey,
+          uniqueId: childUniqueId,
+          reservationLineKey: childResKey,
+          ...(childInvoiceItemName ? { invoiceItemName: childInvoiceItemName } : {}),
           parentLineKey: parentKey,
           isModifier: true,
         };
