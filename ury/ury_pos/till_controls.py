@@ -953,3 +953,849 @@ def get_shift_x_report(pos_profile: str, pos_opening_entry: str | None = None) -
 		"open_checks_count": len(open_checks),
 		"open_checks": open_checks,
 	}
+
+
+def _can_perform_over_short_solo(user: str, profile, opening_user: str | None, max_abs_diff: float) -> bool:
+	"""Whether ``user`` may submit an over-tolerance closing variance without a second-person PIN.
+
+	- When POS Privilege Rule rows exist for the company: requires an active `over_short_close`
+	  rule with `may_perform=1` covering ``max_abs_diff``, AND either `allow_self_approval=1` or
+	  `user != opening_user` (so a cashier/manager never self-approves their own till variance
+	  unless explicitly allowed by policy).
+	- When no POS Privilege Rule rows exist (unconfigured site): keeps legacy manager roles usable
+	  while ALWAYS requiring a manager PIN for non-managers (e.g. URY Cashier).
+	"""
+	if not user or user == "Guest":
+		return False
+	override_mod = _load_override_module()
+	if override_mod and _has_configured_rules(profile.company, "over_short_close"):
+		code = _resolve_privilege_code(override_mod, "over_short_close")
+		if not override_mod.may_perform(user, profile.name, code, amount=max_abs_diff):
+			return False
+		if opening_user and user.casefold() == opening_user.casefold():
+			# Respect allow_self_approval on the matching rule (default 0 blocks self-approval of own till)
+			roles = list(frappe.get_roles(user))
+			rules = frappe.get_all(
+				"POS Privilege Rule",
+				filters={
+					"company": profile.company,
+					"privilege": code,
+					"role": ["in", roles],
+					"pos_profile": ["in", [profile.name, "", None]],
+				},
+				fields=["allow_self_approval", "may_perform"],
+			)
+			if not any(cint(r.get("may_perform")) == 1 and cint(r.get("allow_self_approval")) == 1 for r in rules):
+				return False
+		return True
+
+	roles = set(frappe.get_roles(user))
+	return user == "Administrator" or bool(LEGACY_MANAGER_ROLES & roles)
+
+
+def _cash_variances_above_tolerance(doc, profile):
+	"""Return (exceeding_list, tolerance, precision) for Cash reconciliation rows beyond tolerance."""
+	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	precision = currency_precision(currency)
+	tolerance = flt(profile.get("custom_over_short_tolerance"), precision)
+	if tolerance < 0:
+		tolerance = 0.0
+	exceeding = []
+	for row in doc.get("payment_reconciliation") or []:
+		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") != "Cash":
+			continue
+		diff = flt(row.difference, precision)
+		if abs(diff) > tolerance + 1e-9:
+			exceeding.append((row.mode_of_payment, diff))
+	return exceeding, tolerance, precision
+
+
+def validate_closing_controls(doc, method=None) -> None:
+	"""POS Closing Entry before_submit gate (runs for POS API, Desk, REST, and offline replay).
+
+	Enforces:
+	1. FOR UPDATE lock on POS Opening Entry + refuse closing an already-closed shift (no double close).
+	2. Non-negative closing amounts.
+	3. Close Another Person's Till (`close_other_till`) privilege / PIN gate.
+	4. Over/Short variance tolerance (`over_short_close`) privilege / PIN + reason gate,
+	   strictly hiding expected/variance figures in blind close mode.
+	5. Server-stamped `custom_no_sale_count` for X/Z reports.
+	"""
+	for row in doc.get("payment_reconciliation") or []:
+		if flt(row.get("closing_amount")) < 0:
+			frappe.throw(
+				coded_message(
+					"CLOSE-NEGATIVE-AMOUNT",
+					_("Counted closing amount for {0} cannot be negative.").format(row.get("mode_of_payment") or _("tender")),
+				)
+			)
+
+	opening_name = doc.get("pos_opening_entry")
+	if not opening_name:
+		return
+
+	# Lock the POS Opening Entry row to serialize concurrent close & settle and prevent double close
+	opening = frappe.db.get_value(
+		"POS Opening Entry",
+		opening_name,
+		["name", "status", "docstatus", "user", "pos_profile", "company"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not opening:
+		return
+
+	if cint(opening.docstatus) != 1 or opening.status != "Open":
+		frappe.throw(
+			coded_message(
+				"CLOSE-ALREADY-CLOSED",
+				_("This shift ({0}) is already closed.").format(opening_name),
+			)
+		)
+
+	existing_closing = frappe.get_all(
+		"POS Closing Entry",
+		filters={"pos_opening_entry": opening_name, "docstatus": 1},
+		pluck="name",
+		limit_page_length=2,
+	)
+	other_submitted = [name for name in existing_closing if name != doc.get("name")]
+	if other_submitted:
+		frappe.throw(
+			coded_message(
+				"CLOSE-ALREADY-CLOSED",
+				_("This shift ({0}) already has a submitted closing ({1}).").format(opening_name, other_submitted[0]),
+			)
+		)
+
+	profile_name = doc.get("pos_profile") or opening.pos_profile
+	if not profile_name or not frappe.db.exists("POS Profile", profile_name):
+		return
+	profile = frappe.get_doc("POS Profile", profile_name)
+	flags = getattr(doc, "flags", None)
+
+	# Gate: closing another person's till
+	session_user = frappe.session.user
+	holder = opening.user or doc.get("user")
+	if holder and session_user and holder.casefold() != session_user.casefold():
+		close_other_approval = getattr(flags, "close_other_approval", None)
+		if isinstance(close_other_approval, dict) and close_other_approval.get("approver"):
+			doc.custom_close_approver = close_other_approval["approver"]
+		elif not _may_perform_till_privilege(session_user, profile, "close_other_till"):
+			frappe.throw(
+				coded_message("AUTH-REQUIRED", _("Manager PIN approval is required to close another person's till.")),
+				frappe.PermissionError,
+			)
+
+	# Gate: Over/Short variance above till tolerance
+	exceeding, tolerance, _precision = _cash_variances_above_tolerance(doc, profile)
+	if exceeding:
+		max_abs_diff = max(abs(diff) for _mode, diff in exceeding)
+		over_short_approval = getattr(flags, "over_short_approval", None)
+		if isinstance(over_short_approval, dict) and over_short_approval.get("token_consumed") and over_short_approval.get("approver"):
+			approver = str(over_short_approval["approver"]).strip()
+			excluded = {(session_user or "").casefold(), (holder or "").casefold()}
+			if approver.casefold() in excluded:
+				frappe.throw(
+					coded_message("AUTH-SELF", _("You cannot approve your own over/short variance. Ask another manager.")),
+					frappe.PermissionError,
+				)
+			if not (doc.get("custom_over_short_reason") or "").strip():
+				frappe.throw(
+					coded_message("CLOSE-OVER-SHORT-REASON", _("Enter an Over/Short reason when variance exceeds tolerance."))
+				)
+			doc.custom_over_short_approver = approver
+		elif not _can_perform_over_short_solo(session_user, profile, holder, max_abs_diff):
+			blind = _is_blind_masked_for_user(profile, session_user)
+			if blind:
+				msg = _(
+					"Counted cash is outside this till's allowed variance. "
+					"Recount the drawer or ask a manager to approve with their PIN and a reason."
+				)
+			else:
+				msg = _(
+					"Cash variance exceeds the till's allowed tolerance ({0}). "
+					"Enter a reason and get manager PIN approval."
+				).format(tolerance)
+			frappe.throw(coded_message("CLOSE-VARIANCE-APPROVAL", msg), frappe.PermissionError)
+
+	# Server-stamp shift No Sale count for X/Z reports
+	if frappe.db.table_exists("POS Drawer Event"):
+		doc.custom_no_sale_count = cint(
+			frappe.db.count("POS Drawer Event", {"pos_opening_entry": opening_name, "event_type": "No Sale"})
+		)
+
+
+def validate_closing_cancel(doc, method=None) -> None:
+	"""POS Closing Entry before_cancel gate: reopening a closed till requires `reopen_till` privilege or PIN."""
+	profile_name = doc.get("pos_profile")
+	if not profile_name or not frappe.db.exists("POS Profile", profile_name):
+		return
+	profile = frappe.get_doc("POS Profile", profile_name)
+	flags = getattr(doc, "flags", None)
+	reopen_approval = getattr(flags, "reopen_till_approval", None)
+	if isinstance(reopen_approval, dict) and reopen_approval.get("token_consumed") and reopen_approval.get("approver"):
+		return
+	if _may_perform_till_privilege(frappe.session.user, profile, "reopen_till"):
+		return
+	frappe.throw(
+		coded_message("AUTH-REQUIRED", _("Manager PIN approval is required to reopen a closed till.")),
+		frappe.PermissionError,
+	)
+
+
+def _parse_counted_payments(counted_payments: Any, currency: str | None) -> list[dict[str, Any]]:
+	if isinstance(counted_payments, str):
+		counted_payments = frappe.parse_json(counted_payments) or []
+	if not isinstance(counted_payments, (list, tuple)):
+		frappe.throw(coded_message("CLOSE-INVALID-COUNT", _("Provide counted closing amounts per payment mode.")))
+	precision = currency_precision(currency)
+	parsed = []
+	for row in counted_payments:
+		if not isinstance(row, dict):
+			continue
+		mode = (row.get("mode_of_payment") or "").strip()
+		if not mode:
+			continue
+		raw = row.get("closing_amount", 0)
+		if isinstance(raw, bool) or raw is None or raw == "":
+			val = 0.0
+		else:
+			try:
+				val = float(raw)
+			except (TypeError, ValueError):
+				frappe.throw(coded_message("CLOSE-INVALID-COUNT", _("Counted amount for {0} must be a number.").format(mode)))
+		if not math.isfinite(val):
+			frappe.throw(coded_message("CLOSE-INVALID-COUNT", _("Counted amount for {0} must be finite.").format(mode)))
+		if val < 0:
+			frappe.throw(
+				coded_message("CLOSE-NEGATIVE-AMOUNT", _("Counted closing amount for {0} cannot be negative.").format(mode))
+			)
+		rounded = flt(val, precision)
+		if abs(val - rounded) > 1e-6:
+			frappe.throw(
+				coded_message(
+					"CASH-PRECISION",
+					_("{0} amounts must match currency decimal precision ({1}).").format(currency or _("Currency"), precision),
+				)
+			)
+		amt = int(rounded) if precision == 0 else rounded
+		parsed.append({"mode_of_payment": mode, "closing_amount": amt})
+	return parsed
+
+
+@frappe.whitelist(methods=["GET"])
+def list_open_tills(pos_profile: str) -> list[dict[str, Any]]:
+	"""List all open shifts for ``pos_profile`` (no financial totals exposed; safe for blind mode)."""
+	profile = frappe.get_doc("POS Profile", pos_profile)
+	_check_profile_access(profile)
+	rows = frappe.get_all(
+		"POS Opening Entry",
+		filters={"pos_profile": profile.name, "docstatus": 1, "status": "Open"},
+		fields=["name", "pos_profile", "user", "period_start_date", "posting_date"],
+		order_by="period_start_date desc",
+		limit_page_length=50,
+	)
+	current = (frappe.session.user or "").casefold()
+	return [
+		{
+			"name": r.name,
+			"pos_profile": r.pos_profile,
+			"user": r.user,
+			"user_name": _user_full_name(r.user),
+			"period_start_date": str(r.period_start_date or ""),
+			"posting_date": str(r.posting_date or ""),
+			"is_own": (r.user or "").casefold() == current,
+		}
+		for r in rows
+	]
+
+
+@frappe.whitelist(methods=["GET"])
+def list_closed_tills(pos_profile: str, limit: int = 20) -> list[dict[str, Any]]:
+	"""List recent submitted POS Closing Entries for ``pos_profile`` (for Reopen Till UI)."""
+	profile = frappe.get_doc("POS Profile", pos_profile)
+	_check_profile_access(profile)
+	rows = frappe.get_all(
+		"POS Closing Entry",
+		filters={"pos_profile": profile.name, "docstatus": 1},
+		fields=[
+			"name",
+			"pos_opening_entry",
+			"user",
+			"posting_date",
+			"period_start_date",
+			"period_end_date",
+			"status",
+			"custom_force_closed",
+			"custom_no_sale_count",
+		],
+		order_by="period_end_date desc, creation desc",
+		limit_page_length=min(max(1, cint(limit)), 50),
+	)
+	return [
+		{
+			"name": r.name,
+			"pos_opening_entry": r.pos_opening_entry,
+			"user": r.user,
+			"user_name": _user_full_name(r.user),
+			"posting_date": str(r.posting_date or ""),
+			"period_start_date": str(r.period_start_date or ""),
+			"period_end_date": str(r.period_end_date or ""),
+			"status": r.status or "Submitted",
+			"force_closed": bool(cint(r.get("custom_force_closed"))),
+			"no_sale_count": cint(r.get("custom_no_sale_count")),
+		}
+		for r in rows
+	]
+
+
+@frappe.whitelist(methods=["GET"])
+def get_till_close_preview(pos_profile: str, pos_opening_entry: str | None = None) -> dict[str, Any]:
+	"""Return shift close metadata & rows; strictly strips expected cash & sales totals in blind mode."""
+	profile = frappe.get_doc("POS Profile", pos_profile)
+	_check_profile_access(profile)
+	opening = _resolve_open_shift(profile, pos_opening_entry=pos_opening_entry, required=True)
+	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	blind = _is_blind_masked_for_user(profile)
+	precision = currency_precision(currency)
+
+	opening_doc = frappe.get_doc("POS Opening Entry", opening.name)
+	opening_by_mode = {}
+	for row in opening_doc.get("balance_details") or []:
+		opening_by_mode[row.mode_of_payment] = flt(opening_by_mode.get(row.mode_of_payment, 0) + flt(row.opening_amount), precision)
+
+	expected_cash = _compute_expected_drawer_cash(profile, opening)
+	open_checks = frappe.get_all(
+		"POS Invoice",
+		filters={"pos_profile": profile.name, "docstatus": 0},
+		fields=["name", "customer", "restaurant_table", "grand_total"],
+		limit_page_length=200,
+	)
+	pending_movements = frappe.get_all(
+		"Journal Entry",
+		filters={"custom_pos_opening_entry": opening.name, "docstatus": 0},
+		fields=["name", "custom_cash_movement_type", "total_debit", "custom_cash_movement_reason"],
+		limit_page_length=50,
+	)
+	no_sale_count = frappe.db.count(
+		"POS Drawer Event", {"pos_opening_entry": opening.name, "event_type": "No Sale"}
+	)
+
+	payment_rows = []
+	for p in profile.get("payments") or []:
+		mode = p.mode_of_payment
+		is_cash = frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
+		payment_rows.append(
+			{
+				"mode_of_payment": mode,
+				"is_cash": is_cash,
+				"opening_amount": opening_by_mode.get(mode, 0),
+				"expected_amount": None if blind else (expected_cash if is_cash else opening_by_mode.get(mode, 0)),
+			}
+		)
+
+	grand_total = None
+	if not blind:
+		invs = frappe.get_all(
+			"POS Invoice",
+			filters={"pos_profile": profile.name, "docstatus": 1, "consolidated_invoice": ["is", "not set"]},
+			fields=["grand_total"],
+			limit_page_length=0,
+		)
+		grand_total = flt(sum(flt(i.grand_total) for i in invs), precision)
+
+	return {
+		"pos_profile": profile.name,
+		"pos_opening_entry": opening.name,
+		"opening_user": opening.user,
+		"opening_user_name": _user_full_name(opening.user),
+		"is_other_till": (opening.user or "").casefold() != (frappe.session.user or "").casefold(),
+		"currency": currency,
+		"blind_close": blind,
+		"over_short_tolerance": flt(profile.get("custom_over_short_tolerance"), precision),
+		"grand_total": grand_total,
+		"no_sale_count": cint(no_sale_count),
+		"open_checks_count": len(open_checks),
+		"open_checks": open_checks,
+		"pending_movements_count": len(pending_movements),
+		"pending_movements": pending_movements,
+		"payment_rows": payment_rows,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def close_till_with_controls(
+	pos_profile: str,
+	pos_opening_entry: str,
+	counted_payments: Any,
+	over_short_reason: str | None = None,
+	over_short_approval_token: str | None = None,
+	close_other_approval_token: str | None = None,
+	period_end_date: str | None = None,
+) -> dict[str, Any]:
+	"""Close an open till through native POS Closing Entry with Over/Short tolerance PIN,
+	blind-close protection, close-another-till PIN, and FOR UPDATE lock against double-close."""
+	profile = frappe.get_doc("POS Profile", pos_profile)
+	_check_profile_access(profile)
+	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	parsed_counts = _parse_counted_payments(counted_payments, currency)
+
+	# Lock opening entry before checking status so two concurrent closes never both proceed
+	opening = frappe.db.get_value(
+		"POS Opening Entry",
+		pos_opening_entry,
+		["name", "pos_profile", "company", "user", "status", "docstatus", "period_start_date"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not opening or opening.pos_profile != profile.name or opening.company != profile.company:
+		frappe.throw(coded_message("CASH-SHIFT", _("POS shift not found on {0}.").format(profile.name)))
+	if cint(opening.docstatus) != 1 or opening.status != "Open":
+		frappe.throw(coded_message("CLOSE-ALREADY-CLOSED", _("This shift ({0}) is already closed.").format(opening.name)))
+
+	# Close Another Person's Till gate
+	close_other_approval = None
+	if (opening.user or "").casefold() != (frappe.session.user or "").casefold():
+		other_claim = {
+			"action": "close_other_till",
+			"pos_profile": profile.name,
+			"pos_opening_entry": opening.name,
+			"opening_user": opening.user,
+		}
+		close_other_approval = _require_till_privilege(
+			profile,
+			"close_other_till",
+			opening.name,
+			other_claim,
+			token=close_other_approval_token,
+			allow_cashier_default=False,
+		)
+
+	end_dt = get_datetime(period_end_date) if period_end_date else now_datetime()
+	closing = frappe.new_doc("POS Closing Entry")
+	closing.pos_opening_entry = opening.name
+	closing.pos_profile = profile.name
+	closing.company = profile.company
+	# Native ERPNext rule: closing.user MUST equal opening.user (till holder)
+	closing.user = opening.user
+	closing.period_start_date = opening.period_start_date
+	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+	closing.posting_date = end_dt.strftime("%Y-%m-%d")
+	closing.posting_time = end_dt.strftime("%H:%M:%S")
+	for row in parsed_counts:
+		closing.append(
+			"payment_reconciliation",
+			{"mode_of_payment": row["mode_of_payment"], "closing_amount": row["closing_amount"]},
+		)
+	closing.flags.ignore_permissions = True
+	closing.insert(ignore_permissions=True)
+
+	# Evaluate server-computed cash variances against till tolerance
+	exceeding, tolerance, _precision = _cash_variances_above_tolerance(closing, profile)
+	over_short_approval = None
+	clean_os_reason = (over_short_reason or "").strip()
+	if exceeding:
+		max_abs_diff = max(abs(diff) for _m, diff in exceeding)
+		if over_short_approval_token:
+			if not clean_os_reason:
+				frappe.throw(
+					coded_message("CLOSE-OVER-SHORT-REASON", _("Enter an Over/Short reason when variance exceeds tolerance."))
+				)
+			os_claim = {
+				"action": "over_short_close",
+				"pos_profile": profile.name,
+				"pos_opening_entry": opening.name,
+				"counted_payments": parsed_counts,
+				"reason": clean_os_reason,
+			}
+			over_short_approval = _require_till_privilege(
+				profile,
+				"over_short_close",
+				opening.name,
+				os_claim,
+				token=over_short_approval_token,
+				amount=max_abs_diff,
+				require_second_person=True,
+				excluded_approvers={frappe.session.user, opening.user},
+			)
+		elif not _can_perform_over_short_solo(frappe.session.user, profile, opening.user, max_abs_diff):
+			blind = _is_blind_masked_for_user(profile)
+			if blind:
+				msg = _(
+					"Counted cash is outside this till's allowed variance. "
+					"Recount the drawer or ask a manager to approve with their PIN and a reason."
+				)
+			else:
+				msg = _(
+					"Cash variance exceeds the till's allowed tolerance ({0}). "
+					"Enter a reason and get manager PIN approval."
+				).format(tolerance)
+			frappe.throw(coded_message("CLOSE-VARIANCE-APPROVAL", msg), frappe.PermissionError)
+
+	if clean_os_reason:
+		closing.custom_over_short_reason = clean_os_reason
+	if over_short_approval:
+		closing.flags.over_short_approval = {
+			"approver": over_short_approval.approver,
+			"token_consumed": True,
+		}
+	if close_other_approval:
+		closing.flags.close_other_approval = {
+			"approver": close_other_approval.approver,
+			"token_consumed": True,
+		}
+
+	closing.flags.ignore_permissions = True
+	closing.submit()
+	closing.reload()
+	return {
+		"name": closing.name,
+		"pos_opening_entry": opening.name,
+		"docstatus": cint(closing.docstatus),
+		"user": closing.user,
+		"over_short_approver": closing.get("custom_over_short_approver"),
+		"over_short_reason": closing.get("custom_over_short_reason"),
+		"close_approver": closing.get("custom_close_approver"),
+		"no_sale_count": cint(closing.get("custom_no_sale_count")),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def reopen_till(
+	pos_closing_entry: str,
+	reason: str,
+	approval_token: str | None = None,
+) -> dict[str, Any]:
+	"""Reopen a closed till by cancelling its POS Closing Entry natively (unconsolidating once
+	and restoring POS Opening Entry to Open), guarded by `reopen_till` Manager PIN + locks."""
+	clean_reason = (reason or "").strip()
+	if not clean_reason:
+		frappe.throw(coded_message("REOPEN-REASON", _("Enter a reason before reopening a closed till.")))
+
+	closing_meta = frappe.db.get_value(
+		"POS Closing Entry",
+		pos_closing_entry,
+		["name", "pos_profile", "pos_opening_entry", "company", "user", "docstatus", "status"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not closing_meta:
+		frappe.throw(coded_message("REOPEN-NOT-FOUND", _("POS Closing Entry not found.")))
+	if cint(closing_meta.docstatus) != 1:
+		frappe.throw(coded_message("REOPEN-NOT-CLOSED", _("Only a submitted POS Closing Entry can be reopened.")))
+	if (closing_meta.status or "").strip() == "Queued":
+		frappe.throw(
+			coded_message("REOPEN-IN-PROGRESS", _("Consolidation is still running for this closing. Try again shortly."))
+		)
+
+	profile = frappe.get_doc("POS Profile", closing_meta.pos_profile)
+	_check_profile_access(profile)
+
+	# Lock the POS Opening Entry row and verify no conflicting open shift exists
+	opening_meta = frappe.db.get_value(
+		"POS Opening Entry",
+		closing_meta.pos_opening_entry,
+		["name", "status", "docstatus", "user", "pos_profile"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not opening_meta:
+		frappe.throw(coded_message("CASH-SHIFT", _("Linked POS Opening Entry not found.")))
+
+	other_open = frappe.get_all(
+		"POS Opening Entry",
+		filters={"pos_profile": profile.name, "user": opening_meta.user, "docstatus": 1, "status": "Open"},
+		pluck="name",
+		limit_page_length=2,
+	)
+	if any(name != opening_meta.name for name in other_open):
+		frappe.throw(
+			coded_message(
+				"REOPEN-CONFLICT",
+				_("Another shift is already open for this cashier on {0}. Close it before reopening {1}.").format(
+					profile.name, closing_meta.name
+				),
+			)
+		)
+
+	# Refuse reopening if any consolidated Sales Invoice has already been fiscalised (EFRIS)
+	consolidated_sis = frappe.get_all(
+		"Sales Invoice",
+		filters={"pos_closing_entry": closing_meta.name, "docstatus": 1},
+		fields=["name", "custom_efris_fdn", "custom_efris_irn"],
+		limit_page_length=50,
+	)
+	for si in consolidated_sis:
+		if si.get("custom_efris_fdn") or si.get("custom_efris_irn"):
+			frappe.throw(
+				coded_message(
+					"REOPEN-LOCKED",
+					_("Consolidated invoice {0} is already fiscalised and cannot be reopened.").format(si.name),
+				)
+			)
+
+	claim = {
+		"action": "reopen_till",
+		"pos_profile": profile.name,
+		"pos_closing_entry": closing_meta.name,
+		"pos_opening_entry": opening_meta.name,
+		"reason": clean_reason,
+	}
+	approval = _require_till_privilege(
+		profile,
+		"reopen_till",
+		closing_meta.name,
+		claim,
+		token=approval_token,
+		allow_cashier_default=False,
+	)
+	approver = approval.approver if approval else None
+
+	closing_doc = frappe.get_doc("POS Closing Entry", closing_meta.name)
+	closing_doc.flags.reopen_till_approval = {
+		"approver": approver or frappe.session.user,
+		"token_consumed": bool(approval),
+	}
+	closing_doc.flags.ignore_permissions = True
+	closing_doc.cancel()
+
+	ev = _insert_drawer_event(
+		event_type="Till Reopen",
+		profile=profile,
+		opening_entry=opening_meta.name,
+		closing_entry=closing_meta.name,
+		approver=approver,
+		reason=clean_reason,
+	)
+	return {
+		"event_name": ev.name,
+		"pos_closing_entry": closing_meta.name,
+		"pos_opening_entry": opening_meta.name,
+		"status": "Open",
+		"approver": approver,
+		"approver_name": _user_full_name(approver),
+		"reason": clean_reason,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def force_close_till(
+	pos_profile: str,
+	pos_opening_entry: str,
+	counted_payments: Any,
+	reason: str,
+	discard_pending_movements: Any = False,
+	approval_token: str | None = None,
+	over_short_reason: str | None = None,
+	over_short_approval_token: str | None = None,
+	period_end_date: str | None = None,
+) -> dict[str, Any]:
+	"""Manager-PIN Force Close: snapshots open draft checks, optionally discards pending draft
+	cash movements when explicitly confirmed, and submits native POS Closing Entry so every
+	submitted sale is consolidated once and nothing is lost."""
+	clean_reason = (reason or "").strip()
+	if not clean_reason:
+		frappe.throw(coded_message("FORCE-CLOSE-REASON", _("Enter a reason before force-closing a till.")))
+
+	profile = frappe.get_doc("POS Profile", pos_profile)
+	_check_profile_access(profile)
+	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	parsed_counts = _parse_counted_payments(counted_payments, currency)
+	discard_pending = bool(cint(discard_pending_movements)) if not isinstance(discard_pending_movements, bool) else discard_pending_movements
+
+	opening = frappe.db.get_value(
+		"POS Opening Entry",
+		pos_opening_entry,
+		["name", "pos_profile", "company", "user", "status", "docstatus", "period_start_date"],
+		as_dict=True,
+		for_update=True,
+	)
+	if not opening or opening.pos_profile != profile.name or opening.company != profile.company:
+		frappe.throw(coded_message("CASH-SHIFT", _("POS shift not found on {0}.").format(profile.name)))
+	if cint(opening.docstatus) != 1 or opening.status != "Open":
+		frappe.throw(coded_message("CLOSE-ALREADY-CLOSED", _("This shift ({0}) is already closed.").format(opening.name)))
+
+	claim = {
+		"action": "force_close",
+		"pos_profile": profile.name,
+		"pos_opening_entry": opening.name,
+		"reason": clean_reason,
+		"discard_pending_movements": discard_pending,
+	}
+	approval = _require_till_privilege(
+		profile,
+		"reopen_till",
+		opening.name,
+		claim,
+		token=approval_token,
+		fallback_privilege="close_other_till",
+		allow_cashier_default=False,
+	)
+	approver = approval.approver if approval else None
+
+	open_checks = frappe.get_all(
+		"POS Invoice",
+		filters={"pos_profile": profile.name, "docstatus": 0},
+		pluck="name",
+		limit_page_length=200,
+	)
+	discarded_names = []
+	if discard_pending:
+		pending_jes = frappe.get_all(
+			"Journal Entry",
+			filters={"custom_pos_opening_entry": opening.name, "docstatus": 0},
+			pluck="name",
+			limit_page_length=50,
+		)
+		for je_name in pending_jes:
+			frappe.delete_doc("Journal Entry", je_name, ignore_permissions=True)
+			discarded_names.append(je_name)
+
+	end_dt = get_datetime(period_end_date) if period_end_date else now_datetime()
+	closing = frappe.new_doc("POS Closing Entry")
+	closing.pos_opening_entry = opening.name
+	closing.pos_profile = profile.name
+	closing.company = profile.company
+	closing.user = opening.user
+	closing.period_start_date = opening.period_start_date
+	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+	closing.posting_date = end_dt.strftime("%Y-%m-%d")
+	closing.posting_time = end_dt.strftime("%H:%M:%S")
+	closing.custom_force_closed = 1
+	closing.custom_force_close_reason = clean_reason
+	closing.custom_close_approver = approver or frappe.session.user
+	for row in parsed_counts:
+		closing.append(
+			"payment_reconciliation",
+			{"mode_of_payment": row["mode_of_payment"], "closing_amount": row["closing_amount"]},
+		)
+	closing.flags.ignore_permissions = True
+	closing.flags.pos_force_close = True
+	closing.insert(ignore_permissions=True)
+
+	exceeding, _tol, _prec = _cash_variances_above_tolerance(closing, profile)
+	if exceeding:
+		effective_os_reason = (over_short_reason or "").strip() or clean_reason
+		closing.custom_over_short_reason = effective_os_reason
+		if over_short_approval_token:
+			os_claim = {
+				"action": "over_short_close",
+				"pos_profile": profile.name,
+				"pos_opening_entry": opening.name,
+				"counted_payments": parsed_counts,
+				"reason": effective_os_reason,
+			}
+			os_app = _require_till_privilege(
+				profile,
+				"over_short_close",
+				opening.name,
+				os_claim,
+				token=over_short_approval_token,
+				amount=max(abs(d) for _m, d in exceeding),
+				require_second_person=True,
+				excluded_approvers={frappe.session.user, opening.user},
+			)
+			closing.flags.over_short_approval = {"approver": os_app.approver, "token_consumed": True}
+		elif approver and approver.casefold() not in {(frappe.session.user or "").casefold(), (opening.user or "").casefold()}:
+			closing.flags.over_short_approval = {"approver": approver, "token_consumed": True}
+
+	closing.flags.pos_force_close = True
+	closing.flags.close_other_approval = {
+		"approver": approver or frappe.session.user,
+		"token_consumed": bool(approval),
+	}
+	closing.flags.ignore_permissions = True
+	closing.submit()
+	closing.reload()
+
+	note_parts = []
+	if discarded_names:
+		note_parts.append(f"Discarded pending movements: {', '.join(discarded_names)}")
+	ev = _insert_drawer_event(
+		event_type="Force Close",
+		profile=profile,
+		opening_entry=opening.name,
+		closing_entry=closing.name,
+		approver=approver,
+		reason=clean_reason,
+		note="; ".join(note_parts),
+		open_checks_snapshot=", ".join(open_checks),
+	)
+	return {
+		"name": closing.name,
+		"event_name": ev.name,
+		"pos_opening_entry": opening.name,
+		"docstatus": cint(closing.docstatus),
+		"force_closed": True,
+		"open_checks_snapshot": open_checks,
+		"discarded_pending_movements": discarded_names,
+		"approver": approver,
+		"approver_name": _user_full_name(approver),
+	}
+
+
+def lock_open_shift_for_settlement(pos_profile: str):
+	"""Acquire a FOR UPDATE lock on the active POS Opening Entry for ``pos_profile`` so
+	concurrent bill settlement and till closing serialize cleanly without losing consolidation."""
+	if not pos_profile:
+		return None
+	open_names = frappe.get_all(
+		"POS Opening Entry",
+		filters={"pos_profile": pos_profile, "docstatus": 1, "status": "Open"},
+		pluck="name",
+		order_by="period_start_date desc",
+		limit_page_length=1,
+	)
+	if not open_names:
+		return None
+	return frappe.db.get_value(
+		"POS Opening Entry",
+		open_names[0],
+		["name", "status", "period_start_date"],
+		as_dict=True,
+		for_update=True,
+	)
+
+
+def validate_offline_settlement_shift(
+	pos_profile: str,
+	offline_captured_at: Any = None,
+	client_order_id: str | None = None,
+) -> None:
+	"""Refuse offline settlement replay if the shift it belongs to has already closed."""
+	if not client_order_id and not offline_captured_at:
+		return
+	open_shift = lock_open_shift_for_settlement(pos_profile)
+	if not open_shift or open_shift.get("status") != "Open":
+		frappe.throw(
+			coded_message(
+				"OFFLINE-AFTER-CLOSE",
+				_(
+					"Cannot replay offline settlement: the shift on {0} has already closed. "
+					"Reopen the till or review this offline check with a manager."
+				).format(pos_profile),
+			)
+		)
+	if not offline_captured_at:
+		return
+	captured_dt = get_datetime(offline_captured_at)
+	closed_rows = frappe.get_all(
+		"POS Closing Entry",
+		filters={"pos_profile": pos_profile, "docstatus": 1},
+		fields=["name", "period_end_date"],
+		order_by="period_end_date desc",
+		limit_page_length=5,
+	)
+	for closed in closed_rows:
+		if closed.get("period_end_date") and get_datetime(closed.period_end_date) >= captured_dt:
+			frappe.throw(
+				coded_message(
+					"OFFLINE-AFTER-CLOSE",
+					_(
+						"Offline check was captured before shift closing {0} ({1}). "
+						"Reopen that till or settle under manager review."
+					).format(closed.name, closed.period_end_date),
+				)
+			)
+

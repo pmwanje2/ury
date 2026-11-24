@@ -121,9 +121,14 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 		doc._ury_tip_discount_guard = False
 
 
+def _grand_total_precision(doc):
+	precision_fn = getattr(doc, "precision", None)
+	return precision_fn("grand_total") if callable(precision_fn) else None
+
+
 def sync_charged_tip(doc):
 	"""Make the bill's Tips Payable row match ``custom_charged_tip``."""
-	tip = flt(doc.get("custom_charged_tip"), doc.precision("grand_total"))
+	tip = flt(doc.get("custom_charged_tip"), _grand_total_precision(doc))
 	if tip < 0:
 		frappe.throw(coded_message("TIP-NEGATIVE", _("A tip cannot be negative.")))
 	account = _tips_account(doc)

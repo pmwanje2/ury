@@ -4081,6 +4081,19 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
     if not submit_invoice:
         return {"name": invoice.name, "status": "Draft"}
 
+    # Serialize bill settlement with till closing (FOR UPDATE on open shift) and refuse
+    # offline replays arriving after the shift closed.
+    from ury.ury_pos.till_controls import lock_open_shift_for_settlement, validate_offline_settlement_shift
+
+    if client_order_id or invoice.get("ury_offline_captured_at"):
+        validate_offline_settlement_shift(
+            pos_profile,
+            offline_captured_at=invoice.get("ury_offline_captured_at"),
+            client_order_id=client_order_id,
+        )
+    else:
+        lock_open_shift_for_settlement(pos_profile)
+
     if target:
         # Saving the primary runs on_update, which saves a separate copy of the partner.
         target.reload()

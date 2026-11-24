@@ -340,6 +340,7 @@ doc_events = {
         # the owner-checked list, before_submit rebuilds it from the till.
         "before_validate": "ury.ury.hooks.ury_pos_closing_entry.before_validate",
         "before_submit": "ury.ury.hooks.ury_pos_closing_entry.before_submit",
+        "before_cancel": "ury.ury.hooks.ury_pos_closing_entry.before_cancel",
         "before_save": "ury.ury.hooks.ury_pos_closing_entry.before_save",
         "validate":[
             "ury.ury.hooks.ury_pos_closing_entry.validate",
