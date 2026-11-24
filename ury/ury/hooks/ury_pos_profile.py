@@ -10,6 +10,36 @@ def validate(doc, method):
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
     validate_room_lookup_method(doc, method)
+    validate_paid_out_approval_threshold(doc, method)
+
+
+def validate_paid_out_approval_threshold(doc, method=None):
+    """Normalize custom_paid_out_approval_threshold so 0 stays '0' (every paid-out
+    needs approval) while blank stays None (no limit)."""
+    raw = doc.get("custom_paid_out_approval_threshold")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        doc.custom_paid_out_approval_threshold = None
+        return
+    text = str(raw).strip()
+    try:
+        value = float(text)
+    except ValueError:
+        frappe.throw(
+            coded_message(
+                "CASH-THRESHOLD",
+                _("Paid-Out Second-Person Threshold must be blank (no limit) or a non-negative number."),
+            ),
+            frappe.ValidationError,
+        )
+    if value < 0:
+        frappe.throw(
+            coded_message(
+                "CASH-THRESHOLD",
+                _("Paid-Out Second-Person Threshold cannot be negative."),
+            ),
+            frappe.ValidationError,
+        )
+    doc.custom_paid_out_approval_threshold = text
 
 
 def validate_room_lookup_method(doc, method=None):

@@ -3343,6 +3343,19 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
                 target.append("payments", dict(mode_of_payment=mode, amount=give))
                 amt -= give
                 target_req -= give
+
+            if amt > 0:
+                # Preserve any remaining over-tender on the primary bill so
+                # ury_pos_tender.before_validate applies the tender's over-tender
+                # rule (Refuse / Post to Charged Tip) or cash change.
+                existing = next(
+                    (row for row in reversed(invoice.payments) if row.mode_of_payment == mode),
+                    None,
+                )
+                if existing:
+                    existing.amount = flt(existing.amount) + amt
+                else:
+                    invoice.append("payments", dict(mode_of_payment=mode, amount=amt))
                 
         if not target.payments and payments:
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))

@@ -923,6 +923,8 @@ def getPosProfile():
             for payment in (pos_profiles.get("payments") or [])
         },
         "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
+        "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
+        "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),
@@ -982,6 +984,8 @@ def getPosProfileFull(pos_profile):
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # one configured void reason per line; None on sites without the field
         "custom_void_reasons": profile.get("custom_void_reasons"),
+        "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
+        "over_short_reason_tolerance": frappe.utils.flt(profile.get("custom_over_short_reason_tolerance")),
         **get_default_customer_config(profile),
     }
 

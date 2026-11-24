@@ -1,11 +1,13 @@
 """POS touchscreen API for shift till cash movements (Pickup, Loan, Paid Out).
 
-Cashiers record drawer pickups (safe drops), float loans, and paid-outs from the
-POS register without holding general-ledger ``Journal Entry`` DocPerms. This
-module validates branch membership, cashier/manager role authorization, and the
-POS Profile's configured rules, then writes the native ``Cash Entry`` Journal
-Entry under app authority (while ``ury_cash_movement`` enforces all GL/shift/SoD
-invariants on the real ``Journal Entry`` document lifecycle).
+Cashiers record drawer pickups (safe drops), float loans, and paid-outs (including
+Tip Payouts attributed to a server via ``tip_server``) from the POS register
+without holding general-ledger ``Journal Entry`` DocPerms. This module validates
+branch membership, cashier/manager role authorization, and the POS Profile's
+configured rules, then writes the native ``Cash Entry`` Journal Entry under app
+authority (with ``multi_currency`` for foreign-currency tills, while
+``ury_cash_movement`` enforces all GL/shift/SoD invariants on the real
+``Journal Entry`` document lifecycle).
 """
 
 import frappe
@@ -13,7 +15,15 @@ from frappe import _
 from frappe.utils import cint, flt
 
 from ury.brand import coded_message
-from ury.ury.hooks.ury_cash_movement import LEAVES_DRAWER, _drawer_accounts, _mode_account, till_cash_movements
+from ury.ury.hooks.ury_cash_movement import (
+	LEAVES_DRAWER,
+	_drawer_accounts,
+	_mode_account,
+	build_movement_je_accounts,
+	line_amount_in_profile_currency,
+	paid_out_threshold,
+	till_cash_movements,
+)
 from ury.ury_pos.api import getBranch
 
 TILL_CASH_ROLES = {"URY Cashier", "URY Manager", "URY Admin", "POS Manager", "Accounts Manager", "System Manager"}
@@ -147,26 +157,69 @@ def _user_full_name(user):
 	return frappe.db.get_value("User", user, "full_name") or user
 
 
+def _till_servers(profile):
+	"""Return branch and POS Profile users eligible to be attributed a Tip Payout."""
+	emails = []
+	for row in profile.get("applicable_for_users") or []:
+		if row.get("user") and row.user not in emails:
+			emails.append(row.user)
+	if profile.get("branch") and frappe.db.exists("Branch", profile.branch):
+		branch_doc = frappe.get_doc("Branch", profile.branch)
+		for row in branch_doc.get("user") or []:
+			if row.get("user") and row.user not in emails:
+				emails.append(row.user)
+	options = [
+		{"user": email, "full_name": _user_full_name(email)}
+		for email in emails
+		if email not in ("Administrator", "Guest")
+	]
+	options.sort(key=lambda item: (item["full_name"].lower(), item["user"].lower()))
+	return options
+
+
 def _serialize_movement(entry, profile, can_approve_role):
 	kind = entry.get("custom_cash_movement_type") or ""
-	amount = flt(entry.get("total_debit"))
 	leaves = LEAVES_DRAWER.get(kind, True)
+	drawers = _drawer_accounts(profile, profile.company)
+	company_currency = frappe.get_cached_value("Company", profile.company, "default_currency") or profile.currency
+	account_rows = entry.get("accounts") or frappe.get_all(
+		"Journal Entry Account",
+		filters={"parent": entry.name, "parenttype": "Journal Entry"},
+		fields=[
+			"account",
+			"account_currency",
+			"debit_in_account_currency",
+			"credit_in_account_currency",
+			"debit",
+			"credit",
+		],
+	)
+	drawer_line = next(
+		(
+			row
+			for row in account_rows
+			if (row.account if hasattr(row, "account") else row.get("account")) in drawers
+		),
+		None,
+	)
+	if drawer_line is not None:
+		amount = line_amount_in_profile_currency(
+			drawer_line, leaves, profile.currency, company_currency, entry.get("posting_date")
+		)
+	else:
+		amount = flt(entry.get("total_debit"))
 	drawer_change = -amount if leaves else amount
 	tips_account = profile.get("custom_tips_payable_account")
 	target_kind = "safe" if kind in ("Pickup", "Loan") else "expense"
 	if kind == "Paid Out" and tips_account:
-		accounts = entry.get("accounts") or frappe.get_all(
-			"Journal Entry Account",
-			filters={"parent": entry.name, "parenttype": "Journal Entry"},
-			pluck="account",
-		)
-		account_names = [a.account if hasattr(a, "account") else a for a in accounts]
+		account_names = [a.account if hasattr(a, "account") else a.get("account") for a in account_rows]
 		if tips_account in account_names:
 			target_kind = "tips"
 	docstatus = cint(entry.get("docstatus"))
 	current_user = frappe.session.user
 	owner = entry.get("owner") or ""
 	approver = entry.get("custom_cash_movement_approver") or ""
+	tip_server = entry.get("custom_tip_server") or ""
 	is_draft = docstatus == 0
 	return {
 		"name": entry.name,
@@ -175,6 +228,8 @@ def _serialize_movement(entry, profile, can_approve_role):
 		"drawer_change": drawer_change,
 		"reason": entry.get("custom_cash_movement_reason") or "",
 		"target_kind": target_kind,
+		"tip_server": tip_server,
+		"tip_server_name": _user_full_name(tip_server),
 		"status": "Submitted" if docstatus == 1 else "Pending Approval",
 		"docstatus": docstatus,
 		"owner": owner,
@@ -215,9 +270,11 @@ def get_till_cash_state(pos_profile):
 			filters={"custom_pos_opening_entry": opening.name, "docstatus": ["in", [0, 1]]},
 			fields=[
 				"name",
+				"posting_date",
 				"custom_cash_movement_type",
 				"total_debit",
 				"custom_cash_movement_reason",
+				"custom_tip_server",
 				"docstatus",
 				"owner",
 				"custom_cash_movement_approver",
@@ -241,7 +298,7 @@ def get_till_cash_state(pos_profile):
 		"currency": profile.currency,
 		"opening_entry": opening.name if opening else None,
 		"opening_user": opening.user if opening else None,
-		"paid_out_threshold": flt(profile.get("custom_paid_out_approval_threshold")),
+		"paid_out_threshold": paid_out_threshold(profile),
 		"can_approve": can_approve,
 		"current_user": frappe.session.user,
 		"available_types": {
@@ -250,6 +307,7 @@ def get_till_cash_state(pos_profile):
 			"Paid Out": bool(paid_out or tips),
 		},
 		"paid_out_targets": paid_out_targets,
+		"servers": _till_servers(profile),
 		"movements": movements,
 		"net_drawer_movement": net_drawer_movement,
 		"pending_count": pending_count,
@@ -264,6 +322,7 @@ def record_till_cash_movement(
 	reason=None,
 	paid_out_target="expense",
 	pos_opening_entry=None,
+	tip_server=None,
 ):
 	"""Create (and submit if within threshold) a native Cash Entry Journal Entry under app authority."""
 	profile = frappe.get_doc("POS Profile", pos_profile)
@@ -288,38 +347,45 @@ def record_till_cash_movement(
 	counter = _counter_account(profile, movement_type, paid_out_target)
 	leaves = LEAVES_DRAWER[movement_type]
 	clean_reason = (reason or "").strip() or None
+	clean_server = (
+		(tip_server or "").strip() or None
+		if movement_type == "Paid Out" and (paid_out_target or "expense").strip().lower() == "tips"
+		else None
+	)
+
+	posting_date = frappe.utils.nowdate()
+	company_currency = frappe.get_cached_value("Company", profile.company, "default_currency") or profile.currency
+	multi_currency, accounts = build_movement_je_accounts(
+		drawer=drawer,
+		counter=counter,
+		drawer_leaves=leaves,
+		profile_amount=amount_val,
+		profile_currency=profile.currency or company_currency,
+		company_currency=company_currency,
+		posting_date=posting_date,
+		cost_center=profile.cost_center,
+	)
 
 	entry = frappe.get_doc(
 		{
 			"doctype": "Journal Entry",
 			"voucher_type": "Cash Entry",
 			"company": profile.company,
-			"posting_date": frappe.utils.nowdate(),
+			"posting_date": posting_date,
+			"multi_currency": multi_currency,
 			"custom_pos_opening_entry": opening.name,
 			"custom_cash_movement_type": movement_type,
 			"custom_cash_movement_reason": clean_reason,
+			"custom_tip_server": clean_server,
 			"user_remark": clean_reason or _("{0} on shift {1}").format(movement_type, opening.name),
-			"accounts": [
-				{
-					"account": drawer,
-					"debit_in_account_currency": 0 if leaves else amount_val,
-					"credit_in_account_currency": amount_val if leaves else 0,
-					"cost_center": profile.cost_center,
-				},
-				{
-					"account": counter,
-					"debit_in_account_currency": amount_val if leaves else 0,
-					"credit_in_account_currency": 0 if leaves else amount_val,
-					"cost_center": profile.cost_center,
-				},
-			],
+			"accounts": accounts,
 		}
 	)
 	entry.flags.ignore_permissions = True
 	entry.insert()
 
-	threshold = flt(profile.get("custom_paid_out_approval_threshold"))
-	needs_second_person = movement_type == "Paid Out" and amount_val > threshold
+	threshold = paid_out_threshold(profile)
+	needs_second_person = movement_type == "Paid Out" and threshold is not None and amount_val > threshold
 	if not needs_second_person:
 		entry.flags.ignore_permissions = True
 		entry.submit()
@@ -381,7 +447,7 @@ def discard_till_cash_movement(journal_entry):
 
 @frappe.whitelist()
 def get_shift_cash_movement_totals(pos_opening_entry):
-	"""Return submitted net drawer change per Cash payment mode and pending draft count for closing UI."""
+	"""Return submitted net drawer change per Cash payment mode (profile currency) and pending count."""
 	opening = frappe.db.get_value(
 		"POS Opening Entry",
 		pos_opening_entry,

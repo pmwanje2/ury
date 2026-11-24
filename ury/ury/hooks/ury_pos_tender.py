@@ -72,6 +72,9 @@ def calculate_taxes_and_totals_excluding_tip(doc, calculate_fn):
 	if getattr(doc, "_ury_tip_discount_guard", False):
 		return calculate_fn()
 
+	if doc.get("is_return") and doc.is_new() and doc.get("custom_charged_tip") is None:
+		_adopt_return_tip_if_unset(doc)
+
 	account = _tips_account(doc)
 	has_discount = bool(flt(doc.get("additional_discount_percentage")) or flt(doc.get("discount_amount")))
 	if not account or not has_discount:
@@ -139,29 +142,51 @@ def sync_charged_tip(doc):
 	_append_tip_row(doc, account, tip)
 
 
-def _sync_return_tip(doc):
-	"""Keep the tip reversal visible on sales returns without copying tips on normal duplicates."""
+def _adopt_return_tip_if_unset(doc):
+	"""Populate custom_charged_tip from a newly mapped sales return's copied Tips Payable row.
+
+	Only runs while ``custom_charged_tip`` is still ``None`` (unset by ``no_copy=1`` during
+	``make_sales_return``). Once set — including explicitly zeroed to ``0`` for a partial return —
+	the caller's value is authoritative and never overwritten.
+	"""
+	account = _tips_account(doc)
+	if not account:
+		return
+	existing = [row for row in doc.get("taxes") or [] if row.account_head == account]
+	if not existing:
+		return
 	precision = doc.precision("grand_total")
+	existing_total = flt(sum(flt(row.tax_amount) for row in existing), precision)
+	if existing_total < 0:
+		doc.custom_charged_tip = existing_total
+		doc.custom_tip_server = _resolve_return_tip_server(doc)
+
+
+def _sync_return_tip(doc):
+	"""Keep the tip reversal visible on sales returns, and honour explicit zeroing on partial returns."""
+	precision = doc.precision("grand_total")
+	if doc.is_new() and doc.get("custom_charged_tip") is None:
+		_adopt_return_tip_if_unset(doc)
 	tip = flt(doc.get("custom_charged_tip"), precision)
 	if tip > 0:
 		frappe.throw(coded_message("TIP-NEGATIVE", _("A sales return tip cannot be positive.")))
 	account = _tips_account(doc)
 	if not account:
 		return
-	existing = [row for row in doc.get("taxes") or [] if row.account_head == account]
-	if tip == 0 and existing:
-		existing_total = flt(sum(flt(row.tax_amount) for row in existing), precision)
-		if existing_total < 0:
-			doc.custom_charged_tip = existing_total
-			doc.custom_tip_server = _resolve_return_tip_server(doc)
-	elif tip < 0:
-		_check_tips_account(doc, account)
-		kept = [row for row in doc.get("taxes") or [] if row.account_head != account]
+	kept = [row for row in doc.get("taxes") or [] if row.account_head != account]
+	if tip == 0:
 		doc.set("taxes", kept)
 		for position, row in enumerate(kept, start=1):
 			row.idx = position
-		_append_tip_row(doc, account, tip)
-		doc.custom_tip_server = _resolve_return_tip_server(doc)
+		doc.custom_charged_tip = 0
+		doc.custom_tip_server = None
+		return
+	_check_tips_account(doc, account)
+	doc.set("taxes", kept)
+	for position, row in enumerate(kept, start=1):
+		row.idx = position
+	_append_tip_row(doc, account, tip)
+	doc.custom_tip_server = _resolve_return_tip_server(doc)
 
 
 def _resolve_return_tip_server(doc):
