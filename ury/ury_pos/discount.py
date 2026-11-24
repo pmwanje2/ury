@@ -48,6 +48,21 @@ _CURRENCY_PRECISION_FIELDS = frozenset(
         "paid_amount",
         "base_paid_amount",
         "outstanding_amount",
+        "change_amount",
+        "base_change_amount",
+        "rounding_adjustment",
+        "base_rounding_adjustment",
+        "write_off_amount",
+        "base_write_off_amount",
+        "distributed_discount_amount",
+        "net_rate",
+        "base_net_rate",
+        "net_amount",
+        "base_net_amount",
+        "tax_amount",
+        "base_tax_amount",
+        "tax_amount_after_discount_amount",
+        "base_tax_amount_after_discount_amount",
     }
 )
 
@@ -101,13 +116,16 @@ def currency_precision(doc=None, currency=None):
 
 
 @contextmanager
-def _with_currency_precision(doc, prec):
-    """Ensure ISO 0-decimal (UGX) and 3-decimal (KWD) currencies calculate at their true
-    minor-unit precision even when Frappe System Settings currency_precision defaults to 2."""
+def _with_currency_precision(doc, prec=None):
+    """Ensure ISO 0-decimal (UGX) and 3-decimal (KWD) currencies calculate and save at
+    their true minor-unit precision even when Frappe System Settings currency_precision
+    defaults to 2."""
     code = (doc.get("currency") if doc is not None else None) or ""
     if code.strip().upper() not in (ZERO_DECIMAL_CURRENCIES | THREE_DECIMAL_CURRENCIES):
         yield
         return
+    if prec is None:
+        prec = currency_precision(doc)
 
     saved = []
 
@@ -132,8 +150,9 @@ def _with_currency_precision(doc, prec):
             return
 
     _patch_obj(doc)
-    for row in doc.get("items") or []:
-        _patch_obj(row)
+    for child_field in ("items", "taxes", "payments"):
+        for row in doc.get(child_field) or []:
+            _patch_obj(row)
     try:
         yield
     finally:
@@ -149,6 +168,9 @@ def _with_currency_precision(doc, prec):
                     delattr(obj, "_precision")
             except Exception:
                 pass
+
+
+with_currency_precision = _with_currency_precision
 
 
 def _norm_number(value, places=4):

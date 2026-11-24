@@ -22,6 +22,7 @@ from ury.ury_pos.discount import (
     get_check_discounts as _get_check_discounts_impl,
     list_discount_options as _list_discount_options_impl,
     parse_discount_request,
+    with_currency_precision,
     _read_meta as _read_discount_meta,
     _restore_doc_discount_state,
     _set_row_field,
@@ -3869,8 +3870,10 @@ def apply_check_discount(
     frappe.flags.ury_server_discount_write = True
     try:
         if partner is not None:
-            partner.save(ignore_permissions=True)
-        bill.save()
+            with with_currency_precision(partner):
+                partner.save(ignore_permissions=True)
+        with with_currency_precision(bill):
+            bill.save()
     finally:
         frappe.flags.ury_server_discount_write = prev_disc_flag
     return summary
@@ -3949,8 +3952,10 @@ def remove_check_discount(invoice, pos_profile, row=None, approval=None):
     frappe.flags.ury_server_discount_write = True
     try:
         if partner is not None:
-            partner.save(ignore_permissions=True)
-        bill.save()
+            with with_currency_precision(partner):
+                partner.save(ignore_permissions=True)
+        with with_currency_precision(bill):
+            bill.save()
     finally:
         frappe.flags.ury_server_discount_write = prev_disc_flag
     return summary
@@ -4534,7 +4539,8 @@ def make_invoice(
     if discount_spec["has_any_arg"]:
         frappe.flags.ury_server_discount_write = True
     try:
-        invoice.save()
+        with with_currency_precision(invoice):
+            invoice.save()
     finally:
         frappe.flags.ury_server_tender_received = prev_tender_flag
         frappe.flags.ury_server_discount_write = prev_disc_flag
