@@ -1152,6 +1152,7 @@ def _raise_already_closed_on_deadlock(pos_opening_entry: str) -> None:
 
 
 def _lock_opening_entry_for_close(pos_opening_entry: str, fields: list[str]):
+	deadlocked = False
 	try:
 		return frappe.db.get_value(
 			"POS Opening Entry",
@@ -1162,8 +1163,11 @@ def _lock_opening_entry_for_close(pos_opening_entry: str, fields: list[str]):
 		)
 	except Exception as exc:
 		if _is_concurrent_row_change_error(exc):
-			_raise_already_closed_on_deadlock(pos_opening_entry)
-		raise
+			deadlocked = True
+		else:
+			raise
+	if deadlocked:
+		_raise_already_closed_on_deadlock(pos_opening_entry)
 
 
 def _blind_safe_variance_refusal(profile, tolerance: float) -> None:
@@ -1558,12 +1562,16 @@ def close_till_with_controls(
 			{"mode_of_payment": row["mode_of_payment"], "closing_amount": row["closing_amount"]},
 		)
 	closing.flags.ignore_permissions = True
+	deadlocked = False
 	try:
 		closing.insert(ignore_permissions=True)
 	except Exception as exc:
 		if _is_concurrent_row_change_error(exc):
-			_raise_already_closed_on_deadlock(opening.name)
-		raise
+			deadlocked = True
+		else:
+			raise
+	if deadlocked:
+		_raise_already_closed_on_deadlock(opening.name)
 
 	# Evaluate server-computed cash variances against till tolerance BEFORE consuming any token
 	exceeding, tolerance, _precision = _cash_variances_above_tolerance(closing, profile)
@@ -1635,15 +1643,19 @@ def close_till_with_controls(
 
 	closing.flags.ignore_permissions = True
 	prev_ignore = bool(getattr(frappe.flags, "ignore_permissions", False))
+	deadlocked = False
 	try:
 		frappe.flags.ignore_permissions = True
 		closing.submit()
 	except Exception as exc:
 		if _is_concurrent_row_change_error(exc):
-			_raise_already_closed_on_deadlock(opening.name)
-		raise
+			deadlocked = True
+		else:
+			raise
 	finally:
 		frappe.flags.ignore_permissions = prev_ignore
+	if deadlocked:
+		_raise_already_closed_on_deadlock(opening.name)
 	closing.reload()
 	return {
 		"name": closing.name,
@@ -1862,12 +1874,16 @@ def force_close_till(
 		)
 	closing.flags.ignore_permissions = True
 	closing.flags.pos_force_close = True
+	deadlocked = False
 	try:
 		closing.insert(ignore_permissions=True)
 	except Exception as exc:
 		if _is_concurrent_row_change_error(exc):
-			_raise_already_closed_on_deadlock(opening.name)
-		raise
+			deadlocked = True
+		else:
+			raise
+	if deadlocked:
+		_raise_already_closed_on_deadlock(opening.name)
 
 	# Enforce over_short_close privilege & max_amount when variance exceeds tolerance —
 	# NEVER stamp closing.flags.over_short_approval unchecked from a reopen_till force-close PIN.
@@ -1951,15 +1967,19 @@ def force_close_till(
 	}
 	closing.flags.ignore_permissions = True
 	prev_ignore = bool(getattr(frappe.flags, "ignore_permissions", False))
+	deadlocked = False
 	try:
 		frappe.flags.ignore_permissions = True
 		closing.submit()
 	except Exception as exc:
 		if _is_concurrent_row_change_error(exc):
-			_raise_already_closed_on_deadlock(opening.name)
-		raise
+			deadlocked = True
+		else:
+			raise
 	finally:
 		frappe.flags.ignore_permissions = prev_ignore
+	if deadlocked:
+		_raise_already_closed_on_deadlock(opening.name)
 	closing.reload()
 
 	note_parts = []

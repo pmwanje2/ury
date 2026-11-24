@@ -1090,12 +1090,13 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
             return orig_get_value(doctype, filters, fieldname, as_dict=as_dict, for_update=for_update, **kwargs)
 
         with patch.object(self.frappe.db, "get_value", side_effect=deadlock_on_for_update):
-            with self.assertRaisesRegex(Refused, r"POS-CLOSE-ALREADY-CLOSED"):
+            with self.assertRaisesRegex(Refused, r"POS-CLOSE-ALREADY-CLOSED") as ctx:
                 self.tc.close_till_with_controls(
                     pos_profile="Main Till",
                     pos_opening_entry="OPEN-MAIN-1",
                     counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 150000}],
                 )
+        self.assertIsNone(ctx.exception.__context__)
 
     def test_pending_movement_refused_before_variance_approval_for_cashier(self):
         # A pending draft cash movement makes counted cash look short vs expected;
