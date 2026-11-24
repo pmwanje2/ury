@@ -819,6 +819,29 @@ class TestSettlementPreservesExistingTenders(Loaded):
             {"grand_total": 23.01, "rounded_total": 23.01},
         )
 
+    def test_preserves_frappe_dict_style_payment_rows_without_callable_as_dict(self):
+        class FrappeStyleDict(dict):
+            def __getattr__(self, key):
+                return self.get(key)
+
+        check = Check(
+            "LKG-DICT",
+            grand_total=100.0,
+            rounded_total=100.0,
+            payments=[FrappeStyleDict({"mode_of_payment": "Cash", "amount": 40.0})],
+        )
+        self._settle(
+            check,
+            [
+                {"mode_of_payment": "Cash", "amount": 40.0},
+                {"mode_of_payment": "Mobile Money", "amount": 60.0},
+            ],
+        )
+        self.assertEqual(
+            [(r.mode_of_payment, r.amount) for r in check.payments],
+            [("Cash", 40.0), ("Mobile Money", 60.0)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
