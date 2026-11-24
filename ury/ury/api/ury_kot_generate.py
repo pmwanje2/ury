@@ -266,7 +266,7 @@ def _extract_raw_line_key(item):
     return raw
 
 
-def _resolve_units_for_item_code(item_code, pos_profile, pos_invoice):
+def _resolve_units_for_item_code(item_code, pos_profile, pos_invoice, pos_profile_id=None, room=None):
     production_config = resolve_production_context(
         item_code, pos_profile.branch, company=pos_invoice.company
     )
@@ -276,10 +276,15 @@ def _resolve_units_for_item_code(item_code, pos_profile, pos_invoice):
         company=pos_invoice.company,
         branch=pos_profile.branch,
         production_policy=production_policy,
+        pos_profile=pos_profile_id or pos_profile.name,
+        order_type=pos_invoice.get("order_type"),
+        room=room,
     )
 
 
-def _route_items_with_modifiers_and_combos(kot_items, pos_profile, pos_invoice, *, is_cancel=False):
+def _route_items_with_modifiers_and_combos(
+    kot_items, pos_profile, pos_invoice, *, is_cancel=False, pos_profile_id=None, room=None
+):
     """Route items to production units applying:
     - Simphony Opt 22: modifiers with `custom_inherit_parent_routing=1` inherit their parent's
       station(s) and appear immediately beneath their parent row.
@@ -318,7 +323,9 @@ def _route_items_with_modifiers_and_combos(kot_items, pos_profile, pos_invoice, 
             continue
 
         item_code = item["item_code"]
-        resolved_units = _resolve_units_for_item_code(item_code, pos_profile, pos_invoice)
+        resolved_units = _resolve_units_for_item_code(
+            item_code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
+        )
         raw_key = _extract_raw_line_key(item)
         if raw_key:
             parent_units_by_key[raw_key] = list(resolved_units)
@@ -356,7 +363,9 @@ def _route_items_with_modifiers_and_combos(kot_items, pos_profile, pos_invoice, 
                 if cint(ov.get("inherit_parent_routing", 1)) == 1 and resolved_units:
                     comp_units = list(resolved_units)
                 else:
-                    comp_units = _resolve_units_for_item_code(chosen_code, pos_profile, pos_invoice) or list(resolved_units)
+                    comp_units = _resolve_units_for_item_code(
+                        chosen_code, pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
+                    ) or list(resolved_units)
                 for unit in comp_units:
                     _add_to_station(unit, comp_row, attach_under_parent_key=raw_key)
 
@@ -375,12 +384,18 @@ def _route_items_with_modifiers_and_combos(kot_items, pos_profile, pos_invoice, 
                 target_units = parent_units_by_key[parent_key]
             elif parent_key in saved_parent_item_by_key:
                 target_units = _resolve_units_for_item_code(
-                    saved_parent_item_by_key[parent_key], pos_profile, pos_invoice
+                    saved_parent_item_by_key[parent_key],
+                    pos_profile,
+                    pos_invoice,
+                    pos_profile_id=pos_profile_id,
+                    room=room,
                 )
                 parent_units_by_key[parent_key] = list(target_units)
 
         if target_units is None:
-            target_units = _resolve_units_for_item_code(child["item_code"], pos_profile, pos_invoice)
+            target_units = _resolve_units_for_item_code(
+                child["item_code"], pos_profile, pos_invoice, pos_profile_id=pos_profile_id, room=room
+            )
 
         for unit in target_units:
             _add_to_station(unit, child, attach_under_parent_key=parent_key or None)
@@ -419,8 +434,19 @@ def process_items_for_kot(
         )
 
     # Build a map of production unit -> items using Opt 22 parent inheritance + combo split
+    # while forwarding pos_profile, order_type, and room for G27 routing overrides & failover.
+    room = (
+        frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
+        if restaurant_table
+        else None
+    )
     production_items_map = _route_items_with_modifiers_and_combos(
-        kot_items, pos_profile, pos_invoice, is_cancel=False
+        kot_items,
+        pos_profile,
+        pos_invoice,
+        is_cancel=False,
+        pos_profile_id=pos_profile_id,
+        room=room,
     )
 
     # Print warning if any non-fee item was not routed (legacy behavior)
@@ -496,9 +522,21 @@ def process_items_for_cancel_kot(
 
     created_kot_names = []
 
+    effective_table = restaurant_table or pos_invoice.get("restaurant_table")
+    room = (
+        frappe.db.get_value("URY Table", effective_table, "restaurant_room")
+        if effective_table
+        else None
+    )
     # Build a map of production unit -> items respecting Opt 22 parent inheritance
+    # and forwarding pos_profile, order_type, and room for G27 routing overrides & failover.
     production_items_map = _route_items_with_modifiers_and_combos(
-        kot_items, pos_profile, pos_invoice, is_cancel=True
+        kot_items,
+        pos_profile,
+        pos_invoice,
+        is_cancel=True,
+        pos_profile_id=pos_profile_id,
+        room=room,
     )
 
     # Create one cancel KOT per production unit

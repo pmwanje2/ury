@@ -11,6 +11,7 @@ def validate(doc, method):
     validate_order_type_customers(doc, method)
     validate_room_lookup_method(doc, method)
     validate_paid_out_approval_threshold(doc, method)
+    validate_till_cash_thresholds(doc, method)
     validate_print_format(doc, method)
 
 
@@ -41,6 +42,21 @@ def validate_paid_out_approval_threshold(doc, method=None):
             frappe.ValidationError,
         )
     doc.custom_paid_out_approval_threshold = text
+
+
+def validate_till_cash_thresholds(doc, method=None):
+    from frappe.utils import flt
+
+    for field, label in (
+        ("custom_paid_in_approval_threshold", "Paid-In Approval Threshold"),
+        ("custom_cash_pull_threshold", "Cash Pull Threshold"),
+        ("custom_over_short_tolerance", "Closing Over/Short Tolerance"),
+    ):
+        if flt(doc.get(field)) < 0:
+            frappe.throw(
+                coded_message("PROFILE-TOLERANCE", _("{0} cannot be negative.").format(_(label))),
+                frappe.ValidationError,
+            )
 
 
 def validate_print_format(doc, method=None):

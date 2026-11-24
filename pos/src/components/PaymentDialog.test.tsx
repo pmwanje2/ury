@@ -133,7 +133,7 @@ describe("PaymentDialog", () => {
     expect(buttons.length).toBeGreaterThan(0);
   });
 
-  it("shows discount section when enable_discount is true", () => {
+  it("never renders a discount entry box in PaymentDialog (Simphony: discounts live on open check)", () => {
     render(
       <PaymentDialog
         onClose={vi.fn()}
@@ -150,21 +150,16 @@ describe("PaymentDialog", () => {
       />
     );
     
-    expect(screen.getByText(/payment.apply_discount/)).toBeInTheDocument();
+    expect(screen.queryByText(/payment.apply_discount/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/payment.discount_placeholder/)).not.toBeInTheDocument();
   });
 
-  it("hides discount section when enable_discount is false", () => {
-    mockUsePOSStore.mockReturnValue({
-      paymentModes: ["Cash", "Card"],
-      fetchPaymentModes: vi.fn(),
-      posProfile: { default_payment_mode: "Cash", enable_discount: 0 },
-    });
-
+  it("displays an already-applied check discount read-only with its reason in Order Summary", () => {
     render(
       <PaymentDialog
         onClose={vi.fn()}
-        grandTotal={1000}
-        roundedTotal={1000}
+        grandTotal={900}
+        roundedTotal={900}
         invoice="INV001"
         customer="CUST001"
         posProfile="POS001"
@@ -173,9 +168,17 @@ describe("PaymentDialog", () => {
         owner="user1"
         fetchOrders={vi.fn()}
         clearSelectedOrder={vi.fn()}
+        discountPercentage={10}
+        discountAmount={100}
+        discountReason="Guest complaint"
+        couponCode="LUNCH10"
       />
     );
-    
+
+    const summaryRow = screen.getByTestId("payment-discount-summary");
+    expect(summaryRow).toHaveTextContent("Guest complaint");
+    expect(summaryRow).toHaveTextContent("LUNCH10");
+    expect(summaryRow).toHaveTextContent("100");
     expect(screen.queryByText(/payment.apply_discount/)).not.toBeInTheDocument();
   });
 
@@ -493,6 +496,181 @@ describe("PaymentDialog", () => {
         expect.objectContaining({ submit_invoice: 1 })
       );
     });
+  });
+
+  it("P0-1: enables Pay UGX 0 and settles a 100% comped check cleanly", async () => {
+    mockUsePOSStore.mockReturnValue({
+      paymentModes: ["Cash", "Card"],
+      fetchPaymentModes: vi.fn(),
+      posProfile: {
+        name: "POS001",
+        currency: "UGX",
+        default_payment_mode: "Cash",
+        enable_payment_without_printing: 1,
+      },
+      currency: "UGX",
+    });
+
+    render(
+      <PaymentDialog
+        onClose={vi.fn()}
+        grandTotal={0}
+        roundedTotal={0}
+        invoice="INV-COMP-1"
+        customer="Walk-in Guest"
+        posProfile="POS001"
+        table="T-02"
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn().mockResolvedValue(undefined)}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={100}
+        discountAmount={60000}
+        discountReason="Complaint"
+        order={{ invoice_printed: 1 }}
+      />
+    );
+
+    const checkbox = screen.getByRole("checkbox");
+    fireEvent.click(checkbox);
+
+    const payButton = screen.getByRole("button", { name: /payment.pay_button/ }) as HTMLButtonElement;
+    expect(payButton.disabled).toBe(false);
+
+    fireEvent.click(payButton);
+    await waitFor(() => {
+      expect(call.post).toHaveBeenCalledWith(
+        "ury.ury.doctype.ury_order.ury_order.make_invoice",
+        expect.objectContaining({
+          invoice: "INV-COMP-1",
+          payments: [{ mode_of_payment: "Cash", amount: 0 }],
+          submit_invoice: 1,
+        }),
+      );
+    });
+  });
+
+  it("P0-1 guard: keeps Pay disabled on an un-discounted zero check with no received tender", () => {
+    mockUsePOSStore.mockReturnValue({
+      paymentModes: ["Cash", "Card"],
+      fetchPaymentModes: vi.fn(),
+      posProfile: {
+        name: "POS001",
+        currency: "UGX",
+        default_payment_mode: "Cash",
+        enable_payment_without_printing: 1,
+      },
+      currency: "UGX",
+    });
+
+    render(
+      <PaymentDialog
+        onClose={vi.fn()}
+        grandTotal={0}
+        roundedTotal={0}
+        invoice="INV-ZERO-EMPTY"
+        customer="Walk-in Guest"
+        posProfile="POS001"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn()}
+        clearSelectedOrder={vi.fn()}
+      />
+    );
+
+    const payButton = screen.getByRole("button", { name: /payment.pay_button/ }) as HTMLButtonElement;
+    expect(payButton.disabled).toBe(true);
+  });
+
+  it("P1-7a: renders read-only discount summary when only line discounts exist (appliedDiscount = 0)", () => {
+    render(
+      <PaymentDialog
+        onClose={vi.fn()}
+        grandTotal={45000}
+        roundedTotal={45000}
+        invoice="INV-LINE-ONLY"
+        customer="Walk-in Guest"
+        posProfile="POS001"
+        table="T-01"
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn()}
+        clearSelectedOrder={vi.fn()}
+        discountPercentage={0}
+        discountAmount={0}
+        lineDiscountTotal={5000}
+        discountReason="Complaint"
+      />
+    );
+
+    const summaryRow = screen.getByTestId("payment-discount-summary");
+    expect(summaryRow).toHaveTextContent("Complaint");
+    expect(summaryRow).toHaveTextContent("5000");
+  });
+
+  it("G23: dispatches pos:payment-settled with tendered modes and drawer profile settings on settlement success", async () => {
+    mockUsePOSStore.mockReturnValue({
+      paymentModes: ["R1 Register Notes", "Card"],
+      fetchPaymentModes: vi.fn(),
+      posProfile: {
+        name: "R1 Till A",
+        pos_profile: "R1 Till A",
+        default_payment_mode: "R1 Register Notes",
+        enable_discount: 1,
+        enable_payment_without_printing: 1,
+        print_format: "Standard",
+        custom_drawer_pin: 5,
+        custom_drawer_kick_hex: "1b700119fa",
+        custom_auto_kick_on_cash_tender: 1,
+        drawer_opening_modes: ["R1 Register Notes"],
+      },
+    });
+
+    const settledEvents: CustomEvent[] = [];
+    const listener = (ev: Event) => settledEvents.push(ev as CustomEvent);
+    window.addEventListener("pos:payment-settled", listener);
+
+    try {
+      render(
+        <PaymentDialog
+          onClose={vi.fn()}
+          grandTotal={1000}
+          roundedTotal={1000}
+          invoice="INV-G23-1"
+          customer="CUST001"
+          posProfile="R1 Till A"
+          table={null}
+          cashier="user1"
+          owner="user1"
+          fetchOrders={vi.fn().mockResolvedValue(undefined)}
+          clearSelectedOrder={vi.fn()}
+          order={{ invoice_printed: 1 }}
+        />
+      );
+
+      const checkbox = screen.getByRole("checkbox");
+      fireEvent.click(checkbox);
+
+      const payButton = screen.getByRole("button", { name: /payment.pay_button/ });
+      fireEvent.click(payButton);
+
+      await waitFor(() => {
+        expect(settledEvents).toHaveLength(1);
+      });
+      expect(settledEvents[0].detail).toMatchObject({
+        invoice: "INV-G23-1",
+        posProfile: "R1 Till A",
+        modes: ["R1 Register Notes"],
+        payments: [{ mode_of_payment: "R1 Register Notes", amount: 1000 }],
+        pin: 5,
+        hex: "1b700119fa",
+        autoKickEnabled: 1,
+        drawerModes: ["R1 Register Notes"],
+      });
+    } finally {
+      window.removeEventListener("pos:payment-settled", listener);
+    }
   });
 });
 

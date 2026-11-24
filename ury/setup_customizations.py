@@ -7,8 +7,10 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def after_install():
     create_custom_fields(get_custom_fields())
+    from ury.ury_pos.kds_device_fields import ensure_kds_device_custom_fields
     from ury.ury_pos.modifier_combo_fields import ensure_modifier_combo_custom_fields
 
+    ensure_kds_device_custom_fields()
     ensure_modifier_combo_custom_fields()
     add_roles_to_administrator()
     hide_setup_sidebar_options()
@@ -271,6 +273,17 @@ def get_custom_fields():
 					"label": "Ordering Session",
 					"insert_after": "custom_ordering_device",
 					"read_only": 1,
+				},
+				{
+					"fieldname": "ury_discount_meta",
+					"fieldtype": "Small Text",
+					"label": "POS Discount Metadata",
+					"description": "Server-only discount reason and approval metadata when siteops discount custom fields are absent.",
+					"insert_after": "custom_ordering_session",
+					"read_only": 1,
+					"hidden": 1,
+					"no_copy": 1,
+					"print_hide": 1,
 				}
 				],
 
