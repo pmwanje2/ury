@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 from decimal import Decimal, ROUND_HALF_UP
 import json
+import re
 import sys
 from typing import Any
 
@@ -92,11 +93,11 @@ THREE_DECIMAL_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", 
 
 EFRIS_REASON_MAP = {
     "RET-QUALITY": "101:Return of products due to expiry or damage, etc.",
-    "RET-OVERCHARGE": "103:Invoice amount wrongly stated due to miscalculation of price, tax, or discounts, etc.",
-    "REOPEN-TENDER": "102:Cancellation of the purchase",
-    "REOPEN-SPLIT": "102:Cancellation of the purchase",
+    "RET-OVERCHARGE": "103:Invoice amount wrongly Stated due to miscalculation of price, tax, or discounts,etc.",
+    "REOPEN-TENDER": "102:Cancellation of the purchase.",
+    "REOPEN-SPLIT": "102:Cancellation of the purchase.",
 }
-DEFAULT_EFRIS_CREDIT_REASON = "102:Cancellation of the purchase"
+DEFAULT_EFRIS_CREDIT_REASON = "102:Cancellation of the purchase."
 
 
 def _f():
@@ -909,34 +910,64 @@ def post_waste_stock_entry(
 # ---------------------------------------------------------------------------
 
 
-def _currency_precision(currency: str | None) -> int:
-    code = (currency or "").strip().upper()
-    if code in ZERO_DECIMAL_CURRENCIES:
-        return 0
-    if code in THREE_DECIMAL_CURRENCIES:
-        return 3
-    if code:
+def _pos_invoice_field_precision(doc: Any = None, fieldname: str = "grand_total") -> int | None:
+    """Return the actual POS Invoice currency field precision when known (ignoring unittest mocks)."""
+    if doc is not None and getattr(type(doc), "__module__", "") != "unittest.mock":
+        prec_fn = getattr(doc, "precision", None)
+        if callable(prec_fn) and getattr(type(prec_fn), "__module__", "") != "unittest.mock":
+            try:
+                p = prec_fn(fieldname)
+                if isinstance(p, int) and not isinstance(p, bool) and p >= 0:
+                    return p
+            except Exception:
+                pass
+    fr = _f()
+    get_prec = getattr(fr, "get_precision", None)
+    if callable(get_prec) and getattr(type(get_prec), "__module__", "") != "unittest.mock":
         try:
-            frac = _f().db.get_value("Currency", code, "fraction_units")
-            if isinstance(frac, int) and not isinstance(frac, bool):
-                if frac <= 1:
-                    return 0
-                if frac == 1000:
-                    return 3
-                if frac == 100:
-                    return 2
+            p = get_prec("POS Invoice", fieldname)
+            if isinstance(p, int) and not isinstance(p, bool) and p >= 0:
+                return p
         except Exception:
             pass
-    return 2
+    return None
+
+
+def _currency_precision(currency: str | None, doc: Any = None) -> int:
+    code = (currency or (_field(doc, "currency") if doc is not None else None) or "").strip().upper()
+    if code in ZERO_DECIMAL_CURRENCIES:
+        iso_prec = 0
+    elif code in THREE_DECIMAL_CURRENCIES:
+        iso_prec = 3
+    else:
+        iso_prec = 2
+        if code:
+            try:
+                frac = _f().db.get_value("Currency", code, "fraction_units")
+                if isinstance(frac, int) and not isinstance(frac, bool):
+                    if frac <= 1:
+                        iso_prec = 0
+                    elif frac == 1000:
+                        iso_prec = 3
+                    elif frac == 100:
+                        iso_prec = 2
+            except Exception:
+                pass
+
+    field_prec = _pos_invoice_field_precision(doc, "grand_total")
+    if field_prec is not None:
+        return min(iso_prec, field_prec)
+    return iso_prec
 
 
 def _dec(value: Any) -> Decimal:
     return Decimal(str(value if value is not None else 0))
 
 
-def _q(value: Decimal, precision: int) -> Decimal:
+def _q(value: Any, precision: int) -> Decimal:
+    dec_val = value if isinstance(value, Decimal) else _dec(value)
     quantum = Decimal("1") if precision <= 0 else Decimal(f"1e-{precision}")
-    return value.quantize(quantum, rounding=ROUND_HALF_UP)
+    return dec_val.quantize(quantum, rounding=ROUND_HALF_UP)
 
 
 def _parse_json_arg(val: Any) -> Any:
@@ -963,14 +994,33 @@ def _assert_same_outlet(doc_branch: str | None) -> None:
         )
 
 
+_ROOM_CHARGE_NAME_RE = re.compile(
+    r"(?:\broom[\s_-]*charge\b|\bguest[\s_-]*folio\b|\bfolio\b|\bpms[\s_-]*charge\b|\bpost[\s_-]*to[\s_-]*room\b|\broom[\s_-]*posting\b|^room$)",
+    re.IGNORECASE,
+)
+
+
 def _is_room_charge_mode(mode_of_payment: str | None) -> bool:
     if not isinstance(mode_of_payment, str) or not mode_of_payment.strip():
         return False
-    low = mode_of_payment.strip().lower()
-    if "room" in low or "folio" in low or "pms" in low:
-        return True
-    mop_type = _f().db.get_value("Mode of Payment", mode_of_payment, "type")
-    return isinstance(mop_type, str) and mop_type.strip().lower() in ("room charge", "folio")
+    mode = mode_of_payment.strip()
+    fr = _f()
+    if _has_field("Mode of Payment", "custom_is_room_charge"):
+        try:
+            flagged = fr.db.get_value("Mode of Payment", mode, "custom_is_room_charge")
+            if cint(flagged) == 1:
+                return True
+        except Exception:
+            pass
+    mop_type = fr.db.get_value("Mode of Payment", mode, "type")
+    if isinstance(mop_type, str):
+        mop_type_low = mop_type.strip().lower()
+        if mop_type_low in ("room charge", "folio"):
+            return True
+        # Standard Cash / Bank / Phone modes (e.g. "Showroom Cash") are never room charges.
+        if mop_type_low in ("cash", "bank", "phone"):
+            return False
+    return bool(_ROOM_CHARGE_NAME_RE.search(mode))
 
 
 def _is_room_charge_invoice(inv) -> bool:
@@ -981,6 +1031,69 @@ def _is_room_charge_invoice(inv) -> bool:
         if flt(_field(p, "amount", 0)) > 0 and _is_room_charge_mode(_field(p, "mode_of_payment")):
             return True
     return False
+
+
+def _tips_payable_account(doc: Any, pos_profile_doc: Any = None) -> str | None:
+    if pos_profile_doc is not None:
+        acct = _field(pos_profile_doc, "custom_tips_payable_account")
+        if isinstance(acct, str) and acct.strip():
+            return acct.strip()
+    profile_name = _safe_profile_name(_field(doc, "pos_profile"))
+    if profile_name:
+        acct = _f().db.get_value("POS Profile", profile_name, "custom_tips_payable_account")
+        if isinstance(acct, str) and acct.strip():
+            return acct.strip()
+    return None
+
+
+def _is_tip_tax_row(row: Any, tips_account: str | None) -> bool:
+    if not tips_account:
+        return False
+    return _field(row, "account_head") == tips_account and (_field(row, "charge_type") or "Actual") == "Actual"
+
+
+def _get_charged_tip(doc: Any, pos_profile_doc: Any = None, precision: int | None = None) -> Decimal:
+    raw = _field(doc, "custom_charged_tip", None)
+    if raw is not None and flt(raw) != 0:
+        val = _dec(raw)
+        return _q(val, precision) if precision is not None else val
+    tips_account = _tips_payable_account(doc, pos_profile_doc)
+    if tips_account:
+        tip_sum = sum(
+            _dec(_field(t, "tax_amount", 0))
+            for t in (_field(doc, "taxes") or [])
+            if _is_tip_tax_row(t, tips_account)
+        )
+        if tip_sum != 0:
+            return _q(tip_sum, precision) if precision is not None else tip_sum
+    return Decimal("0")
+
+
+def _clone_tax_row_dict(row: Any, *, tax_amount: float) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "charge_type": _field(row, "charge_type") or "Actual",
+        "account_head": _field(row, "account_head"),
+        "description": _field(row, "description") or _field(row, "account_head"),
+        "rate": float(_field(row, "rate") or 0),
+        "tax_amount": float(tax_amount),
+        "included_in_print_rate": cint(_field(row, "included_in_print_rate", 0)),
+    }
+    if _field(row, "cost_center"):
+        out["cost_center"] = _field(row, "cost_center")
+    if _field(row, "row_id"):
+        out["row_id"] = _field(row, "row_id")
+    if _field(row, "included_in_paid_amount") is not None:
+        out["included_in_paid_amount"] = cint(_field(row, "included_in_paid_amount", 0))
+    if _field(row, "branch"):
+        out["branch"] = _field(row, "branch")
+    return out
+
+
+def _copy_item_tax_fields(src_row: Any, dst_row: dict[str, Any]) -> None:
+    if _field(src_row, "item_tax_template"):
+        dst_row["item_tax_template"] = _field(src_row, "item_tax_template")
+    if _field(src_row, "item_tax_rate"):
+        dst_row["item_tax_rate"] = _field(src_row, "item_tax_rate")
 
 
 def _unreferenced_return_roles(pos_profile_doc) -> set[str]:
@@ -1184,7 +1297,7 @@ def _compute_return_plan(
         _refuse(CODE_RETURN_INVALID_LINE, "Select at least one item to return.", fr.ValidationError)
 
     currency = _field(orig, "currency") or "UGX"
-    precision = _currency_precision(currency)
+    precision = _currency_precision(currency, doc=orig)
     orig_items = list(_field(orig, "items") or [])
     orig_by_name = {_field(r, "name"): r for r in orig_items if _field(r, "name")}
     prior_qty = _prior_returned_qty_by_line(orig, prior_returns)
@@ -1237,24 +1350,31 @@ def _compute_return_plan(
     if orig_gross <= 0:
         _refuse(CODE_RETURN_INVALID_LINE, "Original check has no returnable line total.", fr.ValidationError)
 
+    tips_account = _tips_payable_account(orig, pos_profile_doc)
+    orig_tip = _get_charged_tip(orig, pos_profile_doc, precision)
+
     prior_gross = Decimal("0")
     prior_discount = Decimal("0")
     prior_excl_tax = Decimal("0")
+    prior_incl_tax = Decimal("0")
     prior_total = Decimal("0")
     prior_paid_refunded = Decimal("0")
     for ret in prior_returns:
         prior_gross += sum(abs(_dec(_field(r, "qty", 0))) * _dec(_field(r, "rate", 0)) for r in (_field(ret, "items") or []))
-        prior_discount += abs(_dec(_field(ret, "discount_amount", 0)))
-        prior_excl_tax += sum(
-            abs(_dec(_field(t, "tax_amount", 0)))
-            for t in (_field(ret, "taxes") or [])
-            if cint(_field(t, "included_in_print_rate", 0)) == 0
-        )
-        prior_total += abs(_dec(_field(ret, "rounded_total") or _field(ret, "grand_total") or 0))
-        prior_paid_refunded += sum(abs(_dec(_field(p, "amount", 0))) for p in (_field(ret, "payments") or []))
+        prior_discount += _q(abs(_dec(_field(ret, "discount_amount", 0))), precision)
+        for t in (_field(ret, "taxes") or []):
+            if _is_tip_tax_row(t, tips_account):
+                continue
+            t_amt = abs(_dec(_field(t, "tax_amount", 0)))
+            if cint(_field(t, "included_in_print_rate", 0)) == 0:
+                prior_excl_tax += _q(t_amt, precision)
+            else:
+                prior_incl_tax += t_amt
+        prior_total += _q(abs(_dec(_field(ret, "rounded_total") or _field(ret, "grand_total") or 0)), precision)
+        prior_paid_refunded += _q(sum(abs(_dec(_field(p, "amount", 0))) for p in (_field(ret, "payments") or [])), precision)
 
-    # Cumulative-remainder proportional discount allocation (zero drift in UGX whole shillings!).
-    orig_discount = abs(_dec(_field(orig, "discount_amount", 0)))
+    # Cumulative-remainder proportional discount allocation (zero drift at effective precision!).
+    orig_discount = _q(abs(_dec(_field(orig, "discount_amount", 0))), precision)
     cum_gross = prior_gross + this_gross
     if orig_discount > 0:
         cum_discount = _q(min(orig_discount, orig_discount * cum_gross / orig_gross), precision)
@@ -1262,14 +1382,16 @@ def _compute_return_plan(
     else:
         this_discount = Decimal("0")
 
-    # Cumulative-remainder proportional exclusive tax allocation.
+    # Separate exclusive taxes (added on top of net), inclusive taxes (embedded in print rate),
+    # and #145 Tips Payable Actual rows (never prorated into partial item returns).
     orig_taxes = list(_field(orig, "taxes") or [])
-    orig_excl_tax = sum(
-        _dec(_field(t, "tax_amount", 0))
-        for t in orig_taxes
-        if cint(_field(t, "included_in_print_rate", 0)) == 0
-    )
-    orig_net = orig_gross - orig_discount
+    non_tip_taxes = [t for t in orig_taxes if not _is_tip_tax_row(t, tips_account)]
+    excl_rows = [t for t in non_tip_taxes if cint(_field(t, "included_in_print_rate", 0)) == 0]
+    incl_rows = [t for t in non_tip_taxes if cint(_field(t, "included_in_print_rate", 0)) == 1]
+
+    orig_excl_tax = _q(sum((_dec(_field(t, "tax_amount", 0)) for t in excl_rows), Decimal("0")), precision)
+    orig_incl_tax = sum((_dec(_field(t, "tax_amount", 0)) for t in incl_rows), Decimal("0"))
+    orig_net = _q(orig_gross, precision) - orig_discount
     this_net = _q(this_gross, precision) - this_discount
     prior_net = _q(prior_gross, precision) - prior_discount
 
@@ -1280,7 +1402,22 @@ def _compute_return_plan(
     else:
         this_excl_tax = Decimal("0")
 
-    orig_grand = _q(_dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or (orig_net + orig_excl_tax)), precision)
+    if orig_incl_tax > 0 and orig_net > 0:
+        cum_net = prior_net + this_net
+        incl_prec = max(precision, 2)
+        cum_incl_tax = _q(min(orig_incl_tax, orig_incl_tax * cum_net / orig_net), incl_prec)
+        this_incl_tax = max(Decimal("0"), cum_incl_tax - prior_incl_tax)
+    else:
+        this_incl_tax = Decimal("0")
+
+    raw_orig_grand = _q(
+        _dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or (orig_net + orig_excl_tax)),
+        precision,
+    )
+    # Item returns cap strictly against pre-tip check grand_total (server tips are not prorated out of items).
+    orig_grand = max(Decimal("0"), raw_orig_grand - orig_tip)
+    remaining_grand = max(Decimal("0"), orig_grand - prior_total)
+
     # Check if this return exhausts every remaining line on the check -> guarantee exact grand_total closure.
     is_final_return = all(
         (prior_qty.get(_field(r, "name"), Decimal("0")) + req_by_row.get(_field(r, "name"), Decimal("0"))) >= _dec(_field(r, "qty", 0)) - Decimal("1e-9")
@@ -1288,21 +1425,25 @@ def _compute_return_plan(
         if _dec(_field(r, "qty", 0)) > 0
     )
     if is_final_return:
-        refund_total = max(Decimal("0"), orig_grand - prior_total)
-        # Reconcile any 1-unit rounding remainder cleanly into tax/discount.
-        computed = this_net + this_excl_tax
-        diff = refund_total - computed
-        if diff != 0:
-            if orig_excl_tax > 0:
-                this_excl_tax += diff
-            else:
-                this_discount -= diff
+        refund_total = remaining_grand
     else:
-        refund_total = max(Decimal("0"), min(orig_grand - prior_total, this_net + this_excl_tax))
+        refund_total = max(Decimal("0"), min(remaining_grand, _q(this_net + this_excl_tax, precision)))
 
-    # Proportional per-tax-row amounts for native ERPNext return taxes child table.
-    tax_rows_out: list[dict[str, Any]] = []
-    excl_rows = [t for t in orig_taxes if cint(_field(t, "included_in_print_rate", 0)) == 0]
+    # Reconcile any 1-minor-unit rounding remainder cleanly into tax/discount so grand_total == paid_amount.
+    computed = this_net + this_excl_tax
+    diff = refund_total - computed
+    if diff != 0:
+        if orig_excl_tax > 0 and this_excl_tax + diff >= 0:
+            this_excl_tax += diff
+        elif orig_discount > 0 and this_discount - diff >= 0:
+            this_discount -= diff
+        elif orig_excl_tax > 0:
+            this_excl_tax += diff
+        else:
+            this_discount = max(Decimal("0"), this_discount - diff)
+
+    # Build native return taxes child table preserving BOTH exclusive AND tax-inclusive VAT rows in original order!
+    excl_alloc: dict[int, Decimal] = {}
     if excl_rows and this_excl_tax > 0 and orig_excl_tax > 0:
         allocated = Decimal("0")
         for idx, t in enumerate(excl_rows):
@@ -1311,14 +1452,31 @@ def _compute_return_plan(
             else:
                 amt = _q(this_excl_tax * _dec(_field(t, "tax_amount", 0)) / orig_excl_tax, precision)
                 allocated += amt
-            tax_rows_out.append({
-                "charge_type": _field(t, "charge_type") or "Actual",
-                "account_head": _field(t, "account_head"),
-                "description": _field(t, "description") or _field(t, "account_head"),
-                "rate": float(_field(t, "rate") or 0),
-                "tax_amount": -float(amt),
-                "included_in_print_rate": 0,
-            })
+            excl_alloc[id(t)] = amt
+
+    incl_alloc: dict[int, Decimal] = {}
+    if incl_rows:
+        incl_prec = max(precision, 2)
+        allocated = Decimal("0")
+        for idx, t in enumerate(incl_rows):
+            if orig_incl_tax > 0 and this_incl_tax > 0:
+                if idx == len(incl_rows) - 1:
+                    amt = this_incl_tax - allocated
+                else:
+                    amt = _q(this_incl_tax * _dec(_field(t, "tax_amount", 0)) / orig_incl_tax, incl_prec)
+                    allocated += amt
+            else:
+                amt = Decimal("0")
+            incl_alloc[id(t)] = amt
+
+    tax_rows_out: list[dict[str, Any]] = []
+    for t in non_tip_taxes:
+        if cint(_field(t, "included_in_print_rate", 0)) == 1:
+            amt = incl_alloc.get(id(t), Decimal("0"))
+            tax_rows_out.append(_clone_tax_row_dict(t, tax_amount=-float(amt)))
+        elif id(t) in excl_alloc:
+            amt = excl_alloc[id(t)]
+            tax_rows_out.append(_clone_tax_row_dict(t, tax_amount=-float(amt)))
 
     # Refund payment cap: never hand back more cash/tender than was actually paid!
     orig_net_payments = _net_original_payments(orig, precision)
@@ -1405,10 +1563,46 @@ def _compute_return_plan(
     }
 
 
+def _efris_select_options() -> list[str]:
+    """Read live POS Invoice.efris_creditnote_reasoncode Select options when installed."""
+    try:
+        meta = _f().get_meta("POS Invoice")
+        field = meta.get_field("efris_creditnote_reasoncode") if meta else None
+        raw = getattr(field, "options", None)
+        if isinstance(raw, str) and raw.strip():
+            return [line.strip() for line in raw.splitlines() if line.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _match_efris_option(candidate: str, options: list[str]) -> str:
+    if not options:
+        return candidate
+    if candidate in options:
+        return candidate
+    prefix = ""
+    if ":" in candidate:
+        prefix = candidate.split(":", 1)[0].strip() + ":"
+    elif candidate.isdigit():
+        prefix = candidate + ":"
+    if prefix:
+        for opt in options:
+            if opt.startswith(prefix):
+                return opt
+    norm_cand = "".join(ch for ch in candidate.lower() if ch.isalnum())
+    for opt in options:
+        if "".join(ch for ch in opt.lower() if ch.isalnum()) == norm_cand:
+            return opt
+    return candidate
+
+
 def _resolve_efris_credit_reason(reason_code: str, explicit_code: str | None = None) -> str:
+    options = _efris_select_options()
     if isinstance(explicit_code, str) and explicit_code.strip():
-        return explicit_code.strip()
-    return EFRIS_REASON_MAP.get((reason_code or "").strip().upper(), DEFAULT_EFRIS_CREDIT_REASON)
+        return _match_efris_option(explicit_code.strip(), options)
+    mapped = EFRIS_REASON_MAP.get((reason_code or "").strip().upper(), DEFAULT_EFRIS_CREDIT_REASON)
+    return _match_efris_option(mapped, options)
 
 
 @_default_frappe.whitelist()
@@ -1428,7 +1622,7 @@ def get_returnable_check(invoice_id: str) -> dict[str, Any]:
     prior_returns = _load_prior_returns(orig.name, for_update=False)
     prior_qty = _prior_returned_qty_by_line(orig, prior_returns)
     currency = _field(orig, "currency") or "UGX"
-    precision = _currency_precision(currency)
+    precision = _currency_precision(currency, doc=orig)
     orig_net_payments = _net_original_payments(orig, precision)
     orig_net_paid = sum(p["amount"] for p in orig_net_payments)
     prior_paid_refunded = sum(
@@ -1456,6 +1650,7 @@ def get_returnable_check(invoice_id: str) -> dict[str, Any]:
 
     profile_name = _safe_profile_name(_field(orig, "pos_profile"))
     profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
+    orig_tip = _get_charged_tip(orig, profile_doc, precision)
     profile_modes = [
         _field(p, "mode_of_payment")
         for p in (_field(profile_doc, "payments") or [])
@@ -1471,6 +1666,7 @@ def get_returnable_check(invoice_id: str) -> dict[str, Any]:
         "grand_total": float(_field(orig, "rounded_total") or _field(orig, "grand_total") or 0),
         "discount_amount": float(_field(orig, "discount_amount") or 0),
         "total_taxes_and_charges": float(_field(orig, "total_taxes_and_charges") or 0),
+        "charged_tip": float(orig_tip),
         "net_paid_amount": float(orig_net_paid),
         "already_refunded_amount": float(prior_paid_refunded),
         "remaining_refundable_amount": float(max(Decimal("0"), orig_net_paid - prior_paid_refunded)),
@@ -1651,7 +1847,7 @@ def create_pos_return(
 
     for ln in plan["items"]:
         orow = ln["orig_row"]
-        ret.append("items", {
+        item_payload = {
             "item_code": ln["item_code"],
             "item_name": ln["item_name"],
             "qty": -float(ln["qty"]),
@@ -1662,7 +1858,9 @@ def create_pos_return(
             "cost_center": _field(orow, "cost_center") or (_field(profile_doc, "cost_center") if profile_doc else None),
             "pos_invoice_item": ln["item_row_name"],
             "ury_held": 0,
-        })
+        }
+        _copy_item_tax_fields(orow, item_payload)
+        ret.append("items", item_payload)
 
     if plan["discount_amount"] > 0:
         ret.apply_discount_on = _field(orig, "apply_discount_on") or "Grand Total"
@@ -1670,6 +1868,13 @@ def create_pos_return(
 
     for trow in plan["tax_rows"]:
         ret.append("taxes", trow)
+
+    # Explicitly keep partial/item returns free of #145 charged-tip reversal so Tips Payable
+    # rows are never resurrected on item returns.
+    if _has_field("POS Invoice", "custom_charged_tip"):
+        ret.custom_charged_tip = 0.0
+    if _has_field("POS Invoice", "custom_tip_server"):
+        ret.custom_tip_server = None
 
     for prow in plan["refund_payments"]:
         ret.append("payments", {
@@ -1690,6 +1895,8 @@ def create_pos_return(
     if _has_field("POS Invoice", "cancel_reason"):
         ret.cancel_reason = reason_info["stored"]
 
+    if hasattr(ret, "flags"):
+        ret.flags.ury_return_discount_computed = True
     mark_verified_pos_approval(ret, "return")
     ret.insert(ignore_permissions=True)
     ret.submit()
@@ -1884,7 +2091,7 @@ def create_unreferenced_return(
     }
 
 
-def validate_pos_return_doc(doc) -> None:
+def validate_pos_return_doc(doc, *, on_submit_check: bool = False) -> None:
     """Mutation-level POS Invoice validation hook for `is_return=1` (blocks REST/Desk bypass)."""
     fr = _f()
     if getattr(fr.flags, "in_patch", False) or getattr(fr.flags, "in_migrate", False):
@@ -1920,13 +2127,21 @@ def validate_pos_return_doc(doc) -> None:
             if _field(r, "name") != _field(doc, "name")
         ]
         prior_qty = _prior_returned_qty_by_line(orig, prior_returns)
-        orig_by_name = {_field(r, "name"): r for r in (_field(orig, "items") or []) if _field(r, "name")}
+        orig_items = list(_field(orig, "items") or [])
+        orig_by_name = {_field(r, "name"): r for r in orig_items if _field(r, "name")}
         req_by_name: dict[str, Decimal] = {}
+        req_unlinked_by_code: dict[str, Decimal] = {}
         for row in _field(doc, "items") or []:
             qty_abs = abs(_dec(_field(row, "qty", 0)))
+            if qty_abs <= 0:
+                continue
             ref = _field(row, "pos_invoice_item")
             if ref and ref in orig_by_name:
                 req_by_name[ref] = req_by_name.get(ref, Decimal("0")) + qty_abs
+            else:
+                code = _field(row, "item_code")
+                if code:
+                    req_unlinked_by_code[code] = req_unlinked_by_code.get(code, Decimal("0")) + qty_abs
         for ref, req_qty in req_by_name.items():
             sold = _dec(_field(orig_by_name[ref], "qty", 0))
             rem = sold - prior_qty.get(ref, Decimal("0"))
@@ -1936,13 +2151,85 @@ def validate_pos_return_doc(doc) -> None:
                     f"Return quantity ({req_qty}) exceeds remaining returnable quantity ({rem}).",
                     fr.ValidationError,
                 )
+        if req_unlinked_by_code:
+            rem_by_code: dict[str, Decimal] = {}
+            for r in orig_items:
+                code = _field(r, "item_code")
+                rname = _field(r, "name")
+                rem_row = _dec(_field(r, "qty", 0)) - prior_qty.get(rname, Decimal("0")) - req_by_name.get(rname, Decimal("0"))
+                rem_by_code[code] = rem_by_code.get(code, Decimal("0")) + max(Decimal("0"), rem_row)
+            for code, req_qty in req_unlinked_by_code.items():
+                rem_code = rem_by_code.get(code, Decimal("0"))
+                if req_qty > rem_code + Decimal("1e-9"):
+                    _refuse(
+                        CODE_RETURN_OVER_QTY,
+                        f"Return quantity ({req_qty}) for {code} exceeds remaining returnable quantity ({rem_code}).",
+                        fr.ValidationError,
+                    )
+
         if not has_verified and actor != "Administrator":
+            _assert_same_outlet(_field(orig, "branch"))
+            orig_profile = _safe_profile_name(_field(orig, "pos_profile"))
+            doc_profile = _safe_profile_name(_field(doc, "pos_profile"))
+            if orig_profile and doc_profile and doc_profile != orig_profile:
+                _refuse(
+                    CODE_OUTLET_MISMATCH,
+                    "Return check must stay on the original check's till profile.",
+                    fr.PermissionError,
+                )
+            profile_name = orig_profile or doc_profile
+
             check_actors = {
                 a for a in (_field(orig, "owner"), _field(orig, "cashier"), _field(orig, "waiter"))
                 if isinstance(a, str) and a.strip()
             }
             if actor in check_actors:
                 _refuse(CODE_AUTH_REQUIRED, "You cannot approve a return on your own check.", fr.PermissionError)
+
+            return_amount = abs(flt(_field(doc, "rounded_total") or _field(doc, "grand_total") or 0))
+            if return_amount <= 0:
+                return_amount = sum(
+                    abs(flt(_field(r, "qty", 0))) * flt(_field(r, "rate", 0))
+                    for r in (_field(doc, "items") or [])
+                )
+            if not can_perform_pos_privilege(actor, profile_name, "return", amount=return_amount):
+                _refuse(
+                    CODE_AUTH_REQUIRED,
+                    "Returning or refunding a closed check requires manager approval.",
+                    fr.PermissionError,
+                )
+
+            raw_reason = (
+                _field(doc, "custom_return_reason")
+                or _field(doc, "cancel_reason")
+                or _field(doc, "efris_creditnote_reason")
+                or ""
+            )
+            reason_info = resolve_pos_reason("return", profile_name, raw_reason)
+            if _has_field("POS Invoice", "custom_return_approver"):
+                doc.custom_return_approver = actor
+            if _has_field("POS Invoice", "cancel_reason") and reason_info.get("stored") and not _field(doc, "cancel_reason"):
+                doc.cancel_reason = reason_info["stored"]
+            if on_submit_check:
+                company = _field(orig, "company") or _field(doc, "company")
+                write_authorisation_log(
+                    requester=actor,
+                    approver=actor,
+                    privilege="return",
+                    pos_profile=profile_name,
+                    company=company,
+                    reference_doctype="POS Invoice",
+                    reference_name=orig.name,
+                    claim={
+                        "original_invoice": orig.name,
+                        "return_invoice": _field(doc, "name") or "",
+                        "refund_total": float(return_amount),
+                        "reason": reason_info.get("code") or "",
+                        "direct_submit": 1,
+                    },
+                    reason=reason_info.get("code") or "",
+                    outcome="Consumed",
+                )
     else:
         # Unreferenced return: ALWAYS blocked unless profile grants dedicated roles AND verified approval!
         raw_actor = getattr(getattr(fr, "session", None), "user", None)
@@ -2076,13 +2363,15 @@ def _validate_reopen_or_adjust_base(orig, *, credit_and_rebill: int = 0) -> bool
     return is_fiscal
 
 
-def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str, is_fiscal: bool):
-    """Create and submit a full reversal POS Return against `orig`."""
+def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str, is_fiscal: bool, *, pos_profile_doc=None):
+    """Create and submit a full reversal POS Return against `orig` (preserving inclusive VAT & reversing charged tips)."""
     fr = _f()
     currency = _field(orig, "currency") or "UGX"
-    precision = _currency_precision(currency)
+    precision = _currency_precision(currency, doc=orig)
     session_user = getattr(getattr(fr, "session", None), "user", None) or ""
     orig_net_payments = _net_original_payments(orig, precision)
+    tips_account = _tips_payable_account(orig, pos_profile_doc)
+    orig_tip = _get_charged_tip(orig, pos_profile_doc, precision)
 
     rev = fr.new_doc("POS Invoice")
     rev.is_return = 1
@@ -2108,7 +2397,7 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
         qty = flt(_field(row, "qty", 0))
         if qty <= 0:
             continue
-        rev.append("items", {
+        item_payload = {
             "item_code": _field(row, "item_code"),
             "item_name": _field(row, "item_name") or _field(row, "item_code"),
             "qty": -qty,
@@ -2119,7 +2408,9 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
             "cost_center": _field(row, "cost_center"),
             "pos_invoice_item": _field(row, "name"),
             "ury_held": 0,
-        })
+        }
+        _copy_item_tax_fields(row, item_payload)
+        rev.append("items", item_payload)
 
     disc = abs(flt(_field(orig, "discount_amount", 0)))
     if disc > 0:
@@ -2127,15 +2418,29 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
         rev.discount_amount = -disc
 
     for t in _field(orig, "taxes") or []:
-        if cint(_field(t, "included_in_print_rate", 0)) == 0:
+        if _is_tip_tax_row(t, tips_account):
+            continue
+        rev.append("taxes", _clone_tax_row_dict(t, tax_amount=-abs(flt(_field(t, "tax_amount", 0)))))
+
+    if orig_tip > 0:
+        if _has_field("POS Invoice", "custom_charged_tip"):
+            rev.custom_charged_tip = -float(orig_tip)
+        if _has_field("POS Invoice", "custom_tip_server"):
+            rev.custom_tip_server = _field(orig, "custom_tip_server") or _field(orig, "waiter") or session_user
+        if tips_account:
             rev.append("taxes", {
-                "charge_type": _field(t, "charge_type") or "Actual",
-                "account_head": _field(t, "account_head"),
-                "description": _field(t, "description") or _field(t, "account_head"),
-                "rate": flt(_field(t, "rate", 0)),
-                "tax_amount": -abs(flt(_field(t, "tax_amount", 0))),
+                "charge_type": "Actual",
+                "account_head": tips_account,
+                "description": _tr("Charged Tip"),
+                "tax_amount": -float(orig_tip),
+                "cost_center": (_field(pos_profile_doc, "cost_center") if pos_profile_doc else None) or _field(orig, "cost_center"),
                 "included_in_print_rate": 0,
             })
+    else:
+        if _has_field("POS Invoice", "custom_charged_tip"):
+            rev.custom_charged_tip = 0.0
+        if _has_field("POS Invoice", "custom_tip_server"):
+            rev.custom_tip_server = None
 
     for p in orig_net_payments:
         rev.append("payments", {
@@ -2155,18 +2460,21 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
     if _has_field("POS Invoice", "cancel_reason"):
         rev.cancel_reason = reason_info["stored"]
 
+    if hasattr(rev, "flags"):
+        rev.flags.ury_return_discount_computed = True
     mark_verified_pos_approval(rev, "return")
     rev.insert(ignore_permissions=True)
     rev.submit()
     return rev
 
 
-def _clone_check_lines_and_taxes(src, dst) -> None:
+def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
+    tips_account = _tips_payable_account(src, pos_profile_doc)
     for row in _field(src, "items") or []:
         qty = flt(_field(row, "qty", 0))
         if qty <= 0:
             continue
-        dst.append("items", {
+        item_payload = {
             "item_code": _field(row, "item_code"),
             "item_name": _field(row, "item_name") or _field(row, "item_code"),
             "qty": qty,
@@ -2176,20 +2484,17 @@ def _clone_check_lines_and_taxes(src, dst) -> None:
             "income_account": _field(row, "income_account"),
             "cost_center": _field(row, "cost_center"),
             "ury_held": 0,
-        })
+        }
+        _copy_item_tax_fields(row, item_payload)
+        dst.append("items", item_payload)
     disc = abs(flt(_field(src, "discount_amount", 0)))
     if disc > 0:
         dst.apply_discount_on = _field(src, "apply_discount_on") or "Grand Total"
         dst.discount_amount = disc
     for t in _field(src, "taxes") or []:
-        dst.append("taxes", {
-            "charge_type": _field(t, "charge_type") or "Actual",
-            "account_head": _field(t, "account_head"),
-            "description": _field(t, "description") or _field(t, "account_head"),
-            "rate": flt(_field(t, "rate", 0)),
-            "tax_amount": flt(_field(t, "tax_amount", 0)),
-            "included_in_print_rate": cint(_field(t, "included_in_print_rate", 0)),
-        })
+        if _is_tip_tax_row(t, tips_account):
+            continue
+        dst.append("taxes", _clone_tax_row_dict(t, tax_amount=flt(_field(t, "tax_amount", 0))))
 
 
 def _record_before_after_audit(orig, replacement, action: str, before: dict[str, Any], after: dict[str, Any], approver: str, reason_info: dict[str, Any]) -> None:
@@ -2234,7 +2539,7 @@ def adjust_closed_check(
     profile_name = _safe_profile_name(_field(orig, "pos_profile"))
     profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
     currency = _field(orig, "currency") or "UGX"
-    precision = _currency_precision(currency)
+    precision = _currency_precision(currency, doc=orig)
 
     parsed_pay = _parse_json_arg(payments)
     if not isinstance(parsed_pay, list) or not parsed_pay:
@@ -2245,13 +2550,14 @@ def adjust_closed_check(
         if profile_doc is not None
         else set()
     )
-    orig_tip = _q(_dec(_field(orig, "tip_amount", 0)), precision)
+    orig_tip = _get_charged_tip(orig, profile_doc, precision)
     new_tip = _q(_dec(tip_amount), precision) if tip_amount is not None else orig_tip
     if new_tip < 0:
         _refuse(CODE_ADJUST_TOTAL_MISMATCH, "Tip amount cannot be negative.", fr.ValidationError)
 
     orig_grand = _q(_dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or 0), precision)
-    expected_pay_total = orig_grand + new_tip
+    orig_pre_tip_total = max(Decimal("0"), orig_grand - orig_tip)
+    expected_pay_total = orig_pre_tip_total + new_tip
 
     normalized_payments = []
     pay_sum = Decimal("0")
@@ -2297,6 +2603,7 @@ def adjust_closed_check(
         "invoice": orig.name,
         "grand_total": float(orig_grand),
         "tip_amount": float(orig_tip),
+        "custom_charged_tip": float(orig_tip),
         "payments": [
             {"mode_of_payment": p["mode_of_payment"], "amount": float(p["amount"])}
             for p in _net_original_payments(orig, precision)
@@ -2304,7 +2611,7 @@ def adjust_closed_check(
         "status": _field(orig, "status"),
     }
 
-    rev = _build_full_reversal_return(orig, reason_info, approver, is_fiscal)
+    rev = _build_full_reversal_return(orig, reason_info, approver, is_fiscal, pos_profile_doc=profile_doc)
 
     session_user = getattr(getattr(fr, "session", None), "user", None) or ""
     rep = fr.new_doc("POS Invoice")
@@ -2324,14 +2631,34 @@ def adjust_closed_check(
     rep.restaurant_table = _field(orig, "restaurant_table")
     rep.waiter = _field(orig, "waiter") or session_user
     rep.cashier = session_user
-    if _has_field("POS Invoice", "tip_amount"):
-        rep.tip_amount = float(new_tip)
     if _has_field("POS Invoice", "custom_reopened_from"):
         rep.custom_reopened_from = orig.name
     if _field(orig, "room_number") and any(_is_room_charge_mode(p["mode_of_payment"]) for p in normalized_payments):
         rep.room_number = _field(orig, "room_number")
 
-    _clone_check_lines_and_taxes(orig, rep)
+    _clone_check_lines_and_taxes(orig, rep, pos_profile_doc=profile_doc)
+
+    # Wire adjusted tips through #145's real charged-tip model (`custom_charged_tip` +
+    # `custom_tip_server` + Tips Payable `Sales Taxes and Charges` `Actual` row).
+    tips_account = _tips_payable_account(rep, profile_doc)
+    if _has_field("POS Invoice", "custom_charged_tip"):
+        rep.custom_charged_tip = float(new_tip)
+    if _has_field("POS Invoice", "custom_tip_server"):
+        rep.custom_tip_server = (
+            (_field(orig, "custom_tip_server") or _field(orig, "waiter") or session_user)
+            if new_tip > 0
+            else None
+        )
+    if new_tip > 0 and tips_account:
+        rep.append("taxes", {
+            "charge_type": "Actual",
+            "account_head": tips_account,
+            "description": _tr("Charged Tip"),
+            "tax_amount": float(new_tip),
+            "cost_center": (_field(profile_doc, "cost_center") if profile_doc else None) or _field(orig, "cost_center"),
+            "included_in_print_rate": 0,
+        })
+
     for prow in normalized_payments:
         rep.append("payments", {
             "mode_of_payment": prow["mode_of_payment"],
@@ -2344,8 +2671,9 @@ def adjust_closed_check(
     after_snapshot = {
         "reversal_return": rev.name,
         "replacement_invoice": rep.name,
-        "grand_total": float(orig_grand),
+        "grand_total": float(expected_pay_total),
         "tip_amount": float(new_tip),
+        "custom_charged_tip": float(new_tip),
         "payments": normalized_payments,
         "status": _field(rep, "status") or "Paid",
         "credit_and_rebill": bool(is_fiscal and cint(credit_and_rebill) == 1),
@@ -2383,8 +2711,9 @@ def reopen_closed_check(
     is_fiscal = _validate_reopen_or_adjust_base(orig, credit_and_rebill=cint(credit_and_rebill))
 
     profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
     currency = _field(orig, "currency") or "UGX"
-    precision = _currency_precision(currency)
+    precision = _currency_precision(currency, doc=orig)
     orig_grand = _q(_dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or 0), precision)
 
     reason_info = resolve_pos_reason("reopen_check", profile_name, reason, note=note)
@@ -2416,7 +2745,7 @@ def reopen_closed_check(
         "status": _field(orig, "status"),
     }
 
-    rev = _build_full_reversal_return(orig, reason_info, approver, is_fiscal)
+    rev = _build_full_reversal_return(orig, reason_info, approver, is_fiscal, pos_profile_doc=profile_doc)
 
     # Restore original table ONLY if it exists and is currently free; never collide with another guest!
     orig_table = _field(orig, "restaurant_table")
@@ -2452,9 +2781,8 @@ def reopen_closed_check(
     orig_pays = _field(orig, "payments") or []
     if orig_pays:
         default_mop = _field(orig_pays[0], "mode_of_payment")
-    if not default_mop and profile_name and fr.db.exists("POS Profile", profile_name):
-        prof = fr.get_doc("POS Profile", profile_name)
-        prof_pays = _field(prof, "payments") or []
+    if not default_mop and profile_doc is not None:
+        prof_pays = _field(profile_doc, "payments") or []
         if prof_pays:
             default_mop = _field(prof_pays[0], "mode_of_payment")
     if default_mop:
@@ -2462,8 +2790,12 @@ def reopen_closed_check(
         reopened.append("payments", {"mode_of_payment": default_mop, "amount": 0.0})
     if _has_field("POS Invoice", "custom_reopened_from"):
         reopened.custom_reopened_from = orig.name
+    if _has_field("POS Invoice", "custom_charged_tip"):
+        reopened.custom_charged_tip = 0.0
+    if _has_field("POS Invoice", "custom_tip_server"):
+        reopened.custom_tip_server = None
 
-    _clone_check_lines_and_taxes(orig, reopened)
+    _clone_check_lines_and_taxes(orig, reopened, pos_profile_doc=profile_doc)
     reopened.insert(ignore_permissions=True)
 
     after_snapshot = {

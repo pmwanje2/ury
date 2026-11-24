@@ -245,7 +245,8 @@ class ReopenHarness:
             ("POS Invoice", "efris_creditnote_reason"),
             ("POS Invoice", "efris_irn"),
             ("POS Invoice", "efris_status"),
-            ("POS Invoice", "tip_amount"),
+            ("POS Invoice", "custom_charged_tip"),
+            ("POS Invoice", "custom_tip_server"),
         }
         self.frappe = self._build_frappe()
         self.override = ContractOverrideStub(self)
@@ -566,7 +567,8 @@ class TestReopenAndAdjustClosedCheck(unittest.TestCase):
         self.assertEqual(rep.docstatus, 1)
         self.assertEqual(rep.custom_reopened_from, inv.name)
         self.assertEqual([(p.mode_of_payment, p.amount) for p in rep.payments], [("Card", 55000.0)])
-        self.assertEqual(rep.tip_amount, 5000.0)
+        self.assertEqual(rep.custom_charged_tip, 5000.0)
+        self.assertFalse(hasattr(rep, "tip_amount"))
         # Before/after snapshot in response, POS Authorisation Log, and Comments on both checks
         self.assertEqual(res["before"]["payments"], [{"mode_of_payment": "Cash", "amount": 50000.0}])
         self.assertEqual(res["after"]["payments"], [{"mode_of_payment": "Card", "amount": 55000.0}])

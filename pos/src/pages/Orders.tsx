@@ -38,7 +38,7 @@ import {
   isOrderTypeNotAllowedError,
   isLastItemCannotBeRemovedError,
 } from '../lib/order-api';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, listReasons, overrideErrorMessage, type OverrideReason } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import VoidItemDialog from '../components/VoidItemDialog';
 import ReturnCheckDialog from '../components/ReturnCheckDialog';
@@ -228,6 +228,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
   const [pendingCancelApproval, setPendingCancelApproval] = React.useState<{
     order: POSInvoice;
     reason: string;
+    note: string;
+    isWaste: number;
     claim: Record<string, unknown>;
   } | null>(null);
   const [voidDialogItem, setVoidDialogItem] = React.useState<(typeof selectedOrderItems)[number] | null>(null);
@@ -365,7 +367,61 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     setCancelDialogOpen(true);
   }
 
-  async function handleCancelOrder(approval?: { token: string; targetOrder?: POSInvoice; reason?: string }) {
+  function normalizeCancelReasonForClaim(
+    rawReason: string,
+    rawNote: string,
+    posReasons: OverrideReason[],
+  ): { code: string; note: string; isWaste: number } {
+    let candidate = rawReason.trim();
+    let cleanNote = rawNote.trim();
+    const isWasteFromText = (code: string, desc: string) => {
+      const codeUp = code.trim().toUpperCase();
+      const descLow = desc.trim().toLowerCase();
+      return codeUp.startsWith('WASTE') || descLow.includes('(waste)') || descLow.startsWith('waste') ? 1 : 0;
+    };
+
+    if (posReasons.length > 0) {
+      if (candidate.startsWith('Other: ') && !cleanNote) {
+        const otherRow = posReasons.find((r) => String(r.code || '').toUpperCase() === 'OTHER');
+        if (otherRow) {
+          cleanNote = candidate.slice('Other: '.length).trim();
+          candidate = otherRow.code;
+        }
+      }
+      let matched = posReasons.find((r) => candidate === r.code || candidate === r.description) ?? null;
+      if (!matched) {
+        const candLow = candidate.toLowerCase();
+        const prefixMatches = posReasons.filter((r) =>
+          String(r.description || '').toLowerCase().startsWith(candLow + ' /'),
+        );
+        if (prefixMatches.length === 1) {
+          matched = prefixMatches[0];
+        }
+      }
+      if (!matched) {
+        const otherRow = posReasons.find((r) => String(r.code || '').toUpperCase() === 'OTHER');
+        if (otherRow && candidate.length >= MIN_VOID_NOTE_LENGTH) {
+          matched = otherRow;
+          cleanNote = cleanNote || candidate;
+        }
+      }
+      if (matched) {
+        const code = String(matched.code);
+        const desc = String(matched.description || code);
+        return { code, note: cleanNote, isWaste: isWasteFromText(code, desc) };
+      }
+    }
+
+    return { code: candidate, note: cleanNote, isWaste: isWasteFromText(candidate, candidate) };
+  }
+
+  async function handleCancelOrder(approval?: {
+    token: string;
+    targetOrder?: POSInvoice;
+    reason?: string;
+    note?: string;
+    isWaste?: number;
+  }) {
     const order = approval?.targetOrder ?? selectedOrder;
     if (!order) return;
     const reason = approval?.reason ?? voidReasonToSubmit();
@@ -373,11 +429,14 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     setCancelLoading(true);
     try {
       if (approval?.token) {
-        await call.post('ury.ury.doctype.ury_order.ury_order.cancel_order', {
+        const payload: Record<string, unknown> = {
           invoice_id: order.name,
           reason,
           approval_token: approval.token,
-        });
+        };
+        if (approval.note) payload.note = approval.note;
+        if (approval.isWaste) payload.is_waste = 1;
+        await call.post('ury.ury.doctype.ury_order.ury_order.cancel_order', payload);
       } else {
         await cancelOrder(order.name, reason);
       }
@@ -391,14 +450,18 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     } catch (err) {
       const parsedMessage = parseFrappeError(err) || (err instanceof Error ? err.message : null);
       if (!approval?.token && isAuthRequiredError(parsedMessage || err)) {
+        const activeReasons = await listReasons('cancel_check').catch(() => [] as OverrideReason[]);
+        const normalized = normalizeCancelReasonForClaim(reason, '', activeReasons);
         setPendingCancelApproval({
           order,
-          reason,
+          reason: normalized.code,
+          note: normalized.note,
+          isWaste: normalized.isWaste,
           claim: {
             invoice: order.name,
-            reason,
-            note: '',
-            is_waste: reason.toUpperCase().startsWith('WASTE') ? 1 : 0,
+            reason: normalized.code,
+            note: normalized.note,
+            is_waste: normalized.isWaste,
           },
         });
       } else {
@@ -416,7 +479,9 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     await handleCancelOrder({
       token: result.token,
       targetOrder: pending.order,
-      reason: result.reason || pending.reason,
+      reason: pending.reason,
+      note: pending.note,
+      isWaste: pending.isWaste,
     });
   }
 
@@ -1392,7 +1457,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       {pendingVoidApproval && (
         <ManagerApproval
           open
-          posProfile={posStore.posProfile?.name || ''}
+          posProfile={pendingVoidApproval.order.pos_profile || posStore.posProfile?.name || ''}
           privilege="void_sent_item"
           title={t('manager_approval.void_sent_item_title')}
           summaryLines={[
@@ -1419,7 +1484,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       {pendingCancelApproval && (
         <ManagerApproval
           open
-          posProfile={posStore.posProfile?.name || ''}
+          posProfile={pendingCancelApproval.order.pos_profile || posStore.posProfile?.name || ''}
           privilege="cancel_check"
           title={t('order.cancel_order')}
           summaryLines={[
@@ -1427,7 +1492,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
               pendingCancelApproval.order.grand_total,
               pendingCancelApproval.order.currency || profileCurrency,
             )}`,
-            `${t('void_return.reason_label')}: ${pendingCancelApproval.reason}`,
+            `${t('void_return.reason_label')}: ${pendingCancelApproval.reason}${pendingCancelApproval.note ? ` — ${pendingCancelApproval.note}` : ''}`,
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingCancelApproval.order.name }}
           claim={pendingCancelApproval.claim}
@@ -1440,7 +1505,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       {selectedOrder && voidDialogItem && (
         <VoidItemDialog
           open
-          posProfile={posStore.posProfile?.name || ''}
+          posProfile={selectedOrder.pos_profile || posStore.posProfile?.name || ''}
           invoiceId={selectedOrder.name}
           currency={selectedOrderCurrency || profileCurrency}
           item={voidDialogItem}
@@ -1488,10 +1553,12 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showReopenDialog}
           bill={{
             name: selectedOrder.name,
-            pos_profile: posStore.posProfile?.name || '',
+            pos_profile: selectedOrder.pos_profile || posStore.posProfile?.name || '',
             currency: selectedOrderCurrency || profileCurrency,
             grand_total: selectedOrder.grand_total,
             rounded_total: selectedOrder.rounded_total,
+            efris_irn: selectedOrder.efris_irn ?? null,
+            efris_status: selectedOrder.efris_status ?? null,
             items: selectedOrderItems.map((it) => ({
               item_name: it.item_name,
               qty: it.qty,

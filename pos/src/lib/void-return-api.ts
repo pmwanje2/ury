@@ -30,6 +30,7 @@ export interface ReturnableCheckResponse {
   grand_total: number;
   discount_amount: number;
   total_taxes_and_charges: number;
+  charged_tip?: number;
   net_paid_amount: number;
   already_refunded_amount: number;
   remaining_refundable_amount: number;

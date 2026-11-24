@@ -296,7 +296,7 @@ def get_custom_fields():
 					"fieldtype": "Link",
 					"options": "Stock Entry",
 					"label": "Waste Stock Entry",
-					"description": "Native ERPNext Stock Entry (Material Issue / Wastage) posted for wasted sent items.",
+					"description": "Stock Entry (Material Issue / Wastage) posted for wasted sent items.",
 					"insert_after": "custom_return_approver",
 					"read_only": 1,
 					"no_copy": 1,
@@ -662,6 +662,26 @@ def get_custom_fields():
 				"label": "Merged Tables",
 				"read_only": 1,
 			},
+			{
+				"fieldname": "custom_void_reason_code",
+				"fieldtype": "Data",
+				"label": "Void Reason Code",
+				"description": "POS Reason code linked when this kitchen ticket was cancelled or partially cancelled.",
+				"insert_after": "comments",
+				"read_only": 1,
+				"no_copy": 1,
+				"translatable": 0,
+			},
+			{
+				"fieldname": "custom_waste_stock_entry",
+				"fieldtype": "Link",
+				"options": "Stock Entry",
+				"label": "Waste Stock Entry",
+				"description": "Material Issue / Wastage Stock Entry linked to this cancel ticket.",
+				"insert_after": "custom_void_reason_code",
+				"read_only": 1,
+				"no_copy": 1,
+			},
 		],
 		"Stock Entry": [
 			{
@@ -881,30 +901,6 @@ def get_custom_fields():
 				"hidden": 1,
 			},
 		],
-
-		"URY KOT": [
-			{
-				"fieldname": "custom_void_reason_code",
-				"fieldtype": "Data",
-				"label": "Void Reason Code",
-				"description": "POS Reason code linked when this kitchen ticket was cancelled or partially cancelled.",
-				"insert_after": "comments",
-				"read_only": 1,
-				"no_copy": 1,
-				"translatable": 0,
-			},
-			{
-				"fieldname": "custom_waste_stock_entry",
-				"fieldtype": "Link",
-				"options": "Stock Entry",
-				"label": "Waste Stock Entry",
-				"description": "Native ERPNext Material Issue / Wastage Stock Entry linked to this cancel ticket.",
-				"insert_after": "custom_void_reason_code",
-				"read_only": 1,
-				"no_copy": 1,
-			},
-		],
-
     }
  
 def delete_custom_fields(custom_fields):

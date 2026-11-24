@@ -40,6 +40,10 @@ def validate(doc, method):
 
 
 def before_submit(doc, method):
+    if int(doc.get("is_return") or 0) == 1:
+        from ury.ury_pos.void_return_reopen import validate_pos_return_doc
+
+        validate_pos_return_doc(doc, on_submit_check=True)
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
     validate_confirmed_phone_payments(doc, method)
@@ -96,7 +100,7 @@ def apply_disposable_items(doc, method=None):
     Runs once per submit; skips re-adding if disposable lines already exist
     (e.g. on a resubmit of a doc that already went through this).
     """
-    if not doc.get("items"):
+    if not doc.get("items") or int(doc.get("is_return") or 0) == 1:
         return
 
     if any(item.get("is_disposable") for item in doc.items):

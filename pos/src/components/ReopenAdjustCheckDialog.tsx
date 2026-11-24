@@ -99,18 +99,21 @@ export default function ReopenAdjustCheckDialog({
     setHydratedCheck(null);
     setSelectedTender(bill.payments?.[0]?.mode_of_payment || availableModes?.[0] || 'Cash');
 
-    if (!bill.payments || bill.payments.length === 0) {
-      getReturnableCheck(bill.name)
-        .then((res) => {
-          if (!active) return;
-          setHydratedCheck(res);
-          const firstMode = res.original_payments?.[0]?.mode_of_payment || res.available_modes?.[0];
-          if (firstMode) setSelectedTender(firstMode);
-        })
-        .catch(() => {
-          // Best-effort hydration; server re-validates on submit.
-        });
-    }
+    // Always hydrate authoritative server metadata (is_fiscalised, pos_profile, precision,
+    // available_modes, original_payments, charged_tip) even when bill.payments was pre-filled.
+    getReturnableCheck(bill.name)
+      .then((res) => {
+        if (!active || !res || typeof res !== 'object' || !('invoice' in res)) return;
+        setHydratedCheck(res);
+        const firstMode = res.original_payments?.[0]?.mode_of_payment || res.available_modes?.[0];
+        if (firstMode) setSelectedTender(firstMode);
+        if (typeof res.charged_tip === 'number' && res.charged_tip > 0) {
+          setTipInput(String(res.charged_tip));
+        }
+      })
+      .catch(() => {
+        // Best-effort hydration; server re-validates on submit.
+      });
     return () => {
       active = false;
     };
@@ -139,8 +142,10 @@ export default function ReopenAdjustCheckDialog({
   );
   const requiresNote = Boolean(selectedReason && Number(selectedReason.requires_note) === 1);
   const tipAmount = Math.max(0, Number(tipInput || 0) || 0);
-  const checkTotal = Number(bill.rounded_total || bill.grand_total || 0);
-  const adjustedTotal = checkTotal + tipAmount;
+  const checkTotal = Number(hydratedCheck?.grand_total ?? bill.rounded_total ?? bill.grand_total ?? 0);
+  const existingTip = Math.max(0, Number(hydratedCheck?.charged_tip ?? 0) || 0);
+  const preTipTotal = Math.max(0, checkTotal - existingTip);
+  const adjustedTotal = preTipTotal + tipAmount;
 
   const reasonValid =
     reasons.length > 0

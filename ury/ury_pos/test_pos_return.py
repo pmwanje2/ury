@@ -595,8 +595,10 @@ class ReturnHarness:
             sql=_sql,
         )
         fw.get_doc = _get_doc
+        fw.get_cached_doc = _get_doc
         fw.new_doc = _new_doc
         fw.get_all = _get_all
+        fw.publish_realtime = MagicMock()
         return fw
 
 
@@ -621,7 +623,9 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         utils.get_time = lambda v=None: v
         utils.get_first_day = lambda v=None: v
         utils.get_last_day = lambda v=None: v
-        utils.get_datetime = lambda v=None: v
+        utils.get_datetime = lambda v=None: (
+            v if isinstance(v, datetime) else datetime.strptime(str(v or "2026-11-24 11:30:00")[:19], "%Y-%m-%d %H:%M:%S")
+        )
         utils.getdate = lambda v=None: datetime.strptime(str(v or "2026-11-24")[:10], "%Y-%m-%d").date()
 
         pos_api = ModuleType("ury.ury_pos.api")
@@ -1073,6 +1077,7 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         mgr_no_reason = Doc(
             doctype="POS Invoice", _is_new=True, is_return=1, return_against=orig.name,
             pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            restaurant_table=None, invoice_printed=0,
             waiter="manager2@example.test", modified_by="manager2@example.test",
             cancel_reason="",
             grand_total=-10000.0, rounded_total=-10000.0,
@@ -1086,11 +1091,12 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         mgr_ok = Doc(
             doctype="POS Invoice", name="POS-RET-DESK-1", _is_new=False, is_return=1, return_against=orig.name,
             pos_profile="Till A", company="Hotel Co", branch="Branch A",
-            waiter="manager2@example.test", modified_by="manager2@example.test",
+            restaurant_table=None, invoice_printed=0, order_type="Dine In", no_of_pax=0,
+            cashier="manager2@example.test", waiter="manager2@example.test", modified_by="manager2@example.test",
             custom_return_approver="spoofed@example.test",
             cancel_reason="RET-QUALITY",
             grand_total=-10000.0, rounded_total=-10000.0,
-            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0)],
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0, owner="manager2@example.test")],
             payments=[Doc(mode_of_payment="Cash", amount=-10000.0)],
         )
         self.inv_hook.validate_invoice(mgr_ok, "validate")

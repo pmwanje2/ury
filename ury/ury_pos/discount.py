@@ -1945,6 +1945,8 @@ def prorate_return_discount(doc, method=None):
     """
     if cint(doc.get("is_return")) != 1 or not doc.get("return_against"):
         return
+    if getattr(getattr(doc, "flags", None), "ury_return_discount_computed", False):
+        return
     if flt(doc.get("additional_discount_percentage")):
         return
 
