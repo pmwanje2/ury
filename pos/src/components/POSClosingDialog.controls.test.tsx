@@ -106,7 +106,7 @@ function setupClosingMocks(opts?: {
         },
       });
     }
-    if (method === 'ury.ury.api.ury_checklist.get_checklist') {
+    if (method === 'ury.ury_pos.api.get_checklist') {
       return Promise.resolve({ message: { log_status: 'Complete', items: [] } });
     }
     if (method === 'ury.ury_pos.override.list_approvers') {
