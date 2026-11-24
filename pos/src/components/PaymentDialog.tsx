@@ -8,14 +8,39 @@ import { t } from '../i18n';
 import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
 import { useRootStore } from '../store/root-store';
 import { printOrder } from '../lib/print';
-import { resolvePrintFormat, type POSInvoice } from '../lib/invoice-api';
+import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
 
+
+const currencyDigitsCache = new Map<string, number>();
+
+function currencyDecimalPlaces(code?: string | null): number {
+  if (!code) return 2;
+  const cached = currencyDigitsCache.get(code);
+  if (cached !== undefined) return cached;
+  let digits = 2;
+  try {
+    digits = new Intl.NumberFormat('en', { style: 'currency', currency: code }).resolvedOptions()
+      .maximumFractionDigits ?? 2;
+  } catch {
+    digits = 2;
+  }
+  currencyDigitsCache.set(code, digits);
+  return digits;
+}
+
+function roundToCurrency(amount: number, code?: string | null): number {
+  const digits = currencyDecimalPlaces(code);
+  const factor = 10 ** digits;
+  const rounded = Math.round((amount + Math.sign(amount) * 1e-12) * factor) / factor;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
 
 type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
+  existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
   roundedTotal: number;
@@ -34,6 +59,7 @@ interface PaymentDialogProps {
 
 const PaymentDialog: React.FC<PaymentDialogProps> = ({
   order,
+  existingPayments,
   onClose,
   grandTotal,
   roundedTotal,
@@ -50,7 +76,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   discountAmount
 }) => {
   const user = useRootStore((state) => state.user);
-  const { paymentModes, fetchPaymentModes, posProfile: storePosProfile } = usePOSStore();
+  const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
+  const currencyCode = storePosProfile?.currency || storeCurrency || '';
   const enablePaymentWithoutPrinting = Boolean(
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1
@@ -69,6 +96,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
   // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
   const [serverTotals, setServerTotals] = useState<{ grand_total: number; rounded_total: number } | null>(null);
+  const receivedPayments = (existingPayments ?? order?.payments ?? []).filter(
+    (row) => Number(row?.amount) > 0,
+  );
+  const receivedTotal = roundToCurrency(
+    receivedPayments.reduce((sum, row) => sum + Number(row.amount), 0),
+    currencyCode,
+  );
   const canSelectCredit = storePosProfile?.name === posProfile && storePosProfile.allow_partial_payment === 1
     && !!user?.roles?.some(role => role === 'URY Cashier' || role === 'URY Manager');
   const [query, setQuery] = useState('');
@@ -89,7 +123,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     }, 200);
     return () => { active = false; window.clearTimeout(timer); };
   }, [query, canSelectCredit, posProfile]);
-  const [roomNumber, setRoomNumber] = useState('');
+  const initialRoom = order?.room_number || receivedPayments.find((row) => row.room_number)?.room_number || '';
+  const [roomNumber, setRoomNumber] = useState(initialRoom);
   // Optional room lookup from this till's POS Profile. Blank: free-text room
   // box. Set: Pay waits for a verified match of the room as typed now.
   const roomLookupMethod = (storePosProfile?.name === posProfile && storePosProfile?.room_lookup_method) || '';
@@ -112,8 +147,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       setError(error instanceof Error ? error.message : t('errors.invalid_discount'));
       return;
     }
-    const value = parseFloat(discountValue);
-    if (isNaN(value) || value <= 0) {
+    const trimmed = discountValue.trim();
+    const isClearToZero = appliedDiscountPct !== null && (trimmed === '' || parseFloat(trimmed) === 0);
+    const value = isClearToZero ? 0 : parseFloat(trimmed);
+    if (!isClearToZero && (isNaN(value) || value <= 0)) {
       setError(t('errors.invalid_discount'));
       return;
     }
@@ -127,8 +164,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         { invoice, pos_profile: posProfile, additionalDiscount: value },
       );
       setServerTotals(message);
-      setAppliedDiscountPct(value);
-      setAppliedDiscount(Math.max(0, Math.round((baseTotal - message.grand_total) * 100) / 100));
+      setAppliedDiscountPct(isClearToZero ? null : value);
+      if (isClearToZero) {
+        setDiscountValue('');
+      }
+      setAppliedDiscount(Math.max(0, roundToCurrency(baseTotal - message.grand_total, currencyCode)));
     } catch (err) {
       setError(parseFrappeError(err, t('errors.invalid_discount')));
       return;
@@ -139,7 +179,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // Order summary logic
   const subtotal = baseTotal;
   const adjustment = roundedTotal - grandTotal;
-  const roundedAdjustment = Math.round(adjustment * 100) / 100;
+  const roundedAdjustment = roundToCurrency(adjustment, currencyCode);
   const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
   const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
@@ -147,28 +187,47 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const finalTotal = serverTotals
     ? (serverTotals.rounded_total || serverTotals.grand_total)
     : (roundedTotal || grandTotal);
+  const balanceDue = Math.max(0, roundToCurrency(finalTotal - receivedTotal, currencyCode));
 
-  // Calculate split payment total
-  const payments = paymentModes
+  // Calculate split payment total for new tenders taken now
+  const newPayments = paymentModes
     .map((mode: any) => {
       const id = typeof mode === 'string' ? mode : mode.id;
       const amount = parseFloat(paymentInputs[id] || '');
       return amount > 0 ? { mode_of_payment: id, amount } : null;
     })
-    .filter(Boolean);
-  const paymentsTotal = payments.reduce((sum, p: any) => sum + p.amount, 0);
+    .filter(Boolean) as Array<{ mode_of_payment: string; amount: number }>;
+  const rawNewPaymentsTotal = newPayments.reduce((sum, p) => sum + p.amount, 0);
+  const newPaymentsTotal = roundToCurrency(rawNewPaymentsTotal, currencyCode);
+  const rawTotalTendered = receivedTotal + rawNewPaymentsTotal;
+  const totalTendered = roundToCurrency(rawTotalTendered, currencyCode);
+  const receivedPaymentPayloads = receivedPayments.map((row) => ({
+    mode_of_payment: row.mode_of_payment,
+    amount: Number(row.amount),
+    ...(row.reference_no ? { reference_no: row.reference_no } : {}),
+    ...(row.reference_date ? { reference_date: row.reference_date } : {}),
+    ...(row.clearance_date ? { clearance_date: row.clearance_date } : {}),
+  }));
+  const combinedPayments = [...receivedPaymentPayloads, ...newPayments];
+
   // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
   const roomChargeModes = storePosProfile?.room_charge_modes || [];
   const roomChargeUnconfigured = Boolean(storePosProfile?.room_charge_unconfigured) && roomChargeModes.length === 0;
-  const typedDiscount = discountValue.trim() === '' ? null : parseFloat(discountValue);
-  const hasUnappliedDiscount = discountValue.trim() !== '' && typedDiscount !== appliedDiscountPct;
+  const trimmedDiscount = discountValue.trim();
+  const typedDiscount = trimmedDiscount === '' ? null : parseFloat(trimmedDiscount);
+  const hasUnappliedDiscount =
+    appliedDiscountPct !== null
+      ? typedDiscount === null || typedDiscount !== appliedDiscountPct
+      : trimmedDiscount !== '';
   const roomChargeAmount = roomChargeModes
     .reduce((sum: number, mode: string) => sum + (parseFloat(paymentInputs[mode] || '') || 0), 0);
   const roomVerified = !roomLookupMethod || !(roomChargeAmount > 0)
     || (!!roomCheck?.ok && roomCheck.room === roomNumber.trim());
   const roomFields = roomChargeAmount > 0 ? { room_number: roomNumber } : {};
-  const shortfall = finalTotal - paymentsTotal;
-  const isShort = shortfall > 0.005;
+  const rawShortfall = finalTotal - rawTotalTendered;
+  const shortfall = Math.max(0, roundToCurrency(rawShortfall, currencyCode));
+  const isShort = rawShortfall > 0.005;
+  const changeDue = Math.max(0, roundToCurrency(rawTotalTendered - finalTotal, currencyCode));
   // A named (non-default) customer on a profile with allow_partial_payment
   // may settle short; the balance stays owed on the invoice. Profile, order-type
   // and profile-level default customers are not named accounts; a profile that
@@ -186,10 +245,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // Both rules hold: a Room Charge waits for a verified room, and only a named
   // account may settle short.
   const paymentDisabled = isProcessing || !roomVerified
-    || ((payments.length === 0 || isShort) && !canPayOnAccount);
-  const settlementPayments = payments.length === 0 && canPayOnAccount
+    || ((combinedPayments.length === 0 || isShort) && !canPayOnAccount);
+  const settlementPayments = combinedPayments.length === 0 && canPayOnAccount
     ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
-    : payments;
+    : combinedPayments;
 
   const handleCheckRoom = async () => {
     const room = roomNumber.trim();
@@ -216,31 +275,37 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   };
 
   const finalAdjustment = finalTotal - discountedTotal;
-  const roundedFinalAdjustment = Math.round(finalAdjustment * 100) / 100;
+  const roundedFinalAdjustment = roundToCurrency(finalAdjustment, currencyCode);
   const showFinalAdjustment = Math.abs(roundedFinalAdjustment) > 0.001;
 
-  // The POS Profile payment row marked Default is prefilled with the total.
+  // The POS Profile payment row marked Default is prefilled with the remaining balance due.
   const defaultPaymentMode = storePosProfile?.default_payment_mode || '';
 
   useEffect(()=>{
-    const defaultPaymentModePresent=paymentModes.find((mode)=>mode===defaultPaymentMode)
-    //only one payment mode should be present, then autofill the final amount, if not do not fill
+    const defaultPaymentModePresent=paymentModes.find((mode: string | { id: string })=>(typeof mode === 'string' ? mode : mode.id)===defaultPaymentMode)
+    //only one payment mode should be present, then autofill the remaining balance due, if not do not fill
     const otherPaymentModesNotEntered=Object.keys(paymentInputs).length<=1;
-    if(finalTotal && paymentModes && defaultPaymentMode && defaultPaymentModePresent && otherPaymentModesNotEntered){
-      //check if default payment mode is present in paymentModes
-      setPaymentInputs((prev)=>({ 
-        ...prev,
-        [defaultPaymentMode]:String(finalTotal) 
-      }))
+    if(paymentModes && defaultPaymentMode && defaultPaymentModePresent && otherPaymentModesNotEntered){
+      if(balanceDue > 0){
+        setPaymentInputs((prev)=>({ 
+          ...prev,
+          [defaultPaymentMode]:String(balanceDue) 
+        }))
+      } else if (receivedTotal > 0) {
+        setPaymentInputs((prev)=>({
+          ...prev,
+          [defaultPaymentMode]:''
+        }))
+      }
     }
-  },[finalTotal,paymentModes,defaultPaymentMode])
+  },[balanceDue,receivedTotal,paymentModes,defaultPaymentMode])
 
-  // Helper to calculate remaining balance
+  // Helper to calculate remaining balance rounded to the active currency's precision
   const getRemainingBalance = (currentId: string) => {
     const totalEntered = Object.entries(paymentInputs)
       .filter(([id]) => id !== currentId)
       .reduce((sum, [_, val]) => sum + (parseFloat(val) || 0), 0);
-    return Math.max(0, finalTotal - totalEntered);
+    return Math.max(0, roundToCurrency(balanceDue - totalEntered, currencyCode));
   };
 
   // Handler for input focus to auto-fill remaining balance
@@ -309,8 +374,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         const settlement = await submitSettlementOfflineAware({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
-          amount: paymentsTotal, due: finalTotal, discount: appliedDiscount,
-          modeOfPayment: payments.length === 1 ? payments[0]?.mode_of_payment ?? '' : '',
+          amount: totalTendered, due: finalTotal, discount: appliedDiscount,
+          modeOfPayment: receivedPayments.length === 0 && newPayments.length === 1 ? newPayments[0]?.mode_of_payment ?? '' : '',
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
             additionalDiscount: appliedDiscountPct,
             cashier,
@@ -332,7 +397,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           return;
         }
       }
-      showToast.success(t('payment.success', { amount: formatCurrency(paymentsTotal) }));
+      showToast.success(t('payment.success', { amount: formatCurrency(totalTendered) }));
       onClose();
       clearSelectedOrder();
       await fetchOrders();
@@ -396,6 +461,40 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           {/* Payment Methods Section - Split Payment */}
           <div className="space-y-4 mb-6">
             <h3 className="text-lg font-semibold">{t('payment.payment_methods')}</h3>
+            {receivedPayments.length > 0 && (
+              <div
+                data-testid="received-tenders"
+                className="rounded-md border border-emerald-200 bg-emerald-50 p-3 space-y-1.5"
+              >
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                  {t('payment.already_received')}
+                </p>
+                {receivedPayments.map((row, idx) => {
+                  const ref =
+                    row.reference_no ||
+                    (roomChargeModes.includes(row.mode_of_payment)
+                      ? row.room_number || order?.room_number || ''
+                      : '');
+                  return (
+                    <div
+                      key={`${row.mode_of_payment}-${idx}`}
+                      data-testid="received-tender-row"
+                      className="flex items-center justify-between text-sm text-emerald-900"
+                    >
+                      <span className="font-medium">
+                        {row.mode_of_payment}
+                        {ref && (
+                          <span className="ms-2 text-xs font-normal text-emerald-700">
+                            {t('payment.reference_label', { ref })}
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-semibold tabular-nums">{formatCurrency(Number(row.amount))}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-3">
               {paymentModes.map((mode: any) => {
                 const id = typeof mode === 'string' ? mode : mode.id;
@@ -426,7 +525,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               {accounts.map(row => <Button type="button" variant="outline" key={row.name} disabled={isProcessing}
                 className="w-full h-auto whitespace-normal justify-start text-start" onClick={() => {
                   setAccount(row); setQuery(''); setAccounts([]);
-                  if (paymentsTotal === finalTotal) setPaymentInputs({});
+                  if (newPaymentsTotal === balanceDue) setPaymentInputs({});
                 }}>
                 {row.customer_name} · {row.name} · {t('payment.account_balance')}: {formatCurrency(row.balance,row.currency)} · {t('payment.account_limit')}: {formatCurrency(row.limit,row.currency)} · {t('payment.account_available')}: {formatCurrency(row.available,row.currency)}
               </Button>)}
@@ -481,11 +580,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             <div className="flex justify-between mt-2 text-sm">
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
-                {formatCurrency(paymentsTotal)} / {formatCurrency(finalTotal)}
-                {paymentsTotal > finalTotal && (
+                {formatCurrency(newPaymentsTotal)} / {formatCurrency(balanceDue)}
+                {changeDue > 0 && (
                   <span className="text-yellow-700 font-semibold">
                     <Coins className="inline w-4 h-4 ms-1 text-yellow-500" />
-                    <span className="text-yellow-500 font-bold ms-1">{formatCurrency(paymentsTotal - finalTotal)}</span>
+                    <span className="text-yellow-500 font-bold ms-1">{formatCurrency(changeDue)}</span>
                   </span>
                 )}
               </span>
@@ -495,9 +594,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatCurrency(shortfall) })}
               </p>
             )}
-            {paymentsTotal > finalTotal && (
+            {changeDue > 0 && (
               <p className="text-yellow-700 text-sm font-medium">
-                {t('payment.change_due', { amount: formatCurrency(paymentsTotal - finalTotal) })}
+                {t('payment.change_due', { amount: formatCurrency(changeDue) })}
               </p>
             )}
           </div>
@@ -548,6 +647,20 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                   <span>{formatCurrency(finalTotal)}</span>
                 </div>
               </div>
+              {receivedTotal > 0 && (
+                <>
+                  <div className="flex justify-between text-emerald-700">
+                    <span>{t('payment.already_received')}</span>
+                    <span>-{formatCurrency(receivedTotal)}</span>
+                  </div>
+                  <div className="border-t pt-2">
+                    <div className="flex justify-between font-semibold text-lg" data-testid="balance-due">
+                      <span>{t('payment.balance_due')}</span>
+                      <span>{formatCurrency(balanceDue)}</span>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -578,7 +691,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             variant={paymentDisabled ? "secondary" : "default"}
             className="w-full"
           >
-            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(paymentsTotal > 0 ? paymentsTotal : finalTotal) })}
+            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(newPaymentsTotal > 0 ? newPaymentsTotal : balanceDue) })}
           </Button>
         </div>
       </DialogContent>

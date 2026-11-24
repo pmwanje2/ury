@@ -1055,7 +1055,39 @@ def getPosInvoiceItems(invoice):
                 "rate": rate,
             }
         )
-    return itemDetails, taxDetails
+    paymentDetails = []
+    room_number = orderdItems.get("room_number")
+    room_modes = None
+    for payment in orderdItems.get("payments") or []:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0:
+            continue
+        entry = {
+            "mode_of_payment": payment.get("mode_of_payment"),
+            "amount": amt,
+        }
+        if payment.get("reference_no"):
+            entry["reference_no"] = payment.get("reference_no")
+        if payment.get("reference_date"):
+            entry["reference_date"] = str(payment.get("reference_date"))
+        if payment.get("clearance_date"):
+            entry["clearance_date"] = str(payment.get("clearance_date"))
+        if room_number:
+            if room_modes is None:
+                payment_mode_accounts = {
+                    row.get("mode_of_payment"): frappe.db.get_value(
+                        "Mode of Payment Account",
+                        {"parent": row.get("mode_of_payment"), "company": orderdItems.company},
+                        "default_account",
+                    )
+                    for row in (orderdItems.get("payments") or [])
+                    if row.get("mode_of_payment")
+                }
+                room_modes = set(_room_charge_modes(payment_mode_accounts, orderdItems.company))
+            if payment.get("mode_of_payment") in room_modes:
+                entry["room_number"] = room_number
+        paymentDetails.append(entry)
+    return itemDetails, taxDetails, paymentDetails
 
 
 @frappe.whitelist()

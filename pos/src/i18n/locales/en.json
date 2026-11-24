@@ -165,7 +165,10 @@
     "room_check_required": "Check the room before taking Room Charge",
     "room_check_failed": "Could not check this room",
     "room_charge_not_configured": "Room charge isn't set up for this company. Finance maps the guest ledger clearing account.",
-    "discount_not_applied": "Press Apply to update the total before paying."
+    "discount_not_applied": "Press Apply to update the total before paying.",
+    "already_received": "Already received",
+    "balance_due": "Balance due",
+    "reference_label": "Ref: {{ref}}"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",

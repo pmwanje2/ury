@@ -3,7 +3,7 @@ import { cachedOfflineProfile } from '../../pwa/register-offline';
 import { StateCreator } from 'zustand';
 import { OrderType, OrderStatusType } from '../../data/order-types';
 import { isLinkDown, call } from '@ury/core';
-import { getTillBranch, getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoiceTax } from '../../lib/invoice-api';
+import { getTillBranch, getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoicePayment, POSInvoiceTax } from '../../lib/invoice-api';
 import { searchPosInvoice } from '../../lib/invoice-api';
 
 export interface POSInvoice {
@@ -42,6 +42,8 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   additional_discount_percentage?: number;
   discount_amount?: number;
+  payments?: POSInvoicePayment[];
+  room_number?: string | null;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
 }
@@ -237,16 +239,19 @@ export const createOrdersSlice: StateCreator<
           selectedOrderError: null
         });
 
-        const [{ items, taxes }, splitGroup] = await Promise.all([
+        const [{ items, taxes, payments }, splitGroup] = await Promise.all([
           getPOSInvoiceItems(order.name),
           getSplitGroup(order.name).catch(() => ({ invoices: [], current: order.name, group: null })),
         ]);
 
         if (!current()) return false;
         const splitMatch = splitGroup.invoices.find((inv) => inv.name === order.name);
-        const enrichedOrder = splitMatch
+        const mergedOrder = splitMatch
           ? { ...order, ...mapSplitGroupInvoiceToPOSInvoice(splitMatch) }
           : order;
+        const enrichedOrder = payments !== undefined
+          ? { ...mergedOrder, payments }
+          : mergedOrder;
 
         set((state) => ({
           selectedOrder: enrichedOrder,

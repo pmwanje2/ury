@@ -44,8 +44,19 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  payments?: POSInvoicePayment[];
+  room_number?: string | null;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
+}
+
+export interface POSInvoicePayment {
+  mode_of_payment: string;
+  amount: number;
+  reference_no?: string | null;
+  reference_date?: string | null;
+  clearance_date?: string | null;
+  room_number?: string | null;
 }
 
 export interface SplitGroupInvoice extends POSInvoice {
@@ -93,7 +104,7 @@ interface GetPOSInvoicesParams {
 }
 
 interface GetPOSInvoiceItemsResponse {
-  message: [POSInvoiceItem[], POSInvoiceTax[]];
+  message: [POSInvoiceItem[], POSInvoiceTax[], POSInvoicePayment[]?];
 }
 
 export const outstandingFields = [
@@ -216,7 +227,8 @@ export async function getPOSInvoiceItems(invoiceId: string) {
 
     return {
       items: response.message[0],
-      taxes: response.message[1]
+      taxes: response.message[1],
+      payments: Array.isArray(response.message[2]) ? response.message[2] : undefined,
     };
   } catch (error) {
     console.error('Error fetching POS invoice items:', error);
