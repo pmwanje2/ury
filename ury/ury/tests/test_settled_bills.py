@@ -32,7 +32,10 @@ class SettledBills(unittest.TestCase):
             date_to='2026-11-07', bill_no='INV', table='1', pos_profile='Bar')
         filters = self.f.get_list.call_args.kwargs['filters']
         self.assertEqual(filters['docstatus'], 1)
-        self.assertEqual(set(filters['status'][1]), {'Paid','Consolidated','Return','Partly Paid','Unpaid','Overdue'})
+        self.assertEqual(
+            set(filters['status'][1]),
+            {'Paid', 'Consolidated', 'Return', 'Partly Paid', 'Unpaid', 'Overdue', 'Credit Note Issued'},
+        )
         self.assertEqual(filters['posting_date'][0], 'between')
         for key, value in [('branch','West'), ('restaurant_table','1'), ('pos_profile','Bar')]:
             self.assertEqual(filters[key], value)
