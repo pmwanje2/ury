@@ -39,7 +39,7 @@ function roundToCurrency(amount: number, code?: string | null): number {
 type CreditAccount = {name: string; customer_name: string; balance: number; limit: number; available: number; currency: string};
 
 interface PaymentDialogProps {
-  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number'> & { invoice_printed?: string | number }) | null;
+  order?: (Pick<POSInvoice, 'custom_merged_pos_invoice' | 'ury_client_order_id' | 'payments' | 'room_number' | 'custom_charged_tip'> & { invoice_printed?: string | number }) | null;
   existingPayments?: POSInvoicePayment[];
   onClose: () => void;
   grandTotal: number;
@@ -84,8 +84,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1
   );
+  const existingTip = Math.max(0, Number(order?.custom_charged_tip) || 0);
+  const preTipGrandTotal = Math.max(0, grandTotal - existingTip);
+  const preTipRoundedTotal = roundedTotal ? Math.max(0, roundedTotal - existingTip) : roundedTotal;
   const [isProcessing, setIsProcessing] = useState(false);
-  const [tipInput, setTipInput] = useState('');
+  const [tipInput, setTipInput] = useState(existingTip > 0 ? String(existingTip) : '');
   const [printInvoice, setPrintInvoice] = useState(enablePaymentWithoutPrinting);
   const [error, setError] = useState<string | null>(null);
   const [discountType] = useState<'percentage'>('percentage'); // Only percentage now
@@ -140,8 +143,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     fetchPaymentModes();
   }, [fetchPaymentModes]);
 
-  // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
-  const baseTotal = grandTotal + (discountAmount || 0);
+  // baseTotal represents the pre-tip amount before any invoice-level discount
+  const baseTotal = preTipGrandTotal + (discountAmount || 0);
 
   const handleApplyDiscount = async () => {
     try {
@@ -181,7 +184,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
 
   // Order summary logic
   const subtotal = baseTotal;
-  const adjustment = roundedTotal - grandTotal;
+  const adjustment = preTipRoundedTotal - preTipGrandTotal;
   const roundedAdjustment = roundToCurrency(adjustment, currencyCode);
   const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
   const totalDiscount = appliedDiscount;
@@ -189,7 +192,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // The server's total: its rounded total, or its grand total where the profile does not round.
   const finalTotal = serverTotals
     ? (serverTotals.rounded_total || serverTotals.grand_total)
-    : (roundedTotal || grandTotal);
+    : (preTipRoundedTotal || preTipGrandTotal);
   // A charged or cash tip is owed to the server: the tenders cover it, it is
   // never change, and the server books it to the till's Tips Payable account.
   const tipAmount = parseFloat(tipInput) || 0;
@@ -219,6 +222,29 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     ...(row.clearance_date ? { clearance_date: row.clearance_date } : {}),
   }));
   const combinedPayments = [...receivedPaymentPayloads, ...newPayments];
+  const modeMeta = storePosProfile?.payment_mode_meta ?? {};
+  const isCashMode = (mode: string) => {
+    const metaType = modeMeta[mode]?.type;
+    return metaType ? metaType === 'Cash' : /^cash$/i.test(mode);
+  };
+  const excess = rawTotalTendered - amountDue;
+  const hasExcess = excess > 0.005;
+  const cashTendered = combinedPayments.reduce(
+    (sum, p) => (isCashMode(p.mode_of_payment) ? sum + p.amount : sum),
+    0,
+  );
+  const nonCashModes = combinedPayments
+    .filter((p) => !isCashMode(p.mode_of_payment))
+    .map((p) => p.mode_of_payment);
+  const nonCashExcess = hasExcess ? Math.max(0, roundToCurrency(excess - cashTendered, currencyCode)) : 0;
+  const cashChangeDue =
+    hasExcess && nonCashExcess <= 0.005
+      ? Math.max(0, roundToCurrency(Math.min(excess, cashTendered), currencyCode))
+      : 0;
+  const nonCashAllowsTip =
+    nonCashExcess > 0.005 &&
+    nonCashModes.length > 0 &&
+    nonCashModes.every((mode) => modeMeta[mode]?.overtender_rule === 'Post to Charged Tip');
 
   // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
   const roomChargeModes = storePosProfile?.room_charge_modes || [];
@@ -607,10 +633,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
                 {formatMoney(newPaymentsTotal)} / {formatMoney(balanceDue)}
-                {changeDue > 0 && (
+                {cashChangeDue > 0.005 && (
                   <span className="text-yellow-700 font-semibold">
                     <Coins className="inline w-4 h-4 ms-1 text-yellow-500" />
-                    <span className="text-yellow-500 font-bold ms-1">{formatMoney(changeDue)}</span>
+                    <span className="text-yellow-500 font-bold ms-1">{formatMoney(cashChangeDue)}</span>
                   </span>
                 )}
               </span>
@@ -620,9 +646,16 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatMoney(shortfall) })}
               </p>
             )}
-            {changeDue > 0 && (
+            {cashChangeDue > 0.005 && (
               <p className="text-yellow-700 text-sm font-medium">
-                {t('payment.change_due', { amount: formatMoney(changeDue) })}
+                {t('payment.change_due', { amount: formatMoney(cashChangeDue) })}
+              </p>
+            )}
+            {nonCashExcess > 0.005 && (
+              <p className={`${nonCashAllowsTip ? 'text-blue-700' : 'text-red-700'} text-sm font-medium`}>
+                {t(nonCashAllowsTip ? 'payment.overtender_to_tip' : 'payment.non_cash_overtender', {
+                  amount: formatMoney(nonCashExcess),
+                })}
               </p>
             )}
           </div>
@@ -666,11 +699,18 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                   <span>{roundedFinalAdjustment > 0 ? '+' : ''}{formatMoney(roundedFinalAdjustment)}</span>
                 </div>
               )}
-              {/* Final Total (Rounded) */}
+              {/* Tip (if any) */}
+              {tipAmount > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">{t('payment.tip')}</span>
+                  <span>{formatCurrency(tipAmount)}</span>
+                </div>
+              )}
+              {/* Final Total (including tip) */}
               <div className="border-t pt-2">
                 <div className="flex justify-between font-semibold text-lg">
                   <span>{t('payment.total')}</span>
-                  <span>{formatMoney(finalTotal)}</span>
+                  <span>{formatMoney(amountDue)}</span>
                 </div>
               </div>
               {receivedTotal > 0 && (

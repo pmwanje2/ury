@@ -921,6 +921,16 @@ def getPosProfile():
         "floor_signout_after_send": pos_profiles.get("custom_floor_signout_after_send") or 0,
         "custom_blind_cash_count": pos_profiles.get("custom_blind_cash_count") or 0,
         "payment_mode_accounts": payment_mode_accounts,
+        "payment_mode_meta": {
+            payment.mode_of_payment: {
+                "type": frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "type") or "",
+                "overtender_rule": frappe.db.get_value(
+                    "Mode of Payment", payment.mode_of_payment, "custom_overtender_rule"
+                ) or "Refuse",
+            }
+            for payment in (pos_profiles.get("payments") or [])
+        },
+        "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
         # the till's tenders come from configuration, never literals
         "default_payment_mode": next(
             (payment.mode_of_payment for payment in (pos_profiles.get("payments") or []) if payment.get("default")),

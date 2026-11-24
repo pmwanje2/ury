@@ -19,6 +19,7 @@ import ClosingPaymentTable from './ClosingPaymentTable';
 import { isBlindCashCount } from '../lib/pos-closing-visibility';
 import ChecklistGateDialog from './ChecklistGateDialog';
 import { getChecklist } from '../lib/checklist-api';
+import { getShiftCashMovementTotals } from '../lib/till-cash-api';
 import {
   getOpenPosOpeningEntries,
   getSubCashierPosInvoices,
@@ -344,6 +345,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [hiddenRows, setHiddenRows] = useState<ClosingPaymentSummary[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [pendingCashMovements, setPendingCashMovements] = useState(0);
   // Set once the close submission (Sub POS Closing / POS Closing Entry) has
   // succeeded. Per plan decision D8, the Closing checklist gate hangs off
   // this success -- not off validatePOSClose() -- so it renders in place of
@@ -421,22 +423,32 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPeriodEndDate(now);
       const end = formatDateTime(now);
 
-      const [invoiceResult, openingDoc] = await Promise.all([
+      const [invoiceResult, openingDoc, cashMovements] = await Promise.all([
         subCashier
           ? getSubCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name)
           : getMainCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name),
         db.getDoc<OpeningEntryDoc>('POS Opening Entry', ownEntry.name),
+        subCashier
+          ? Promise.resolve({ by_mode: {}, pending_count: 0 })
+          : getShiftCashMovementTotals(ownEntry.name),
       ]);
 
       const invoices = Array.isArray(invoiceResult) ? invoiceResult : (invoiceResult?.invoices || []);
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
+      setPendingCashMovements(cashMovements.pending_count);
       const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(
         invoices,
         payments,
         paymentModes,
         posProfile.payment_mode_accounts,
       );
+      Object.entries(cashMovements.by_mode).forEach(([mode, delta]) => {
+        const movementAmount = Number(delta) || 0;
+        if (movementAmount !== 0) {
+          expectedByMode[mode] = (expectedByMode[mode] || 0) + movementAmount;
+        }
+      });
       setTotals(aggregatedTotals);
       const { visible, hidden } = buildRows(
         openingDoc?.balance_details ?? [],
@@ -757,6 +769,11 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                 </p>
               )}
 
+              {hasRows && pendingCashMovements > 0 && (
+                <p className="mt-3 text-sm font-medium text-amber-700">
+                  {t('pos_closing.pending_cash_movements', { count: pendingCashMovements })}
+                </p>
+              )}
               {hasRows && validation.blockingMessage && (
                 <p className="mt-3 text-sm font-medium text-amber-700">
                   {validation.blockingMessage}

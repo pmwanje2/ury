@@ -773,6 +773,7 @@ fixtures = [
                     "Journal Entry-branch",
                     "Mode of Payment-custom_overtender_rule",
                     "POS Profile-custom_tips_cash_section",
+                    "POS Profile-custom_enable_cash_movements",
                     "POS Profile-custom_tips_payable_account",
                     "POS Profile-custom_cash_over_short_account",
                     "POS Profile-custom_cash_safe_account",

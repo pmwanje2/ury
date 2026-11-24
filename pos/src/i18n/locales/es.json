@@ -37,7 +37,8 @@
     "search_placeholder_reservations": "Buscar reservas por cliente, mesa...",
     "switch_waiter": "Cambiar de mesero",
     "pair_tablet": "Vincular esta tableta",
-    "staff_pins": "PIN del personal"
+    "staff_pins": "PIN del personal",
+    "till_cash": "Caja"
   },
   "menu": {
     "special_items": "Artículos especiales",
@@ -117,7 +118,9 @@
     "discount_not_applied": "Pulsa Aplicar para actualizar el total antes de pagar.",
     "already_received": "Ya recibido",
     "balance_due": "Saldo pendiente",
-    "reference_label": "Ref.: {{ref}}"
+    "reference_label": "Ref.: {{ref}}",
+    "overtender_to_tip": "El excedente de {{amount}} se registrará como propina.",
+    "non_cash_overtender": "Excedente no en efectivo de {{amount}}: solo el efectivo devuelve cambio."
   },
   "pos": {
     "not_opened_title": "POS no abierto",
@@ -176,7 +179,8 @@
     "opening": "Apertura",
     "expected": "Esperado",
     "closing": "Cierre",
-    "difference": "Diferencia"
+    "difference": "Diferencia",
+    "pending_cash_movements": "{{count}} movimiento(s) de caja pendiente(s) deben aprobarse o descartarse antes de cerrar."
   },
   "checklist": {
     "title_opening": "Lista de apertura",
@@ -742,5 +746,42 @@
     "captured": "Capturado",
     "no_fdn": "Captura sin conexión; sin número fiscal.",
     "refused": "{{action}} no está permitido sin conexión. Vuelva a conectarse al servidor primero."
+  },
+  "till_cash": {
+    "title": "Movimientos de caja",
+    "description": "Registre retiros a caja fuerte, préstamos de fondo y salidas de efectivo del turno activo.",
+    "loading": "Cargando movimientos de caja...",
+    "load_failed": "Error al cargar los movimientos de caja.",
+    "disabled": "Los movimientos de caja no están habilitados para este perfil POS.",
+    "no_open_shift": "Abra un turno antes de registrar movimientos de caja.",
+    "pickup": "Retiro",
+    "loan": "Fondo",
+    "paid_out": "Salida",
+    "amount": "Importe",
+    "amount_placeholder": "Ingrese el importe",
+    "paid_out_for": "Categoría de salida",
+    "reason": "Motivo",
+    "reason_placeholder": "Ingrese el motivo de la salida",
+    "requires_second_person": "Las salidas superiores a {{threshold}} requieren aprobación de una segunda persona.",
+    "record_pickup": "Registrar retiro",
+    "record_loan": "Registrar fondo",
+    "record_paid_out": "Registrar salida",
+    "recording": "Registrando...",
+    "recorded_success": "{{type}} registrado.",
+    "saved_pending": "Salida guardada para aprobación de una segunda persona.",
+    "record_failed": "Error al registrar el movimiento.",
+    "approved_success": "Movimiento aprobado y contabilizado.",
+    "approve_failed": "Error al aprobar el movimiento.",
+    "discarded_success": "Movimiento pendiente descartado.",
+    "discard_failed": "Error al descartar el movimiento.",
+    "shift_movements": "Movimientos del turno",
+    "net_drawer_movement": "Cambio neto de caja",
+    "pending_badge": "{{count}} pendiente(s) de aprobación",
+    "refresh": "Actualizar",
+    "empty": "No hay movimientos de caja registrados en este turno.",
+    "recorded_by": "Registrado por",
+    "approved_by": "Aprobado por",
+    "approve": "Aprobar",
+    "discard": "Descartar"
   }
 }

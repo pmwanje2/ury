@@ -8,6 +8,7 @@ TILL_MONEY = (
 	"ury.ury.hooks.test_ury_pos_tender",
 	"ury.ury.hooks.test_ury_cash_movement",
 	"ury.ury.tests.test_settlement_tip",
+	"ury.ury_pos.test_till_cash_movements",
 )
 
 

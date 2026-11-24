@@ -2,6 +2,11 @@ import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
 
+export interface PaymentModeMeta {
+  type: string;
+  overtender_rule: string;
+}
+
 // Limited fields response
 export interface PosProfileLimited {
   pos_profile: string;
@@ -31,6 +36,10 @@ export interface PosProfileLimited {
   custom_blind_cash_count?: number;
   /** Mode of Payment -> default account for the profile's company. */
   payment_mode_accounts?: Record<string, string | null>;
+  /** Mode of Payment -> type and non-cash over-tender rule. */
+  payment_mode_meta?: Record<string, PaymentModeMeta>;
+  /** POS Profile toggle for cashier touchscreen Pickup / Loan / Paid Out. */
+  enable_cash_movements?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
@@ -126,6 +135,8 @@ export interface PosProfileCombined extends PosProfileFull {
   custom_enable_payment_without_printing?: number;
   custom_disable_print_status_tracking?: number | boolean;
   payment_mode_accounts?: Record<string, string | null>;
+  payment_mode_meta?: Record<string, PaymentModeMeta>;
+  enable_cash_movements?: number;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
@@ -202,6 +213,8 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     custom_disable_print_status_tracking: limitedProfile.custom_disable_print_status_tracking ?? 0,
     custom_blind_cash_count: limitedProfile.custom_blind_cash_count ?? 0,
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
+    payment_mode_meta: limitedProfile.payment_mode_meta,
+    enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',
