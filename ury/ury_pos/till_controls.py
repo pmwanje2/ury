@@ -1504,8 +1504,8 @@ def _parse_tip_declarations(raw_rows: Any) -> list[dict[str, Any]]:
 		return []
 	if isinstance(raw_rows, str):
 		try:
-			raw_rows = json.loads(raw_rows)
-		except Exception:
+			raw_rows = frappe.parse_json(raw_rows)
+		except (ValueError, TypeError):
 			return []
 	if not isinstance(raw_rows, (list, tuple)):
 		return []

@@ -158,6 +158,7 @@ export function openTableRow(rows: OfflineEntry[], table: string): OfflineEntry 
 export class OfflineOutbox {
   replaying = false;
   reachable = typeof navigator === 'undefined' || navigator.onLine !== false;
+  verified = false;
   persistent: boolean | null = null;
   private replayPromise?: Promise<void>;
   private scope: string;
@@ -416,6 +417,7 @@ export class OfflineOutbox {
     if (user !== this.options.user.name) throw new NotReady('Cashier session does not match');
     sessionStorage.removeItem(this.sessionBlockKey);
     this.reachable = true;
+    this.verified = true;
   }
   async replay(): Promise<void> {
     if (!canCaptureOffline(this.options.profile, this.options.user)) return;

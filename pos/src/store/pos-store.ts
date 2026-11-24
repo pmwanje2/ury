@@ -334,21 +334,21 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       set({ isInitializing: true, error: null });
       
       await bindOfflineUser(getSessionUser());
-      await get().fetchPosProfile();
-      void get().fetchAvailableOutlets();
+      const [profileResult, _outletsResult, menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
+        get().fetchPosProfile(),
+        get().fetchAvailableOutlets(),
+        get().fetchMenuItems(),
+        get().fetchCategories(),
+        get().fetchPaymentModes()
+      ]);
 
       if (get().requiresOutletSelection) {
         set({ isInitializing: false, error: null });
         return;
       }
 
-      const [menuResult, categoriesResult, paymentModesResult] = await Promise.allSettled([
-        get().fetchMenuItems(),
-        get().fetchCategories(),
-        get().fetchPaymentModes()
-      ]);
-
-      if (!get().posProfile ||
+      if (profileResult.status === 'rejected' ||
+          !get().posProfile ||
           menuResult.status === 'rejected' || 
           categoriesResult.status === 'rejected' ||
           paymentModesResult.status === 'rejected') {
