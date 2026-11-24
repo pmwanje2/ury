@@ -1,0 +1,179 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-11-24 07:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "pos_profile",
+  "privilege",
+  "role",
+  "privilege_group",
+  "column_break_limits",
+  "may_perform",
+  "may_authorise",
+  "requires_reason",
+  "allow_self_approval",
+  "require_clocked_in",
+  "max_percent",
+  "max_amount"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "description": "Optional. When set, this rule overrides the company-wide rule for the same privilege and role.",
+   "fieldname": "pos_profile",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "POS Profile",
+   "options": "POS Profile",
+   "search_index": 1
+  },
+  {
+   "fieldname": "privilege",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Privilege",
+   "options": "discount\ndiscount_remove\ncomplimentary\nvoid_sent_item\nreduce_sent_qty\ncancel_check\nreturn\nreopen_check\nadjust_closed_check\nprice_override\nopen_item\nservice_charge_waive\ntax_exempt\ntransfer_check\npickup_other_check\nmerge_checks\nsplit_check\nguest_count_change\norder_type_change\nreprint_bill\nreprint_kot\nno_sale\npaid_out\ncash_pickup\ncash_loan\nover_short_close\nover_halo_tender\non_account_over_limit\nroom_charge_over_limit\ntip_adjust\nitem_86_restore\nreservation_cancel\noffline_tender\nclose_other_till\nreopen_till",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Role",
+   "options": "Role",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Privilege group 0-3 (0 = unrestricted, matching Simphony Privilege Groups 0-3).",
+   "fieldname": "privilege_group",
+   "fieldtype": "Int",
+   "label": "Privilege Group",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "column_break_limits",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Role may perform this action alone without manager approval.",
+   "fieldname": "may_perform",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "May Perform"
+  },
+  {
+   "default": "0",
+   "description": "Role may authorise this action for another operator with their approval PIN.",
+   "fieldname": "may_authorise",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "May Authorise"
+  },
+  {
+   "default": "0",
+   "description": "Require an operator reason before performing or authorising this action.",
+   "fieldname": "requires_reason",
+   "fieldtype": "Check",
+   "label": "Requires Reason"
+  },
+  {
+   "default": "0",
+   "description": "Allow this role to authorise another operator on a check this manager originally opened (default off; a manager acting alone uses May Perform).",
+   "fieldname": "allow_self_approval",
+   "fieldtype": "Check",
+   "label": "Allow Self Approval"
+  },
+  {
+   "default": "0",
+   "description": "Require the operator/approver to be clocked in (enforced only when attendance check-in records exist).",
+   "fieldname": "require_clocked_in",
+   "fieldtype": "Check",
+   "label": "Require Clocked In"
+  },
+  {
+   "default": "0",
+   "description": "Maximum percentage allowed (0 means no rule cap). For discounts, the stricter of Approval Limit and this cap wins.",
+   "fieldname": "max_percent",
+   "fieldtype": "Percent",
+   "label": "Max Percent"
+  },
+  {
+   "default": "0",
+   "description": "Maximum currency amount allowed (0 means no limit).",
+   "fieldname": "max_amount",
+   "fieldtype": "Currency",
+   "label": "Max Amount"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-24 07:20:00.000000",
+ "modified_by": "Administrator",
+ "module": "URY",
+ "name": "POS Privilege Rule",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "URY Admin",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "URY Manager",
+   "write": 1
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager"
+  },
+  {
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Auditor"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
