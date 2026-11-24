@@ -2170,6 +2170,173 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
             with self.assertRaisesRegex(NotPermitted, "POS-AUTH-REQUIRED"):
                 pa_mod.validate_privileged_pricing_mutations(inv, "validate")
 
+    def test_preview_order_totals_includes_152_service_charge_rows_and_preserves_sc_descriptions(self):
+        """R3 live visual catch: preview_order_totals must run #152 sync_service_charge (preserving
+        orig_invoice SC flags) so PaymentDialog Order Summary shows Service Charge + VAT on Service
+        Charge rows matching grand_total, and _build_preview_tax_rows must not mangle SC tax labels.
+        """
+        frappe_mock, utils = _make_frappe_env()
+        frappe_mock.session = SimpleNamespace(user="cashier_a@example.com")
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        frappe_mock.has_permission = MagicMock(return_value=True)
+        frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+            "Rest A" if dt == "URY Restaurant"
+            else ("Main Branch A" if dt == "POS Profile" and field == "branch" else None)
+        )
+        frappe_mock.get_all.return_value = []
+
+        sc_calls = []
+
+        def fake_sync_service_charge(doc, profile=None):
+            sc_calls.append(
+                {
+                    "waived": doc.get("custom_service_charge_waived"),
+                    "override_rate": doc.get("custom_service_charge_override_rate"),
+                    "no_of_pax": doc.get("no_of_pax"),
+                }
+            )
+            doc.taxes.append(
+                Row(
+                    charge_type="Actual",
+                    account_head="Service Charge Payable - MFU",
+                    description="Service Charge",
+                    rate=0.0,
+                    tax_amount=4700.0,
+                    custom_pos_charge_kind="Service Charge",
+                )
+            )
+            doc.taxes.append(
+                Row(
+                    charge_type="On Previous Row Amount",
+                    account_head="VAT - MFU",
+                    description="VAT on Service Charge",
+                    rate=18.0,
+                    tax_amount=846.0,
+                    custom_pos_charge_kind="Service Charge Tax",
+                )
+            )
+
+        class _PreviewInvoice(FakeInvoice):
+            def precision(self, _f=None):
+                return 0
+
+            def calculate_taxes_and_totals(self):
+                self.net_total = 47000.0
+                self.total_taxes_and_charges = sum(float(t.get("tax_amount") or 0) for t in self.taxes)
+                self.grand_total = self.net_total + self.total_taxes_and_charges
+                self.rounded_total = self.grand_total
+                self.rounding_adjustment = 0.0
+
+        preview_doc = _PreviewInvoice(
+            taxes=[
+                Row(
+                    charge_type="On Net Total",
+                    account_head="VAT - MFU",
+                    description="VAT",
+                    rate=18.0,
+                    tax_amount=8460.0,
+                    custom_pos_charge_kind="",
+                )
+            ]
+        )
+        orig_invoice = Row(
+            name="MFUA00090",
+            branch="Main Branch A",
+            pos_profile="POS Profile A",
+            order_type="Dine In",
+            customer="Walk In Guest",
+            no_of_pax=4,
+            restaurant_table="Table A-Free",
+            custom_serving_period="All Day Dining",
+            custom_transaction_local_time="21:55:00",
+            custom_transaction_weekday="Tue",
+            selling_price_list="Standard UGX",
+            custom_service_charge_waived=0,
+            custom_service_charge_override_rate=12.5,
+            custom_service_charge_override_amount=0.0,
+            items=[
+                Row(
+                    item_code="KH-BURGER-18",
+                    item_name="Classic Kampalan Burger",
+                    qty=2,
+                    rate=16000.0,
+                    price_list_rate=20000.0,
+                    item_tax_template="Item VAT 18% - MFU",
+                    item_tax_rate='{"VAT - MFU": 18.0}',
+                ),
+                Row(
+                    item_code="KH-NO-EFRIS-CODE",
+                    item_name="Unmapped Local Snack",
+                    qty=1,
+                    rate=15000.0,
+                    price_list_rate=15000.0,
+                    item_tax_template="Item VAT 18% - MFU",
+                    item_tax_rate='{"VAT - MFU": 18.0}',
+                ),
+            ],
+        )
+        profile = Row(
+            name="POS Profile A",
+            company="Maximus Foods UG",
+            currency="UGX",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            selling_price_list="Standard UGX",
+            cost_center="Main - MFU",
+            warehouse="Stores - MFU",
+            applicable_for_users=[Row(user="cashier_a@example.com")],
+            customer_groups=[],
+        )
+        frappe_mock.new_doc = MagicMock(return_value=preview_doc)
+        frappe_mock.get_doc = MagicMock(
+            side_effect=lambda dt, name=None: orig_invoice if dt == "POS Invoice" else profile
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury_pos.dayparts": _stub(
+                "ury.ury_pos.dayparts",
+                resolve_menu_and_price_list=MagicMock(return_value={"price_list": "Standard UGX", "serving_period": None}),
+                stamp_invoice_outlet_time=MagicMock(return_value={"local_dt": datetime(2026, 11, 24, 21, 55, 0), "local_time": "21:55:00"}),
+            ),
+            "ury.ury_pos.default_customer": _stub(
+                "ury.ury_pos.default_customer",
+                resolve_default_customer=MagicMock(return_value="Walk In Guest"),
+                get_default_customer_config=MagicMock(return_value={}),
+            ),
+            "ury.ury_pos.tax_determination": _stub(
+                "ury.ury_pos.tax_determination",
+                apply_order_type_tax=MagicMock(),
+                validate_efris_readiness=MagicMock(return_value=[]),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                sync_service_charge=fake_sync_service_charge,
+            ),
+        }
+        with patch.dict(sys.modules, modules):
+            api_mod = _load_module("ury.ury_pos.api", URY_PKG / "ury_pos/api.py")
+            with (
+                patch.object(api_mod, "_authorize_pos_profile_access", MagicMock()),
+                patch.object(api_mod, "_authorize_customer_for_pos_profile", MagicMock(return_value=Row(name="Walk In Guest"))),
+            ):
+                res = api_mod.preview_order_totals(pos_profile="POS Profile A", invoice_name="MFUA00090")
+
+        self.assertEqual(len(sc_calls), 1)
+        self.assertEqual(sc_calls[0]["no_of_pax"], 4)
+        self.assertEqual(sc_calls[0]["override_rate"], 12.5)
+        descs = [r["description"] for r in res["tax_rows"]]
+        self.assertIn("Service Charge", descs)
+        self.assertIn("VAT on Service Charge", descs)
+        self.assertEqual(res["grand_total"], 61006.0)
+        # Also verify _build_preview_tax_rows never rewrites Service Charge Tax even when header_rate differs from item_tax_rate
+        preview_doc.taxes[-1]["rate"] = 10.0  # different from item's 18.0 VAT - MFU
+        rows_checked = api_mod._build_preview_tax_rows(preview_doc, 0)
+        sc_tax_row = next(r for r in rows_checked if r["tax_amount"] == 846.0)
+        self.assertEqual(sc_tax_row["description"], "VAT on Service Charge")
+        self.assertFalse(sc_tax_row["item_rate_override"])
+
 
 if __name__ == "__main__":
     unittest.main()
