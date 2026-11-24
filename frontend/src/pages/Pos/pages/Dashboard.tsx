@@ -871,14 +871,9 @@ function DashboardContent({ recipient }: { recipient?: string }) {
 
             <Panel
               title="Shift Brief"
-              meta={
-                <span className="rounded bg-primary-50 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-primary ring-1 ring-primary-200">
-                  HUF
-                </span>
-              }
             >
               <p className="text-sm text-text-tertiary">
-                AI-written shift summaries are not yet connected. This panel will show HUF's shift
+                AI-written shift summaries are not yet connected. This panel will show the assistant's shift
                 observations once integrated.
               </p>
             </Panel>

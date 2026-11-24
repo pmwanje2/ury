@@ -62,10 +62,12 @@ describe("AskBar", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("displays HUF badge", () => {
+  it("shows no third-party assistant brand badge (Maximus only)", () => {
     renderWithProviders();
 
-    expect(screen.getByText("HUF")).toBeInTheDocument();
+    expect(screen.getByText(/Ask about tonight/i)).toBeInTheDocument();
+    // Per element, so adjacent text (an icon label) cannot hide the badge from a word match.
+    expect(screen.queryAllByText(/\bHUF\b/)).toEqual([]);
   });
 
   it("displays keyboard shortcut hint", () => {

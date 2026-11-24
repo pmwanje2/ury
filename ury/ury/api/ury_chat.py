@@ -34,7 +34,7 @@ _CONVERSATION_CACHE_PREFIX = "ury_huf_conversation"
 
 
 def _huf_unavailable(reason):
-	frappe.log_error(title="URY HUF chat unavailable", message=reason)
+	frappe.log_error(title="URY assistant chat unavailable", message=reason)
 	return {"available": False, "reason": reason}
 
 
@@ -98,7 +98,7 @@ def get_or_create_conversation(report_context=None):
 	require_manager()
 
 	if "huf" not in frappe.get_installed_apps():
-		return _huf_unavailable("huf app is not installed on this site")
+		return _huf_unavailable("The assistant app is not installed on this site")
 
 	cache_key = _conversation_cache_key()
 	cached_id = frappe.cache().get_value(cache_key)
@@ -116,15 +116,15 @@ def get_or_create_conversation(report_context=None):
 		agent_name = _get_agent_name()
 
 		if not frappe.db.exists("Agent", agent_name):
-			return _huf_unavailable(f"HUF Agent {agent_name!r} does not exist")
+			return _huf_unavailable(f"Assistant agent {agent_name!r} does not exist")
 
 		agent_doc = frappe.db.get_value(
 			"Agent", agent_name, ["disabled", "provider", "model"], as_dict=True
 		)
 		if agent_doc.disabled:
-			return _huf_unavailable(f"HUF Agent {agent_name!r} is disabled")
+			return _huf_unavailable(f"Assistant agent {agent_name!r} is disabled")
 		if not (agent_doc.provider and agent_doc.model):
-			return _huf_unavailable(f"HUF Agent {agent_name!r} has no provider/model configured")
+			return _huf_unavailable(f"Assistant agent {agent_name!r} has no provider/model configured")
 
 		conversation = agent_chat.create_conversation(agent=agent_name, channel="Chat")
 		if isinstance(conversation, dict):
@@ -138,7 +138,7 @@ def get_or_create_conversation(report_context=None):
 
 		if not conversation_id:
 			return _huf_unavailable(
-				f"HUF create_conversation() returned no conversation id: {conversation!r}"
+				f"The assistant returned no conversation id: {conversation!r}"
 			)
 
 		frappe.cache().set_value(cache_key, conversation_id, expires_in_sec=3600)
@@ -157,7 +157,7 @@ def send_chat_message(conversation_id, message, report_context=None):
 	require_manager()
 
 	if "huf" not in frappe.get_installed_apps():
-		return _huf_unavailable("huf app is not installed on this site")
+		return _huf_unavailable("The assistant app is not installed on this site")
 
 	if isinstance(report_context, str):
 		report_context = frappe.parse_json(report_context)
@@ -182,7 +182,7 @@ def get_chat_history(conversation_id, limit=50):
 	require_manager()
 
 	if "huf" not in frappe.get_installed_apps():
-		return _huf_unavailable("huf app is not installed on this site")
+		return _huf_unavailable("The assistant app is not installed on this site")
 
 	try:
 		agent_chat = _get_agent_chat_module()
@@ -202,7 +202,7 @@ def get_run_result(agent_run_id):
 	require_manager()
 
 	if "huf" not in frappe.get_installed_apps():
-		return _huf_unavailable("huf app is not installed on this site")
+		return _huf_unavailable("The assistant app is not installed on this site")
 
 	if not frappe.db.exists("Agent Run", agent_run_id):
 		frappe.throw(frappe._("Agent Run not found"), frappe.DoesNotExistError)
