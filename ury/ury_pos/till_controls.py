@@ -1447,7 +1447,12 @@ def close_till_with_controls(
 		}
 
 	closing.flags.ignore_permissions = True
-	closing.submit()
+	prev_ignore = bool(getattr(frappe.flags, "ignore_permissions", False))
+	try:
+		frappe.flags.ignore_permissions = True
+		closing.submit()
+	finally:
+		frappe.flags.ignore_permissions = prev_ignore
 	closing.reload()
 	return {
 		"name": closing.name,
@@ -1566,7 +1571,12 @@ def reopen_till(
 		"token_consumed": bool(approval),
 	}
 	closing_doc.flags.ignore_permissions = True
-	closing_doc.cancel()
+	prev_ignore = bool(getattr(frappe.flags, "ignore_permissions", False))
+	try:
+		frappe.flags.ignore_permissions = True
+		closing_doc.cancel()
+	finally:
+		frappe.flags.ignore_permissions = prev_ignore
 
 	ev = _insert_drawer_event(
 		event_type="Till Reopen",
@@ -1714,7 +1724,12 @@ def force_close_till(
 		"token_consumed": bool(approval),
 	}
 	closing.flags.ignore_permissions = True
-	closing.submit()
+	prev_ignore = bool(getattr(frappe.flags, "ignore_permissions", False))
+	try:
+		frappe.flags.ignore_permissions = True
+		closing.submit()
+	finally:
+		frappe.flags.ignore_permissions = prev_ignore
 	closing.reload()
 
 	note_parts = []
