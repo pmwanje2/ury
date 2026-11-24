@@ -140,6 +140,7 @@ def seed_default_rules(company=None):
                 ).insert(ignore_permissions=True)
 
         frappe.db.set_default(marker, "1")
+        frappe.db.set_default(f"{FX_RULES_SEED_MARKER_PREFIX}{comp}", "1")
 
 
 def seed_default_reasons():
@@ -166,6 +167,7 @@ def seed_default_reasons():
             }
         ).insert(ignore_permissions=True)
     frappe.db.set_default(REASONS_SEED_MARKER, "1")
+    frappe.db.set_default(FX_REASON_SEED_MARKER, "1")
 
 
 def ensure_fx_override_defaults(company=None):
