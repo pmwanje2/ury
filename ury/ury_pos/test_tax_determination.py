@@ -1315,6 +1315,7 @@ class TestR2SecurityParityAndEfrisFixes(unittest.TestCase):
             "ury.ury.api.table_reservation": table_res_mod,
         }
         with patch.dict(sys.modules, modules):
+            _load_module("ury.ury_pos.discount", URY_PKG / "ury_pos/discount.py")
             _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
             _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
             order_mod = _load_module(
@@ -1923,6 +1924,251 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
             18000,
             f"URY POS Invoice custom fields use {total_bytes} B (> 18,000 B budget); triggers MariaDB 1118 Row size too large with uganda_compliance.",
         )
+
+    def test_change_order_type_repricing_coexists_with_152_privileged_mutation_guard_and_preserves_overrides(self):
+        """R3 live-caught bug: change_order_type repricing must pass validate_privileged_pricing_mutations and preserve #152 manager-overridden rows."""
+        frappe_mock, utils = _make_frappe_env()
+        frappe_mock.session = SimpleNamespace(user="cashier_a@example.com")
+        frappe_mock.get_roles = MagicMock(return_value=["URY Cashier"])
+        frappe_mock.has_permission = MagicMock(return_value=True)
+        frappe_mock.get_meta = MagicMock(return_value=SimpleNamespace(has_field=lambda f: False))
+
+        set_taxes_mock = MagicMock(
+            side_effect=lambda customer, party_type, posting_date, company, customer_group=None, tax_category=None: (
+                "UG Levy 10% - MFU" if tax_category == "Delivery Reduced" else "UG VAT 18% - MFU"
+            )
+        )
+        party_mod = _stub("erpnext.accounts.party", set_taxes=set_taxes_mock)
+        erpnext_mod = _stub(
+            "erpnext",
+            accounts=_stub("erpnext.accounts", party=party_mod),
+            controllers=_stub("erpnext.controllers", queries=_stub("erpnext.controllers.queries", item_query=MagicMock())),
+        )
+        ip_mod = _stub(
+            "ury.ury.api.item_price",
+            item_price_release_states=MagicMock(return_value=(None, None)),
+            price_valid_on=MagicMock(
+                side_effect=lambda code, pl, dt, rf, rel, customer=None: Row(
+                    price_list_rate=22000.0 if code == "KH-BURGER-18" else 16500.0
+                )
+            ),
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "frappe.model.document": _stub("frappe.model.document", Document=object),
+            "erpnext": erpnext_mod,
+            "erpnext.accounts": erpnext_mod.accounts,
+            "erpnext.accounts.party": party_mod,
+            "erpnext.controllers.queries": erpnext_mod.controllers.queries,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury_pos.api": _stub(
+                "ury.ury_pos.api",
+                getBranch=MagicMock(return_value="Main Branch A"),
+                getBranchRoom=MagicMock(),
+                getRoom=MagicMock(return_value=[Row(name="Main Hall", branch="Main Branch A")]),
+                posOpening=MagicMock(),
+            ),
+            "ury.ury_pos.default_customer": _stub(
+                "ury.ury_pos.default_customer",
+                get_default_customer_config=MagicMock(),
+                resolve_default_customer=MagicMock(),
+            ),
+            "ury.ury_pos.override": _stub(
+                "ury.ury_pos.override",
+                authorize_or_perform=MagicMock(),
+                has_verified_approval=MagicMock(return_value=False),
+                may_perform=MagicMock(return_value=True),
+                consume=MagicMock(),
+                mark_verified_approval=MagicMock(),
+                _validate_reason=MagicMock(),
+                is_company_policy_active=MagicMock(return_value=False),
+            ),
+            "ury.ury.api.ury_kot_generate": _stub(
+                "ury.ury.api.ury_kot_generate", _execute_kot=MagicMock(), process_items_for_cancel_kot=MagicMock()
+            ),
+            "ury.ury.api.ury_order_reservation_service": _stub(
+                "ury.ury.api.ury_order_reservation_service",
+                _line_key=MagicMock(),
+                _line_ref=MagicMock(),
+                reconcile_order_reservations=MagicMock(),
+                release_order_reservations=MagicMock(),
+                resolve_production_context=MagicMock(return_value=None),
+                _warehouse_for_context=MagicMock(),
+            ),
+            "ury.ury.api.ury_stock_policy": _stub("ury.ury.api.ury_stock_policy", get_branch_stock_policy=MagicMock()),
+            "ury.ury.doctype.alert_settings.alert_settings": _stub(
+                "ury.ury.doctype.alert_settings.alert_settings", get_alert_rule=MagicMock()
+            ),
+            "ury.ury.api.ury_kot_notification": _stub(
+                "ury.ury.api.ury_kot_notification",
+                create_system_notification=MagicMock(),
+                get_users_with_role=MagicMock(),
+            ),
+            "ury.ury.api.item_price": ip_mod,
+            "ury.ury.api.table_reservation": _stub(
+                "ury.ury.api.table_reservation",
+                check_table_reservation=MagicMock(return_value=None),
+                parse_to_datetime=MagicMock(return_value=datetime(2026, 11, 24, 19, 0, 0)),
+            ),
+        }
+        with patch.dict(sys.modules, modules):
+            _load_module("ury.ury_pos.discount", URY_PKG / "ury_pos/discount.py")
+            _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            pa_mod = _load_module("ury.ury_pos.pricing_actions", URY_PKG / "ury_pos/pricing_actions.py")
+            order_mod = _load_module("ury.ury.doctype.ury_order.ury_order", URY_PKG / "ury/doctype/ury_order/ury_order.py")
+
+            profile = Row(
+                name="POS Profile A",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                custom_edit_order_type=1,
+                transfer_role_permissions=[Row(role="URY Manager")],
+                role_allowed_for_billing=[Row(role="URY Cashier")],
+                role_restricted_for_table_order=[],
+                applicable_for_users=[Row(user="cashier_a@example.com")],
+                tax_category="",
+                taxes_and_charges="",
+                custom_order_type_tax_categories=[
+                    Row(order_type="Take Away", tax_category="Take Away VAT"),
+                    Row(order_type="Delivery", tax_category="Delivery Reduced"),
+                ],
+            )
+            before_snapshot = Row(
+                name="MFUA00036",
+                docstatus=0,
+                is_return=0,
+                order_type="Take Away",
+                selling_price_list="Standard UGX",
+                custom_is_complimentary=0,
+                custom_tax_exempt=0,
+                custom_service_charge_waived=0,
+                discount_amount=0.0,
+                additional_discount_percentage=0.0,
+                taxes=[],
+                items=[
+                    Row(
+                        name="ROW-1",
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        price_list_rate=20000.0,
+                        rate=16000.0,
+                        custom_price_overridden=0,
+                        custom_is_open_item=0,
+                        custom_is_complimentary=0,
+                    ),
+                    Row(
+                        name="ROW-OV",
+                        item_code="KH-CHICKEN-18",
+                        qty=1,
+                        price_list_rate=15000.0,
+                        rate=12500.0,
+                        custom_price_overridden=1,
+                        custom_price_override_approver="manager_a@example.com",
+                        custom_is_open_item=0,
+                        custom_is_complimentary=0,
+                    ),
+                ],
+            )
+            class _HookedInvoice(FakeInvoice):
+                def get_doc_before_save(self):
+                    return before_snapshot
+
+                def precision(self, _f=None):
+                    return 0
+
+                def as_dict(self):
+                    return dict(self)
+
+                def save(self):
+                    pa_mod.validate_privileged_pricing_mutations(self, "validate")
+
+            inv = _HookedInvoice(
+                name="MFUA00036",
+                docstatus=0,
+                is_return=0,
+                owner="cashier_a@example.com",
+                cashier="cashier_a@example.com",
+                waiter="cashier_a@example.com",
+                pos_profile="POS Profile A",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                order_type="Take Away",
+                customer="Walk In Guest",
+                selling_price_list="Standard UGX",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                custom_is_complimentary=0,
+                custom_tax_exempt=0,
+                custom_service_charge_waived=0,
+                discount_amount=0.0,
+                additional_discount_percentage=0.0,
+                items=[
+                    Row(
+                        name="ROW-1",
+                        item_code="KH-BURGER-18",
+                        qty=1,
+                        price_list_rate=20000.0,
+                        rate=16000.0,
+                        custom_price_overridden=0,
+                        custom_is_open_item=0,
+                        custom_is_complimentary=0,
+                    ),
+                    Row(
+                        name="ROW-OV",
+                        item_code="KH-CHICKEN-18",
+                        qty=1,
+                        price_list_rate=15000.0,
+                        rate=12500.0,
+                        custom_price_overridden=1,
+                        custom_price_override_approver="manager_a@example.com",
+                        custom_is_open_item=0,
+                        custom_is_complimentary=0,
+                    ),
+                ],
+            )
+            inv._tax_templates["UG Levy 10% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 10.0, "description": "UG Levy 10%"}
+            ]
+
+            frappe_mock.get_doc.side_effect = lambda dt, name=None: (
+                inv if dt == "POS Invoice"
+                else (profile if dt == "POS Profile" else Row(name="Walk In Guest", tax_category=None, customer_group="Individual"))
+            )
+            frappe_mock.get_cached_doc.side_effect = lambda dt, name=None: profile if dt == "POS Profile" else None
+            frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+                22000.0 if (dt == "URY Menu Item" and isinstance(flt, dict) and flt.get("item") == "KH-BURGER-18")
+                else (16500.0 if (dt == "URY Menu Item" and isinstance(flt, dict) and flt.get("item") == "KH-CHICKEN-18") else None)
+            )
+
+            with (
+                patch.object(
+                    order_mod,
+                    "_dayparts_mod",
+                    return_value=SimpleNamespace(
+                        resolve_outlet_local_datetime=lambda _b, at=None: (datetime(2026, 11, 24, 18, 16, 0), "18:16:00", "Tue"),
+                        resolve_menu_and_price_list=lambda *a, **k: {"menu": "Delivery Menu", "price_list": "Delivery UGX", "serving_period": None},
+                        serving_period_applies_to_order_type=lambda *a, **k: True,
+                    ),
+                ),
+                patch.object(order_mod, "price_valid_on", side_effect=lambda code, pl, *a, **k: {"price_list_rate": 22000.0 if code == "KH-BURGER-18" else 16500.0}),
+            ):
+                order_mod.change_order_type("MFUA00036", "Delivery")
+
+            # Standard item repriced to Delivery UGX (22,000), AND #152 manager-overridden item preserved (12,500)!
+            self.assertEqual(inv.selling_price_list, "Delivery UGX")
+            self.assertEqual(inv["items"][0].rate, 22000.0)
+            self.assertEqual(inv["items"][1].rate, 12500.0)
+            # Server repricing flags must be cleaned up after save() so direct REST tampering remains blocked
+            self.assertFalse(getattr(inv.flags, "ury_privileged_action_verified", False))
+            self.assertFalse(getattr(inv.flags, "ury_server_order_type_change", False))
+            self.assertFalse(getattr(inv.flags, "ury_trusted_server_pricing", False))
+            inv["items"][0].rate = 1.0
+            with self.assertRaisesRegex(NotPermitted, "POS-AUTH-REQUIRED"):
+                pa_mod.validate_privileged_pricing_mutations(inv, "validate")
 
 
 if __name__ == "__main__":
