@@ -375,4 +375,141 @@ describe('POS-PR-7: Header status strip, MenuCard daypart/promo, OrderPanel & Pa
       }
     }
   });
+
+  it('OrderPanel renders server-evaluated promo line price matching preview totals when no customer is selected', async () => {
+    mockPosState.value = {
+      ...mockPosState.value,
+      selectedCustomer: null,
+      selectedOrderType: 'Take Away',
+      selectedTable: null,
+      activeOrders: [
+        {
+          id: 'KH-BURGER-18',
+          item: 'KH-BURGER-18',
+          name: 'Classic Kampalan Burger',
+          price: 20000,
+          promo_rate: 16000,
+          promo_label: 'Daypart Special -20%',
+          quantity: 1,
+          uniqueId: 'KH-BURGER-18-default',
+        },
+        {
+          id: 'KH-NO-EFRIS-CODE',
+          item: 'KH-NO-EFRIS-CODE',
+          name: 'Unmapped Special Dish',
+          price: 15000,
+          quantity: 1,
+          uniqueId: 'KH-NO-EFRIS-CODE-default',
+        },
+      ],
+    };
+    mockCallPost.mockResolvedValueOnce({
+      message: {
+        net_total: 31000,
+        discount_amount: 0,
+        tax_rows: [{ description: 'UG VAT 18% (18.0%)', rate: 18, tax_amount: 5580 }],
+        grand_total: 36580,
+        rounded_total: 36580,
+        item_taxes: [
+          { item_code: 'KH-BURGER-18', rate: 16000, net_amount: 16000 },
+          { item_code: 'KH-NO-EFRIS-CODE', rate: 15000, net_amount: 15000 },
+        ],
+        efris_warnings: [],
+      },
+    });
+
+    render(<OrderPanel />);
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 36580');
+      },
+      { timeout: 1000 },
+    );
+
+    const panel = screen.getByTestId('order-panel');
+    // Promo cart line must display the discounted 16000 price (matching MenuCard & preview net 31000)
+    expect(panel).toHaveTextContent('UGX 16000');
+    expect(screen.getByTestId('order-tax-preview-footer')).toHaveTextContent('UGX 31000');
+  });
+
+  it('PaymentDialog never displays a misleading header rate label when item tax templates override the effective rate', async () => {
+    mockCallPost.mockResolvedValueOnce({
+      message: {
+        net_total: 31000,
+        discount_amount: 0,
+        tax_rows: [
+          {
+            description: 'UG Levy 10% (10.0%)',
+            rate: 10,
+            effective_rate: 18,
+            item_rate_override: true,
+            tax_amount: 5580,
+            account_head: 'VAT - MFU',
+          },
+        ],
+        grand_total: 36580,
+        rounded_total: 36580,
+        item_taxes: [
+          { item_code: 'KH-BURGER-18', item_tax_template: 'Item VAT 18% - MFU', rate: 16000, net_amount: 16000 },
+        ],
+        efris_warnings: [],
+      },
+    });
+
+    render(
+      <PaymentDialog
+        order={{ invoice_printed: 1, order_type: 'Delivery', currency: 'UGX' }}
+        onClose={vi.fn()}
+        grandTotal={36580}
+        roundedTotal={36580}
+        invoice="MFUA00030"
+        customer="Walk In Guest"
+        posProfile="POS Profile A"
+        table={null}
+        cashier="cashier@example.com"
+        owner="cashier@example.com"
+        fetchOrders={vi.fn(async () => {})}
+        clearSelectedOrder={vi.fn()}
+      />,
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('payment-tax-breakdown')).toHaveTextContent('UGX 5580');
+      },
+      { timeout: 1000 },
+    );
+
+    const breakdown = screen.getByTestId('payment-tax-breakdown');
+    expect(breakdown).not.toHaveTextContent('10.0%');
+    expect(breakdown).toHaveTextContent('18%');
+  });
+
+  it('MenuCard places promoBadge clear of AvailabilityActionMenu top-right controls with truncation', () => {
+    render(
+      <MenuCard
+        id="KH-BURGER-18"
+        item="KH-BURGER-18"
+        name="Classic Kampalan Burger"
+        price={20000}
+        promoRate={16000}
+        promoLabel="Daypart Special -20%"
+        item_image={null}
+        course="Main"
+        currency="UGX"
+        availabilityActions={{
+          markSoldOut: vi.fn(),
+          markAvailable: vi.fn(),
+          setDailyLimit: vi.fn(),
+        }}
+      />,
+    );
+    const badge = screen.getByText('Daypart Special -20%');
+    expect(badge).toHaveAttribute('title', 'Daypart Special -20%');
+    expect(badge.className).toMatch(/\btruncate\b/);
+    // Placed along the bottom of the image slot so top-right AvailabilityActionMenu ("...") never clips it
+    expect(badge.className).toMatch(/\bbottom-/);
+    expect(badge.className).not.toMatch(/\btop-1\b/);
+  });
 });

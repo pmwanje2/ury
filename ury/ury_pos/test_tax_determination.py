@@ -833,5 +833,582 @@ class TestChangeOrderTypeTaxTransition(unittest.TestCase):
             )
 
 
+class TestR2SecurityParityAndEfrisFixes(unittest.TestCase):
+    """R2 RED->GREEN regression tests closing all 5 Hydrogen R1 blocking findings + white-label check."""
+
+    def test_custom_field_descriptions_contain_zero_vendor_names(self):
+        import re
+
+        vendor = re.compile(r"\b(?:URY|Frappe|ERPNext|Kamra|HUF|Tridz|HeyKoala)\b", re.I)
+        framework, utils = _make_frappe_env()
+        cf_mod = _stub("frappe.custom.doctype.custom_field.custom_field", create_custom_fields=MagicMock())
+        with patch.dict(
+            sys.modules,
+            {
+                "frappe": framework,
+                "frappe.utils": utils,
+                "frappe.custom": _stub("frappe.custom"),
+                "frappe.custom.doctype": _stub("frappe.custom.doctype"),
+                "frappe.custom.doctype.custom_field": _stub("frappe.custom.doctype.custom_field"),
+                "frappe.custom.doctype.custom_field.custom_field": cf_mod,
+                "click": _stub("click"),
+            },
+        ):
+            sc = _load_module("ury.setup_customizations", URY_PKG / "setup_customizations.py")
+            fields_by_dt = sc.get_custom_fields()
+
+        target_fields = {
+            ("POS Profile", "custom_order_type_tax_categories"),
+            ("POS Invoice", "custom_serving_period"),
+            ("POS Invoice", "custom_transaction_local_time"),
+            ("POS Invoice", "custom_transaction_weekday"),
+            ("POS Invoice", "custom_tax_exempt"),
+            ("POS Invoice Item", "custom_tax_exempt"),
+        }
+        for dt, fname in target_fields:
+            fdef = next((f for f in fields_by_dt.get(dt, []) if f.get("fieldname") == fname), None)
+            self.assertIsNotNone(fdef, f"Missing {dt}-{fname} in setup_customizations")
+            for prop in ("label", "description"):
+                self.assertNotRegex(str(fdef.get(prop) or ""), vendor, f"{dt}-{fname}.{prop} leaks vendor wording")
+
+        cf_json = json.loads((URY_PKG / "fixtures/custom_field.json").read_text(encoding="utf-8"))
+        by_name = {row["name"]: row for row in cf_json}
+        for dt, fname in target_fields:
+            row = by_name.get(f"{dt}-{fname}")
+            if row:
+                for prop in ("label", "description"):
+                    self.assertNotRegex(str(row.get(prop) or ""), vendor, f"fixture {dt}-{fname}.{prop} leaks vendor wording")
+
+    def test_tax_exempt_customer_does_not_inherit_blank_category_18pct_item_tax(self):
+        frappe_mock, utils = _make_frappe_env()
+        set_taxes_mock = MagicMock(return_value="UG Exempt 0% - MFU")
+        party_mod = _stub("erpnext.accounts.party", set_taxes=set_taxes_mock)
+        erpnext_mod = _stub("erpnext", accounts=_stub("erpnext.accounts", party=party_mod))
+        with patch.dict(
+            sys.modules,
+            {
+                "frappe": frappe_mock,
+                "frappe.utils": utils,
+                "erpnext": erpnext_mod,
+                "erpnext.accounts": erpnext_mod.accounts,
+                "erpnext.accounts.party": party_mod,
+            },
+        ):
+            tax_mod = _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+
+            def get_all(dt, filters=None, fields=None, **kw):
+                if dt == "Item Tax":
+                    return [Row(item_tax_template="Item VAT 18% - MFU", tax_category="")]
+                if dt == "Sales Taxes and Charges":
+                    tpl = (filters or {}).get("parent")
+                    if tpl == "UG Exempt 0% - MFU":
+                        return [Row(rate=0.0, tax_amount=0.0, charge_type="On Net Total")]
+                    return [Row(rate=18.0, tax_amount=0.0, charge_type="On Net Total")]
+                return []
+
+            frappe_mock.get_all.side_effect = get_all
+            profile = Row(
+                name="POS Profile A",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                currency="UGX",
+                taxes_and_charges="UG VAT 18% - MFU",
+                custom_order_type_tax_categories=[Row(order_type="Take Away", tax_category="Take Away VAT")],
+            )
+            diplomat = Row(name="Diplomat Exempt Guest", customer_group="Diplomat", tax_category="Zero Exempt Guest")
+
+            # Case 1: Fresh invoice for Diplomat Exempt Guest
+            inv_fresh = FakeInvoice(
+                order_type="Take Away",
+                customer="Diplomat Exempt Guest",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                items=[Row(item_code="KH-BURGER-18", rate=20000, qty=1, item_tax_template="", custom_tax_exempt=0)],
+            )
+            inv_fresh._tax_templates["UG Exempt 0% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 0.0, "description": "UG Exempt 0%"}
+            ]
+            tax_mod.apply_order_type_tax(inv_fresh, profile, customer_doc=diplomat)
+            self.assertEqual(inv_fresh.taxes_and_charges, "UG Exempt 0% - MFU")
+            self.assertEqual(inv_fresh["items"][0].item_tax_template, "")
+            inv_fresh.calculate_taxes_and_totals()
+            self.assertEqual(inv_fresh.total_taxes_and_charges, 0.0)
+
+            # Case 2: Existing invoice switched from Walk In (had stale Item VAT 18%) to Diplomat Exempt Guest
+            inv_switch = FakeInvoice(
+                order_type="Take Away",
+                customer="Diplomat Exempt Guest",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                items=[
+                    Row(
+                        item_code="KH-BURGER-18",
+                        rate=20000,
+                        qty=1,
+                        item_tax_template="Item VAT 18% - MFU",
+                        item_tax_rate='{"VAT - MFU": 18.0}',
+                        custom_tax_exempt=0,
+                    )
+                ],
+            )
+            inv_switch._tax_templates["UG Exempt 0% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 0.0, "description": "UG Exempt 0%"}
+            ]
+            tax_mod.apply_order_type_tax(inv_switch, profile, customer_doc=diplomat)
+            self.assertEqual(inv_switch["items"][0].item_tax_template, "")
+            self.assertEqual(inv_switch["items"][0].item_tax_rate, "{}")
+            inv_switch.calculate_taxes_and_totals()
+            self.assertEqual(inv_switch.total_taxes_and_charges, 0.0)
+
+    def test_efris_readiness_flags_item_with_empty_item_taxes_table(self):
+        frappe_mock, utils = _make_frappe_env()
+        frappe_mock.get_installed_apps.return_value = ["frappe", "erpnext", "ury", "uganda_compliance"]
+        settings_mod = _stub(
+            "uganda_compliance.efris.doctype.e_invoicing_settings.e_invoicing_settings",
+            get_e_company_settings=MagicMock(return_value=Row(company="Maximus Foods UG", enabled=1)),
+        )
+        frappe_mock.db.get_value.side_effect = lambda dt, name, field=None, **kw: (
+            Row(efris_commodity_code="50181905", stock_uom="Nos")
+            if dt == "Item"
+            else ("101" if dt == "UOM" else 1)
+        )
+        # Item has commodity code + mapped UOM, but ZERO rows in Item.taxes!
+        frappe_mock.get_all.return_value = []
+        uc_modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "uganda_compliance": _stub("uganda_compliance"),
+            "uganda_compliance.efris": _stub("uganda_compliance.efris"),
+            "uganda_compliance.efris.doctype": _stub("uganda_compliance.efris.doctype"),
+            "uganda_compliance.efris.doctype.e_invoicing_settings": _stub(
+                "uganda_compliance.efris.doctype.e_invoicing_settings"
+            ),
+            "uganda_compliance.efris.doctype.e_invoicing_settings.e_invoicing_settings": settings_mod,
+        }
+        with patch.dict(sys.modules, uc_modules):
+            tax_mod = _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            inv = FakeInvoice(
+                company="Maximus Foods UG",
+                items=[Row(idx=1, item_code="KH-NO-ITEM-TAX", item_name="Mapped Code Missing Tax Row", uom="Nos")],
+            )
+            warnings = tax_mod.validate_efris_readiness(inv, throw=False)
+            self.assertEqual(len(warnings), 1)
+            self.assertEqual(warnings[0]["code"], "EFRIS-ITEM-001")
+            self.assertEqual(warnings[0]["item_code"], "KH-NO-ITEM-TAX")
+            with self.assertRaisesRegex(Refused, "EFRIS-ITEM-001"):
+                tax_mod.validate_efris_readiness(inv, throw=True)
+
+    def _load_api_env(self):
+        frappe_mock, utils = _make_frappe_env()
+        set_taxes_mock = MagicMock(return_value="UG VAT 18% - MFU")
+        party_mod = _stub("erpnext.accounts.party", set_taxes=set_taxes_mock)
+        pricing_rule_mock = MagicMock(return_value={})
+        pricing_rule_mod = _stub(
+            "erpnext.accounts.doctype.pricing_rule.pricing_rule",
+            get_pricing_rule_for_item=pricing_rule_mock,
+        )
+        erpnext_mod = _stub(
+            "erpnext",
+            accounts=_stub(
+                "erpnext.accounts",
+                party=party_mod,
+                doctype=_stub(
+                    "erpnext.accounts.doctype",
+                    pricing_rule=_stub("erpnext.accounts.doctype.pricing_rule", pricing_rule=pricing_rule_mod),
+                ),
+            ),
+            controllers=_stub("erpnext.controllers", queries=_stub("erpnext.controllers.queries", item_query=MagicMock())),
+        )
+        brand_mod = _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}")
+        dc_mod = _stub(
+            "ury.ury_pos.default_customer",
+            get_default_customer_config=MagicMock(return_value={"order_type_customer_map": {}, "default_customer": None}),
+            resolve_default_customer=MagicMock(return_value=None),
+        )
+        ip_mod = _stub(
+            "ury.ury.api.item_price",
+            item_price_release_states=MagicMock(return_value=(None, None)),
+            price_valid_on=MagicMock(side_effect=lambda code, pl, dt, rf, rel, customer=None: Row(price_list_rate=20000 if code == "KH-BURGER-18" else 15000)),
+        )
+        self.enterContext(
+            patch.dict(
+                sys.modules,
+                {
+                    "frappe": frappe_mock,
+                    "frappe.utils": utils,
+                    "erpnext": erpnext_mod,
+                    "erpnext.accounts": erpnext_mod.accounts,
+                    "erpnext.accounts.party": party_mod,
+                    "erpnext.accounts.doctype": erpnext_mod.accounts.doctype,
+                    "erpnext.accounts.doctype.pricing_rule": erpnext_mod.accounts.doctype.pricing_rule,
+                    "erpnext.accounts.doctype.pricing_rule.pricing_rule": pricing_rule_mod,
+                    "erpnext.controllers.queries": erpnext_mod.controllers.queries,
+                    "ury.brand": brand_mod,
+                    "ury.ury_pos.default_customer": dc_mod,
+                    "ury.ury.api.item_price": ip_mod,
+                },
+            )
+        )
+        dayparts = _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+        tax_mod = _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+        api = _load_module("ury.ury_pos.api", URY_PKG / "ury_pos/api.py")
+        return frappe_mock, api, tax_mod, dayparts, set_taxes_mock, pricing_rule_mock
+
+    def test_preview_order_totals_enforces_profile_read_permission_and_blocks_branchless_idor(self):
+        frappe_mock, api, _, _, _, _ = self._load_api_env()
+
+        # Case 1: POS Profile read permission denied -> PermissionError immediately
+        denied_profile = Row(name="POS Profile B", branch="Main Branch B", company="Maximus Foods UG")
+        denied_profile.check_permission = MagicMock(side_effect=NotPermitted("No read permission"))
+        frappe_mock.get_doc.return_value = denied_profile
+        with patch.object(api, "getBranch", return_value="Main Branch A"):
+            with self.assertRaises(NotPermitted):
+                api.preview_order_totals(pos_profile="POS Profile B", order_type="Take Away", items=[])
+        denied_profile.check_permission.assert_called_once_with("read")
+
+        # Case 2: Branchless POS Profile with cashier NOT in applicable_for_users -> PermissionError BEFORE new_doc
+        branchless_profile = Row(
+            name="POS Profile C NoBranch",
+            branch="",
+            company="Other Co",
+            applicable_for_users=[],
+        )
+        branchless_profile.check_permission = MagicMock(return_value=True)
+        frappe_mock.get_doc.return_value = branchless_profile
+        frappe_mock.new_doc.side_effect = AssertionError("must reject branchless IDOR before creating invoice")
+        with patch.object(api, "getBranch", return_value="Main Branch A"):
+            with self.assertRaises(NotPermitted):
+                api.preview_order_totals(pos_profile="POS Profile C NoBranch", order_type="Take Away", items=[])
+
+    def test_preview_order_totals_blocks_cross_outlet_foreign_customer_idor(self):
+        frappe_mock, api, _, _, _, _ = self._load_api_env()
+        profile_a = Row(
+            name="POS Profile A",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            company="Maximus Foods UG",
+            currency="UGX",
+            taxes_and_charges="UG VAT 18% - MFU",
+            custom_order_type_tax_categories=[],
+            applicable_for_users=[Row(user="cashier@example.com")],
+        )
+        profile_a.check_permission = MagicMock(return_value=True)
+        secret_customer = Row(
+            name="VIP Secret B Customer",
+            customer_group="Secret B Group",
+            tax_category="Secret B Tax",
+        )
+        secret_customer.check_permission = MagicMock(side_effect=NotPermitted("Foreign customer"))
+        frappe_mock.has_permission.side_effect = lambda dt, perm="read", doc=None: (
+            False if dt == "Customer" else True
+        )
+        frappe_mock.get_doc.side_effect = lambda dt, name=None: (
+            profile_a if dt == "POS Profile" else secret_customer
+        )
+        frappe_mock.new_doc.return_value = FakeInvoice()
+        frappe_mock.db.get_value.return_value = "Rest A"
+        with patch.object(api, "getBranch", return_value="Main Branch A"):
+            with self.assertRaises(NotPermitted):
+                api.preview_order_totals(
+                    pos_profile="POS Profile A",
+                    order_type="Take Away",
+                    customer="VIP Secret B Customer",
+                    items=[{"item": "KH-BURGER-18", "qty": 1}],
+                )
+
+    def test_get_restaurant_menu_enforces_profile_permission_branch_match_and_string_profile_safety(self):
+        frappe_mock, api, _, _, _, _ = self._load_api_env()
+        profile_b = Row(
+            name="POS Profile B",
+            branch="Main Branch B",
+            company="Maximus Foods UG",
+            role_allowed_for_billing=[Row(role="URY Cashier")],
+        )
+        profile_b.check_permission = MagicMock(return_value=True)
+        frappe_mock.get_doc.return_value = profile_b
+        with patch.object(api, "getBranch", return_value="Main Branch A"):
+            with self.assertRaises(NotPermitted):
+                api.getRestaurantMenu(pos_profile="POS Profile B", order_type="Take Away")
+        profile_b.check_permission.assert_called_once_with("read")
+
+        # String pos_profile passed directly to resolve_restaurant_menu must not raise AttributeError
+        profile_a = Row(
+            name="POS Profile A",
+            branch="Main Branch A",
+            company="Maximus Foods UG",
+            taxes_and_charges="UG VAT 18% - MFU",
+            custom_order_type_tax_categories=[],
+        )
+        frappe_mock.get_doc.return_value = profile_a
+        frappe_mock.get_cached_doc.return_value = profile_a
+        frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+            "Rest A" if dt == "URY Restaurant" and isinstance(flt, dict)
+            else ("Main Menu" if dt == "URY Restaurant" and field == "active_menu"
+            else ("Standard UGX" if dt == "Price List"
+            else ("Africa/Kampala" if dt == "URY Branch Operating Schedule" else None)))
+        )
+        frappe_mock.get_all.return_value = []
+        res = api.resolve_restaurant_menu("Main Branch A", order_type="Take Away", pos_profile="POS Profile A")
+        self.assertEqual(res["name"], "Main Menu")
+        self.assertIsNotNone(res["tax_summary"])
+
+    def test_preview_order_totals_applies_selling_pricing_rules_without_customer_and_reports_effective_tax_rate(self):
+        frappe_mock, api, _, _, set_taxes_mock, pricing_rule_mock = self._load_api_env()
+        set_taxes_mock.return_value = "UG Levy 10% - MFU"
+
+        def fake_pricing_rule(args, doc=None, for_validate=False):
+            if args.get("transaction_type") == "selling" and args.get("item_code") == "KH-BURGER-18":
+                return Row(
+                    pricing_rules='["PRLE-0001"]',
+                    price_or_product_discount="Price",
+                    discount_percentage=20.0,
+                    discount_amount=0.0,
+                )
+            return Row()
+
+        pricing_rule_mock.side_effect = fake_pricing_rule
+        profile_a = Row(
+            name="POS Profile A",
+            branch="Main Branch A",
+            restaurant="Rest A",
+            company="Maximus Foods UG",
+            currency="UGX",
+            cost_center="Main - MFU",
+            warehouse="Outlet A Store - MFU",
+            taxes_and_charges="UG Levy 10% - MFU",
+            custom_order_type_tax_categories=[Row(order_type="Delivery", tax_category="Delivery Reduced")],
+        )
+        profile_a.check_permission = MagicMock(return_value=True)
+
+        class PricingAwareInvoice(FakeInvoice):
+            def apply_pricing_rule_on_items(self, item, pr_args):
+                if pr_args.get("price_or_product_discount") == "Price":
+                    pct = _flt(pr_args.get("discount_percentage"))
+                    item["discount_percentage"] = pct
+                    item["rate"] = _flt(_flt(item.get("price_list_rate")) * (1.0 - pct / 100.0), self.precision("rate"))
+
+        def new_doc(dt):
+            doc = PricingAwareInvoice()
+            doc._tax_templates["UG Levy 10% - MFU"] = [
+                {
+                    "charge_type": "On Net Total",
+                    "account_head": "VAT - MFU",
+                    "rate": 10.0,
+                    "description": "UG Levy 10% (10.0%)",
+                }
+            ]
+            return doc
+
+        frappe_mock.new_doc.side_effect = new_doc
+        frappe_mock.get_doc.side_effect = lambda dt, name=None: profile_a if dt == "POS Profile" else Row(name=name)
+        frappe_mock.db.get_value.side_effect = lambda dt, flt=None, field=None, **kw: (
+            "Rest A" if dt == "URY Restaurant" and isinstance(flt, dict)
+            else ("Main Menu" if dt == "URY Restaurant" and field == "active_menu"
+            else ("Standard UGX" if dt == "Price List"
+            else ("Africa/Kampala" if dt == "URY Branch Operating Schedule"
+            else ("Classic Kampalan Burger" if dt == "Item" else None))))
+        )
+        frappe_mock.get_all.side_effect = lambda dt, filters=None, **kw: (
+            [Row(item_tax_template="Item VAT 18% - MFU", tax_category="")]
+            if dt == "Item Tax"
+            else ([Row(rate=10.0, tax_amount=0.0)] if dt == "Sales Taxes and Charges" else [])
+        )
+
+        with patch.object(api, "getBranch", return_value="Main Branch A"):
+            res = api.preview_order_totals(
+                pos_profile="POS Profile A",
+                order_type="Delivery",
+                customer=None,
+                items=[
+                    {"item": "KH-BURGER-18", "qty": 1, "rate": 20000, "item_tax_rate": '{"VAT - MFU": 18.0}'},
+                    {"item": "KH-NO-EFRIS-CODE", "qty": 1, "rate": 15000, "item_tax_rate": '{"VAT - MFU": 18.0}'},
+                ],
+            )
+
+        # Pricing Rule -20% on 20,000 -> 16,000 + 15,000 = 31,000 net, 18% VAT = 5,580, grand = 36,580
+        self.assertEqual(res["net_total"], 31000)
+        self.assertEqual(res["total_taxes_and_charges"], 5580)
+        self.assertEqual(res["grand_total"], 36580)
+        # Tax row label must NOT claim misleading "10.0%" when overridden to 18% by Item Tax Template
+        self.assertTrue(res["tax_rows"][0].get("item_rate_override"))
+        self.assertEqual(res["tax_rows"][0].get("effective_rate"), 18.0)
+        self.assertNotIn("10.0%", res["tax_rows"][0]["description"])
+        self.assertIn("18%", res["tax_rows"][0]["description"])
+
+    def test_change_order_type_refreshes_price_list_for_order_type_menu_and_validates_dine_in_table(self):
+        frappe_mock, utils = _make_frappe_env()
+        set_taxes_mock = MagicMock(return_value="UG Levy 10% - MFU")
+        party_mod = _stub("erpnext.accounts.party", set_taxes=set_taxes_mock)
+        erpnext_mod = _stub(
+            "erpnext",
+            accounts=_stub("erpnext.accounts", party=party_mod),
+            controllers=_stub("erpnext.controllers", queries=_stub("erpnext.controllers.queries", item_query=MagicMock())),
+        )
+        override_mod = _stub(
+            "ury.ury_pos.override",
+            may_perform=MagicMock(return_value=True),
+            consume=MagicMock(),
+            mark_verified_approval=MagicMock(),
+            _validate_reason=MagicMock(),
+        )
+        reservation_state = {"active": None}
+        table_res_mod = _stub(
+            "ury.ury.api.table_reservation",
+            check_table_reservation=MagicMock(side_effect=lambda tbl: reservation_state["active"]),
+            parse_to_datetime=MagicMock(return_value=datetime(2026, 11, 24, 19, 0, 0)),
+        )
+        ip_mod = _stub(
+            "ury.ury.api.item_price",
+            item_price_release_states=MagicMock(return_value=(None, None)),
+            price_valid_on=MagicMock(
+                side_effect=lambda code, pl, dt, rf, rel, customer=None: Row(
+                    price_list_rate=22000 if pl == "Delivery UGX" else 20000
+                )
+            ),
+        )
+        modules = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "frappe.model.document": _stub("frappe.model.document", Document=object),
+            "erpnext": erpnext_mod,
+            "erpnext.accounts": erpnext_mod.accounts,
+            "erpnext.accounts.party": party_mod,
+            "erpnext.controllers.queries": erpnext_mod.controllers.queries,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury_pos.api": _stub(
+                "ury.ury_pos.api",
+                getBranch=MagicMock(return_value="Main Branch A"),
+                getBranchRoom=MagicMock(),
+                getRoom=MagicMock(return_value=[Row(name="Main Hall", branch="Main Branch A")]),
+                posOpening=MagicMock(),
+            ),
+            "ury.ury_pos.default_customer": _stub(
+                "ury.ury_pos.default_customer",
+                get_default_customer_config=MagicMock(),
+                resolve_default_customer=MagicMock(),
+            ),
+            "ury.ury_pos.override": override_mod,
+            "ury.ury.api.ury_kot_generate": _stub(
+                "ury.ury.api.ury_kot_generate", _execute_kot=MagicMock(), process_items_for_cancel_kot=MagicMock()
+            ),
+            "ury.ury.api.ury_order_reservation_service": _stub(
+                "ury.ury.api.ury_order_reservation_service",
+                _line_key=MagicMock(),
+                _line_ref=MagicMock(),
+                reconcile_order_reservations=MagicMock(),
+                release_order_reservations=MagicMock(),
+                resolve_production_context=MagicMock(return_value=None),
+                _warehouse_for_context=MagicMock(),
+            ),
+            "ury.ury.api.ury_stock_policy": _stub("ury.ury.api.ury_stock_policy", get_branch_stock_policy=MagicMock()),
+            "ury.ury.doctype.alert_settings.alert_settings": _stub(
+                "ury.ury.doctype.alert_settings.alert_settings", get_alert_rule=MagicMock()
+            ),
+            "ury.ury.api.ury_kot_notification": _stub(
+                "ury.ury.api.ury_kot_notification",
+                create_system_notification=MagicMock(),
+                get_users_with_role=MagicMock(),
+            ),
+            "ury.ury.api.item_price": ip_mod,
+            "ury.ury.api.table_reservation": table_res_mod,
+        }
+        with patch.dict(sys.modules, modules):
+            _load_module("ury.ury_pos.tax_determination", URY_PKG / "ury_pos/tax_determination.py")
+            _load_module("ury.ury_pos.dayparts", URY_PKG / "ury_pos/dayparts.py")
+            order_mod = _load_module(
+                "ury.ury.doctype.ury_order.ury_order",
+                URY_PKG / "ury/doctype/ury_order/ury_order.py",
+            )
+
+            profile = Row(
+                name="POS Profile A",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                custom_edit_order_type=1,
+                transfer_role_permissions=[Row(role="URY Manager")],
+                role_allowed_for_billing=[Row(role="URY Cashier")],
+                role_restricted_for_table_order=[],
+                custom_order_type_tax_categories=[
+                    Row(order_type="Take Away", tax_category="Take Away VAT"),
+                    Row(order_type="Delivery", tax_category="Delivery Reduced"),
+                    Row(order_type="Dine In", tax_category="Dine In VAT"),
+                ],
+                taxes_and_charges="UG VAT 18% - MFU",
+            )
+            tables = {
+                "T-B1": Row(name="T-B1", branch="Main Branch B", restaurant_room="Room B", occupied=0),
+                "T-A-OCC": Row(name="T-A-OCC", branch="Main Branch A", restaurant_room="Main Hall", occupied=1),
+                "T-A-RES": Row(name="T-A-RES", branch="Main Branch A", restaurant_room="Main Hall", occupied=0),
+            }
+
+            def db_get_value(dt, flt=None, field=None, **kw):
+                if dt == "URY Restaurant":
+                    if isinstance(flt, dict):
+                        return "Rest A"
+                    if field == "order_type_wise_menu":
+                        return 1
+                    if field == "active_menu":
+                        return "Standard Menu"
+                    return 0
+                if dt == "Order Type Menu":
+                    return "Delivery Menu" if (flt or {}).get("order_type") == "Delivery" else "Standard Menu"
+                if dt == "Price List":
+                    return "Delivery UGX" if (flt or {}).get("restaurant_menu") == "Delivery Menu" else "Standard UGX"
+                if dt == "URY Branch Operating Schedule":
+                    return "Africa/Kampala"
+                if dt == "URY Table":
+                    return tables.get(flt)
+                return None
+
+            frappe_mock.db.get_value.side_effect = db_get_value
+            frappe_mock.db.exists.return_value = None
+            frappe_mock.get_all.return_value = []
+
+            # 1. Take Away -> Delivery must refresh selling_price_list to Delivery UGX & re-price item
+            inv = FakeInvoice(
+                name="MFUA00030",
+                company="Maximus Foods UG",
+                branch="Main Branch A",
+                restaurant="Rest A",
+                pos_profile="POS Profile A",
+                order_type="Take Away",
+                selling_price_list="Standard UGX",
+                customer="Walk In Guest",
+                waiter="cashier@example.com",
+                tax_category="Take Away VAT",
+                taxes_and_charges="UG VAT 18% - MFU",
+                items=[Row(item_code="KH-BURGER-18", rate=20000, price_list_rate=20000, qty=1, custom_tax_exempt=0)],
+            )
+            inv._tax_templates["UG Levy 10% - MFU"] = [
+                {"charge_type": "On Net Total", "account_head": "VAT - MFU", "rate": 10.0, "description": "UG Levy 10%"}
+            ]
+            frappe_mock.get_doc.side_effect = lambda dt, name=None, **kw: (
+                inv if dt == "POS Invoice" else (profile if dt == "POS Profile" else Row(name=name, tax_category=None))
+            )
+            order_mod.change_order_type("MFUA00030", "Delivery")
+            self.assertEqual(inv.selling_price_list, "Delivery UGX")
+            self.assertEqual(inv["items"][0].rate, 22000)
+
+            # 2. Dine In with foreign-branch table -> PermissionError
+            with self.assertRaises(NotPermitted):
+                order_mod.change_order_type("MFUA00030", "Dine In", table="T-B1")
+
+            # 3. Dine In with occupied table -> ValidationError
+            with self.assertRaisesRegex(Refused, "occupied"):
+                order_mod.change_order_type("MFUA00030", "Dine In", table="T-A-OCC")
+
+            # 4. Dine In with reserved table in lock window -> ValidationError
+            reservation_state["active"] = {
+                "is_lock_window_active": True,
+                "status": "Confirmed",
+                "reserved_at": "2026-11-24 19:00:00",
+            }
+            with self.assertRaisesRegex(Refused, "reserved"):
+                order_mod.change_order_type("MFUA00030", "Dine In", table="T-A-RES")
+
+
 if __name__ == "__main__":
     unittest.main()
