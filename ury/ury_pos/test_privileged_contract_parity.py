@@ -136,22 +136,26 @@ class TestPrivilegedContractParity(TestPricingPrivilegedActions):
         self.assertTrue(pricing._is_room_charge_mode("Room Charge", "Test Co"))
         self.assertFalse(pricing._is_room_charge_mode("Cash", "Test Co"))
 
+
+class TestPosProfileFullParity(unittest.TestCase):
     def test_get_pos_profile_full_exposes_privileged_fields_without_nameerror(self):
         """getPosProfileFull must import flt cleanly and return Scope e+f profile fields."""
-        from ury.ury_pos.test_floor_privileged_actions import FloorHarness
+        from ury.ury_pos.test_floor_privileged_actions import TestFloorPrivilegedActions
 
-        fh = FloorHarness()
-        with fh.patched():
-            api_mod = fh.load("ury.ury_pos.api")
-            fh.profiles["Main Till"]["allow_rate_change"] = 1
-            fh.profiles["Main Till"]["custom_service_charge_rate"] = 10.0
-            fh.profiles["Main Till"]["custom_tips_payable_account"] = "Tips Payable - TC"
-            orig_get_branch = api_mod.getBranch
-            api_mod.getBranch = lambda: fh.branch
+        helper = TestFloorPrivilegedActions("test_table_transfer_requires_pin_or_rule_and_keeps_session")
+        helper.setUp()
+        try:
+            helper.h.profiles["Main Till"]["allow_rate_change"] = 1
+            helper.h.profiles["Main Till"]["custom_service_charge_rate"] = 10.0
+            helper.h.profiles["Main Till"]["custom_tips_payable_account"] = "Tips Payable - TC"
+            orig_get_branch = helper.api.getBranch
+            helper.api.getBranch = lambda: helper.h.branch
             try:
-                full = api_mod.getPosProfileFull("Main Till")
+                full = helper.api.getPosProfileFull("Main Till")
             finally:
-                api_mod.getBranch = orig_get_branch
+                helper.api.getBranch = orig_get_branch
+        finally:
+            helper.tearDown()
         self.assertEqual(full["allow_rate_change"], 1)
         self.assertEqual(full["custom_service_charge_rate"], 10.0)
         self.assertEqual(full["custom_tips_payable_account"], "Tips Payable - TC")
