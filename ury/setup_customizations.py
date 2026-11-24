@@ -102,6 +102,7 @@ def get_custom_fields():
 				{
 					"fieldname": "mobile_number",
 					"fieldtype": "Data",
+					"length": 64,
 					"fetch_from": "customer.mobile_number",
 					"label": "Mobile Number",
 					"insert_after": "customer_name",
@@ -138,6 +139,7 @@ def get_custom_fields():
 				{
 					"fieldname": "no_of_pax",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Pax",
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,
@@ -198,7 +200,7 @@ def get_custom_fields():
 				},
 				{
 					"fieldname": "custom_merged_tables",
-					"fieldtype": "Data",
+					"fieldtype": "Small Text",
 					"insert_after": "restaurant_table",
 					"label": "Merged Tables",
 					"read_only": 1,
@@ -214,6 +216,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_split_group",
 					"fieldtype": "Data",
+					"length": 64,
 					"insert_after": "custom_split_from",
 					"label": "Split Group",
 					"read_only": 1,
@@ -276,6 +279,7 @@ def get_custom_fields():
 				{
 					"fieldname": "custom_room_charge_stay",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Room Charge Stay",
 					"description": "Verified stay identifier bound to a room-charge settlement.",
 					"insert_after": "custom_comments",
@@ -324,6 +328,7 @@ def get_custom_fields():
 					{
 					"fieldname": "mobile_number",
 					"fieldtype": "Data",
+					"length": 64,
 					"fetch_from": "customer.mobile_number",
 					"label": "Mobile Number",
 					"insert_after": "customer_name",
@@ -362,6 +367,7 @@ def get_custom_fields():
 				{
 					"fieldname": "no_of_pax",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Pax",
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,
