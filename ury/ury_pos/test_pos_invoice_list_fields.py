@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 ROOT = Path(__file__).resolve().parents[2]
 
 ROW = {
-	"name": "POS-INV-0001", "docstatus": 0, "invoice_printed": 1, "custom_printing_time": None,
+	"name": "POS-INV-0001", "currency": "USD", "docstatus": 0, "invoice_printed": 1, "custom_printing_time": None,
 	"grand_total": 100.0, "restaurant_table": "T-1", "custom_merged_tables": None, "cashier": "cashier@example.test",
 	"waiter": "waiter@example.test", "net_total": 100.0, "posting_time": "10:00:00", "total_taxes_and_charges": 0.0,
 	"customer": "CUST-0001", "customer_name": "Dr. Elena Rostova", "status": "Draft", "mobile_number": "",

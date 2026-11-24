@@ -171,7 +171,7 @@ const ChatWidget = forwardRef<ChatWidgetHandle>(function ChatWidget(_props, ref)
           // rather than throwing, per PLAN.md item 4.
           setAvailable(false);
           setUnavailableReason('Assistant is temporarily unavailable.');
-          console.error('Error initializing HUF chat:', err);
+          console.error('Error initializing assistant chat:', err);
         }
       } finally {
         if (!cancelled) setInitializing(false);
@@ -277,12 +277,9 @@ const ChatWidget = forwardRef<ChatWidgetHandle>(function ChatWidget(_props, ref)
           )}
           style={{ height: expanded ? 'min(720px, calc(100vh - 2.5rem))' : 520 }}
         >
-          {/* Header — mirrors the mockup's HUF-branded "ask" chrome */}
+          {/* Header: the active report or "Ask about tonight" (no vendor badge; Maximus only) */}
           <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="rounded border border-chat-accent/30 bg-chat-accent/6 px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-chat-accent">
-                HUF
-              </span>
               <span className="truncate text-sm font-medium text-foreground">
                 {activeReport ? activeReport.label : t('ai.ask_about_tonight_short')}
               </span>
@@ -377,7 +374,7 @@ const ChatWidget = forwardRef<ChatWidgetHandle>(function ChatWidget(_props, ref)
                 onKeyDown={handleKeyDown}
                 disabled={isDisabled || sending}
                 placeholder={
-                  isDisabled ? 'Assistant unavailable' : 'Ask HUF about tonight…'
+                  isDisabled ? 'Assistant unavailable' : t('ai.ask_about_tonight')
                 }
                 className="flex-1 min-w-0 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
               />

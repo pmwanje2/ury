@@ -958,7 +958,7 @@ def sync_merged_invoice(doc):
 
     except Exception:
         # One guest bill posts both halves or neither: a partner that cannot post stops
-        # the primary posting.
+        # the primary posting (compatible with #143).
         if doc.docstatus == 1:
             raise
         frappe.log_error(
