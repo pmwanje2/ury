@@ -2227,7 +2227,7 @@ class TestSplitBillReservations(FrappeTestCase):
 
         mock_get_all.side_effect = get_all_side_effect
 
-        with self.assertRaisesRegex(frappe.ValidationError, 'URY-SPLIT-RESERVED-KOT'):
+        with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-SPLIT-RESERVED-KOT\]"):
             split_bill(source.name, [{"name": "ITEM-ROW-A", "qty": 2}])
         mock_new_doc.assert_not_called()
         mock_reconcile.assert_not_called()

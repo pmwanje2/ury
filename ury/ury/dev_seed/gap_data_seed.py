@@ -649,7 +649,7 @@ def _invoice_env(ctx):
 		or frappe.db.get_value("URY Self Ordering Profile", {}, "name"),
 		units=_production_units(ctx.branch),
 		cooks=_ensure_cooks(),
-		kot_series=(frappe.db.get_value("POS Profile", ctx.pos_profile, "custom_kot_naming_series") or "KOT-URY-"),
+		kot_series=(frappe.db.get_value("POS Profile", ctx.pos_profile, "custom_kot_naming_series") or "KOT-"),
 	)
 
 

@@ -175,7 +175,7 @@ class TestGuestFeedback(unittest.TestCase):
                     del self.profile.enable_feedback
                 with self.assertRaises(frappe.ValidationError) as caught:
                     self.submit(session="opaque-session", ratings=RATINGS, invoice="POS-9", template="EVIL")
-                self.assertIn("[URY-FEEDBACK-DISABLED]", str(caught.exception))
+                self.assertIn("[POS-FEEDBACK-DISABLED]", str(caught.exception))
         self.assertEqual(self.invoice_loads, [])
         self.feedback.insert.assert_not_called()
 
@@ -183,14 +183,14 @@ class TestGuestFeedback(unittest.TestCase):
         self.profile.feedback_template = None
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=RATINGS)
-        self.assertIn("[URY-FEEDBACK-TEMPLATE]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-TEMPLATE]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_missing_bill_link_field_refuses_before_insert(self):
         self.meta.has_field.side_effect = lambda field: False
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=RATINGS)
-        self.assertIn("[URY-FEEDBACK-BILL-LINK-MISSING]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-BILL-LINK-MISSING]", str(caught.exception))
         self.assertEqual(self.invoice_loads, [])
         self.feedback.insert.assert_not_called()
 
@@ -199,7 +199,7 @@ class TestGuestFeedback(unittest.TestCase):
         self.invoice.docstatus = 0
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=RATINGS)
-        self.assertIn("[URY-FEEDBACK-NOT-ELIGIBLE]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-NOT-ELIGIBLE]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_printed_unpaid_bill_stores_the_session_invoice_only(self):
@@ -247,7 +247,7 @@ class TestGuestFeedback(unittest.TestCase):
         self.invoice.status = "Partly Paid"
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=RATINGS)
-        self.assertIn("[URY-FEEDBACK-NOT-ELIGIBLE]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-NOT-ELIGIBLE]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_cancelled_or_return_bill_is_refused(self):
@@ -261,7 +261,7 @@ class TestGuestFeedback(unittest.TestCase):
                     setattr(self.invoice, key, value)
                 with self.assertRaises(frappe.ValidationError) as caught:
                     self.submit(session="opaque-session", ratings=RATINGS)
-                self.assertIn("[URY-FEEDBACK-NOT-ELIGIBLE]", str(caught.exception))
+                self.assertIn("[POS-FEEDBACK-NOT-ELIGIBLE]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_bill_from_another_till_is_refused(self):
@@ -321,7 +321,7 @@ class TestGuestFeedback(unittest.TestCase):
             self.submit(session="opaque-session", ratings=RATINGS)
         except (frappe.ValidationError, frappe.QueryDeadlockError) as exc:
             self.assertIsInstance(exc, frappe.ValidationError)
-            self.assertIn("[URY-FEEDBACK-RETRY]", str(exc))
+            self.assertIn("[POS-FEEDBACK-RETRY]", str(exc))
             self.assertNotIn("PRIVATE", str(exc))
         else:
             self.fail("A native snapshot conflict must refuse with a safe retry")
@@ -333,7 +333,7 @@ class TestGuestFeedback(unittest.TestCase):
             self.submit(session="opaque-session", ratings=RATINGS)
         except (frappe.ValidationError, frappe.QueryTimeoutError) as exc:
             self.assertIsInstance(exc, frappe.ValidationError)
-            self.assertIn("[URY-FEEDBACK-RETRY]", str(exc))
+            self.assertIn("[POS-FEEDBACK-RETRY]", str(exc))
             self.assertNotIn("PRIVATE", str(exc))
         else:
             self.fail("A native lock timeout must not guess successful feedback")
@@ -349,7 +349,7 @@ class TestGuestFeedback(unittest.TestCase):
                 ]
                 with self.assertRaises(frappe.ValidationError) as caught:
                     self.submit(session="opaque-session", ratings=ratings)
-                self.assertIn("[URY-FEEDBACK-RATINGS]", str(caught.exception))
+                self.assertIn("[POS-FEEDBACK-RATINGS]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_unknown_parameter_is_refused(self):
@@ -360,7 +360,7 @@ class TestGuestFeedback(unittest.TestCase):
         ]
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=ratings)
-        self.assertIn("[URY-FEEDBACK-RATINGS]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-RATINGS]", str(caught.exception))
         self.feedback.insert.assert_not_called()
         self.sql.assert_not_called()
 
@@ -372,14 +372,14 @@ class TestGuestFeedback(unittest.TestCase):
         ]
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=ratings)
-        self.assertIn("[URY-FEEDBACK-RATINGS]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-RATINGS]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_missing_template_parameter_is_refused(self):
         ratings = [{"parameter": "Food", "rating": 5}, {"parameter": "Service", "rating": 4}]
         with self.assertRaises(frappe.ValidationError) as caught:
             self.submit(session="opaque-session", ratings=ratings)
-        self.assertIn("[URY-FEEDBACK-RATINGS]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-RATINGS]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_session_without_its_own_invoice_is_refused(self):
@@ -465,11 +465,11 @@ class TestGuestFeedback(unittest.TestCase):
             with self.subTest(attempt=name):
                 with self.assertRaises(frappe.PermissionError) as caught:
                     self.submit(ratings=RATINGS, **kwargs)
-                self.assertIn("[URY-FEEDBACK-LINK-INVALID]", str(caught.exception))
+                self.assertIn("[POS-FEEDBACK-LINK-INVALID]", str(caught.exception))
         self.invoice.pos_profile = "Other Till"
         with self.assertRaises(frappe.PermissionError) as caught:
             self.submit(session="opaque-session", ratings=RATINGS)
-        self.assertIn("[URY-FEEDBACK-LINK-INVALID]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-LINK-INVALID]", str(caught.exception))
         self.feedback.insert.assert_not_called()
 
     def test_every_invalid_receipt_token_gets_one_enumeration_safe_refusal(self):
@@ -509,7 +509,7 @@ class TestGuestFeedback(unittest.TestCase):
                     refusals[(endpoint, name)] = (type(error).__name__, str(error))
                 else:
                     self.fail(f"{endpoint} accepted the {name} token")
-        expected = ("PermissionError", "[URY-FEEDBACK-LINK-INVALID] Invalid feedback link")
+        expected = ("PermissionError", "[POS-FEEDBACK-LINK-INVALID] Invalid feedback link")
         self.assertEqual(refusals, {key: expected for key in refusals})
         self.feedback.insert.assert_not_called()
 
@@ -612,7 +612,7 @@ class TestGuestFeedback(unittest.TestCase):
                             call(session=session)
                         except frappe.RateLimitExceededError as error:
                             self.assertEqual(index, 5)
-                            self.assertIn("[URY-FEEDBACK-RATE-LIMITED]", str(error))
+                            self.assertIn("[POS-FEEDBACK-RATE-LIMITED]", str(error))
                             break
                         except frappe.ValidationError:
                             continue
@@ -887,7 +887,7 @@ class TestFeedbackForm(unittest.TestCase):
         self.assertTrue(callable(method), "Guest feedback form reader is missing")
         with self.assertRaises(frappe.ValidationError) as caught:
             method(session="opaque-session")
-        self.assertIn("[URY-FEEDBACK-DISABLED]", str(caught.exception))
+        self.assertIn("[POS-FEEDBACK-DISABLED]", str(caught.exception))
         self.assertEqual(frappe.allowed_http_methods_for_whitelisted_func[method], ["POST"])
 
     def test_feedback_form_charges_the_verified_credential_budget(self):

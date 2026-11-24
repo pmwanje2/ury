@@ -6,14 +6,16 @@ and priority follow ERPNext get_item_price (erpnext 16.53.0,
 erpnext/stock/get_item_details.py: _get_item_price_query, _order_item_prices
 and the stock-UOM retry in get_price_list_rate_for).
 
-Refusal ids (append-only): URY-PRICE-NO-RELEASE-STATE, URY-PRICE-NOT-VALID,
-URY-PRICE-RELEASED-TODAY.
+Refusal keys (append-only, emitted via ``coded_message``): PRICE-NO-RELEASE-STATE,
+PRICE-NOT-VALID, PRICE-RELEASED-TODAY.
 """
 
 from datetime import date
 
 import frappe
 from frappe import _
+
+from ury.brand import coded_message
 
 _WORKFLOW = {"document_type": "Item Price", "is_active": 1}
 
@@ -38,7 +40,10 @@ def item_price_release_states():
     released = _states_styled(workflow, "Success")
     if not released:
         frappe.throw(
-            _("[URY-PRICE-NO-RELEASE-STATE] Item Price workflow {0} has no released (Success) state, so no menu price can be billed.").format(workflow),
+            coded_message(
+                "PRICE-NO-RELEASE-STATE",
+                _("Item Price workflow {0} has no released (Success) state, so no menu price can be billed.").format(workflow),
+            ),
             frappe.ValidationError,
         )
     return field, released

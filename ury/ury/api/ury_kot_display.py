@@ -3,6 +3,7 @@ from datetime import timedelta
 from math import isfinite
 
 import frappe
+from ury.brand import coded_message
 from ury.ury_pos.api import getBranch
 from frappe.utils import get_datetime
 from frappe import _
@@ -57,15 +58,15 @@ def is_kitchen_admin(user=None):
 def recall_kot(name):
     """Return a KOT served in the last 15 minutes to the kitchen board.
 
-    Refusal ids ([URY-KOT-RECALL-*]) are append-only; never renumber or reuse one.
+    Refusal keys (KOT-RECALL-*, emitted via coded_message) are append-only; never renumber or reuse one.
     """
     if frappe.request and frappe.request.method != "POST":
-        frappe.throw(_("[URY-KOT-RECALL-POST-ONLY] POST requests only"), frappe.PermissionError)
+        frappe.throw(coded_message("KOT-RECALL-POST-ONLY", _("POST requests only")), frappe.PermissionError)
 
     kot_doc = frappe.get_doc("URY KOT", name)
     if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
         frappe.throw(
-            _("[URY-KOT-RECALL-NOT-PERMITTED] You do not have permission to modify this KOT."),
+            coded_message("KOT-RECALL-NOT-PERMITTED", _("You do not have permission to modify this KOT.")),
             frappe.PermissionError,
         )
 
@@ -73,12 +74,12 @@ def recall_kot(name):
 
     if session_branch and kot_doc.branch != session_branch:
         frappe.throw(
-            _("[URY-KOT-RECALL-OTHER-BRANCH] You do not have permission to modify KOTs from other branches."),
+            coded_message("KOT-RECALL-OTHER-BRANCH", _("You do not have permission to modify KOTs from other branches.")),
             frappe.PermissionError,
         )
 
     if kot_doc.order_status != "Served":
-        frappe.throw(_("[URY-KOT-RECALL-NOT-SERVED] Only Served KOTs can be recalled."), frappe.ValidationError)
+        frappe.throw(coded_message("KOT-RECALL-NOT-SERVED", _("Only Served KOTs can be recalled.")), frappe.ValidationError)
 
     # production_time is minutes from creation to serving; unlike modified it is not
     # extended by a later edit and carries the date across midnight.
@@ -88,12 +89,12 @@ def recall_kot(name):
             raise ValueError
         served_at = get_datetime(kot_doc.creation) + timedelta(minutes=production_minutes)
     except (TypeError, ValueError, OverflowError):
-        frappe.throw(_("[URY-KOT-RECALL-NO-SERVE-TIME] This KOT has no valid serving time."), frappe.ValidationError)
+        frappe.throw(coded_message("KOT-RECALL-NO-SERVE-TIME", _("This KOT has no valid serving time.")), frappe.ValidationError)
 
     elapsed = (get_datetime() - served_at).total_seconds()
     if not 0 <= elapsed <= KOT_RECALL_WINDOW_MINUTES * 60:
         frappe.throw(
-            _("[URY-KOT-RECALL-WINDOW-CLOSED] KOTs can only be recalled within 15 minutes of serving."),
+            coded_message("KOT-RECALL-WINDOW-CLOSED", _("KOTs can only be recalled within 15 minutes of serving.")),
             frappe.ValidationError,
         )
 

@@ -4,6 +4,8 @@ import os
 import frappe
 import frappe.sessions
 
+from ury.brand import get_brand_context
+
 no_cache = 1
 sitemap = 0
 
@@ -41,6 +43,7 @@ def get_context(context):
 
 	if request is not None and is_go_path(path):
 		# Token landing page: static shell, no user data, never cached, no referrer.
+		context.update(get_brand_context(surface="staff"))
 		context.no_cache = 1
 		context.brief_user_key = ""
 		context.csrf_token = ""
@@ -50,6 +53,7 @@ def get_context(context):
 		h.set("Referrer-Policy", "no-referrer")
 		return context
 
+	context.update(get_brand_context(surface="staff"))
 	context.no_cache = 1
 	context.brief_user_key = user_key(frappe.session.user, frappe.local.site)
 	context.csrf_token = frappe.sessions.get_csrf_token()
