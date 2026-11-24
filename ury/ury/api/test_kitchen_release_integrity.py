@@ -79,7 +79,7 @@ class TestKitchenReleaseIntegrity(TestCase):
 
         before = snapshot()
         self.assertTrue(before[2] and before[3])
-        with self.assertRaisesRegex(frappe.ValidationError, 'URY-SPLIT-RESERVED-KOT'):
+        with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-SPLIT-RESERVED-KOT\]"):
             split_bill(invoice.name, [dict(name=invoice.items[0].name, qty=move_qty)])
         self.assertEqual(snapshot(), before)
 

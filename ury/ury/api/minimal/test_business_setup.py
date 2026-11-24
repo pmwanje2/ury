@@ -167,5 +167,71 @@ class TestPrepareAndInsertItem(unittest.TestCase):
         mock_doc.insert.assert_called_once_with()
 
 
+class TestDefaultKotNamingSeries(unittest.TestCase):
+    """Minimal business setup assigns a neutral KOT naming series on both create and update."""
+
+    def _run_for_pos_profile(self, *, profile_exists: bool):
+        from ury.ury.api.minimal.business_setup import _run_configure_data
+
+        captured = {}
+        existing_profile = frappe._dict(name="Main", save=MagicMock())
+
+        def fake_exists(doctype, name=None, *args, **kwargs):
+            if doctype == "POS Profile":
+                return profile_exists
+            if doctype in ("Company", "Branch", "URY Room", "URY Table", "URY Restaurant", "Warehouse",
+                           "URY Production Unit", "URY Menu", "Price List", "Item Group"):
+                return True
+            return False
+
+        def fake_get_doc(arg, name=None, *args, **kwargs):
+            if isinstance(arg, dict):
+                if arg.get("doctype") == "POS Profile":
+                    captured["created"] = dict(arg)
+                doc = MagicMock()
+                doc.name = arg.get("name") or arg.get("pos_profile_name") or "Created"
+                return doc
+            if arg == "POS Profile":
+                return existing_profile
+            if arg == "Company":
+                return frappe._dict(default_currency="UGX", default_income_account="Sales - M",
+                                    default_expense_account="COGS - M", cost_center="Main - M",
+                                    write_off_account="Write Off - M")
+            doc = MagicMock()
+            doc.name = name or arg
+            return doc
+
+        meta = MagicMock()
+        meta.get_table_fields.return_value = []
+        meta.has_field.return_value = True
+
+        fake_db = MagicMock()
+        fake_db.exists.side_effect = fake_exists
+        fake_db.get_value.return_value = "M"
+
+        with (
+            patch("ury.ury.api.minimal.business_setup._get_company_name", return_value="Main Co"),
+            patch("ury.ury.api.minimal.business_setup.frappe.publish_realtime"),
+            patch("ury.ury.api.minimal.business_setup.frappe.db", fake_db),
+            patch("ury.ury.api.minimal.business_setup.frappe.get_all", return_value=[]),
+            patch("ury.ury.api.minimal.business_setup.frappe.get_meta", return_value=meta),
+            patch("ury.ury.api.minimal.business_setup.frappe.get_doc", side_effect=fake_get_doc),
+            patch("ury.ury.api.minimal.business_setup.frappe.session", frappe._dict(user="admin@example.com")),
+        ):
+            _run_configure_data({"branch": {"branchName": "Main"}}, {}, "admin@example.com")
+        return captured.get("created"), existing_profile
+
+    def test_new_pos_profile_gets_neutral_kot_series(self):
+        created, _ = self._run_for_pos_profile(profile_exists=False)
+        self.assertIsNotNone(created)
+        self.assertEqual(created["custom_kot_naming_series"], "KOT-")
+        self.assertEqual(created["kot_naming_series"], "KOT-")
+
+    def test_existing_pos_profile_update_gets_neutral_kot_series(self):
+        _, updated = self._run_for_pos_profile(profile_exists=True)
+        self.assertEqual(updated.custom_kot_naming_series, "KOT-")
+        self.assertEqual(updated.kot_naming_series, "KOT-")
+
+
 if __name__ == "__main__":
     unittest.main()

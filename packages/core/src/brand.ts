@@ -24,5 +24,5 @@ export function clientMessage(message: string): string {
     .replace(/\bfrappe\.exceptions\.\w+:\s*/gi, '')
     .replace(/\[URY[-_][A-Z0-9_-]+\]\s*(?=\S)/g, '')
     .replace(/\bURY[-_]([A-Z0-9_-]+)/g, '$1')
-    .replace(/\b(?:URY|Frappe|ERPNext|Kamra)\b/gi, 'Maximus');
+    .replace(/\b(?:URY|Frappe|ERPNext|Kamra|HUF|Tridz|HeyKoala)\b/gi, 'Maximus');
 }

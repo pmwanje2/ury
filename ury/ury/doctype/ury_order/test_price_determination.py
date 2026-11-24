@@ -232,7 +232,7 @@ class TestPriceDetermination(PricedOnTheDouble):
 
     def test_no_record_valid_on_the_pricing_date_refuses(self):
         self.book.add(150, "2027-01-01")
-        with self.assertRaisesRegex(_framework.ValidationError, r"\[URY-PRICE-NOT-VALID\]"):
+        with self.assertRaisesRegex(_framework.ValidationError, r"\[POS-PRICE-NOT-VALID\]"):
             self.bill()
 
     def test_release_workflow_skips_unreleased_records(self):
@@ -254,7 +254,7 @@ class TestPriceDetermination(PricedOnTheDouble):
     def test_release_workflow_without_a_released_state_refuses(self):
         self.book.use_workflow({"Draft": "", "Pending": "Warning"})
         self.book.add(100, "2026-01-01", state="Pending")
-        with self.assertRaisesRegex(_framework.ValidationError, r"\[URY-PRICE-NO-RELEASE-STATE\]"):
+        with self.assertRaisesRegex(_framework.ValidationError, r"\[POS-PRICE-NO-RELEASE-STATE\]"):
             self.bill()
 
     def test_same_valid_from_latest_record_wins(self):
@@ -332,7 +332,7 @@ class TestReleaseStates(PricedOnTheDouble):
     def test_workflow_without_a_released_state_refuses(self):
         release_states = _require(item_price, "item_price_release_states")
         self.book.use_workflow({"Draft": "", "Pending": "Warning"})
-        with self.assertRaisesRegex(_framework.ValidationError, r"\[URY-PRICE-NO-RELEASE-STATE\]"):
+        with self.assertRaisesRegex(_framework.ValidationError, r"\[POS-PRICE-NO-RELEASE-STATE\]"):
             release_states()
 
     def test_workflow_with_a_released_state_returns_its_field_and_states(self):

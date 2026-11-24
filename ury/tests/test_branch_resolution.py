@@ -48,7 +48,7 @@ class TestBranchResolution(IntegrationTestCase):
     def test_two_branches_without_default_refuse_all_branch_apis(self):
         for api in (getBranch, getBranchRoom, getRoom):
             with self.subTest(api=api.__name__), self.assertRaisesRegex(
-                frappe.ValidationError, "URY-BRANCH-AMBIGUOUS"
+                frappe.ValidationError, r"^\[POS-BRANCH-AMBIGUOUS\] "
             ):
                 api()
 
@@ -74,7 +74,7 @@ class TestBranchResolution(IntegrationTestCase):
             "user": [{"user": "Administrator"}],
         }).insert()
         self.set_default(other)
-        with self.assertRaisesRegex(frappe.ValidationError, "URY-BRANCH-AMBIGUOUS"):
+        with self.assertRaisesRegex(frappe.ValidationError, r"^\[POS-BRANCH-AMBIGUOUS\] "):
             getBranch()
 
     def test_non_default_permission_does_not_resolve_ambiguity(self):
@@ -83,7 +83,7 @@ class TestBranchResolution(IntegrationTestCase):
         permission.is_default = 0
         permission.save()
         frappe.set_user(self.user.name)
-        with self.assertRaisesRegex(frappe.ValidationError, "URY-BRANCH-AMBIGUOUS"):
+        with self.assertRaisesRegex(frappe.ValidationError, r"^\[POS-BRANCH-AMBIGUOUS\] "):
             getBranch()
 
     def test_multiple_rooms_in_one_branch_are_not_branch_ambiguity(self):

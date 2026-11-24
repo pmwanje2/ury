@@ -622,8 +622,8 @@ def _run_configure_data(data, results, user):
                 "selling_price_list": selling_price_list,
                 "customer": customer,
                 "update_stock": 1,
-                "custom_kot_naming_series": "KOT-URY-",
-                "kot_naming_series": "KOT-URY-",
+                "custom_kot_naming_series": "KOT-",
+                "kot_naming_series": "KOT-",
                 "custom_kot_warning_time": 15,
                 "table_attention_time": 30,
                 "role_allowed_for_billing": "URY Cashier",
@@ -674,8 +674,8 @@ def _run_configure_data(data, results, user):
             meta = frappe.get_meta("POS Profile")
             table_fields = {df.fieldname: df for df in meta.get_table_fields()}
             update_fields = {
-                "custom_kot_naming_series": "KOT-URY-",
-                "kot_naming_series": "KOT-URY-",
+                "custom_kot_naming_series": "KOT-",
+                "kot_naming_series": "KOT-",
                 "custom_kot_warning_time": 15,
                 "table_attention_time": 30,
                 "role_allowed_for_billing": "URY Cashier",
