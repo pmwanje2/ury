@@ -3,7 +3,19 @@ from datetime import datetime
 from frappe.utils import now_datetime, get_time, now, flt, getdate, get_first_day, get_last_day, get_datetime
 from ury.ury.doctype.ury_order.ury_order import release_merge_cluster_tables
 from ury.ury.doctype.staff_discount_policy.staff_discount_policy import get_applicable_policy
-from ury.ury_pos.discount import prorate_return_discount, validate_pos_discount
+
+try:
+    from ury.ury_pos.discount import prorate_return_discount, validate_pos_discount
+except ImportError:  # pragma: no cover - partial frappe.utils stubs in unrelated unit tests
+    def prorate_return_discount(doc, method=None):
+        from ury.ury_pos.discount import prorate_return_discount as _prorate_return_discount
+
+        return _prorate_return_discount(doc, method)
+
+    def validate_pos_discount(doc, method=None):
+        from ury.ury_pos.discount import validate_pos_discount as _validate_pos_discount
+
+        return _validate_pos_discount(doc, method)
 
 
 def before_insert(doc, method):
