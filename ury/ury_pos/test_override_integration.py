@@ -21,43 +21,65 @@ from frappe.utils.password import update_password
 
 
 class TestOverrideIntegration(unittest.TestCase):
-    def setUp(self):
-        self.site = frappe.local.site
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.site = frappe.local.site
         frappe.set_user("Administrator")
-        self.suffix = random_string(8).lower()
-        self.created = []
-        self.cleanup_log_profiles = []
-        self.cleanup_companies = []
+        cls.suffix = random_string(8).lower()
+        cls.created = []
+        cls.cleanup_log_profiles = []
+        cls.cleanup_companies = []
 
-        self.company_a = self._ensure_company(f"AuthCoA-{self.suffix}", f"AA{self.suffix[:3].upper()}")
-        self.company_b = self._ensure_company(f"AuthCoB-{self.suffix}", f"AB{self.suffix[:3].upper()}")
+        cls.company_a = cls._ensure_company(f"AuthCoA-{cls.suffix}", f"AA{cls.suffix[:3].upper()}")
+        cls.company_b = cls._ensure_company(f"AuthCoB-{cls.suffix}", f"AB{cls.suffix[:3].upper()}")
 
-        self.cashier = self._make_user(f"cashier-{self.suffix}@example.test", "Cashier A", ["URY Cashier"])
-        self.manager_a = self._make_user(f"mgr-a-{self.suffix}@example.test", "Manager A", ["URY Manager"])
-        self.manager_b = self._make_user(f"mgr-b-{self.suffix}@example.test", "Manager B", ["URY Manager"])
-        self.manager_other_outlet = self._make_user(f"mgr-pool-{self.suffix}@example.test", "Pool Manager", ["URY Manager"])
-        self.manager_other_co = self._make_user(f"mgr-cob-{self.suffix}@example.test", "OtherCo Manager", ["URY Manager"])
-        self.disabled_mgr = self._make_user(f"mgr-off-{self.suffix}@example.test", "Disabled Manager", ["URY Manager"], enabled=0)
-        self.sysmgr = self._make_user(f"sysmgr-{self.suffix}@example.test", "Sys Manager", ["System Manager"])
+        cls.cashier = cls._make_user(f"cashier-{cls.suffix}@example.test", "Cashier A", ["URY Cashier"])
+        cls.manager_a = cls._make_user(f"mgr-a-{cls.suffix}@example.test", "Manager A", ["URY Manager"])
+        cls.manager_b = cls._make_user(f"mgr-b-{cls.suffix}@example.test", "Manager B", ["URY Manager"])
+        cls.manager_other_outlet = cls._make_user(f"mgr-pool-{cls.suffix}@example.test", "Pool Manager", ["URY Manager"])
+        cls.manager_other_co = cls._make_user(f"mgr-cob-{cls.suffix}@example.test", "OtherCo Manager", ["URY Manager"])
+        cls.disabled_mgr = cls._make_user(f"mgr-off-{cls.suffix}@example.test", "Disabled Manager", ["URY Manager"], enabled=0)
+        cls.sysmgr = cls._make_user(f"sysmgr-{cls.suffix}@example.test", "Sys Manager", ["System Manager"])
 
-        self.branch_a = self._make_branch(f"MainBranch-{self.suffix}", self.company_a, [
-            self.cashier, self.manager_a, self.manager_b, self.disabled_mgr, self.sysmgr,
+        cls.branch_a = cls._make_branch(f"MainBranch-{cls.suffix}", cls.company_a, [
+            cls.cashier, cls.manager_a, cls.manager_b, cls.disabled_mgr, cls.sysmgr,
         ])
-        self.branch_pool = self._make_branch(f"PoolBranch-{self.suffix}", self.company_a, [self.manager_other_outlet])
-        self.branch_b = self._make_branch(f"OtherCoBranch-{self.suffix}", self.company_b, [self.manager_other_co])
+        cls.branch_pool = cls._make_branch(f"PoolBranch-{cls.suffix}", cls.company_a, [cls.manager_other_outlet])
+        cls.branch_b = cls._make_branch(f"OtherCoBranch-{cls.suffix}", cls.company_b, [cls.manager_other_co])
 
-        self.profile_a = self._make_pos_profile(f"MainTill-{self.suffix}", self.company_a, self.branch_a, [self.cashier])
-        self.profile_pool = self._make_pos_profile(f"PoolTill-{self.suffix}", self.company_a, self.branch_pool, [self.manager_other_outlet])
-        self.profile_b = self._make_pos_profile(f"OtherTill-{self.suffix}", self.company_b, self.branch_b, [self.manager_other_co])
-        self.cleanup_log_profiles.extend([self.profile_a, self.profile_pool, self.profile_b])
-
-        from ury.patches.v2_0 import setup_pos_manager_authorisation
-        setup_pos_manager_authorisation.seed_default_rules(company=self.company_a)
-        setup_pos_manager_authorisation.seed_default_rules(company=self.company_b)
-        setup_pos_manager_authorisation.seed_default_reasons()
+        cls.profile_a = cls._make_pos_profile(f"MainTill-{cls.suffix}", cls.company_a, cls.branch_a, [cls.cashier])
+        cls.profile_pool = cls._make_pos_profile(f"PoolTill-{cls.suffix}", cls.company_a, cls.branch_pool, [cls.manager_other_outlet])
+        cls.profile_b = cls._make_pos_profile(f"OtherTill-{cls.suffix}", cls.company_b, cls.branch_b, [cls.manager_other_co])
+        cls.cleanup_log_profiles.extend([cls.profile_a, cls.profile_pool, cls.profile_b])
         frappe.db.commit()
 
-    def tearDown(self):
+    @classmethod
+    def tearDownClass(cls):
+        frappe.set_user("Administrator")
+        frappe.db.rollback()
+        for user in (
+            cls.cashier, cls.manager_a, cls.manager_b,
+            cls.manager_other_outlet, cls.manager_other_co,
+            cls.disabled_mgr, cls.sysmgr,
+        ):
+            key = f"pos-override-pin:{user.casefold()}"
+            frappe.cache.hdel("login_failed_count", key)
+            frappe.cache.hdel("login_failed_time", key)
+        if cls.cleanup_log_profiles:
+            frappe.db.delete("POS Authorisation Log", {"pos_profile": ["in", cls.cleanup_log_profiles]})
+        if cls.cleanup_companies:
+            frappe.db.delete("POS Privilege Rule", {"company": ["in", cls.cleanup_companies]})
+            frappe.db.delete("Mode of Payment Account", {"company": ["in", cls.cleanup_companies]})
+        for dt, name in reversed(cls.created):
+            if frappe.db.exists(dt, name):
+                if dt == "Mode of Payment":
+                    frappe.db.delete("Mode of Payment Account", {"parent": name})
+                frappe.db.delete(dt, {"name": name})
+        frappe.db.commit()
+        super().tearDownClass()
+
+    def setUp(self):
         frappe.set_user("Administrator")
         frappe.db.rollback()
         for user in (
@@ -68,16 +90,21 @@ class TestOverrideIntegration(unittest.TestCase):
             key = f"pos-override-pin:{user.casefold()}"
             frappe.cache.hdel("login_failed_count", key)
             frappe.cache.hdel("login_failed_time", key)
-        if self.cleanup_log_profiles:
-            frappe.db.delete("POS Authorisation Log", {"pos_profile": ["in", self.cleanup_log_profiles]})
-        if self.cleanup_companies:
-            frappe.db.delete("POS Privilege Rule", {"company": ["in", self.cleanup_companies]})
-        for dt, name in reversed(self.created):
-            if frappe.db.exists(dt, name):
-                frappe.db.delete(dt, {"name": name})
+            frappe.db.set_value("User", user, "custom_override_pin_hash", "", update_modified=False)
+        frappe.db.delete("POS Authorisation Log", {"pos_profile": ["in", self.cleanup_log_profiles]})
+        frappe.db.delete("POS Privilege Rule", {"company": ["in", self.cleanup_companies]})
+        from ury.patches.v2_0 import setup_pos_manager_authorisation
+        setup_pos_manager_authorisation.seed_default_rules(company=self.company_a)
+        setup_pos_manager_authorisation.seed_default_rules(company=self.company_b)
+        setup_pos_manager_authorisation.seed_default_reasons()
         frappe.db.commit()
 
-    def _ensure_company(self, name, abbr):
+    def tearDown(self):
+        frappe.set_user("Administrator")
+        frappe.db.rollback()
+
+    @classmethod
+    def _ensure_company(cls, name, abbr):
         base_company = frappe.db.get_value("Company", {}, "name")
         if not base_company:
             raise RuntimeError("No base Company available on test site")
@@ -89,49 +116,60 @@ class TestOverrideIntegration(unittest.TestCase):
             "default_currency": base.default_currency or "USD",
             "country": base.country or "United States",
         }).insert(ignore_permissions=True)
-        self.created.append(("Company", doc.name))
-        self.cleanup_companies.append(doc.name)
+        cls.created.append(("Company", doc.name))
+        cls.cleanup_companies.append(doc.name)
         return doc.name
 
-    def _make_user(self, email, first_name, roles, enabled=1):
-        doc = frappe.get_doc({
-            "doctype": "User",
-            "email": email,
-            "first_name": first_name,
-            "enabled": enabled,
-            "user_type": "System User",
-            "send_welcome_email": 0,
-            "roles": [{"role": r} for r in roles],
-        }).insert(ignore_permissions=True)
-        update_password(doc.name, f"Pass-{self.suffix}!")
-        self.created.append(("User", doc.name))
+    @classmethod
+    def _make_user(cls, email, first_name, roles, enabled=1):
+        prev_import = getattr(frappe.flags, "in_import", False)
+        frappe.flags.in_import = True
+        try:
+            doc = frappe.get_doc({
+                "doctype": "User",
+                "email": email,
+                "first_name": first_name,
+                "enabled": enabled,
+                "user_type": "System User",
+                "send_welcome_email": 0,
+                "roles": [{"role": r} for r in roles],
+            }).insert(ignore_permissions=True)
+        finally:
+            frappe.flags.in_import = prev_import
+        update_password(doc.name, f"Pass-{cls.suffix}!")
+        cls.created.append(("User", doc.name))
         return doc.name
 
-    def _make_branch(self, name, company, users):
+    @classmethod
+    def _make_branch(cls, name, company, users):
         doc = frappe.get_doc({
             "doctype": "Branch",
             "branch": name,
             "company": company,
             "user": [{"user": u} for u in users],
         }).insert(ignore_permissions=True)
-        self.created.append(("Branch", doc.name))
+        cls.created.append(("Branch", doc.name))
         return doc.name
 
-    def _ensure_cash_mop(self, company):
+    @classmethod
+    def _ensure_cash_mop(cls, company):
+        mop_name = f"Cash-{company}"
+        if frappe.db.exists("Mode of Payment", mop_name):
+            return mop_name
         cash_acct = frappe.db.get_value("Company", company, "default_cash_account") or frappe.db.get_value(
             "Account", {"company": company, "account_type": "Cash", "is_group": 0}, "name"
         )
-        mop_name = f"Cash-{self.suffix}-{company[:6]}"
         mop = frappe.get_doc({
             "doctype": "Mode of Payment",
             "mode_of_payment": mop_name,
             "type": "Cash",
             "accounts": [{"company": company, "default_account": cash_acct}],
         }).insert(ignore_permissions=True)
-        self.created.append(("Mode of Payment", mop.name))
+        cls.created.append(("Mode of Payment", mop.name))
         return mop.name
 
-    def _make_pos_profile(self, name, company, branch, users):
+    @classmethod
+    def _make_pos_profile(cls, name, company, branch, users):
         co = frappe.get_doc("Company", company)
         wh = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
         income = co.default_income_account or frappe.db.get_value(
@@ -142,7 +180,7 @@ class TestOverrideIntegration(unittest.TestCase):
         )
         cc = co.cost_center or frappe.db.get_value("Cost Center", {"company": company, "is_group": 0}, "name")
         currency = co.default_currency or "USD"
-        mop = self._ensure_cash_mop(company)
+        mop = cls._ensure_cash_mop(company)
         doc = frappe.get_doc({
             "doctype": "POS Profile",
             "name": name,
@@ -162,7 +200,7 @@ class TestOverrideIntegration(unittest.TestCase):
             "custom_override_max_attempts": 3,
             "custom_override_lock_minutes": 15,
         }).insert(ignore_permissions=True)
-        self.created.append(("POS Profile", doc.name))
+        cls.created.append(("POS Profile", doc.name))
         return doc.name
 
     def test_docperms_and_insert_only_log_are_enforced(self):
