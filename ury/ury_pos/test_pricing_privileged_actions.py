@@ -284,7 +284,7 @@ class FakeFrappeHarness:
                         harness.logs.append(doc)
                         return orig_insert(ignore_permissions=ignore_permissions)
 
-                    doc.insert = _insert
+                    object.__setattr__(doc, "insert", _insert)
                 elif dt == "Journal Entry":
                     doc["name"] = f"JV-TEST-{len(harness.journal_entries) + 1}"
                     orig_submit = doc.submit
@@ -293,7 +293,7 @@ class FakeFrappeHarness:
                         harness.journal_entries.append(doc)
                         return orig_submit()
 
-                    doc.submit = _submit
+                    object.__setattr__(doc, "submit", _submit)
                 return doc
             key = (arg1, arg2)
             if key not in harness.docs:
