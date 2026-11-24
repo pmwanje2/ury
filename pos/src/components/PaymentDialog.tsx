@@ -80,8 +80,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const user = useRootStore((state) => state.user);
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
   const currencyCode = storePosProfile?.currency || storeCurrency || '';
-  const formatMoney = (amount: number) =>
-    currencyCode ? formatCurrency(amount, currencyCode) : formatCurrency(amount);
+  const formatMoney = (amount: number) => formatCurrency(amount, currencyCode || undefined);
   const enablePaymentWithoutPrinting = Boolean(
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1

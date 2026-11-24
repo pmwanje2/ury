@@ -28,7 +28,10 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
     getItemQuantityFromCart,
     activeOrders,
     menuItems,
+    posProfile,
+    currency: storeCurrency,
   } = usePOSStore();
+  const activeCurrency = posProfile?.currency || storeCurrency;
 
   const existingCartItem = selectedItem
     ? activeOrders.find(
@@ -188,7 +191,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
       variants={variantDetails.map((v) => ({
         id: v.id,
         name: v.name,
-        priceLabel: formatCurrency(v.price),
+        priceLabel: formatCurrency(v.price, activeCurrency),
       }))}
       selectedVariantId={(itemDoc?.item as string | undefined) || selectedItem.item}
       onSelectVariant={(id) => {
@@ -198,7 +201,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
       addons={addonDetails.map((a) => ({
         id: a.id,
         name: a.name,
-        priceLabel: formatCurrency(a.price),
+        priceLabel: formatCurrency(a.price, activeCurrency),
       }))}
       selectedAddonIds={selectedAddons.map((a) => a.id)}
       onToggleAddon={(id) => {
@@ -212,7 +215,7 @@ const ProductDialog: React.FC<ProductDialogProps> = ({
       }}
       addonsLoading={addonsLoading}
       addonsError={addonsError}
-      totalLabel={formatCurrency(total)}
+      totalLabel={formatCurrency(total, activeCurrency)}
       submitDisabled={numericQuantity === 0}
       onSubmit={handleAddToOrder}
       labels={{

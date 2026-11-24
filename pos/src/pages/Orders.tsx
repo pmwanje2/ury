@@ -888,11 +888,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               <SplitGroupPanel
                 invoiceName={selectedOrder.name}
+                currency={selectedOrderCurrency}
                 onOpenInvoice={openRelatedInvoice}
               />
 
               <MergedBillPanel
                 order={selectedOrder}
+                currency={selectedOrderCurrency}
                 onOpenSecondary={openSecondaryInvoice}
               />
 
@@ -1102,6 +1104,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           open={showMergeDialog}
           onOpenChange={setShowMergeDialog}
           invoiceName={selectedOrder.name}
+          currency={selectedOrderCurrency}
           onConfirm={handleMergeBill}
         />
       )}
