@@ -28,10 +28,26 @@
   "assigned_employees",
   "tab_devices",
   "printer_info_section",
+  "custom_device_mode",
+  "custom_printer_transport",
+  "custom_primary_printer",
+  "custom_backup_printer",
+  "column_break_device_print",
+  "custom_print_format",
+  "custom_page_width",
+  "custom_command_mode",
   "printer_settings",
   "section_break_sevj",
+  "custom_is_expo",
   "enable_order_type_wise_display_on_mosaic",
-  "order_type"
+  "order_type",
+  "section_break_failover",
+  "custom_failover_production_unit",
+  "custom_failover_active",
+  "column_break_failover",
+  "custom_auto_failover_enabled",
+  "custom_heartbeat_timeout_seconds",
+  "custom_last_heartbeat"
  ],
  "fields": [
   {
@@ -166,11 +182,118 @@
    "fieldname": "tab_devices",
    "fieldtype": "Tab Break",
    "label": "Devices and KDS"
+  },
+  {
+   "default": "KDS Display",
+   "fieldname": "custom_device_mode",
+   "fieldtype": "Select",
+   "label": "Order Device Mode",
+   "options": "KDS Display\nNetwork Printer\nKDS + Auto Print\nExpo Display",
+   "translatable": 0
+  },
+  {
+   "default": "None",
+   "fieldname": "custom_printer_transport",
+   "fieldtype": "Select",
+   "label": "Printer Transport",
+   "options": "None\nQZ Tray\nServer Network ESC/POS",
+   "translatable": 0
+  },
+  {
+   "description": "Installed queue name, Network Printer Settings record, or host:port.",
+   "fieldname": "custom_primary_printer",
+   "fieldtype": "Data",
+   "label": "Primary Printer",
+   "translatable": 0
+  },
+  {
+   "description": "Automatic fallback queue name, Network Printer Settings record, or host:port used if the primary printer fails.",
+   "fieldname": "custom_backup_printer",
+   "fieldtype": "Data",
+   "label": "Backup Printer",
+   "translatable": 0
+  },
+  {
+   "fieldname": "column_break_device_print",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "custom_print_format",
+   "fieldtype": "Data",
+   "label": "Station Print Format",
+   "translatable": 0
+  },
+  {
+   "default": "576",
+   "fieldname": "custom_page_width",
+   "fieldtype": "Select",
+   "label": "Paper Width (Dots)",
+   "options": "576\n384",
+   "translatable": 0
+  },
+  {
+   "default": "standard",
+   "fieldname": "custom_command_mode",
+   "fieldtype": "Select",
+   "label": "Printer Command Mode",
+   "options": "standard\nraster",
+   "translatable": 0
+  },
+  {
+   "default": "0",
+   "description": "Display all active branch preparation stations grouped per order with final Expo Bump.",
+   "fieldname": "custom_is_expo",
+   "fieldtype": "Check",
+   "label": "Is Expo Station"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_failover",
+   "fieldtype": "Section Break",
+   "label": "Station Failover"
+  },
+  {
+   "description": "Healthy station that receives tickets when this unit is disabled, offline, or in failover mode.",
+   "fieldname": "custom_failover_production_unit",
+   "fieldtype": "Link",
+   "label": "Failover Production Unit",
+   "options": "URY Production Unit"
+  },
+  {
+   "default": "0",
+   "description": "Manually route new tickets away from this station to its failover station.",
+   "fieldname": "custom_failover_active",
+   "fieldtype": "Check",
+   "label": "Failover Active"
+  },
+  {
+   "fieldname": "column_break_failover",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Automatically route tickets to the failover station when KDS heartbeat expires.",
+   "fieldname": "custom_auto_failover_enabled",
+   "fieldtype": "Check",
+   "label": "Enable Auto Failover"
+  },
+  {
+   "default": "120",
+   "fieldname": "custom_heartbeat_timeout_seconds",
+   "fieldtype": "Int",
+   "label": "Heartbeat Timeout (Seconds)",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "custom_last_heartbeat",
+   "fieldtype": "Datetime",
+   "label": "Last Heartbeat",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-22 16:00:00.000000",
+ "modified": "2026-11-24 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY Production Unit",

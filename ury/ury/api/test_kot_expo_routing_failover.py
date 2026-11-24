@@ -483,6 +483,28 @@ class TestKdsExpoPriorityAllDayAndRecallWindow(unittest.TestCase):
         courses = [g["course"] for g in hot_kot.get("course_groups", [])]
         self.assertEqual(courses, ["Starter", "Dessert"])
 
+    def test_admin_kot_list_resolves_recall_window_from_station_profile_or_branch(self):
+        # All-branch admin board has branch=None; recall window must still read the station's profile/branch.
+        self.frappe.session.user = "Administrator"
+        self.frappe.get_list.return_value = []
+        self.frappe.get_all.return_value = []
+
+        def _get_value(dt, filters, field=None, as_dict=False):
+            if (dt, filters, field) == ("URY Production Unit", "Expo", "branch"):
+                return "Main Branch"
+            if (dt, filters, field) == ("URY Production Unit", "Expo", "pos_profile"):
+                return "Main Till"
+            if (dt, filters, field) == ("URY Production Unit", "Expo", "custom_is_expo"):
+                return 1
+            if (dt, filters, field) == ("POS Profile", "Main Till", "custom_kds_recall_window_minutes"):
+                return 30
+            return 0
+
+        self.frappe.db.get_value.side_effect = _get_value
+        result = self.display.kot_list(production_unit="Expo")
+        self.assertIsNone(result["Branch"])
+        self.assertEqual(result["recall_window_minutes"], 30)
+
 
 if __name__ == "__main__":
     unittest.main()

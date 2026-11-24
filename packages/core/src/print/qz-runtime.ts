@@ -12,8 +12,11 @@ interface QzBridge {
     disconnect(): Promise<void>;
   };
   printers: { getDefault(): Promise<string> };
-  configs: { create(printer: string): unknown };
-  print(config: unknown, data: { type: string; format: string; data: string }[]): Promise<void>;
+  configs: { create(printer: string | { host: string; port: number }): unknown };
+  print(
+    config: unknown,
+    data: { type: string; format: string; flavor?: string; data: string; options?: Record<string, unknown> }[],
+  ): Promise<void>;
 }
 
 declare global {

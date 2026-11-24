@@ -1,12 +1,40 @@
 import json
+from collections import OrderedDict
 from datetime import timedelta
 from math import isfinite
 
 import frappe
+from frappe import _
+from frappe.utils import get_datetime
 from ury.brand import coded_message
 from ury.ury_pos.api import getBranch
-from frappe.utils import get_datetime
-from frappe import _
+
+
+def _cint(value):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(float(value.strip()))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _flt(value):
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value.strip())
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
 
 # Function to set order status in a KOT document
 @frappe.whitelist(methods=["POST"])
@@ -46,6 +74,36 @@ def record_kot_served(name, creation_time, kot_doc=None):
 
 
 KOT_RECALL_WINDOW_MINUTES = 15
+KOT_RECALL_WINDOW_MIN_MINUTES = 1
+KOT_RECALL_WINDOW_MAX_MINUTES = 240
+
+
+def _parse_positive_int(raw):
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _kot_recall_window_minutes(branch=None, pos_profile=None):
+    """Configured recall window in minutes (1-240), defaulting to 15."""
+    raw = None
+    if isinstance(pos_profile, str) and pos_profile.strip():
+        raw = frappe.db.get_value(
+            "POS Profile", pos_profile.strip(), "custom_kds_recall_window_minutes"
+        )
+    minutes = _parse_positive_int(raw)
+    if minutes is None and isinstance(branch, str) and branch.strip():
+        raw = frappe.db.get_value(
+            "POS Profile", {"branch": branch.strip()}, "custom_kds_recall_window_minutes"
+        )
+        minutes = _parse_positive_int(raw)
+    if minutes is None:
+        return KOT_RECALL_WINDOW_MINUTES
+    return max(KOT_RECALL_WINDOW_MIN_MINUTES, min(minutes, KOT_RECALL_WINDOW_MAX_MINUTES))
 
 
 def is_kitchen_admin(user=None):
@@ -56,7 +114,7 @@ def is_kitchen_admin(user=None):
 
 @frappe.whitelist(methods=["POST"])
 def recall_kot(name):
-    """Return a KOT served in the last 15 minutes to the kitchen board.
+    """Return a recently served KOT to the kitchen board within the configured recall window.
 
     Refusal keys (KOT-RECALL-*, emitted via coded_message) are append-only; never renumber or reuse one.
     """
@@ -91,10 +149,17 @@ def recall_kot(name):
     except (TypeError, ValueError, OverflowError):
         frappe.throw(coded_message("KOT-RECALL-NO-SERVE-TIME", _("This KOT has no valid serving time.")), frappe.ValidationError)
 
+    window_minutes = _kot_recall_window_minutes(
+        branch=getattr(kot_doc, "branch", None),
+        pos_profile=getattr(kot_doc, "pos_profile", None),
+    )
     elapsed = (get_datetime() - served_at).total_seconds()
-    if not 0 <= elapsed <= KOT_RECALL_WINDOW_MINUTES * 60:
+    if not 0 <= elapsed <= window_minutes * 60:
         frappe.throw(
-            coded_message("KOT-RECALL-WINDOW-CLOSED", _("KOTs can only be recalled within 15 minutes of serving.")),
+            coded_message(
+                "KOT-RECALL-WINDOW-CLOSED",
+                _("KOTs can only be recalled within {0} minutes of serving.").format(window_minutes),
+            ),
             frappe.ValidationError,
         )
 
@@ -102,20 +167,82 @@ def recall_kot(name):
     kot_doc.add_comment("Comment", _("Recalled by {0}").format(frappe.session.user))
 
 
+@frappe.whitelist()
+def recent_served_kots(branch=None, production=None):
+    """Return served tickets still within the branch POS Profile recall window."""
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and branch and branch != session_branch:
+        frappe.throw(
+            coded_message("KOT-RECALL-OTHER-BRANCH", _("You do not have permission to read KOTs from other branches.")),
+            frappe.PermissionError,
+        )
+    effective_branch = session_branch or branch
+    unit_pos_profile = None
+    if production:
+        if not effective_branch:
+            effective_branch = frappe.db.get_value("URY Production Unit", production, "branch")
+        unit_pos_profile = frappe.db.get_value("URY Production Unit", production, "pos_profile")
+    window_minutes = _kot_recall_window_minutes(
+        branch=effective_branch, pos_profile=unit_pos_profile
+    )
+    now_dt = get_datetime()
+    cutoff = (now_dt - timedelta(minutes=window_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+
+    filters = {
+        "order_status": "Served",
+        "docstatus": 1,
+        "type": ["not in", ["Cancelled", "Partially cancelled"]],
+        "modified": [">=", cutoff],
+    }
+    if effective_branch:
+        filters["branch"] = effective_branch
+
+    is_expo = _is_expo_unit(production)
+    if production and not is_expo:
+        filters["production"] = production
+
+    rows = frappe.get_list(
+        "URY KOT",
+        fields=[
+            "name",
+            "invoice",
+            "production",
+            "restaurant_table",
+            "table_takeaway",
+            "order_no",
+            "order_status",
+            "creation",
+            "production_time",
+            "custom_guest_label",
+        ],
+        filters=filters,
+        order_by="modified desc",
+        limit_page_length=100,
+    )
+    eligible = []
+    for row in rows:
+        try:
+            prod_mins = float(row.get("production_time"))
+            if not isfinite(prod_mins) or prod_mins < 0:
+                continue
+            served_at = get_datetime(row.get("creation")) + timedelta(minutes=prod_mins)
+            elapsed = (now_dt - served_at).total_seconds()
+            if 0 <= elapsed <= window_minutes * 60:
+                eligible.append(row)
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+    return {
+        "kots": eligible,
+        "recall_window_minutes": window_minutes,
+        "server_time": frappe.utils.now(),
+    }
+
+
 def _ensure_ready_before_serve(kot_name):
     """Fire the READY transition -- which attaches the real-time production
     posting intent -- for any item execution row still QUEUED or
-    IN_PREPARATION.
-
-    Every serve surface funnels through :func:`serve_kot` for the final
-    ``order_status`` flip, but only the Mosaic kitchen display calls
-    ``mark_item_ready`` on the way. Served without READY, an order never
-    creates its posting intent: MTO Work Orders stay "In Process" forever
-    and the Manufacture Stock Entry is never posted. Rows already READY
-    (the normal kitchen-display path) are untouched, and a failure here is
-    logged without blocking the customer-facing serve -- the transition's
-    own savepoint guarantees a failed READY never half-applies.
-    """
+    IN_PREPARATION."""
     from ury.ury.api.ury_kot_item_execution_service import mark_item_ready
 
     pending_rows = frappe.get_all(
@@ -134,8 +261,6 @@ def _ensure_ready_before_serve(kot_name):
 
 
 # Function to mark it as verified in a cancel type KOT.
-# The verifying user is derived from the session and must hold a manager-level
-# role, so confirmation cannot be self-attributed or forged by the caller.
 @frappe.whitelist()
 def confirm_cancel_kot(name):
     manager_roles = {"URY Manager", "URY Admin", "System Manager"}
@@ -145,20 +270,17 @@ def confirm_cancel_kot(name):
             frappe.PermissionError,
         )
 
-    # Fetch the KOT document
     try:
         kot_doc = frappe.get_doc("URY KOT", name)
     except frappe.DoesNotExistError:
         frappe.throw(f"Restaurant KOT {name} not found.", frappe.DoesNotExistError)
 
-    # Document-level permission check
     if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
         frappe.throw(
             "You do not have permission to modify this KOT.",
-            frappe.PermissionError
+            frappe.PermissionError,
         )
 
-    # Branch-level permission check
     try:
         session_branch = getBranch()
     except Exception:
@@ -170,23 +292,344 @@ def confirm_cancel_kot(name):
     if session_branch and kot_doc.branch != session_branch:
         frappe.throw(
             "You do not have permission to modify KOTs from other branches.",
-            frappe.PermissionError
+            frappe.PermissionError,
         )
 
     frappe.db.set_value("URY KOT", name, "verified", 1)
     frappe.db.set_value("URY KOT", name, "verified_by", frappe.session.user)
 
 
+@frappe.whitelist(methods=["POST"])
+def set_check_priority(invoice, is_rush=None, is_vip=None, reason=None):
+    """Flag a POS Invoice and all its active kitchen tickets as Rush and/or VIP (audited)."""
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw(
+            coded_message("KOT-PRIORITY-POST-ONLY", _("POST requests only")),
+            frappe.PermissionError,
+        )
+
+    if not invoice:
+        frappe.throw(
+            coded_message("KOT-PRIORITY-INVOICE-REQUIRED", _("An invoice name is required.")),
+            frappe.ValidationError,
+        )
+
+    if is_rush is None and is_vip is None:
+        frappe.throw(
+            coded_message("KOT-PRIORITY-NO-CHANGE", _("Specify Rush or VIP priority to update.")),
+            frappe.ValidationError,
+        )
+
+    inv_doc = frappe.get_doc("POS Invoice", invoice)
+    if not frappe.has_permission("POS Invoice", "write", doc=inv_doc):
+        frappe.throw(
+            coded_message("KOT-PRIORITY-NOT-PERMITTED", _("You do not have permission to prioritise this order.")),
+            frappe.PermissionError,
+        )
+
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and getattr(inv_doc, "branch", None) and inv_doc.branch != session_branch:
+        frappe.throw(
+            coded_message("KOT-PRIORITY-OTHER-BRANCH", _("You cannot prioritise orders in another branch.")),
+            frappe.PermissionError,
+        )
+
+    updates = {}
+    if is_rush is not None:
+        updates["custom_is_rush"] = 1 if _cint(is_rush) else 0
+    if is_vip is not None:
+        updates["custom_is_vip"] = 1 if _cint(is_vip) else 0
+
+    inv_doc.db_set(updates)
+
+    labels = []
+    if "custom_is_rush" in updates:
+        labels.append("RUSH=ON" if updates["custom_is_rush"] else "RUSH=OFF")
+    if "custom_is_vip" in updates:
+        labels.append("VIP=ON" if updates["custom_is_vip"] else "VIP=OFF")
+    audit_note = _("Kitchen priority updated ({0}) by {1}").format(
+        ", ".join(labels), frappe.session.user
+    )
+    if reason and str(reason).strip():
+        audit_note = f"{audit_note} — {str(reason).strip()}"
+    inv_doc.add_comment("Comment", audit_note)
+
+    active_kots = frappe.get_all(
+        "URY KOT",
+        filters={
+            "invoice": invoice,
+            "docstatus": 1,
+            "order_status": ["!=", "Served"],
+        },
+        fields=["name", "production"],
+    )
+    updated_kots = []
+    inv_branch = getattr(inv_doc, "branch", None)
+    for row in active_kots:
+        kot_name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
+        if not kot_name:
+            continue
+        kot_doc = frappe.get_doc("URY KOT", kot_name)
+        kot_doc.db_set(updates)
+        if hasattr(kot_doc, "add_comment"):
+            kot_doc.add_comment("Comment", audit_note)
+        updated_kots.append(kot_name)
+        prod = row.get("production") if isinstance(row, dict) else getattr(row, "production", None)
+        if inv_branch and prod:
+            frappe.publish_realtime(
+                f"kot_priority_{inv_branch}_{prod}",
+                {"invoice": invoice, "kot": kot_name, **updates},
+                after_commit=True,
+            )
+
+    if inv_branch:
+        frappe.publish_realtime(
+            f"kot_priority_{inv_branch}",
+            {"invoice": invoice, "updated_kots": updated_kots, **updates},
+            after_commit=True,
+        )
+
+    final_rush = updates.get("custom_is_rush", _cint(getattr(inv_doc, "custom_is_rush", 0)))
+    final_vip = updates.get("custom_is_vip", _cint(getattr(inv_doc, "custom_is_vip", 0)))
+    return {
+        "invoice": invoice,
+        "custom_is_rush": final_rush,
+        "custom_is_vip": final_vip,
+        "updated_kots": updated_kots,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def expo_bump_order(invoice, production_unit=None):
+    """Serve all active non-cancelled KOTs for an invoice from the Expo screen."""
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw(
+            coded_message("KOT-EXPO-POST-ONLY", _("POST requests only")),
+            frappe.PermissionError,
+        )
+
+    if not invoice:
+        frappe.throw(
+            coded_message("KOT-EXPO-INVOICE-REQUIRED", _("An invoice name is required.")),
+            frappe.ValidationError,
+        )
+
+    session_branch = None if is_kitchen_admin() else getBranch()
+    filters = {
+        "invoice": invoice,
+        "docstatus": 1,
+        "order_status": "Ready For Prepare",
+        "type": ["not in", ["Cancelled", "Partially cancelled"]],
+    }
+    if session_branch:
+        filters["branch"] = session_branch
+
+    kots = frappe.get_all("URY KOT", filters=filters, fields=["name", "branch"])
+    if not kots:
+        return {"invoice": invoice, "served_kots": []}
+
+    served = []
+    for row in kots:
+        kot_name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
+        kot_doc = frappe.get_doc("URY KOT", kot_name)
+        if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
+            frappe.throw(
+                coded_message("KOT-EXPO-NOT-PERMITTED", _("Not permitted to bump this order.")),
+                frappe.PermissionError,
+            )
+        if session_branch and kot_doc.branch != session_branch:
+            frappe.throw(
+                coded_message("KOT-EXPO-OTHER-BRANCH", _("You cannot bump orders from another branch.")),
+                frappe.PermissionError,
+            )
+        record_kot_served(kot_name, kot_doc.creation, kot_doc)
+        served.append(kot_name)
+
+    return {"invoice": invoice, "served_kots": served}
+
+
+@frappe.whitelist(methods=["POST"])
+def record_station_heartbeat(production_unit):
+    """Record a KDS heartbeat timestamp for automatic station failover monitoring."""
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw(
+            coded_message("KOT-HEARTBEAT-POST-ONLY", _("POST requests only")),
+            frappe.PermissionError,
+        )
+    if not production_unit:
+        return {"status": "Ignored"}
+
+    unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and getattr(unit_doc, "branch", None) and unit_doc.branch != session_branch:
+        frappe.throw(
+            coded_message("KOT-HEARTBEAT-OTHER-BRANCH", _("Cannot update station heartbeat for another branch.")),
+            frappe.PermissionError,
+        )
+
+    now_dt = get_datetime()
+    frappe.db.set_value(
+        "URY Production Unit",
+        production_unit,
+        "custom_last_heartbeat",
+        now_dt,
+        update_modified=False,
+    )
+    return {"production_unit": production_unit, "last_heartbeat": str(now_dt)}
+
+
+def _extract_station_device_config(production_unit):
+    if not production_unit or not isinstance(production_unit, str):
+        return None
+    fields = [
+        "custom_is_expo",
+        "custom_device_mode",
+        "custom_printer_transport",
+        "custom_primary_printer",
+        "custom_backup_printer",
+        "custom_print_format",
+        "custom_page_width",
+        "custom_command_mode",
+        "custom_failover_production_unit",
+        "custom_auto_failover_enabled",
+        "custom_failover_active",
+        "custom_heartbeat_timeout_seconds",
+        "custom_last_heartbeat",
+    ]
+    try:
+        row = frappe.db.get_value("URY Production Unit", production_unit, fields, as_dict=True)
+    except TypeError:
+        return None
+    if not isinstance(row, dict):
+        return None
+
+    primary = str(row.get("custom_primary_printer") or "").strip()
+    backup = str(row.get("custom_backup_printer") or "").strip()
+    transport = str(row.get("custom_printer_transport") or "None").strip()
+    device_mode = str(row.get("custom_device_mode") or "KDS Display").strip()
+    page_width = _parse_positive_int(row.get("custom_page_width")) or 576
+    if page_width not in (576, 384):
+        page_width = 576
+    command_mode = str(row.get("custom_command_mode") or "standard").strip()
+    if command_mode not in ("standard", "raster"):
+        command_mode = "standard"
+
+    def _split_target(value):
+        if ":" in value and not value.startswith("/") and " " not in value:
+            host_part, _, port_part = value.rpartition(":")
+            if host_part and port_part.isdigit():
+                return {"printer": "", "host": host_part, "port": int(port_part)}
+        return {"printer": value, "host": "", "port": 9100}
+
+    primary_target = _split_target(primary)
+    backup_target = _split_target(backup)
+    return {
+        "production_unit": production_unit,
+        "is_expo": bool(_cint(row.get("custom_is_expo"))),
+        "device_mode": device_mode,
+        "printer_transport": transport,
+        "enabled": device_mode in ("Network Printer", "KDS + Auto Print") and bool(primary),
+        "printer": primary_target["printer"],
+        "host": primary_target["host"],
+        "port": primary_target["port"],
+        "backupPrinter": backup_target["printer"],
+        "backupHost": backup_target["host"],
+        "backupPort": backup_target["port"],
+        "printFormat": str(row.get("custom_print_format") or "").strip(),
+        "pageWidth": page_width,
+        "commandMode": command_mode,
+        "failover_production_unit": row.get("custom_failover_production_unit") or "",
+        "auto_failover_enabled": bool(_cint(row.get("custom_auto_failover_enabled"))),
+        "failover_active": bool(_cint(row.get("custom_failover_active"))),
+        "heartbeat_timeout_seconds": _parse_positive_int(row.get("custom_heartbeat_timeout_seconds")) or 120,
+        "last_heartbeat": str(row.get("custom_last_heartbeat") or ""),
+    }
+
+
+@frappe.whitelist()
+def get_station_device_config(production_unit):
+    """Return server-stored order device & backup printer settings for a Production Unit."""
+    if not production_unit:
+        return None
+    unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and getattr(unit_doc, "branch", None) and unit_doc.branch != session_branch:
+        frappe.throw(
+            coded_message("KOT-DEVICE-OTHER-BRANCH", _("Cannot read station settings for another branch.")),
+            frappe.PermissionError,
+        )
+    return _extract_station_device_config(production_unit)
+
+
+@frappe.whitelist(methods=["POST"])
+def save_station_device_config(production_unit, config):
+    """Persist unified station printer & backup printer config on `URY Production Unit`."""
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw(
+            coded_message("KOT-DEVICE-POST-ONLY", _("POST requests only")),
+            frappe.PermissionError,
+        )
+    if isinstance(config, str):
+        config = json.loads(config)
+    if not isinstance(config, dict):
+        frappe.throw(
+            coded_message("KOT-DEVICE-INVALID-CONFIG", _("Station device settings must be an object.")),
+            frappe.ValidationError,
+        )
+
+    unit_doc = frappe.get_doc("URY Production Unit", production_unit)
+    if not frappe.has_permission("URY Production Unit", "write", doc=unit_doc):
+        frappe.throw(
+            coded_message("KOT-DEVICE-NOT-PERMITTED", _("You do not have permission to update station settings.")),
+            frappe.PermissionError,
+        )
+
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and getattr(unit_doc, "branch", None) and unit_doc.branch != session_branch:
+        frappe.throw(
+            coded_message("KOT-DEVICE-OTHER-BRANCH", _("Cannot update station settings for another branch.")),
+            frappe.PermissionError,
+        )
+
+    printer = str(config.get("printer") or "").strip()
+    host = str(config.get("host") or "").strip()
+    port = _cint(config.get("port") or 9100) or 9100
+    primary_value = printer or (f"{host}:{port}" if host else "")
+
+    backup_printer = str(config.get("backupPrinter") or "").strip()
+    backup_host = str(config.get("backupHost") or "").strip()
+    backup_port = _cint(config.get("backupPort") or 9100) or 9100
+    backup_value = backup_printer or (f"{backup_host}:{backup_port}" if backup_host else "")
+
+    page_width = str(config.get("pageWidth") or 576)
+    if page_width not in ("576", "384"):
+        page_width = "576"
+    command_mode = str(config.get("commandMode") or "standard")
+    if command_mode not in ("standard", "raster"):
+        command_mode = "standard"
+
+    enabled = bool(config.get("enabled"))
+    unit_doc.custom_primary_printer = primary_value
+    unit_doc.custom_backup_printer = backup_value
+    unit_doc.custom_print_format = str(config.get("printFormat") or "").strip()
+    unit_doc.custom_page_width = page_width
+    unit_doc.custom_command_mode = command_mode
+    if enabled:
+        unit_doc.custom_device_mode = "KDS + Auto Print"
+        unit_doc.custom_printer_transport = "QZ Tray"
+    elif getattr(unit_doc, "custom_device_mode", None) == "KDS + Auto Print":
+        unit_doc.custom_device_mode = "KDS Display"
+    unit_doc.save()
+    return _extract_station_device_config(production_unit)
+
+
 @frappe.whitelist(allow_guest=True)
 def get_site_name():
     return {"site_name": frappe.local.site}
 
-def _attach_item_states(kot_jsons):
-    """Stamp each kot_item dict with its URY KOT Item Execution ``state``.
 
-    One batched query for all KOTs (no N+1). Items with no execution row are
-    implicitly QUEUED. Plain fields only, so it is safe on v15 and v16.
-    """
+def _attach_item_states(kot_jsons):
+    """Stamp each kot_item dict with its URY KOT Item Execution ``state``."""
     kot_names = [k.get("name") for k in kot_jsons if k.get("name")]
     state_by_item = {}
     if kot_names:
@@ -200,6 +643,181 @@ def _attach_item_states(kot_jsons):
         for item in kot.get("kot_items") or []:
             item["state"] = state_by_item.get(item.get("name")) or "QUEUED"
     return kot_jsons
+
+
+def group_items_by_course(kot_items):
+    """Order KOT items by `serve_priority` and group them under distinct Course headers."""
+    items = list(kot_items or [])
+    items.sort(
+        key=lambda row: (
+            _cint(row.get("serve_priority") or 0),
+            str(row.get("course") or ""),
+            _cint(row.get("idx") or 0),
+        )
+    )
+    grouped = OrderedDict()
+    for item in items:
+        course_name = str(item.get("course") or "").strip()
+        prio = _cint(item.get("serve_priority") or 0)
+        key = (prio, course_name)
+        if key not in grouped:
+            grouped[key] = {
+                "course": course_name,
+                "serve_priority": prio,
+                "items": [],
+            }
+        grouped[key]["items"].append(item)
+    return list(grouped.values())
+
+
+def build_all_day_summary(kots):
+    """Aggregate total open item quantities across active non-cancelled tickets."""
+    totals = {}
+    for kot in kots or []:
+        if kot.get("type") in ("Cancelled", "Partially cancelled"):
+            continue
+        is_rush = bool(_cint(kot.get("custom_is_rush")))
+        is_vip = bool(_cint(kot.get("custom_is_vip")))
+        kot_name = kot.get("name")
+        for item in kot.get("kot_items") or []:
+            if item.get("state") == "SERVED":
+                continue
+            qty = _flt(item.get("quantity")) - _flt(item.get("cancelled_qty"))
+            if qty <= 0:
+                continue
+            item_name = str(item.get("item_name") or item.get("item") or "").strip()
+            if not item_name:
+                continue
+            item_code = str(item.get("item") or item_name).strip()
+            course = str(item.get("course") or "").strip()
+            key = (item_code, item_name, course)
+            entry = totals.get(key)
+            if entry is None:
+                entry = {
+                    "item": item_code,
+                    "item_name": item_name,
+                    "course": course,
+                    "total_qty": 0.0,
+                    "rush_qty": 0.0,
+                    "vip_qty": 0.0,
+                    "tickets": set(),
+                }
+                totals[key] = entry
+            entry["total_qty"] = round(entry["total_qty"] + qty, 4)
+            if is_rush:
+                entry["rush_qty"] = round(entry["rush_qty"] + qty, 4)
+            if is_vip:
+                entry["vip_qty"] = round(entry["vip_qty"] + qty, 4)
+            if kot_name:
+                entry["tickets"].add(kot_name)
+
+    summary = [
+        {
+            "item": entry["item"],
+            "item_name": entry["item_name"],
+            "course": entry["course"],
+            "total_qty": entry["total_qty"],
+            "rush_qty": entry["rush_qty"],
+            "vip_qty": entry["vip_qty"],
+            "ticket_count": len(entry["tickets"]),
+        }
+        for entry in totals.values()
+    ]
+    summary.sort(key=lambda r: (-r["rush_qty"], -r["total_qty"], r["item_name"].lower()))
+    return summary
+
+
+def sort_kots_for_display(kots):
+    """Pin Rush tickets first, then VIP tickets, preserving relative order otherwise."""
+    return sorted(
+        kots,
+        key=lambda k: (
+            0 if _cint(k.get("custom_is_rush")) else 1,
+            0 if _cint(k.get("custom_is_vip")) else 1,
+        ),
+    )
+
+
+def _station_readiness_status(kot):
+    if kot.get("order_status") == "Served":
+        return "Served", True, len(kot.get("kot_items") or []), len(kot.get("kot_items") or [])
+    items = kot.get("kot_items") or []
+    if not items:
+        return "Ready", True, 0, 0
+    states = [str(item.get("state") or "QUEUED").upper() for item in items]
+    ready_count = sum(1 for st in states if st in ("READY", "SERVED"))
+    if ready_count == len(items):
+        return "Ready", True, ready_count, len(items)
+    if any(st in ("IN_PREPARATION", "READY", "SERVED") for st in states):
+        return "Preparing", False, ready_count, len(items)
+    return "Queued", False, ready_count, len(items)
+
+
+def build_expo_orders(kots):
+    """Group active KOTs across all branch stations by `invoice` for Expo expediting."""
+    by_invoice = OrderedDict()
+    for kot in kots or []:
+        if kot.get("type") in ("Cancelled", "Partially cancelled"):
+            continue
+        invoice = kot.get("invoice") or kot.get("name")
+        if invoice not in by_invoice:
+            by_invoice[invoice] = {
+                "invoice": invoice,
+                "restaurant_table": kot.get("restaurant_table"),
+                "table_takeaway": kot.get("table_takeaway"),
+                "custom_merged_tables": kot.get("custom_merged_tables"),
+                "custom_guest_label": kot.get("custom_guest_label"),
+                "order_no": kot.get("order_no"),
+                "user": kot.get("user"),
+                "custom_is_rush": 0,
+                "custom_is_vip": 0,
+                "earliest_creation": kot.get("creation"),
+                "earliest_time": kot.get("time"),
+                "stations": [],
+                "active_kot_names": [],
+            }
+        order = by_invoice[invoice]
+        if _cint(kot.get("custom_is_rush")):
+            order["custom_is_rush"] = 1
+        if _cint(kot.get("custom_is_vip")):
+            order["custom_is_vip"] = 1
+        if kot.get("creation") and (
+            not order["earliest_creation"] or str(kot["creation"]) < str(order["earliest_creation"])
+        ):
+            order["earliest_creation"] = kot.get("creation")
+            order["earliest_time"] = kot.get("time")
+
+        status_label, is_ready, ready_count, total_count = _station_readiness_status(kot)
+        order["stations"].append({
+            "kot_name": kot.get("name"),
+            "production": kot.get("production") or "",
+            "order_status": kot.get("order_status"),
+            "type": kot.get("type"),
+            "status": status_label,
+            "all_items_ready": is_ready,
+            "ready_items": ready_count,
+            "total_items": total_count,
+            "kot_items": kot.get("kot_items") or [],
+            "course_groups": group_items_by_course(kot.get("kot_items")),
+        })
+        if kot.get("order_status") != "Served" and kot.get("name"):
+            order["active_kot_names"].append(kot.get("name"))
+
+    expo_orders = []
+    for order in by_invoice.values():
+        order["all_stations_ready"] = bool(order["stations"]) and all(
+            st["all_items_ready"] for st in order["stations"]
+        )
+        expo_orders.append(order)
+
+    return sort_kots_for_display(expo_orders)
+
+
+def _is_expo_unit(production_unit):
+    if not production_unit or not isinstance(production_unit, str):
+        return False
+    val = frappe.db.get_value("URY Production Unit", production_unit, "custom_is_expo")
+    return bool(_cint(val)) if isinstance(val, (int, float, str, bool)) else False
 
 
 def build_dashboard_summary(kot_list):
@@ -217,7 +835,7 @@ def build_dashboard_summary(kot_list):
                 "active_orders": 0,
                 "pending_orders": 0,
                 "ready_orders": 0,
-                "orders": []
+                "orders": [],
             }
 
         summary[production]["active_orders"] += 1
@@ -231,14 +849,9 @@ def build_dashboard_summary(kot_list):
 
     return list(summary.values())
 
-def _get_cancel_confirmed_original_kots(branch):
-    """Names of KOTs that a verified cancel-KOT references via `original_kot`.
 
-    `original_kot` is a comma-separated string of KOT names stamped onto the
-    cancel-KOT record at creation time (see `ury_kot_generate.py`), not a
-    link field, so it has to be matched with LIKE and split in Python rather
-    than joined in the query.
-    """
+def _get_cancel_confirmed_original_kots(branch):
+    """Names of KOTs that a verified cancel-KOT references via `original_kot`."""
     filters = {
         "type": ["in", ["Cancelled", "Partially cancelled"]],
         "verified": 1,
@@ -276,21 +889,14 @@ def _kot_display_window_hours(branch):
     hours = None
     if branch:
         hours = frappe.db.get_value("POS Profile", {"branch": branch}, "ury_kds_display_window_hours")
-    try:
-        hours = int(hours or 0)
-    except (TypeError, ValueError):
-        hours = 0
+    hours = _parse_positive_int(hours) or 0
     if hours <= 0:
         return KOT_DISPLAY_WINDOW_HOURS
     return min(hours, KOT_DISPLAY_WINDOW_MAX_HOURS)
 
 
 def _kot_display_filters(order_status, branch=None):
-    """Single definition of which KOTs the Mosaic KDS shows.
-
-    Shared by the per-unit view (kot_list / served_kot_list) and the overview
-    counts (production_unit_counts) so both always use the same time window.
-    """
+    """Single definition of which KOTs the Mosaic KDS shows."""
     filters = {
         "order_status": order_status,
         "type": ["in", KOT_DISPLAY_TYPES],
@@ -379,13 +985,23 @@ def kot_list(production_unit=None):
     daily_order_number = frappe.db.get_value(
         "POS Profile", pos_profile_filters, "custom_reset_order_number_daily"
     )
-    three_hours_ago = frappe.utils.add_to_date(today, hours=-3)
     audio_alert = frappe.db.get_value(
         "POS Profile", pos_profile_filters, "custom_kot_alert"
     )
     audio_file = frappe.db.get_value(
         "POS Profile", pos_profile_filters, "custom_kot_alert_sound"
     )
+    unit_pos_profile = (
+        frappe.db.get_value("URY Production Unit", production_unit, "pos_profile")
+        if production_unit
+        else None
+    )
+    recall_window_minutes = _kot_recall_window_minutes(
+        branch=availability_branch or branch,
+        pos_profile=unit_pos_profile,
+    )
+    is_expo = _is_expo_unit(production_unit)
+    station_device_config = _extract_station_device_config(production_unit) if production_unit else None
 
     filters = _kot_display_filters("Ready For Prepare", branch)
 
@@ -420,8 +1036,20 @@ def kot_list(production_unit=None):
 
         kotjson = json.loads(frappe.as_json(kotdoc))
         KOT.append(kotjson)
+
     _attach_item_states(KOT)
+    for kotjson in KOT:
+        kotjson["course_groups"] = group_items_by_course(kotjson.get("kot_items"))
+    KOT = sort_kots_for_display(KOT)
+
     dashboard = build_dashboard_summary(KOT)
+    summary_source = (
+        KOT if (is_expo or not production_unit)
+        else [k for k in KOT if k.get("production") == production_unit]
+    )
+    all_day_summary = build_all_day_summary(summary_source)
+    expo_orders = build_expo_orders(KOT) if is_expo else []
+
     return {
         "KOT": KOT,
         "Dashboard": dashboard,
@@ -432,8 +1060,49 @@ def kot_list(production_unit=None):
         "kot_alert_time": kot_alert_time,
         "audio_alert": audio_alert,
         "audio_file": audio_file,
-        "daily_order_number":daily_order_number
+        "daily_order_number": daily_order_number,
+        "recall_window_minutes": recall_window_minutes,
+        "is_expo": is_expo,
+        "all_day_summary": all_day_summary,
+        "expo_orders": expo_orders,
+        "station_device_config": station_device_config,
     }
+
+
+@frappe.whitelist()
+def get_kds_summary(production_unit=None, branch=None):
+    """Return All-Day aggregated item counts, course-grouped tickets, and Expo view."""
+    session_branch = None if is_kitchen_admin() else getBranch()
+    if session_branch and branch and branch != session_branch:
+        frappe.throw(
+            coded_message("KOT-SUMMARY-OTHER-BRANCH", _("You cannot read kitchen summary for another branch.")),
+            frappe.PermissionError,
+        )
+    data = kot_list(production_unit=production_unit)
+    kots = data["KOT"]
+    if production_unit and not data["is_expo"]:
+        kots = [k for k in kots if k.get("production") == production_unit]
+    return {
+        "branch": data["Branch"],
+        "production_unit": production_unit,
+        "is_expo": data["is_expo"],
+        "recall_window_minutes": data["recall_window_minutes"],
+        "all_day_summary": data["all_day_summary"],
+        "expo_orders": data["expo_orders"],
+        "course_grouped_kots": [
+            {
+                "name": k.get("name"),
+                "invoice": k.get("invoice"),
+                "production": k.get("production"),
+                "custom_is_rush": _cint(k.get("custom_is_rush")),
+                "custom_is_vip": _cint(k.get("custom_is_vip")),
+                "course_groups": k.get("course_groups") or [],
+            }
+            for k in kots
+        ],
+        "total_active_kots": len(kots),
+    }
+
 
 @frappe.whitelist()
 def served_kot_list():
@@ -450,10 +1119,10 @@ def served_kot_list():
     daily_order_number = frappe.db.get_value(
         "POS Profile", pos_profile_filters, "custom_reset_order_number_daily"
     )
-    three_hours_ago = frappe.utils.add_to_date(today, hours=-3)
     audio_alert = frappe.db.get_value(
         "POS Profile", pos_profile_filters, "custom_kot_alert"
     )
+    recall_window_minutes = _kot_recall_window_minutes(branch=branch)
 
     filters = _kot_display_filters("Served", branch)
 
@@ -465,12 +1134,10 @@ def served_kot_list():
     )
     production_filters = {}
 
-    print(kotList,"kotList..................")
     KOT = []
     for kot in kotList:
         kotdoc = frappe.get_doc("URY KOT", kot.name)
-        print(kot.name,".................kotdoc")
-        
+
         if kotdoc.production:
             if kotdoc.production not in production_filters:
                 prod_doc = frappe.get_doc("URY Production Unit", kotdoc.production)
@@ -478,15 +1145,13 @@ def served_kot_list():
                     production_filters[kotdoc.production] = [row.order_type for row in prod_doc.get("order_type", [])]
                 else:
                     production_filters[kotdoc.production] = None
-            
+
             allowed_order_types = production_filters[kotdoc.production]
             if allowed_order_types is not None:
                 invoice_order_type = frappe.db.get_value("POS Invoice", kotdoc.invoice, "order_type")
                 if invoice_order_type not in allowed_order_types:
                     continue
 
-        invoice=frappe.db.get_value("URY KOT",kot.name,"invoice")
-        print(invoice,".....................invoice")
         kotjson = json.loads(frappe.as_json(kotdoc))
         KOT.append(kotjson)
     _attach_item_states(KOT)
@@ -495,6 +1160,6 @@ def served_kot_list():
         "Branch": branch,
         "kot_alert_time": kot_alert_time,
         "audio_alert": audio_alert,
-        "daily_order_number":daily_order_number
+        "daily_order_number": daily_order_number,
+        "recall_window_minutes": recall_window_minutes,
     }
-

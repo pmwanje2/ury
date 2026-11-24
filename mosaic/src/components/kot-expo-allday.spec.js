@@ -255,7 +255,7 @@ describe("G28: Station backup printer failover & server-synced device config", (
     const outcome = await printer.process({
       name: "KOT-FAILOVER-1",
       production: "Kitchen",
-      creation: "2026-11-24 13:55:00",
+      creation: "2026-11-24T13:55:00.000Z",
     });
 
     expect(outcome.printed).toBe(true);

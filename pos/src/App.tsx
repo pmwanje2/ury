@@ -20,6 +20,7 @@ import { homePath } from './lib/home-route';
 import { useRootStore } from './store/root-store';
 import { usePOSStore } from './store/pos-store';
 import { useEffect, useRef, useState } from 'react';
+import { installDrawerKickListener } from './lib/drawer-kick';
 import { getActiveLanguage, getActiveDirection } from './i18n';
 import { ActiveReportProvider } from './components/chat/ActiveReportContext';
 import ChatWidget, {
@@ -79,6 +80,22 @@ function App() {
   useEffect(() => {
     initializeApp();
   }, [initializeApp]);
+
+  useEffect(() => {
+    return installDrawerKickListener({
+      getProfile: () => {
+        const state = usePOSStore.getState();
+        const profile = state.posProfile;
+        if (!profile) return null;
+        return {
+          pos_profile: profile.pos_profile,
+          print_type: profile.print_type,
+          qz_host: profile.qz_host,
+          printer: profile.printer,
+        };
+      },
+    });
+  }, []);
 
   useEffect(() => {
     const lang = getActiveLanguage();

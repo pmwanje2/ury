@@ -239,6 +239,11 @@ def process_items_for_kot(
         )
 
     # Build a map of production unit -> items for that unit using the unified resolver
+    room = (
+        frappe.db.get_value("URY Table", restaurant_table, "restaurant_room")
+        if restaurant_table
+        else None
+    )
     production_items_map = {}
     for item in kot_items:
         item_code = item["item_code"]
@@ -252,18 +257,16 @@ def process_items_for_kot(
         production_policy = production_config.production_policy if production_config else None
 
         # Resolve production units for this item using the unified routing
-        # logic. A RoutingError here means a controlled item's routing is
-        # missing/ambiguous/disabled -- that must fail the whole KOT batch
-        # closed (not be silently skipped) so a customer is never charged
-        # for an item the kitchen never sees. See sa-post-373-review-fixes
-        # Blocker 2. DIRECT_RETAIL items never raise here (see
-        # resolve_production_units); they simply resolve to no production
-        # unit.
+        # logic (overrides -> exact config -> legacy item-group fallback, with
+        # cycle-safe station failover).
         resolved_units = resolve_production_units(
             item_code=item_code,
             company=pos_invoice.company,
             branch=pos_profile.branch,
             production_policy=production_policy,
+            pos_profile=pos_profile_id,
+            order_type=pos_invoice.get("order_type"),
+            room=room,
         )
         for production_unit in resolved_units:
             if production_unit not in production_items_map:

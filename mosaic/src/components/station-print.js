@@ -10,16 +10,52 @@ export function loadQz({ window = globalThis.window, document = globalThis.docum
   });
 }
 
+function resolveBackupTarget(settings) {
+  const backupPrinter = String(settings.backupPrinter ?? "").trim();
+  const backupHost = String(settings.backupHost ?? "").trim();
+  const backupPort = Number(settings.backupPort);
+  if (backupPrinter) {
+    return { target: backupPrinter, label: backupPrinter };
+  }
+  if (backupHost) {
+    const port = Number.isInteger(backupPort) && backupPort >= 1 && backupPort <= 65535 ? backupPort : 9100;
+    return { target: { host: backupHost, port }, label: `${backupHost}:${port}` };
+  }
+  return null;
+}
+
 export function createStationPrinter({
   production, user, call, storage = globalThis.localStorage, qz,
   fetch = globalThis.fetch, now = Date.now, onChange = () => {},
+  serverSettings = null,
 }) {
   const prefix = `ury:mosaic:station-print:${production}`;
   const read = (key, fallback) => {
     try { return JSON.parse(storage.getItem(`${prefix}:${key}`)) ?? fallback; }
     catch { return fallback; }
   };
-  let settings = { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, printFormat: "", pageWidth: 576, commandMode: "standard", ...read("settings", {}) };
+  const defaults = {
+    enabled: false,
+    enabledAt: null,
+    printer: "",
+    host: "",
+    port: 9100,
+    backupPrinter: "",
+    backupHost: "",
+    backupPort: 9100,
+    printFormat: "",
+    pageWidth: 576,
+    commandMode: "standard",
+  };
+  const persisted = read("settings", null);
+  let settings = {
+    ...defaults,
+    ...(serverSettings && typeof serverSettings === "object" ? serverSettings : {}),
+    ...(persisted && typeof persisted === "object" ? persisted : {}),
+  };
+  if (settings.enabled && !settings.enabledAt) {
+    settings.enabledAt = new Date(now()).toISOString();
+  }
   const printed = new Set(read("printed", []));
   const attempted = new Set();
   const failures = new Map();
@@ -73,6 +109,17 @@ export function createStationPrinter({
     }
   }
 
+  async function sendToTarget(bridge, target, data) {
+    // QZ rasterises raw HTML at pageWidth dots (without it the ticket is an 8-dot blank strip). Double density
+    // prints one dot per column; QZ's single-density default prints each column twice and cuts the ticket in half.
+    // Raster mode is for generic ESC/POS clones that mishandle ESC * images: QZ sends GS v 0 instead.
+    const image = settings.commandMode === "raster" ? { imageEncoding: "GS_V_0" } : { dotDensity: "double" };
+    await bridge.print(bridge.configs.create(target), [
+      { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth, ...image } },
+      { type: "raw", format: "command", flavor: "plain", data: "\n\n\n\x1dV\x00" },
+    ]);
+  }
+
   async function process(kot, { retry = false } = {}) {
     if (!settings.enabled || kot.production !== production || !kot.name || printed.has(kot.name) || pending.has(kot.name)) return { printed: false };
     const created = new Date(String(kot.creation).replace(" ", "T")).getTime();
@@ -85,6 +132,9 @@ export function createStationPrinter({
     let expired = false;
     let timer;
     let code = "RENDER_FAILED";
+    let renderedData = "";
+    let bridgeInstance = null;
+
     const job = async () => {
       const { message } = await call.get("frappe.www.printview.get_html_and_style", {
         doc: "URY KOT", name: kot.name, print_format: settings.printFormat,
@@ -92,20 +142,16 @@ export function createStationPrinter({
       if (!message?.html) throw Error("RENDER_FAILED");
       code = "QZ_UNAVAILABLE";
       const bridge = await connectQz();
+      bridgeInstance = bridge;
       if (expired) return;
-      const data = `${message.style ? `<style>${message.style}</style>` : ""}${message.html}`;
+      renderedData = `${message.style ? `<style>${message.style}</style>` : ""}${message.html}`;
       // QZ resolves a name to an OS print queue (USB or installed network printer); host is a raw socket.
       const target = settings.printer || { host: settings.host, port: Number(settings.port) };
-      // QZ rasterises raw HTML at pageWidth dots (without it the ticket is an 8-dot blank strip). Double density
-      // prints one dot per column; QZ's single-density default prints each column twice and cuts the ticket in half.
-      // Raster mode is for generic ESC/POS clones that mishandle ESC * images: QZ sends GS v 0 instead.
-      const image = settings.commandMode === "raster" ? { imageEncoding: "GS_V_0" } : { dotDensity: "double" };
-      await bridge.print(bridge.configs.create(target), [
-        { type: "raw", format: "html", flavor: "plain", data, options: { language: "ESCPOS", pageWidth: settings.pageWidth, ...image } },
-        { type: "raw", format: "command", flavor: "plain", data: "\n\n\n\x1dV\x00" },
-      ]);
+      await sendToTarget(bridge, target, renderedData);
     };
+
     let outcome;
+    let failoverLabel = "";
     try {
       await Promise.race([
         job(),
@@ -119,34 +165,89 @@ export function createStationPrinter({
       outcome = { printed: true };
     } catch (error) {
       if (code === "QZ_UNAVAILABLE" && /Cannot find printer/i.test(String(error?.message ?? error))) code = "PRINTER_NOT_FOUND";
-      failures.set(kot.name, kot);
-      outcome = { printed: false, code };
+      const backup = code !== "RENDER_FAILED" ? resolveBackupTarget(settings) : null;
+      if (backup && renderedData && bridgeInstance) {
+        try {
+          await sendToTarget(bridgeInstance, backup.target, renderedData);
+          printed.add(kot.name);
+          storage.setItem(`${prefix}:printed`, JSON.stringify([...printed]));
+          failures.delete(kot.name);
+          failoverLabel = backup.label;
+          outcome = { printed: true, failoverUsed: true, backupTarget: backup.label };
+        } catch {
+          failures.set(kot.name, kot);
+          outcome = { printed: false, code };
+        }
+      } else {
+        failures.set(kot.name, kot);
+        outcome = { printed: false, code };
+      }
     } finally {
       clearTimeout(timer);
       pending.delete(kot.name);
       notify();
     }
-    await comment(kot, outcome.printed ? `[KOT-PRINTED] ${production}` : `[KOT-PRINT-FAILED] ${outcome.code}`);
+    const logMessage = outcome.printed
+      ? (failoverLabel ? `[KOT-FAILOVER-PRINTED] ${failoverLabel}` : `[KOT-PRINTED] ${production}`)
+      : `[KOT-PRINT-FAILED] ${outcome.code}`;
+    await comment(kot, logMessage);
     return outcome;
   }
 
   return {
     get settings() { return { ...settings }; },
+    hydrateFromServer(remote) {
+      if (!remote || typeof remote !== "object") return { ...settings };
+      const localStored = read("settings", null);
+      if (localStored) {
+        // Fill in backup settings from server when local storage has none.
+        settings = {
+          ...settings,
+          backupPrinter: settings.backupPrinter || String(remote.backupPrinter ?? "").trim(),
+          backupHost: settings.backupHost || String(remote.backupHost ?? "").trim(),
+          backupPort: settings.backupPort || Number(remote.backupPort) || 9100,
+        };
+        return { ...settings };
+      }
+      settings = {
+        ...defaults,
+        ...remote,
+        enabledAt: remote.enabled ? (remote.enabledAt || new Date(now()).toISOString()) : null,
+      };
+      return { ...settings };
+    },
     configure(next) {
       const printer = String(next.printer ?? "").trim();
       const host = String(next.host ?? "").trim();
       const port = Number(next.port);
       const validPort = Number.isInteger(port) && port >= 1 && port <= 65535;
+      const backupPrinter = String(next.backupPrinter ?? settings.backupPrinter ?? "").trim();
+      const backupHost = String(next.backupHost ?? settings.backupHost ?? "").trim();
+      const backupPortRaw = Number(next.backupPort ?? settings.backupPort ?? 9100);
+      const validBackupPort = Number.isInteger(backupPortRaw) && backupPortRaw >= 1 && backupPortRaw <= 65535;
       // 80 mm and 58 mm ESC/POS heads at 203 dpi.
       const pageWidth = next.pageWidth ?? settings.pageWidth;
       if (pageWidth !== 576 && pageWidth !== 384) throw Error("Choose a paper width: 80 mm or 58 mm.");
       const commandMode = next.commandMode ?? settings.commandMode;
       if (commandMode !== "standard" && commandMode !== "raster") throw Error("Choose a printer command mode: Standard (ESC *) or Raster (GS v 0).");
       if (printer && host) throw Error("Choose an installed printer or a network host, not both.");
+      if (backupPrinter && backupHost) throw Error("Choose a backup installed printer or a backup network host, not both.");
       if (next.enabled && !printer && !host) throw Error("Choose an installed printer or enter a network host and port.");
       if (next.enabled && (!next.printFormat?.trim() || (host && !validPort))) throw Error(printer ? "Enter a print format." : "Enter a printer host, port (1–65535), and print format.");
       const enabledAt = next.enabled && !settings.enabled ? new Date(now()).toISOString() : settings.enabledAt;
-      settings = { enabled: !!next.enabled, enabledAt, printer, host, port: validPort ? port : 9100, printFormat: String(next.printFormat ?? "").trim(), pageWidth, commandMode };
+      settings = {
+        enabled: !!next.enabled,
+        enabledAt,
+        printer,
+        host,
+        port: validPort ? port : 9100,
+        backupPrinter,
+        backupHost,
+        backupPort: validBackupPort ? backupPortRaw : 9100,
+        printFormat: String(next.printFormat ?? "").trim(),
+        pageWidth,
+        commandMode,
+      };
       storage.setItem(`${prefix}:settings`, JSON.stringify(settings));
       return { ...settings };
     },
