@@ -224,7 +224,7 @@ class TestPaymentReferencePrintAndApiContracts(unittest.TestCase):
             with self.subTest(print_format=path.name):
                 html = json.loads(path.read_text(encoding="utf-8")).get("html", "")
                 self.assertIn("reference_no", html)
-                self.assertRegex(html, r"reference_no\s*\|\s*e")
+                self.assertRegex(html, r"(?:reference_no|_ref_no)\s*(?:\|\s*trim\s*)?\|\s*e")
 
     def test_api_search_settled_bills_selects_reference_and_fx_fields(self):
         api_text = (ROOT / "ury" / "ury_pos" / "api.py").read_text(encoding="utf-8")

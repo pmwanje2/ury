@@ -6,11 +6,15 @@ from ury.ury_pos.default_customer import validate_order_type_customers
 
 
 def validate(doc, method):
+    from ury.ury_pos.fx import validate_fx_payment_modes, validate_offline_peer_relay_url
+
     validate_bill_check(doc, method)
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
     validate_room_lookup_method(doc, method)
     validate_print_format(doc, method)
+    validate_fx_payment_modes(doc)
+    validate_offline_peer_relay_url(doc.get("custom_offline_peer_relay_url"))
 
 
 def validate_print_format(doc, method=None):

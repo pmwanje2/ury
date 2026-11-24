@@ -120,7 +120,18 @@
     "discount_not_applied": "Pulsa Aplicar para actualizar el total antes de pagar.",
     "already_received": "Ya recibido",
     "balance_due": "Saldo pendiente",
-    "reference_label": "Ref.: {{ref}}"
+    "reference_label": "Ref.: {{ref}}",
+    "reference_label_default": "Referencia de pago",
+    "reference_placeholder_default": "Ingrese la referencia de transacción o código de autorización",
+    "reference_required": "Ingrese una referencia de pago para {{mode}}.",
+    "reference_invalid": "La referencia de pago para {{mode}} no cumple el formato requerido.",
+    "reference_date": "Fecha de referencia",
+    "reference_date_required": "Seleccione una fecha de referencia para {{mode}}.",
+    "fx_rate_badge": "1 {{currency}} = {{rate}} {{home}}",
+    "fx_equivalent": "Equivalente local: {{amount}}",
+    "fx_stale_rate": "El tipo de cambio para {{currency}} está vencido o falta. Actualícelo antes de cobrar.",
+    "fx_override_rate": "Tipo de cambio autorizado por gerente",
+    "fx_change_local": "Cambio en {{currency}}: {{amount}}"
   },
   "pos": {
     "not_opened_title": "POS no abierto",
@@ -179,7 +190,9 @@
     "opening": "Apertura",
     "expected": "Esperado",
     "closing": "Cierre",
-    "difference": "Diferencia"
+    "difference": "Diferencia",
+    "fx_native_count": "Contar en {{currency}}",
+    "fx_base_equivalent": "Equivalente base: {{amount}}"
   },
   "checklist": {
     "title_opening": "Lista de apertura",
@@ -745,7 +758,10 @@
     "client_order": "Pedido del cliente",
     "captured": "Capturado",
     "no_fdn": "Captura sin conexión; sin número fiscal.",
-    "refused": "{{action}} no está permitido sin conexión. Vuelva a conectarse al servidor primero."
+    "refused": "{{action}} no está permitido sin conexión. Vuelva a conectarse al servidor primero.",
+    "waiter_offline_pill": "Sin conexión · Pedidos en cola local",
+    "waiter_queued_badge": "{{count}} en cola sin conexión",
+    "waiter_settle_blocked": "El cobro sin conexión requiere permisos de caja."
   },
   "manager_approval": {
     "title": "Se requiere autorización de encargado",

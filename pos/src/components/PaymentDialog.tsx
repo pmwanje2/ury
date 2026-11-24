@@ -1,17 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Percent, Coins, Printer } from 'lucide-react';
+import { X, Percent, Coins, Printer, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { formatCurrency, parseFrappeError } from '@ury/core';
 import { Button, Input, Dialog, DialogContent, showToast } from '@ury/ui';
 import { call } from '@ury/core';
 import { t } from '../i18n';
 import { assertOfflineActionAllowed, submitSettlementOfflineAware } from '../offline/cashier';
-import { canCaptureOffline } from '../offline/outbox';
+import { canSettleOffline } from '../offline/outbox';
 import { useRootStore } from '../store/root-store';
 import { printOrder } from '../lib/print';
 import { queuePendingFiscalReprint, resolveEfrisPrintWaitSeconds, waitForEfrisFdn } from '../lib/efris-print';
 import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../lib/invoice-api';
+import { getPosFxRates, type PaymentModeConfig, type PosFxRateInfo } from '../lib/payment-api';
+import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
+
+const MAX_REF_PATTERN_LENGTH = 128;
+
+function stepForCurrency(code?: string | null): string {
+  const digits = currencyDecimalPlaces(code);
+  if (digits <= 0) return '1';
+  if (digits === 3) return '0.001';
+  return '0.01';
+}
+
+function matchesReferencePattern(value: string, pattern?: string | null): boolean {
+  const raw = (pattern || '').trim();
+  if (!raw) return true;
+  if (raw.length > MAX_REF_PATTERN_LENGTH) return false;
+  if (/\([^)]*[+*?][^)]*\)[+*?{]|[+*?]\s*[+*?]|\\[1-9]/.test(raw)) return false;
+  try {
+    const anchored = raw.startsWith('^') && raw.endsWith('$') ? raw : `^(?:${raw})$`;
+    return new RegExp(anchored).test(value);
+  } catch {
+    return false;
+  }
+}
 
 
 const currencyDigitsCache = new Map<string, number>();
@@ -78,7 +102,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   discountAmount
 }) => {
   const user = useRootStore((state) => state.user);
-  const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
+  const {
+    paymentModes,
+    paymentModeDetails = {},
+    fetchPaymentModes,
+    posProfile: storePosProfile,
+    currency: storeCurrency,
+  } = usePOSStore();
   const currencyCode = order?.currency || storePosProfile?.currency || storeCurrency || '';
   const formatMoney = (amount: number) => formatCurrency(amount, currencyCode || undefined);
   const enablePaymentWithoutPrinting = Boolean(
@@ -100,6 +130,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const [appliedDiscountPct, setAppliedDiscountPct] = useState<number | null>(initialAppliedPct);
   const [appliedDiscount, setAppliedDiscount] = useState<number>(discountAmount || 0); // Only tracking transaction discount!
   const [paymentInputs, setPaymentInputs] = useState<{ [mode: string]: string }>({});
+  const autoFilledDefaultRef = useRef<string | null>(null);
+  const [fxInputs, setFxInputs] = useState<{ [mode: string]: string }>({});
+  const [refInputs, setRefInputs] = useState<{ [mode: string]: string }>({});
+  const [refDateInputs, setRefDateInputs] = useState<{ [mode: string]: string }>({});
+  const [liveFxRates, setLiveFxRates] = useState<Record<string, PosFxRateInfo>>({});
+  const [fxOverrides, setFxOverrides] = useState<Record<string, { rate: number; token: string; reason?: string }>>({});
+  const [pendingFxOverride, setPendingFxOverride] = useState<{ mode: string; currency: string; rate: number } | null>(null);
+  const [overrideRateDraft, setOverrideRateDraft] = useState<{ [mode: string]: string }>({});
   // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
   const [serverTotals, setServerTotals] = useState<{ grand_total: number; rounded_total: number } | null>(null);
   const receivedPayments = (existingPayments ?? order?.payments ?? []).filter(
@@ -142,6 +180,28 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   useEffect(() => {
     fetchPaymentModes();
   }, [fetchPaymentModes]);
+
+  useEffect(() => {
+    let active = true;
+    const hasFxNeedingRate = Object.values(paymentModeDetails || {}).some(
+      (cfg) =>
+        cfg?.custom_tender_currency &&
+        cfg.custom_tender_currency !== currencyCode &&
+        cfg.fx_rate_status === undefined &&
+        cfg.exchange_rate === undefined,
+    );
+    if (!hasFxNeedingRate || !posProfile || typeof call?.get !== 'function') return;
+    getPosFxRates(posProfile)
+      .then((res) => {
+        if (active && res?.rates) setLiveFxRates(res.rates);
+      })
+      .catch(() => {
+        // Stale/unreachable FX rates fail closed when rate is absent.
+      });
+    return () => {
+      active = false;
+    };
+  }, [posProfile, paymentModeDetails, currencyCode]);
 
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
   const baseTotal = grandTotal + (discountAmount || 0);
@@ -195,24 +255,120 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     : (roundedTotal || grandTotal);
   const balanceDue = Math.max(0, roundToCurrency(finalTotal - receivedTotal, currencyCode));
 
-  // Calculate split payment total for new tenders taken now
+  const getModeDetail = (id: string): PaymentModeConfig | undefined => paymentModeDetails?.[id];
+
+  const getFxCurrency = (id: string): string | null => {
+    const curr = (getModeDetail(id)?.custom_tender_currency || '').trim().toUpperCase();
+    return curr && currencyCode && curr !== currencyCode.toUpperCase() ? curr : null;
+  };
+
+  const getEffectiveFxRate = (id: string): number | null => {
+    const overridden = fxOverrides[id]?.rate;
+    if (overridden && overridden > 0) return overridden;
+    const live = liveFxRates[id];
+    if (live) {
+      return live.status === 'fresh' && Number(live.rate) > 0 ? Number(live.rate) : null;
+    }
+    const detail = getModeDetail(id);
+    if (detail?.fx_rate_status === 'stale') return null;
+    if (Number(detail?.exchange_rate) > 0) return Number(detail?.exchange_rate);
+    return null;
+  };
+
+  const getReferenceError = (id: string, active: boolean): string | null => {
+    if (!active) return null;
+    const detail = getModeDetail(id);
+    const mode = detail?.custom_reference_mode || 'Hidden';
+    if (mode === 'Hidden') return null;
+    const refVal = (refInputs[id] || '').trim();
+    const refDateVal = (refDateInputs[id] || '').trim();
+    if (mode === 'Required' && !refVal) {
+      return t('payment.reference_required', { mode: id });
+    }
+    if (refVal && detail?.custom_reference_pattern && !matchesReferencePattern(refVal, detail.custom_reference_pattern)) {
+      return t('payment.reference_invalid', { mode: id });
+    }
+    if (Number(detail?.custom_reference_date_required) === 1 && (mode === 'Required' || Boolean(refVal)) && !refDateVal) {
+      return t('payment.reference_date_required', { mode: id });
+    }
+    return null;
+  };
+
+  type TenderPayload = {
+    mode_of_payment: string;
+    amount: number;
+    reference_no?: string;
+    reference_date?: string;
+    clearance_date?: string;
+    custom_tender_currency?: string;
+    custom_tender_amount?: number;
+    override_exchange_rate?: number;
+    fx_override_token?: string;
+    fx_override_reason?: string;
+  };
+
+  // Calculate split payment total for new tenders taken now (home + foreign currency)
   const newPayments = paymentModes
-    .map((mode: any) => {
+    .map((mode: any): TenderPayload | null => {
       const id = typeof mode === 'string' ? mode : mode.id;
+      const fxCurr = getFxCurrency(id);
+      const refVal = (refInputs[id] || '').trim();
+      const refDateVal = (refDateInputs[id] || '').trim();
+      if (fxCurr) {
+        const fxAmt = parseFloat(fxInputs[id] || '');
+        const rate = getEffectiveFxRate(id);
+        if (!(fxAmt > 0) || !rate) return null;
+        const localAmt = roundToCurrency(fxAmt * rate, currencyCode);
+        const ov = fxOverrides[id];
+        return {
+          mode_of_payment: id,
+          amount: localAmt,
+          custom_tender_currency: fxCurr,
+          custom_tender_amount: roundToCurrency(fxAmt, fxCurr),
+          ...(refVal ? { reference_no: refVal } : {}),
+          ...(refDateVal ? { reference_date: refDateVal } : {}),
+          ...(ov ? { override_exchange_rate: ov.rate, fx_override_token: ov.token, ...(ov.reason ? { fx_override_reason: ov.reason } : {}) } : {}),
+        };
+      }
       const amount = parseFloat(paymentInputs[id] || '');
-      return amount > 0 ? { mode_of_payment: id, amount } : null;
+      if (!(amount > 0)) return null;
+      return {
+        mode_of_payment: id,
+        amount,
+        ...(refVal ? { reference_no: refVal } : {}),
+        ...(refDateVal ? { reference_date: refDateVal } : {}),
+      };
     })
-    .filter(Boolean) as Array<{ mode_of_payment: string; amount: number }>;
+    .filter(Boolean) as TenderPayload[];
+
+  const hasStaleFxInput = paymentModes.some((mode: any) => {
+    const id = typeof mode === 'string' ? mode : mode.id;
+    const fxCurr = getFxCurrency(id);
+    if (!fxCurr) return false;
+    const fxAmt = parseFloat(fxInputs[id] || '');
+    return fxAmt > 0 && !getEffectiveFxRate(id);
+  });
+
+  const hasRefValidationError = paymentModes.some((mode: any) => {
+    const id = typeof mode === 'string' ? mode : mode.id;
+    const fxCurr = getFxCurrency(id);
+    const active = fxCurr ? (parseFloat(fxInputs[id] || '') || 0) > 0 : (parseFloat(paymentInputs[id] || '') || 0) > 0;
+    return getReferenceError(id, active) !== null;
+  });
+
+  const hasFxTender = newPayments.some((p) => Boolean(p.custom_tender_currency));
   const rawNewPaymentsTotal = newPayments.reduce((sum, p) => sum + p.amount, 0);
   const newPaymentsTotal = roundToCurrency(rawNewPaymentsTotal, currencyCode);
   const rawTotalTendered = receivedTotal + rawNewPaymentsTotal;
   const totalTendered = roundToCurrency(rawTotalTendered, currencyCode);
-  const receivedPaymentPayloads = receivedPayments.map((row) => ({
+  const receivedPaymentPayloads: TenderPayload[] = receivedPayments.map((row) => ({
     mode_of_payment: row.mode_of_payment,
     amount: Number(row.amount),
     ...(row.reference_no ? { reference_no: row.reference_no } : {}),
     ...(row.reference_date ? { reference_date: row.reference_date } : {}),
     ...(row.clearance_date ? { clearance_date: row.clearance_date } : {}),
+    ...(row.custom_tender_currency ? { custom_tender_currency: row.custom_tender_currency } : {}),
+    ...(row.custom_tender_amount ? { custom_tender_amount: Number(row.custom_tender_amount) } : {}),
   }));
   const combinedPayments = [...receivedPaymentPayloads, ...newPayments];
 
@@ -248,9 +404,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     && !!customer.trim() && customer !== storePosProfile.customer
     && !profileLacksDefaultCustomerConfig(storePosProfile)
     && !isConfiguredDefaultCustomer(customer, storePosProfile);
-  // Both rules hold: a Room Charge waits for a verified room, and only a named
-  // account may settle short.
-  const paymentDisabled = isProcessing || !roomVerified
+  // Both rules hold: a Room Charge waits for a verified room, required payment
+  // references / valid FX rates must be satisfied, and only a named account may settle short.
+  const paymentDisabled = isProcessing || !roomVerified || hasRefValidationError || hasStaleFxInput
     || ((combinedPayments.length === 0 || isShort) && !canPayOnAccount);
   const settlementPayments = combinedPayments.length === 0 && canPayOnAccount
     ? [{ mode_of_payment: accountPaymentMode, amount: 0 }]
@@ -289,15 +445,18 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
 
   useEffect(()=>{
     const defaultPaymentModePresent=paymentModes.find((mode: string | { id: string })=>(typeof mode === 'string' ? mode : mode.id)===defaultPaymentMode)
+    const defaultIsFx = Boolean(defaultPaymentMode && getFxCurrency(defaultPaymentMode));
     //only one payment mode should be present, then autofill the remaining balance due, if not do not fill
-    const otherPaymentModesNotEntered=Object.keys(paymentInputs).length<=1;
-    if(paymentModes && defaultPaymentMode && defaultPaymentModePresent && otherPaymentModesNotEntered){
+    const otherPaymentModesNotEntered=Object.keys(paymentInputs).length<=1 && Object.keys(fxInputs).length===0;
+    if(paymentModes && defaultPaymentMode && defaultPaymentModePresent && !defaultIsFx && otherPaymentModesNotEntered){
       if(balanceDue > 0){
+        autoFilledDefaultRef.current = defaultPaymentMode;
         setPaymentInputs((prev)=>({ 
           ...prev,
           [defaultPaymentMode]:String(balanceDue) 
         }))
       } else if (receivedTotal > 0) {
+        autoFilledDefaultRef.current = null;
         setPaymentInputs((prev)=>({
           ...prev,
           [defaultPaymentMode]:''
@@ -305,6 +464,21 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
       }
     }
   },[balanceDue,receivedTotal,paymentModes,defaultPaymentMode])
+
+  const clearAutoFilledDefaultIfOther = (activeModeId: string) => {
+    const autoMode = autoFilledDefaultRef.current;
+    if (autoMode && autoMode !== activeModeId) {
+      autoFilledDefaultRef.current = null;
+      setPaymentInputs((prev) => {
+        if (!(autoMode in prev)) return prev;
+        const next = { ...prev };
+        delete next[autoMode];
+        return next;
+      });
+    } else if (autoMode === activeModeId) {
+      autoFilledDefaultRef.current = null;
+    }
+  };
 
   // Helper to calculate remaining balance rounded to the active currency's precision
   const getRemainingBalance = (currentId: string) => {
@@ -340,11 +514,12 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         return;
       }
 
-      const offlineCapable = canCaptureOffline(
+      const offlineCapable = canSettleOffline(
         storePosProfile ?? { name: posProfile },
         user ?? { name: 'Guest', roles: [] }
       );
       const trimmedRoomNumber = roomChargeAmount > 0 ? roomNumber.trim() : undefined;
+      const singleNewTender = receivedPayments.length === 0 && newPayments.length === 1 ? newPayments[0] : null;
 
       if (effectivePrintInvoice && !offlineCapable) {
         // Step 1: Save the draft invoice with discount and payment modes
@@ -372,7 +547,9 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           profile: storePosProfile ?? { name: posProfile }, user: user ?? { name: 'Guest', roles: [] },
           invoice, customer, table, cashier, owner, clientOrderId: order?.ury_client_order_id,
           amount: totalTendered, due: finalTotal, discount: appliedDiscount,
-          modeOfPayment: receivedPayments.length === 0 && newPayments.length === 1 ? newPayments[0]?.mode_of_payment ?? '' : '',
+          modeOfPayment: singleNewTender?.mode_of_payment ?? '',
+          reference: singleNewTender?.reference_no,
+          referenceDate: singleNewTender?.reference_date,
           roomNumber: trimmedRoomNumber,
           onlineSettle: (ids) => call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
             additionalDiscount: appliedDiscountPct,
@@ -526,21 +703,174 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             <div className="grid grid-cols-1 gap-3">
               {paymentModes.map((mode: any) => {
                 const id = typeof mode === 'string' ? mode : mode.id;
+                const label = typeof mode === 'string' ? mode : mode.name;
+                const detail = getModeDetail(id);
+                const fxCurr = getFxCurrency(id);
+                const fxRate = fxCurr ? getEffectiveFxRate(id) : null;
+                const fxIsStale = Boolean(fxCurr && !fxRate);
+                const fxRawVal = fxInputs[id] || '';
+                const fxNum = parseFloat(fxRawVal) || 0;
+                const fxLocalEquiv = fxCurr && fxRate && fxNum > 0 ? roundToCurrency(fxNum * fxRate, currencyCode) : 0;
+                const isActiveTender = fxCurr ? fxNum > 0 : (parseFloat(paymentInputs[id] || '') || 0) > 0;
+                const refMode = detail?.custom_reference_mode || 'Hidden';
+                const showRefInput = refMode !== 'Hidden' && isActiveTender;
+                const refRequired = refMode === 'Required';
+                const refDateRequired = Number(detail?.custom_reference_date_required) === 1;
+                const refError = getReferenceError(id, isActiveTender);
+                const allowFxOverride = Number(storePosProfile?.custom_allow_fx_rate_override) === 1;
+
                 return (
-                  <div key={id} className="flex items-center gap-3">
-                    <span className="w-24 font-medium">{typeof mode === 'string' ? mode : mode.name}</span>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={paymentInputs[id] || ''}
-                      onChange={e => setPaymentInputs(inputs => ({ ...inputs, [id]: e.target.value }))}
-                      onFocus={() => handlePaymentInputFocus(id)}
-                      placeholder={t('payment.amount_placeholder')}
-                      className="flex-1"
-                      size="sm"
-                      disabled={isProcessing}
-                    />
+                  <div key={id} className="rounded-md border border-gray-200 p-2.5 space-y-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-28 shrink-0">
+                        <span className="font-medium text-sm text-gray-900 break-words">{label}</span>
+                        {fxCurr && (
+                          <span
+                            data-testid={`fx-badge-${id}`}
+                            className="mt-0.5 inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200"
+                          >
+                            {fxCurr}
+                          </span>
+                        )}
+                      </div>
+                      {fxCurr ? (
+                        <Input
+                          data-testid={`payment-fx-amount-${id}`}
+                          type="number"
+                          min="0"
+                          step={stepForCurrency(fxCurr)}
+                          value={fxRawVal}
+                          onChange={(e) => {
+                            if (e.target.value) clearAutoFilledDefaultIfOther(id);
+                            setFxInputs((prev) => ({ ...prev, [id]: e.target.value }));
+                          }}
+                          placeholder={fxCurr}
+                          className="flex-1"
+                          size="sm"
+                          disabled={isProcessing || fxIsStale}
+                        />
+                      ) : (
+                        <Input
+                          data-testid={`payment-amount-${id}`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={paymentInputs[id] || ''}
+                          onChange={(e) => {
+                            if (e.target.value) clearAutoFilledDefaultIfOther(id);
+                            setPaymentInputs((inputs) => ({ ...inputs, [id]: e.target.value }));
+                          }}
+                          onFocus={() => handlePaymentInputFocus(id)}
+                          placeholder={t('payment.amount_placeholder')}
+                          className="flex-1"
+                          size="sm"
+                          disabled={isProcessing}
+                        />
+                      )}
+                    </div>
+
+                    {fxCurr && fxRate && (
+                      <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-gray-600 ps-1">
+                        <span className="tabular-nums">
+                          {t('payment.fx_rate_badge', { currency: fxCurr, rate: fxRate, home: currencyCode })}
+                        </span>
+                        {fxLocalEquiv > 0 && (
+                          <span data-testid={`fx-equiv-${id}`} className="font-semibold text-blue-700 tabular-nums">
+                            {t('payment.fx_equivalent', { amount: formatMoney(fxLocalEquiv) })}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {fxCurr && fxIsStale && (
+                      <div
+                        role="alert"
+                        data-testid={`fx-stale-alert-${id}`}
+                        className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 space-y-1.5"
+                      >
+                        <div className="flex items-start gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-700" />
+                          <span>{t('payment.fx_stale_rate', { currency: fxCurr })}</span>
+                        </div>
+                        {allowFxOverride && (
+                          <div className="flex items-center gap-2 pt-1">
+                            <Input
+                              data-testid={`fx-override-rate-input-${id}`}
+                              type="number"
+                              min="0"
+                              step="0.0001"
+                              value={overrideRateDraft[id] || ''}
+                              onChange={(e) => setOverrideRateDraft((prev) => ({ ...prev, [id]: e.target.value }))}
+                              placeholder={t('payment.fx_override_rate')}
+                              size="sm"
+                              className="flex-1 bg-white"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={isProcessing || !(parseFloat(overrideRateDraft[id] || '') > 0)}
+                              onClick={() => {
+                                const parsed = parseFloat(overrideRateDraft[id] || '');
+                                if (parsed > 0) {
+                                  setPendingFxOverride({ mode: id, currency: fxCurr, rate: parsed });
+                                }
+                              }}
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5 me-1" />
+                              {t('payment.fx_override_rate')}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {showRefInput && (
+                      <div className="space-y-1.5 pt-1 border-t border-gray-100">
+                        <label
+                          htmlFor={`payment-ref-${id}`}
+                          className="block text-xs font-medium text-gray-700"
+                        >
+                          {detail?.custom_reference_label || t('payment.reference_label_default')}
+                          {refRequired && <span className="text-red-600 ms-0.5">*</span>}
+                        </label>
+                        <Input
+                          id={`payment-ref-${id}`}
+                          data-testid={`payment-ref-${id}`}
+                          type="text"
+                          value={refInputs[id] || ''}
+                          onChange={(e) => setRefInputs((prev) => ({ ...prev, [id]: e.target.value }))}
+                          placeholder={detail?.custom_reference_placeholder || t('payment.reference_placeholder_default')}
+                          size="sm"
+                          disabled={isProcessing}
+                        />
+                        {refDateRequired && (
+                          <div className="space-y-1">
+                            <label
+                              htmlFor={`payment-ref-date-${id}`}
+                              className="block text-xs font-medium text-gray-700"
+                            >
+                              {t('payment.reference_date')}
+                              {refRequired && <span className="text-red-600 ms-0.5">*</span>}
+                            </label>
+                            <Input
+                              id={`payment-ref-date-${id}`}
+                              data-testid={`payment-ref-date-${id}`}
+                              type="date"
+                              value={refDateInputs[id] || ''}
+                              onChange={(e) => setRefDateInputs((prev) => ({ ...prev, [id]: e.target.value }))}
+                              size="sm"
+                              disabled={isProcessing}
+                            />
+                          </div>
+                        )}
+                        {refError && (
+                          <p role="alert" className="text-xs text-red-600">
+                            {refError}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -623,8 +953,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               </p>
             )}
             {changeDue > 0 && (
-              <p className="text-yellow-700 text-sm font-medium">
-                {t('payment.change_due', { amount: formatMoney(changeDue) })}
+              <p
+                data-testid={hasFxTender ? 'fx-local-change' : undefined}
+                className="text-yellow-700 text-sm font-medium"
+              >
+                {hasFxTender && currencyCode
+                  ? t('payment.fx_change_local', { currency: currencyCode, amount: formatMoney(changeDue) })
+                  : t('payment.change_due', { amount: formatMoney(changeDue) })}
               </p>
             )}
           </div>
@@ -719,6 +1054,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
 
           {/* Payment Button */}
           <Button
+            data-testid="payment-submit-btn"
             onClick={handlePayment}
             disabled={paymentDisabled}
             variant={paymentDisabled ? "secondary" : "default"}
@@ -727,6 +1063,37 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatMoney(newPaymentsTotal > 0 ? newPaymentsTotal : balanceDue) })}
           </Button>
         </div>
+        {pendingFxOverride && (
+          <ManagerApproval
+            open={true}
+            posProfile={posProfile}
+            privilege="fx_rate_override"
+            title={t('payment.fx_override_rate')}
+            summaryLines={[
+              `${pendingFxOverride.mode}: 1 ${pendingFxOverride.currency} = ${pendingFxOverride.rate} ${currencyCode}`,
+            ]}
+            reference={{ doctype: 'POS Invoice', name: invoice }}
+            claim={{
+              action: 'pos_fx_rate_override',
+              mode_of_payment: pendingFxOverride.mode,
+              from_currency: pendingFxOverride.currency,
+              to_currency: currencyCode,
+              override_rate: pendingFxOverride.rate,
+            }}
+            onApproved={(result: ManagerApprovalResult) => {
+              setFxOverrides((prev) => ({
+                ...prev,
+                [pendingFxOverride.mode]: {
+                  rate: pendingFxOverride.rate,
+                  token: result.token,
+                  reason: result.reason,
+                },
+              }));
+              setPendingFxOverride(null);
+            }}
+            onCancel={() => setPendingFxOverride(null)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

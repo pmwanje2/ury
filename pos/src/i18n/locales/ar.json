@@ -178,7 +178,18 @@
     "account_limit": "حد الائتمان",
     "account_available": "الائتمان المتاح",
     "no_accounts": "لم يتم العثور على حسابات معتمدة.",
-    "account_search_failed": "تعذّر البحث في حسابات الائتمان."
+    "account_search_failed": "تعذّر البحث في حسابات الائتمان.",
+    "reference_label_default": "مرجع الدفع",
+    "reference_placeholder_default": "أدخل مرجع المعاملة أو رمز التفويض",
+    "reference_required": "أدخل مرجع الدفع لـ {{mode}}.",
+    "reference_invalid": "مرجع الدفع لـ {{mode}} لا يطابق التنسيق المطلوب.",
+    "reference_date": "تاريخ المرجع",
+    "reference_date_required": "اختر تاريخ المرجع لـ {{mode}}.",
+    "fx_rate_badge": "1 {{currency}} = {{rate}} {{home}}",
+    "fx_equivalent": "المعادل المحلي: {{amount}}",
+    "fx_stale_rate": "سعر الصرف لـ {{currency}} منتهي الصلاحية أو غير متوفر. حدّث السعر قبل إتمام الدفع.",
+    "fx_override_rate": "تجاوز سعر الصرف بموافقة المدير",
+    "fx_change_local": "الباقي المستحق بعملة {{currency}}: {{amount}}"
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",
@@ -239,7 +250,9 @@
     "expected": "المتوقع",
     "closing": "الإغلاق",
     "difference": "الفرق",
-    "on_account": "على الحساب"
+    "on_account": "على الحساب",
+    "fx_native_count": "الجرد بعملة {{currency}}",
+    "fx_base_equivalent": "المعادل الأساسي: {{amount}}"
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -980,7 +993,10 @@
     "client_order": "طلب العميل",
     "captured": "وقت التسجيل",
     "no_fdn": "تسجيل دون اتصال؛ لا يوجد رقم فاتورة ضريبية.",
-    "refused": "{{action}} غير متاح دون اتصال. أعد الاتصال بالخادم أولاً."
+    "refused": "{{action}} غير متاح دون اتصال. أعد الاتصال بالخادم أولاً.",
+    "waiter_offline_pill": "غير متصل · الطلبات محفوظة محلياً",
+    "waiter_queued_badge": "{{count}} بانتظار المزامنة",
+    "waiter_settle_blocked": "التحصيل دون اتصال يتطلب صلاحية أمين الصندوق."
   },
   "bill_requests": {
     "choose_check": "Choose an open check",

@@ -249,7 +249,7 @@ describe('POS-PR-6: G22 & G25 ClosingPaymentTable currency-wise foreign cash cou
 
     const fxInput = screen.getByTestId('closing-fx-input-USD Cash') as HTMLInputElement;
     expect(fxInput).toBeInTheDocument();
-    expect(screen.getByText(/USD/)).toBeInTheDocument();
+    expect(screen.getAllByText(/USD/).length).toBeGreaterThanOrEqual(2);
 
     fireEvent.change(fxInput, { target: { value: '95' } });
     await waitFor(() => {

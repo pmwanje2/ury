@@ -10,6 +10,8 @@ interface ClosingPaymentTableProps {
   /** Modes the cashier has explicitly entered a closing amount for (see Fix 2). */
   touchedModes: Set<string>;
   onChange: (modeOfPayment: string, closingAmount: number) => void;
+  /** Physical count in native foreign tender currency for FX modes (G22). */
+  onForeignChange?: (modeOfPayment: string, closingForeignAmount: number) => void;
   /** Mask Expected and Difference (display only; values are still computed and submitted). */
   hideExpected?: boolean;
   /** Blind cash count: omit the Expected and Difference columns entirely. */
@@ -17,10 +19,22 @@ interface ClosingPaymentTableProps {
   currency?: string;
 }
 
+function fxStepForCurrency(code?: string | null): string {
+  if (!code) return '0.01';
+  try {
+    const digits = new Intl.NumberFormat('en', { style: 'currency', currency: code }).resolvedOptions()
+      .maximumFractionDigits ?? 2;
+    return digits === 0 ? '1' : digits === 3 ? '0.001' : '0.01';
+  } catch {
+    return '0.01';
+  }
+}
+
 const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
   rows,
   touchedModes,
   onChange,
+  onForeignChange,
   hideExpected = false,
   blindCashCount = false,
   currency,
@@ -31,6 +45,21 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
     // not stop programmatic or pasted negative input.
     const closingAmount = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     onChange(modeOfPayment, closingAmount);
+  };
+
+  const handleForeignAmountChange = (row: ClosingPaymentSummary, value: string) => {
+    const parsed = parseFloat(value);
+    const fxAmount = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    if (onForeignChange) {
+      onForeignChange(row.mode_of_payment, fxAmount);
+    } else {
+      const rate =
+        row.effective_exchange_rate ||
+        (row.custom_expected_foreign_amount && row.custom_expected_foreign_amount > 0
+          ? row.expected_amount / row.custom_expected_foreign_amount
+          : 1);
+      onChange(row.mode_of_payment, fxAmount * rate);
+    }
   };
 
   return (
@@ -97,8 +126,15 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
             // Positive = overage (cashier has more than expected), negative
             // = shortage. Must match the sign convention used in the submit
             // payload built by POSClosingDialog.handleSubmit.
+            const fxCurrency =
+              row.custom_tender_currency && row.custom_tender_currency !== currency
+                ? row.custom_tender_currency
+                : null;
+            const expectedFx = Number(row.custom_expected_foreign_amount) || 0;
+            const closingFx = Number(row.custom_closing_foreign_amount) || 0;
+            const foreignDiff = closingFx - expectedFx;
             const difference = row.closing_amount - row.expected_amount;
-            const hasDifference = Math.abs(difference) > 0.001;
+            const hasDifference = fxCurrency ? Math.abs(foreignDiff) > 0.001 : Math.abs(difference) > 0.001;
             const isTouched = touchedModes.has(row.mode_of_payment);
 
             return (
@@ -110,29 +146,67 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                 )}
               >
                 <td className="py-3 px-4 text-gray-900 font-medium">
-                  {row.mode_of_payment}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span>{row.mode_of_payment}</span>
+                    {fxCurrency && (
+                      <span className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200">
+                        {fxCurrency}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="py-3 px-4 text-end text-gray-700">
                   {formatCurrency(row.opening_amount, currency)}
                 </td>
                 {!blindCashCount && (
                 <td className="py-3 px-4 text-end text-gray-700">
-                  {hideExpected ? '—' : formatCurrency(row.expected_amount, currency)}
+                  {hideExpected ? (
+                    '—'
+                  ) : fxCurrency ? (
+                    <div className="tabular-nums">
+                      <div className="font-medium">{formatCurrency(expectedFx, fxCurrency)}</div>
+                      <div className="text-xs text-gray-500">
+                        {t('pos_closing.fx_base_equivalent', { amount: formatCurrency(row.expected_amount, currency) })}
+                      </div>
+                    </div>
+                  ) : (
+                    formatCurrency(row.expected_amount, currency)
+                  )}
                 </td>
                 )}
                 <td className="py-3 px-4">
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={row.closing_amount > 0 ? String(row.closing_amount) : ''}
-                    onChange={(e) =>
-                      handleClosingAmountChange(row.mode_of_payment, e.target.value)
-                    }
-                    placeholder="0.00"
-                    className={cn('w-full text-center', !isTouched && 'border-amber-400')}
-                    size="sm"
-                  />
+                  {fxCurrency ? (
+                    <div className="space-y-1">
+                      <Input
+                        data-testid={`closing-fx-input-${row.mode_of_payment}`}
+                        aria-label={t('pos_closing.fx_native_count', { currency: fxCurrency })}
+                        type="number"
+                        min="0"
+                        step={fxStepForCurrency(fxCurrency)}
+                        value={closingFx > 0 ? String(closingFx) : ''}
+                        onChange={(e) => handleForeignAmountChange(row, e.target.value)}
+                        placeholder={t('pos_closing.fx_native_count', { currency: fxCurrency })}
+                        className={cn('w-full text-center', !isTouched && 'border-amber-400')}
+                        size="sm"
+                      />
+                      <div className="text-center text-xs text-gray-500 tabular-nums">
+                        {formatCurrency(row.closing_amount, currency)}
+                      </div>
+                    </div>
+                  ) : (
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={row.closing_amount > 0 ? String(row.closing_amount) : ''}
+                      onChange={(e) =>
+                        handleClosingAmountChange(row.mode_of_payment, e.target.value)
+                      }
+                      placeholder="0.00"
+                      className={cn('w-full text-center', !isTouched && 'border-amber-400')}
+                      size="sm"
+                    />
+                  )}
                 </td>
                 {!blindCashCount && (
                 <td
@@ -145,7 +219,16 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                         : 'text-green-600'
                   )}
                 >
-                  {hideExpected ? '—' : formatCurrency(difference, currency)}
+                  {hideExpected ? (
+                    '—'
+                  ) : fxCurrency ? (
+                    <div className="tabular-nums">
+                      <div>{formatCurrency(foreignDiff, fxCurrency)}</div>
+                      <div className="text-xs opacity-80">{formatCurrency(difference, currency)}</div>
+                    </div>
+                  ) : (
+                    formatCurrency(difference, currency)
+                  )}
                 </td>
                 )}
               </tr>

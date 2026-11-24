@@ -70,7 +70,10 @@ def merged_bill(text):
 		taxes=[
 			Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=12, included_in_print_rate=0),
 		],
-		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=20, account=None)],
+		payments=[Doc(
+			mode_of_payment=text("partner.mode_of_payment"), amount=20, account=None,
+			custom_tender_currency=None, custom_tender_amount=0, custom_exchange_rate=0, reference_no=None,
+		)],
 		paid_amount=20, change_amount=0, outstanding_amount=60,
 		tax_id=text("partner.tax_id"), efris_e_invoice=None,
 	)
@@ -98,8 +101,15 @@ def merged_bill(text):
 		custom_merged_pos_invoice=text("doc.custom_merged_pos_invoice"), custom_merged_total=80,
 		custom_merged_pos_invoice_details=[Doc(item_name=text("merged.item_name"), comment=text("merged.comment"), qty=1, rate=80, amount=80)],
 		payments=[
-			Doc(mode_of_payment=text("doc.mode_of_payment"), amount=20, account=None),
-			Doc(mode_of_payment="Room Charge", amount=20, account=None),
+			Doc(
+				mode_of_payment=text("doc.mode_of_payment"), amount=20, account=None,
+				custom_tender_currency=text("doc.tender_currency"), custom_tender_amount=10,
+				custom_exchange_rate=2, reference_no=text("doc.payment_ref"),
+			),
+			Doc(
+				mode_of_payment="Room Charge", amount=20, account=None,
+				custom_tender_currency=None, custom_tender_amount=0, custom_exchange_rate=0, reference_no=None,
+			),
 		],
 		paid_amount=40, change_amount=0, outstanding_amount=60,
 		efris_e_invoice="EINV-1", terms=None, ury_print_partner=partner,
@@ -115,7 +125,10 @@ def bill_copy(text):
 		taxes=[Doc(description=text("partner.tax_description"), account_head="VAT", rate=18, tax_amount=9, included_in_print_rate=0)],
 		total=50, net_total=50, discount_amount=0, additional_discount_percentage=0, rounding_adjustment=0,
 		grand_total=59, rounded_total=59, outstanding_amount=0, change_amount=0,
-		payments=[Doc(mode_of_payment=text("partner.mode_of_payment"), amount=59, account=None)],
+		payments=[Doc(
+			mode_of_payment=text("partner.mode_of_payment"), amount=59, account=None,
+			custom_tender_currency=None, custom_tender_amount=0, custom_exchange_rate=0, reference_no=None,
+		)],
 		tax_id=text("partner.tax_id"), efris_e_invoice=None,
 	)
 	return Doc(
@@ -130,8 +143,15 @@ def bill_copy(text):
 		total=100, net_total=100, discount_amount=0, additional_discount_percentage=0, rounding_adjustment=0,
 		grand_total=118, rounded_total=118, outstanding_amount=60, change_amount=0,
 		payments=[
-			Doc(mode_of_payment=text("payment.mode_of_payment"), amount=38, account=None),
-			Doc(mode_of_payment="Room Charge", amount=20, account=None),
+			Doc(
+				mode_of_payment=text("payment.mode_of_payment"), amount=38, account=None,
+				custom_tender_currency=text("payment.tender_currency"), custom_tender_amount=10,
+				custom_exchange_rate=3.8, reference_no=text("payment.reference_no"),
+			),
+			Doc(
+				mode_of_payment="Room Charge", amount=20, account=None,
+				custom_tender_currency=None, custom_tender_amount=0, custom_exchange_rate=0, reference_no=None,
+			),
 		],
 		tax_id=text("doc.tax_id"), efris_e_invoice="EINV-1", ury_print_partner=partner,
 	)
@@ -162,7 +182,7 @@ FORMATS = {
 		"waiter.full_name", "cashier.full_name", "doc.restaurant", "doc.branch", "doc.no_of_pax",
 		"item.item_name", "item.comment", "service.description", "tax.description",
 		"doc.custom_merged_pos_invoice", "merged.item_name", "merged.comment",
-		"doc.mode_of_payment", "doc.customer", "doc.currency", "doc.tax_id",
+		"doc.mode_of_payment", "doc.tender_currency", "doc.payment_ref", "doc.customer", "doc.currency", "doc.tax_id",
 		"partner.mode_of_payment", "partner.customer", "partner.currency",
 		"efris.fdn", "efris.verification_code", "efris.device_no", "efris.issued",
 		"efris.original_fdn", "efris.tax_category", "partner.application_ref",
@@ -171,7 +191,7 @@ FORMATS = {
 		"company.name", "address.line1", "address.city", "company.phone", "company.tax_id",
 		"doc.restaurant", "doc.branch", "doc.name", "doc.customer_name", "doc.currency",
 		"doc.room_number", "doc.custom_guest_label",
-		"item.item_name", "item.comment", "tax.description", "payment.mode_of_payment", "doc.customer", "doc.tax_id",
+		"item.item_name", "item.comment", "tax.description", "payment.mode_of_payment", "payment.tender_currency", "payment.reference_no", "doc.customer", "doc.tax_id",
 		"partner.name", "partner.item_name", "partner.item_comment", "partner.tax_description", "partner.mode_of_payment",
 		"efris.fdn", "efris.verification_code", "efris.device_no", "efris.issued",
 		"efris.original_fdn", "efris.tax_category", "partner.application_ref",

@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 CUSTOM_FIELDS_JSON = ROOT / "ury" / "fixtures" / "custom_field.json"
 HOOKS_PY = ROOT / "ury" / "hooks.py"
 SETUP_CUSTOMIZATIONS_PY = ROOT / "ury" / "setup_customizations.py"
@@ -68,6 +68,9 @@ def _ensure_frappe_stub():
     utils_mod = types.ModuleType("frappe.utils")
     utils_mod.cint = lambda v: int(float(v or 0))
     utils_mod.flt = lambda v, p=None: round(float(v or 0), p) if p is not None else float(v or 0)
+    utils_mod.getdate = lambda v=None: datetime.date.fromisoformat(str(v)[:10]) if v else datetime.date(2026, 11, 24)
+    utils_mod.add_days = lambda d, n: d + datetime.timedelta(days=int(n))
+    utils_mod.today = lambda: "2026-11-24"
     utils_mod.get_datetime = lambda v: datetime.datetime.fromisoformat(str(v)) if isinstance(v, str) else v
     utils_mod.now_datetime = lambda: datetime.datetime(2026, 11, 24, 14, 0, 0)
     utils_mod.get_system_timezone = lambda: "UTC"

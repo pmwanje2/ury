@@ -1078,6 +1078,39 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                   </div>
                 </div>
               )}
+
+              {/* Settled / Recorded Payments (reference_no & FX tender details) */}
+              {selectedOrder.payments && selectedOrder.payments.some((p) => Number(p.amount) > 0) && (
+                <div className="mb-6" data-testid="order-payments-summary">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">{t('payment.payment_methods')}</h3>
+                  <div className="space-y-2">
+                    {selectedOrder.payments
+                      .filter((p) => Number(p.amount) > 0)
+                      .map((p, index) => (
+                        <div key={`${p.mode_of_payment}-${index}`} className="flex justify-between items-start gap-2 py-1 border-b border-gray-100 text-sm">
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900">{p.mode_of_payment}</div>
+                            {p.custom_tender_currency && Number(p.custom_tender_amount) > 0 && (
+                              <div className="text-xs text-blue-700 tabular-nums">
+                                {formatCurrency(Number(p.custom_tender_amount), p.custom_tender_currency)}
+                                {Number(p.custom_exchange_rate) > 0 ? ` @ ${p.custom_exchange_rate}` : ''}
+                              </div>
+                            )}
+                            {p.reference_no && (
+                              <div className="text-xs text-gray-600 break-all">
+                                {t('payment.reference_label', { ref: p.reference_no })}
+                                {p.reference_date ? ` · ${p.reference_date}` : ''}
+                              </div>
+                            )}
+                          </div>
+                          <span className="font-semibold text-gray-900 shrink-0 tabular-nums">
+                            {formatCurrency(Number(p.amount), selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Sticky Bottom Section: Print | Split | Settle | Total */}

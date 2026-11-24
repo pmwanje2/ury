@@ -105,6 +105,10 @@ export interface PosProfileFull {
   /** Roles exempt from floor-tablet sign-out (POS Profile.custom_floor_stay_signed_in_roles). */
   custom_floor_stay_signed_in_roles?: Array<{ role: string }>;
   efris_print_wait_seconds?: number;
+  custom_allow_fx_rate_override?: number;
+  custom_max_fx_variance_pct?: number;
+  custom_offline_peer_relay_url?: string;
+  custom_offline_collision_policy?: string;
 }
 
 // Combined POS Profile with both limited and full fields

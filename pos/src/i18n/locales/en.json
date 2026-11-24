@@ -171,7 +171,18 @@
     "discount_not_applied": "Press Apply to update the total before paying.",
     "already_received": "Already received",
     "balance_due": "Balance due",
-    "reference_label": "Ref: {{ref}}"
+    "reference_label": "Ref: {{ref}}",
+    "reference_label_default": "Payment reference",
+    "reference_placeholder_default": "Enter transaction reference or auth code",
+    "reference_required": "Enter a payment reference for {{mode}}.",
+    "reference_invalid": "Payment reference for {{mode}} does not match the required format.",
+    "reference_date": "Reference date",
+    "reference_date_required": "Select a reference date for {{mode}}.",
+    "fx_rate_badge": "1 {{currency}} = {{rate}} {{home}}",
+    "fx_equivalent": "Local equivalent: {{amount}}",
+    "fx_stale_rate": "Exchange rate for {{currency}} is stale or missing. Update the rate before taking payment.",
+    "fx_override_rate": "Manager override rate",
+    "fx_change_local": "Change due in {{currency}}: {{amount}}"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
@@ -232,7 +243,9 @@
     "opening": "Opening",
     "expected": "Expected",
     "closing": "Closing",
-    "difference": "Difference"
+    "difference": "Difference",
+    "fx_native_count": "Count in {{currency}}",
+    "fx_base_equivalent": "Base equivalent: {{amount}}"
   },
   "checklist": {
     "title_opening": "Opening Checklist",
@@ -973,7 +986,10 @@
     "client_order": "Client order",
     "captured": "Captured",
     "no_fdn": "Offline capture; no fiscal device number.",
-    "refused": "{{action}} is refused offline. Reconnect to the server first."
+    "refused": "{{action}} is refused offline. Reconnect to the server first.",
+    "waiter_offline_pill": "Offline · Orders queued locally",
+    "waiter_queued_badge": "{{count}} queued offline",
+    "waiter_settle_blocked": "Offline settlement requires cashier billing access."
   },
   "bill_requests": {
     "choose_check": "Choose an open check",

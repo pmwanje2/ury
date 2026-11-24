@@ -8,6 +8,10 @@ export interface OfflineProfile extends DefaultCustomerConfig {
   name: string;
   ury_offline_capture?: unknown;
   role_allowed_for_billing?: Array<{ role: string }>;
+  role_restricted_for_table_order?: Array<{ role: string }>;
+  custom_offline_peer_relay_url?: string | null;
+  custom_offline_collision_policy?: string | null;
+  branch?: string | null;
   print_type?: string;
   qz_host?: string | null;
   print_format?: string | null;
@@ -33,7 +37,14 @@ export interface OfflineOrder {
   mode_of_payment?: string; order_type: string; table?: string; room?: string; comments?: string | null;
 }
 export interface OfflineSettlement {
-  kind: 'cash' | 'mobile-money'; mode_of_payment: string; amount: number; reference?: string; room_number?: string;
+  kind: 'cash' | 'mobile-money';
+  mode_of_payment: string;
+  amount: number;
+  reference?: string;
+  reference_date?: string;
+  room_number?: string;
+  custom_tender_currency?: string;
+  custom_tender_amount?: number;
 }
 export interface OfflineEntry {
   sequence?: number; owner: string; profile: string; client_order_id: string; outage_id: string;
@@ -104,10 +115,33 @@ export async function purgeEmptyOutbox(): Promise<void> {
   });
   changed();
 }
+export function canCaptureOfflineOrder(
+  profile?: OfflineProfile | null,
+  user?: OfflineUser | null,
+  orderType?: string | null,
+): boolean {
+  if (!profile || !user || !user.name || user.name === 'Guest') return false;
+  if (![1, '1', true].includes(profile.ury_offline_capture as number | string | boolean)) return false;
+  if (!Array.isArray(user.roles) || user.roles.length === 0) return false;
+  if (
+    orderType === 'Dine In' &&
+    profile.role_restricted_for_table_order?.some((row) => user.roles.includes(row.role))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function canSettleOffline(profile?: OfflineProfile | null, user?: OfflineUser | null): boolean {
+  return (
+    canCaptureOfflineOrder(profile, user) &&
+    !!profile?.role_allowed_for_billing?.some((row) => user?.roles?.includes(row.role))
+  );
+}
+
+/** Backwards-compatible alias for billing-capable offline capture (cashier tills). */
 export function canCaptureOffline(profile?: OfflineProfile | null, user?: OfflineUser | null): boolean {
-  return !!profile && !!user && user.name !== 'Guest' &&
-    [1, '1', true].includes(profile.ury_offline_capture as number | string | boolean) &&
-    !!profile.role_allowed_for_billing?.some((row) => user.roles.includes(row.role));
+  return canSettleOffline(profile, user);
 }
 class LinkDown extends Error {}
 class NotReady extends Error {}
@@ -147,9 +181,18 @@ export class OfflineOutbox {
     // A later outage cannot undo a server denial, even after the store is reloaded.
     if (this.reachable) sessionStorage.setItem(this.sessionBlockKey, '1');
   }
-  private allowed() {
+  private allowed(orderType?: string | null) {
     this.assertSessionAllowed();
-    if (!canCaptureOffline(this.options.profile, this.options.user)) throw new Error('Offline capture requires an opted-in POS Profile and its billing role.');
+    if (!canCaptureOfflineOrder(this.options.profile, this.options.user, orderType)) {
+      throw new Error('Offline order capture requires an opted-in POS Profile and permitted staff role.');
+    }
+    if (this.replaying) throw new Error('The outbox is Replaying. Wait before capturing or settling.');
+  }
+  private allowedSettle() {
+    this.assertSessionAllowed();
+    if (!canSettleOffline(this.options.profile, this.options.user)) {
+      throw new Error('Offline settlement requires an opted-in POS Profile and its billing role.');
+    }
     if (this.replaying) throw new Error('The outbox is Replaying. Wait before capturing or settling.');
   }
   list(): Promise<OfflineEntry[]> {
@@ -224,7 +267,7 @@ export class OfflineOutbox {
   }
   async capture(order: OfflineOrder, total: number, clientId?: string,
     reserved?: { clientOrderId: string; roundId: string }): Promise<OfflineEntry> {
-    this.allowed();
+    this.allowed(order.order_type);
     if (order.items.some(item => item.ury_held)) throw Object.assign(new Error(t('hold_fire.offline')), { code: 'URY_HOLD_OFFLINE' });
     if (order.invoice || order.last_invoice) throw new Error('Rounds on online orders are refused offline.');
     if (order.pos_profile !== this.options.profile.name) throw new Error('Offline order belongs to another profile.');
@@ -263,7 +306,7 @@ export class OfflineOutbox {
     });
   }
   async settle(clientId: string, tender: OfflineSettlement): Promise<OfflineEntry> {
-    this.allowed();
+    this.allowedSettle();
     if (!['cash', 'mobile-money'].includes(tender.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
     if (tender.kind === 'mobile-money' && !tender.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
     return exclusive(async () => {
@@ -285,7 +328,7 @@ export class OfflineOutbox {
     clientOrderId: string; roundId: string; invoice: string; customer?: string; table?: string | null;
     cashier?: string; owner?: string; orderType?: string; settlement: OfflineSettlement;
   }): Promise<OfflineEntry> {
-    this.allowed();
+    this.allowedSettle();
     if (!['cash', 'mobile-money'].includes(input.settlement.kind)) throw new Error('Offline settlement accepts cash or manual mobile-money only.');
     if (input.settlement.kind === 'mobile-money' && !input.settlement.reference?.trim()) throw new Error('Type the manual mobile-money reference.');
     if (!Number.isFinite(input.settlement.amount) || input.settlement.amount < 0) throw new Error('Offline total must be a finite nonnegative amount.');
@@ -358,7 +401,7 @@ export class OfflineOutbox {
     this.reachable = true;
   }
   async replay(): Promise<void> {
-    if (!canCaptureOffline(this.options.profile, this.options.user)) return;
+    if (!canCaptureOfflineOrder(this.options.profile, this.options.user)) return;
     if (this.replayPromise) return this.replayPromise;
     this.replaying = true; changed();
     this.replayPromise = exclusive(async () => {
@@ -366,7 +409,9 @@ export class OfflineOutbox {
         await this.verifyCashier();
         for (const entry of await this.list()) {
           if (entry.state !== 'pending') continue;
+          if (!canCaptureOfflineOrder(this.options.profile, this.options.user, entry.order.order_type)) continue;
           if (entry.rounds.some((round) => !round.offline_printed) || entry.settlement && !entry.bill_printed) break;
+          if (entry.settlement && !canSettleOffline(this.options.profile, this.options.user)) break;
           try {
             while (entry.next_round < entry.rounds.length) {
               const round = entry.rounds[entry.next_round];
@@ -378,12 +423,21 @@ export class OfflineOutbox {
               entry.server_invoice = reply.name; entry.next_round++; await save(entry);
             }
             if (!entry.settlement) { this.rememberOpen(entry); await remove(entry); continue; }
+            if (!canSettleOffline(this.options.profile, this.options.user)) break;
             if (entry.phase === 'order') { entry.phase = 'print'; await save(entry); }
             if (entry.phase === 'print') { await this.call('ury.ury.api.ury_print.qz_print_update', { invoice: entry.server_invoice }); entry.phase = 'settle'; await save(entry); }
+            const paymentRow: Record<string, unknown> = {
+              mode_of_payment: entry.settlement.mode_of_payment,
+              amount: entry.settlement.amount,
+              ...(entry.settlement.reference ? { reference_no: entry.settlement.reference } : {}),
+              ...(entry.settlement.reference_date ? { reference_date: entry.settlement.reference_date } : {}),
+              ...(entry.settlement.custom_tender_currency ? { custom_tender_currency: entry.settlement.custom_tender_currency } : {}),
+              ...(entry.settlement.custom_tender_amount !== undefined ? { custom_tender_amount: entry.settlement.custom_tender_amount } : {}),
+            };
             const reply = await this.call('ury.ury.doctype.ury_order.ury_order.make_invoice', {
               customer: entry.order.customer, cashier: entry.order.cashier, owner: entry.order.owner, table: entry.order.table || null,
               pos_profile: entry.profile, invoice: entry.server_invoice, client_order_id: entry.client_order_id,
-              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [{ mode_of_payment: entry.settlement.mode_of_payment, amount: entry.settlement.amount }], additionalDiscount: null,
+              round_id: entry.rounds[entry.rounds.length - 1].round_id, payments: [paymentRow], additionalDiscount: null,
               ...(entry.settlement.room_number ? { room_number: entry.settlement.room_number } : {}),
             });
             // v16 make_invoice answers {name, status}; a settled retry answers the same.

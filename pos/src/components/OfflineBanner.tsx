@@ -5,10 +5,10 @@ import { t } from '../i18n';
 import { useEffect, useState } from 'react';
 import { Button, showToast } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
-import { canCaptureOffline, type OfflineEntry, type OfflineOutbox } from '../offline/outbox';
+import { canCaptureOfflineOrder, canSettleOffline, type OfflineEntry, type OfflineOutbox } from '../offline/outbox';
 import { flushPendingFiscalReprints } from '../lib/efris-print';
 
-function PendingOrder({ row, queue, modes, disabled }: { row: OfflineEntry; queue: OfflineOutbox; modes: string[]; disabled: boolean }) {
+function PendingOrder({ row, queue, modes, disabled, canSettle }: { row: OfflineEntry; queue: OfflineOutbox; modes: string[]; disabled: boolean; canSettle: boolean }) {
   const [busy, setBusy] = useState(false);
   const [reference, setReference] = useState('');
   const cash = modes.find((mode) => /^cash$/i.test(mode));
@@ -24,15 +24,15 @@ function PendingOrder({ row, queue, modes, disabled }: { row: OfflineEntry; queu
     <span>{row.order.customer || row.order.table} · {row.client_order_id.slice(0, 8)} · {t('payment.total')}: {total}</span>
     {row.rounds.some((round) => !round.offline_printed) && <Button size="sm" disabled={disabled || busy} onClick={() => action(() => queue.reprint(row.client_order_id, 'kot'))}>{t('offline.reprint_kot')}</Button>}
     {row.settlement ? <span className="ms-2">{t('offline.settled')} · {row.settlement.mode_of_payment}
-      {!row.bill_printed && <Button size="sm" disabled={disabled || busy} onClick={() => action(() => queue.reprint(row.client_order_id, 'bill'))}>{t('offline.reprint_bill')}</Button>}
-    </span> : <div className="flex flex-wrap gap-2 mt-1">
+      {!row.bill_printed && canSettle && <Button size="sm" disabled={disabled || busy} onClick={() => action(() => queue.reprint(row.client_order_id, 'bill'))}>{t('offline.reprint_bill')}</Button>}
+    </span> : canSettle ? <div className="flex flex-wrap gap-2 mt-1">
       {cash && <Button size="sm" data-testid="settle-cash" disabled={disabled || busy || row.next_round > 0} onClick={() => action(() => queue.settle(row.client_order_id, { kind: 'cash', mode_of_payment: cash, amount: total }))}>{t('offline.cash')}</Button>}
       {mobile.length > 0 && <>
         <select aria-label={t('offline.mobile_mode')} value={mobileMode} disabled={disabled || busy} onChange={(event) => setMobileMode(event.target.value)}>{mobile.map((mode) => <option key={mode}>{mode}</option>)}</select>
         <input aria-label={t('offline.reference')} placeholder={t('offline.reference')} value={reference} disabled={disabled || busy} onChange={(event) => setReference(event.target.value)} />
         <Button size="sm" disabled={disabled || busy || !reference.trim() || row.next_round > 0} onClick={() => action(() => queue.settle(row.client_order_id, { kind: 'mobile-money', mode_of_payment: mobileMode, amount: total, reference }))}>{t('offline.mobile')}</Button>
       </>}
-    </div>}
+    </div> : <p className="mt-1 text-xs text-amber-800">{t('offline.waiter_settle_blocked')}</p>}
   </li>;
 }
 
@@ -55,13 +55,15 @@ export default function OfflineBanner() {
   }, [posProfile]);
   const pending = rows.filter((row) => row.state === 'pending').length;
   const review = rows.filter((row) => row.state === 'review');
-  if (!rows.length && (!offline || !canCaptureOffline(posProfile, user))) return null;
+  const canCaptureOrder = canCaptureOfflineOrder(posProfile, user);
+  const canSettle = canSettleOffline(posProfile, user);
+  if (!rows.length && (!offline || !canCaptureOrder)) return null;
   return <section role="status" data-testid="offline-banner" className="bg-amber-100 border-b border-amber-300 px-4 py-2 text-sm text-amber-950">
     <strong>{t(replaying ? 'offline.replaying' : offline ? 'offline.capture' : 'offline.outbox')}</strong>
     <span className="ms-2">{t('offline.pending', { count: pending })}{review.length ? ` · ${t('offline.review_count', { count: review.length })}` : ''}</span>
     {offline && <p>{t('offline.refusals')}</p>}
     {queue?.persistent === false && <p role="alert">{t('offline.persistence_warning')}</p>}
-    {queue && pending > 0 && <details open className="max-h-48 overflow-y-auto"><summary>{t('offline.outbox')}</summary><ul>{rows.filter((row) => row.state === 'pending').map((row) => <PendingOrder key={row.sequence} row={row} queue={queue} modes={paymentModes} disabled={replaying || queue.sessionBlocked || !canCaptureOffline(posProfile, user)} />)}</ul></details>}
+    {queue && pending > 0 && <details open className="max-h-48 overflow-y-auto"><summary>{t('offline.outbox')}</summary><ul>{rows.filter((row) => row.state === 'pending').map((row) => <PendingOrder key={row.sequence} row={row} queue={queue} modes={paymentModes} canSettle={canSettle} disabled={replaying || queue.sessionBlocked || !canCaptureOrder} />)}</ul></details>}
     {review.length > 0 && <ul className="mt-1 list-disc ps-5">{review.map((row) => <li key={row.sequence}>{row.client_order_id.slice(0, 8)} · {parseFrappeError({ _server_messages: row.reason }, row.reason || '')}</li>)}</ul>}
   </section>;
 }

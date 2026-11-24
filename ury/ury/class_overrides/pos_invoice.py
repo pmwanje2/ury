@@ -127,6 +127,36 @@ class CustomPOSInvoice(POSInvoice):
 
 		validate_confirmed_phone_payments(self, "on_submit")
 
+	def clear_unallocated_mode_of_payments(self):
+		"""Preserve the 0-amount local change-account payment row when change_amount > 0.
+
+		Stock POSInvoice.clear_unallocated_mode_of_payments() deletes every amount=0 row
+		on submit. When an invoice is paid 100% in a foreign currency tender (whose
+		default_account is FX Till Clearing, not account_for_change_amount), deleting the
+		0-amount local Cash row causes POSClosingEntry.get_change_payment_row() to fall
+		back to the first Cash-type row (the foreign Cash mode!) and wrongly deduct local
+		change from the foreign currency tender.
+		"""
+		change_account = self.get("account_for_change_amount")
+		if not self.get("is_return") and flt(self.get("change_amount")) > 0 and change_account:
+			kept = [
+				row
+				for row in (self.get("payments") or [])
+				if row.get("amount") not in (0, None, "") or row.get("account") == change_account
+			]
+			self.set("payments", kept)
+			sip = frappe.qb.DocType("Sales Invoice Payment")
+			(
+				frappe.qb.from_(sip)
+				.delete()
+				.where(sip.parent == self.name)
+				.where(sip.amount == 0)
+				.where((sip.account.isnull()) | (sip.account != change_account))
+				.run()
+			)
+			return
+		super().clear_unallocated_mode_of_payments()
+
 	def validate_stock_availablility(self):
 		if self.is_return or frappe.get_cached_doc("Stock Settings").allow_negative_stock:
 			return

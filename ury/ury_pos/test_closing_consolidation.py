@@ -698,9 +698,13 @@ class TestClosingConsolidation(unittest.TestCase):
         ])
         self.assertEqual(events["on_submit"], [
             "ury.ury.hooks.ury_pos_closing_entry.submit_stock_correction",
+            "ury.ury.hooks.ury_pos_closing_entry.post_fx_vault_sweep_journal_entry",
             "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
         ])
-        self.assertEqual(events["on_cancel"], ["ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times"])
+        self.assertEqual(events["on_cancel"], [
+            "ury.ury.hooks.ury_pos_closing_entry.cancel_fx_vault_sweep_journal_entry",
+            "ury.ury.hooks.ury_pos_closing_entry.update_branch_avg_times",
+        ])
 
     def _validate_calls(self):
         calls = []

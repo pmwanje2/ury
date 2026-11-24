@@ -304,6 +304,6 @@ describe('POS-PR-6 UI RED/GREEN: PaymentDialog G25 reference & G22 FX tender + S
     fireEvent.click(billBtn);
 
     expect(await screen.findByText(/MOMO-REF-555/)).toBeInTheDocument();
-    expect(screen.getByText(/USD/)).toBeInTheDocument();
+    expect(screen.getAllByText(/USD/).length).toBeGreaterThanOrEqual(2);
   });
 });

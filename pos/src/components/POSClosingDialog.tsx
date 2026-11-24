@@ -228,9 +228,13 @@ function aggregateInvoices(
 ): {
   totals: AggregatedTotals;
   expectedByMode: Record<string, number>;
+  expectedForeignByMode: Record<string, number>;
+  fxCurrencyByMode: Record<string, string>;
 } {
   const totals: AggregatedTotals = { grandTotal: 0, netTotal: 0, totalQty: 0, onAccount: 0 };
   const expectedByMode: Record<string, number> = {};
+  const expectedForeignByMode: Record<string, number> = {};
+  const fxCurrencyByMode: Record<string, string> = {};
 
   invoices.forEach((invoice) => {
     totals.onAccount += Number(invoice.outstanding_amount) || 0;
@@ -259,6 +263,21 @@ function aggregateInvoices(
         }
         expectedByMode[payment.mode_of_payment] =
           (expectedByMode[payment.mode_of_payment] || 0) + amount;
+        if (payment.custom_tender_currency) {
+          fxCurrencyByMode[payment.mode_of_payment] = payment.custom_tender_currency;
+          expectedForeignByMode[payment.mode_of_payment] =
+            (expectedForeignByMode[payment.mode_of_payment] || 0) +
+            (Number(payment.custom_tender_amount) || 0);
+        }
+      });
+    } else {
+      (invoice.payments || []).forEach((payment) => {
+        if (payment.custom_tender_currency) {
+          fxCurrencyByMode[payment.mode_of_payment] = payment.custom_tender_currency;
+          expectedForeignByMode[payment.mode_of_payment] =
+            (expectedForeignByMode[payment.mode_of_payment] || 0) +
+            (Number(payment.custom_tender_amount) || 0);
+        }
       });
     }
   });
@@ -267,10 +286,16 @@ function aggregateInvoices(
     paymentsByMode.forEach((payment) => {
       expectedByMode[payment.mode_of_payment] =
         (expectedByMode[payment.mode_of_payment] || 0) + (Number(payment.amount) || 0);
+      if (payment.custom_tender_currency) {
+        fxCurrencyByMode[payment.mode_of_payment] = payment.custom_tender_currency;
+        expectedForeignByMode[payment.mode_of_payment] =
+          (expectedForeignByMode[payment.mode_of_payment] || 0) +
+          (Number(payment.custom_tender_amount) || 0);
+      }
     });
   }
 
-  return { totals, expectedByMode };
+  return { totals, expectedByMode, expectedForeignByMode, fxCurrencyByMode };
 }
 
 /**
@@ -282,7 +307,10 @@ function buildRows(
   openingBalances: OpeningBalanceDetail[],
   expectedByMode: Record<string, number>,
   blindCashCount = false,
-  profilePaymentModes: string[] = []
+  profilePaymentModes: string[] = [],
+  expectedForeignByMode: Record<string, number> = {},
+  fxCurrencyByMode: Record<string, string> = {},
+  tillCurrency?: string,
 ): { visible: ClosingPaymentSummary[]; hidden: ClosingPaymentSummary[] } {
   const rows = new Map<string, ClosingPaymentSummary>();
   const hidden = new Map<string, ClosingPaymentSummary>();
@@ -292,6 +320,21 @@ function buildRows(
         ...profilePaymentModes.map((mode) => ({ mode_of_payment: mode, opening_amount: 0 })),
       ]
     : openingBalances;
+
+  const enrichFx = (row: ClosingPaymentSummary): ClosingPaymentSummary => {
+    const curr = fxCurrencyByMode[row.mode_of_payment];
+    if (!curr || curr === tillCurrency) return row;
+    const expectedFx = expectedForeignByMode[row.mode_of_payment] || 0;
+    const rate = expectedFx > 0 && row.expected_amount > 0 ? row.expected_amount / expectedFx : undefined;
+    return {
+      ...row,
+      custom_tender_currency: curr,
+      custom_expected_foreign_amount: expectedFx,
+      custom_closing_foreign_amount: 0,
+      custom_foreign_difference: -expectedFx,
+      ...(rate ? { effective_exchange_rate: rate } : {}),
+    };
+  };
 
   rowBalances.forEach((detail) => {
     if (rows.has(detail.mode_of_payment)) return;
@@ -322,11 +365,14 @@ function buildRows(
     }
   });
 
-  return { visible: Array.from(rows.values()), hidden: Array.from(hidden.values()) };
+  return {
+    visible: Array.from(rows.values()).map(enrichFx),
+    hidden: Array.from(hidden.values()).map(enrichFx),
+  };
 }
 
 const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosingDialogProps) => {
-  const { posProfile, currency, paymentModes = NO_PAYMENT_MODES } = usePOSStore();
+  const { posProfile, currency, paymentModes = NO_PAYMENT_MODES, paymentModeDetails = {} } = usePOSStore();
   const tillCurrency = posProfile?.currency || currency;
   const { user } = useRootStore();
   const blindCashCount = isBlindCashCount(posProfile);
@@ -432,18 +478,31 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       const invoices = Array.isArray(invoiceResult) ? invoiceResult : (invoiceResult?.invoices || []);
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
-      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(
+      const {
+        totals: aggregatedTotals,
+        expectedByMode,
+        expectedForeignByMode,
+        fxCurrencyByMode,
+      } = aggregateInvoices(
         invoices,
         payments,
         paymentModes,
         posProfile.payment_mode_accounts,
       );
+      Object.values(paymentModeDetails || {}).forEach((cfg) => {
+        if (cfg?.mode_of_payment && cfg.custom_tender_currency && cfg.custom_tender_currency !== tillCurrency) {
+          fxCurrencyByMode[cfg.mode_of_payment] = cfg.custom_tender_currency;
+        }
+      });
       setTotals(aggregatedTotals);
       const { visible, hidden } = buildRows(
         openingDoc?.balance_details ?? [],
         expectedByMode,
         blindCashCount,
         paymentModes,
+        expectedForeignByMode,
+        fxCurrencyByMode,
+        tillCurrency,
       );
       setRows(visible);
       setHiddenRows(hidden);
@@ -467,6 +526,33 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       prev.map((row) =>
         row.mode_of_payment === modeOfPayment ? { ...row, closing_amount: closingAmount } : row
       )
+    );
+    setTouchedModes((prev) => {
+      if (prev.has(modeOfPayment)) return prev;
+      const next = new Set(prev);
+      next.add(modeOfPayment);
+      return next;
+    });
+  };
+
+  const handleForeignRowChange = (modeOfPayment: string, closingForeignAmount: number) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.mode_of_payment !== modeOfPayment) return row;
+        const expectedFx = Number(row.custom_expected_foreign_amount) || 0;
+        const cfgRate = Number(paymentModeDetails?.[modeOfPayment]?.exchange_rate) || 0;
+        const shiftRate =
+          row.effective_exchange_rate ||
+          (expectedFx > 0 && row.expected_amount > 0 ? row.expected_amount / expectedFx : cfgRate || 1);
+        const baseClosing = Math.round(closingForeignAmount * shiftRate * 100) / 100;
+        return {
+          ...row,
+          custom_closing_foreign_amount: closingForeignAmount,
+          custom_foreign_difference: closingForeignAmount - expectedFx,
+          closing_amount: baseClosing,
+          difference: baseClosing - row.expected_amount,
+        };
+      }),
     );
     setTouchedModes((prev) => {
       if (prev.has(modeOfPayment)) return prev;
@@ -551,6 +637,15 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       // Positive = overage, negative = shortage. Must match the display
       // convention in ClosingPaymentTable (Fix 1).
       difference: row.closing_amount - row.expected_amount,
+      ...(row.custom_tender_currency
+        ? {
+            custom_tender_currency: row.custom_tender_currency,
+            custom_expected_foreign_amount: row.custom_expected_foreign_amount ?? 0,
+            custom_closing_foreign_amount: row.custom_closing_foreign_amount ?? 0,
+            custom_foreign_difference:
+              (row.custom_closing_foreign_amount ?? 0) - (row.custom_expected_foreign_amount ?? 0),
+          }
+        : {}),
     }));
 
     // Fix 3: if a previous attempt already created the draft doc but the
@@ -750,6 +845,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   rows={rows}
                   touchedModes={touchedModes}
                   onChange={handleRowChange}
+                  onForeignChange={handleForeignRowChange}
                   hideExpected={maskAmounts}
                   blindCashCount={blindCashCount}
                 />

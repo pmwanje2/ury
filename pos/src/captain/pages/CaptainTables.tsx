@@ -22,6 +22,9 @@ import {
 } from '../lib/captain-table-api';
 import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
 import { floorSignOut } from '../../lib/floor-session';
+import { useRootStore } from '../../store/root-store';
+import { useOutbox } from '../../offline/use-outbox';
+import { createOfflinePeerSync, type OfflinePeerTableSummary } from '../../offline/peer-sync';
 import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
@@ -44,9 +47,42 @@ export default function CaptainTables() {
     error: contextError,
   } = useCaptainContext();
 
-  const tillCurrency = usePOSStore((s) => s.posProfile?.currency || s.currency);
+  const posProfile = usePOSStore((s) => s.posProfile);
+  const tillCurrency = posProfile?.currency || usePOSStore((s) => s.currency);
+  const rootUser = useRootStore((s) => s.user);
+  const { rows: outboxRows, offline: isOffline } = useOutbox(posProfile, rootUser, true);
+  const [peerPendingTables, setPeerPendingTables] = useState<OfflinePeerTableSummary[]>([]);
   const currentUser = context?.user ?? null;
   const canAccessOtherCaptainsTables = Boolean(capabilities?.canAccessOtherCaptainsTables);
+
+  useEffect(() => {
+    if (!branch || !posProfile?.name || !posProfile.ury_offline_capture) return;
+    const sync = createOfflinePeerSync({
+      branch,
+      posProfile: posProfile.name,
+      relayUrl: posProfile.custom_offline_peer_relay_url,
+      onPeerUpdate: (msg) => {
+        if (msg.type === 'outbox_snapshot') {
+          setPeerPendingTables(msg.pendingTables || []);
+        } else if (msg.type === 'outbox_cleared') {
+          setPeerPendingTables([]);
+        }
+      },
+    });
+    void sync.pollRelay();
+    return () => sync.close();
+  }, [branch, posProfile?.name, posProfile?.ury_offline_capture, posProfile?.custom_offline_peer_relay_url]);
+
+  const queuedOfflineCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of outboxRows) {
+      if (row.state === 'pending') ids.add(row.client_order_id);
+    }
+    for (const peer of peerPendingTables) {
+      if (peer.clientOrderId) ids.add(peer.clientOrderId);
+    }
+    return ids.size;
+  }, [outboxRows, peerPendingTables]);
 
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [branchRooms, setBranchRooms] = useState<Room[]>([]);
@@ -337,8 +373,26 @@ export default function CaptainTables() {
   return (
     <div className="flex min-h-screen flex-col bg-gray-50">
       <div className="sticky top-0 z-10 border-b border-border bg-white p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-bold text-gray-900">{t('captain.tables')}</h1>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-lg font-bold text-gray-900">{t('captain.tables')}</h1>
+            {isOffline && (
+              <span
+                data-testid="captain-offline-pill"
+                className="inline-flex items-center rounded-full bg-amber-100 border border-amber-300 px-2.5 py-0.5 text-xs font-medium text-amber-900"
+              >
+                {t('offline.waiter_offline_pill')}
+              </span>
+            )}
+            {queuedOfflineCount > 0 && (
+              <span
+                data-testid="captain-queued-badge"
+                className="inline-flex items-center rounded-full bg-amber-600 px-2.5 py-0.5 text-xs font-semibold text-white"
+              >
+                {t('offline.waiter_queued_badge', { count: queuedOfflineCount })}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={refresh}>
               {t('common.refresh')}

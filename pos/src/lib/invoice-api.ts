@@ -56,6 +56,7 @@ export interface POSInvoice {
   additional_discount_percentage?: number;
   payments?: POSInvoicePayment[];
   room_number?: string | null;
+  custom_offline_conflict?: number;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
 }
@@ -68,6 +69,10 @@ export interface POSInvoicePayment {
   clearance_date?: string | null;
   room_number?: string | null;
   custom_tender_received?: number | boolean;
+  custom_tender_currency?: string | null;
+  custom_tender_amount?: number | null;
+  custom_exchange_rate?: number | null;
+  custom_exchange_rate_date?: string | null;
 }
 
 export interface SplitGroupInvoice extends POSInvoice {

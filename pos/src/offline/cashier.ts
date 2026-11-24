@@ -1,7 +1,19 @@
 import { clearAppStorage, logout, purgeOfflineSession } from '@ury/core';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
-import { OfflineOutbox, canCaptureOffline, openTableRow, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import {
+  OfflineOutbox,
+  canCaptureOfflineOrder,
+  canSettleOffline,
+  openTableRow,
+  withEmptyOutbox,
+  purgeEmptyOutbox,
+  type OfflineProfile,
+  type OfflineUser,
+  type OfflineOrder,
+  type OfflineEntry,
+  type OfflineSettlement,
+} from './outbox';
 import { gatewayStatusOf } from './gateway';
 import { readOpenTableCheck } from './open-table-checks';
 import { triggerPostReplayFiscalPrint } from '../lib/efris-print';
@@ -72,7 +84,7 @@ export async function submitOrderOfflineAware<T>({ profile, user, order, total, 
   }
   // The id goes out on the live write. A free table keeps that id if the
   // gateway drops the ack. An occupied table reuses its open check id.
-  const queueable = canCaptureOffline(profile, user) && !order.invoice && !order.last_invoice;
+  const queueable = canCaptureOfflineOrder(profile, user, order.order_type) && !order.invoice && !order.last_invoice;
   const occupied = queueable && order.table ? await openClientForTable(queue, user.name, order.table) : undefined;
   const ids = queueable ? { clientOrderId: occupied || uuid(), roundId: uuid() } : undefined;
   try {
@@ -98,10 +110,10 @@ function offlineCashOrMobile(mode: string, reference?: string): OfflineSettlemen
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
-  clientOrderId, amount, due, modeOfPayment, reference, roomNumber, discount, orderType, onlineSettle }: {
+  clientOrderId, amount, due, modeOfPayment, reference, referenceDate, roomNumber, discount, orderType, onlineSettle }: {
   profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
   cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; due: number; modeOfPayment: string;
-  reference?: string; roomNumber?: string; discount?: number; orderType?: string;
+  reference?: string; referenceDate?: string; roomNumber?: string; discount?: number; orderType?: string;
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
@@ -110,7 +122,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
   // A short named-account settlement (#44) leaves a balance owed. It is not a
   // cash settlement and stays online-only, so the tender must cover the bill.
   const paidInFull = Number.isFinite(due) && amount >= due - 0.005;
-  const queueable = !!kind && paidInFull && canCaptureOffline(profile, user) && !(discount && discount > 0);
+  const queueable = !!kind && paidInFull && canSettleOffline(profile, user) && !(discount && discount > 0);
   if (!queueable) return { offline: false as const, response: await onlineSettle() };
   const existing = clientOrderId
     ? (await queue.list()).find((row) => row.client_order_id === clientOrderId && row.state === 'pending')
@@ -127,6 +139,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
     const cleanedRoom = roomNumber?.trim() || undefined;
     const settlement: OfflineSettlement = {
       kind: kind!, mode_of_payment: modeOfPayment, amount, reference,
+      ...(referenceDate ? { reference_date: referenceDate } : {}),
       ...(cleanedRoom ? { room_number: cleanedRoom } : {}),
     };
     if (existing && !existing.settlement && !existing.next_round) {

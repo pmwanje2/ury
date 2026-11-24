@@ -223,14 +223,53 @@ def getRoom():
 
 @frappe.whitelist()
 def getModeOfPayment():
+    from ury.ury_pos.fx import currency_precision, get_mode_payment_config, resolve_pos_exchange_rate
+
     posDetails = getPosProfile()
     posProfile = posDetails["pos_profile"]
     posProfiles = frappe.get_doc("POS Profile", posProfile)
+    company = posProfiles.company
+    home_currency = (posProfiles.currency or "").strip().upper()
     mode_of_payments = posProfiles.payments
     modeOfPayments = []
     for mop in mode_of_payments:
+        cfg = get_mode_payment_config(mop.mode_of_payment, company=company)
+        tender_curr = cfg.get("custom_tender_currency") or ""
+        fx_fields = {}
+        if tender_curr and home_currency and tender_curr != home_currency:
+            rate_type = cfg.get("custom_fx_rate_type") or "Buying"
+            fx_fields["tender_precision"] = currency_precision(tender_curr)
+            try:
+                rate_info = resolve_pos_exchange_rate(
+                    tender_curr,
+                    home_currency,
+                    company=company,
+                    rate_type=rate_type,
+                )
+                fx_fields["exchange_rate"] = rate_info["rate"]
+                fx_fields["exchange_rate_date"] = rate_info["rate_date"]
+                fx_fields["fx_rate_status"] = "fresh"
+            except frappe.ValidationError as exc:
+                fx_fields["exchange_rate"] = None
+                fx_fields["exchange_rate_date"] = None
+                fx_fields["fx_rate_status"] = "stale"
+                fx_fields["fx_rate_error"] = str(exc)
         modeOfPayments.append(
-            {"mode_of_payment": mop.mode_of_payment, "opening_amount": float(0)}
+            {
+                "mode_of_payment": mop.mode_of_payment,
+                "opening_amount": float(0),
+                "type": cfg.get("type") or "",
+                "custom_reference_mode": cfg.get("custom_reference_mode") or "Hidden",
+                "custom_reference_label": cfg.get("custom_reference_label") or "",
+                "custom_reference_placeholder": cfg.get("custom_reference_placeholder") or "",
+                "custom_reference_pattern": cfg.get("custom_reference_pattern") or "",
+                "custom_reference_date_required": cint(cfg.get("custom_reference_date_required")),
+                "custom_tender_currency": tender_curr,
+                "custom_fx_rate_type": cfg.get("custom_fx_rate_type") or "Buying",
+                "default_account": cfg.get("default_account"),
+                "custom_fx_vault_account": cfg.get("custom_fx_vault_account"),
+                **fx_fields,
+            }
         )
     return modeOfPayments
 
@@ -1028,6 +1067,10 @@ def getPosProfileFull(pos_profile):
         "custom_enable_payment_without_printing": profile.get("custom_enable_payment_without_printing") or 0,
         "ury_enable_hold_fire": cint(profile.get("ury_enable_hold_fire")),
         "ury_offline_capture": 1 if profile.get("ury_offline_capture") else 0,
+        "custom_offline_peer_relay_url": profile.get("custom_offline_peer_relay_url") or "",
+        "custom_offline_collision_policy": profile.get("custom_offline_collision_policy") or "Auto Split Check",
+        "custom_allow_fx_rate_override": 1 if profile.get("custom_allow_fx_rate_override") else 0,
+        "custom_max_fx_variance_pct": flt(profile.get("custom_max_fx_variance_pct")),
         # native partial-payment switch; the till lets only a named account settle short
         "allow_partial_payment": 1 if profile.get("allow_partial_payment") else 0,
         # one configured void reason per line; None on sites without the field
@@ -1207,6 +1250,12 @@ def getPosInvoiceItems(invoice):
             entry["reference_date"] = str(payment.get("reference_date"))
         if payment.get("clearance_date"):
             entry["clearance_date"] = str(payment.get("clearance_date"))
+        if payment.get("custom_tender_currency"):
+            entry["custom_tender_currency"] = payment.get("custom_tender_currency")
+            entry["custom_tender_amount"] = frappe.utils.flt(payment.get("custom_tender_amount"))
+            entry["custom_exchange_rate"] = frappe.utils.flt(payment.get("custom_exchange_rate"))
+            if payment.get("custom_exchange_rate_date"):
+                entry["custom_exchange_rate_date"] = str(payment.get("custom_exchange_rate_date"))
         if room_number:
             if room_modes is None:
                 payment_mode_accounts = {
@@ -2815,7 +2864,9 @@ def search_settled_bills(branch: str | None = None, pos_profile: str | None = No
                 'pos_profile', 'customer', 'cashier', 'waiter', 'currency', 'grand_total', 'net_total', 'rounded_total',
                 'total_taxes_and_charges', 'outstanding_amount', 'status', 'consolidated_invoice')}
         for child, fields in [('items', ('item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
-                              ('payments', ('mode_of_payment', 'amount'))]:
+                              ('payments', ('mode_of_payment', 'amount', 'reference_no', 'reference_date',
+                                            'custom_tender_currency', 'custom_tender_amount',
+                                            'custom_exchange_rate', 'custom_exchange_rate_date'))]:
             data[child] = [{key: entry.get(key) for key in fields} for entry in doc.get(child) or []]
         rows.append(data)
     return rows
