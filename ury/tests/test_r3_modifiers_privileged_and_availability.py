@@ -20,14 +20,6 @@ class TestAvailabilityRestoreAuthorisationLogLinks(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		suffix = frappe.generate_hash(length=6)
 		self.company = frappe.get_list("Company", pluck="name")[0]
-		self.branch = frappe.get_doc(
-			{
-				"doctype": "Branch",
-				"branch": f"R3 Avail Branch {suffix}",
-				"company": self.company,
-			}
-		).insert(ignore_permissions=True)
-
 		self.manager_email = f"r3-mgr-{suffix}@example.com"
 		self.manager = frappe.get_doc(
 			{
@@ -40,6 +32,16 @@ class TestAvailabilityRestoreAuthorisationLogLinks(IntegrationTestCase):
 			}
 		).insert(ignore_permissions=True)
 		self.manager.add_roles("URY Manager", "URY Cashier")
+
+		self.branch = frappe.get_doc(
+			{
+				"doctype": "Branch",
+				"branch": f"R3 Avail Branch {suffix}",
+				"company": self.company,
+				"user": [{"user": self.manager.name}],
+			}
+		).insert(ignore_permissions=True)
+
 		self.room = frappe.get_doc(
 			{
 				"doctype": "URY Room",
@@ -47,7 +49,7 @@ class TestAvailabilityRestoreAuthorisationLogLinks(IntegrationTestCase):
 				"branch": self.branch.name,
 			}
 		).insert(ignore_permissions=True)
-		self.branch.append("user", {"user": self.manager.name, "room": self.room.name})
+		self.branch.user[0].room = self.room.name
 		self.branch.save(ignore_permissions=True)
 
 		self.regular_item = self._make_item(f"R3-RIBEYE-{suffix}", "R3 Ribeye Steak")
@@ -58,7 +60,7 @@ class TestAvailabilityRestoreAuthorisationLogLinks(IntegrationTestCase):
 				"doctype": "URY Modifier Group",
 				"group_name": f"R3 Extras {suffix}",
 				"display_title": "R3 Extras",
-				"group_type": "Add-on",
+				"group_type": "Condiment",
 				"options": [
 					{
 						"option_code": f"BACON-{suffix}",
@@ -103,6 +105,60 @@ class TestAvailabilityRestoreAuthorisationLogLinks(IntegrationTestCase):
 				"active_menu": self.menu.name,
 			}
 		).insert(ignore_permissions=True)
+
+		wh = frappe.db.get_value("Warehouse", {"company": self.company, "is_group": 0}, "name")
+		cc = frappe.db.get_value("Cost Center", {"company": self.company, "is_group": 0}, "name")
+		income_acct = frappe.db.get_value(
+			"Account", {"company": self.company, "account_type": "Income Account", "is_group": 0}, "name"
+		) or frappe.db.get_value("Account", {"company": self.company, "root_type": "Income", "is_group": 0}, "name")
+		expense_acct = frappe.db.get_value(
+			"Account", {"company": self.company, "root_type": "Expense", "is_group": 0}, "name"
+		)
+		cash_acct = frappe.db.get_value(
+			"Account", {"company": self.company, "account_type": "Cash", "is_group": 0}, "name"
+		)
+		if not frappe.db.exists("Mode of Payment", "Cash"):
+			frappe.get_doc(
+				{"doctype": "Mode of Payment", "mode_of_payment": "Cash", "type": "Cash", "enabled": 1}
+			).insert(ignore_permissions=True)
+		mop = frappe.get_doc("Mode of Payment", "Cash")
+		if cash_acct and not any(a.company == self.company for a in mop.accounts):
+			mop.append("accounts", {"company": self.company, "default_account": cash_acct})
+			mop.save(ignore_permissions=True)
+		currency = frappe.db.get_value("Company", self.company, "default_currency") or "UGX"
+		self.pos_profile = frappe.get_doc(
+			{
+				"doctype": "POS Profile",
+				"name": f"R3 Till {suffix}",
+				"company": self.company,
+				"currency": currency,
+				"warehouse": wh,
+				"write_off_account": expense_acct,
+				"write_off_cost_center": cc,
+				"cost_center": cc,
+				"income_account": income_acct,
+				"expense_account": expense_acct,
+				"branch": self.branch.name,
+				"restaurant": self.restaurant.name,
+				"payments": [{"mode_of_payment": "Cash", "default": 1}],
+				"applicable_for_users": [{"user": self.manager.name, "default": 1}],
+			}
+		).insert(ignore_permissions=True)
+		if frappe.db.table_exists("POS Privilege Rule") and not frappe.db.exists(
+			"POS Privilege Rule",
+			{"company": self.company, "privilege": "item_86_restore", "role": "URY Manager"},
+		):
+			frappe.get_doc(
+				{
+					"doctype": "POS Privilege Rule",
+					"company": self.company,
+					"privilege": "item_86_restore",
+					"role": "URY Manager",
+					"may_perform": 1,
+					"may_authorise": 1,
+					"requires_reason": 0,
+				}
+			).insert(ignore_permissions=True)
 
 		frappe.set_user(self.manager.name)
 
