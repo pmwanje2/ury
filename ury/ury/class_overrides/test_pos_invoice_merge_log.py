@@ -122,3 +122,94 @@ class TestCustomPOSInvoiceMergeLog(FrappeTestCase):
 			self.assertEqual(result.posting_date, date(2026, 10, 21))
 			self.assertEqual(result.posting_time, time(23, 0, 0))
 			self.assertEqual(merge_log.consolidated_invoice, "SINV-TEST-0001")
+
+	def test_foreign_currency_consolidation_preserves_invoice_or_party_receivable_account(self):
+		accounts = {
+			"Debtors - MHL": frappe._dict(
+				company="Maximus Hospitality Ltd",
+				account_type="Receivable",
+				account_currency="UGX",
+				is_group=0,
+				disabled=0,
+			),
+			"Debtors USD - MHL": frappe._dict(
+				company="Maximus Hospitality Ltd",
+				account_type="Receivable",
+				account_currency="USD",
+				is_group=0,
+				disabled=0,
+			),
+		}
+
+		def mock_get_value(doctype, filters, fieldname=None, as_dict=False, **kwargs):
+			if doctype == "Account":
+				acct = accounts.get(filters)
+				if not acct:
+					return None
+				if as_dict:
+					return acct
+				if isinstance(fieldname, str):
+					return acct.get(fieldname)
+			if doctype == "Customer" and fieldname == "customer_group":
+				return "Individual"
+			return None
+
+		def mock_get_all(doctype, filters=None, pluck=None, **kwargs):
+			if doctype == "Party Account" and filters and filters.get("parent") == "USD Guest":
+				return ["Debtors USD - MHL"]
+			return []
+
+		merge_log = CustomPOSInvoiceMergeLog({"doctype": "POS Invoice Merge Log"})
+		merge_log.company = "Maximus Hospitality Ltd"
+		merge_log.customer = "Walk-in"
+
+		with (
+			patch("frappe.get_cached_value", return_value="UGX"),
+			patch("frappe.db.get_value", side_effect=mock_get_value),
+			patch("frappe.get_all", side_effect=mock_get_all),
+			patch("frappe.db.get_single_value", return_value=0),
+			patch(
+				"erpnext.accounts.party.get_party_gle_currency",
+				return_value=None,
+			),
+		):
+			# 1. Source POS Invoice carries USD debit_to while consolidated SI defaulted to UGX Debtors.
+			si_from_pos = frappe._dict(
+				company="Maximus Hospitality Ltd",
+				customer="Walk-in",
+				currency="USD",
+				debit_to="Debtors - MHL",
+				party_account_currency="UGX",
+			)
+			merge_log._resolve_consolidated_receivable_account(
+				si_from_pos, [frappe._dict(debit_to="Debtors USD - MHL", currency="USD")]
+			)
+			self.assertEqual(si_from_pos.debit_to, "Debtors USD - MHL")
+			self.assertEqual(si_from_pos.party_account_currency, "USD")
+
+			# 2. Source POS Invoice had UGX Debtors, but Customer carries a USD Party Account.
+			si_from_party = frappe._dict(
+				company="Maximus Hospitality Ltd",
+				customer="USD Guest",
+				currency="USD",
+				debit_to="Debtors - MHL",
+				party_account_currency="UGX",
+			)
+			merge_log._resolve_consolidated_receivable_account(
+				si_from_party, [frappe._dict(debit_to="Debtors - MHL", currency="USD")]
+			)
+			self.assertEqual(si_from_party.debit_to, "Debtors USD - MHL")
+			self.assertEqual(si_from_party.party_account_currency, "USD")
+
+			# 3. Neither USD receivable nor Accounts Settings flag enabled -> actionable coded error.
+			si_bad = frappe._dict(
+				company="Maximus Hospitality Ltd",
+				customer="Walk-in",
+				currency="USD",
+				debit_to="Debtors - MHL",
+				party_account_currency="UGX",
+			)
+			with self.assertRaisesRegex(frappe.ValidationError, r"\[POS-CLOSE-FOREIGN-RECEIVABLE\]"):
+				merge_log._resolve_consolidated_receivable_account(
+					si_bad, [frappe._dict(debit_to="Debtors - MHL", currency="USD")]
+				)

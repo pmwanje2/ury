@@ -5,6 +5,7 @@ import { OrderType, OrderStatusType } from '../../data/order-types';
 import { isLinkDown, call } from '@ury/core';
 import { getTillBranch, getPOSInvoices, getPOSInvoiceItems, getSplitGroup, mapSplitGroupInvoiceToPOSInvoice, POSInvoiceItem, POSInvoicePayment, POSInvoiceTax } from '../../lib/invoice-api';
 import { searchPosInvoice } from '../../lib/invoice-api';
+import { getCheckDiscounts, type CheckDiscountSummary } from '../../lib/discount-api';
 
 export interface POSInvoice {
   branch?: string;
@@ -43,6 +44,7 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   additional_discount_percentage?: number;
   discount_amount?: number;
+  coupon_code?: string | null;
   payments?: POSInvoicePayment[];
   room_number?: string | null;
   age_minutes?: number;
@@ -65,6 +67,7 @@ export interface OrdersState {
   selectedOrder: POSInvoice | null;
   selectedOrderItems: POSInvoiceItem[];
   selectedOrderTaxes: POSInvoiceTax[];
+  selectedOrderDiscounts: CheckDiscountSummary | null;
   selectedOrderLoading: boolean;
   selectedOrderError: string | null;
   orderSearchQuery: string;
@@ -93,7 +96,7 @@ export const createOrdersSlice: StateCreator<
 > = (set, get) => {
   let listVersion = 0;
   let detailVersion = 0;
-  const emptyDetails = { selectedOrder: null, selectedOrderItems: [], selectedOrderTaxes: [], selectedOrderError: null, selectedOrderLoading: false };
+  const emptyDetails = { selectedOrder: null, selectedOrderItems: [], selectedOrderTaxes: [], selectedOrderDiscounts: null, selectedOrderError: null, selectedOrderLoading: false };
   const clearQueue = (owner: string | null, branch: string | null) => {
     ++detailVersion;
     set({ ...emptyDetails, orders: [], ordersOwner: owner, ordersBranch: branch,
@@ -116,6 +119,7 @@ export const createOrdersSlice: StateCreator<
     selectedOrder: null,
     selectedOrderItems: [],
     selectedOrderTaxes: [],
+    selectedOrderDiscounts: null,
     selectedOrderLoading: false,
     selectedOrderError: null,
     orderSearchQuery: '',
@@ -240,9 +244,10 @@ export const createOrdersSlice: StateCreator<
           selectedOrderError: null
         });
 
-        const [{ items, taxes, payments }, splitGroup] = await Promise.all([
+        const [{ items, taxes, payments }, splitGroup, checkDiscounts] = await Promise.all([
           getPOSInvoiceItems(order.name),
           getSplitGroup(order.name).catch(() => ({ invoices: [], current: order.name, group: null })),
+          getCheckDiscounts(order.name).catch(() => null),
         ]);
 
         if (!current()) return false;
@@ -258,6 +263,7 @@ export const createOrdersSlice: StateCreator<
           selectedOrder: enrichedOrder,
           selectedOrderItems: items,
           selectedOrderTaxes: taxes,
+          selectedOrderDiscounts: checkDiscounts,
           selectedOrderLoading: false,
           orders: splitMatch
             ? state.orders.map((o) => (o.name === enrichedOrder.name ? enrichedOrder : o))
