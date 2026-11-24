@@ -913,6 +913,16 @@ def getPosProfile():
             )
             for payment in (pos_profiles.get("payments") or [])
         },
+        "payment_mode_meta": {
+            payment.mode_of_payment: {
+                "type": frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "type") or "",
+                "overtender_rule": frappe.db.get_value(
+                    "Mode of Payment", payment.mode_of_payment, "custom_overtender_rule"
+                ) or "Refuse",
+            }
+            for payment in (pos_profiles.get("payments") or [])
+        },
+        "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": (pos_profiles.get("custom_room_lookup_method") or "").strip(),
         **get_default_customer_config(pos_profiles),

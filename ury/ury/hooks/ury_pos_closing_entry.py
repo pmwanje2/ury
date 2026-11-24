@@ -175,10 +175,11 @@ def _set_expected_amounts(doc):
         if not modes:
             continue
         if len(modes) != 1:
-            frappe.throw(
-                "[POS-CLOSE-MOVEMENT-NO-TILL-MODE] Map exactly one cash till payment mode "
-                f"to the drawer account {account} before closing."
-            )
+            frappe.throw(coded_message(
+                "CLOSE-MOVEMENT-NO-TILL-MODE",
+                "Map exactly one cash till payment mode "
+                f"to the drawer account {account} before closing.",
+            ))
         expected_by_mode[modes[0]] = _currency_flt(expected_by_mode.get(modes[0], 0) + amount, precision)
 
     client_rows = {row.mode_of_payment: row for row in doc.payment_reconciliation or []}
