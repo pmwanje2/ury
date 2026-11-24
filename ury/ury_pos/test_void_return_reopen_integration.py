@@ -511,3 +511,155 @@ class TestVoidReturnReopenIntegration(unittest.TestCase):
         self.assertEqual(len(results), 1, f"Expected exactly 1 winning return, got {len(results)}; errors={errors}")
         self.assertEqual(len(errors), 1, f"Expected exactly 1 refused return, got {errors}")
         self.assertIn("POS-RETURN-OVER-QTY", errors[0])
+
+    def test_r2_direct_rest_return_bypass_blocked_and_inclusive_vat_and_tips_adjust_live(self):
+        """Real MariaDB + uganda_compliance proof for Findings 1, 2, 3, 4, 6a."""
+        from ury.ury_pos.void_return_reopen import adjust_closed_check, create_pos_return, _is_room_charge_mode
+
+        cashier2 = self._make_user(f"b5a-cashier2-{self.suffix}@example.test", "Cashier Two", ["URY Cashier"])
+        br = frappe.get_doc("Branch", self.branch)
+        br.append("user", {"user": cashier2})
+        br.save(ignore_permissions=True)
+        prof = frappe.get_doc("POS Profile", self.profile)
+        prof.append("applicable_for_users", {"user": cashier2})
+
+        # Ensure a Tips Payable liability account and an Output VAT account exist for this company
+        co = frappe.get_doc("Company", self.company)
+        liab_parent = frappe.db.get_value(
+            "Account", {"company": self.company, "root_type": "Liability", "is_group": 1}, "name"
+        )
+        tips_acct = frappe.get_doc({
+            "doctype": "Account",
+            "account_name": f"B5a Tips Payable {self.suffix}",
+            "parent_account": liab_parent,
+            "company": self.company,
+            "is_group": 0,
+            "root_type": "Liability",
+        }).insert(ignore_permissions=True).name
+        vat_acct = frappe.get_doc({
+            "doctype": "Account",
+            "account_name": f"B5a Output VAT {self.suffix}",
+            "parent_account": liab_parent,
+            "company": self.company,
+            "is_group": 0,
+            "root_type": "Liability",
+            "account_type": "Tax",
+        }).insert(ignore_permissions=True).name
+        prof.custom_tips_payable_account = tips_acct
+        prof.save(ignore_permissions=True)
+
+        # Finding 6a: Showroom Cash (Cash type) is NOT Room Charge
+        cash_acct = co.default_cash_account or frappe.db.get_value(
+            "Account", {"company": self.company, "account_type": "Cash", "is_group": 0}, "name"
+        )
+        showroom_mop = self._make_mop(f"Showroom Cash {self.suffix}", "Cash", cash_acct)
+        self.assertFalse(_is_room_charge_mode(showroom_mop))
+
+        # Finding 3: 18% Tax-inclusive VAT invoice -> partial return preserves negative VAT & net_total
+        frappe.set_user("Administrator")
+        vat_inv = frappe.get_doc({
+            "doctype": "POS Invoice",
+            "company": self.company,
+            "branch": self.branch,
+            "pos_profile": self.profile,
+            "customer": self.customer,
+            "currency": "UGX",
+            "selling_price_list": self.price_list,
+            "order_type": "Dine In",
+            "posting_date": nowdate(),
+            "invoice_printed": 1,
+            "waiter": self.cashier,
+            "cashier": self.cashier,
+            "items": [{
+                "item_code": self.service_item,
+                "item_name": "Steak Plate",
+                "qty": 2,
+                "rate": 10000.0,
+                "price_list_rate": 10000.0,
+                "base_price_list_rate": 10000.0,
+                "uom": "Nos",
+                "conversion_factor": 1.0,
+                "income_account": self.income_account,
+                "expense_account": self.expense_account,
+                "cost_center": self.cost_center,
+                "warehouse": self.warehouse,
+                "ury_held": 0,
+            }],
+            "taxes": [{
+                "charge_type": "On Net Total",
+                "account_head": vat_acct,
+                "description": "VAT 18% Inclusive",
+                "rate": 18.0,
+                "cost_center": self.cost_center,
+                "included_in_print_rate": 1,
+            }],
+            "payments": [{"mode_of_payment": self.mop_cash, "amount": 20000.0}],
+        })
+        vat_inv.insert(ignore_permissions=True)
+        vat_inv.submit()
+        frappe.db.commit()
+        self.assertGreater(flt(vat_inv.total_taxes_and_charges), 0.0)
+
+        # Finding 1 (P0): cashier2 attempting direct unapproved return against cashier1's invoice -> REFUSED!
+        frappe.set_user(cashier2)
+        bypass_ret = frappe.get_doc({
+            "doctype": "POS Invoice",
+            "is_return": 1,
+            "return_against": vat_inv.name,
+            "company": self.company,
+            "branch": self.branch,
+            "pos_profile": self.profile,
+            "customer": self.customer,
+            "currency": "UGX",
+            "selling_price_list": self.price_list,
+            "posting_date": nowdate(),
+            "items": [{
+                "item_code": self.service_item,
+                "qty": -1,
+                "rate": 10000.0,
+                "uom": "Nos",
+                "income_account": self.income_account,
+                "cost_center": self.cost_center,
+                "warehouse": self.warehouse,
+                "pos_invoice_item": vat_inv.items[0].name,
+            }],
+            "payments": [{"mode_of_payment": self.mop_cash, "amount": -10000.0}],
+        })
+        with self.assertRaisesRegex(frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            bypass_ret.insert(ignore_permissions=True)
+
+        # Finding 2 + 3: Governed partial return with RET-OVERCHARGE (103:...) preserves inclusive VAT!
+        frappe.set_user(self.manager2)
+        with patch("ury.ury_pos.api.getBranch", return_value=self.branch):
+            ret_res = create_pos_return(
+                vat_inv.name,
+                [{"item_row_name": vat_inv.items[0].name, "qty": 1}],
+                reason="RET-OVERCHARGE",
+            )
+            ret_doc = frappe.get_doc("POS Invoice", ret_res["return_invoice"])
+            self.assertEqual(ret_doc.docstatus, 1)
+            self.assertLess(flt(ret_doc.total_taxes_and_charges), 0.0, "Tax-inclusive VAT must be negative on credit note")
+            self.assertLess(flt(ret_doc.net_total), 0.0)
+            self.assertGreater(flt(ret_doc.net_total), -10000.0, "net_total must exclude backed-out VAT")
+            self.assertEqual(flt(ret_doc.grand_total), -10000.0)
+
+            # Finding 4: adjust_closed_check with #145 custom_charged_tip on Card (no TENDER-OVERTENDER!)
+            tip_inv = self._make_pos_invoice(
+                items=[{"item_code": self.service_item, "item_name": "Steak Plate", "qty": 1, "rate": 35000.0}],
+                payments=[{"mode_of_payment": self.mop_cash, "amount": 35000.0}],
+                submit=True,
+            )
+            frappe.set_user(self.manager2)
+            adj = adjust_closed_check(
+                tip_inv.name,
+                [{"mode_of_payment": self.mop_card, "amount": 40000.0}],
+                reason="REOPEN-TENDER",
+                tip_amount=5000.0,
+            )
+            rep = frappe.get_doc("POS Invoice", adj["replacement_invoice"])
+            self.assertEqual(rep.docstatus, 1)
+            self.assertEqual(flt(rep.custom_charged_tip), 5000.0)
+            self.assertEqual(flt(rep.grand_total), 40000.0)
+            self.assertEqual(flt(rep.change_amount), 0.0)
+            tip_rows = [t for t in rep.taxes if t.account_head == tips_acct]
+            self.assertEqual([flt(t.tax_amount) for t in tip_rows], [5000.0])

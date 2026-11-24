@@ -227,4 +227,239 @@ describe('POS Orders screen — settled single & Add Check return/reopen and rec
     );
     expect(orderState.fetchOrders).toHaveBeenCalled();
   });
+
+  it('Finding 6b: passes selectedOrder.pos_profile (not posStore.posProfile) on multi-till branches and hydrates ReopenAdjustCheckDialog', async () => {
+    const prevOrder = { ...orderState.order };
+    Object.assign(orderState.order, {
+      name: 'POS-INV-MULTITILL-1',
+      status: 'Paid' as const,
+      pos_profile: 'R1 Till UGX',
+      payments: [{ mode_of_payment: 'Cash', amount: 45000 }],
+      efris_irn: undefined,
+      efris_status: undefined,
+    });
+    try {
+      const getSpy = vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+        if (method === 'frappe.client.has_permission') return { message: { has_permission: false } };
+        if (method === 'ury.ury_pos.override.list_reasons') {
+          return {
+            message: [
+              { code: 'REOPEN-TENDER', description: 'Wrong payment method', requires_note: 0, applies_to: ['adjust_closed_check'] },
+            ],
+          };
+        }
+        if (method === 'ury.ury_pos.void_return_reopen.get_returnable_check') {
+          return {
+            message: {
+              invoice: 'POS-INV-MULTITILL-1',
+              pos_profile: 'R1 Till UGX',
+              branch: 'R1 Main Branch',
+              customer: 'Walk In',
+              currency: 'UGX',
+              precision: 0,
+              grand_total: 45000,
+              discount_amount: 0,
+              total_taxes_and_charges: 0,
+              net_paid_amount: 45000,
+              already_refunded_amount: 0,
+              remaining_refundable_amount: 45000,
+              original_payments: [{ mode_of_payment: 'Cash', amount: 45000 }],
+              available_modes: ['Cash', 'Card'],
+              is_room_charge: false,
+              is_fiscalised: true,
+              items: [],
+              reasons: [],
+            },
+          };
+        }
+        if (method === 'ury.ury_pos.override.list_approvers') {
+          return { message: [{ user: 'mgr@example.com', full_name: 'Alice Manager' }] };
+        }
+        if (method === 'ury.ury_pos.override.privilege_policy') {
+          return { message: { privilege: 'adjust_closed_check', label: 'Adjust', may_perform: false, requires_reason: false } };
+        }
+        return { message: [] };
+      });
+
+      const postSpy = vi.spyOn(call, 'post').mockImplementation(async (method: string, payload?: unknown) => {
+        const body = (payload || {}) as Record<string, unknown>;
+        if (method === 'ury.ury_pos.void_return_reopen.adjust_closed_check') {
+          if (!body.approval_token) {
+            throw new Error('Manager approval required. [POS-AUTH-REQUIRED]');
+          }
+          return {
+            message: {
+              action: 'adjust_closed_check',
+              original_invoice: 'POS-INV-MULTITILL-1',
+              reversal_return: 'POS-REV-MT1',
+              replacement_invoice: 'POS-REP-MT1',
+              approver: 'mgr@example.com',
+              credit_and_rebill: true,
+            },
+          };
+        }
+        if (method === 'ury.ury_pos.override.authorise') {
+          return { message: { token: 'tok-mt-1', approver: 'mgr@example.com', approver_name: 'Alice Manager', expires_in: 120 } };
+        }
+        return { message: null };
+      });
+
+      render(
+        <MemoryRouter>
+          <Orders />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /reopen \/ adjust/i }));
+      // Even though bill.payments is pre-populated, ReopenAdjustCheckDialog MUST hydrate via get_returnable_check!
+      await screen.findByLabelText(/credit note and rebill/i);
+      expect(getSpy).toHaveBeenCalledWith(
+        'ury.ury_pos.void_return_reopen.get_returnable_check',
+        { invoice_id: 'POS-INV-MULTITILL-1' },
+      );
+
+      fireEvent.click(screen.getByLabelText(/credit note and rebill/i));
+      fireEvent.change(await screen.findByLabelText(/reason/i), { target: { value: 'REOPEN-TENDER' } });
+      fireEvent.click(screen.getByRole('button', { name: /apply adjustment/i }));
+
+      await screen.findByText(/Alice Manager/);
+      for (const d of ['7', '4', '1', '2']) {
+        fireEvent.click(screen.getByRole('button', { name: d }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+
+      await waitFor(() =>
+        expect(postSpy).toHaveBeenCalledWith(
+          'ury.ury_pos.override.authorise',
+          expect.objectContaining({
+            pos_profile: 'R1 Till UGX',
+            privilege: 'adjust_closed_check',
+          }),
+        ),
+      );
+    } finally {
+      Object.assign(orderState.order, prevOrder);
+    }
+  });
+
+  it('Finding 6b: passes selectedOrder.pos_profile to VoidItemDialog and normalizes cancel claim reason & note', async () => {
+    const prevOrder = { ...orderState.order };
+    Object.assign(orderState.order, {
+      name: 'POS-INV-DRAFT-MT',
+      status: 'Draft' as const,
+      pos_profile: 'R1 Till UGX',
+      custom_merged_tables: null,
+      custom_merged_pos_invoice: null,
+    });
+    try {
+      vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+        if (method === 'frappe.client.has_permission') return { message: { has_permission: true } };
+        if (method === 'ury.ury_pos.override.list_reasons') {
+          return {
+            message: [
+              { code: 'VOID-GUEST', description: 'Guest changed mind', requires_note: 0, applies_to: ['void_sent_item', 'reduce_sent_qty', 'cancel_check'] },
+              { code: 'OTHER', description: 'Other', requires_note: 1, applies_to: [] },
+            ],
+          };
+        }
+        if (method === 'ury.ury_pos.override.list_approvers') {
+          return { message: [{ user: 'mgr@example.com', full_name: 'Alice Manager' }] };
+        }
+        if (method === 'ury.ury_pos.override.privilege_policy') {
+          return { message: { privilege: 'reduce_sent_qty', label: 'Reduce Sent Qty', may_perform: false, requires_reason: false } };
+        }
+        return { message: [] };
+      });
+
+      const postSpy = vi.spyOn(call, 'post').mockImplementation(async (method: string, payload?: unknown) => {
+        const body = (payload || {}) as Record<string, unknown>;
+        if (method === 'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty') {
+          if (!body.approval_token) throw new Error('Manager approval required. [POS-AUTH-REQUIRED]');
+          return {
+            message: {
+              invoice: 'POS-INV-DRAFT-MT',
+              item_row_name: 'ROW-1',
+              item_code: 'BURGER',
+              previous_qty: 2,
+              new_qty: 1,
+              delta: -1,
+              cancel_kot_names: [],
+            },
+          };
+        }
+        if (method === 'ury.ury.doctype.ury_order.ury_order.cancel_order') {
+          if (!body.approval_token) throw new Error('Manager approval required. [POS-AUTH-REQUIRED]');
+          return { message: { invoice: 'POS-INV-DRAFT-MT', status: 'Cancelled' } };
+        }
+        if (method === 'ury.ury_pos.override.authorise') {
+          return { message: { token: 'tok-mt-void', approver: 'mgr@example.com', approver_name: 'Alice Manager', expires_in: 120 } };
+        }
+        return { message: null };
+      });
+
+      render(
+        <MemoryRouter>
+          <Orders />
+        </MemoryRouter>,
+      );
+
+      // 1) VoidItemDialog must authorise against selectedOrder.pos_profile ('R1 Till UGX'), not 'Main Till'
+      const voidBtn = screen.getByRole('button', { name: /confirm void burger/i });
+      fireEvent.click(voidBtn);
+      const voidReasonSel = await screen.findByLabelText(/reason/i);
+      fireEvent.change(voidReasonSel, { target: { value: 'VOID-GUEST' } });
+      fireEvent.click(screen.getByRole('button', { name: /^confirm void$/i }));
+      await screen.findByText(/Alice Manager/);
+      for (const d of ['7', '4', '1', '2']) {
+        fireEvent.click(screen.getByRole('button', { name: d }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+      await waitFor(() =>
+        expect(postSpy).toHaveBeenCalledWith(
+          'ury.ury_pos.override.authorise',
+          expect.objectContaining({ pos_profile: 'R1 Till UGX' }),
+        ),
+      );
+
+      // 2) Cancel order with "Other: guest left" normalizes claim to { reason: 'OTHER', note: 'guest left', is_waste: 0 }
+      const cancelIconBtn = await screen.findByRole('button', { name: /cancel order/i });
+      fireEvent.click(cancelIconBtn);
+      const textarea = await screen.findByPlaceholderText(/reason/i);
+      fireEvent.change(textarea, { target: { value: 'Other: guest left' } });
+      fireEvent.click(screen.getByRole('button', { name: /confirm cancel/i }));
+      await screen.findByText(/Alice Manager/);
+      for (const d of ['7', '4', '1', '2']) {
+        fireEvent.click(screen.getByRole('button', { name: d }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+      await waitFor(() =>
+        expect(postSpy).toHaveBeenCalledWith(
+          'ury.ury_pos.override.authorise',
+          expect.objectContaining({
+            pos_profile: 'R1 Till UGX',
+            privilege: 'cancel_check',
+            claim: expect.objectContaining({
+              invoice: 'POS-INV-DRAFT-MT',
+              reason: 'OTHER',
+              note: 'guest left',
+              is_waste: 0,
+            }),
+          }),
+        ),
+      );
+      await waitFor(() =>
+        expect(postSpy).toHaveBeenCalledWith(
+          'ury.ury.doctype.ury_order.ury_order.cancel_order',
+          expect.objectContaining({
+            invoice_id: 'POS-INV-DRAFT-MT',
+            reason: 'OTHER',
+            note: 'guest left',
+            approval_token: 'tok-mt-void',
+          }),
+        ),
+      );
+    } finally {
+      Object.assign(orderState.order, prevOrder);
+    }
+  });
 });

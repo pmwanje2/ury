@@ -1035,6 +1035,252 @@ class TestPOSReturnAndRefund(unittest.TestCase):
         self.h.frappe.db.get_value = _get_value_with_ugx_100
         self.assertEqual(self.mod._currency_precision("UGX"), 0)
 
+    # --- 9. Hydrogen R1 / R2 regressions (Findings 1, 2, 3, 5, 6a) ---
+
+    def test_r2_p0_direct_rest_return_by_second_cashier_without_approval_is_refused(self):
+        """Finding 1 (P0 Security): second URY Cashier NOT in check_actors cannot bypass via direct REST return."""
+        self.h.user_roles["cashier2@example.test"] = ["URY Cashier"]
+        self.h.user_branch["cashier2@example.test"] = "Branch A"
+        orig = self.h.add_closed_check(
+            "POS-REST-1",
+            owner="waiter1@example.test",
+            cashier="cashier@example.test",
+            waiter="waiter1@example.test",
+            items=[{"name": "ROW-1", "item_code": "BURGER", "qty": 2, "rate": 10000.0}],
+            payments=[{"mode_of_payment": "Cash", "amount": 20000.0}],
+        )
+
+        # Direct REST POST by cashier2 (not check actor, no manager role, no approval_token, even spoofing approver) -> REFUSED!
+        self.h.frappe.session.user = "cashier2@example.test"
+        rest_ret = Doc(
+            doctype="POS Invoice", _is_new=True, is_return=1, return_against=orig.name,
+            pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            restaurant_table=None, invoice_printed=0,
+            waiter="cashier2@example.test", modified_by="cashier2@example.test",
+            custom_return_approver="manager2@example.test",
+            cancel_reason="RET-QUALITY",
+            grand_total=-10000.0, rounded_total=-10000.0,
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0)],
+            payments=[Doc(mode_of_payment="Cash", amount=-10000.0)],
+        )
+        with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            self.inv_hook.validate_invoice(rest_ret, "validate")
+        with self.assertRaisesRegex(self.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
+            self.inv_hook.before_submit(rest_ret, "before_submit")
+
+        # Independent URY Manager (has return privilege) without reason -> REFUSED [POS-AUTH-REASON]!
+        self.h.frappe.session.user = "manager2@example.test"
+        mgr_no_reason = Doc(
+            doctype="POS Invoice", _is_new=True, is_return=1, return_against=orig.name,
+            pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            waiter="manager2@example.test", modified_by="manager2@example.test",
+            cancel_reason="",
+            grand_total=-10000.0, rounded_total=-10000.0,
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0)],
+            payments=[Doc(mode_of_payment="Cash", amount=-10000.0)],
+        )
+        with self.assertRaisesRegex(self.h.frappe.ValidationError, "POS-AUTH-REASON"):
+            self.inv_hook.validate_invoice(mgr_no_reason, "validate")
+
+        # Independent URY Manager WITH valid reason -> allowed, server forces custom_return_approver=actor & logs on submit!
+        mgr_ok = Doc(
+            doctype="POS Invoice", name="POS-RET-DESK-1", _is_new=False, is_return=1, return_against=orig.name,
+            pos_profile="Till A", company="Hotel Co", branch="Branch A",
+            waiter="manager2@example.test", modified_by="manager2@example.test",
+            custom_return_approver="spoofed@example.test",
+            cancel_reason="RET-QUALITY",
+            grand_total=-10000.0, rounded_total=-10000.0,
+            items=[Doc(item_code="BURGER", pos_invoice_item="ROW-1", qty=-1.0, rate=10000.0)],
+            payments=[Doc(mode_of_payment="Cash", amount=-10000.0)],
+        )
+        self.inv_hook.validate_invoice(mgr_ok, "validate")
+        self.assertEqual(mgr_ok.custom_return_approver, "manager2@example.test")
+        logs_before = len(self.h.auth_logs)
+        self.inv_hook.before_submit(mgr_ok, "before_submit")
+        self.assertEqual(len(self.h.auth_logs), logs_before + 1)
+        self.assertEqual(self.h.auth_logs[-1].approver, "manager2@example.test")
+
+    def test_r2_p0_efris_credit_note_reasoncode_matches_uganda_compliance_and_dynamic_meta(self):
+        """Finding 2 (P0 Runtime): exact uganda_compliance options (102 trailing '.', 103 'Stated' & ',etc.') + dynamic meta lookup."""
+        self.assertEqual(
+            self.mod.EFRIS_REASON_MAP["REOPEN-TENDER"],
+            "102:Cancellation of the purchase.",
+        )
+        self.assertEqual(
+            self.mod.EFRIS_REASON_MAP["REOPEN-SPLIT"],
+            "102:Cancellation of the purchase.",
+        )
+        self.assertEqual(
+            self.mod.DEFAULT_EFRIS_CREDIT_REASON,
+            "102:Cancellation of the purchase.",
+        )
+        self.assertEqual(
+            self.mod.EFRIS_REASON_MAP["RET-OVERCHARGE"],
+            "103:Invoice amount wrongly Stated due to miscalculation of price, tax, or discounts,etc.",
+        )
+
+        # Dynamic resolution from POS Invoice meta Select options must follow live options by numeric prefix.
+        orig_get_meta = self.h.frappe.get_meta
+
+        def _meta_with_efris_opts(dt):
+            m = orig_get_meta(dt)
+            if dt == "POS Invoice":
+                m.get_field = lambda fn: (
+                    SimpleNamespace(
+                        options=(
+                            "\n101:Custom 101 Option."
+                            "\n102:Custom 102 Cancellation."
+                            "\n103:Custom 103 Miscalculation."
+                        )
+                    )
+                    if fn == "efris_creditnote_reasoncode"
+                    else None
+                )
+            return m
+
+        self.h.frappe.get_meta = _meta_with_efris_opts
+        self.assertEqual(self.mod._resolve_efris_credit_reason("RET-OVERCHARGE"), "103:Custom 103 Miscalculation.")
+        self.assertEqual(self.mod._resolve_efris_credit_reason("REOPEN-TENDER"), "102:Custom 102 Cancellation.")
+        self.assertEqual(self.mod._resolve_efris_credit_reason("RET-QUALITY"), "101:Custom 101 Option.")
+
+    def test_r2_p1_tax_inclusive_vat_preserved_on_credit_notes_and_tips_payable_excluded(self):
+        """Finding 3 (P1 Tax Accounting): inclusive VAT rows (included_in_print_rate=1) are preserved on returns."""
+        self.h.frappe.session.user = "manager2@example.test"
+        self.h.profiles["Till A"].custom_tips_payable_account = "Tips Payable - HC"
+        inv = self.h.add_closed_check(
+            "POS-VAT-INCL",
+            currency="UGX",
+            items=[{"name": "ROW-1", "item_code": "BURGER", "item_name": "Burger", "qty": 2, "rate": 10000.0}],
+            taxes=[
+                {
+                    "charge_type": "On Net Total",
+                    "account_head": "VAT - HC",
+                    "description": "VAT 18% Inclusive",
+                    "rate": 18.0,
+                    "tax_amount": 3050.85,
+                    "included_in_print_rate": 1,
+                    "cost_center": "Restaurant - HC",
+                },
+                {
+                    "charge_type": "Actual",
+                    "account_head": "Tips Payable - HC",
+                    "description": "Charged Tip",
+                    "rate": 0.0,
+                    "tax_amount": 5000.0,
+                    "included_in_print_rate": 0,
+                    "cost_center": "Restaurant - HC",
+                },
+            ],
+            payments=[{"mode_of_payment": "Cash", "amount": 25000.0}],
+        )
+        inv.custom_charged_tip = 5000.0
+        inv.net_total = 16949.15
+        inv.total_taxes_and_charges = 8050.85
+        inv.grand_total = 25000.0
+        inv.rounded_total = 25000.0
+
+        res = self.mod.create_pos_return(inv.name, [{"item_row_name": "ROW-1", "qty": 1}], reason="RET-QUALITY")
+        # Inclusive VAT is inside the 10,000 item price, and server tip is excluded from partial item return.
+        self.assertEqual(res["refund_total"], 10000.0)
+        ret_doc = self.h.invoices[res["return_invoice"]]
+        incl_rows = [t for t in ret_doc.taxes if int(t.get("included_in_print_rate") or 0) == 1]
+        self.assertEqual(len(incl_rows), 1, "Tax-inclusive VAT row MUST be preserved on credit note")
+        self.assertEqual(incl_rows[0].account_head, "VAT - HC")
+        self.assertEqual(incl_rows[0].rate, 18.0)
+        self.assertLess(float(incl_rows[0].tax_amount), 0.0)
+        # Tips Payable row must NOT be copied onto a partial item return, and custom_charged_tip explicitly 0
+        tip_rows = [t for t in ret_doc.taxes if t.account_head == "Tips Payable - HC"]
+        self.assertEqual(tip_rows, [])
+        self.assertEqual(getattr(ret_doc.flags, "ury_return_discount_computed", False), True)
+
+    def test_r2_p1_kwd_partial_returns_reconcile_with_2dp_field_precision_zero_over_refund(self):
+        """Finding 5 (P1 Multi-Currency): 3-way partial KWD return on 2dp site never over-refunds 2.500 -> 2.507."""
+        self.h.profiles["Till KWD"] = Doc(
+            name="Till KWD",
+            company="Hotel Co",
+            currency="KWD",
+            branch="Branch A",
+            warehouse="Kitchen - HC",
+            cost_center="Restaurant - HC",
+            selling_price_list="KWD Selling",
+            custom_unreferenced_return_roles="",
+            payments=[Doc(mode_of_payment="Cash", default=1)],
+        )
+        self.h.frappe.session.user = "manager2@example.test"
+        inv = self.h.add_closed_check(
+            "R1KWD00001",
+            pos_profile="Till KWD",
+            currency="KWD",
+            discount_amount=0.500,
+            items=[{"name": "KWD-R1", "item_code": "BURGER", "item_name": "Burger", "qty": 3, "rate": 1.000}],
+            payments=[{"mode_of_payment": "Cash", "amount": 2.500}],
+        )
+        # Simulate Frappe default 2dp POS Invoice.grand_total field precision (as reproduced live in Hydrogen R1).
+        inv.precision = lambda fieldname=None: 2
+
+        # Wrap new_doc so returned POS Invoices also round grand_total/paid_amount at 2dp just like live ERPNext!
+        orig_new_doc = self.h.frappe.new_doc
+
+        def _new_doc_2dp(dt):
+            d = orig_new_doc(dt)
+            d.precision = lambda fieldname=None: 2
+            orig_ins = d.insert
+
+            def _ins_2dp(ignore_permissions=False):
+                orig_ins(ignore_permissions=ignore_permissions)
+                d.grand_total = round(float(d.grand_total), 2)
+                d.rounded_total = round(float(d.rounded_total), 2)
+                d.paid_amount = round(float(d.paid_amount), 2)
+                return d
+
+            d.insert = _ins_2dp
+            return d
+
+        self.h.frappe.new_doc = _new_doc_2dp
+
+        self.assertEqual(self.mod._currency_precision("KWD", doc=inv), 2)
+        r1 = self.mod.create_pos_return(inv.name, [{"item_row_name": "KWD-R1", "qty": 1}], reason="RET-QUALITY")
+        r2 = self.mod.create_pos_return(inv.name, [{"item_row_name": "KWD-R1", "qty": 1}], reason="RET-QUALITY")
+        r3 = self.mod.create_pos_return(inv.name, [{"item_row_name": "KWD-R1", "qty": 1}], reason="RET-QUALITY")
+
+        planned_sum = round(r1["refund_total"] + r2["refund_total"] + r3["refund_total"], 3)
+        self.assertEqual(planned_sum, 2.500, f"Planned refunds must equal 2.500 exact, got {planned_sum}")
+        for r in (r1, r2, r3):
+            ret_doc = self.h.invoices[r["return_invoice"]]
+            self.assertEqual(
+                round(float(ret_doc.grand_total), 3),
+                round(float(ret_doc.paid_amount), 3),
+                f"grand_total ({ret_doc.grand_total}) must equal paid_amount ({ret_doc.paid_amount})",
+            )
+
+    def test_r2_p2_showroom_cash_not_misclassified_as_room_charge(self):
+        """Finding 6a (P2 Mode Detection): 'Showroom Cash' must NOT be treated as a Room Charge."""
+        self.h.mops["Showroom Cash"] = Doc(name="Showroom Cash", type="Cash")
+        self.h.mops["Showroom Voucher"] = Doc(name="Showroom Voucher", type="General")
+        self.h.mops["R1 Room Charge"] = Doc(name="R1 Room Charge", type="General")
+        self.h.profiles["Till A"].payments.append(Doc(mode_of_payment="Showroom Cash", default=0))
+
+        self.assertFalse(self.mod._is_room_charge_mode("Showroom Cash"))
+        self.assertFalse(self.mod._is_room_charge_mode("Showroom Voucher"))
+        self.assertTrue(self.mod._is_room_charge_mode("Room Charge"))
+        self.assertTrue(self.mod._is_room_charge_mode("R1 Room Charge"))
+
+        self.h.frappe.session.user = "manager2@example.test"
+        inv = self.h.add_closed_check(
+            "POS-SHOWROOM-1",
+            payments=[{"mode_of_payment": "Showroom Cash", "amount": 30000.0}],
+        )
+        prev = self.mod.preview_pos_return(inv.name, [{"item_row_name": "ROW-1", "qty": 1}])
+        self.assertFalse(prev["is_room_charge"])
+        res = self.mod.create_pos_return(
+            inv.name,
+            [{"item_row_name": "ROW-1", "qty": 1}],
+            reason="RET-QUALITY",
+            refund_payments=[{"mode_of_payment": "Showroom Cash", "amount": 10000.0}],
+        )
+        self.assertFalse(res["is_room_charge"])
+        self.assertEqual(res["refund_payments"], [{"mode_of_payment": "Showroom Cash", "amount": 10000.0}])
+
 
 if __name__ == "__main__":
     unittest.main()

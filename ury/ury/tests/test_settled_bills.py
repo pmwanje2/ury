@@ -59,3 +59,51 @@ class SettledBills(unittest.TestCase):
         self.f.has_permission.return_value = True
         for self.doc.docstatus, self.doc.status in [(0,'Draft'), (2,'Cancelled')]:
             with self.assertRaises((ValueError, PermissionError)): copy('INV-1', idempotency_key='one')
+
+    def test_cashier_search_settled_bills_allows_same_till_return_and_skips_inaccessible_rows(self):
+        """Finding 6c: a cashier searching settled bills on their own till never gets 403 when another cashier's return exists."""
+        self.f.session = frappe._dict(user='cashier1@example.test')
+        own_bill = frappe._dict(
+            name='INV-OWN', branch='West', docstatus=1, status='Credit Note Issued',
+            pos_profile='Till-UGX', restaurant_table='1', cashier='cashier1@example.test',
+            waiter='cashier1@example.test', owner='cashier1@example.test', outstanding_amount=0,
+            items=[dict(item_name='Burger', qty=1, amount=10000)], taxes=[],
+            payments=[dict(mode_of_payment='Cash', amount=10000)],
+        )
+        other_cashier_return = frappe._dict(
+            name='INV-RET-OTHER', branch='West', docstatus=1, status='Return', is_return=1,
+            return_against='INV-OWN', pos_profile='Till-UGX', restaurant_table=None,
+            cashier='cashier2@example.test', waiter='cashier2@example.test', owner='cashier2@example.test',
+            outstanding_amount=0, items=[dict(item_name='Burger', qty=-1, amount=-10000)], taxes=[],
+            payments=[dict(mode_of_payment='Cash', amount=-10000)],
+        )
+        other_till_bill = frappe._dict(
+            name='INV-OTHER-TILL', branch='West', docstatus=1, status='Paid',
+            pos_profile='Till-KWD', restaurant_table='9', cashier='cashier2@example.test',
+            waiter='cashier2@example.test', owner='cashier2@example.test', outstanding_amount=0,
+            items=[dict(item_name='Steak', qty=1, amount=25)], taxes=[],
+            payments=[dict(mode_of_payment='Cash', amount=25)],
+        )
+        docs = {d.name: d for d in (own_bill, other_cashier_return, other_till_bill)}
+        self.f.get_list.return_value = [frappe._dict(name=n) for n in docs]
+        self.f.get_doc.side_effect = lambda dt, name, **kw: docs[name]
+        self.f.db.exists.side_effect = lambda dt, filt=None: (
+            'PPU-1'
+            if dt == 'POS Profile User'
+            and isinstance(filt, dict)
+            and filt.get('parent') == 'Till-UGX'
+            and filt.get('user') == 'cashier1@example.test'
+            else None
+        )
+
+        def _strict_enforce(doc, require_modify=False):
+            if doc.waiter != 'cashier1@example.test':
+                raise PermissionError('Not permitted to access this order')
+
+        with patch('ury.ury.doctype.ury_order.ury_order._enforce_order_access', side_effect=_strict_enforce):
+            rows = self.endpoint('search_settled_bills')(branch='West')
+
+        returned_names = [r['name'] for r in rows]
+        self.assertIn('INV-OWN', returned_names)
+        self.assertIn('INV-RET-OTHER', returned_names)
+        self.assertNotIn('INV-OTHER-TILL', returned_names)

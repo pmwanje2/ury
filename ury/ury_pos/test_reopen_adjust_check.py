@@ -685,6 +685,75 @@ class TestReopenAndAdjustClosedCheck(unittest.TestCase):
         patch_path = ROOT / "ury/patches/v2_0/setup_pos_void_return_reopen.py"
         self.assertTrue(patch_path.exists(), "Patch setup_pos_void_return_reopen.py is missing")
 
+        # 4. Finding 6d (White-Label): zero vendor/OSS names in B5a custom field descriptions
+        forbidden = ("erpnext", "frappe", "kamra", "tridz", " huf ")
+        for row in fixture_rows:
+            if (row["dt"], row["fieldname"]) in expected:
+                desc = (row.get("description") or "").lower()
+                for word in forbidden:
+                    self.assertNotIn(word, desc, f"White-label leak {word!r} in {row['name']} description: {row.get('description')}")
+        setup_txt = (ROOT / "ury/setup_customizations.py").read_text(encoding="utf-8")
+        self.assertNotIn("Native ERPNext Stock Entry", setup_txt)
+        self.assertNotIn("Native ERPNext Material Issue", setup_txt)
+
+    def test_r2_p1_adjust_closed_check_uses_custom_charged_tip_not_nonexistent_tip_amount(self):
+        """Finding 4 (P1 #145 interop): adjust_closed_check reads/writes custom_charged_tip + Tips Payable Actual row."""
+        self.h.custom_fields_present.discard(("POS Invoice", "tip_amount"))
+        self.h.custom_fields_present.add(("POS Invoice", "custom_charged_tip"))
+        self.h.custom_fields_present.add(("POS Invoice", "custom_tip_server"))
+        self.h.profiles["Till A"].custom_tips_payable_account = "Tips Payable - HC"
+
+        self.h.frappe.session.user = "manager2@example.test"
+        # Case A: Original check has no tip (50,000); adjust to Card + 5,000 tip -> total 55,000
+        inv1 = self.h.add_closed_check("POS-TIP-ADJ-1")
+        inv1._d.pop("tip_amount", None)
+        inv1.custom_charged_tip = 0.0
+        res1 = self.mod.adjust_closed_check(
+            inv1.name,
+            [{"mode_of_payment": "Card", "amount": 55000.0}],
+            reason="REOPEN-TENDER",
+            tip_amount=5000.0,
+        )
+        rep1 = self.h.invoices[res1["replacement_invoice"]]
+        self.assertFalse("tip_amount" in rep1._d, "Must NEVER write nonexistent POS Invoice.tip_amount")
+        self.assertEqual(rep1.custom_charged_tip, 5000.0)
+        self.assertEqual(rep1.custom_tip_server, inv1.waiter)
+        tip_rows1 = [t for t in rep1.taxes if t.account_head == "Tips Payable - HC" and t.charge_type == "Actual"]
+        self.assertEqual(len(tip_rows1), 1)
+        self.assertEqual(float(tip_rows1[0].tax_amount), 5000.0)
+
+        # Case B: Original check ALREADY had 5,000 custom_charged_tip (grand_total=55,000); adjust tip 5,000 -> 7,000 (total 57,000, NOT 62,000!)
+        inv2 = self.h.add_closed_check(
+            "POS-TIP-ADJ-2",
+            payments=[{"mode_of_payment": "Card", "amount": 55000.0}],
+        )
+        inv2._d.pop("tip_amount", None)
+        inv2.custom_charged_tip = 5000.0
+        inv2.custom_tip_server = "cashier@example.test"
+        inv2.taxes = [
+            Doc(charge_type="On Net Total", account_head="VAT - HC", description="VAT 18%", rate=18.0, tax_amount=7627.12, included_in_print_rate=1),
+            Doc(charge_type="Actual", account_head="Tips Payable - HC", description="Charged Tip", rate=0.0, tax_amount=5000.0, included_in_print_rate=0),
+        ]
+        inv2.grand_total = 55000.0
+        inv2.rounded_total = 55000.0
+        res2 = self.mod.adjust_closed_check(
+            inv2.name,
+            [{"mode_of_payment": "Card", "amount": 57000.0}],
+            reason="REOPEN-TENDER",
+            tip_amount=7000.0,
+        )
+        rev2 = self.h.invoices[res2["reversal_return"]]
+        rep2 = self.h.invoices[res2["replacement_invoice"]]
+        # Reversal preserves tax-inclusive VAT AND reverses original tip!
+        self.assertEqual(rev2.custom_charged_tip, -5000.0)
+        self.assertTrue(any(int(t.get("included_in_print_rate") or 0) == 1 for t in rev2.taxes))
+        # Replacement has new tip 7,000 (single Tips Payable row, never duplicated!)
+        self.assertEqual(rep2.custom_charged_tip, 7000.0)
+        tip_rows2 = [t for t in rep2.taxes if t.account_head == "Tips Payable - HC"]
+        self.assertEqual([float(t.tax_amount) for t in tip_rows2], [7000.0])
+        self.assertEqual(res2["before"]["tip_amount"], 5000.0)
+        self.assertEqual(res2["after"]["tip_amount"], 7000.0)
+
 
 if __name__ == "__main__":
     unittest.main()
