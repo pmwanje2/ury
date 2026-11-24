@@ -2136,6 +2136,14 @@ def validate_pos_return_doc(doc, *, on_submit_check: bool = False) -> None:
         if _field(orig, "custom_merged_pos_invoice"):
             _refuse(CODE_RETURN_MERGED, "Legacy linked merged checks cannot be returned individually.", fr.ValidationError)
         _assert_not_consolidated_or_day_closed(orig)
+        if _is_room_charge_invoice(orig):
+            for prow in _field(doc, "payments") or []:
+                if abs(flt(_field(prow, "amount", 0))) > 0 and not _is_room_charge_mode(_field(prow, "mode_of_payment")):
+                    _refuse(
+                        CODE_RETURN_ROOM_CHARGE,
+                        "A room charge check can only be refunded back to the room folio, not cash or card.",
+                        fr.ValidationError,
+                    )
         prior_returns = [
             r for r in _load_prior_returns(orig.name, for_update=False)
             if _field(r, "name") != _field(doc, "name")
@@ -2485,27 +2493,58 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
 
 def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
     tips_account = _tips_payable_account(src, pos_profile_doc)
+    has_line_discount = False
     for row in _field(src, "items") or []:
         qty = flt(_field(row, "qty", 0))
         if qty <= 0:
             continue
+        rate = flt(_field(row, "rate", 0))
+        plr = flt(_field(row, "price_list_rate", 0)) or rate
+        disc_pct = flt(_field(row, "discount_percentage", 0))
+        disc_amt = flt(_field(row, "discount_amount", 0))
+        margin_type = _field(row, "margin_type")
+        margin_val = flt(_field(row, "margin_rate_or_amount", 0))
+        if disc_pct > 0 or disc_amt > 0 or (plr > 0 and plr > rate + 1e-6):
+            has_line_discount = True
         item_payload = {
             "item_code": _field(row, "item_code"),
             "item_name": _field(row, "item_name") or _field(row, "item_code"),
             "qty": qty,
-            "rate": flt(_field(row, "rate", 0)),
+            "price_list_rate": plr,
+            "discount_percentage": disc_pct,
+            "discount_amount": disc_amt,
+            "rate": rate,
             "uom": _field(row, "uom") or "Nos",
             "warehouse": _field(row, "warehouse"),
             "income_account": _field(row, "income_account"),
             "cost_center": _field(row, "cost_center"),
             "ury_held": 0,
         }
+        if margin_type:
+            item_payload["margin_type"] = margin_type
+            item_payload["margin_rate_or_amount"] = margin_val
         _copy_item_tax_fields(row, item_payload)
         dst.append("items", item_payload)
+
     disc = abs(flt(_field(src, "discount_amount", 0)))
-    if disc > 0:
+    add_disc_pct = flt(_field(src, "additional_discount_percentage", 0))
+    has_header_discount = disc > 0 or add_disc_pct > 0
+    if has_header_discount:
         dst.apply_discount_on = _field(src, "apply_discount_on") or "Grand Total"
-        dst.discount_amount = disc
+        if add_disc_pct > 0:
+            dst.additional_discount_percentage = add_disc_pct
+        if disc > 0:
+            dst.discount_amount = disc
+        coupon = _field(src, "coupon_code")
+        if coupon and (_has_field("POS Invoice", "coupon_code") or hasattr(dst, "coupon_code")):
+            dst.coupon_code = coupon
+
+    if (
+        has_header_discount
+        or has_line_discount
+        or _field(src, "ury_discount_meta", None) is not None
+        or _field(src, "custom_discount_approver", None) is not None
+    ):
         for disc_field in (
             "custom_discount_reason",
             "custom_discount_note",
@@ -2516,6 +2555,7 @@ def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
             val = _field(src, disc_field, None)
             if val is not None and _has_field("POS Invoice", disc_field):
                 setattr(dst, disc_field, val)
+
     for t in _field(src, "taxes") or []:
         if _is_tip_tax_row(t, tips_account):
             continue

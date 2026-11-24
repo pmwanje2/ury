@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileWarning, RefreshCw, X } from 'lucide-react';
 import { Button, Textarea } from '@ury/ui';
-import { parseFrappeError } from '@ury/core';
+import { currencyFractionDigits, parseFrappeError } from '@ury/core';
 import { t } from '../i18n';
 import {
   isAuthRequiredError,
@@ -40,6 +40,14 @@ export interface ReopenAdjustCheckDialogProps {
   onClose: () => void;
 }
 
+function roundToPrecision(value: number, precision: number): number {
+  const digits = Math.max(0, Math.min(6, Math.trunc(precision)));
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num === 0) return 0;
+  const factor = 10 ** digits;
+  return Number((Math.round((num + Math.sign(num) * 1e-12) * factor) / factor).toFixed(digits));
+}
+
 export default function ReopenAdjustCheckDialog({
   open,
   bill,
@@ -72,7 +80,12 @@ export default function ReopenAdjustCheckDialog({
 
   const effectiveProfile = hydratedCheck?.pos_profile || bill.pos_profile;
   const effectiveCurrency = hydratedCheck?.currency || bill.currency;
-  const effectivePrecision = hydratedCheck?.precision;
+  const effectivePrecision =
+    typeof hydratedCheck?.precision === 'number'
+      ? hydratedCheck.precision
+      : effectiveCurrency
+        ? currencyFractionDigits(effectiveCurrency)
+        : 2;
 
   const tenderModes = useMemo(() => {
     const set = new Set<string>(hydratedCheck?.available_modes || availableModes || []);
@@ -141,11 +154,14 @@ export default function ReopenAdjustCheckDialog({
     [reasons, selectedReasonCode],
   );
   const requiresNote = Boolean(selectedReason && Number(selectedReason.requires_note) === 1);
-  const tipAmount = Math.max(0, Number(tipInput || 0) || 0);
-  const checkTotal = Number(hydratedCheck?.grand_total ?? bill.rounded_total ?? bill.grand_total ?? 0);
-  const existingTip = Math.max(0, Number(hydratedCheck?.charged_tip ?? 0) || 0);
-  const preTipTotal = Math.max(0, checkTotal - existingTip);
-  const adjustedTotal = preTipTotal + tipAmount;
+  const tipAmount = roundToPrecision(Math.max(0, Number(tipInput || 0) || 0), effectivePrecision);
+  const checkTotal = roundToPrecision(
+    Number(hydratedCheck?.grand_total ?? bill.rounded_total ?? bill.grand_total ?? 0),
+    effectivePrecision,
+  );
+  const existingTip = roundToPrecision(Math.max(0, Number(hydratedCheck?.charged_tip ?? 0) || 0), effectivePrecision);
+  const preTipTotal = roundToPrecision(Math.max(0, checkTotal - existingTip), effectivePrecision);
+  const adjustedTotal = roundToPrecision(preTipTotal + tipAmount, effectivePrecision);
 
   const reasonValid =
     reasons.length > 0

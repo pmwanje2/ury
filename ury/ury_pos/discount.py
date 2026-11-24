@@ -812,7 +812,7 @@ def _row_manual_discount_map(doc, precision):
         rname = str(item.get("name") or "")
         if not rname:
             continue
-        plr = flt(item.get("price_list_rate") if item.get("price_list_rate") is not None else item.get("rate"))
+        plr = flt(item.get("price_list_rate")) or flt(item.get("rate"))
         rate = flt(item.get("rate"))
         row_amt = flt(item.get("amount"))
         row_da = flt(item.get("discount_amount"))
@@ -844,7 +844,7 @@ def _compute_manual_discount_summary(doc, precision):
         qty = flt(item.get("qty"))
         if qty <= 0 or cint(item.get("is_disposable")):
             continue
-        plr = flt(item.get("price_list_rate") if item.get("price_list_rate") is not None else item.get("rate"))
+        plr = flt(item.get("price_list_rate")) or flt(item.get("rate"))
         rate = flt(item.get("rate"))
         row_amt = flt(item.get("amount"))
         if _is_auto_pricing_rule_row(item):
@@ -1867,9 +1867,34 @@ def validate_pos_discount(doc, method=None):
     prev_meta_dict = _read_meta(previous) if previous is not None else {}
     stored_approver = prev_approver or prev_meta_dict.get("approver")
     stored_approved_pct = prev_approved_pct or flt(prev_meta_dict.get("approved_percent"))
+    prev_add_pct = flt(previous.get("additional_discount_percentage")) if previous is not None else 0.0
+    curr_add_pct = flt(doc.get("additional_discount_percentage"))
+    prev_row_discs = _row_manual_discount_map(previous, prec) if previous is not None else {}
+    curr_row_discs = _row_manual_discount_map(doc, prec)
+    row_tol = 10 ** (-(prec + 1))
+    any_row_disc_increased = any(
+        curr_v > prev_row_discs.get(r, 0.0) + row_tol for r, curr_v in curr_row_discs.items()
+    )
+    pct_scaled_with_basket = (
+        previous is not None
+        and prev_add_pct > 0
+        and curr_add_pct <= prev_add_pct + 1e-6
+        and curr_summary["discount_basis"] > prev_summary["discount_basis"] + row_tol
+        and not any_row_disc_increased
+        and not _exceeds_approved_percent(
+            curr_summary, doc, max(prev_add_pct, prev_summary["effective_percent"]), prec
+        )
+    )
     discount_increased = (
-        curr_summary["discount_total"] > prev_summary["discount_total"] + 10 ** (-(prec + 1))
-        or curr_summary["effective_percent"] > prev_summary["effective_percent"] + 1e-4
+        (
+            curr_summary["discount_total"] > prev_summary["discount_total"] + row_tol
+            and not pct_scaled_with_basket
+        )
+        or (
+            curr_summary["effective_percent"] > prev_summary["effective_percent"] + 1e-4
+            and not pct_scaled_with_basket
+        )
+        or any_row_disc_increased
     )
     is_new_discount = previous is None or prev_summary["discount_total"] <= 0
 
