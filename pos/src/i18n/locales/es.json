@@ -872,6 +872,17 @@
     "kot_refired": "Comanda reenviada a cocina.",
     "merge_checks": "Unir cuentas",
     "split_check": "Dividir cuenta",
-    "transfer_check": "Transferir cuenta / mesa"
+    "transfer_check": "Transferir cuenta / mesa",
+    "sc_active_rule": "Regla de cargo por servicio activa",
+    "sc_waived_badge": "Exonerado",
+    "sc_fixed_label": "Fijo",
+    "sc_taxable_badge": "Gravado",
+    "sc_pre_discount": "Subtotal antes de descuento",
+    "sc_post_discount": "Subtotal después de descuento",
+    "sc_pax_threshold": "{{count}}+ comensales",
+    "sc_summary_net": "Subtotal",
+    "sc_summary_discount": "Descuento",
+    "sc_summary_tax": "Impuesto",
+    "sc_summary_toggle": "Ver desglose"
   }
 }

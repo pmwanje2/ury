@@ -1,6 +1,7 @@
 import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
+import type { ServiceChargeRule } from './service-charge';
 
 // Limited fields response
 export interface PosProfileLimited {
@@ -109,6 +110,11 @@ export interface PosProfileFull {
   custom_max_free_closed_copies?: number;
   custom_service_charge_rate?: number;
   custom_service_charge_account?: string | null;
+  custom_service_charge_min_pax?: number;
+  custom_service_charge_order_types?: string | null;
+  custom_service_charge_taxable?: number;
+  custom_service_charge_description?: string | null;
+  custom_service_charge_rules?: ServiceChargeRule[];
   custom_tax_exempt_category?: string | null;
   custom_tips_payable_account?: string | null;
   efris_print_wait_seconds?: number;

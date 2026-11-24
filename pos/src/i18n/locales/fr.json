@@ -921,6 +921,17 @@
     "kot_refired": "Bon cuisine relancé.",
     "merge_checks": "Fusionner les notes",
     "split_check": "Diviser la note",
-    "transfer_check": "Transférer la note / table"
+    "transfer_check": "Transférer la note / table",
+    "sc_active_rule": "Règle de frais de service active",
+    "sc_waived_badge": "Exonéré",
+    "sc_fixed_label": "Forfait",
+    "sc_taxable_badge": "Taxable",
+    "sc_pre_discount": "Sous-total avant remise",
+    "sc_post_discount": "Sous-total après remise",
+    "sc_pax_threshold": "{{count}}+ couverts",
+    "sc_summary_net": "Sous-total",
+    "sc_summary_discount": "Remise",
+    "sc_summary_tax": "Taxe",
+    "sc_summary_toggle": "Voir le détail"
   }
 }

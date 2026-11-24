@@ -24,6 +24,7 @@ import { splitBill, cancelOrder, reprintKot } from '../lib/order-api';
 import PriceOverrideDialog from '../components/PriceOverrideDialog';
 import CheckPrivilegedDialog, { type CheckPrivilegedTab } from '../components/CheckPrivilegedDialog';
 import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
+import { classifyInvoiceTaxes } from '../lib/service-charge';
 import {
   getOrdersTabForInvoice,
   getOpenCheckCounts,
@@ -1173,22 +1174,110 @@ function OwnerOrders({ owner }: { owner: string | null }) {
                 </div>
               </div>
 
-              {/* Taxes */}
-              {selectedOrderTaxes.length > 0 && (
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('order.taxes_charges')}</h3>
-                  <div className="space-y-2">
-                    {selectedOrderTaxes.map((tax, index) => (
-                      <div key={index} className="flex justify-between items-center py-1">
-                        <span className="text-sm text-gray-600">{tax.description}</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          {formatCurrency(tax.rate, selectedOrderCurrency)}
+              {/* Structured Financial Breakdown: Net -> Discount -> Service Charge -> Tax -> Total */}
+              {(() => {
+                const { serviceChargeRows, taxRows, tipRows } = classifyInvoiceTaxes(selectedOrderTaxes);
+                const subtotalVal = selectedOrder.total || selectedOrder.net_total || 0;
+                const discountVal = Number(selectedOrder.discount_amount || 0);
+                const isScWaived = Number(selectedOrder.custom_service_charge_waived || 0) === 1;
+                const editable = isOrderEditable(selectedOrder.status);
+                const hasBreakdown =
+                  subtotalVal > 0 ||
+                  discountVal > 0 ||
+                  serviceChargeRows.length > 0 ||
+                  taxRows.length > 0 ||
+                  tipRows.length > 0 ||
+                  isScWaived;
+                if (!hasBreakdown) return null;
+                return (
+                  <div className="mb-6 rounded-lg border border-gray-200 bg-gray-50/70 p-3.5 space-y-2">
+                    <h3 className="text-sm font-semibold text-gray-900">{t('order.taxes_charges')}</h3>
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex items-center justify-between gap-2 text-gray-700">
+                        <span>{t('privileged_actions.sc_summary_net')}</span>
+                        <span className="tabular-nums font-medium">
+                          {formatCurrency(subtotalVal, selectedOrderCurrency)}
                         </span>
                       </div>
-                    ))}
+                      {discountVal > 0 && (
+                        <div className="flex items-center justify-between gap-2 text-emerald-700">
+                          <span>
+                            {t('privileged_actions.sc_summary_discount')}
+                            {Number(selectedOrder.additional_discount_percentage || 0) > 0
+                              ? ` (${selectedOrder.additional_discount_percentage}%)`
+                              : ''}
+                          </span>
+                          <span className="tabular-nums font-medium">
+                            -{formatCurrency(discountVal, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      )}
+                      {serviceChargeRows.map((sc, index) => (
+                        <div key={`sc-${index}`} className="flex items-center justify-between gap-2">
+                          {editable ? (
+                            <button
+                              type="button"
+                              onClick={() => setCheckPrivTab('service_charge')}
+                              className="min-h-11 inline-flex items-center gap-1.5 text-start text-sm font-medium text-blue-700 hover:underline"
+                            >
+                              <span>{sc.description}</span>
+                              {Number(sc.tax_rate || 0) > 0 && !String(sc.description || '').includes('%') && (
+                                <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+                                  {sc.tax_rate}%
+                                </span>
+                              )}
+                            </button>
+                          ) : (
+                            <span className="text-gray-700">{sc.description}</span>
+                          )}
+                          <span className="tabular-nums font-medium text-gray-900">
+                            {formatCurrency(sc.tax_amount ?? sc.rate, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                      {isScWaived && serviceChargeRows.length === 0 && (
+                        <div className="flex items-center justify-between gap-2">
+                          {editable ? (
+                            <button
+                              type="button"
+                              onClick={() => setCheckPrivTab('service_charge')}
+                              className="min-h-11 inline-flex items-center gap-1.5 text-start text-sm text-rose-700 hover:underline"
+                            >
+                              <span>{t('privileged_actions.service_charge')}</span>
+                              <span className="rounded bg-rose-50 px-1.5 py-0.5 text-xs font-medium text-rose-700">
+                                {t('privileged_actions.sc_waived_badge')}
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="text-rose-700">
+                              {t('privileged_actions.service_charge')} ({t('privileged_actions.sc_waived_badge')})
+                            </span>
+                          )}
+                          <span className="tabular-nums text-gray-500">
+                            {formatCurrency(0, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      )}
+                      {taxRows.map((tax, index) => (
+                        <div key={`tax-${index}`} className="flex items-center justify-between gap-2 text-gray-600">
+                          <span className="min-w-0 break-words">{tax.description}</span>
+                          <span className="shrink-0 tabular-nums font-medium text-gray-900">
+                            {formatCurrency(tax.tax_amount ?? tax.rate, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                      {tipRows.map((tip, index) => (
+                        <div key={`tip-${index}`} className="flex items-center justify-between gap-2 text-gray-600">
+                          <span className="min-w-0 break-words">{tip.description}</span>
+                          <span className="shrink-0 tabular-nums font-medium text-gray-900">
+                            {formatCurrency(tip.tax_amount ?? tip.rate, selectedOrderCurrency)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
 
             {/* Sticky Bottom Section: Print | Split | Settle | Total */}
@@ -1346,6 +1435,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           company={posStore.posProfile?.company || ''}
           invoiceName={selectedOrder.name}
           currency={selectedOrderCurrency}
+          isTaxExempt={Number(selectedOrder.custom_tax_exempt || 0) === 1}
+          isServiceChargeWaived={Number(selectedOrder.custom_service_charge_waived || 0) === 1}
           onSuccess={async () => {
             await fetchOrders();
             await selectOrder(selectedOrder);

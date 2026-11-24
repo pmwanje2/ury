@@ -1124,6 +1124,17 @@
     "kot_refired": "تمت إعادة إرسال طلب المطبخ.",
     "merge_checks": "دمج الفواتير",
     "split_check": "تقسيم الفاتورة",
-    "transfer_check": "نقل الفاتورة / الطاولة"
+    "transfer_check": "نقل الفاتورة / الطاولة",
+    "sc_active_rule": "قاعدة رسوم الخدمة النشطة",
+    "sc_waived_badge": "معفى",
+    "sc_fixed_label": "ثابت",
+    "sc_taxable_badge": "خاضع للضريبة",
+    "sc_pre_discount": "المجموع الفرعي قبل الخصم",
+    "sc_post_discount": "المجموع الفرعي بعد الخصم",
+    "sc_pax_threshold": "{{count}}+ ضيوف",
+    "sc_summary_net": "المجموع الفرعي",
+    "sc_summary_discount": "الخصم",
+    "sc_summary_tax": "الضريبة",
+    "sc_summary_toggle": "عرض التفاصيل"
   }
 }

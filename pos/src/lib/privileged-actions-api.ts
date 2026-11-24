@@ -1,5 +1,18 @@
 import { call, parseFrappeError } from '@ury/core';
 import { assertOfflineActionAllowed } from '../offline/cashier';
+import type { ServiceChargeRule } from './service-charge';
+
+export interface ServiceChargeStatusResponse {
+  invoice: string;
+  waived: boolean;
+  override_rate?: number | null;
+  override_amount?: number | null;
+  reason?: string;
+  approver?: string;
+  service_charge_amount: number;
+  service_charge_tax_amount: number;
+  matched_rule?: ServiceChargeRule | null;
+}
 
 export interface PrivilegedActionAuth {
   approvalToken?: string;
@@ -180,6 +193,20 @@ export async function clearTaxExemption(params: {
     },
   );
   return res.message;
+}
+
+export async function getServiceChargeStatus(
+  invoice: string,
+  posProfile?: string,
+): Promise<ServiceChargeStatusResponse | null> {
+  const res = await call.get<{ message?: ServiceChargeStatusResponse }>(
+    'ury.ury_pos.pricing_actions.get_service_charge_status',
+    {
+      invoice,
+      ...(posProfile ? { pos_profile: posProfile } : {}),
+    },
+  );
+  return res?.message ?? null;
 }
 
 export async function adjustServiceCharge(params: {

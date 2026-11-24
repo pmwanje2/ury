@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare } from 'lucide-react';
+import { Trash2, Edit, FrownIcon, Plus, Loader2, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { formatCurrency, parseFrappeError, resolveDefaultCustomer } from '@ury/core';
@@ -7,6 +7,7 @@ import { CustomerSelect } from './CustomerSelect';
 import ProductDialog from './ProductDialog';
 import OrderTypeSelect from './OrderTypeSelect';
 import CommentDialog from './CommentDialog';
+import CheckPrivilegedDialog from './CheckPrivilegedDialog';
 import { Button, Badge } from '@ury/ui';
 import { getOrderKotStatus, type KotItemState } from '../lib/kot-status-api';
 import { Spinner } from '@ury/ui';
@@ -24,6 +25,11 @@ import { DINE_IN, orderTypeLabel } from '../data/order-types';
 import { t } from '../i18n';
 import { cartQtyForItem, remainingHeadroom } from '../lib/cart-capacity';
 import type { MenuAvailability } from '../lib/availability-api';
+import {
+  estimateServiceCharge,
+  resolveActiveServiceChargeRule,
+  roundCurrency,
+} from '../lib/service-charge';
 
 const KOT_BADGE: Record<KotItemState, { label: string; variant: 'cancelled' | 'warning' | 'info' | 'success' }> = {
   QUEUED: { label: 'order.kot_sent', variant: 'cancelled' },
@@ -75,6 +81,8 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const [editingItem, setEditingItem] = useState<typeof activeOrders[0] | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCommentDialog, setShowCommentDialog] = useState(false);
+  const [mobileSummaryOpen, setMobileSummaryOpen] = useState(false);
+  const [showServiceChargeDialog, setShowServiceChargeDialog] = useState(false);
   const [pendingSyncVoidApproval, setPendingSyncVoidApproval] = useState<{
     privilege: 'void_sent_item' | 'guest_count_change' | 'order_type_change' | 'pickup_other_check';
     orderData: SyncOrderRequest;
@@ -114,6 +122,22 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
     (sum, item) => sum + calculateItemTotal(item),
     0
   );
+  const activeServiceChargeRule = resolveActiveServiceChargeRule(posProfile, selectedOrderType, noOfPax);
+  const estimatedServiceCharge = estimateServiceCharge(total, activeServiceChargeRule, activeCurrency);
+  const estimatedTotal = roundCurrency(total + estimatedServiceCharge, activeCurrency);
+  const serviceChargeMeta = activeServiceChargeRule
+    ? [
+        activeServiceChargeRule.charge_mode === 'Fixed Amount'
+          ? t('privileged_actions.sc_fixed_label')
+          : `${activeServiceChargeRule.rate || 0}%`,
+        activeServiceChargeRule.order_type === '*' ? null : orderTypeLabel(activeServiceChargeRule.order_type),
+        (activeServiceChargeRule.min_pax || 0) > 0
+          ? t('privileged_actions.sc_pax_threshold', { count: activeServiceChargeRule.min_pax })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
 
   const handleEdit = (item: typeof activeOrders[0]) => {
     const menuItem = {
@@ -646,6 +670,91 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
               className="mb-3 w-full rounded-md border border-border px-3 py-1.5 text-sm"
               disabled={isInteractionDisabled}
             />
+            {/* Phone (390px) collapsible summary bar with >=44px touch target */}
+            <div className="lg:hidden mb-3">
+              <button
+                type="button"
+                data-testid="mobile-summary-toggle"
+                aria-expanded={mobileSummaryOpen}
+                onClick={() => setMobileSummaryOpen((prev) => !prev)}
+                className="min-h-11 w-full flex items-center justify-between gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-start text-sm"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs text-gray-600">
+                    {t('privileged_actions.sc_summary_net')}: {formatCurrency(total, activeCurrency)}
+                    {activeServiceChargeRule && estimatedServiceCharge > 0
+                      ? ` · ${activeServiceChargeRule.description || t('privileged_actions.service_charge')}: ${formatCurrency(estimatedServiceCharge, activeCurrency)}`
+                      : ''}
+                  </div>
+                  <div className="text-xs font-medium text-blue-700">
+                    {t('privileged_actions.sc_summary_toggle')}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5 font-semibold text-gray-900 tabular-nums">
+                  <span>{formatCurrency(estimatedTotal, activeCurrency)}</span>
+                  {mobileSummaryOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </div>
+              </button>
+              {mobileSummaryOpen && (
+                <div className="mt-2 rounded-md border border-gray-200 bg-white p-3 space-y-1.5 text-sm">
+                  <div className="flex items-center justify-between text-gray-600">
+                    <span>{t('privileged_actions.sc_summary_net')}</span>
+                    <span className="tabular-nums">{formatCurrency(total, activeCurrency)}</span>
+                  </div>
+                  {activeServiceChargeRule && estimatedServiceCharge > 0 && (
+                    <div className="flex items-center justify-between gap-2 text-gray-700">
+                      <span className="min-w-0 truncate">
+                        {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
+                        {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
+                      </span>
+                      <span className="shrink-0 tabular-nums font-medium">
+                        {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between border-t border-gray-100 pt-1.5 font-semibold text-gray-900">
+                    <span>{t('cart.total')}</span>
+                    <span className="tabular-nums">{formatCurrency(estimatedTotal, activeCurrency)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Desktop summary breakdown */}
+            <div className="hidden lg:block space-y-1.5 mb-3">
+              {activeServiceChargeRule && estimatedServiceCharge > 0 && (
+                <>
+                  <div className="flex items-center justify-between text-sm text-gray-600">
+                    <span>{t('privileged_actions.sc_summary_net')}</span>
+                    <span className="tabular-nums">{formatCurrency(total, activeCurrency)}</span>
+                  </div>
+                  <div
+                    data-testid="order-panel-sc-row"
+                    className="flex items-center justify-between gap-2 text-sm text-gray-700"
+                  >
+                    {orderId ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowServiceChargeDialog(true)}
+                        className="min-w-0 truncate text-start text-blue-700 hover:underline"
+                      >
+                        {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
+                        {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
+                      </button>
+                    ) : (
+                      <span className="min-w-0 truncate">
+                        {activeServiceChargeRule.description || t('privileged_actions.service_charge')}
+                        {serviceChargeMeta ? ` (${serviceChargeMeta})` : ''}
+                      </span>
+                    )}
+                    <span className="shrink-0 tabular-nums font-medium">
+                      {formatCurrency(estimatedServiceCharge, activeCurrency)}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-2">
                 <Button
@@ -663,7 +772,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
                 </Button>
                 <span className="text-lg font-semibold">{t('cart.total')}</span>
               </div>
-              <span className="text-lg font-semibold">{formatCurrency(total, activeCurrency)}</span>
+              <span className="text-lg font-semibold tabular-nums">{formatCurrency(estimatedTotal, activeCurrency)}</span>
             </div>
             <Button
               onClick={handleSubmit}
@@ -708,6 +817,19 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         onSave={handleCommentSave}
         initialComment={orderComment}
       />
+
+      {showServiceChargeDialog && orderId && posProfile && (
+        <CheckPrivilegedDialog
+          open
+          onOpenChange={setShowServiceChargeDialog}
+          initialTab="service_charge"
+          posProfile={posProfile.name}
+          company={posProfile.company || ''}
+          invoiceName={orderId}
+          currency={activeCurrency || undefined}
+          onSuccess={() => setShowServiceChargeDialog(false)}
+        />
+      )}
 
       {pendingSyncVoidApproval && orderId && posProfile && (
         <ManagerApproval

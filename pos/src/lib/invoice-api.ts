@@ -29,8 +29,11 @@ export interface POSInvoice {
   /** the waiter's full name, when the server resolves it; not read from POS Invoice */
   waiter_name?: string | null;
   net_total: number;
+  total?: number;
   posting_time: string;
   total_taxes_and_charges: number;
+  custom_service_charge_waived?: number;
+  custom_tax_exempt?: number;
   customer: string;
   customer_name?: string;
   /** a short name for this check (Susan, Seat 2); not a Customer */
@@ -98,6 +101,11 @@ export interface POSInvoiceItem {
 export interface POSInvoiceTax {
   description: string;
   rate: number;
+  tax_amount?: number;
+  tax_rate?: number;
+  charge_type?: string;
+  custom_pos_charge_kind?: string;
+  account_head?: string;
 }
 
 interface GetPOSInvoicesResponse {

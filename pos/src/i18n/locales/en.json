@@ -1117,6 +1117,17 @@
     "kot_refired": "Kitchen ticket re-fired.",
     "merge_checks": "Merge Checks",
     "split_check": "Split Check",
-    "transfer_check": "Transfer Check / Table"
+    "transfer_check": "Transfer Check / Table",
+    "sc_active_rule": "Active service charge rule",
+    "sc_waived_badge": "Waived",
+    "sc_fixed_label": "Fixed",
+    "sc_taxable_badge": "Taxable",
+    "sc_pre_discount": "Pre-discount subtotal",
+    "sc_post_discount": "Post-discount subtotal",
+    "sc_pax_threshold": "{{count}}+ guests",
+    "sc_summary_net": "Subtotal",
+    "sc_summary_discount": "Discount",
+    "sc_summary_tax": "Tax",
+    "sc_summary_toggle": "View breakdown"
   }
 }

@@ -24,9 +24,13 @@ import {
   applyTaxExemption,
   clearTaxExemption,
   extractAuthChallenge,
+  getServiceChargeStatus,
   listTaxExemptionOptions,
+  type ServiceChargeStatusResponse,
   type TaxExemptionOption,
 } from '../lib/privileged-actions-api';
+import { formatCurrency } from '@ury/core';
+import { currencyInputStep } from '../lib/service-charge';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 export type CheckPrivilegedTab = 'complimentary' | 'tax_exempt' | 'service_charge';
@@ -57,6 +61,7 @@ export default function CheckPrivilegedDialog({
   posProfile,
   company,
   invoiceName,
+  currency,
   isTaxExempt = false,
   isServiceChargeWaived = false,
   onSuccess,
@@ -74,6 +79,7 @@ export default function CheckPrivilegedDialog({
   );
   const [svcRate, setSvcRate] = useState('');
   const [svcAmount, setSvcAmount] = useState('');
+  const [scStatus, setScStatus] = useState<ServiceChargeStatusResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{
@@ -119,10 +125,23 @@ export default function CheckPrivilegedDialog({
           if (active) setTaxCategories([]);
         });
     }
+    if (tab === 'service_charge' && invoiceName) {
+      getServiceChargeStatus(invoiceName, posProfile)
+        .then((status) => {
+          if (!active) return;
+          setScStatus(status);
+          if (status?.waived) {
+            setSvcMode('restore');
+          }
+        })
+        .catch(() => {
+          if (active) setScStatus(null);
+        });
+    }
     return () => {
       active = false;
     };
-  }, [open, tab, company]);
+  }, [open, tab, company, invoiceName, posProfile]);
 
   const selectedReasonObj = reasons.find((r) => r.code === selectedReason) ?? null;
   const needsNote = Boolean(selectedReasonObj && Number(selectedReasonObj.requires_note) === 1);
@@ -328,6 +347,55 @@ export default function CheckPrivilegedDialog({
 
             {tab === 'service_charge' && (
               <div className="space-y-3">
+                {(scStatus?.matched_rule || scStatus?.waived || isServiceChargeWaived) && (
+                  <div
+                    data-testid="sc-active-rule-card"
+                    className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-xs text-gray-700 space-y-1"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-gray-900">
+                        {scStatus?.matched_rule?.description || t('privileged_actions.service_charge')}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {scStatus?.matched_rule && (
+                          <span className="rounded bg-blue-50 px-2 py-0.5 font-medium text-blue-700">
+                            {scStatus.matched_rule.charge_mode === 'Fixed Amount'
+                              ? `${t('privileged_actions.sc_fixed_label')} · ${formatCurrency(scStatus.matched_rule.fixed_amount || 0, currency)}`
+                              : `${scStatus.matched_rule.rate || 0}%`}
+                          </span>
+                        )}
+                        {Number(scStatus?.matched_rule?.taxable || 0) === 1 && (
+                          <span className="rounded bg-amber-50 px-2 py-0.5 font-medium text-amber-800">
+                            {t('privileged_actions.sc_taxable_badge')}
+                          </span>
+                        )}
+                        {(scStatus?.waived || isServiceChargeWaived) && (
+                          <span className="rounded bg-rose-50 px-2 py-0.5 font-medium text-rose-700">
+                            {t('privileged_actions.sc_waived_badge')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {scStatus?.matched_rule && (
+                      <p className="text-gray-600">
+                        {[
+                          scStatus.matched_rule.order_type === '*' ? '*' : scStatus.matched_rule.order_type,
+                          Number(scStatus.matched_rule.min_pax || 0) > 0
+                            ? t('privileged_actions.sc_pax_threshold', { count: scStatus.matched_rule.min_pax })
+                            : null,
+                          scStatus.matched_rule.charge_mode !== 'Fixed Amount'
+                            ? scStatus.matched_rule.calculation_basis === 'Pre-Discount Subtotal'
+                              ? t('privileged_actions.sc_pre_discount')
+                              : t('privileged_actions.sc_post_discount')
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-1.5">
                   <label htmlFor="svc-mode-select" className="block text-sm font-medium text-gray-900">
                     {t('privileged_actions.service_charge_action')}
@@ -346,7 +414,7 @@ export default function CheckPrivilegedDialog({
                 </div>
 
                 {svcMode === 'override' && (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1.5">
                       <label htmlFor="svc-rate-input" className="block text-sm font-medium text-gray-900">
                         {t('privileged_actions.service_charge_rate')}
@@ -356,7 +424,7 @@ export default function CheckPrivilegedDialog({
                         type="number"
                         inputMode="decimal"
                         min={0}
-                        step="any"
+                        step="0.01"
                         value={svcRate}
                         onChange={(e) => {
                           setSvcRate(e.target.value);
@@ -375,7 +443,7 @@ export default function CheckPrivilegedDialog({
                         type="number"
                         inputMode="decimal"
                         min={0}
-                        step="any"
+                        step={currencyInputStep(currency)}
                         value={svcAmount}
                         onChange={(e) => {
                           setSvcAmount(e.target.value);
