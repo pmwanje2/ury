@@ -2762,7 +2762,7 @@ def is_printer_watch_installed() -> dict:
     return {"installed": bool(installed)}
 
 
-_CLOSED_STATUSES = ('Paid', 'Partly Paid', 'Unpaid', 'Overdue', 'Consolidated', 'Return')
+_CLOSED_STATUSES = ('Paid', 'Partly Paid', 'Unpaid', 'Overdue', 'Consolidated', 'Return', 'Credit Note Issued')
 _COPY_LOG = 'URY Bill Reprint Log'
 
 
