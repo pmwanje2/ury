@@ -992,6 +992,13 @@ def _clean_str(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _set_row_attr(row: Any, key: str, value: Any) -> None:
+    if isinstance(row, dict):
+        row[key] = value
+    else:
+        setattr(row, key, value)
+
+
 def _doc_precision(doc, fieldname: str = "total_taxes_and_charges") -> int:
     fn = getattr(doc, "precision", None)
     if callable(fn):
@@ -1206,7 +1213,7 @@ def _partition_tax_rows(doc, profile) -> tuple[list[Any], list[Any]]:
         ):
             continue
         if kind == "Charged Tip" or (tip_account and acct == tip_account):
-            row["custom_pos_charge_kind"] = "Charged Tip"
+            _set_row_attr(row, "custom_pos_charge_kind", "Charged Tip")
             tip_rows.append(row)
             continue
         base_rows.append(row)
@@ -1307,7 +1314,7 @@ def _resolve_effective_vat(doc, base_tax_rows: list[Any]) -> tuple[str, float, s
 
 def _normalize_tax_indices(doc) -> None:
     for idx, row in enumerate(doc.get("taxes") or [], start=1):
-        row["idx"] = idx
+        _set_row_attr(row, "idx", idx)
 
 
 def sync_service_charge(doc, profile=None) -> None:
@@ -1335,6 +1342,17 @@ def sync_service_charge(doc, profile=None) -> None:
             return
 
     base_rows, tip_rows = _partition_tax_rows(doc, profile)
+
+    # On a brand-new check (e.g. sync_order before save/set_missing_values), doc.taxes is
+    # still empty even though taxes_and_charges is already set. Hydrate template VAT rows
+    # first so ERPNext set_taxes() is never suppressed and taxable SC can chain via row_id.
+    if not base_rows and cint(doc.get("custom_tax_exempt")) != 1:
+        tpl_name = _clean_str(doc.get("taxes_and_charges"))
+        if tpl_name:
+            try:
+                base_rows = _load_template_tax_rows(tpl_name)
+            except Exception:
+                base_rows = []
 
     if cint(doc.get("custom_service_charge_waived")) == 1 or cint(doc.get("custom_is_complimentary")) == 1:
         doc.set("taxes", base_rows + tip_rows)
@@ -1508,8 +1526,8 @@ def prorate_return_service_charge(doc) -> None:
         for row in doc.get("taxes") or []:
             if _is_sc_row(row) or _is_sc_tax_row(row):
                 if flt(row.get("tax_amount")) != 0 or flt(row.get("rate")) != 0:
-                    row["tax_amount"] = 0.0
-                    row["rate"] = 0.0
+                    _set_row_attr(row, "tax_amount", 0.0)
+                    _set_row_attr(row, "rate", 0.0)
                     mutated = True
         if mutated and callable(getattr(doc, "calculate_taxes_and_totals", None)):
             doc.calculate_taxes_and_totals()
@@ -1568,7 +1586,7 @@ def prorate_return_service_charge(doc) -> None:
             desired = -target_refund if not allocated else 0.0
             allocated = True
             if abs(flt(row.get("tax_amount")) - desired) > 1e-6:
-                row["tax_amount"] = desired
+                _set_row_attr(row, "tax_amount", desired)
                 mutated = True
 
     if mutated and callable(getattr(doc, "calculate_taxes_and_totals", None)):

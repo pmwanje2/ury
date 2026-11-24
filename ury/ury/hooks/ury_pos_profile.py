@@ -1,6 +1,14 @@
 import frappe
 from frappe import _, msgprint
-from frappe.utils import cint, flt
+try:
+    from frappe.utils import cint, flt
+except ImportError:
+    def cint(value):
+        return int(float(value or 0))
+
+    def flt(value, precision=None):
+        num = float(value or 0)
+        return round(num, precision) if precision is not None else num
 
 from ury.brand import coded_message
 from ury.ury_pos.default_customer import validate_order_type_customers

@@ -70,7 +70,10 @@ def assert_not_offline_replay(
 ) -> None:
     """Refuse every privileged action during offline capture or offline outbox replay."""
     flags = getattr(frappe, "flags", None)
-    flag_offline = getattr(flags, "ury_offline_replay", False) is True
+    try:
+        flag_offline = getattr(flags, "ury_offline_replay", False) is True
+    except RuntimeError:
+        flag_offline = False
     is_offline = bool(
         flag_offline
         or cint(append) == 1
