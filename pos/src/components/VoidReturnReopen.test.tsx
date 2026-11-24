@@ -216,7 +216,7 @@ describe('ReturnCheckDialog (whole/partial return, UGX rounding, room charge, EF
 
     // Select 1 Burger to return
     fireEvent.click(screen.getByRole('button', { name: /increase return quantity for burger/i }));
-    await screen.findByText(/8,333|8333/);
+    expect((await screen.findAllByText(/8,333|8333/)).length).toBeGreaterThanOrEqual(1);
 
     // Pick reason and submit
     fireEvent.change(screen.getByLabelText(/return reason/i), { target: { value: 'RET-QUALITY' } });
