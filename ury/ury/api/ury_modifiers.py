@@ -1237,6 +1237,13 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 	privileged_action_verified = bool(
 		getattr(getattr(doc, "flags", None), "ury_privileged_action_verified", False)
 	)
+	verified_child_rates = getattr(
+		getattr(doc, "flags", None), "ury_verified_privileged_child_rates", None
+	)
+	in_verified_split_or_merge = bool(
+		getattr(frappe.flags, "ury_bill_split", False)
+		or getattr(frappe.flags, "in_bill_merge_sync", False)
+	)
 	rate_tol = (10 ** (-precision)) / 2.0 if precision > 0 else 0.001
 
 	# 3. Validate every parent row, its modifiers, its linked children, and its bundle overrides
@@ -1447,6 +1454,14 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 					and ("rkey", str(child.get("reservation_line_key"))) in saved_privileged_child_rates
 				):
 					saved_priv_rate = saved_privileged_child_rates[("rkey", str(child.get("reservation_line_key")))]
+				elif in_verified_split_or_merge and isinstance(verified_child_rates, dict):
+					if ("row_id", id(child)) in verified_child_rates:
+						saved_priv_rate = verified_child_rates[("row_id", id(child))]
+					elif (
+						child.get("reservation_line_key")
+						and ("rkey", str(child.get("reservation_line_key"))) in verified_child_rates
+					):
+						saved_priv_rate = verified_child_rates[("rkey", str(child.get("reservation_line_key")))]
 			row_has_authorized_privileged_rate = row_is_privileged_priced and (
 				privileged_action_verified
 				or (saved_priv_rate is not None and abs(actual_rate - saved_priv_rate) <= rate_tol)

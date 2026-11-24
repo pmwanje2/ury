@@ -680,6 +680,24 @@ def _copy_invoice_item_fields(item_row, qty):
     if item_row.get("margin_type"):
         data["margin_type"] = item_row.get("margin_type")
         data["margin_rate_or_amount"] = flt(item_row.get("margin_rate_or_amount"))
+    for priv_field in (
+        "custom_original_price_list_rate",
+        "custom_price_overridden",
+        "custom_price_override_reason",
+        "custom_price_override_approver",
+        "custom_is_open_item",
+        "custom_open_item_reference",
+        "custom_is_complimentary",
+        "custom_comp_type",
+        "custom_comp_reason",
+        "custom_comp_approver",
+        "custom_efris_tax_category",
+    ):
+        val = item_row.get(priv_field)
+        if val not in (None, "", 0, 0.0):
+            data[priv_field] = val
+    if cint(item_row.get("ignore_pricing_rule")) == 1 or cint(item_row.get("custom_price_overridden")) == 1:
+        data["ignore_pricing_rule"] = 1
     return data
 
 
@@ -1000,16 +1018,47 @@ def split_bill(
         if move_map.get(item.name, 0) > 0 and not cint(item.get("is_disposable"))
     )
 
+    split_rate_prec = currency_precision(source)
+    verified_priv_child_rates = {}
+    copied_priv_snapshots = []
+    source_priv_snapshots = []
+
+    def _priv_rate_snapshot(row):
+        return {
+            "rate": flt(row.get("rate"), split_rate_prec),
+            "price_list_rate": flt(row.get("price_list_rate"), split_rate_prec),
+            "discount_percentage": flt(row.get("discount_percentage")),
+            "discount_amount": flt(row.get("discount_amount")),
+            "ignore_pricing_rule": 1
+            if (cint(row.get("ignore_pricing_rule")) == 1 or cint(row.get("custom_price_overridden")) == 1)
+            else 0,
+        }
+
     items_to_remove = []
     for item in source.items:
         move_qty = move_map.get(item.name, 0)
+        is_priv_row = (
+            cint(item.get("custom_price_overridden")) == 1
+            or cint(item.get("custom_is_complimentary")) == 1
+        )
+        if is_priv_row and move_qty < item.qty:
+            source_priv_snapshots.append((item, _priv_rate_snapshot(item)))
         if move_qty <= 0:
             continue
+        copied_qty = item.qty if move_qty >= item.qty else move_qty
+        copied_row = new_invoice.append("items", _copy_invoice_item_fields(item, copied_qty))
+        if copied_row is None and new_invoice.items:
+            copied_row = new_invoice.items[-1]
+        if is_priv_row and copied_row is not None:
+            snap = _priv_rate_snapshot(item)
+            copied_priv_snapshots.append((copied_row, snap))
+            if cint(item.get("custom_is_modifier")) == 1:
+                verified_priv_child_rates[("row_id", id(copied_row))] = snap["rate"]
+                if item.get("reservation_line_key"):
+                    verified_priv_child_rates[("rkey", str(item.get("reservation_line_key")))] = snap["rate"]
         if move_qty >= item.qty:
-            new_invoice.append("items", _copy_invoice_item_fields(item, item.qty))
             items_to_remove.append(item)
         else:
-            new_invoice.append("items", _copy_invoice_item_fields(item, move_qty))
             item.qty -= move_qty
 
     for item in items_to_remove:
@@ -1099,6 +1148,9 @@ def split_bill(
 
         source.set_missing_values()
         source.run_method("set_missing_values")
+        for row, snap in source_priv_snapshots:
+            for field, val in snap.items():
+                setattr(row, field, val)
         if split_profile is not None:
             _sync_service_charge(source, split_profile)
         source.calculate_taxes_and_totals()
@@ -1132,6 +1184,9 @@ def split_bill(
 
         new_invoice.set_missing_values()
         new_invoice.run_method("set_missing_values")
+        for row, snap in copied_priv_snapshots:
+            for field, val in snap.items():
+                setattr(row, field, val)
         if split_profile is not None:
             _sync_service_charge(new_invoice, split_profile)
         new_invoice.calculate_taxes_and_totals()
@@ -1285,12 +1340,16 @@ def split_bill(
         )
         if swap_for_inherited_approval:
             frappe.session.user = source.get("owner")
+        if verified_priv_child_rates and getattr(new_invoice, "flags", None) is not None:
+            new_invoice.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
         try:
             if swap_for_inherited_approval:
                 new_invoice.insert(ignore_permissions=True)
             else:
                 new_invoice.insert()
         finally:
+            if getattr(new_invoice, "flags", None) is not None:
+                new_invoice.flags.ury_verified_privileged_child_rates = None
             if swap_for_inherited_approval:
                 frappe.session.user = orig_session_user
         new_invoice.reload()
@@ -1611,12 +1670,28 @@ def consolidate_checks(destination, sources):
     ).reservation_control_enabled
     destination_before = _reservation_lines(destination.items)
 
+    merge_rate_prec = currency_precision(destination)
+    verified_priv_child_rates = {}
     for source in sources:
         for row in source.items:
-            destination.append(
+            appended = destination.append(
                 "items",
                 row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True),
             )
+            if appended is None and destination.items:
+                appended = destination.items[-1]
+            if (
+                appended is not None
+                and cint(row.get("custom_is_modifier")) == 1
+                and (
+                    cint(row.get("custom_price_overridden")) == 1
+                    or cint(row.get("custom_is_complimentary")) == 1
+                )
+            ):
+                verified_rate = flt(row.get("rate"), merge_rate_prec)
+                verified_priv_child_rates[("row_id", id(appended))] = verified_rate
+                if row.get("reservation_line_key"):
+                    verified_priv_child_rates[("rkey", str(row.get("reservation_line_key")))] = verified_rate
 
     if discount_plan is not None:
         if discount_plan.get("has_header_discount"):
@@ -1694,12 +1769,19 @@ def consolidate_checks(destination, sources):
     )
     if swap_for_inherited_approval:
         frappe.session.user = destination.get("owner")
+    prev_verified_child_rates = getattr(
+        getattr(destination, "flags", None), "ury_verified_privileged_child_rates", None
+    )
+    if verified_priv_child_rates and getattr(destination, "flags", None) is not None:
+        destination.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
     try:
         if swap_for_inherited_approval:
             destination.save(ignore_permissions=True)
         else:
             destination.save()
     finally:
+        if getattr(destination, "flags", None) is not None:
+            destination.flags.ury_verified_privileged_child_rates = prev_verified_child_rates
         if swap_for_inherited_approval:
             frappe.session.user = orig_session_user
         frappe.flags.ury_server_tender_received = prev_tender_flag
