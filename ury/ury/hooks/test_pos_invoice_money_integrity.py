@@ -593,6 +593,113 @@ class TestConfirmedPhonePaymentsAndServerOnlyFlag(Loaded):
         finally:
             self.frappe.flags.ury_server_tender_received = False
 
+    def test_server_only_guard_blocks_client_dropping_reducing_remoding_or_replacing_received_row(self):
+        """P1 #2: validate_server_only_tender_received must compare DB rows first so a raw
+        REST PUT with custom_tender_received=0 (or empty payments) cannot drop, reduce,
+        re-mode, or replace an already-received tender."""
+        fn = self.hooks.validate_server_only_tender_received
+        self.db_received_rows = [
+            Row(name="sip-1", mode_of_payment="Cash", amount=5.90, reference_no=None, type="Cash")
+        ]
+
+        for label, payments in (
+            ("drop_all", []),
+            ("unflag_same_row", [Row(name="sip-1", mode_of_payment="Cash", amount=5.90, custom_tender_received=0)]),
+            ("reduce_amount", [Row(name="sip-1", mode_of_payment="Cash", amount=2.00, custom_tender_received=0)]),
+            ("remode", [Row(name="sip-1", mode_of_payment="Card", amount=5.90, custom_tender_received=0)]),
+            ("replace_row", [Row(name="sip-2", mode_of_payment="Cash", amount=5.90, custom_tender_received=0)]),
+        ):
+            with self.subTest(case=label):
+                doc = Check(name="LKG-00088", payments=payments)
+                with self.assertRaisesRegex(Refused, "received"):
+                    fn(doc, "validate")
+
+        # Even Administrator over an HTTP request cannot drop a received row without the server flag.
+        self.frappe.session = SimpleNamespace(user="Administrator")
+        self.frappe.request = SimpleNamespace(method="PUT")
+        try:
+            with self.assertRaisesRegex(Refused, "received"):
+                fn(Check(name="LKG-00088", payments=[]), "validate")
+        finally:
+            self.frappe.request = None
+            self.frappe.session = SimpleNamespace(user="cashier@example.com")
+
+        # Server return / cancel / explicit server flag flows remain allowed.
+        fn(Check(name="LKG-RET", is_return=1, payments=[]), "validate")
+        fn(Check(name="LKG-CAN", docstatus=2, payments=[]), "validate")
+        self.frappe.flags.ury_server_tender_received = True
+        try:
+            fn(Check(name="LKG-00088", payments=[]), "validate")
+        finally:
+            self.frappe.flags.ury_server_tender_received = False
+
+        # A Phone row whose Payment Request is no longer live Paid/Partially Paid may be replaced.
+        self.db_received_rows = [
+            Row(
+                name="sip-phone",
+                mode_of_payment="Online Mobile Money",
+                amount=5.90,
+                reference_no="PR-CANCELLED",
+                type="Phone",
+            )
+        ]
+        self.paid_requests = []
+        fn(
+            Check(
+                name="LKG-00089",
+                payments=[Row(name="sip-cash", mode_of_payment="Cash", amount=5.90, custom_tender_received=0)],
+            ),
+            "validate",
+        )
+
+
+class TestOfflinePosUtilsMultiCompanyFiscalYear(unittest.TestCase):
+    """P2: offline_pos_utils must ensure company URY belongs to an active Fiscal Year even
+    when another company already owns the active Fiscal Year on a multi-company site."""
+
+    def test_links_ury_company_to_existing_active_fiscal_year_on_multi_company_site(self):
+        from datetime import date
+
+        framework = _stub(
+            "frappe",
+            db=_stub("frappe.db"),
+            get_all=MagicMock(),
+            get_doc=MagicMock(),
+        )
+        utils_mod = _stub("frappe.utils", now_datetime=lambda: SimpleNamespace(date=lambda: date(2026, 11, 24)))
+        saved = []
+
+        class FakeFY:
+            def __init__(self, name, companies):
+                self.name = name
+                self.companies = [SimpleNamespace(company=c) for c in companies]
+
+            def append(self, field, row):
+                self.companies.append(SimpleNamespace(**row))
+
+            def save(self, **kw):
+                saved.append((self.name, [c.company for c in self.companies]))
+
+        fy_doc = FakeFY("2026", ["Lakeside Hospitality"])
+        framework.get_all.side_effect = lambda dt, filters=None, pluck=None, **kw: (
+            ["2026"]
+            if dt == "Fiscal Year"
+            else (["Lakeside Hospitality"] if dt == "Fiscal Year Company" else [])
+        )
+        framework.get_doc.return_value = fy_doc
+
+        spec = importlib.util.spec_from_file_location(
+            "offline_pos_utils_under_test",
+            APP.parent / "tests" / "offline_pos_utils.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"frappe": framework, "frappe.utils": utils_mod}):
+            spec.loader.exec_module(mod)
+            ensure_fn = getattr(mod, "_ensure_company_fiscal_year", None)
+            self.assertTrue(callable(ensure_fn), "_ensure_company_fiscal_year missing from offline_pos_utils.py")
+            ensure_fn("URY", date(2026, 11, 24))
+        self.assertEqual(saved, [("2026", ["Lakeside Hospitality", "URY"])])
+
 
 if __name__ == "__main__":
     unittest.main()

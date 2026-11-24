@@ -378,6 +378,10 @@ doc_events = {
     },
     "Payment Request": {
         "on_payment_authorized": "ury.ury.api.self_ordering.mark_phone_payment_received",
+        "on_cancel": "ury.ury.api.self_ordering.clear_phone_payment_received",
+        "on_update_after_submit": "ury.ury.api.self_ordering.sync_phone_payment_received",
+        "set_failed": "ury.ury.api.self_ordering.clear_phone_payment_received",
+        "on_discard": "ury.ury.api.self_ordering.clear_phone_payment_received",
     },
 }
 
