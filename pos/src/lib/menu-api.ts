@@ -12,6 +12,8 @@ export interface MenuItem {
   recommended?: boolean;
   description?: string;
   special_dish?: 1 | 0;
+  custom_is_open_priced?: number;
+  custom_allow_zero_price?: number;
 }
 
 export interface GetMenuResponse {
