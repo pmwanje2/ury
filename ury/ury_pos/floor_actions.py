@@ -271,12 +271,16 @@ def transfer_check_outlet(
                 {"occupied": 0, "latest_invoice_time": None},
             )
 
-    if flt(target_profile.get("custom_service_charge_rate")) > 0 and target_profile.get("custom_service_charge_account"):
-        from ury.ury_pos.pricing_actions import sync_service_charge
+    from ury.ury_pos.pricing_actions import sync_service_charge
 
-        sync_service_charge(inv, target_profile)
-
-    inv.save()
+    sync_service_charge(inv, target_profile)
+    if callable(getattr(inv, "calculate_taxes_and_totals", None)):
+        inv.calculate_taxes_and_totals()
+    inv.flags.ury_privileged_action_verified = True
+    try:
+        inv.save()
+    finally:
+        inv.flags.ury_privileged_action_verified = False
 
     if target_table_doc is not None:
         from ury.ury.doctype.ury_order.ury_order import change_table_in_kot

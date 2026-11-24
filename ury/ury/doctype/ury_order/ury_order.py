@@ -887,8 +887,19 @@ def split_bill(
     frappe.flags.ury_bill_split = True
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     try:
+        from ury.ury_pos.pricing_actions import sync_service_charge
+
+        split_profile = None
+        if source.get("pos_profile") and frappe.db.exists("POS Profile", source.pos_profile):
+            try:
+                split_profile = frappe.get_doc("POS Profile", source.pos_profile)
+            except Exception:
+                split_profile = None
+
         source.set_missing_values()
         source.run_method("set_missing_values")
+        if split_profile is not None:
+            sync_service_charge(source, split_profile)
         source.calculate_taxes_and_totals()
 
         if source_received:
@@ -920,6 +931,8 @@ def split_bill(
 
         new_invoice.set_missing_values()
         new_invoice.run_method("set_missing_values")
+        if split_profile is not None:
+            sync_service_charge(new_invoice, split_profile)
         new_invoice.calculate_taxes_and_totals()
 
         # Never copy received tenders onto the split child check.
@@ -1200,6 +1213,10 @@ def consolidate_checks(destination, sources):
         destination.room_number = carried_room
 
     destination.invoice_printed = 0
+    if destination.get("pos_profile"):
+        from ury.ury_pos.pricing_actions import sync_service_charge
+
+        sync_service_charge(destination)
     destination.calculate_taxes_and_totals()
     destination.set_paid_amount()
     destination.set_outstanding_amount()
@@ -3282,9 +3299,9 @@ def sync_order(
         item_dict["ury_held"] = cint(source.get("ury_held"))
         invoice.append("items", item_dict)
 
-    if flt(posprofile.get("custom_service_charge_rate")) > 0 and posprofile.get("custom_service_charge_account"):
-        from ury.ury_pos.pricing_actions import sync_service_charge
-        sync_service_charge(invoice, posprofile)
+    from ury.ury_pos.pricing_actions import sync_service_charge
+
+    sync_service_charge(invoice, posprofile)
 
     if expected_total is not None:
         # Compare the server-priced, tax-inclusive total without reapplying profile defaults.
@@ -3601,6 +3618,11 @@ def table_transfer(table, newTable, invoice, approval_token=None, reason=None, r
 
     pos_invoice.restaurant_table = new_table.name
     pos_invoice.custom_restaurant_room = new_table.restaurant_room
+    from ury.ury_pos.pricing_actions import sync_service_charge
+
+    sync_service_charge(pos_invoice, pos_profile_doc)
+    if callable(getattr(pos_invoice, "calculate_taxes_and_totals", None)):
+        pos_invoice.calculate_taxes_and_totals()
     pos_invoice.save()
 
     transfer_seated_reservation(old_table_name, new_table.name, pos_invoice)
@@ -4006,6 +4028,8 @@ def preview_settlement_totals(invoice, pos_profile, additionalDiscount=None):
     if bill.custom_merged_pos_invoice:
         bills.append(frappe.get_doc("POS Invoice", bill.custom_merged_pos_invoice))
 
+    from ury.ury_pos.pricing_actions import sync_service_charge
+
     totals = {"grand_total": 0, "rounded_total": 0}
     for row in bills:
         if discount:
@@ -4016,6 +4040,7 @@ def preview_settlement_totals(invoice, pos_profile, additionalDiscount=None):
             row.discount_amount = 0
         else:
             row.additional_discount_percentage = 0
+        sync_service_charge(row)
         row.calculate_taxes_and_totals()
         totals["grand_total"] += flt(row.grand_total)
         totals["rounded_total"] += flt(row.rounded_total)
@@ -4493,6 +4518,9 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
         else:
             invoice.additional_discount_percentage = 0
         
+    from ury.ury_pos.pricing_actions import sync_service_charge
+
+    sync_service_charge(invoice, pos_prof)
     invoice.calculate_taxes_and_totals()
 
     target = None
@@ -4502,6 +4530,7 @@ def make_invoice(customer, payments, cashier, pos_profile, owner, additionalDisc
         # One guest bill, one discount: a bill linked before Add Check consolidated lines
         # takes the bill's discount on both halves.
         target.additional_discount_percentage = invoice.additional_discount_percentage
+        sync_service_charge(target, pos_prof)
         target.calculate_taxes_and_totals()
 
         doc_existing = _received_payment_rows(invoice)

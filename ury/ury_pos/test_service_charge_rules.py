@@ -386,6 +386,9 @@ def _build_frappe_harness():
         raise f.DoesNotExistError(f"{arg} {name}")
 
     def get_all(dt, filters=None, fields=None, pluck=None, **kw):
+        if dt == "Sales Taxes and Charges" and isinstance(filters, dict):
+            tpl_name = filters.get("parent")
+            return [dict(r) for r in tax_templates.get(tpl_name, [])]
         if dt == "Tax Rule":
             return list(tax_rules)
         if dt == "POS Reason":
@@ -922,8 +925,8 @@ class TestServiceChargeEngineAndHooks(unittest.TestCase):
         inv.calculate_taxes_and_totals()
 
         before = FakeDoc(inv.as_dict())
-        before.set("items", [dict(r) for r in inv.items])
-        before.set("taxes", [dict(r) for r in inv.taxes])
+        before.set("items", [dict(r) for r in inv.get("items") or []])
+        before.set("taxes", [dict(r) for r in inv.get("taxes") or []])
         inv._before_save = before
 
         # Direct REST edit tries to strip the Service Charge row without Manager PIN

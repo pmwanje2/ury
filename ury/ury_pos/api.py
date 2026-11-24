@@ -2,7 +2,14 @@ import frappe
 import json
 from frappe import _
 from datetime import date, datetime, timedelta
-from frappe.utils import cint, flt, nestedset, validate_phone_number
+from frappe.utils import cint, nestedset, validate_phone_number
+
+try:
+    from frappe.utils import flt
+except ImportError:
+    def flt(value, precision=None):
+        num = float(value or 0)
+        return round(num, precision) if precision is not None else num
 
 from urllib.parse import quote
 
@@ -1035,6 +1042,27 @@ def getPosProfileFull(pos_profile):
         "custom_max_free_closed_copies": cint(profile.get("custom_max_free_closed_copies") or 0),
         "custom_service_charge_rate": flt(profile.get("custom_service_charge_rate") or 0),
         "custom_service_charge_account": profile.get("custom_service_charge_account") or "",
+        "custom_service_charge_min_pax": cint(profile.get("custom_service_charge_min_pax") or 0),
+        "custom_service_charge_order_types": profile.get("custom_service_charge_order_types") or "",
+        "custom_service_charge_taxable": 1 if profile.get("custom_service_charge_taxable") else 0,
+        "custom_service_charge_description": profile.get("custom_service_charge_description") or "",
+        "custom_service_charge_rules": [
+            {
+                "order_type": row.get("order_type") or "",
+                "enabled": cint(row.get("enabled") if row.get("enabled") is not None else 1),
+                "charge_mode": row.get("charge_mode") or "Percentage",
+                "rate": flt(row.get("rate") or 0),
+                "fixed_amount": flt(row.get("fixed_amount") or 0),
+                "min_amount_floor": flt(row.get("min_amount_floor") or 0),
+                "min_pax": cint(row.get("min_pax") or 0),
+                "calculation_basis": row.get("calculation_basis") or "Post-Discount Subtotal",
+                "taxable": cint(row.get("taxable") or 0),
+                "account_head": row.get("account_head") or "",
+                "description": row.get("description") or "",
+                "efris_item_code": row.get("efris_item_code") or "",
+            }
+            for row in (profile.get("custom_service_charge_rules") or [])
+        ],
         "custom_tax_exempt_category": profile.get("custom_tax_exempt_category") or "",
         "custom_tips_payable_account": profile.get("custom_tips_payable_account") or "",
         # one configured void reason per line; None on sites without the field
@@ -1077,10 +1105,16 @@ def getPosInvoiceItems(invoice):
     for tax in taxDetail:
         description = tax.description
         rate = tax.tax_amount
+        get_t = tax.get if callable(getattr(tax, "get", None)) else (lambda k, d=None: getattr(tax, k, d))
         taxDetails.append(
             {
                 "description": description,
                 "rate": rate,
+                "tax_amount": flt(rate),
+                "tax_rate": flt(get_t("rate") or 0),
+                "charge_type": get_t("charge_type") or "",
+                "custom_pos_charge_kind": get_t("custom_pos_charge_kind") or "",
+                "account_head": get_t("account_head") or "",
             }
         )
     paymentDetails = []

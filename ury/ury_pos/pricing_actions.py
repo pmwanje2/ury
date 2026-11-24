@@ -22,7 +22,27 @@ from typing import Any
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, getdate, nowdate
+from frappe.utils import cint, flt
+
+
+def _nowdate() -> str:
+    fn = getattr(getattr(frappe, "utils", None), "nowdate", None)
+    if callable(fn):
+        return fn()
+    import datetime as _dt
+
+    return _dt.date.today().isoformat()
+
+
+def _getdate(val=None):
+    fn = getattr(getattr(frappe, "utils", None), "getdate", None)
+    if callable(fn):
+        return fn(val)
+    import datetime as _dt
+
+    if isinstance(val, _dt.date):
+        return val
+    return _dt.date.fromisoformat(str(val or _nowdate())[:10])
 
 from ury.brand import coded_message
 from ury.ury_pos.privileged_auth import (
@@ -263,6 +283,7 @@ def override_line_price(
     )
     target_row.custom_price_override_approver = auth["approver"]
 
+    sync_service_charge(doc, profile)
     doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
@@ -431,6 +452,7 @@ def add_open_item(
         },
     )
 
+    sync_service_charge(doc, profile)
     doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
@@ -586,6 +608,7 @@ def apply_complimentary(
         doc.custom_comp_approver = auth["approver"]
         doc.remarks = f"{comp_type}: {full_reason}"
 
+    sync_service_charge(doc, profile)
     doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
@@ -645,16 +668,16 @@ def _resolve_native_tax_rule_template(company: str, tax_category: str) -> str | 
             fields=["name", "sales_tax_template", "priority", "from_date", "to_date"],
             order_by="priority desc",
         )
-        today = getdate(nowdate())
+        today = _getdate(_nowdate())
         for rule in rules or []:
             tpl = rule.get("sales_tax_template")
             if not tpl:
                 continue
             from_d = rule.get("from_date")
             to_d = rule.get("to_date")
-            if from_d and getdate(from_d) > today:
+            if from_d and _getdate(from_d) > today:
                 continue
-            if to_d and getdate(to_d) < today:
+            if to_d and _getdate(to_d) < today:
                 continue
             return tpl
     # Fallback to a native Sales Taxes and Charges Template bound directly to this Tax Category
@@ -802,17 +825,21 @@ def apply_tax_exemption(
 
     full_reason = f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
 
-    # Preserve non-VAT operational charge rows (e.g. Service Charge, Charged Tip) when switching tax template
-    sc_account = profile.get("custom_service_charge_account")
-    tip_account = profile.get("custom_tips_payable_account")
-    non_tax_accounts = {a for a in (sc_account, tip_account) if a}
+    # Preserve Charged Tip rows while switching tax template; Service Charge & Service Charge Tax
+    # are rebuilt cleanly by sync_service_charge() below (dropping SC Tax on exempt checks).
+    tip_account = (profile.get("custom_tips_payable_account") or "").strip()
 
     if scope == "check":
-        preserved = [r for r in (doc.get("taxes") or []) if r.get("account_head") in non_tax_accounts]
+        preserved_tips = [
+            r
+            for r in (doc.get("taxes") or [])
+            if r.get("custom_pos_charge_kind") == "Charged Tip"
+            or (tip_account and r.get("account_head") == tip_account)
+        ]
         template_rows = _load_template_tax_rows(resolved_template)
         doc.tax_category = resolved_category
         doc.taxes_and_charges = resolved_template
-        doc.set("taxes", template_rows + preserved)
+        doc.set("taxes", template_rows + preserved_tips)
     else:
         details = frappe.get_all(
             "Item Tax Template Detail",
@@ -831,6 +858,7 @@ def apply_tax_exemption(
     doc.custom_tax_exempt_customer = doc.get("customer") or ""
     doc.custom_efris_tax_category = efris_code
 
+    sync_service_charge(doc, profile)
     doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
@@ -873,14 +901,17 @@ def clear_tax_exemption(
     if not default_tpl:
         default_tpl = profile.get("taxes_and_charges")
 
-    sc_account = profile.get("custom_service_charge_account")
-    tip_account = profile.get("custom_tips_payable_account")
-    non_tax_accounts = {a for a in (sc_account, tip_account) if a}
-    preserved = [r for r in (doc.get("taxes") or []) if r.get("account_head") in non_tax_accounts]
+    tip_account = (profile.get("custom_tips_payable_account") or "").strip()
+    preserved_tips = [
+        r
+        for r in (doc.get("taxes") or [])
+        if r.get("custom_pos_charge_kind") == "Charged Tip"
+        or (tip_account and r.get("account_head") == tip_account)
+    ]
 
     doc.tax_category = ""
     doc.taxes_and_charges = default_tpl or ""
-    doc.set("taxes", (_load_template_tax_rows(default_tpl) if default_tpl else []) + preserved)
+    doc.set("taxes", (_load_template_tax_rows(default_tpl) if default_tpl else []) + preserved_tips)
     for row in doc.get("items") or []:
         if row.get("item_tax_template"):
             row.item_tax_template = ""
@@ -894,6 +925,7 @@ def clear_tax_exemption(
     doc.custom_tax_exempt_customer = ""
     doc.custom_efris_tax_category = ""
 
+    sync_service_charge(doc, profile)
     doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
@@ -952,82 +984,627 @@ def list_tax_exemption_options(
 
 
 # =====================================================================
-# E5: Service Charge Auto-Apply, Waive & Change (Matrix Row 14)
+# E5: Service Charge Rules, Pre/Post-Discount, Taxable Chain & Waive (G19)
 # =====================================================================
 
 
-def _service_charge_applies(doc, profile) -> bool:
-    rate = flt(profile.get("custom_service_charge_rate"))
-    account = (profile.get("custom_service_charge_account") or "").strip()
-    if rate <= 0 or not account:
-        return False
-    raw_types = (profile.get("custom_service_charge_order_types") or "Dine In").strip()
-    allowed_types = {
+def _clean_str(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _doc_precision(doc, fieldname: str = "total_taxes_and_charges") -> int:
+    fn = getattr(doc, "precision", None)
+    if callable(fn):
+        try:
+            p = fn(fieldname)
+            if isinstance(p, int) and not isinstance(p, bool) and p >= 0:
+                return p
+        except Exception:
+            pass
+    return 2
+
+
+def resolve_service_charge_rules(profile) -> list[dict[str, Any]]:
+    """Return normalized enabled Service Charge rules from POS Profile.
+
+    When `POS Profile.custom_service_charge_rules` is empty, synthesizes
+    backward-compatible Percentage rule(s) from #152's scalar fields
+    (`custom_service_charge_*`). When child rows exist (even if all disabled),
+    only the child table governs.
+    """
+    if profile is None:
+        return []
+    raw_rows = profile.get("custom_service_charge_rules") if callable(getattr(profile, "get", None)) else getattr(profile, "custom_service_charge_rules", None)
+    if isinstance(raw_rows, (list, tuple)) and len(raw_rows) > 0:
+        out: list[dict[str, Any]] = []
+        for row in raw_rows:
+            get_f = row.get if callable(getattr(row, "get", None)) else (lambda k, d=None: getattr(row, k, d))
+            enabled_raw = get_f("enabled")
+            if enabled_raw is not None and cint(enabled_raw) != 1:
+                continue
+            acct = _clean_str(get_f("account_head"))
+            order_type = _clean_str(get_f("order_type"))
+            if not acct or not order_type:
+                continue
+            charge_mode = _clean_str(get_f("charge_mode")) or "Percentage"
+            rate = flt(get_f("rate"))
+            fixed_amount = flt(get_f("fixed_amount"))
+            if charge_mode == "Fixed Amount":
+                if fixed_amount <= 0:
+                    continue
+                calc_basis = "Fixed Amount"
+            else:
+                charge_mode = "Percentage"
+                if rate <= 0:
+                    continue
+                calc_basis = _clean_str(get_f("calculation_basis")) or "Post-Discount Subtotal"
+            out.append(
+                {
+                    "order_type": order_type,
+                    "enabled": 1,
+                    "charge_mode": charge_mode,
+                    "rate": rate,
+                    "fixed_amount": fixed_amount,
+                    "min_amount_floor": max(0.0, flt(get_f("min_amount_floor"))),
+                    "min_pax": max(0, cint(get_f("min_pax"))),
+                    "calculation_basis": calc_basis,
+                    "taxable": 1 if cint(get_f("taxable")) == 1 else 0,
+                    "account_head": acct,
+                    "description": _clean_str(get_f("description")) or _("Service Charge"),
+                    "efris_item_code": _clean_str(get_f("efris_item_code")),
+                }
+            )
+        return out
+
+    # Legacy scalar fallback when custom_service_charge_rules table is empty
+    get_p = profile.get if callable(getattr(profile, "get", None)) else (lambda k, d=None: getattr(profile, k, d))
+    legacy_rate = flt(get_p("custom_service_charge_rate"))
+    legacy_account = _clean_str(get_p("custom_service_charge_account"))
+    if legacy_rate <= 0 or not legacy_account:
+        return []
+
+    raw_types = _clean_str(get_p("custom_service_charge_order_types")) or "Dine In"
+    order_types = [
         part.strip()
         for line in raw_types.splitlines()
         for part in line.split(",")
         if part.strip()
+    ] or ["Dine In"]
+    min_pax = max(0, cint(get_p("custom_service_charge_min_pax")))
+    taxable = 1 if cint(get_p("custom_service_charge_taxable")) == 1 else 0
+    desc = _clean_str(get_p("custom_service_charge_description")) or _("Service Charge")
+    return [
+        {
+            "order_type": ot,
+            "enabled": 1,
+            "charge_mode": "Percentage",
+            "rate": legacy_rate,
+            "fixed_amount": 0.0,
+            "min_amount_floor": 0.0,
+            "min_pax": min_pax,
+            "calculation_basis": "Post-Discount Subtotal",
+            "taxable": taxable,
+            "account_head": legacy_account,
+            "description": desc,
+            "efris_item_code": "",
+        }
+        for ot in order_types
+    ]
+
+
+def match_service_charge_rule(doc, profile) -> dict[str, Any] | None:
+    """Select the highest-precedence enabled Service Charge rule for (order_type, no_of_pax).
+
+    Precedence: exact `order_type` match beats `*` wildcard; among matches with equal
+    specificity, the highest qualifying `min_pax` wins.
+    """
+    rules = resolve_service_charge_rules(profile)
+    if not rules:
+        return None
+    order_type = _clean_str(doc.get("order_type")).casefold()
+    pax = cint(doc.get("no_of_pax"))
+
+    exact_matches: list[dict[str, Any]] = []
+    wildcard_matches: list[dict[str, Any]] = []
+    for rule in rules:
+        if pax < cint(rule["min_pax"]):
+            continue
+        r_ot = rule["order_type"].casefold()
+        if r_ot == order_type and order_type:
+            exact_matches.append(rule)
+        elif r_ot == "*":
+            wildcard_matches.append(rule)
+
+    pool = exact_matches or wildcard_matches
+    if not pool:
+        return None
+    pool.sort(key=lambda r: cint(r["min_pax"]), reverse=True)
+    return pool[0]
+
+
+def _service_charge_applies(doc, profile) -> bool:
+    return match_service_charge_rule(doc, profile) is not None
+
+
+def _all_service_charge_accounts(profile) -> set[str]:
+    accounts: set[str] = set()
+    if profile is None:
+        return accounts
+    get_p = profile.get if callable(getattr(profile, "get", None)) else (lambda k, d=None: getattr(profile, k, d))
+    legacy = _clean_str(get_p("custom_service_charge_account"))
+    if legacy:
+        accounts.add(legacy)
+    raw_rows = get_p("custom_service_charge_rules")
+    if isinstance(raw_rows, (list, tuple)):
+        for row in raw_rows:
+            get_f = row.get if callable(getattr(row, "get", None)) else (lambda k, d=None: getattr(row, k, d))
+            acct = _clean_str(get_f("account_head"))
+            if acct:
+                accounts.add(acct)
+    return accounts
+
+
+def _resolve_override_rule(doc, profile, matched_rule: dict[str, Any] | None) -> dict[str, Any] | None:
+    if matched_rule is not None:
+        return matched_rule
+    rules = resolve_service_charge_rules(profile)
+    order_type = _clean_str(doc.get("order_type")).casefold()
+    for rule in rules:
+        if rule["order_type"].casefold() == order_type:
+            return rule
+    if rules:
+        return rules[0]
+    get_p = profile.get if callable(getattr(profile, "get", None)) else (lambda k, d=None: getattr(profile, k, d))
+    legacy_account = _clean_str(get_p("custom_service_charge_account"))
+    if not legacy_account:
+        return None
+    return {
+        "order_type": _clean_str(doc.get("order_type")) or "*",
+        "enabled": 1,
+        "charge_mode": "Percentage",
+        "rate": flt(get_p("custom_service_charge_rate")),
+        "fixed_amount": 0.0,
+        "min_amount_floor": 0.0,
+        "min_pax": 0,
+        "calculation_basis": "Post-Discount Subtotal",
+        "taxable": 1 if cint(get_p("custom_service_charge_taxable")) == 1 else 0,
+        "account_head": legacy_account,
+        "description": _clean_str(get_p("custom_service_charge_description")) or _("Service Charge"),
+        "efris_item_code": "",
     }
-    if allowed_types and (doc.get("order_type") or "") not in allowed_types:
-        return False
-    min_pax = cint(profile.get("custom_service_charge_min_pax"))
-    if min_pax > 0 and cint(doc.get("no_of_pax")) < min_pax:
-        return False
-    return True
+
+
+def _partition_tax_rows(doc, profile) -> tuple[list[Any], list[Any]]:
+    """Split existing doc.taxes into (base_item_taxes, tip_rows), stripping old SC & SC Tax rows."""
+    taxes = list(doc.get("taxes") or [])
+    sc_accounts = _all_service_charge_accounts(profile)
+    get_p = profile.get if callable(getattr(profile, "get", None)) else (lambda k, d=None: getattr(profile, k, d))
+    tip_account = _clean_str(get_p("custom_tips_payable_account"))
+
+    old_sc_indices: set[str] = set()
+    for pos, row in enumerate(taxes, start=1):
+        kind = _clean_str(row.get("custom_pos_charge_kind"))
+        acct = _clean_str(row.get("account_head"))
+        idx_val = str(cint(row.get("idx")) or pos)
+        if kind == "Service Charge" or (not kind and acct and acct in sc_accounts):
+            old_sc_indices.add(idx_val)
+
+    base_rows: list[Any] = []
+    tip_rows: list[Any] = []
+    for pos, row in enumerate(taxes, start=1):
+        kind = _clean_str(row.get("custom_pos_charge_kind"))
+        acct = _clean_str(row.get("account_head"))
+        idx_val = str(cint(row.get("idx")) or pos)
+        if kind == "Service Charge" or kind == "Service Charge Tax":
+            continue
+        if not kind and idx_val in old_sc_indices:
+            continue
+        if (
+            not kind
+            and row.get("charge_type") == "On Previous Row Amount"
+            and str(row.get("row_id") or "").strip() in old_sc_indices
+        ):
+            continue
+        if kind == "Charged Tip" or (tip_account and acct == tip_account):
+            row["custom_pos_charge_kind"] = "Charged Tip"
+            tip_rows.append(row)
+            continue
+        base_rows.append(row)
+
+    return base_rows, tip_rows
+
+
+def _billable_items(doc) -> list[Any]:
+    out = []
+    for row in doc.get("items") or []:
+        if cint(row.get("is_disposable")) == 1 or cint(row.get("custom_is_complimentary")) == 1:
+            continue
+        qty = flt(row.get("qty"))
+        rate = flt(row.get("rate"))
+        if qty > 0 and rate > 0:
+            out.append(row)
+    return out
+
+
+def _compute_pre_discount_net(doc, base_tax_rows: list[Any], prec: int) -> float:
+    """Compute item net subtotal BEFORE any header additional discount (exclusive & inclusive safe)."""
+    items = _billable_items(doc)
+    if not items:
+        return 0.0
+
+    incl_rate_sum = sum(
+        flt(t.get("rate"))
+        for t in base_tax_rows
+        if cint(t.get("included_in_print_rate")) == 1 and flt(t.get("rate")) > 0
+    )
+    has_header_discount = flt(doc.get("additional_discount_percentage")) > 0 or flt(doc.get("discount_amount")) > 0
+
+    total_net = 0.0
+    for row in items:
+        gross = flt(row.get("qty")) * flt(row.get("rate"))
+        if not has_header_discount and flt(row.get("net_amount")) > 0:
+            total_net += flt(row.get("net_amount"))
+            continue
+        # Handle tax-inclusive line item (checking item_tax_rate JSON if present)
+        line_incl_rate = incl_rate_sum
+        raw_itr = row.get("item_tax_rate")
+        if raw_itr and isinstance(raw_itr, str) and raw_itr.strip() not in ("", "{}"):
+            try:
+                parsed = json.loads(raw_itr)
+                if isinstance(parsed, dict) and parsed:
+                    incl_accts = {
+                        _clean_str(t.get("account_head"))
+                        for t in base_tax_rows
+                        if cint(t.get("included_in_print_rate")) == 1
+                    }
+                    if incl_accts:
+                        matched_rates = [flt(v) for k, v in parsed.items() if k in incl_accts]
+                        if matched_rates:
+                            line_incl_rate = sum(matched_rates)
+            except Exception:
+                pass
+        if line_incl_rate > 0:
+            total_net += gross / (1.0 + line_incl_rate / 100.0)
+        else:
+            total_net += gross
+    return flt(total_net, prec)
+
+
+def _resolve_effective_vat(doc, base_tax_rows: list[Any]) -> tuple[str, float, str] | None:
+    """Find the active output VAT/GST account, rate, and short label on the check."""
+    if cint(doc.get("custom_tax_exempt")) == 1:
+        return None
+
+    def _is_vat_like(row) -> bool:
+        txt = f"{row.get('description') or ''} {row.get('account_head') or ''}".casefold()
+        return any(tok in txt for tok in ("vat", "gst", "tax"))
+
+    candidates = [r for r in base_tax_rows if _clean_str(r.get("account_head"))]
+    # Prefer VAT/GST-named percentage rows first, then any percentage row
+    ordered = sorted(candidates, key=lambda r: (0 if _is_vat_like(r) else 1))
+    for row in ordered:
+        acct = _clean_str(row.get("account_head"))
+        rate = flt(row.get("rate"))
+        if rate <= 0:
+            # ERPNext item-wise tax templates keep header row rate=0 and put rates in item.item_tax_rate JSON
+            item_rates: list[float] = []
+            for item in _billable_items(doc):
+                raw_itr = item.get("item_tax_rate")
+                if raw_itr and isinstance(raw_itr, str):
+                    try:
+                        parsed = json.loads(raw_itr)
+                        if isinstance(parsed, dict) and acct in parsed and flt(parsed[acct]) > 0:
+                            item_rates.append(flt(parsed[acct]))
+                    except Exception:
+                        pass
+            if item_rates:
+                rate = max(item_rates)
+        if rate > 0:
+            label = _clean_str(row.get("description")) or _("VAT")
+            return acct, rate, label
+    return None
+
+
+def _normalize_tax_indices(doc) -> None:
+    for idx, row in enumerate(doc.get("taxes") or [], start=1):
+        row["idx"] = idx
 
 
 def sync_service_charge(doc, profile=None) -> None:
-    """Keep the check's native Sales Taxes and Charges service-charge row in sync with POS Profile."""
+    """Keep native Sales Taxes and Charges Service Charge (+ optional Taxable chain) in sync.
+
+    Always normalizes `doc.taxes` order to:
+        `[base_item_taxes..., Service Charge (idx S), Service Charge Tax (idx S+1, row_id=S)?, Charged Tip...]`
+    so `row_id` never shifts across tip updates, discounts, order-type switches, splits, or merges.
+    """
     if not doc or cint(doc.get("is_return")) == 1:
         return
     if profile is None:
-        if not doc.get("pos_profile"):
+        prof_name = _clean_str(doc.get("pos_profile"))
+        if not prof_name:
             return
-        profile = frappe.get_doc("POS Profile", doc.pos_profile)
+        try:
+            if hasattr(frappe, "db") and callable(getattr(frappe.db, "exists", None)):
+                if not frappe.db.exists("POS Profile", prof_name):
+                    return
+            profile = frappe.get_doc("POS Profile", prof_name)
+        except Exception:
+            return
+        # Guard site-less unit tests where frappe.get_doc is an unconfigured MagicMock
+        if not isinstance(profile, dict) and not isinstance(getattr(profile, "name", None), str):
+            return
 
-    account = (profile.get("custom_service_charge_account") or "").strip()
-    if not account:
-        return
+    base_rows, tip_rows = _partition_tax_rows(doc, profile)
 
-    existing_non_sc = [r for r in (doc.get("taxes") or []) if r.get("account_head") != account]
-
-    if cint(doc.get("custom_service_charge_waived")) == 1:
-        doc.set("taxes", existing_non_sc)
+    if cint(doc.get("custom_service_charge_waived")) == 1 or cint(doc.get("custom_is_complimentary")) == 1:
+        doc.set("taxes", base_rows + tip_rows)
+        _normalize_tax_indices(doc)
         return
 
     override_rate = doc.get("custom_service_charge_override_rate")
     override_amount = doc.get("custom_service_charge_override_amount")
-    has_override = override_rate not in (None, "") or override_amount not in (None, "")
+    has_override_rate = override_rate not in (None, "")
+    has_override_amount = override_amount not in (None, "")
+    has_override = has_override_rate or has_override_amount
 
-    if not has_override and not _service_charge_applies(doc, profile):
-        doc.set("taxes", existing_non_sc)
+    matched_rule = match_service_charge_rule(doc, profile)
+    effective_rule = _resolve_override_rule(doc, profile, matched_rule) if has_override else matched_rule
+
+    if effective_rule is None:
+        doc.set("taxes", base_rows + tip_rows)
+        _normalize_tax_indices(doc)
         return
 
-    desc = (profile.get("custom_service_charge_description") or _("Service Charge")).strip()
-    taxable = cint(profile.get("custom_service_charge_taxable")) == 1
-    if override_amount not in (None, "") and flt(override_amount) >= 0 and override_rate in (None, ""):
+    billable = _billable_items(doc)
+    if not billable and not has_override_amount:
+        doc.set("taxes", base_rows + tip_rows)
+        _normalize_tax_indices(doc)
+        return
+
+    prec = _doc_precision(doc, "total_taxes_and_charges")
+    account = effective_rule["account_head"]
+    desc = effective_rule["description"]
+    taxable = cint(effective_rule.get("taxable")) == 1
+    cost_center = (
+        (profile.get("cost_center") if callable(getattr(profile, "get", None)) else getattr(profile, "cost_center", None))
+        or doc.get("cost_center")
+    )
+
+    pre_disc_net = _compute_pre_discount_net(doc, base_rows, prec)
+
+    if has_override_amount and not has_override_rate:
         sc_row = {
             "charge_type": "Actual",
             "account_head": account,
             "description": desc,
-            "tax_amount": flt(override_amount),
-            "cost_center": profile.get("cost_center") or doc.get("cost_center"),
+            "rate": 0.0,
+            "tax_amount": flt(override_amount, prec),
+            "cost_center": cost_center,
             "included_in_print_rate": 0,
+            "custom_pos_charge_kind": "Service Charge",
         }
-    else:
-        eff_rate = flt(override_rate) if override_rate not in (None, "") else flt(profile.get("custom_service_charge_rate"))
+    elif not has_override and effective_rule["charge_mode"] == "Fixed Amount":
         sc_row = {
-            "charge_type": "On Net Total",
+            "charge_type": "Actual",
             "account_head": account,
             "description": desc,
-            "rate": eff_rate,
-            "cost_center": profile.get("cost_center") or doc.get("cost_center"),
+            "rate": 0.0,
+            "tax_amount": flt(effective_rule["fixed_amount"], prec),
+            "cost_center": cost_center,
             "included_in_print_rate": 0,
+            "custom_pos_charge_kind": "Service Charge",
         }
+    else:
+        eff_rate = flt(override_rate) if has_override_rate else flt(effective_rule["rate"])
+        calc_basis = effective_rule.get("calculation_basis") or "Post-Discount Subtotal"
+        floor_amt = 0.0 if has_override else flt(effective_rule.get("min_amount_floor"), prec)
 
-    # If service charge is taxable, place it before VAT rows; otherwise after VAT rows.
-    combined = ([sc_row] + existing_non_sc) if taxable else (existing_non_sc + [sc_row])
-    doc.set("taxes", combined)
+        if calc_basis == "Pre-Discount Subtotal":
+            computed_amt = flt(pre_disc_net * eff_rate / 100.0, prec)
+            if floor_amt > 0 and computed_amt < floor_amt:
+                computed_amt = floor_amt
+            sc_row = {
+                "charge_type": "Actual",
+                "account_head": account,
+                "description": desc,
+                "rate": 0.0,
+                "tax_amount": computed_amt,
+                "cost_center": cost_center,
+                "included_in_print_rate": 0,
+                "custom_pos_charge_kind": "Service Charge",
+            }
+        else:
+            # Post-Discount Subtotal: On Net Total unless Option 17 floor binds on non-empty non-comp check
+            disc_pct = flt(doc.get("additional_discount_percentage"))
+            disc_amt = flt(doc.get("discount_amount"))
+            if disc_pct > 0:
+                est_post_net = flt(pre_disc_net * max(0.0, 1.0 - disc_pct / 100.0), prec)
+            elif disc_amt > 0:
+                est_post_net = flt(max(0.0, pre_disc_net - disc_amt), prec)
+            else:
+                est_post_net = pre_disc_net
+
+            if floor_amt > 0 and flt(est_post_net * eff_rate / 100.0, prec) < floor_amt:
+                sc_row = {
+                    "charge_type": "Actual",
+                    "account_head": account,
+                    "description": desc,
+                    "rate": 0.0,
+                    "tax_amount": floor_amt,
+                    "cost_center": cost_center,
+                    "included_in_print_rate": 0,
+                    "custom_pos_charge_kind": "Service Charge",
+                }
+            else:
+                sc_row = {
+                    "charge_type": "On Net Total",
+                    "account_head": account,
+                    "description": desc,
+                    "rate": eff_rate,
+                    "tax_amount": 0.0,
+                    "cost_center": cost_center,
+                    "included_in_print_rate": 0,
+                    "custom_pos_charge_kind": "Service Charge",
+                }
+
+    sc_idx = len(base_rows) + 1
+    appended = [sc_row]
+    if taxable:
+        vat_info = _resolve_effective_vat(doc, base_rows)
+        if vat_info is not None:
+            vat_account, vat_rate, vat_label = vat_info
+            appended.append(
+                {
+                    "charge_type": "On Previous Row Amount",
+                    "row_id": str(sc_idx),
+                    "account_head": vat_account,
+                    "rate": vat_rate,
+                    "tax_amount": 0.0,
+                    "description": f"{vat_label} on {desc}",
+                    "cost_center": cost_center,
+                    "included_in_print_rate": 0,
+                    "custom_pos_charge_kind": "Service Charge Tax",
+                }
+            )
+
+    doc.set("taxes", base_rows + appended + tip_rows)
+    _normalize_tax_indices(doc)
+
+
+def prorate_return_service_charge(doc) -> None:
+    """Prorate Actual/Fixed Service Charge on partial returns and cap cumulative refunded SC at 100%."""
+    if not doc or cint(doc.get("is_return")) != 1:
+        return
+    orig_name = _clean_str(doc.get("return_against"))
+    if not orig_name:
+        return
+    try:
+        orig = frappe.get_doc("POS Invoice", orig_name)
+    except Exception:
+        return
+
+    prec = _doc_precision(doc, "total_taxes_and_charges")
+    profile = None
+    prof_name = _clean_str(doc.get("pos_profile") or orig.get("pos_profile"))
+    if prof_name:
+        try:
+            profile = frappe.get_doc("POS Profile", prof_name)
+        except Exception:
+            profile = None
+    sc_accounts = _all_service_charge_accounts(profile)
+
+    def _is_sc_row(r) -> bool:
+        kind = _clean_str(r.get("custom_pos_charge_kind"))
+        if kind == "Service Charge":
+            return True
+        return not kind and _clean_str(r.get("account_head")) in sc_accounts
+
+    def _is_sc_tax_row(r) -> bool:
+        return _clean_str(r.get("custom_pos_charge_kind")) == "Service Charge Tax"
+
+    # If the original check had Service Charge waived, a return must refund 0 SC
+    if cint(orig.get("custom_service_charge_waived")) == 1:
+        mutated = False
+        for row in doc.get("taxes") or []:
+            if _is_sc_row(row) or _is_sc_tax_row(row):
+                if flt(row.get("tax_amount")) != 0 or flt(row.get("rate")) != 0:
+                    row["tax_amount"] = 0.0
+                    row["rate"] = 0.0
+                    mutated = True
+        if mutated and callable(getattr(doc, "calculate_taxes_and_totals", None)):
+            doc.calculate_taxes_and_totals()
+        return
+
+    orig_sc_actual = sum(
+        abs(flt(r.get("tax_amount")))
+        for r in (orig.get("taxes") or [])
+        if _is_sc_row(r) and r.get("charge_type") == "Actual"
+    )
+    if orig_sc_actual <= 0:
+        return
+
+    orig_items_total = sum(
+        abs(flt(r.get("amount")) or (flt(r.get("qty")) * flt(r.get("rate"))))
+        for r in (orig.get("items") or [])
+        if cint(r.get("is_disposable")) != 1
+    )
+    ret_items_total = sum(
+        abs(flt(r.get("amount")) or (flt(r.get("qty")) * flt(r.get("rate"))))
+        for r in (doc.get("items") or [])
+        if cint(r.get("is_disposable")) != 1
+    )
+
+    prior_returns = frappe.get_all(
+        "POS Invoice",
+        filters={
+            "is_return": 1,
+            "return_against": orig_name,
+            "docstatus": 1,
+            **({"name": ["!=", doc.name]} if doc.get("name") else {}),
+        },
+        pluck="name",
+    ) or []
+    prior_returned_sc = 0.0
+    for r_name in prior_returns:
+        try:
+            prev_ret = r_name if isinstance(r_name, dict) else frappe.get_doc("POS Invoice", r_name)
+        except Exception:
+            continue
+        prior_returned_sc += sum(
+            abs(flt(t.get("tax_amount")))
+            for t in (prev_ret.get("taxes") or [])
+            if _is_sc_row(t) and t.get("charge_type") == "Actual"
+        )
+
+    remaining_sc = max(0.0, flt(orig_sc_actual - prior_returned_sc, prec))
+    ratio = min(1.0, ret_items_total / orig_items_total) if orig_items_total > 0 else 0.0
+    prorated = flt(orig_sc_actual * ratio, prec)
+    target_refund = min(prorated, remaining_sc)
+
+    mutated = False
+    allocated = False
+    for row in doc.get("taxes") or []:
+        if _is_sc_row(row) and row.get("charge_type") == "Actual":
+            desired = -target_refund if not allocated else 0.0
+            allocated = True
+            if abs(flt(row.get("tax_amount")) - desired) > 1e-6:
+                row["tax_amount"] = desired
+                mutated = True
+
+    if mutated and callable(getattr(doc, "calculate_taxes_and_totals", None)):
+        doc.calculate_taxes_and_totals()
+
+
+@frappe.whitelist(methods=["GET"])
+def get_service_charge_status(invoice: str, pos_profile: str | None = None) -> dict[str, Any]:
+    """Return active matched Service Charge rule, waived/override state, and current amounts for UI."""
+    doc = frappe.get_doc("POS Invoice", invoice)
+    if not frappe.has_permission("POS Invoice", "read", doc=doc):
+        frappe.throw(_("Not permitted to view this check."), frappe.PermissionError)
+    eff_profile = pos_profile or doc.get("pos_profile")
+    profile = frappe.get_doc("POS Profile", eff_profile) if eff_profile else None
+    matched = match_service_charge_rule(doc, profile) if profile else None
+    sc_amount = sum(
+        flt(t.get("tax_amount"))
+        for t in (doc.get("taxes") or [])
+        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge"
+    )
+    sc_tax_amount = sum(
+        flt(t.get("tax_amount"))
+        for t in (doc.get("taxes") or [])
+        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge Tax"
+    )
+    return {
+        "invoice": doc.name,
+        "waived": cint(doc.get("custom_service_charge_waived")) == 1,
+        "override_rate": doc.get("custom_service_charge_override_rate"),
+        "override_amount": doc.get("custom_service_charge_override_amount"),
+        "reason": doc.get("custom_service_charge_reason") or "",
+        "approver": doc.get("custom_service_charge_approver") or "",
+        "service_charge_amount": sc_amount,
+        "service_charge_tax_amount": sc_tax_amount,
+        "matched_rule": matched,
+    }
 
 
 def build_service_charge_claim(
@@ -1384,7 +1961,7 @@ def adjust_closed_check_tip(
             "doctype": "Journal Entry",
             "voucher_type": "Journal Entry",
             "company": doc.company,
-            "posting_date": nowdate(),
+            "posting_date": _nowdate(),
             "user_remark": (
                 f"POS tip adjustment on {doc.name} ({old_tip} -> {new_tip}, server={server}, "
                 f"reason={full_reason}, approver={auth['approver']})"
@@ -1426,6 +2003,7 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
     if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
         return
     if cint(doc.get("is_return")) == 1:
+        prorate_return_service_charge(doc)
         return
 
     # 1. Negative line rates are NEVER permitted on non-return checks.
@@ -1464,7 +2042,7 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
                 frappe.ValidationError,
             )
 
-    if doc.flags.get("ury_privileged_action_verified"):
+    if getattr(getattr(doc, "flags", None), "ury_privileged_action_verified", False):
         return
     if getattr(frappe.flags, "ury_bill_split", False) or getattr(frappe.flags, "ury_qty_reduction", False):
         return
@@ -1499,6 +2077,52 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
                 coded_message(
                     "POS-AUTH-REQUIRED",
                     _("This privileged pricing change requires POS manager authorisation."),
+                ),
+                frappe.PermissionError,
+            )
+
+    for ov_field in ("custom_service_charge_override_rate", "custom_service_charge_override_amount"):
+        if (doc.get(ov_field) or None) != (before.get(ov_field) or None):
+            frappe.throw(
+                coded_message(
+                    "POS-AUTH-REQUIRED",
+                    _("Service charge overrides must go through the POS service charge authorisation flow."),
+                ),
+                frappe.PermissionError,
+            )
+
+    # Guard against direct REST/Desk stripping or mutating Service Charge rows without PIN
+    # when the check's order_type, covers, profile, items, and discounts did not change.
+    def _sc_signature(inv_doc) -> list[tuple[str, str, float, float]]:
+        rows = []
+        for t in inv_doc.get("taxes") or []:
+            if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge":
+                rows.append(
+                    (
+                        _clean_str(t.get("charge_type")),
+                        _clean_str(t.get("account_head")),
+                        round(flt(t.get("rate")), 4),
+                        round(flt(t.get("tax_amount")), 4),
+                    )
+                )
+        return rows
+
+    before_sc = _sc_signature(before)
+    curr_sc = _sc_signature(doc)
+    if before_sc and before_sc != curr_sc:
+        context_unchanged = (
+            _clean_str(doc.get("order_type")) == _clean_str(before.get("order_type"))
+            and cint(doc.get("no_of_pax")) == cint(before.get("no_of_pax"))
+            and _clean_str(doc.get("pos_profile")) == _clean_str(before.get("pos_profile"))
+            and round(flt(doc.get("additional_discount_percentage")), 4) == round(flt(before.get("additional_discount_percentage")), 4)
+            and round(flt(doc.get("discount_amount")), 4) == round(flt(before.get("discount_amount")), 4)
+            and len(doc.get("items") or []) == len(before.get("items") or [])
+        )
+        if context_unchanged:
+            frappe.throw(
+                coded_message(
+                    "POS-AUTH-REQUIRED",
+                    _("Service charge rows cannot be stripped or altered without POS manager authorisation."),
                 ),
                 frappe.PermissionError,
             )

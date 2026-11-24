@@ -111,11 +111,19 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
                 "insert_after": "custom_service_charge_taxable",
             },
             {
+                "fieldname": "custom_service_charge_rules",
+                "fieldtype": "Table",
+                "options": "POS Service Charge Rule",
+                "label": "Service Charge Rules",
+                "description": "Order-type and party-size service charge rules (Percentage or Fixed Amount, Pre/Post-discount, Taxable).",
+                "insert_after": "custom_service_charge_description",
+            },
+            {
                 "fieldname": "custom_tax_exempt_category",
                 "fieldtype": "Link",
                 "options": "Tax Category",
                 "label": "Default Tax Exempt Category",
-                "insert_after": "custom_service_charge_description",
+                "insert_after": "custom_service_charge_rules",
             },
             {
                 "fieldname": "custom_exempt_item_tax_template",
@@ -479,6 +487,18 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
                 "label": "EFRIS Tax Category",
                 "description": "URA EFRIS tax category code (01 Standard, 02 Zero-rated, 03 Exempt, 04 Deemed).",
                 "insert_after": "disabled",
+            },
+        ],
+        "Sales Taxes and Charges": [
+            {
+                "fieldname": "custom_pos_charge_kind",
+                "fieldtype": "Select",
+                "options": "\nService Charge\nService Charge Tax\nCharged Tip",
+                "label": "POS Charge Kind",
+                "hidden": 1,
+                "no_copy": 1,
+                "print_hide": 1,
+                "insert_after": "charge_type",
             },
         ],
         "URY Table Reservation": [
