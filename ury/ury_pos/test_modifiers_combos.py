@@ -44,6 +44,9 @@ class Doc(SimpleNamespace):
 	def get(self, key, default=None):
 		return getattr(self, key, default)
 
+	def set(self, key, value):
+		setattr(self, key, value)
+
 	def __getitem__(self, key):
 		return getattr(self, key)
 
