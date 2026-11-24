@@ -46,6 +46,15 @@ CODE_RETURN_OVER_PAID = "POS-RETURN-OVER-PAID"
 CODE_RETURN_TENDER_MISMATCH = "POS-RETURN-TENDER-MISMATCH"
 CODE_RETURN_OWN_CHECK = "POS-RETURN-OWN-CHECK"
 CODE_RETURN_UNREFERENCED_NOT_ALLOWED = "POS-RETURN-UNREFERENCED-NOT-ALLOWED"
+CODE_REOPEN_NOT_CLOSED = "POS-REOPEN-NOT-CLOSED"
+CODE_REOPEN_OF_RETURN = "POS-REOPEN-OF-RETURN"
+CODE_REOPEN_PREVIOUS_DAY = "POS-REOPEN-PREVIOUS-DAY"
+CODE_REOPEN_SHIFT_CLOSED = "POS-REOPEN-SHIFT-CLOSED"
+CODE_REOPEN_CONSOLIDATED = "POS-REOPEN-CONSOLIDATED"
+CODE_REOPEN_ALREADY_RETURNED = "POS-REOPEN-ALREADY-RETURNED"
+CODE_REOPEN_FISCALISED = "POS-REOPEN-FISCALISED"
+CODE_ADJUST_ITEMS_FORBIDDEN = "POS-ADJUST-ITEMS-FORBIDDEN"
+CODE_ADJUST_TOTAL_MISMATCH = "POS-ADJUST-TOTAL-MISMATCH"
 
 ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "RWF", "BIF", "JPY", "KRW", "VND", "TZS", "XAF", "XOF"})
 
@@ -1844,3 +1853,514 @@ def validate_pos_return_doc(doc) -> None:
                 "Unreferenced returns require dedicated POS Profile roles and manager PIN approval.",
                 fr.PermissionError,
             )
+
+
+# ---------------------------------------------------------------------------
+# Slice 3: Reopen / Adjust Closed Check (Matrix row 10, Simphony Opt 67/68, SAP FP17)
+# ---------------------------------------------------------------------------
+
+
+def _assert_shift_still_open(orig) -> None:
+    fr = _f()
+    orig_name = _field(orig, "name")
+    if isinstance(orig_name, str) and orig_name and fr.db.table_exists("POS Closing Entry Detail") is True:
+        close_rows = fr.db.sql(
+            """
+            SELECT pce.name
+            FROM `tabPOS Closing Entry` pce
+            INNER JOIN `tabPOS Closing Entry Detail` pced ON pced.parent = pce.name
+            WHERE pce.docstatus = 1 AND pced.pos_invoice = %s
+            LIMIT 1
+            """,
+            (orig_name,),
+        )
+        if close_rows:
+            _refuse(
+                CODE_REOPEN_SHIFT_CLOSED,
+                "The shift for this check has already closed.",
+                fr.ValidationError,
+            )
+    profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    if profile_name and fr.db.table_exists("POS Opening Entry") is True:
+        open_entry = fr.db.exists(
+            "POS Opening Entry",
+            {"pos_profile": profile_name, "docstatus": 1, "status": "Open"},
+        )
+        if not open_entry:
+            _refuse(
+                CODE_REOPEN_SHIFT_CLOSED,
+                "An open shift on this till is required to reopen or adjust a closed check.",
+                fr.ValidationError,
+            )
+
+
+def _validate_reopen_or_adjust_base(orig, *, credit_and_rebill: int = 0) -> bool:
+    """Enforce shared same-day / open-shift / unconsolidated / unreturned / fiscal limits."""
+    fr = _f()
+    _assert_same_outlet(_field(orig, "branch"))
+    if cint(_field(orig, "docstatus", 0)) != 1:
+        _refuse(CODE_REOPEN_NOT_CLOSED, "Only closed checks can be reopened or adjusted.", fr.ValidationError)
+    if cint(_field(orig, "is_return", 0)) == 1:
+        _refuse(CODE_REOPEN_OF_RETURN, "A return check cannot be reopened or adjusted.", fr.ValidationError)
+    if _field(orig, "custom_merged_pos_invoice"):
+        _refuse(CODE_RETURN_MERGED, "Legacy linked merged checks cannot be reopened individually.", fr.ValidationError)
+
+    # Consolidation check
+    if _field(orig, "consolidated_invoice") or str(_field(orig, "status") or "") == "Consolidated":
+        _refuse(
+            CODE_REOPEN_CONSOLIDATED,
+            "This check has already been consolidated and cannot be reopened or adjusted.",
+            fr.ValidationError,
+        )
+    if fr.db.table_exists("POS Invoice Reference") is True:
+        merge_rows = fr.db.sql(
+            """
+            SELECT piml.name
+            FROM `tabPOS Invoice Merge Log` piml
+            INNER JOIN `tabPOS Invoice Reference` pir ON pir.parent = piml.name
+            WHERE piml.docstatus = 1 AND pir.pos_invoice = %s
+            LIMIT 1
+            """,
+            (orig.name,),
+        )
+        if merge_rows:
+            _refuse(
+                CODE_REOPEN_CONSOLIDATED,
+                "This check is already consolidated and cannot be reopened or adjusted.",
+                fr.ValidationError,
+            )
+
+    # Same business day only
+    orig_day = str(_field(orig, "posting_date") or "")[:10]
+    if orig_day != _today_date():
+        _refuse(
+            CODE_REOPEN_PREVIOUS_DAY,
+            "Only checks from the current business day can be reopened or adjusted.",
+            fr.ValidationError,
+        )
+
+    # Shift still open
+    _assert_shift_still_open(orig)
+
+    # Not already returned
+    prior_returns = _load_prior_returns(orig.name, for_update=True)
+    if prior_returns:
+        _refuse(
+            CODE_REOPEN_ALREADY_RETURNED,
+            "This check already has a return and cannot be reopened or adjusted.",
+            fr.ValidationError,
+        )
+
+    # Fiscalised check requires explicit credit-and-rebill confirmation
+    is_fiscal = is_fiscalised_invoice(orig)
+    if is_fiscal and cint(credit_and_rebill) != 1:
+        _refuse(
+            CODE_REOPEN_FISCALISED,
+            "This check was fiscalised. Confirm credit and rebill to issue an EFRIS credit note and replacement check.",
+            fr.ValidationError,
+        )
+    return is_fiscal
+
+
+def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str, is_fiscal: bool):
+    """Create and submit a full reversal POS Return against `orig`."""
+    fr = _f()
+    currency = _field(orig, "currency") or "UGX"
+    precision = _currency_precision(currency)
+    session_user = getattr(getattr(fr, "session", None), "user", None) or ""
+    orig_net_payments = _net_original_payments(orig, precision)
+
+    rev = fr.new_doc("POS Invoice")
+    rev.is_return = 1
+    rev.return_against = orig.name
+    rev.company = _field(orig, "company")
+    rev.branch = _field(orig, "branch")
+    rev.pos_profile = _field(orig, "pos_profile")
+    rev.customer = _field(orig, "customer")
+    rev.customer_name = _field(orig, "customer_name") or _field(orig, "customer")
+    rev.currency = currency
+    rev.selling_price_list = _field(orig, "selling_price_list")
+    rev.posting_date = _today_date()
+    rev.posting_time = _now_time()
+    rev.set_posting_time = 1
+    rev.invoice_printed = 0
+    rev.restaurant_table = None
+    rev.cashier = session_user
+    rev.waiter = session_user
+    if _field(orig, "room_number"):
+        rev.room_number = _field(orig, "room_number")
+
+    for row in _field(orig, "items") or []:
+        qty = flt(_field(row, "qty", 0))
+        if qty <= 0:
+            continue
+        rev.append("items", {
+            "item_code": _field(row, "item_code"),
+            "item_name": _field(row, "item_name") or _field(row, "item_code"),
+            "qty": -qty,
+            "rate": flt(_field(row, "rate", 0)),
+            "uom": _field(row, "uom") or "Nos",
+            "warehouse": _field(row, "warehouse"),
+            "income_account": _field(row, "income_account"),
+            "cost_center": _field(row, "cost_center"),
+            "pos_invoice_item": _field(row, "name"),
+            "ury_held": 0,
+        })
+
+    disc = abs(flt(_field(orig, "discount_amount", 0)))
+    if disc > 0:
+        rev.apply_discount_on = _field(orig, "apply_discount_on") or "Grand Total"
+        rev.discount_amount = -disc
+
+    for t in _field(orig, "taxes") or []:
+        if cint(_field(t, "included_in_print_rate", 0)) == 0:
+            rev.append("taxes", {
+                "charge_type": _field(t, "charge_type") or "Actual",
+                "account_head": _field(t, "account_head"),
+                "description": _field(t, "description") or _field(t, "account_head"),
+                "rate": flt(_field(t, "rate", 0)),
+                "tax_amount": -abs(flt(_field(t, "tax_amount", 0))),
+                "included_in_print_rate": 0,
+            })
+
+    for p in orig_net_payments:
+        rev.append("payments", {
+            "mode_of_payment": p["mode_of_payment"],
+            "amount": -float(p["amount"]),
+        })
+
+    if is_fiscal or _has_field("POS Invoice", "efris_creditnote_reasoncode"):
+        efris_code = _resolve_efris_credit_reason(reason_info["code"])
+        if _has_field("POS Invoice", "efris_creditnote_reasoncode"):
+            rev.efris_creditnote_reasoncode = efris_code
+        if _has_field("POS Invoice", "efris_creditnote_reason"):
+            rev.efris_creditnote_reason = reason_info["stored"]
+
+    if _has_field("POS Invoice", "custom_return_approver"):
+        rev.custom_return_approver = approver
+    if _has_field("POS Invoice", "cancel_reason"):
+        rev.cancel_reason = reason_info["stored"]
+
+    mark_verified_pos_approval(rev, "return")
+    rev.insert(ignore_permissions=True)
+    rev.submit()
+    return rev
+
+
+def _clone_check_lines_and_taxes(src, dst) -> None:
+    for row in _field(src, "items") or []:
+        qty = flt(_field(row, "qty", 0))
+        if qty <= 0:
+            continue
+        dst.append("items", {
+            "item_code": _field(row, "item_code"),
+            "item_name": _field(row, "item_name") or _field(row, "item_code"),
+            "qty": qty,
+            "rate": flt(_field(row, "rate", 0)),
+            "uom": _field(row, "uom") or "Nos",
+            "warehouse": _field(row, "warehouse"),
+            "income_account": _field(row, "income_account"),
+            "cost_center": _field(row, "cost_center"),
+            "ury_held": 0,
+        })
+    disc = abs(flt(_field(src, "discount_amount", 0)))
+    if disc > 0:
+        dst.apply_discount_on = _field(src, "apply_discount_on") or "Grand Total"
+        dst.discount_amount = disc
+    for t in _field(src, "taxes") or []:
+        dst.append("taxes", {
+            "charge_type": _field(t, "charge_type") or "Actual",
+            "account_head": _field(t, "account_head"),
+            "description": _field(t, "description") or _field(t, "account_head"),
+            "rate": flt(_field(t, "rate", 0)),
+            "tax_amount": flt(_field(t, "tax_amount", 0)),
+            "included_in_print_rate": cint(_field(t, "included_in_print_rate", 0)),
+        })
+
+
+def _record_before_after_audit(orig, replacement, action: str, before: dict[str, Any], after: dict[str, Any], approver: str, reason_info: dict[str, Any]) -> None:
+    summary = (
+        f"{action} | Original: {orig.name} -> Replacement: {replacement.name} "
+        f"| Reason: {reason_info['stored']} | Approved by: {approver} "
+        f"| Before: {json.dumps(before, sort_keys=True, default=str)} "
+        f"| After: {json.dumps(after, sort_keys=True, default=str)}"
+    )
+    for target in (orig, replacement):
+        add_comment = getattr(target, "add_comment", None)
+        if callable(add_comment):
+            add_comment("Info", summary)
+
+
+@_default_frappe.whitelist()
+def adjust_closed_check(
+    invoice_id: str,
+    payments: Any,
+    reason: Any,
+    note: Any = None,
+    tip_amount: Any = None,
+    credit_and_rebill: int = 0,
+    approval_token: str | None = None,
+    items: Any = None,
+    offline_captured: int = 0,
+) -> dict[str, Any]:
+    """Adjust tender/tip ONLY on a same-day open-shift closed check (Simphony Opt 67)."""
+    fr = _f()
+    if cint(offline_captured) == 1:
+        _refuse(CODE_OFFLINE_NOT_ALLOWED, "Closed checks cannot be adjusted offline.", fr.ValidationError)
+    if items is not None:
+        _refuse(
+            CODE_ADJUST_ITEMS_FORBIDDEN,
+            "Items cannot be changed in Adjust Closed Check. Use Reopen Check instead.",
+            fr.ValidationError,
+        )
+
+    orig = fr.get_doc("POS Invoice", invoice_id, for_update=True)
+    is_fiscal = _validate_reopen_or_adjust_base(orig, credit_and_rebill=cint(credit_and_rebill))
+
+    profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
+    currency = _field(orig, "currency") or "UGX"
+    precision = _currency_precision(currency)
+
+    parsed_pay = _parse_json_arg(payments)
+    if not isinstance(parsed_pay, list) or not parsed_pay:
+        _refuse(CODE_ADJUST_TOTAL_MISMATCH, "Provide at least one replacement payment method.", fr.ValidationError)
+
+    profile_modes = (
+        {_field(p, "mode_of_payment") for p in (_field(profile_doc, "payments") or []) if _field(p, "mode_of_payment")}
+        if profile_doc is not None
+        else set()
+    )
+    orig_tip = _q(_dec(_field(orig, "tip_amount", 0)), precision)
+    new_tip = _q(_dec(tip_amount), precision) if tip_amount is not None else orig_tip
+    if new_tip < 0:
+        _refuse(CODE_ADJUST_TOTAL_MISMATCH, "Tip amount cannot be negative.", fr.ValidationError)
+
+    orig_grand = _q(_dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or 0), precision)
+    expected_pay_total = orig_grand + new_tip
+
+    normalized_payments = []
+    pay_sum = Decimal("0")
+    for p in parsed_pay:
+        mop = p.get("mode_of_payment") if isinstance(p, dict) else None
+        amt = _q(_dec(p.get("amount", 0) if isinstance(p, dict) else 0), precision)
+        if not isinstance(mop, str) or not mop.strip() or amt <= 0:
+            _refuse(CODE_ADJUST_TOTAL_MISMATCH, "Each payment row needs a valid payment method and positive amount.", fr.ValidationError)
+        mop = mop.strip()
+        if profile_modes and mop not in profile_modes:
+            _refuse(CODE_RETURN_DIFFERENT_TENDER, f"Payment method '{mop}' is not enabled on this till.", fr.ValidationError)
+        pay_sum += amt
+        normalized_payments.append({"mode_of_payment": mop, "amount": float(amt)})
+
+    if abs(pay_sum - expected_pay_total) > Decimal("1e-9"):
+        _refuse(
+            CODE_ADJUST_TOTAL_MISMATCH,
+            f"Adjusted payments ({pay_sum}) must equal check total plus tip ({expected_pay_total}).",
+            fr.ValidationError,
+        )
+
+    reason_info = resolve_pos_reason("adjust_closed_check", profile_name, reason, note=note)
+
+    claim = {
+        "original_invoice": orig.name,
+        "payments": sorted(normalized_payments, key=lambda x: x["mode_of_payment"]),
+        "tip_amount": float(new_tip),
+        "credit_and_rebill": 1 if (is_fiscal and cint(credit_and_rebill) == 1) else 0,
+        "reason": reason_info["code"],
+        "note": reason_info["note"],
+    }
+    approver = require_pos_override(
+        "adjust_closed_check",
+        profile_name,
+        "POS Invoice",
+        orig.name,
+        claim,
+        approval_token=approval_token,
+        amount=float(expected_pay_total),
+    )
+
+    before_snapshot = {
+        "invoice": orig.name,
+        "grand_total": float(orig_grand),
+        "tip_amount": float(orig_tip),
+        "payments": [
+            {"mode_of_payment": p["mode_of_payment"], "amount": float(p["amount"])}
+            for p in _net_original_payments(orig, precision)
+        ],
+        "status": _field(orig, "status"),
+    }
+
+    rev = _build_full_reversal_return(orig, reason_info, approver, is_fiscal)
+
+    session_user = getattr(getattr(fr, "session", None), "user", None) or ""
+    rep = fr.new_doc("POS Invoice")
+    rep.is_return = 0
+    rep.company = _field(orig, "company")
+    rep.branch = _field(orig, "branch")
+    rep.pos_profile = profile_name
+    rep.customer = _field(orig, "customer")
+    rep.customer_name = _field(orig, "customer_name") or _field(orig, "customer")
+    rep.order_type = _field(orig, "order_type") or "Dine In"
+    rep.currency = currency
+    rep.selling_price_list = _field(orig, "selling_price_list")
+    rep.posting_date = _today_date()
+    rep.posting_time = _now_time()
+    rep.set_posting_time = 1
+    rep.invoice_printed = 1
+    rep.restaurant_table = _field(orig, "restaurant_table")
+    rep.waiter = _field(orig, "waiter") or session_user
+    rep.cashier = session_user
+    if _has_field("POS Invoice", "tip_amount"):
+        rep.tip_amount = float(new_tip)
+    if _has_field("POS Invoice", "custom_reopened_from"):
+        rep.custom_reopened_from = orig.name
+    if _field(orig, "room_number") and any(_is_room_charge_mode(p["mode_of_payment"]) for p in normalized_payments):
+        rep.room_number = _field(orig, "room_number")
+
+    _clone_check_lines_and_taxes(orig, rep)
+    for prow in normalized_payments:
+        rep.append("payments", {
+            "mode_of_payment": prow["mode_of_payment"],
+            "amount": float(prow["amount"]),
+        })
+
+    rep.insert(ignore_permissions=True)
+    rep.submit()
+
+    after_snapshot = {
+        "reversal_return": rev.name,
+        "replacement_invoice": rep.name,
+        "grand_total": float(orig_grand),
+        "tip_amount": float(new_tip),
+        "payments": normalized_payments,
+        "status": _field(rep, "status") or "Paid",
+        "credit_and_rebill": bool(is_fiscal and cint(credit_and_rebill) == 1),
+    }
+    _record_before_after_audit(orig, rep, "Adjust Closed Check", before_snapshot, after_snapshot, approver, reason_info)
+
+    return {
+        "action": "adjust_closed_check",
+        "original_invoice": orig.name,
+        "reversal_return": rev.name,
+        "replacement_invoice": rep.name,
+        "before": before_snapshot,
+        "after": after_snapshot,
+        "approver": approver,
+        "reason": reason_info["code"],
+        "credit_and_rebill": bool(is_fiscal and cint(credit_and_rebill) == 1),
+    }
+
+
+@_default_frappe.whitelist()
+def reopen_closed_check(
+    invoice_id: str,
+    reason: Any,
+    note: Any = None,
+    credit_and_rebill: int = 0,
+    approval_token: str | None = None,
+    offline_captured: int = 0,
+) -> dict[str, Any]:
+    """Reopen a same-day open-shift closed check into an editable Draft (Simphony Opt 68 / SAP FP17)."""
+    fr = _f()
+    if cint(offline_captured) == 1:
+        _refuse(CODE_OFFLINE_NOT_ALLOWED, "Closed checks cannot be reopened offline.", fr.ValidationError)
+
+    orig = fr.get_doc("POS Invoice", invoice_id, for_update=True)
+    is_fiscal = _validate_reopen_or_adjust_base(orig, credit_and_rebill=cint(credit_and_rebill))
+
+    profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    currency = _field(orig, "currency") or "UGX"
+    precision = _currency_precision(currency)
+    orig_grand = _q(_dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or 0), precision)
+
+    reason_info = resolve_pos_reason("reopen_check", profile_name, reason, note=note)
+    claim = {
+        "original_invoice": orig.name,
+        "grand_total": float(orig_grand),
+        "credit_and_rebill": 1 if (is_fiscal and cint(credit_and_rebill) == 1) else 0,
+        "reason": reason_info["code"],
+        "note": reason_info["note"],
+    }
+    approver = require_pos_override(
+        "reopen_check",
+        profile_name,
+        "POS Invoice",
+        orig.name,
+        claim,
+        approval_token=approval_token,
+        amount=float(orig_grand),
+    )
+
+    before_snapshot = {
+        "invoice": orig.name,
+        "grand_total": float(orig_grand),
+        "payments": [
+            {"mode_of_payment": p["mode_of_payment"], "amount": float(p["amount"])}
+            for p in _net_original_payments(orig, precision)
+        ],
+        "restaurant_table": _field(orig, "restaurant_table"),
+        "status": _field(orig, "status"),
+    }
+
+    rev = _build_full_reversal_return(orig, reason_info, approver, is_fiscal)
+
+    # Restore original table ONLY if it exists and is currently free; never collide with another guest!
+    orig_table = _field(orig, "restaurant_table")
+    restored_table = None
+    table_restored = False
+    if isinstance(orig_table, str) and orig_table.strip() and fr.db.exists("URY Table", orig_table):
+        is_occupied = cint(fr.db.get_value("URY Table", orig_table, "occupied") or 0) == 1
+        if not is_occupied:
+            fr.db.set_value("URY Table", orig_table, "occupied", 1, update_modified=False)
+            restored_table = orig_table
+            table_restored = True
+
+    session_user = getattr(getattr(fr, "session", None), "user", None) or ""
+    reopened = fr.new_doc("POS Invoice")
+    reopened.is_return = 0
+    reopened.company = _field(orig, "company")
+    reopened.branch = _field(orig, "branch")
+    reopened.pos_profile = profile_name
+    reopened.customer = _field(orig, "customer")
+    reopened.customer_name = _field(orig, "customer_name") or _field(orig, "customer")
+    reopened.order_type = _field(orig, "order_type") or "Dine In"
+    reopened.currency = currency
+    reopened.selling_price_list = _field(orig, "selling_price_list")
+    reopened.posting_date = _today_date()
+    reopened.posting_time = _now_time()
+    reopened.set_posting_time = 1
+    reopened.invoice_printed = 0
+    reopened.restaurant_table = restored_table
+    reopened.waiter = _field(orig, "waiter") or session_user
+    reopened.cashier = session_user
+    reopened.payments = []
+    if _has_field("POS Invoice", "custom_reopened_from"):
+        reopened.custom_reopened_from = orig.name
+
+    _clone_check_lines_and_taxes(orig, reopened)
+    reopened.insert(ignore_permissions=True)
+
+    after_snapshot = {
+        "reversal_return": rev.name,
+        "reopened_invoice": reopened.name,
+        "docstatus": 0,
+        "restaurant_table": restored_table,
+        "table_restored": table_restored,
+        "payments": [],
+        "credit_and_rebill": bool(is_fiscal and cint(credit_and_rebill) == 1),
+    }
+    _record_before_after_audit(orig, reopened, "Reopen Closed Check", before_snapshot, after_snapshot, approver, reason_info)
+
+    return {
+        "action": "reopen_closed_check",
+        "original_invoice": orig.name,
+        "reversal_return": rev.name,
+        "reopened_invoice": reopened.name,
+        "table_restored": table_restored,
+        "restaurant_table": restored_table,
+        "before": before_snapshot,
+        "after": after_snapshot,
+        "approver": approver,
+        "reason": reason_info["code"],
+        "credit_and_rebill": bool(is_fiscal and cint(credit_and_rebill) == 1),
+    }

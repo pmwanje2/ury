@@ -805,6 +805,12 @@ fixtures = [
                     "User-custom_override_pin_hash",
                     "POS Profile-custom_override_max_attempts",
                     "POS Profile-custom_override_lock_minutes",
+                    "POS Profile-custom_unreferenced_return_roles",
+                    "POS Invoice-custom_reopened_from",
+                    "POS Invoice-custom_return_approver",
+                    "POS Invoice-custom_waste_stock_entry",
+                    "URY KOT-custom_void_reason_code",
+                    "URY KOT-custom_waste_stock_entry",
                 },
             ]
         ],
