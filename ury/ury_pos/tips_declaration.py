@@ -365,7 +365,7 @@ def _is_deadlock_or_lock_error(exc: Exception) -> bool:
     if isinstance(qde, type) and issubclass(qde, BaseException) and isinstance(exc, qde):
         return True
     msg = str(exc).lower()
-    return "deadlock" in msg or "lock wait timeout" in msg
+    return "deadlock" in msg or "lock wait timeout" in msg or "record has changed" in msg
 
 
 def _lock_closing_entry_for_payroll(pos_closing_entry: str) -> None:
@@ -412,8 +412,9 @@ def _locked_committed_refs_and_salaries(pos_closing_entry: str) -> tuple[dict[st
             for r in td_rows:
                 if isinstance(r, dict) and r.get("name") and (r.get("custom_additional_salary_ref") or "").strip():
                     row_refs[str(r["name"])] = str(r["custom_additional_salary_ref"]).strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        if _is_deadlock_or_lock_error(exc):
+            raise
     try:
         sal_rows = frappe.db.sql(
             """
@@ -431,8 +432,9 @@ def _locked_committed_refs_and_salaries(pos_closing_entry: str) -> tuple[dict[st
             for r in sal_rows:
                 if isinstance(r, dict) and r.get("name") and r.get("employee"):
                     emp_salaries[str(r["employee"])] = str(r["name"])
-    except Exception:
-        pass
+    except Exception as exc:
+        if _is_deadlock_or_lock_error(exc):
+            raise
     return row_refs, emp_salaries
 
 
@@ -487,6 +489,16 @@ def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str
         closing = frappe.get_doc("POS Closing Entry", pos_closing_entry, for_update=True)
     except TypeError:
         closing = frappe.get_doc("POS Closing Entry", pos_closing_entry)
+    except Exception as exc:
+        if _is_deadlock_or_lock_error(exc):
+            frappe.throw(
+                coded_message(
+                    "TIPS-PAYROLL-ALREADY-CREATED",
+                    _("Payroll tip entries have already been created for this shift close."),
+                ),
+                frappe.ValidationError,
+            )
+        raise
 
     if not frappe.has_permission("POS Closing Entry", "read", doc=closing):
         frappe.throw(
@@ -525,7 +537,18 @@ def create_tip_additional_salaries(pos_closing_entry: str, salary_component: str
         or ""
     )
 
-    committed_row_refs, committed_emp_salaries = _locked_committed_refs_and_salaries(closing.name)
+    try:
+        committed_row_refs, committed_emp_salaries = _locked_committed_refs_and_salaries(closing.name)
+    except Exception as exc:
+        if _is_deadlock_or_lock_error(exc):
+            frappe.throw(
+                coded_message(
+                    "TIPS-PAYROLL-ALREADY-CREATED",
+                    _("Payroll tip entries have already been created for this shift close."),
+                ),
+                frappe.ValidationError,
+            )
+        raise
 
     rows = list(closing.get("custom_tip_declarations") or [])
     created: list[dict[str, Any]] = []
