@@ -21,7 +21,6 @@ settings: ``custom_cash_safe_account``, ``custom_paid_out_account``,
 
 import frappe
 from frappe import _
-from frappe.query_builder.functions import Sum
 from frappe.utils import flt
 
 from ury.brand import coded_message
@@ -88,6 +87,8 @@ def before_cancel(doc, method=None):
 
 def till_cash_movements(opening_entry):
 	"""Submitted movements of a POS shift: net debit per account (company currency)."""
+	from frappe.query_builder.functions import Sum
+
 	entry = frappe.qb.DocType("Journal Entry")
 	line = frappe.qb.DocType("Journal Entry Account")
 	rows = (
