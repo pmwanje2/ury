@@ -160,6 +160,7 @@ class TestPosProfileFullParity(unittest.TestCase):
                 helper.api.getBranch = orig_get_branch
         finally:
             helper.tearDown()
+            helper.doCleanups()
         self.assertEqual(full["allow_rate_change"], 1)
         self.assertEqual(full["custom_service_charge_rate"], 10.0)
         self.assertEqual(full["custom_tips_payable_account"], "Tips Payable - TC")
