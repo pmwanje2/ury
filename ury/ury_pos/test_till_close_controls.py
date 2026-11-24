@@ -661,6 +661,49 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
         self.assertEqual(len(active_sis), 1)
         self.assertEqual(self.store.pos_invoices["POS-INV-1"].consolidated_invoice, active_sis[0].name)
 
+    def test_reopen_till_skips_missing_efris_columns_on_non_uganda_sites(self):
+        self.store.current_user = "cashier@example.com"
+        first = self.tc.close_till_with_controls(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=[{"mode_of_payment": "Cash", "closing_amount": 150000}],
+        )
+        closing_name = first["name"]
+        orig_get_all = self.frappe.get_all
+
+        def strict_get_all(doctype, *args, **kwargs):
+            fields = kwargs.get("fields") or []
+            if doctype == "Sales Invoice" and any(f in ("custom_efris_fdn", "custom_efris_irn") for f in fields):
+                raise RuntimeError("Unknown column 'custom_efris_fdn' in 'SELECT'")
+            return orig_get_all(doctype, *args, **kwargs)
+
+        claim = {
+            "action": "reopen_till",
+            "pos_profile": "Main Till",
+            "pos_closing_entry": closing_name,
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "reason": "Non-EFRIS site reopen",
+        }
+        self.override.mint(
+            "tok-reopen-nonefris",
+            requester="cashier@example.com",
+            approver="manager@example.com",
+            privilege="reopen_till",
+            pos_profile="Main Till",
+            reference_name=closing_name,
+            claim=claim,
+        )
+        with (
+            patch.object(self.frappe.db, "has_column", return_value=False, create=True),
+            patch.object(self.frappe, "get_all", side_effect=strict_get_all),
+        ):
+            res = self.tc.reopen_till(
+                pos_closing_entry=closing_name,
+                reason="Non-EFRIS site reopen",
+                approval_token="tok-reopen-nonefris",
+            )
+        self.assertEqual(res["status"], "Open")
+
     def test_force_close_requires_pin_snapshots_open_checks_and_preserves_consolidation(self):
         # Add an open draft check on Main Till
         self.store.pos_invoices["POS-DRAFT-1"] = FakeDoc(
