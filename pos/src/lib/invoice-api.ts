@@ -20,6 +20,7 @@ export interface POSInvoice {
   name: string;
   pos_profile?: string | null;
   currency?: string;
+  conversion_rate?: number | null;
   efris_irn?: string | null;
   efris_status?: string | null;
   invoice_printed: number;

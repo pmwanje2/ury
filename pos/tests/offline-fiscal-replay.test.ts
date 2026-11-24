@@ -19,6 +19,9 @@ const makeProfile = (): OfflineProfile => ({
   name: "Till A",
   ury_offline_capture: 1,
   role_allowed_for_billing: [{ role: "Cashier" }],
+  offline_payment_modes: [
+    { mode_of_payment: "Cash", type: "Cash", allow_offline: true, requires_reference: false },
+  ],
 });
 
 beforeEach(() => {

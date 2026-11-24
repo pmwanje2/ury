@@ -870,6 +870,12 @@ fixtures = [
                     "POS Invoice-custom_waste_stock_entry",
                     "URY KOT-custom_void_reason_code",
                     "URY KOT-custom_waste_stock_entry",
+                    "Mode of Payment-custom_allow_offline",
+                    "Mode of Payment-custom_offline_requires_reference",
+                    "POS Profile-custom_offline_tender_limit",
+                    "POS Invoice-custom_room_charge_stay",
+                    "POS Invoice-custom_override_approver",
+                    "POS Invoice-custom_override_reason",
                 },
             ]
         ],
