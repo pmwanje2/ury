@@ -5957,6 +5957,12 @@ def change_order_type(
         for row in inv.get("items") or []:
             if cint(row.get("is_disposable")) == 1:
                 continue
+            if (
+                cint(row.get("custom_price_overridden")) == 1
+                or cint(row.get("custom_is_open_item")) == 1
+                or cint(row.get("custom_is_complimentary")) == 1
+            ):
+                continue
             code = row.get("item_code")
             if not code:
                 continue
@@ -6015,7 +6021,16 @@ def change_order_type(
             reason_suffix,
         ),
     )
-    inv.save()
+    prev_priv_verified = getattr(getattr(inv, "flags", None), "ury_privileged_action_verified", False)
+    if getattr(inv, "flags", None) is not None:
+        inv.flags.ury_privileged_action_verified = True
+    try:
+        inv.save()
+    finally:
+        if getattr(inv, "flags", None) is not None:
+            inv.flags.ury_privileged_action_verified = prev_priv_verified
+            inv.flags.ury_server_order_type_change = False
+            inv.flags.ury_trusted_server_pricing = False
 
     if inv.get("restaurant_table") and inv.get("restaurant_table") != old_table:
         frappe.db.set_value(
