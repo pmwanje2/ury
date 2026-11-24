@@ -889,7 +889,8 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
             inv.name, "ROW-1", 0, reason="VOID-KITCHEN", approval_token=token
         )
         self.assertEqual(res["new_qty"], 0)
-        self.assertEqual(inv.items[0].qty, 0)
+        # ERPNext v16 validate_qty_is_not_zero refuses qty==0 rows on draft POS Invoices.
+        self.assertEqual([r.name for r in inv.items], ["ROW-2"])
         self.assertEqual(res["approver"], "manager@example.test")
 
     def test_waste_reason_posts_native_material_issue_stock_entry_and_links_kot(self):
@@ -1027,7 +1028,7 @@ class TestSentItemVoidAndCancelOrder(unittest.TestCase):
         self.h.frappe.session.user = "manager@example.test"
         inv = self.h.add_invoice(invoice_printed=0)
         self.qty_mod.reduce_order_item_qty(inv.name, "ROW-1", 0, reason="VOID-GUEST")
-        self.assertEqual(inv.items[0].qty, 0)
+        self.assertEqual([r.name for r in inv.items], ["ROW-2"])
         kots_after_cut = len(self.h.kots)
 
         self.h.frappe.session.user = "cashier@example.test"
