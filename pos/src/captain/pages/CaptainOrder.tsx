@@ -249,6 +249,22 @@ export default function CaptainOrder() {
           // Same stable line identity the Cashier OrderPanel sends — see
           // OrderItem.reservationLineKey (B02b).
           reservation_line_key: item.reservationLineKey || item.uniqueId,
+          ...(item.parentLineKey ? { custom_parent_line_key: item.parentLineKey } : {}),
+          ...(item.lineRole ? { custom_line_role: item.lineRole } : {}),
+          ...(item.isModifier ? { custom_is_modifier: 1 } : {}),
+          ...(item.modifierPrefix ? { custom_modifier_prefix: item.modifierPrefix } : {}),
+          ...(item.modifierGroup ? { custom_modifier_group: item.modifierGroup } : {}),
+          ...(item.modifierOption ? { custom_modifier_option: item.modifierOption } : {}),
+          ...(item.selectedModifiers && item.selectedModifiers.length > 0
+            ? { custom_modifiers_json: JSON.stringify(item.selectedModifiers) }
+            : {}),
+          ...(item.bundleOverrides && item.bundleOverrides.length > 0
+            ? { custom_bundle_overrides_json: JSON.stringify(item.bundleOverrides) }
+            : {}),
+          ...(item.inheritParentRouting !== undefined
+            ? { custom_inherit_parent_routing: item.inheritParentRouting ? 1 : 0 }
+            : {}),
+          ...(item.hideUnpricedOnReceipt ? { custom_hide_unpriced_on_receipt: 1 } : {}),
         })),
         no_of_pax: noOfPax,
         pos_profile: posProfile.name,

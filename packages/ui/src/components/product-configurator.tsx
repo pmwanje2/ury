@@ -11,6 +11,30 @@ export interface ProductOption {
   priceLabel: string
 }
 
+export interface ModifierOptionView {
+  optionCode: string
+  label: string
+  prefix?: string | null
+  priceLabel: string | null
+  selected: boolean
+  isDefault: boolean
+  available: boolean
+}
+
+export interface ModifierGroupView {
+  name: string
+  displayTitle: string
+  groupType: 'Condiment' | 'Combo Choice'
+  required: boolean
+  minSelections: number
+  maxSelections: number
+  allowPrefixes: boolean
+  allowedPrefixes: string[]
+  activePrefix?: string | null
+  selectedCount: number
+  options: ModifierOptionView[]
+}
+
 export interface ProductConfiguratorLabels {
   specialInstructions: string
   specialInstructionsPlaceholder: string
@@ -21,6 +45,13 @@ export interface ProductConfiguratorLabels {
   noAddons: string
   total: string
   submit: string
+  requiredBadge?: string
+  optionalBadge?: string
+  includedBadge?: string
+  soldOutBadge?: string
+  regularPrefix?: string
+  prefixStripLabel?: string
+  selectRequiredPrompt?: string
 }
 
 export interface ProductConfiguratorProps {
@@ -45,6 +76,10 @@ export interface ProductConfiguratorProps {
   onToggleAddon: (id: string) => void
   addonsLoading?: boolean
   addonsError?: string | null
+  modifierGroups?: ModifierGroupView[]
+  onSelectModifierPrefix?: (groupName: string, prefix: string | null) => void
+  onToggleModifierOption?: (groupName: string, optionCode: string) => void
+  missingRequiredGroups?: string[]
   totalLabel: string
   submitDisabled?: boolean
   onSubmit: () => void
@@ -73,6 +108,10 @@ export function ProductConfigurator({
   onToggleAddon,
   addonsLoading,
   addonsError,
+  modifierGroups = [],
+  onSelectModifierPrefix,
+  onToggleModifierOption,
+  missingRequiredGroups = [],
   totalLabel,
   submitDisabled,
   onSubmit,
@@ -80,6 +119,7 @@ export function ProductConfigurator({
 }: ProductConfiguratorProps) {
   const [imageFailed, setImageFailed] = useState(false)
   const showImage = Boolean(imageUrl) && !imageFailed
+  const hasModifierGroups = modifierGroups.length > 0
 
   useEffect(() => {
     setImageFailed(false)
@@ -89,7 +129,7 @@ export function ProductConfigurator({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         variant="xlarge"
-        className="flex max-h-dialog-max-h w-full max-w-[90rem] flex-col overflow-y-auto bg-white p-0 md:flex-row"
+        className="flex max-h-dialog-max-h w-[calc(100vw-1rem)] max-w-[90rem] flex-col overflow-x-hidden overflow-y-auto bg-white p-0 sm:w-full md:flex-row"
         showCloseButton={false}
       >
         <div className="relative h-40 shrink-0 sm:h-48 md:h-auto md:min-h-[16rem] md:w-1/3 md:self-stretch">
@@ -200,8 +240,116 @@ export function ProductConfigurator({
           )}
         </div>
 
-        <div className="flex h-auto flex-col overflow-y-auto border-t border-border p-6 md:w-1/3 md:border-s md:border-t-0">
-          <div className="mb-6 overflow-y-auto">
+        <div className="flex h-auto min-w-0 flex-col overflow-y-auto border-t border-border p-4 sm:p-6 md:w-1/3 md:border-s md:border-t-0">
+          <div className="mb-6 space-y-5 overflow-y-auto">
+            {hasModifierGroups && (
+              <div className="space-y-5" data-testid="modifier-groups-section">
+                {modifierGroups.map((group) => {
+                  const isMissing = group.required && group.selectedCount < Math.max(1, group.minSelections)
+                  return (
+                    <section key={group.name} className="space-y-2.5" aria-label={group.displayTitle}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-base font-semibold text-gray-900">{group.displayTitle}</h3>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={cn(
+                              'rounded-full px-2 py-0.5 text-xs font-medium',
+                              group.required
+                                ? isMissing
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-emerald-100 text-emerald-800'
+                                : 'bg-gray-100 text-gray-600'
+                            )}
+                          >
+                            {group.required
+                              ? `${labels.requiredBadge || 'Required'} (${group.selectedCount}/${Math.max(1, group.minSelections)})`
+                              : group.maxSelections > 0
+                                ? `${labels.optionalBadge || 'Optional'} (${group.selectedCount}/${group.maxSelections})`
+                                : labels.optionalBadge || 'Optional'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {group.allowPrefixes && group.allowedPrefixes.length > 0 && (
+                        <div
+                          role="group"
+                          aria-label={labels.prefixStripLabel || 'Modifier prefix'}
+                          className="flex flex-wrap gap-1.5"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => onSelectModifierPrefix?.(group.name, null)}
+                            aria-pressed={!group.activePrefix}
+                            className={cn(
+                              'min-h-[44px] min-w-[44px] rounded-md border px-3 py-2 text-xs font-medium transition-colors touch-manipulation',
+                              !group.activePrefix
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : 'border-border bg-white text-gray-700 hover:bg-gray-50'
+                            )}
+                          >
+                            {labels.regularPrefix || 'Regular'}
+                          </button>
+                          {group.allowedPrefixes.map((prefix) => {
+                            const active = group.activePrefix === prefix
+                            return (
+                              <button
+                                key={prefix}
+                                type="button"
+                                onClick={() => onSelectModifierPrefix?.(group.name, active ? null : prefix)}
+                                aria-pressed={active}
+                                className={cn(
+                                  'min-h-[44px] min-w-[44px] rounded-md border px-3 py-2 text-xs font-medium transition-colors touch-manipulation',
+                                  active
+                                    ? 'border-blue-600 bg-blue-600 text-white'
+                                    : 'border-border bg-white text-gray-700 hover:bg-gray-50'
+                                )}
+                              >
+                                {prefix}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {group.options.map((opt) => (
+                          <button
+                            key={opt.optionCode}
+                            type="button"
+                            disabled={!opt.available}
+                            aria-pressed={opt.selected}
+                            onClick={() => onToggleModifierOption?.(group.name, opt.optionCode)}
+                            className={cn(
+                              'flex min-h-[44px] w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-start text-sm font-medium transition-colors touch-manipulation',
+                              !opt.available
+                                ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                                : opt.selected
+                                  ? 'border-blue-600 bg-blue-50 text-blue-900'
+                                  : 'border-border bg-white text-gray-900 hover:border-blue-300'
+                            )}
+                          >
+                            <span className="min-w-0 truncate">
+                              {opt.selected && opt.prefix ? `${opt.prefix} ` : ''}
+                              {opt.label}
+                            </span>
+                            <span className="shrink-0 text-xs font-normal text-gray-500">
+                              {!opt.available
+                                ? labels.soldOutBadge || 'Sold Out'
+                                : opt.priceLabel
+                                  ? opt.priceLabel
+                                  : group.groupType === 'Combo Choice' || opt.isDefault
+                                    ? labels.includedBadge || 'Included'
+                                    : null}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )
+                })}
+              </div>
+            )}
+
             {addonsLoading ? (
               <div className="flex items-center justify-center text-gray-500">{labels.loadingAddons}</div>
             ) : addonsError ? (
@@ -218,13 +366,13 @@ export function ProductConfigurator({
                       variant="outline"
                       aria-pressed={selectedAddonIds.includes(addon.id)}
                       className={cn(
-                        'w-full rounded-lg p-3 text-start',
+                        'min-h-[44px] w-full rounded-lg p-3 text-start',
                         selectedAddonIds.includes(addon.id)
                           ? 'border-blue-500 bg-blue-50 hover:border-blue-500'
                           : 'border-border hover:border-blue-200'
                       )}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex w-full items-center justify-between">
                         <span>{addon.name}</span>
                         <span className="text-sm text-gray-500">+{addon.priceLabel}</span>
                       </div>
@@ -232,17 +380,22 @@ export function ProductConfigurator({
                   ))}
                 </div>
               </div>
-            ) : (
+            ) : !hasModifierGroups ? (
               <div className="flex items-center justify-center text-sm text-gray-400">{labels.noAddons}</div>
-            )}
+            ) : null}
           </div>
 
           <div className="mt-auto border-t border-border pt-2">
+            {missingRequiredGroups.length > 0 && (
+              <p className="mb-2 text-xs font-medium text-amber-700" role="status">
+                {labels.selectRequiredPrompt || 'Complete required selections'}: {missingRequiredGroups.join(', ')}
+              </p>
+            )}
             <div className="flex items-center justify-between text-lg font-semibold">
               <span>{labels.total}&nbsp;</span>
               <span>{totalLabel}</span>
             </div>
-            <Button type="button" onClick={onSubmit} className="mt-4 w-full" size="lg" disabled={submitDisabled}>
+            <Button type="button" onClick={onSubmit} className="mt-4 min-h-[48px] w-full" size="lg" disabled={submitDisabled}>
               {labels.submit}
             </Button>
           </div>

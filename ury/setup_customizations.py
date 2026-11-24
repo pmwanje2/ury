@@ -7,6 +7,9 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
 def after_install():
     create_custom_fields(get_custom_fields())
+    from ury.ury_pos.modifier_combo_fields import ensure_modifier_combo_custom_fields
+
+    ensure_modifier_combo_custom_fields()
     add_roles_to_administrator()
     hide_setup_sidebar_options()
     setup_pos_invoice_print_fields()

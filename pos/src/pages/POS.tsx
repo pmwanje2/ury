@@ -49,7 +49,20 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
 
   const handleItemClick = (item: any) => {
     if (isMenuInteractionDisabled()) return;
-    
+
+    // Single tap on any item with required modifiers, auto-prompt modifiers, or combo choices
+    // immediately opens the selector without adding an unconfigured item to the cart.
+    if (item.has_required_modifiers || item.prompt_on_add || item.is_combo_meal) {
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
+      clickCountRef.current = 0;
+      setSelectedItem(item);
+      setIsDialogOpen(true);
+      return;
+    }
+
     clickCountRef.current += 1;
     
     if (clickTimerRef.current) {

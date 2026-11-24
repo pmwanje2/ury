@@ -1,0 +1,209 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:group_name",
+ "creation": "2026-11-24 14:00:00.000000",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "group_name",
+  "display_title",
+  "group_type",
+  "sort_order",
+  "disabled",
+  "column_break_rules",
+  "required",
+  "prompt_on_add",
+  "min_selections",
+  "max_selections",
+  "section_break_prefixes",
+  "allow_prefixes",
+  "allowed_prefixes",
+  "column_break_routing",
+  "inherit_parent_routing",
+  "hide_unpriced_on_receipt",
+  "section_break_options",
+  "options"
+ ],
+ "fields": [
+  {
+   "fieldname": "group_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Group Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "display_title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Display Title",
+   "description": "Customer- and staff-facing heading shown in the selector."
+  },
+  {
+   "default": "Condiment",
+   "fieldname": "group_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Group Type",
+   "options": "Condiment\nCombo Choice",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "sort_order",
+   "fieldtype": "Int",
+   "label": "Sort Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  },
+  {
+   "fieldname": "column_break_rules",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "required",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Required"
+  },
+  {
+   "default": "0",
+   "fieldname": "prompt_on_add",
+   "fieldtype": "Check",
+   "label": "Prompt Automatically on Add",
+   "description": "Open the selector automatically when tapping an item linked to this group."
+  },
+  {
+   "default": "0",
+   "fieldname": "min_selections",
+   "fieldtype": "Int",
+   "label": "Minimum Selections",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "description": "Maximum allowed selections (0 means unlimited).",
+   "fieldname": "max_selections",
+   "fieldtype": "Int",
+   "label": "Maximum Selections",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "section_break_prefixes",
+   "fieldtype": "Section Break",
+   "label": "Prefixes & Routing"
+  },
+  {
+   "default": "1",
+   "fieldname": "allow_prefixes",
+   "fieldtype": "Check",
+   "label": "Allow Prefixes"
+  },
+  {
+   "default": "No\nExtra\nSide\nLight\nOn Side",
+   "depends_on": "eval:doc.allow_prefixes",
+   "description": "Allowed modifier prefixes, one per line.",
+   "fieldname": "allowed_prefixes",
+   "fieldtype": "Small Text",
+   "label": "Allowed Prefixes"
+  },
+  {
+   "fieldname": "column_break_routing",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "Route modifiers to the parent item's preparation station.",
+   "fieldname": "inherit_parent_routing",
+   "fieldtype": "Check",
+   "label": "Inherit Parent Station Routing"
+  },
+  {
+   "default": "1",
+   "description": "Hide zero-price preparation notes on guest checks and receipts while always printing them on kitchen and waiter slips.",
+   "fieldname": "hide_unpriced_on_receipt",
+   "fieldtype": "Check",
+   "label": "Suppress Unpriced Modifiers on Receipt"
+  },
+  {
+   "fieldname": "section_break_options",
+   "fieldtype": "Section Break",
+   "label": "Options"
+  },
+  {
+   "fieldname": "options",
+   "fieldtype": "Table",
+   "label": "Options",
+   "options": "URY Modifier Option",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-11-24 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "URY",
+ "name": "URY Modifier Group",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "URY Admin",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "URY Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "URY Cashier",
+   "select": 1
+  },
+  {
+   "read": 1,
+   "role": "URY Captain",
+   "select": 1
+  }
+ ],
+ "sort_field": "sort_order",
+ "sort_order": "ASC",
+ "states": []
+}

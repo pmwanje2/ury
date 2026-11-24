@@ -178,6 +178,7 @@ jinja = {
         "ury.ury.api.self_ordering.feedback_receipt_qr",
         "ury.ury.print_format.utils.format_bill_money",
         "ury.ury.print_format.utils.resolve_bill_logo_src",
+        "ury.ury.print_format.utils.format_receipt_item_notes",
     ],
 }
 

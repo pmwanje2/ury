@@ -31,6 +31,9 @@ def set_sales_invoice_commission_attribution(doc, method=None):
 def validate(doc, method):
     if doc.is_pos:
         doc.update_stock = 1
+    from ury.ury.api.ury_bundle_resolver import apply_bundle_overrides_to_packed_items
+
+    apply_bundle_overrides_to_packed_items(doc)
 
 
 def before_insert(doc, method):

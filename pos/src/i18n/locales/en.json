@@ -100,6 +100,7 @@
     "processing_order": "Processing Order...",
     "loading_order": "Loading order details...",
     "edit_item": "Edit item",
+    "modify": "Modify",
     "add_comment": "Add comment",
     "edit_comment": "Edit comment",
     "pax": "Pax",
@@ -599,7 +600,18 @@
     "no_addons": "No add ons",
     "total": "Total",
     "update_order": "Update Order",
-    "add_to_order": "Add to Order"
+    "add_to_order": "Add to Order",
+    "required_badge": "Required",
+    "optional_badge": "Optional",
+    "included_badge": "Included",
+    "sold_out_badge": "Sold Out",
+    "regular_prefix": "Regular",
+    "prefix_strip_label": "Modifier prefix",
+    "select_required_prompt": "Complete required selections",
+    "combo_choices": "Combo Choices",
+    "modifiers": "Modifiers",
+    "selection_count_required": "{{selected}}/{{min}} required",
+    "selection_count_range": "{{selected}}/{{max}} selected"
   },
   "order_types": {
     "dine_in": "Dine In",

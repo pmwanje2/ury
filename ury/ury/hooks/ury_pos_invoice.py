@@ -19,9 +19,15 @@ def validate(doc, method):
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)
+    from ury.ury.api.ury_bundle_resolver import apply_bundle_overrides_to_packed_items
+
+    apply_bundle_overrides_to_packed_items(doc)
 
 
 def before_submit(doc, method):
+    from ury.ury.api.ury_modifiers import validate_invoice_modifiers_before_submit
+
+    validate_invoice_modifiers_before_submit(doc, method)
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
     validate_confirmed_phone_payments(doc, method)

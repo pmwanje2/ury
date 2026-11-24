@@ -562,6 +562,16 @@ def _copy_invoice_item_fields(item_row, qty):
         # split invoice's own backfill logic rescue it on the next sync,
         # the same way an un-split legacy invoice already gets rescued.
         reservation_line_key=item_row.get("reservation_line_key") or None,
+        custom_parent_line_key=item_row.get("custom_parent_line_key") or None,
+        custom_line_role=item_row.get("custom_line_role") or "Standard",
+        custom_is_modifier=cint(item_row.get("custom_is_modifier")),
+        custom_modifier_prefix=item_row.get("custom_modifier_prefix") or "",
+        custom_modifier_group=item_row.get("custom_modifier_group") or None,
+        custom_modifier_option=item_row.get("custom_modifier_option") or None,
+        custom_modifiers_json=item_row.get("custom_modifiers_json") or "",
+        custom_bundle_overrides_json=item_row.get("custom_bundle_overrides_json") or "",
+        custom_inherit_parent_routing=cint(item_row.get("custom_inherit_parent_routing", 1)),
+        custom_hide_unpriced_on_receipt=cint(item_row.get("custom_hide_unpriced_on_receipt")),
     )
 
 
@@ -656,6 +666,46 @@ def split_bill(source_invoice, items_to_move, customer=None, guest_label=None):
     }
     if not move_map:
         frappe.throw(_("Select at least one item to move."))
+
+    # Atomic parent-child modifier integrity during split:
+    # 1. Splitting a child modifier without its parent is refused.
+    # 2. Moving a parent automatically moves its linked child modifiers proportionally.
+    parent_by_key = {}
+    children_by_parent_key = defaultdict(list)
+    for item in source.items:
+        if cint(item.get("custom_is_modifier")) == 1 and item.get("custom_parent_line_key"):
+            children_by_parent_key[item.get("custom_parent_line_key")].append(item)
+        else:
+            key = item.get("reservation_line_key") or item.name
+            if key:
+                parent_by_key[key] = item
+
+    for item in source.items:
+        if move_map.get(item.name, 0) > 0 and cint(item.get("custom_is_modifier")) == 1:
+            pkey = item.get("custom_parent_line_key")
+            parent_row = parent_by_key.get(pkey) if pkey else None
+            if not parent_row or move_map.get(parent_row.name, 0) <= 0:
+                frappe.throw(
+                    coded_message(
+                        "MODIFIER-SPLIT-WITH-PARENT",
+                        _("Modifiers must be split together with their parent item."),
+                    ),
+                    frappe.ValidationError,
+                )
+
+    for pkey, child_rows in children_by_parent_key.items():
+        parent_row = parent_by_key.get(pkey)
+        if not parent_row:
+            continue
+        parent_move = move_map.get(parent_row.name, 0)
+        if parent_move <= 0 or flt(parent_row.qty) <= 0:
+            continue
+        ratio = min(1.0, flt(parent_move) / flt(parent_row.qty))
+        for child in child_rows:
+            if child.name not in move_map:
+                child_move = flt(child.qty) if ratio >= 1.0 else round(flt(child.qty) * ratio, 6)
+                if child_move > 0:
+                    move_map[child.name] = min(flt(child.qty), child_move)
 
     total_moving_qty = 0.0
     total_remaining_qty = 0.0
@@ -1340,7 +1390,16 @@ def invoice_pricing_date(invoice):
     return frappe.utils.getdate()
 
 
-def price_items_for_invoice(items, price_list, pos_profile, branch, menu, posting_date=None, customer=None):
+def price_items_for_invoice(
+    items,
+    price_list,
+    pos_profile,
+    branch,
+    menu,
+    posting_date=None,
+    customer=None,
+    price_overrides=None,
+):
     """Resolve course and price for each item and build the invoice item dicts.
 
     Returns a list of dicts in the same shape previously passed directly to
@@ -1376,47 +1435,65 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu, postin
     priced_items = []
     posting_date = frappe.utils.getdate(posting_date) if posting_date else frappe.utils.getdate()
     release_field, released = item_price_release_states()
+    price_overrides = price_overrides or {}
 
     for d in items:
         item_code = d.get("item")
         item_name = d.get("item_name")
+        line_key = d.get("reservation_line_key")
 
         course = frappe.db.get_value("URY Menu Item", {"item": item_code, "parent": menu}, "course")
 
-        item_price = price_valid_on(
-            item_code, price_list, posting_date, release_field, released, customer=customer,
-        )
-
-        if not item_price:
-            frappe.throw(
-                coded_message(
-                    "PRICE-NOT-VALID",
-                    _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
-                ),
-                frappe.ValidationError,
-            )
-
+        override = price_overrides.get(line_key) if line_key else None
+        if override and override.get("is_validated_modifier"):
+            resolved_rate = override["rate"]
         else:
-            if not item_name or item_name == item_code:
-                item_name = frappe.db.get_value("Item", item_code, "item_name") or item_name or item_code
-            department_warehouse = _department_warehouse_for_item(item_code, branch, company)
-            priced_items.append(
-                dict(
-                    item_code=item_code,
-                    item_name=item_name,
-                    qty=d.get("qty"),
-                    reservation_line_key=d.get("reservation_line_key"),
-                    **({"custom_course": course} if course else {}),
-                    **({"warehouse": department_warehouse} if department_warehouse else {}),
-                    comment=d.get("comment"),
-                    rate = item_price.price_list_rate,
-                    price_list_rate = item_price.price_list_rate,
-                    base_price_list_rate = item_price.price_list_rate,
-                    cost_center = frappe.db.get_value(
-                        "POS Profile", pos_profile, "cost_center"
-                        ),
-                )
+            item_price = price_valid_on(
+                item_code, price_list, posting_date, release_field, released, customer=customer,
             )
+            if not item_price:
+                frappe.throw(
+                    coded_message(
+                        "PRICE-NOT-VALID",
+                        _("No released item price valid on {2} found for Item: {0} in Price List: {1}. Please check the price list settings.").format(item_code, price_list, posting_date),
+                    ),
+                    frappe.ValidationError,
+                )
+            resolved_rate = item_price.price_list_rate
+
+        if not item_name or item_name == item_code:
+            item_name = frappe.db.get_value("Item", item_code, "item_name") or item_name or item_code
+        department_warehouse = _department_warehouse_for_item(item_code, branch, company)
+        modifier_fields = {
+            "custom_parent_line_key": d.get("custom_parent_line_key") or None,
+            "custom_line_role": d.get("custom_line_role") or "Standard",
+            "custom_is_modifier": cint(d.get("custom_is_modifier")),
+            "custom_modifier_prefix": d.get("custom_modifier_prefix") or "",
+            "custom_modifier_group": d.get("custom_modifier_group") or None,
+            "custom_modifier_option": d.get("custom_modifier_option") or None,
+            "custom_modifiers_json": d.get("custom_modifiers_json") or "",
+            "custom_bundle_overrides_json": d.get("custom_bundle_overrides_json") or "",
+            "custom_inherit_parent_routing": cint(d.get("custom_inherit_parent_routing", 1)),
+            "custom_hide_unpriced_on_receipt": cint(d.get("custom_hide_unpriced_on_receipt")),
+        }
+        priced_items.append(
+            dict(
+                item_code=item_code,
+                item_name=item_name,
+                qty=d.get("qty"),
+                reservation_line_key=line_key,
+                **({"custom_course": course} if course else {}),
+                **({"warehouse": department_warehouse} if department_warehouse else {}),
+                comment=d.get("comment"),
+                rate=resolved_rate,
+                price_list_rate=resolved_rate,
+                base_price_list_rate=resolved_rate,
+                cost_center=frappe.db.get_value(
+                    "POS Profile", pos_profile, "cost_center"
+                ),
+                **modifier_fields,
+            )
+        )
 
     return priced_items
 
@@ -1698,19 +1775,37 @@ def _validate_sync_items_against_menu(
     table=None,
     room=None,
     order_type=None,
+    validated_modifier_keys=None,
 ):
     """Reject newly added disabled / off-menu lines; keep historic + aggregators.
 
     Aggregator flows price from Aggregator Settings (not restaurant menu).
     Historic item codes already on the invoice may stay even if later disabled
     or removed from the menu so captains can still update notes/qty of sent lines.
+    Server-validated modifier / combo upcharge lines are checked for Item.disabled
+    but are not required to appear as standalone dishes on URY Menu.
     """
     historic_codes = {prev["item_code"] for prev in (past_item or []) if prev.get("item_code")}
+    validated_modifier_keys = set(validated_modifier_keys or ())
     new_codes = []
+    modifier_codes = []
     for row in items or []:
         code = row.get("item")
-        if code and code not in historic_codes and code not in new_codes:
+        if not code or code in historic_codes:
+            continue
+        line_key = row.get("reservation_line_key")
+        if line_key and line_key in validated_modifier_keys:
+            if code not in modifier_codes:
+                modifier_codes.append(code)
+            continue
+        if code not in new_codes:
             new_codes.append(code)
+
+    for code in modifier_codes:
+        if frappe.db.get_value("Item", code, "disabled"):
+            frappe.throw(
+                _("Item {0} is disabled and cannot be added to the order.").format(code)
+            )
 
     if not new_codes:
         return
@@ -2220,6 +2315,13 @@ def _previous_line_snapshot(invoice_items):
                 "qty": item.qty,
                 "comments": item.get("comment") or "",
                 "ury_held": cint(item.get("ury_held")),
+                "custom_parent_line_key": item.get("custom_parent_line_key") or None,
+                "custom_line_role": item.get("custom_line_role") or "Standard",
+                "custom_is_modifier": cint(item.get("custom_is_modifier")),
+                "custom_modifier_prefix": item.get("custom_modifier_prefix") or "",
+                "custom_modifiers_json": item.get("custom_modifiers_json") or "",
+                "custom_bundle_overrides_json": item.get("custom_bundle_overrides_json") or "",
+                "custom_inherit_parent_routing": cint(item.get("custom_inherit_parent_routing", 1)),
             }
         )
     return snapshot
@@ -2426,7 +2528,19 @@ def _kitchen_snapshot(items):
         if not key and (code, note) in legacy:
             legacy[code, note]["qty"] += flt(item.get("qty"))
             continue
-        row = dict(item_code=code, item_name=item.get("item_name"), qty=flt(item.get("qty")), comments=note)
+        row = dict(
+            item_code=code,
+            item_name=item.get("item_name"),
+            qty=flt(item.get("qty")),
+            comments=note,
+            custom_parent_line_key=item.get("custom_parent_line_key") or None,
+            custom_line_role=item.get("custom_line_role") or "Standard",
+            custom_is_modifier=cint(item.get("custom_is_modifier")),
+            custom_modifier_prefix=item.get("custom_modifier_prefix") or "",
+            custom_modifiers_json=item.get("custom_modifiers_json") or "",
+            custom_bundle_overrides_json=item.get("custom_bundle_overrides_json") or "",
+            custom_inherit_parent_routing=cint(item.get("custom_inherit_parent_routing", 1)),
+        )
         if key:
             row["reservation_line_key"] = key
         else:
@@ -2938,6 +3052,40 @@ def sync_order(
         )
         invoice.invoice_created = 1
 
+    menu = _resolve_menu_for_sync(invoice.branch, table=table or invoice.restaurant_table, room=opening_room or room, order_type=effective_order_type) or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
+    _sync_order_company = invoice.company or getattr(posprofile, "company", None) or frappe.db.get_value("Branch", invoice.branch, "company")
+
+    # Validate G3 modifiers & G4 combo choices and resolve authoritative 0/2/3dp server prices.
+    from ury.ury.api.ury_modifiers import validate_and_normalize_order_items
+
+    rate_precision = 2
+    if callable(getattr(invoice, "precision", None)):
+        try:
+            prec = invoice.precision("rate")
+            if isinstance(prec, int) and not isinstance(prec, bool):
+                rate_precision = prec
+        except Exception:
+            pass
+    if invoice.get("currency"):
+        try:
+            frac = cint(frappe.db.get_value("Currency", invoice.currency, "fraction_units"))
+            if frac >= 1:
+                rate_precision = max(0, len(str(frac)) - 1)
+        except Exception:
+            pass
+
+    items, modifier_price_overrides = validate_and_normalize_order_items(
+        items,
+        past_item,
+        menu,
+        price_list,
+        invoice.branch,
+        _sync_order_company,
+        posting_date=invoice_pricing_date(invoice),
+        customer=invoice.customer,
+        currency_precision=rate_precision,
+    )
+
     # Reject newly-added lines that are disabled or off the active menu
     # before pricing runs; historic lines already on the invoice are exempt
     # (see _validate_sync_items_against_menu docstring).
@@ -2948,19 +3096,17 @@ def sync_order(
         table=table,
         room=opening_room or room,
         order_type=effective_order_type,
+        validated_modifier_keys=set(modifier_price_overrides.keys()),
     )
     from ury.ury.api.ury_availability import apply_count_delta
 
     apply_count_delta(invoice.branch, past_item, past_item + items if append else items, invoice=invoice)
 
-    menu = _resolve_menu_for_sync(invoice.branch, table=table or invoice.restaurant_table, room=opening_room or room, order_type=effective_order_type) or frappe.db.get_value("URY Menu", {"branch": invoice.branch}, "name")
-
     priced_items = price_items_for_invoice(
         items, price_list, pos_profile, invoice.branch, menu, posting_date=invoice_pricing_date(invoice),
-        customer=invoice.customer,
+        customer=invoice.customer, price_overrides=modifier_price_overrides,
     )
 
-    _sync_order_company = invoice.company or getattr(posprofile, "company", None) or frappe.db.get_value("Branch", invoice.branch, "company")
     if get_branch_stock_policy(branch=invoice.branch, company=_sync_order_company).reservation_control_enabled:
         reconcile_order_reservations(
             order_ref=_ensure_invoice_reservation_ref(invoice),

@@ -155,7 +155,53 @@ class CustomPOSInvoice(POSInvoice):
 				return
 
 			bundle_items = get_active_bundle_items({d.item_code for d in rows})
-			required_qty = get_required_stock_qty(rows, bundle_items)
+			from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
+
+			effective_bundles_by_row = {}
+			has_any_bundle_overrides = False
+			for d in rows:
+				if d.item_code not in bundle_items:
+					continue
+				raw_ov = d.get("custom_bundle_overrides_json")
+				if not raw_ov:
+					effective_bundles_by_row[id(d)] = bundle_items[d.item_code]
+					continue
+				parsed = parse_bundle_overrides(raw_ov)
+				if not parsed:
+					effective_bundles_by_row[id(d)] = bundle_items[d.item_code]
+					continue
+				has_any_bundle_overrides = True
+				slot_queue = {}
+				for ov in parsed:
+					if ov["slot_item"]:
+						slot_queue.setdefault(ov["slot_item"], []).append(ov)
+				swapped = []
+				for bi in bundle_items[d.item_code]:
+					bi_code = bi.get("item_code") if isinstance(bi, dict) else getattr(bi, "item_code", None)
+					bi_qty = bi.get("qty") if isinstance(bi, dict) else getattr(bi, "qty", 1)
+					slot_list = slot_queue.get(bi_code)
+					if slot_list:
+						ov = slot_list.pop(0)
+						swapped.append(frappe._dict(item_code=ov["chosen_item"], qty=flt(ov.get("qty") or bi_qty or 1)))
+					else:
+						swapped.append(bi)
+				effective_bundles_by_row[id(d)] = swapped
+
+			if has_any_bundle_overrides:
+				required_qty = {}
+				for d in rows:
+					if d.item_code in bundle_items:
+						for bi in effective_bundles_by_row.get(id(d), bundle_items[d.item_code]):
+							bi_code = bi.get("item_code") if isinstance(bi, dict) else getattr(bi, "item_code", None)
+							bi_qty = flt(bi.get("qty") if isinstance(bi, dict) else getattr(bi, "qty", 1))
+							key = (bi_code, d.warehouse)
+							required_qty[key] = required_qty.get(key, 0.0) + flt(d.stock_qty) * bi_qty
+					else:
+						key = (d.item_code, d.warehouse)
+						required_qty[key] = required_qty.get(key, 0.0) + flt(d.stock_qty)
+			else:
+				required_qty = get_required_stock_qty(rows, bundle_items)
+
 			available_qty, reserved_stock_keys = get_available_stock_qty(required_qty)
 			items = get_stock_item_details({item_code for item_code, warehouse in required_qty})
 			keys_to_check = {
@@ -167,7 +213,7 @@ class CustomPOSInvoice(POSInvoice):
 			for d in rows:
 				if d.item_code in bundle_items:
 					self.validate_bundle_stock(
-						d, bundle_items[d.item_code], required_qty, available_qty, keys_to_check
+						d, effective_bundles_by_row.get(id(d), bundle_items[d.item_code]), required_qty, available_qty, keys_to_check
 					)
 				elif (d.item_code, d.warehouse) in keys_to_check:
 					self.validate_item_stock(d, required_qty, available_qty)

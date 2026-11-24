@@ -379,7 +379,7 @@ describe('POS-PR-8 G3 Modifiers & G4 Combo Meals UI', () => {
       'product_dialog.select_required_prompt': '',
       'product_dialog.combo_choices': '',
       'product_dialog.modifiers': '',
-      'product_dialog.selection_count_required': '{{selected}},{{min}}',
+      'product_dialog.selection_count_required': '{{min}},{{selected}}',
       'product_dialog.selection_count_range': '{{max}},{{selected}}',
       'cart.modify': '',
     };

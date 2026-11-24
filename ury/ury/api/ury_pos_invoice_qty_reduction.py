@@ -195,8 +195,23 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 			).format(new_qty),
 		)
 
+	# Locate any linked child modifier / combo upcharge rows belonging to this parent line
+	parent_line_key = item_row.get("reservation_line_key")
+	linked_children = [
+		row
+		for row in pos_invoice.items
+		if row.name != item_row_name
+		and parent_line_key
+		and cint(row.get("custom_is_modifier")) == 1
+		and row.get("custom_parent_line_key") == parent_line_key
+		and flt(row.qty) > 0
+	]
+	linked_child_names = {c.name for c in linked_children}
+
 	other_rows_with_qty = sum(
-		1 for row in pos_invoice.items if row.name != item_row_name and flt(row.qty) > 0
+		1
+		for row in pos_invoice.items
+		if row.name != item_row_name and row.name not in linked_child_names and flt(row.qty) > 0
 	)
 	if new_qty == 0 and other_rows_with_qty == 0:
 		raise QtyReductionError(
@@ -206,6 +221,20 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 				"removing its last item."
 			).format(item_code, invoice_id),
 		)
+
+	# Compute new quantities for linked child modifiers proportionally
+	child_updates = []
+	for child in linked_children:
+		if new_qty == 0:
+			child_new_qty = 0.0
+		elif flt(current_qty) > 0:
+			ratio = flt(new_qty) / flt(current_qty)
+			scaled = flt(child.qty) * ratio
+			child_new_qty = float(round(scaled)) if abs(scaled - round(scaled)) < 1e-6 else flt(child.qty)
+		else:
+			child_new_qty = flt(child.qty)
+		if child_new_qty < flt(child.qty):
+			child_updates.append((child, flt(child.qty), child_new_qty))
 
 	pos_profile_id = pos_invoice.pos_profile
 	kot_naming_series = pos_profile.custom_kot_naming_series
@@ -225,7 +254,10 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		from ury.ury_pos import override
 
 		voided_qty = flt(current_qty) - flt(new_qty)
-		voided_amount = round(flt(item_row.get("rate") or 0) * voided_qty, 4)
+		voided_amount = flt(item_row.get("rate") or 0) * voided_qty
+		for child, child_prev_qty, child_new_qty in child_updates:
+			voided_amount += flt(child.get("rate") or 0) * (child_prev_qty - child_new_qty)
+		voided_amount = round(voided_amount, 4)
 		claim = {
 			"action": "reduce_order_item_qty",
 			"item_row_name": item_row_name,
@@ -249,10 +281,13 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 
 	from ury.ury.api.ury_availability import apply_count_delta
 
-	apply_count_delta(
-		pos_invoice.branch, [{"item": item_code, "qty": current_qty}],
-		[{"item": item_code, "qty": new_qty}], invoice=pos_invoice,
-	)
+	prev_count_rows = [{"item": item_code, "qty": current_qty}] + [
+		{"item": c.item_code, "qty": prev_q} for c, prev_q, _ in child_updates
+	]
+	next_count_rows = [{"item": item_code, "qty": new_qty}] + [
+		{"item": c.item_code, "qty": next_q} for c, _, next_q in child_updates
+	]
+	apply_count_delta(pos_invoice.branch, prev_count_rows, next_count_rows, invoice=pos_invoice)
 
 	reconcile_held = False
 	if held:
@@ -269,31 +304,34 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 		# Use the same canonical dish/note groups and persisted keys as the original KOT.
 		previous_items_snapshot = list(_line_keyed_items(_kitchen_snapshot(pos_invoice.items)).values())
 		cancel_line, = _line_keyed_items(_kitchen_snapshot([item_row])).values()
+		cancel_payload = [{**cancel_line, "qty": delta}]
+		for child, child_prev_qty, child_new_qty in child_updates:
+			if cint(child.get("ury_held")) == 1:
+				continue
+			child_lines = list(_line_keyed_items(_kitchen_snapshot([child])).values())
+			if child_lines:
+				cancel_payload.append({**child_lines[0], "qty": child_new_qty - child_prev_qty})
 
 	# Apply the reduction (or full removal) to the invoice, bypassing
 	# validate_invoice's post-print guard for exactly this legitimate write.
 	frappe.flags.ury_qty_reduction = True
 	try:
-		# A full removal (new_qty == 0) sets the row's qty to 0 rather than
-		# deleting it from the child table. Physically removing a row changes
-		# the child table's row COUNT after submit, which ERPNext's own
-		# accounts_controller.check_if_child_table_updated() cannot handle --
-		# it diffs before/after child rows by parallel index and raises a raw
-		# IndexError once the arrays are different lengths (observed live on
-		# a real restored dataset, not merely theoretical). Frontends must
-		# treat a qty == 0 row as removed/hidden -- it stays present in
-		# `items` for ERPNext's own post-submit bookkeeping, but contributes
-		# nothing to totals or KDS/cancel-KOT display beyond the cancel-KOT
-		# already generated for its full original qty.
 		item_row.qty = new_qty
 		if held and new_qty == 0:
 			item_row.ury_held = 0
+		for child, _child_prev_qty, child_new_qty in child_updates:
+			child.qty = child_new_qty
+			if held and child_new_qty == 0:
+				child.ury_held = 0
 		if reconcile_held:
 			reconcile_order_reservations(order_ref=pos_invoice.name, previous_items=previous,
 				accepted_items=_previous_line_snapshot(pos_invoice.items), branch=pos_invoice.branch,
 				company=pos_invoice.company, actor=actor)
 		if held and new_qty == 0 and pos_invoice.docstatus == 0:
 			# ERPNext validates positive draft quantities again at settlement.
+			for child, _child_prev_qty, child_new_qty in child_updates:
+				if child_new_qty == 0:
+					pos_invoice.remove(child)
 			pos_invoice.remove(item_row)
 		pos_invoice.save(ignore_permissions=False)
 	finally:
@@ -304,7 +342,7 @@ def reduce_order_item_qty(invoice_id, item_row_name, new_qty, item_code=None, re
 	if not held:
 		created_kot_names = process_items_for_cancel_kot(
 			invoice_id, pos_invoice.customer, pos_invoice.get("restaurant_table"),
-			[{**cancel_line, "qty": delta}], reason, pos_profile_id, cancel_kot_naming_series,
+			cancel_payload, reason, pos_profile_id, cancel_kot_naming_series,
 			"Partially cancelled", previous_items_snapshot,
 		)
 
