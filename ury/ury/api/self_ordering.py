@@ -804,7 +804,7 @@ def add_customer_items(session, items):
             default_mode = posprofile.payments[0].mode_of_payment if posprofile.payments else None
             if not default_mode:
                 frappe.throw(_("POS Profile has no mode of payment configured"), frappe.ValidationError)
-            invoice.append("payments", dict(mode_of_payment=default_mode, amount=invoice.grand_total))
+            invoice.append("payments", dict(mode_of_payment=default_mode, amount=0, custom_tender_received=0))
             invoice.invoice_created = 1
 
         try:
@@ -958,7 +958,16 @@ def get_order_status(session):
 # selecting the same gateway mode. No provider webhook logic belongs here.
 # ---------------------------------------------------------------------------
 
-_CLOSED_REQUEST_STATUSES = ["Paid", "Partially Paid", "Cancelled", "Failed"]
+_CLOSED_REQUEST_STATUSES = [
+    "Paid",
+    "Partially Paid",
+    "Partially Refunded",
+    "Cancelled",
+    "Failed",
+    "Expired",
+    "Refunded",
+]
+_LIVE_PHONE_PAID_STATUSES = ["Paid", "Partially Paid", "Partially Refunded"]
 # (requests, seconds) per ordering session; guests at one venue share an IP.
 _PAYMENT_REQUEST_LIMIT = (10, 600)
 _PAYMENT_STATUS_LIMIT = (60, 600)
@@ -1090,9 +1099,6 @@ def create_payment_request(session):
             or invoice.get("grand_total")
         )
 
-        # ERPNext validates each Phone row against ONE Paid request, not a
-        # sum of requests. After phone payment, any growth is paid at the
-        # counter; changing the default gateway must not open another link.
         request_filters = {
             "reference_doctype": "POS Invoice",
             "reference_name": invoice.name,
@@ -1100,15 +1106,46 @@ def create_payment_request(session):
         }
         paid_requests = frappe.get_all(
             "Payment Request",
-            filters={**request_filters, "payment_channel": "Phone", "payment_request_type": "Inward",
-                "company": invoice.company, "currency": invoice.currency,
-                "status": ["in", ["Paid", "Partially Paid"]]},
-            fields=["name", "currency", "grand_total", "outstanding_amount", "status"],
+            filters={
+                **request_filters,
+                "payment_channel": "Phone",
+                "payment_request_type": "Inward",
+                "company": invoice.company,
+                "currency": invoice.currency,
+                "status": ["in", _LIVE_PHONE_PAID_STATUSES],
+            },
+            fields=[
+                "name",
+                "currency",
+                "grand_total",
+                "outstanding_amount",
+                "status",
+                "payment_gateway_account",
+                "mode_of_payment",
+            ],
             order_by="creation desc",
         )
-        paid_amount = flt(sum(flt(p.grand_total) - flt(p.outstanding_amount) for p in paid_requests))
+        paid_amount = flt(sum(max(0.0, flt(p.grand_total) - flt(p.outstanding_amount)) for p in paid_requests))
         remaining_amount = flt(flt(outstanding_amount) - paid_amount, invoice.precision("grand_total"))
-        if paid_requests:
+        partially_paid_open = any(
+            p.status == "Partially Paid" and flt(p.outstanding_amount) > 0 for p in paid_requests
+        )
+        requested_by_paid = flt(sum(flt(p.grand_total) for p in paid_requests))
+        # Once a check has a confirmed Phone payment on a gateway, changing the
+        # company/profile default gateway must never open a second gateway request.
+        different_gateway = any(
+            (
+                p.get("payment_gateway_account")
+                and p.get("payment_gateway_account") != gateway_account.name
+            )
+            or (p.get("mode_of_payment") and p.get("mode_of_payment") != mode_of_payment)
+            for p in paid_requests
+        )
+        if paid_requests and (
+            remaining_amount <= 0
+            or different_gateway
+            or (partially_paid_open and flt(outstanding_amount) <= requested_by_paid)
+        ):
             return {
                 "payment_request": paid_requests[0].name,
                 "amount": paid_amount,
@@ -1176,7 +1213,12 @@ def create_payment_request(session):
             pr.cancel()
 
         phone_payment = next(
-            (payment for payment in invoice.payments if payment.mode_of_payment == mode_of_payment),
+            (
+                payment
+                for payment in invoice.payments
+                if payment.mode_of_payment == mode_of_payment
+                and cint(payment.get("custom_tender_received")) != 1
+            ),
             None,
         )
         if not phone_payment:
@@ -1184,7 +1226,17 @@ def create_payment_request(session):
         phone_payment.mode_of_payment = mode_of_payment
         phone_payment.account = payment_account
         phone_payment.type = "Phone"
-        phone_payment.amount = outstanding_amount
+        phone_payment.amount = remaining_amount
+        # Provisional request row only — money is NOT received until the gateway confirms Paid.
+        phone_payment.custom_tender_received = 0
+        # ERPNext v16 get_amount() stops at the FIRST Phone row matching payment_account.
+        # Keep this provisional row first so a grown check after a Paid PR requests the
+        # remaining balance without altering earlier received rows.
+        if len(invoice.payments) > 1 and invoice.payments[0] is not phone_payment:
+            invoice.payments.remove(phone_payment)
+            invoice.payments.insert(0, phone_payment)
+            for idx, row in enumerate(invoice.payments, start=1):
+                row.idx = idx
         invoice.save(ignore_permissions=True)
 
         # make_payment_request() derives its own amount from the reference
@@ -1217,6 +1269,335 @@ def _payment_request_response(pr, payment_url, paid_amount, remaining_amount):
         # The check balance; after growth it can exceed a kept request.
         "remaining_amount": max(0, remaining_amount),
     }
+
+
+def _is_inward_phone_pos_payment_request(doc):
+    return (
+        doc.get("reference_doctype") == "POS Invoice"
+        and bool(doc.get("reference_name"))
+        and doc.get("payment_channel") == "Phone"
+        and doc.get("payment_request_type") == "Inward"
+    )
+
+
+def _is_really_paid_phone_payment_request(doc):
+    return (
+        cint(doc.get("docstatus")) == 1
+        and doc.get("status") in _LIVE_PHONE_PAID_STATUSES
+        and (flt(doc.get("grand_total")) - flt(doc.get("outstanding_amount"))) > 0
+    )
+
+
+def _late_phone_refund_recipients():
+    """Return enabled manager user ids to alert when a late phone payment requires refund."""
+    role_users = frappe.get_all(
+        "Has Role",
+        filters={
+            "role": ["in", ["URY Manager", "Accounts Manager", "System Manager"]],
+            "parenttype": "User",
+        },
+        pluck="parent",
+    )
+    candidates = [u for u in (role_users or []) if u and u != "Guest"]
+    if candidates:
+        enabled = frappe.get_all(
+            "User",
+            filters={"name": ["in", list(dict.fromkeys(candidates))], "enabled": 1},
+            pluck="name",
+        )
+        if enabled:
+            return list(dict.fromkeys(enabled))
+    return ["Administrator"]
+
+
+def _alert_managers_late_phone_refund(doc, invoice, pe_name, paid_amount, reason):
+    currency = doc.get("currency") or invoice.get("currency") or ""
+    subject = _(
+        "Refund required: late phone payment {0} ({1} {2}) after check {3}"
+    ).format(doc.name, paid_amount, currency, invoice.name).strip()
+    description = _(
+        "Late phone payment of {0} {1} arrived on Payment Request {2} ({3}) for check {4}. "
+        "The check was not altered; the receipt has been recorded as unapplied Payment Entry {5}. "
+        "Please review and issue a refund to the guest."
+    ).format(paid_amount, currency, doc.name, reason, invoice.name, pe_name)
+
+    for user in _late_phone_refund_recipients():
+        if not frappe.db.exists(
+            "ToDo",
+            {
+                "reference_type": "Payment Entry",
+                "reference_name": pe_name,
+                "allocated_to": user,
+                "status": "Open",
+            },
+        ):
+            todo = frappe.new_doc("ToDo")
+            todo.allocated_to = user
+            todo.reference_type = "Payment Entry"
+            todo.reference_name = pe_name
+            todo.priority = "High"
+            todo.status = "Open"
+            todo.description = description
+            todo.insert(ignore_permissions=True)
+
+        if not frappe.db.exists(
+            "Notification Log",
+            {
+                "document_type": "Payment Entry",
+                "document_name": pe_name,
+                "for_user": user,
+            },
+        ):
+            note = frappe.new_doc("Notification Log")
+            note.for_user = user
+            note.type = "Alert"
+            note.document_type = "Payment Entry"
+            note.document_name = pe_name
+            note.subject = subject
+            note.email_content = description
+            note.insert(ignore_permissions=True)
+
+
+def _posting_date():
+    """Return today's date string without requiring `nowdate` at module import time."""
+    nowdate_fn = getattr(getattr(frappe, "utils", None), "nowdate", None)
+    if callable(nowdate_fn):
+        return nowdate_fn()
+    return now_datetime().date().isoformat()
+
+
+def _record_unapplied_late_phone_receipt(doc, invoice, paid_amount, reason):
+    """Record a late confirmed phone payment as an idempotent unapplied Payment Entry
+    (advance receipt with empty references) and raise a manager refund alert, without
+    mutating the already-settled or closed POS Invoice."""
+    existing_pe = frappe.db.exists(
+        "Payment Entry",
+        {"reference_no": doc.name, "docstatus": ["!=", 2]},
+    )
+    if existing_pe:
+        pe_name = existing_pe if isinstance(existing_pe, str) else doc.name
+        _alert_managers_late_phone_refund(doc, invoice, pe_name, paid_amount, reason)
+        return pe_name
+
+    company = doc.get("company") or invoice.get("company")
+    paid_from = invoice.get("debit_to")
+    paid_to = doc.get("payment_account")
+    paid_from_currency = (
+        invoice.get("party_account_currency")
+        or (paid_from and frappe.db.get_value("Account", paid_from, "account_currency"))
+        or doc.get("currency")
+        or invoice.get("currency")
+    )
+    paid_to_currency = (
+        (paid_to and frappe.db.get_value("Account", paid_to, "account_currency"))
+        or doc.get("currency")
+        or invoice.get("currency")
+    )
+
+    posting_date = _posting_date()
+    pe = frappe.new_doc("Payment Entry")
+    pe.payment_type = "Receive"
+    pe.posting_date = posting_date
+    pe.company = company
+    pe.mode_of_payment = doc.get("mode_of_payment")
+    pe.party_type = "Customer"
+    pe.party = doc.get("party") or invoice.get("customer")
+    pe.party_name = doc.get("party_name") or invoice.get("customer_name")
+    pe.paid_from = paid_from
+    pe.paid_to = paid_to
+    pe.paid_from_account_currency = paid_from_currency
+    pe.paid_to_account_currency = paid_to_currency
+    pe.paid_amount = paid_amount
+    pe.received_amount = paid_amount
+    pe.source_exchange_rate = 1
+    pe.target_exchange_rate = 1
+    pe.reference_no = doc.name
+    pe.reference_date = posting_date
+    if doc.get("cost_center") or invoice.get("cost_center"):
+        pe.cost_center = doc.get("cost_center") or invoice.get("cost_center")
+    if doc.get("project") or invoice.get("project"):
+        pe.project = doc.get("project") or invoice.get("project")
+    pe.remarks = _(
+        "Unapplied late phone payment from Payment Request {0} ({1}) for check {2}. Refund required."
+    ).format(doc.name, reason, invoice.name)
+    if (
+        paid_from_currency
+        and paid_to_currency
+        and paid_from_currency != paid_to_currency
+        and callable(getattr(pe, "set_exchange_rate", None))
+    ):
+        pe.set_exchange_rate()
+    pe.insert(ignore_permissions=True)
+    pe.submit()
+
+    _alert_managers_late_phone_refund(doc, invoice, pe.name, paid_amount, reason)
+    return pe.name
+
+
+def mark_phone_payment_received(doc, method=None, status=None):
+    """Mark a draft POS Invoice's Phone payment row as received when its Payment Request
+    reaches Paid/Partially Paid/Partially Refunded via a confirmed gateway callback
+    (on_payment_authorized).
+
+    Late callbacks that arrive after the check was already settled/closed, or after the
+    Payment Request was cancelled, leave the check untouched and record an idempotent
+    unapplied Payment Entry with a manager alert to refund so real money is never lost
+    or double-settled.
+    """
+    if not _is_inward_phone_pos_payment_request(doc):
+        return
+
+    paid_amount = flt(doc.get("grand_total")) - flt(doc.get("outstanding_amount"))
+
+    # Late authorization on a cancelled Payment Request: real money arrived, so never
+    # attach it to the check (which may already have another PR or Cash), and never drop it.
+    if (
+        cint(doc.get("docstatus")) == 2
+        and status in ("Authorized", "Completed")
+        and doc.get("status") in _LIVE_PHONE_PAID_STATUSES
+        and paid_amount > 0
+    ):
+        if not doc.get("mode_of_payment"):
+            return
+        with _elevated():
+            invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
+            _record_unapplied_late_phone_receipt(
+                doc, invoice, paid_amount, reason="cancelled payment request"
+            )
+        return
+
+    if not _is_really_paid_phone_payment_request(doc):
+        if (
+            cint(doc.get("docstatus")) == 2
+            or doc.get("status") in ("Cancelled", "Failed", "Expired", "Refunded", "Partially Refunded")
+            or status in ("Cancelled", "Failed", "Expired", "Refunded")
+        ):
+            clear_phone_payment_received(doc, method)
+        return
+
+    mode_of_payment = doc.get("mode_of_payment")
+    if not mode_of_payment:
+        return
+
+    with _elevated():
+        invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
+        if cint(invoice.docstatus) != 0:
+            _record_unapplied_late_phone_receipt(
+                doc, invoice, paid_amount, reason="already settled or closed check"
+            )
+            return
+
+        payments = invoice.payments or []
+        other_received = sum(
+            flt(p.get("amount"))
+            for p in payments
+            if cint(p.get("custom_tender_received")) == 1
+            and (p.get("reference_no") or "").strip() != doc.name
+        )
+        if other_received > 0:
+            raw_total = invoice.get("rounded_total") or invoice.get("grand_total")
+            check_total = flt(raw_total) if isinstance(raw_total, (int, float)) else 0.0
+            if check_total > 0 and other_received >= check_total:
+                _record_unapplied_late_phone_receipt(
+                    doc, invoice, paid_amount, reason="check already covered by received tenders"
+                )
+                return
+
+        row = next(
+            (
+                p for p in payments
+                if (p.get("reference_no") or "").strip() == doc.name
+            ),
+            None,
+        )
+        if row is None:
+            row = next(
+                (
+                    p for p in payments
+                    if p.get("mode_of_payment") == mode_of_payment
+                    and not (p.get("reference_no") or "").strip()
+                    and cint(p.get("custom_tender_received")) != 1
+                ),
+                None,
+            )
+        if row is None:
+            row = invoice.append("payments", {})
+
+        row.mode_of_payment = mode_of_payment
+        if doc.get("payment_account"):
+            row.account = doc.payment_account
+        row.type = "Phone"
+        row.amount = paid_amount
+        row.reference_no = doc.name
+        row.custom_tender_received = 1
+
+        if callable(getattr(invoice, "set_paid_amount", None)):
+            invoice.set_paid_amount()
+        if callable(getattr(invoice, "set_outstanding_amount", None)):
+            invoice.set_outstanding_amount()
+
+        prev_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        frappe.flags.ury_server_tender_received = True
+        try:
+            invoice.save(ignore_permissions=True)
+        finally:
+            frappe.flags.ury_server_tender_received = prev_flag
+
+
+def clear_phone_payment_received(doc, method=None):
+    """Clear custom_tender_received on a draft POS Invoice when its linked Phone Payment
+    Request is cancelled, failed, expired, or refunded. Never clears a request that is
+    genuinely Paid, Partially Paid, or Partially Refunded with live paid > 0."""
+    if not _is_inward_phone_pos_payment_request(doc):
+        return
+    if _is_really_paid_phone_payment_request(doc):
+        return
+
+    with _elevated():
+        invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
+        if cint(invoice.docstatus) != 0:
+            return
+
+        changed = False
+        for row in invoice.payments or []:
+            if (row.get("reference_no") or "").strip() != doc.name:
+                continue
+            if cint(row.get("custom_tender_received")) == 1 or flt(row.get("amount")) > 0:
+                row.custom_tender_received = 0
+                row.amount = 0
+                row.reference_no = ""
+                changed = True
+
+        if not changed:
+            return
+
+        if callable(getattr(invoice, "set_paid_amount", None)):
+            invoice.set_paid_amount()
+        if callable(getattr(invoice, "set_outstanding_amount", None)):
+            invoice.set_outstanding_amount()
+
+        prev_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        frappe.flags.ury_server_tender_received = True
+        try:
+            invoice.save(ignore_permissions=True)
+        finally:
+            frappe.flags.ury_server_tender_received = prev_flag
+
+
+def sync_phone_payment_received(doc, method=None):
+    """Keep draft POS Invoice Phone payment state in sync on Payment Request updates after submit."""
+    if not _is_inward_phone_pos_payment_request(doc):
+        return
+    if _is_really_paid_phone_payment_request(doc):
+        mark_phone_payment_received(doc, method)
+    elif cint(doc.get("docstatus")) == 2 or doc.get("status") in (
+        "Cancelled",
+        "Failed",
+        "Expired",
+        "Refunded",
+        "Partially Refunded",
+    ):
+        clear_phone_payment_received(doc, method)
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

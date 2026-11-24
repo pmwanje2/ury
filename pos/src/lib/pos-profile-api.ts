@@ -7,6 +7,7 @@ export interface PosProfileLimited {
   pos_profile: string;
   branch: string;
   company: string;
+  currency?: string | null;
   country?: string;
   waiter: string;
   warehouse: string;
@@ -34,6 +35,12 @@ export interface PosProfileLimited {
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
   room_lookup_method?: string;
+  /** The POS Profile payment row marked Default; the till prefills it with the total. */
+  default_payment_mode?: string | null;
+  /** Payment methods posting to the Company's Guest Ledger Clearing account (room charge). */
+  room_charge_modes?: string[];
+  /** True when the site/profile expects room charge but Company.custom_guest_ledger_clearing is unmapped. */
+  room_charge_unconfigured?: boolean;
   /** Seconds to wait for EFRIS FDN before printing pending receipt + queuing auto-reprint. */
   efris_print_wait_seconds?: number;
 }
@@ -125,6 +132,9 @@ export interface PosProfileCombined extends PosProfileFull {
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
+  default_payment_mode?: string;
+  room_charge_modes?: string[];
+  room_charge_unconfigured?: boolean;
   efris_print_wait_seconds?: number;
 }
 
@@ -174,6 +184,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
   // Merge both profiles
   const combinedProfile: PosProfileCombined = {
     ...fullProfile,
+    currency: fullProfile.currency || limitedProfile.currency || '',
     country: fullProfile.country || limitedProfile.country || '',
     owner: limitedProfile.owner,
     waiter: limitedProfile.waiter,
@@ -198,6 +209,9 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',
+    default_payment_mode: limitedProfile.default_payment_mode ?? '',
+    room_charge_modes: limitedProfile.room_charge_modes ?? [],
+    room_charge_unconfigured: Boolean(limitedProfile.room_charge_unconfigured),
     efris_print_wait_seconds: limitedProfile.efris_print_wait_seconds ?? fullProfile.efris_print_wait_seconds ?? 5,
   };
 

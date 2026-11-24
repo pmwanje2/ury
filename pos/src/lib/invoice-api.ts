@@ -9,6 +9,7 @@ import type { Filter } from 'frappe-js-sdk/lib/db/types';
 export interface POSInvoice {
   ury_client_order_id?: string | null;
   name: string;
+  currency?: string;
   invoice_printed: number;
   custom_printing_time?: string | null;
   grand_total: number;
@@ -44,8 +45,20 @@ export interface POSInvoice {
   custom_merged_total?: number | null;
   discount_amount?: number;
   additional_discount_percentage?: number;
+  payments?: POSInvoicePayment[];
+  room_number?: string | null;
   age_minutes?: number;
   items_preview?: Array<{ item_name: string; qty: number }>;
+}
+
+export interface POSInvoicePayment {
+  mode_of_payment: string;
+  amount: number;
+  reference_no?: string | null;
+  reference_date?: string | null;
+  clearance_date?: string | null;
+  room_number?: string | null;
+  custom_tender_received?: number | boolean;
 }
 
 export interface SplitGroupInvoice extends POSInvoice {
@@ -93,11 +106,11 @@ interface GetPOSInvoicesParams {
 }
 
 interface GetPOSInvoiceItemsResponse {
-  message: [POSInvoiceItem[], POSInvoiceTax[]];
+  message: [POSInvoiceItem[], POSInvoiceTax[], POSInvoicePayment[]?];
 }
 
 export const outstandingFields = [
-  'docstatus', 'name', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
+  'docstatus', 'name', 'currency', 'creation', 'invoice_printed', 'custom_printing_time', 'grand_total', 'restaurant_table',
   'custom_merged_tables', 'cashier', 'waiter', 'net_total', 'posting_time', 'total_taxes_and_charges',
   'customer', 'customer_name', 'status', 'mobile_number', 'posting_date', 'rounded_total', 'order_type',
   'custom_split_group', 'custom_split_from', 'custom_guest_label', 'custom_merged_pos_invoice',
@@ -216,7 +229,8 @@ export async function getPOSInvoiceItems(invoiceId: string) {
 
     return {
       items: response.message[0],
-      taxes: response.message[1]
+      taxes: response.message[1],
+      payments: Array.isArray(response.message[2]) ? response.message[2] : undefined,
     };
   } catch (error) {
     console.error('Error fetching POS invoice items:', error);
@@ -287,6 +301,7 @@ export function getOrdersTabForInvoice(
 export function mapSplitGroupInvoiceToPOSInvoice(inv: SplitGroupInvoice): POSInvoice {
   return {
     name: inv.name,
+    currency: inv.currency,
     ury_client_order_id: inv.ury_client_order_id,
     invoice_printed: inv.invoice_printed,
     custom_printing_time: inv.custom_printing_time ?? null,
@@ -370,6 +385,7 @@ export const MERGED_POS_INVOICE_PRINT_FORMAT = 'Merged POS Invoice Format';
 
 export interface MergeBillCandidate {
   name: string;
+  currency?: string;
   customer: string;
   customer_name?: string;
   grand_total: number;
@@ -398,14 +414,15 @@ export interface MergeBillsResponse {
 //   };
 // }
 export function getCombinedOrderTotals(
-  order: Pick<POSInvoice, 'rounded_total' | 'custom_merged_total'>
+  order: Pick<POSInvoice, 'grand_total' | 'rounded_total' | 'custom_merged_total'>
 ) {
-  const roundedTotal =
-    (order.rounded_total ?? 0) + Math.round(order.custom_merged_total ?? 0);
+  // The server's totals: its rounded total, or its grand total where the profile does not
+  // round. A legacy linked bill adds its partner's server total as it is.
+  const merged = order.custom_merged_total ?? 0;
 
   return {
-    grandTotal: roundedTotal,
-    roundedTotal,
+    grandTotal: (order.grand_total ?? 0) + merged,
+    roundedTotal: (order.rounded_total || order.grand_total || 0) + merged,
   };
 }
 
@@ -427,6 +444,7 @@ export const MERGE_CANDIDATE_PAGE_SIZE = 10;
 
 const MERGE_CANDIDATE_FIELDS = [
   'name',
+  'currency',
   'customer',
   'customer_name',
   'grand_total',

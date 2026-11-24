@@ -7,11 +7,13 @@ import { Spinner } from '@ury/ui';
 import { Button } from '@ury/ui';
 
 interface MergedBillPanelProps {
-  order: Pick<POSInvoice, 'name' | 'custom_merged_pos_invoice' | 'custom_merged_total' | 'rounded_total'>;
+  order: Pick<POSInvoice, 'name' | 'currency' | 'custom_merged_pos_invoice' | 'custom_merged_total' | 'rounded_total'>;
+  currency?: string;
   onOpenSecondary?: (invoiceName: string) => void;
 }
 
-const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
+const MergedBillPanel = ({ order, currency, onOpenSecondary }: MergedBillPanelProps) => {
+  const resolvedCurrency = order.currency || currency;
   const secondaryName = order.custom_merged_pos_invoice;
   const [items, setItems] = useState<POSInvoiceItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -71,7 +73,7 @@ const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
       <div className="mb-3 flex items-center justify-between rounded-md border border-border bg-white px-3 py-2 text-sm">
         <span className="font-medium text-gray-900">{secondaryName}</span>
         <span className="font-semibold text-gray-900 tabular-nums">
-          {formatCurrency(Math.round(order.custom_merged_total ?? 0))}
+          {formatCurrency(order.custom_merged_total ?? 0, resolvedCurrency)}
         </span>
       </div>
 
@@ -90,7 +92,7 @@ const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
             >
               <span className="truncate text-gray-900">{item.item_name}</span>
               <span className="ms-2 shrink-0 text-gray-600 tabular-nums">
-                {item.qty} × {formatCurrency(item.rate)}
+                {item.qty} × {formatCurrency(item.rate, resolvedCurrency)}
               </span>
             </div>
           ))}
@@ -99,7 +101,7 @@ const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
 
       <div className="mt-3 flex items-center justify-between border-t border-primary-200 pt-3 text-sm">
         <span className="font-medium text-gray-700">{t('bill_merge.combined_total')}</span>
-        <span className="font-bold text-primary tabular-nums">{formatCurrency(combinedTotal)}</span>
+        <span className="font-bold text-primary tabular-nums">{formatCurrency(combinedTotal, resolvedCurrency)}</span>
       </div>
     </div>
   );

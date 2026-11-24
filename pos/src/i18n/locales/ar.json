@@ -165,7 +165,12 @@
     "room_check_required": "تحقق من الغرفة قبل رسوم الغرفة",
     "receipt_print_failed": "تم تسجيل الدفع، لكن الإيصال لم يُطبع: {{reason}}. أعد طباعته من الطلبات.",
     "fiscal_reprint_printed": "تمت طباعة النسخة المالية #{{copy}} للفاتورة {{invoice}} (FDN {{fdn}}).",
-    "room_check_failed": "تعذر التحقق من هذه الغرفة"
+    "room_check_failed": "تعذر التحقق من هذه الغرفة",
+    "room_charge_not_configured": "لم يتم إعداد رسوم الغرفة لهذه الشركة. يتولى قسم المالية ربط حساب تسوية دفتر النزلاء.",
+    "discount_not_applied": "اضغط على تطبيق لتحديث الإجمالي قبل الدفع.",
+    "already_received": "تم استلامه مسبقاً",
+    "balance_due": "الرصيد المتبقي",
+    "reference_label": "المرجع: {{ref}}"
   },
   "pos": {
     "not_opened_title": "نقطة البيع غير مفتوحة",

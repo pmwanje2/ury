@@ -143,7 +143,12 @@
     "room_check_required": "Vérifiez la chambre avant une imputation",
     "receipt_print_failed": "Paiement enregistré, mais le reçu ne s'est pas imprimé : {{reason}}. Réimprimez-le depuis Commandes.",
     "fiscal_reprint_printed": "Reçu fiscal COPIE #{{copy}} imprimé pour {{invoice}} (FDN {{fdn}}).",
-    "room_check_failed": "Impossible de vérifier cette chambre"
+    "room_check_failed": "Impossible de vérifier cette chambre",
+    "room_charge_not_configured": "L'imputation en chambre n'est pas configurée pour cette société. La finance associe le compte de compensation du folio client.",
+    "discount_not_applied": "Appuyez sur Appliquer pour mettre à jour le total avant de payer.",
+    "already_received": "Déjà reçu",
+    "balance_due": "Solde dû",
+    "reference_label": "Réf. : {{ref}}"
   },
   "pos": {
     "not_opened_title": "PDV non ouvert",
