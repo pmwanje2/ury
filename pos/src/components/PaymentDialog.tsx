@@ -10,6 +10,7 @@ import { useRootStore } from '../store/root-store';
 import { printOrder } from '../lib/print';
 import { resolvePrintFormat, type POSInvoice, type POSInvoicePayment } from '../lib/invoice-api';
 import { isConfiguredDefaultCustomer, profileLacksDefaultCustomerConfig } from '@ury/core/default-customer';
+import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 
 const currencyDigitsCache = new Map<string, number>();
@@ -88,6 +89,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const preTipGrandTotal = Math.max(0, grandTotal - existingTip);
   const preTipRoundedTotal = roundedTotal ? Math.max(0, roundedTotal - existingTip) : roundedTotal;
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showHaloApproval, setShowHaloApproval] = useState(false);
   const [tipInput, setTipInput] = useState(existingTip > 0 ? String(existingTip) : '');
   const [printInvoice, setPrintInvoice] = useState(enablePaymentWithoutPrinting);
   const [error, setError] = useState<string | null>(null);
@@ -246,6 +248,27 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     nonCashModes.length > 0 &&
     nonCashModes.every((mode) => modeMeta[mode]?.overtender_rule === 'Post to Charged Tip');
 
+  // High Amount Lockout (HALO): sum per mode_of_payment to prevent split-row evasion.
+  const overHaloTenders = (() => {
+    const totalsByMode = new Map<string, number>();
+    for (const row of combinedPayments) {
+      if (row.amount <= 0) continue;
+      totalsByMode.set(
+        row.mode_of_payment,
+        roundToCurrency((totalsByMode.get(row.mode_of_payment) || 0) + row.amount, currencyCode),
+      );
+    }
+    const exceeded: Array<{ mode_of_payment: string; amount: number; halo: number }> = [];
+    for (const mode of Array.from(totalsByMode.keys()).sort()) {
+      const amount = totalsByMode.get(mode) || 0;
+      const halo = roundToCurrency(Number(modeMeta[mode]?.halo_max_amount) || 0, currencyCode);
+      if (halo > 0 && amount > halo + 1e-6) {
+        exceeded.push({ mode_of_payment: mode, amount, halo });
+      }
+    }
+    return exceeded;
+  })();
+
   // Room-charge tenders are those the POS Profile reports as posting to Guest Ledger Clearing.
   const roomChargeModes = storePosProfile?.room_charge_modes || [];
   const roomChargeUnconfigured = Boolean(storePosProfile?.room_charge_unconfigured) && roomChargeModes.length === 0;
@@ -356,9 +379,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     });
   };
 
-  const handlePayment = async () => {
+  const executePayment = async (haloApprovalToken?: string) => {
     setIsProcessing(true);
     setError(null);
+    const haloFields = haloApprovalToken ? { halo_approval_token: haloApprovalToken } : {};
     try {
       await assertOfflineActionAllowed('online invoice settlement');
       const wasAlreadyPrinted = order ? String(order.invoice_printed) !== '0' : false;
@@ -383,6 +407,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           submit_invoice: 0,
           ...tipFields,
           ...roomFields,
+          ...haloFields,
         });
 
         // Step 2: Print invoice with discount and payment modes included
@@ -425,6 +450,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             submit_invoice: 1,
             ...tipFields,
             ...roomFields,
+            ...haloFields,
             ...(ids && { client_order_id: ids.clientOrderId, round_id: ids.roundId }),
           }),
         });
@@ -445,6 +471,20 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handlePayment = () => {
+    if (overHaloTenders.length > 0) {
+      setError(null);
+      setShowHaloApproval(true);
+      return;
+    }
+    void executePayment();
+  };
+
+  const handleHaloApproved = (result: ManagerApprovalResult) => {
+    setShowHaloApproval(false);
+    void executePayment(result.token);
   };
 
   return (
@@ -658,6 +698,22 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 })}
               </p>
             )}
+            {overHaloTenders.length > 0 && (
+              <div
+                role="alert"
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 space-y-1"
+              >
+                {overHaloTenders.map((row) => (
+                  <p key={row.mode_of_payment} className="text-sm font-medium text-amber-900">
+                    {t('payment.halo_warning', {
+                      mode: row.mode_of_payment,
+                      amount: formatMoney(row.amount),
+                      limit: formatMoney(row.halo),
+                    })}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -761,6 +817,34 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           </Button>
         </div>
       </DialogContent>
+      {showHaloApproval && overHaloTenders.length > 0 && (
+        <ManagerApproval
+          open={showHaloApproval}
+          posProfile={posProfile}
+          privilege="over_halo_tender"
+          summaryLines={overHaloTenders.map((row) =>
+            t('payment.halo_warning', {
+              mode: row.mode_of_payment,
+              amount: formatMoney(row.amount),
+              limit: formatMoney(row.halo),
+            }),
+          )}
+          reference={{ doctype: 'POS Invoice', name: invoice }}
+          amount={Math.max(...overHaloTenders.map((row) => row.amount))}
+          claim={{
+            action: 'over_halo_tender',
+            invoice,
+            pos_profile: posProfile,
+            tenders: overHaloTenders.map((row) => ({
+              mode_of_payment: row.mode_of_payment,
+              amount: row.amount,
+            })),
+          }}
+          requireReason={false}
+          onApproved={handleHaloApproved}
+          onCancel={() => setShowHaloApproval(false)}
+        />
+      )}
     </Dialog>
   );
 };

@@ -1,6 +1,6 @@
 import { call } from '@ury/core';
 
-export type CashMovementType = 'Pickup' | 'Loan' | 'Paid Out';
+export type CashMovementType = 'Pickup' | 'Loan' | 'Paid Out' | 'Paid In';
 
 export interface TillCashPaidOutTarget {
   kind: 'expense' | 'tips';
@@ -13,7 +13,8 @@ export interface TillCashMovementRow {
   amount: number;
   drawer_change: number;
   reason: string;
-  target_kind: 'safe' | 'expense' | 'tips';
+  reference?: string;
+  target_kind: 'safe' | 'expense' | 'tips' | 'paid_in';
   status: 'Submitted' | 'Pending Approval';
   docstatus: number;
   owner: string;
@@ -33,9 +34,11 @@ export interface TillCashState {
   opening_entry: string | null;
   opening_user: string | null;
   paid_out_threshold: number;
+  paid_in_threshold?: number;
+  cash_pull_threshold?: number;
   can_approve: boolean;
   current_user: string;
-  available_types: Record<CashMovementType, boolean>;
+  available_types: Partial<Record<CashMovementType, boolean>>;
   paid_out_targets: TillCashPaidOutTarget[];
   movements: TillCashMovementRow[];
   net_drawer_movement: number;
@@ -60,7 +63,9 @@ export async function recordTillCashMovement(payload: {
   movement_type: CashMovementType;
   amount: number;
   reason?: string;
+  reference?: string;
   paid_out_target?: 'expense' | 'tips';
+  approval_token?: string;
 }): Promise<TillCashMovementRow> {
   const body: Record<string, unknown> = {
     pos_profile: payload.pos_profile,
@@ -70,8 +75,14 @@ export async function recordTillCashMovement(payload: {
   if (payload.reason !== undefined) {
     body.reason = payload.reason;
   }
+  if (payload.reference) {
+    body.reference = payload.reference;
+  }
   if (payload.paid_out_target !== undefined) {
     body.paid_out_target = payload.paid_out_target;
+  }
+  if (payload.approval_token) {
+    body.approval_token = payload.approval_token;
   }
   const response = await call.post<{ message: TillCashMovementRow }>(
     'ury.ury_pos.cash_movements.record_till_cash_movement',

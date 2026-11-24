@@ -5,6 +5,7 @@ import type { DefaultCustomerEntry } from '@ury/core/default-customer';
 export interface PaymentModeMeta {
   type: string;
   overtender_rule: string;
+  halo_max_amount?: number;
 }
 
 // Limited fields response
@@ -40,6 +41,12 @@ export interface PosProfileLimited {
   payment_mode_meta?: Record<string, PaymentModeMeta>;
   /** POS Profile toggle for cashier touchscreen Pickup / Loan / Paid Out. */
   enable_cash_movements?: number;
+  over_short_tolerance?: number;
+  cash_pull_threshold?: number;
+  paid_out_approval_threshold?: number;
+  paid_in_approval_threshold?: number;
+  paid_in_enabled?: boolean;
+  cash_drawer_id?: string;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   /** Whitelisted method the till calls before a Room Charge; "" keeps the free-text room box. */
@@ -137,6 +144,12 @@ export interface PosProfileCombined extends PosProfileFull {
   payment_mode_accounts?: Record<string, string | null>;
   payment_mode_meta?: Record<string, PaymentModeMeta>;
   enable_cash_movements?: number;
+  over_short_tolerance?: number;
+  cash_pull_threshold?: number;
+  paid_out_approval_threshold?: number;
+  paid_in_approval_threshold?: number;
+  paid_in_enabled?: boolean;
+  cash_drawer_id?: string;
   floor_idle_signout_seconds?: number;
   floor_signout_after_send?: number;
   room_lookup_method?: string;
@@ -215,6 +228,12 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
     payment_mode_accounts: limitedProfile.payment_mode_accounts,
     payment_mode_meta: limitedProfile.payment_mode_meta,
     enable_cash_movements: Number(limitedProfile.enable_cash_movements ?? 0),
+    over_short_tolerance: limitedProfile.over_short_tolerance,
+    cash_pull_threshold: limitedProfile.cash_pull_threshold,
+    paid_out_approval_threshold: limitedProfile.paid_out_approval_threshold,
+    paid_in_approval_threshold: limitedProfile.paid_in_approval_threshold,
+    paid_in_enabled: limitedProfile.paid_in_enabled,
+    cash_drawer_id: limitedProfile.cash_drawer_id,
     floor_idle_signout_seconds: limitedProfile.floor_idle_signout_seconds ?? 0,
     floor_signout_after_send: limitedProfile.floor_signout_after_send ?? 0,
     room_lookup_method: limitedProfile.room_lookup_method ?? '',

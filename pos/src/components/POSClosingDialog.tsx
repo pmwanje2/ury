@@ -9,7 +9,7 @@ import {
   DialogTitle,
   messageToPlainText,
 } from '@ury/ui';
-import { Button } from '@ury/ui';
+import { Button, Input } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import { call, db, formatCurrency, shouldMaskAmounts } from '@ury/core';
 import { t } from '../i18n';
@@ -18,8 +18,17 @@ import { useRootStore } from '../store/root-store';
 import ClosingPaymentTable from './ClosingPaymentTable';
 import { isBlindCashCount } from '../lib/pos-closing-visibility';
 import ChecklistGateDialog from './ChecklistGateDialog';
+import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { getChecklist } from '../lib/checklist-api';
 import { getShiftCashMovementTotals } from '../lib/till-cash-api';
+import {
+  closeTillWithControls,
+  forceCloseTill,
+  getTillClosePreview,
+  listOpenTills,
+  type OpenTillRow,
+  type TillClosePreview,
+} from '../lib/till-controls-api';
 import {
   getOpenPosOpeningEntries,
   getSubCashierPosInvoices,
@@ -335,7 +344,9 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [openingEntry, setOpeningEntry] = useState<OpenPosOpeningEntry | null>(null);
+  const [availableOpenTills, setAvailableOpenTills] = useState<OpenTillRow[]>([]);
+  const [openingEntry, setOpeningEntry] = useState<OpenTillRow | null>(null);
+  const [closePreview, setClosePreview] = useState<TillClosePreview | null>(null);
   const [isSubCashier, setIsSubCashier] = useState(false);
   const [periodEndDate, setPeriodEndDate] = useState<Date>(new Date());
   const [invoiceCount, setInvoiceCount] = useState(0);
@@ -346,6 +357,15 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pendingCashMovements, setPendingCashMovements] = useState(0);
+  const [overShortReason, setOverShortReason] = useState('');
+  const [blindVarianceMessage, setBlindVarianceMessage] = useState<string | null>(null);
+  const [showForceClose, setShowForceClose] = useState(false);
+  const [forceCloseReason, setForceCloseReason] = useState('');
+  const [discardPendingOnForce, setDiscardPendingOnForce] = useState(false);
+  const [closeOtherToken, setCloseOtherToken] = useState<string | null>(null);
+  const [pendingCloseApproval, setPendingCloseApproval] = useState<
+    null | 'over_short_close' | 'close_other_till' | 'force_close'
+  >(null);
   // Set once the close submission (Sub POS Closing / POS Closing Entry) has
   // succeeded. Per plan decision D8, the Closing checklist gate hangs off
   // this success -- not off validatePOSClose() -- so it renders in place of
@@ -372,46 +392,27 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   // actually fires (Fix 6).
   const [showConfirm, setShowConfirm] = useState(false);
 
-  const loadClosingDetails = useCallback(async () => {
-    if (!posProfile || !user) return;
+  const loadEntryDetails = useCallback(
+    async (selectedEntry: OpenTillRow) => {
+      if (!posProfile || !user) return;
+      setOpeningEntry(selectedEntry);
+      setBlindVarianceMessage(null);
+      setCloseOtherToken(null);
+      setOverShortReason('');
+      setShowForceClose(false);
+      setForceCloseReason('');
+      setDiscardPendingOnForce(false);
 
-    setIsLoading(true);
-    setLoadError(null);
-    setSubmitError(null);
-
-    try {
-      const openEntries = await getOpenPosOpeningEntries(posProfile.name);
-      const ownEntry = openEntries.find((entry) => entry.user === user.name) ?? null;
-
-      if (!ownEntry) {
-        setOpeningEntry(null);
-        setLoadError(t('pos_closing.no_open_entry'));
-        return;
-      }
-      setOpeningEntry(ownEntry);
-
-      // Multi-cashier mode + current user is not the POS Profile's main
-      // cashier => this session closes via Sub POS Closing.
-      //
-      // Fix 4: do NOT trust the cached posProfile.owner from the store for
-      // this decision. `ury.ury_pos.api.getPosProfile` (already whitelisted,
-      // already used elsewhere -- see lib/pos-profile-api.ts) is the
-      // authoritative source: it derives `owner` from the POS Profile's
-      // `applicable_for_users` child table row with `custom_main_cashier`
-      // set, which is the same signal the Opening flow's
-      // `_get_main_cashier_status` helper uses. Calling it fresh here (it
-      // takes no args and resolves the profile from the user's own branch,
-      // same as the store's cached copy) avoids relying on a POS Profile
-      // snapshot that may have been cached in sessionStorage since session
-      // start and could be stale if main-cashier assignment changed since.
+      const closingOther = selectedEntry.user !== user.name;
       let subCashier = false;
-      if (posProfile.multiple_cashier === 1) {
+      if (!closingOther && posProfile.multiple_cashier === 1) {
         try {
           const profileStatus = await call.get<{
             message: { owner: string; multiple_cashier: number };
           }>('ury.ury_pos.api.getPosProfile');
-          subCashier = profileStatus.message.multiple_cashier === 1
-            && profileStatus.message.owner !== user.name;
+          subCashier =
+            profileStatus.message.multiple_cashier === 1 &&
+            profileStatus.message.owner !== user.name;
         } catch (statusError) {
           console.error('Failed to resolve main-cashier status, falling back to cached profile:', statusError);
           subCashier = posProfile.owner !== user.name;
@@ -423,16 +424,20 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPeriodEndDate(now);
       const end = formatDateTime(now);
 
-      const [invoiceResult, openingDoc, cashMovements] = await Promise.all([
+      const [invoiceResult, openingDoc, cashMovements, preview] = await Promise.all([
         subCashier
-          ? getSubCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name)
-          : getMainCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name),
-        db.getDoc<OpeningEntryDoc>('POS Opening Entry', ownEntry.name),
+          ? getSubCashierPosInvoices(selectedEntry.period_start_date, end, posProfile.name, selectedEntry.user)
+          : getMainCashierPosInvoices(selectedEntry.period_start_date, end, posProfile.name, selectedEntry.user),
+        db.getDoc<OpeningEntryDoc>('POS Opening Entry', selectedEntry.name),
         subCashier
           ? Promise.resolve({ by_mode: {}, pending_count: 0 })
-          : getShiftCashMovementTotals(ownEntry.name),
+          : getShiftCashMovementTotals(selectedEntry.name),
+        subCashier
+          ? Promise.resolve(null)
+          : getTillClosePreview(posProfile.name, selectedEntry.name),
       ]);
 
+      setClosePreview(preview);
       const invoices = Array.isArray(invoiceResult) ? invoiceResult : (invoiceResult?.invoices || []);
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
@@ -459,13 +464,46 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setRows(visible);
       setHiddenRows(hidden);
       setTouchedModes(new Set());
+    },
+    [posProfile, user, blindCashCount, paymentModes],
+  );
+
+  const loadClosingDetails = useCallback(async () => {
+    if (!posProfile || !user) return;
+
+    setIsLoading(true);
+    setLoadError(null);
+    setSubmitError(null);
+
+    try {
+      const listedTills = await listOpenTills(posProfile.name);
+      const openEntries: OpenTillRow[] =
+        listedTills && listedTills.length > 0
+          ? listedTills
+          : (await getOpenPosOpeningEntries(posProfile.name)).map((e) => ({
+              ...e,
+              is_own: e.user === user.name,
+            }));
+
+      setAvailableOpenTills(openEntries);
+      const ownEntry = openEntries.find((entry) => entry.user === user.name) ?? null;
+      const chosenEntry = ownEntry ?? openEntries[0] ?? null;
+
+      if (!chosenEntry) {
+        setOpeningEntry(null);
+        setClosePreview(null);
+        setLoadError(t('pos_closing.no_open_entry'));
+        return;
+      }
+
+      await loadEntryDetails(chosenEntry);
     } catch (error) {
       console.error('Failed to load POS closing details:', error);
       setLoadError(extractServerErrorMessage(error, t('pos_closing.load_failed')));
     } finally {
       setIsLoading(false);
     }
-  }, [posProfile, user, blindCashCount, paymentModes]);
+  }, [posProfile, user, loadEntryDetails]);
 
   useEffect(() => {
     if (!open) return;
@@ -496,9 +534,62 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPendingCloseDoc(null);
       setShowConfirm(false);
       setPreCloseGate(false);
+      setPendingCloseApproval(null);
+      setBlindVarianceMessage(null);
+      setShowForceClose(false);
     }
     onOpenChange(next);
   };
+
+  const isClosingOther = Boolean(
+    openingEntry && user && openingEntry.user !== user.name,
+  );
+
+  const effectiveTolerance: number | null = useMemo(() => {
+    if (typeof closePreview?.over_short_tolerance === 'number') {
+      return closePreview.over_short_tolerance;
+    }
+    if (typeof posProfile?.over_short_tolerance === 'number') {
+      return posProfile.over_short_tolerance;
+    }
+    return null;
+  }, [closePreview?.over_short_tolerance, posProfile?.over_short_tolerance]);
+
+  const cashVarianceInfo = useMemo(() => {
+    if (blindCashCount || effectiveTolerance === null) {
+      return { exceeds: false, maxAbsDiff: 0 };
+    }
+    const modeMeta = posProfile?.payment_mode_meta ?? {};
+    const hasMeta = Object.keys(modeMeta).length > 0;
+    let maxAbsDiff = 0;
+    for (const row of rows) {
+      const metaType = modeMeta[row.mode_of_payment]?.type;
+      const isCash = hasMeta
+        ? metaType
+          ? metaType === 'Cash'
+          : /^cash$/i.test(row.mode_of_payment)
+        : true;
+      if (!isCash) continue;
+      const absDiff = Math.abs(row.closing_amount - row.expected_amount);
+      if (absDiff > maxAbsDiff) maxAbsDiff = absDiff;
+    }
+    return {
+      exceeds: maxAbsDiff > effectiveTolerance + 1e-6,
+      maxAbsDiff,
+    };
+  }, [blindCashCount, effectiveTolerance, posProfile?.payment_mode_meta, rows]);
+
+  const countedPaymentsPayload = useMemo(
+    () =>
+      [...rows, ...hiddenRows].map((row) => ({
+        mode_of_payment: row.mode_of_payment,
+        closing_amount: row.closing_amount,
+      })),
+    [rows, hiddenRows],
+  );
+
+  const useControlledClose =
+    !isSubCashier && (effectiveTolerance !== null || blindCashCount || isClosingOther);
 
   // Closing may be submitted with blank or zero amount fields. Blank inputs
   // count as 0; rows that had activity but a zero close only show a warning.
@@ -523,11 +614,105 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
 
   const handleRequestSubmit = () => {
     if (!validation.isValid) return;
+    setSubmitError(null);
+    if (isClosingOther && !closeOtherToken) {
+      setPendingCloseApproval('close_other_till');
+      return;
+    }
+    if (cashVarianceInfo.exceeds) {
+      if (!overShortReason.trim()) {
+        setSubmitError(t('pos_closing.over_short_reason_required'));
+        return;
+      }
+      setPendingCloseApproval('over_short_close');
+      return;
+    }
     setShowConfirm(true);
+  };
+
+  const executeControlledClose = async (tokens?: {
+    overShortToken?: string;
+    closeOtherToken?: string;
+  }) => {
+    if (!openingEntry || !posProfile || !user) return;
+    if (posProfile.name) {
+      try {
+        const { logStatus } = await getChecklist(posProfile.name, 'Closing');
+        if (logStatus !== 'Complete') {
+          setPreCloseGate(true);
+          setShowClosingChecklist(true);
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to check closing checklist status:', error);
+        setPreCloseGate(true);
+        setShowClosingChecklist(true);
+        return;
+      }
+    }
+
+    setShowConfirm(false);
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setBlindVarianceMessage(null);
+
+    try {
+      await closeTillWithControls({
+        pos_profile: posProfile.name,
+        pos_opening_entry: openingEntry.name,
+        counted_payments: countedPaymentsPayload,
+        over_short_reason: overShortReason.trim() || undefined,
+        over_short_approval_token: tokens?.overShortToken,
+        close_other_approval_token: tokens?.closeOtherToken ?? closeOtherToken ?? undefined,
+        period_end_date: formatDateTime(periodEndDate),
+      });
+      setPendingCloseDoc(null);
+      setCloseOtherToken(null);
+
+      if (posProfile?.name) {
+        try {
+          const { logStatus } = await getChecklist(posProfile.name, 'Closing');
+          if (logStatus !== 'Complete') {
+            setShowClosingChecklist(true);
+          } else {
+            await onClosingSubmitted?.();
+            onOpenChange(false);
+          }
+        } catch (error) {
+          console.error('Failed to check closing checklist status:', error);
+          setShowClosingChecklist(true);
+        }
+      } else {
+        await onClosingSubmitted?.();
+        onOpenChange(false);
+      }
+    } catch (error) {
+      const rawMsg = extractServerErrorMessage(error, t('pos_closing.submit_failed'));
+      const rawText = String(readErrorProp(error, 'message') ?? rawMsg);
+      if (
+        rawText.includes('POS-CLOSE-VARIANCE-APPROVAL') ||
+        rawMsg.includes('POS-CLOSE-VARIANCE-APPROVAL') ||
+        /outside this till's allowed variance/i.test(rawMsg)
+      ) {
+        setBlindVarianceMessage(
+          rawText.includes('POS-CLOSE-VARIANCE-APPROVAL')
+            ? messageToPlainText(rawText)
+            : rawMsg,
+        );
+      } else {
+        setSubmitError(rawMsg);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleConfirmSubmit = async () => {
     if (!openingEntry || !posProfile || !user) return;
+    if (useControlledClose) {
+      await executeControlledClose();
+      return;
+    }
 
     // Gate on the Closing checklist BEFORE creating the closing doc: the
     // role-based Dependent Checklist validations (grillax port) throw on
@@ -669,6 +854,119 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     onOpenChange(false);
   };
 
+  const handleManagerApprovedClose = async (result: ManagerApprovalResult) => {
+    const kind = pendingCloseApproval;
+    setPendingCloseApproval(null);
+    if (!kind || !openingEntry || !posProfile) return;
+
+    if (kind === 'close_other_till') {
+      if (cashVarianceInfo.exceeds) {
+        setCloseOtherToken(result.token);
+        if (!overShortReason.trim()) {
+          setSubmitError(t('pos_closing.over_short_reason_required'));
+          return;
+        }
+        setPendingCloseApproval('over_short_close');
+        return;
+      }
+      await executeControlledClose({ closeOtherToken: result.token });
+      return;
+    }
+
+    if (kind === 'over_short_close') {
+      await executeControlledClose({ overShortToken: result.token });
+      return;
+    }
+
+    if (kind === 'force_close') {
+      setIsSubmitting(true);
+      setSubmitError(null);
+      try {
+        await forceCloseTill({
+          pos_profile: posProfile.name,
+          pos_opening_entry: openingEntry.name,
+          counted_payments: countedPaymentsPayload,
+          reason: forceCloseReason.trim(),
+          discard_pending_movements: discardPendingOnForce,
+          approval_token: result.token,
+          over_short_reason: overShortReason.trim() || undefined,
+          period_end_date: formatDateTime(periodEndDate),
+        });
+        setShowForceClose(false);
+        await onClosingSubmitted?.();
+        onOpenChange(false);
+      } catch (error) {
+        setSubmitError(extractServerErrorMessage(error, t('pos_closing.submit_failed')));
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const closeApprovalProps = useMemo(() => {
+    if (!pendingCloseApproval || !openingEntry || !posProfile) return null;
+    if (pendingCloseApproval === 'close_other_till') {
+      return {
+        privilege: 'close_other_till',
+        reference: { doctype: 'POS Opening Entry', name: openingEntry.name },
+        summaryLines: [
+          t('pos_closing.other_till_notice', {
+            cashier: openingEntry.user_name || openingEntry.user,
+          }),
+          openingEntry.name,
+        ],
+        claim: {
+          action: 'close_other_till',
+          pos_profile: posProfile.name,
+          pos_opening_entry: openingEntry.name,
+          opening_user: openingEntry.user,
+        },
+      };
+    }
+    if (pendingCloseApproval === 'over_short_close') {
+      return {
+        privilege: 'over_short_close',
+        reference: { doctype: 'POS Opening Entry', name: openingEntry.name },
+        amount: cashVarianceInfo.maxAbsDiff || undefined,
+        summaryLines: [
+          t('pos_closing.blind_variance_title'),
+          `${t('pos_closing.over_short_reason')}: ${overShortReason.trim()}`,
+        ],
+        claim: {
+          action: 'over_short_close',
+          pos_profile: posProfile.name,
+          pos_opening_entry: openingEntry.name,
+          counted_payments: countedPaymentsPayload,
+          reason: overShortReason.trim(),
+        },
+      };
+    }
+    return {
+      privilege: 'reopen_till',
+      reference: { doctype: 'POS Opening Entry', name: openingEntry.name },
+      summaryLines: [
+        t('pos_closing.force_close_title'),
+        `${t('pos_closing.force_close_reason')}: ${forceCloseReason.trim()}`,
+      ],
+      claim: {
+        action: 'force_close',
+        pos_profile: posProfile.name,
+        pos_opening_entry: openingEntry.name,
+        reason: forceCloseReason.trim(),
+        discard_pending_movements: discardPendingOnForce,
+      },
+    };
+  }, [
+    pendingCloseApproval,
+    openingEntry,
+    posProfile,
+    cashVarianceInfo.maxAbsDiff,
+    overShortReason,
+    countedPaymentsPayload,
+    forceCloseReason,
+    discardPendingOnForce,
+  ]);
+
   const hasRows = useMemo(() => rows.length > 0, [rows]);
 
   if (showClosingChecklist && posProfile?.name) {
@@ -726,6 +1024,44 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             <p className="py-8 text-center text-sm text-red-600">{loadError}</p>
           ) : (
             <>
+              {(availableOpenTills.length > 1 || isClosingOther) && openingEntry && (
+                <div className="mb-4 rounded-lg border border-border bg-gray-50 p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label htmlFor="pos-closing-till-select" className="text-xs font-semibold text-gray-700">
+                      {t('pos_closing.select_till')}
+                    </label>
+                    <span className="text-sm font-medium text-gray-900">
+                      {openingEntry.user_name || openingEntry.user} · {openingEntry.name}
+                    </span>
+                  </div>
+                  {availableOpenTills.length > 1 && (
+                    <select
+                      id="pos-closing-till-select"
+                      value={openingEntry.name}
+                      disabled={isSubmitting}
+                      onChange={(e) => {
+                        const found = availableOpenTills.find((entry) => entry.name === e.target.value);
+                        if (found) void loadEntryDetails(found);
+                      }}
+                      className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+                    >
+                      {availableOpenTills.map((entry) => (
+                        <option key={entry.name} value={entry.name}>
+                          {(entry.user_name || entry.user)} — {entry.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {isClosingOther && (
+                    <p className="text-xs font-medium text-amber-800">
+                      {t('pos_closing.other_till_notice', {
+                        cashier: openingEntry.user_name || openingEntry.user,
+                      })}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {!blindCashCount && (
               <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <div className="rounded-lg border border-border p-3">
@@ -784,6 +1120,152 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   {validation.warningMessage}
                 </p>
               )}
+
+              {closePreview && closePreview.no_sale_count > 0 && (
+                <p className="mt-2 text-xs text-gray-600">
+                  {t('pos_closing.no_sale_summary', { count: closePreview.no_sale_count })}
+                </p>
+              )}
+
+              {hasRows && cashVarianceInfo.exceeds && !blindCashCount && (
+                <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3.5 space-y-2.5">
+                  <p className="text-sm font-medium text-amber-900">
+                    {t('pos_closing.variance_exceeds_tolerance', {
+                      tolerance: formatCurrency(effectiveTolerance ?? 0, posProfile?.currency || undefined),
+                    })}
+                  </p>
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="pos-closing-over-short-reason"
+                      className="text-xs font-medium text-amber-950"
+                    >
+                      {t('pos_closing.over_short_reason')}
+                    </label>
+                    <Input
+                      id="pos-closing-over-short-reason"
+                      type="text"
+                      value={overShortReason}
+                      onChange={(e) => setOverShortReason(e.target.value)}
+                      placeholder={t('pos_closing.over_short_reason_placeholder')}
+                      disabled={isSubmitting}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {blindVarianceMessage && (
+                <div
+                  role="alert"
+                  className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-3"
+                >
+                  <p className="text-sm font-medium text-amber-950">{blindVarianceMessage}</p>
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="pos-closing-over-short-reason"
+                      className="text-xs font-medium text-amber-950"
+                    >
+                      {t('pos_closing.over_short_reason')}
+                    </label>
+                    <Input
+                      id="pos-closing-over-short-reason"
+                      type="text"
+                      value={overShortReason}
+                      onChange={(e) => setOverShortReason(e.target.value)}
+                      placeholder={t('pos_closing.over_short_reason_placeholder')}
+                      disabled={isSubmitting}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="min-h-11"
+                      onClick={() => setBlindVarianceMessage(null)}
+                    >
+                      {t('pos_closing.recount')}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="min-h-11"
+                      disabled={!overShortReason.trim() || isSubmitting}
+                      onClick={() => setPendingCloseApproval('over_short_close')}
+                    >
+                      {t('pos_closing.approve_variance_pin')}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {showForceClose && openingEntry && !isSubCashier && (
+                <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 space-y-3">
+                  <h4 className="text-sm font-semibold text-red-900">
+                    {t('pos_closing.force_close_title')}
+                  </h4>
+                  {closePreview && closePreview.open_checks_count > 0 && (
+                    <p className="text-sm text-red-800">
+                      {t('pos_closing.force_close_open_checks', {
+                        count: closePreview.open_checks_count,
+                      })}
+                    </p>
+                  )}
+                  {(pendingCashMovements > 0 || (closePreview?.pending_movements_count ?? 0) > 0) && (
+                    <label className="flex items-center gap-2 text-xs text-red-900">
+                      <input
+                        type="checkbox"
+                        checked={discardPendingOnForce}
+                        onChange={(e) => setDiscardPendingOnForce(e.target.checked)}
+                      />
+                      <span>
+                        {t('pos_closing.force_close_discard_pending', {
+                          count: Math.max(
+                            pendingCashMovements,
+                            closePreview?.pending_movements_count ?? 0,
+                          ),
+                        })}
+                      </span>
+                    </label>
+                  )}
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="pos-closing-force-reason"
+                      className="text-xs font-medium text-red-950"
+                    >
+                      {t('pos_closing.force_close_reason')}
+                    </label>
+                    <Input
+                      id="pos-closing-force-reason"
+                      type="text"
+                      value={forceCloseReason}
+                      onChange={(e) => setForceCloseReason(e.target.value)}
+                      placeholder={t('pos_closing.force_close_reason_placeholder')}
+                      disabled={isSubmitting}
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="min-h-11"
+                      onClick={() => setShowForceClose(false)}
+                    >
+                      {t('common.cancel')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      className="min-h-11"
+                      disabled={!forceCloseReason.trim() || isSubmitting}
+                      onClick={() => setPendingCloseApproval('force_close')}
+                    >
+                      {t('pos_closing.approve_force_close')}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -794,6 +1276,16 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
 
         <DialogFooter>
           <TillLogout />
+          {!isSubCashier && openingEntry && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowForceClose((prev) => !prev)}
+              disabled={isSubmitting || isLoading}
+            >
+              {t('pos_closing.force_close')}
+            </Button>
+          )}
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isSubmitting}>
             {t('common.cancel')}
           </Button>
@@ -805,6 +1297,21 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {closeApprovalProps && posProfile?.name && (
+        <ManagerApproval
+          open={Boolean(pendingCloseApproval)}
+          posProfile={posProfile.name}
+          privilege={closeApprovalProps.privilege}
+          summaryLines={closeApprovalProps.summaryLines}
+          reference={closeApprovalProps.reference}
+          claim={closeApprovalProps.claim}
+          amount={'amount' in closeApprovalProps ? closeApprovalProps.amount : undefined}
+          requireReason={false}
+          onApproved={(res) => void handleManagerApprovedClose(res)}
+          onCancel={() => setPendingCloseApproval(null)}
+        />
+      )}
 
       {showConfirm && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4">
