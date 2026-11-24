@@ -1,8 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { call } from '@ury/core';
+import { call, db, ownedSessionKey } from '@ury/core';
 import { initI18n } from '../src/i18n';
 import { useRootStore } from '../src/store/root-store';
 import { usePOSStore } from '../src/store/pos-store';
@@ -11,6 +13,8 @@ import type { PosProfileCombined } from '../src/lib/pos-profile-api';
 import { printOrder } from '../src/lib/print';
 import PaymentDialog from '../src/components/PaymentDialog';
 import MergedBillPanel from '../src/components/MergedBillPanel';
+import SplitGroupPanel from '../src/components/SplitGroupPanel';
+import BillMergeDialog from '../src/components/BillMergeDialog';
 import Footer from '../src/components/Footer';
 import Header from '../src/components/Header';
 import { PrinterWatchProvider } from '../src/components/PrinterWatch';
@@ -542,5 +546,229 @@ describe('POS-PR-2 R2 hermetic checks', () => {
     const searchWrapperClasses = searchInput!.parentElement!.className.split(/\s+/);
     expect(searchWrapperClasses).toContain('min-w-0');
     expect(searchWrapperClasses).not.toContain('mx-8');
+  });
+
+  it('SplitGroupPanel, BillMergeDialog, and MergedBillPanel format UGX (never USD) on a USD-default site', async () => {
+    vi.stubGlobal('frappe', { boot: { sysdefaults: { currency: 'USD' } } });
+    usePOSStore.setState({
+      currency: 'USD',
+      posProfile: makeProfile({ name: 'Kampala UGX Till', currency: 'UGX', branch: 'Kampala' }),
+    });
+
+    const profileKey = ownedSessionKey('posProfile');
+    if (profileKey) {
+      sessionStorage.setItem(profileKey, JSON.stringify({ branch: 'Kampala', currency: 'UGX' }));
+    }
+
+    // 1. SplitGroupPanel
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.api.get_split_group') {
+        return {
+          message: {
+            group: 'SG-UGX',
+            current: 'KBG-00010',
+            invoices: [
+              {
+                name: 'KBG-00010',
+                currency: 'UGX',
+                status: 'Draft',
+                docstatus: 0,
+                invoice_printed: 0,
+                grand_total: 19057,
+                rounded_total: 19100,
+                net_total: 16150,
+                total_taxes_and_charges: 2907,
+                restaurant_table: 'K-101',
+                cashier: 'cashier@example.com',
+                waiter: 'cashier@example.com',
+                customer: 'Walk-in Guest',
+                mobile_number: '',
+                posting_date: '2026-11-24',
+                posting_time: '12:00:00',
+                order_type: 'Dine In',
+                split_index: 1,
+                split_total: 2,
+                is_original: true,
+              },
+              {
+                name: 'KBG-00011',
+                currency: 'UGX',
+                status: 'Draft',
+                docstatus: 0,
+                invoice_printed: 0,
+                grand_total: 12000,
+                rounded_total: 12000,
+                net_total: 10169,
+                total_taxes_and_charges: 1831,
+                restaurant_table: 'K-101',
+                cashier: 'cashier@example.com',
+                waiter: 'cashier@example.com',
+                customer: 'Walk-in Guest',
+                mobile_number: '',
+                posting_date: '2026-11-24',
+                posting_time: '12:01:00',
+                order_type: 'Dine In',
+                split_index: 2,
+                split_total: 2,
+                is_original: false,
+              },
+            ],
+          },
+        };
+      }
+      if (method === 'ury.ury_pos.api.getPosInvoiceItems') {
+        return {
+          message: [
+            [{ name: 'row-m1', item_name: 'Grilled Tilapia', qty: 1, rate: 16150, price_list_rate: 16150, amount: 16150 }],
+            [],
+            [],
+          ],
+        };
+      }
+      return { message: {} };
+    });
+
+    await act(async () =>
+      root.render(<SplitGroupPanel invoiceName="KBG-00010" onOpenInvoice={vi.fn()} />),
+    );
+    const splitText = container.textContent || '';
+    expect(splitText).toContain('UGX 19,100');
+    expect(splitText).toContain('UGX 12,000');
+    expect(splitText).not.toContain('USD');
+
+    // 2. MergedBillPanel
+    await act(async () =>
+      root.render(
+        <MergedBillPanel
+          order={{
+            name: 'KBG-00010',
+            currency: 'UGX',
+            custom_merged_pos_invoice: 'KBG-00012',
+            custom_merged_total: 16150,
+            rounded_total: 19100,
+          }}
+        />,
+      ),
+    );
+    const mergedText = container.textContent || '';
+    expect(mergedText).toContain('UGX 16,150');
+    expect(mergedText).toContain('UGX 35,250');
+    expect(mergedText).not.toContain('USD');
+
+    // 3. BillMergeDialog (+ MERGE_CANDIDATE_FIELDS includes currency)
+    const getDocListSpy = vi.spyOn(db, 'getDocList').mockImplementation(async (_dt, args) => {
+      const fields = (args as { fields?: readonly string[] } | undefined)?.fields ?? [];
+      if (fields.includes('custom_merged_pos_invoice')) {
+        return [];
+      }
+      return [
+        {
+          name: 'KBG-00015',
+          currency: 'UGX',
+          customer: 'Walk-in Guest',
+          customer_name: 'Walk-in Guest',
+          grand_total: 25000,
+          rounded_total: 25000,
+          posting_date: '2026-11-24',
+          posting_time: '12:05:00',
+          order_type: 'Dine In',
+          restaurant_table: 'K-102',
+          custom_merged_tables: null,
+          status: 'Draft',
+          invoice_printed: 0,
+        },
+      ];
+    });
+
+    await act(async () =>
+      root.render(
+        <BillMergeDialog
+          open
+          onOpenChange={vi.fn()}
+          invoiceName="KBG-00010"
+          onConfirm={vi.fn(async () => {})}
+        />,
+      ),
+    );
+    const candidateCall = getDocListSpy.mock.calls.find(([, args]) => {
+      const fields = (args as { fields?: readonly string[] } | undefined)?.fields ?? [];
+      return fields.includes('rounded_total');
+    });
+    expect(candidateCall).toBeTruthy();
+    expect(((candidateCall![1] as { fields?: readonly string[] }).fields) ?? []).toContain('currency');
+
+    const dialogText = document.body.textContent || '';
+    expect(dialogText).toContain('UGX 25,000');
+    expect(dialogText).not.toContain('USD 25,000');
+  });
+
+  it('guard: every formatCurrency call in pos/src passes an explicit currency argument', () => {
+    const srcRoot = path.resolve(__dirname, '../src');
+    const offenders: string[] = [];
+
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === '__tests__') continue;
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        if (/\.(test|spec)\.(ts|tsx)$/.test(entry.name)) continue;
+
+        const source = fs.readFileSync(full, 'utf8');
+        const re = /\bformatCurrency\s*\(/g;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(source)) !== null) {
+          let i = match.index + match[0].length;
+          let depth = 1;
+          let hasTopLevelComma = false;
+          let inSingle = false;
+          let inDouble = false;
+          let inTemplate = false;
+          let escaped = false;
+          while (i < source.length && depth > 0) {
+            const ch = source[i];
+            if (escaped) {
+              escaped = false;
+              i += 1;
+              continue;
+            }
+            if (inSingle) {
+              if (ch === '\\') escaped = true;
+              else if (ch === "'") inSingle = false;
+            } else if (inDouble) {
+              if (ch === '\\') escaped = true;
+              else if (ch === '"') inDouble = false;
+            } else if (inTemplate) {
+              if (ch === '\\') escaped = true;
+              else if (ch === '`') inTemplate = false;
+            } else if (ch === "'") {
+              inSingle = true;
+            } else if (ch === '"') {
+              inDouble = true;
+            } else if (ch === '`') {
+              inTemplate = true;
+            } else if (ch === '(' || ch === '[' || ch === '{') {
+              depth += 1;
+            } else if (ch === ')' || ch === ']' || ch === '}') {
+              depth -= 1;
+            } else if (ch === ',' && depth === 1) {
+              hasTopLevelComma = true;
+            }
+            i += 1;
+          }
+          if (!hasTopLevelComma) {
+            const line = source.slice(0, match.index).split('\n').length;
+            const rel = path.relative(path.resolve(__dirname, '..'), full);
+            offenders.push(`${rel}:${line}`);
+          }
+        }
+      }
+    };
+
+    walk(srcRoot);
+    expect(offenders).toEqual([]);
   });
 });

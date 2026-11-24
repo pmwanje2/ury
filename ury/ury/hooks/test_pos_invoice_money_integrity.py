@@ -652,6 +652,130 @@ class TestConfirmedPhonePaymentsAndServerOnlyFlag(Loaded):
             "validate",
         )
 
+    def test_server_only_guard_blocks_administrator_background_and_data_import_writes(self):
+        """R6 P1 #3: Administrator with frappe.request=None (e.g. background Data Import)
+        must NEVER bypass validate_server_only_tender_received. Only the server's own
+        ury_server_tender_received flag (outside Data Import) may modify received rows."""
+        fn = self.hooks.validate_server_only_tender_received
+        self.db_received_rows = [
+            Row(name="sip-1", mode_of_payment="Cash", amount=5.90, reference_no=None, type="Cash")
+        ]
+        self.frappe.session = SimpleNamespace(user="Administrator")
+        self.frappe.request = None
+        try:
+            for label, in_import, server_flag in (
+                ("admin_bg_no_flag", False, False),
+                ("admin_data_import_no_flag", True, False),
+                ("admin_data_import_even_with_flag", True, True),
+            ):
+                with self.subTest(case=label):
+                    self.frappe.flags.in_import = in_import
+                    self.frappe.flags.ury_server_tender_received = server_flag
+                    # Attempting to unflag or drop an existing received tender must fail.
+                    with self.assertRaisesRegex(Refused, "received"):
+                        fn(
+                            Check(
+                                name="LKG-ADMIN-DI",
+                                payments=[
+                                    Row(name="sip-1", mode_of_payment="Cash", amount=5.90, custom_tender_received=0)
+                                ],
+                            ),
+                            "validate",
+                        )
+                    # Attempting to forge custom_tender_received=1 on a new row must also fail.
+                    with self.assertRaisesRegex(Refused, "confirmed server payment"):
+                        fn(
+                            Check(
+                                name="LKG-ADMIN-DI",
+                                payments=[
+                                    Row(name="sip-1", mode_of_payment="Cash", amount=5.90, custom_tender_received=1),
+                                    Row(name="sip-2", mode_of_payment="Cash", amount=10.0, custom_tender_received=1),
+                                ],
+                            ),
+                            "validate",
+                        )
+
+            # Server-only internal flow (not Data Import) passes cleanly with the internal flag.
+            self.frappe.flags.in_import = False
+            self.frappe.flags.ury_server_tender_received = True
+            fn(Check(name="LKG-ADMIN-SERVER", payments=[]), "validate")
+        finally:
+            self.frappe.flags.in_import = False
+            self.frappe.flags.ury_server_tender_received = False
+            self.frappe.request = None
+            self.frappe.session = SimpleNamespace(user="cashier@example.com")
+
+    def test_partially_refunded_phone_request_validates_against_live_paid_amount(self):
+        """R6 P1 #2: Partially Refunded Phone Payment Requests must validate against live
+        paid amount (grand_total - outstanding_amount) so cash balance settles cleanly."""
+        fn = self.hooks.validate_confirmed_phone_payments
+
+        def status_aware_get_all(doctype, filters=None, fields=None, **kw):
+            if doctype == "Payment Request":
+                f = filters or {}
+                allowed = set(f["status"][1]) if isinstance(f.get("status"), list) else None
+                mode = f.get("mode_of_payment")
+                return [
+                    pr
+                    for pr in self.paid_requests
+                    if (not mode or pr.get("mode_of_payment") == mode)
+                    and (allowed is None or pr.get("status") in allowed)
+                ]
+            if doctype == "Sales Invoice Payment":
+                return list(self.db_received_rows)
+            return []
+
+        self.frappe.get_all.side_effect = status_aware_get_all
+        self.paid_requests = [
+            Row(
+                name="PR-PART-REF",
+                mode_of_payment="Online Mobile Money",
+                grand_total=5.90,
+                outstanding_amount=2.00,
+                status="Partially Refunded",
+            )
+        ]
+
+        # Live paid 3.90 + Cash 2.00 must submit cleanly.
+        fn(
+            Check(
+                name="LKG-PART-REF",
+                payments=[
+                    Row(mode_of_payment="Online Mobile Money", type="Phone", amount=3.90),
+                    Row(mode_of_payment="Cash", type="Cash", amount=2.00),
+                ],
+            ),
+            "before_submit",
+        )
+
+        # Stale full 5.90 must be refused because confirmed live paid is 3.90.
+        with self.assertRaisesRegex(Refused, "Confirmed payment"):
+            fn(
+                Check(
+                    name="LKG-PART-REF",
+                    payments=[Row(mode_of_payment="Online Mobile Money", type="Phone", amount=5.90)],
+                ),
+                "before_submit",
+            )
+
+        # Fully refunded (outstanding == grand_total -> live paid 0.0) refuses Phone and allows Cash.
+        self.paid_requests[0]["outstanding_amount"] = 5.90
+        with self.assertRaisesRegex(Refused, "not been confirmed"):
+            fn(
+                Check(
+                    name="LKG-PART-REF",
+                    payments=[Row(mode_of_payment="Online Mobile Money", type="Phone", amount=5.90)],
+                ),
+                "before_submit",
+            )
+        fn(
+            Check(
+                name="LKG-PART-REF",
+                payments=[Row(mode_of_payment="Cash", type="Cash", amount=5.90)],
+            ),
+            "before_submit",
+        )
+
 
 class TestOfflinePosUtilsMultiCompanyFiscalYear(unittest.TestCase):
     """P2: offline_pos_utils must ensure company URY belongs to an active Fiscal Year even

@@ -375,6 +375,75 @@ class TestGetPosInvoiceItemsPayments(Loaded):
             src = inspect.getsource(getattr(self.api, fn_name))
             self.assertIn("currency", src, f"{fn_name} must select POS Invoice.currency")
 
+    def test_partially_refunded_phone_request_returns_live_paid_amount_not_stale_row_amount(self):
+        """R6 P1 #2: getPosInvoiceItems must report live paid amount (grand_total - outstanding_amount)
+        for Partially Paid and Partially Refunded Phone Payment Requests, and omit fully refunded ones."""
+        self.frappe.db.get_value.side_effect = lambda dt, name, field=None, *a, **k: (
+            "Phone" if dt == "Mode of Payment" and name == "Online Mobile Money" and field == "type" else None
+        )
+        invoice = SimpleNamespace(
+            name="LKG-00075",
+            branch="Lakeside",
+            company="Lakeside Hotel",
+            items=[Row(name="i1", item_name="Iced Tea", qty=1, rate=5.0, amount=5.0, is_disposable=0)],
+            taxes=[],
+            payments=[
+                Row(
+                    mode_of_payment="Online Mobile Money",
+                    type="Phone",
+                    amount=5.90,
+                    reference_no="ACC-PRQ-PART",
+                    custom_tender_received=1,
+                ),
+            ],
+            get=lambda k, default=None: getattr(invoice, k, default),
+        )
+        self.frappe.get_doc.return_value = invoice
+
+        for pr_status in ("Partially Paid", "Partially Refunded"):
+            with self.subTest(pr_status=pr_status):
+                live_pr = Row(
+                    name="ACC-PRQ-PART",
+                    mode_of_payment="Online Mobile Money",
+                    payment_account="MoMo - LH",
+                    grand_total=5.90,
+                    outstanding_amount=2.00,
+                    status=pr_status,
+                )
+
+                def filtered_get_all(doctype, filters=None, **kw):
+                    f = filters or {}
+                    allowed = set(f["status"][1]) if isinstance(f.get("status"), list) else None
+                    if allowed is not None and live_pr["status"] not in allowed:
+                        return []
+                    return [live_pr]
+
+                self.frappe.get_all.side_effect = filtered_get_all
+                _, _, payments = self.api.getPosInvoiceItems("LKG-00075")
+                self.assertEqual(
+                    payments,
+                    [
+                        {
+                            "mode_of_payment": "Online Mobile Money",
+                            "amount": 3.90,
+                            "reference_no": "ACC-PRQ-PART",
+                        }
+                    ],
+                )
+
+        # Fully refunded (outstanding == grand_total -> live paid 0.0) must return [].
+        zero_pr = Row(
+            name="ACC-PRQ-PART",
+            mode_of_payment="Online Mobile Money",
+            payment_account="MoMo - LH",
+            grand_total=5.90,
+            outstanding_amount=5.90,
+            status="Partially Refunded",
+        )
+        self.frappe.get_all.side_effect = lambda doctype, filters=None, **kw: [zero_pr]
+        _, _, payments = self.api.getPosInvoiceItems("LKG-00075")
+        self.assertEqual(payments, [])
+
 
 if __name__ == "__main__":
     unittest.main()
