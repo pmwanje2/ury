@@ -77,6 +77,9 @@ class Doc:
     def get(self, key, default=None):
         return self._d.get(key, default)
 
+    def setdefault(self, key, default=None):
+        return self._d.setdefault(key, default)
+
     def append(self, field, row):
         self._d.setdefault(field, []).append(Doc(row) if isinstance(row, dict) else row)
         return self._d[field][-1]

@@ -341,9 +341,15 @@ def validate_invoice(doc, method):
         doc.waiter = doc.modified_by
     if getattr(frappe.flags, "ury_bill_split", False):
         return
-    # A new document has no printed copy or sent baseline to compare against,
-    # and a return refunds a paid check; neither is an edit of a sent bill.
-    if doc.is_new() or doc.get("is_return"):
+    # A new document has no printed copy or sent baseline to compare against.
+    # Return checks run the dedicated return mutation guard (over-return, consolidation,
+    # unreferenced-return privilege, and table/printed cleanup).
+    if doc.get("is_return"):
+        from ury.ury_pos.void_return_reopen import validate_pos_return_doc
+
+        validate_pos_return_doc(doc)
+        return
+    if doc.is_new():
         return
 
     # Mutation-level `void_sent_item` / `reduce_sent_qty` gate (Amendment 1 #7):

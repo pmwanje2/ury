@@ -2679,8 +2679,10 @@ def search_settled_bills(branch: str | None = None, pos_profile: str | None = No
         doc = _closed_invoice(row.name, branch)
         data = {key: doc.get(key) for key in ('name', 'posting_date', 'posting_time', 'branch', 'restaurant_table',
                 'pos_profile', 'customer', 'cashier', 'waiter', 'currency', 'grand_total', 'net_total', 'rounded_total',
+                'discount_amount', 'additional_discount_percentage', 'paid_amount', 'change_amount', 'room_number',
+                'is_return', 'return_against', 'custom_reopened_from', 'efris_irn', 'efris_status',
                 'total_taxes_and_charges', 'outstanding_amount', 'status', 'consolidated_invoice')}
-        for child, fields in [('items', ('item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
+        for child, fields in [('items', ('name', 'item_code', 'item_name', 'qty', 'rate', 'amount')), ('taxes', ('description', 'tax_amount')),
                               ('payments', ('mode_of_payment', 'amount'))]:
             data[child] = [{key: entry.get(key) for key in fields} for entry in doc.get(child) or []]
         rows.append(data)

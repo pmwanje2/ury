@@ -12,6 +12,7 @@ Matrix rows 5-10, tracker G8 & G34:
 from __future__ import annotations
 
 import datetime as _dt
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import sys
 from typing import Any
@@ -31,6 +32,30 @@ CODE_VOID_CLOSED_USE_RETURN = "POS-VOID-CLOSED-USE-RETURN"
 CODE_VOID_FISCALISED_USE_RETURN = "POS-VOID-FISCALISED-USE-RETURN"
 CODE_VOID_PARTIAL_PAYMENT = "POS-VOID-PARTIAL-PAYMENT"
 CODE_VOID_OFFLINE_REFUSED = "POS-VOID-OFFLINE-REFUSED"
+CODE_OFFLINE_NOT_ALLOWED = "POS-OFFLINE-NOT-ALLOWED"
+CODE_RETURN_NOT_CLOSED = "POS-RETURN-NOT-CLOSED"
+CODE_RETURN_OF_RETURN = "POS-RETURN-OF-RETURN"
+CODE_RETURN_CONSOLIDATED = "POS-RETURN-CONSOLIDATED"
+CODE_RETURN_AFTER_DAY_CLOSE = "POS-RETURN-AFTER-DAY-CLOSE"
+CODE_RETURN_MERGED = "POS-RETURN-MERGED"
+CODE_RETURN_OVER_QTY = "POS-RETURN-OVER-QTY"
+CODE_RETURN_INVALID_LINE = "POS-RETURN-INVALID-LINE"
+CODE_RETURN_ROOM_CHARGE = "POS-RETURN-ROOM-CHARGE"
+CODE_RETURN_DIFFERENT_TENDER = "POS-RETURN-DIFFERENT-TENDER"
+CODE_RETURN_OVER_PAID = "POS-RETURN-OVER-PAID"
+CODE_RETURN_TENDER_MISMATCH = "POS-RETURN-TENDER-MISMATCH"
+CODE_RETURN_OWN_CHECK = "POS-RETURN-OWN-CHECK"
+CODE_RETURN_UNREFERENCED_NOT_ALLOWED = "POS-RETURN-UNREFERENCED-NOT-ALLOWED"
+
+ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "RWF", "BIF", "JPY", "KRW", "VND", "TZS", "XAF", "XOF"})
+
+EFRIS_REASON_MAP = {
+    "RET-QUALITY": "101:Return of products due to expiry or damage, etc.",
+    "RET-OVERCHARGE": "103:Invoice amount wrongly stated due to miscalculation of price, tax, or discounts, etc.",
+    "REOPEN-TENDER": "102:Cancellation of the purchase",
+    "REOPEN-SPLIT": "102:Cancellation of the purchase",
+}
+DEFAULT_EFRIS_CREDIT_REASON = "102:Cancellation of the purchase"
 
 
 def _f():
@@ -792,3 +817,1030 @@ def post_waste_stock_entry(
             fr.db.set_value("POS Invoice", inv_name, "custom_waste_stock_entry", se.name, update_modified=False)
 
     return se.name
+
+
+# ---------------------------------------------------------------------------
+# Slice 2: POS Return / Refund at the till (Matrix row 9, tracker G34)
+# ---------------------------------------------------------------------------
+
+
+def _currency_precision(currency: str | None) -> int:
+    code = (currency or "").strip().upper()
+    if code in ZERO_DECIMAL_CURRENCIES:
+        return 0
+    return 2
+
+
+def _dec(value: Any) -> Decimal:
+    return Decimal(str(value if value is not None else 0))
+
+
+def _q(value: Decimal, precision: int) -> Decimal:
+    quantum = Decimal("1") if precision <= 0 else Decimal(f"1e-{precision}")
+    return value.quantize(quantum, rounding=ROUND_HALF_UP)
+
+
+def _parse_json_arg(val: Any) -> Any:
+    if isinstance(val, str):
+        return json.loads(val)
+    return val
+
+
+def _assert_same_outlet(doc_branch: str | None) -> None:
+    fr = _f()
+    actor = getattr(getattr(fr, "session", None), "user", None) or ""
+    if actor == "Administrator":
+        return
+    if not isinstance(doc_branch, str) or not doc_branch.strip():
+        return
+    from ury.ury_pos.api import getBranch
+
+    user_branch = getBranch()
+    if isinstance(user_branch, str) and user_branch.strip() and user_branch.strip() != doc_branch.strip():
+        _refuse(
+            CODE_OUTLET_MISMATCH,
+            "Not permitted to process checks from another outlet.",
+            fr.PermissionError,
+        )
+
+
+def _is_room_charge_mode(mode_of_payment: str | None) -> bool:
+    if not isinstance(mode_of_payment, str) or not mode_of_payment.strip():
+        return False
+    low = mode_of_payment.strip().lower()
+    if "room" in low or "folio" in low or "pms" in low:
+        return True
+    mop_type = _f().db.get_value("Mode of Payment", mode_of_payment, "type")
+    return isinstance(mop_type, str) and mop_type.strip().lower() in ("room charge", "folio")
+
+
+def _is_room_charge_invoice(inv) -> bool:
+    room = _field(inv, "room_number")
+    if isinstance(room, str) and room.strip():
+        return True
+    for p in _field(inv, "payments") or []:
+        if flt(_field(p, "amount", 0)) > 0 and _is_room_charge_mode(_field(p, "mode_of_payment")):
+            return True
+    return False
+
+
+def _unreferenced_return_roles(pos_profile_doc) -> set[str]:
+    raw = _field(pos_profile_doc, "custom_unreferenced_return_roles") or ""
+    if not isinstance(raw, str):
+        return set()
+    return {part.strip() for part in raw.replace(",", "\n").splitlines() if part.strip()}
+
+
+def _assert_not_consolidated_or_day_closed(orig) -> None:
+    fr = _f()
+    orig_name = _field(orig, "name")
+    if _field(orig, "consolidated_invoice") or str(_field(orig, "status") or "") == "Consolidated":
+        _refuse(
+            CODE_RETURN_CONSOLIDATED,
+            "This check has already been consolidated. Issue a credit note against the consolidated invoice instead.",
+            fr.ValidationError,
+        )
+    if isinstance(orig_name, str) and orig_name:
+        if fr.db.table_exists("POS Invoice Reference") is True:
+            merge_rows = fr.db.sql(
+                """
+                SELECT piml.name
+                FROM `tabPOS Invoice Merge Log` piml
+                INNER JOIN `tabPOS Invoice Reference` pir ON pir.parent = piml.name
+                WHERE piml.docstatus = 1 AND pir.pos_invoice = %s
+                LIMIT 1
+                """,
+                (orig_name,),
+            )
+            if merge_rows:
+                _refuse(
+                    CODE_RETURN_CONSOLIDATED,
+                    "This check is included in a submitted consolidation log and cannot be returned at the till.",
+                    fr.ValidationError,
+                )
+        if fr.db.table_exists("POS Closing Entry Detail") is True:
+            close_rows = fr.db.sql(
+                """
+                SELECT pce.name
+                FROM `tabPOS Closing Entry` pce
+                INNER JOIN `tabPOS Closing Entry Detail` pced ON pced.parent = pce.name
+                WHERE pce.docstatus = 1 AND pced.pos_invoice = %s
+                LIMIT 1
+                """,
+                (orig_name,),
+            )
+            if close_rows:
+                _refuse(
+                    CODE_RETURN_AFTER_DAY_CLOSE,
+                    "This check belongs to a closed shift/day and cannot be returned at the till.",
+                    fr.ValidationError,
+                )
+
+
+def _load_prior_returns(orig_name: str, *, for_update: bool = False) -> list[Any]:
+    fr = _f()
+    if for_update:
+        rows = fr.db.sql(
+            """
+            SELECT name FROM `tabPOS Invoice`
+            WHERE return_against = %s AND is_return = 1 AND docstatus = 1
+            ORDER BY creation ASC, name ASC
+            FOR UPDATE
+            """,
+            (orig_name,),
+        )
+        names = [r[0] if isinstance(r, (list, tuple)) else _field(r, "name") for r in (rows or [])]
+    else:
+        names = fr.get_all(
+            "POS Invoice",
+            filters={"return_against": orig_name, "is_return": 1, "docstatus": 1},
+            pluck="name",
+        ) or []
+    return [fr.get_doc("POS Invoice", n) for n in names if isinstance(n, str) and n]
+
+
+def _prior_returned_qty_by_line(orig, prior_returns: list[Any]) -> dict[str, Decimal]:
+    """Return already-returned positive quantities keyed by original `POS Invoice Item.name`."""
+    returned: dict[str, Decimal] = {}
+    orig_items = list(_field(orig, "items") or [])
+    by_name = {_field(r, "name"): r for r in orig_items if _field(r, "name")}
+    by_code: dict[str, list[Any]] = {}
+    for r in orig_items:
+        by_code.setdefault(_field(r, "item_code"), []).append(r)
+
+    for ret in prior_returns:
+        for row in _field(ret, "items") or []:
+            qty_abs = abs(_dec(_field(row, "qty", 0)))
+            if qty_abs <= 0:
+                continue
+            ref = _field(row, "pos_invoice_item")
+            if ref and ref in by_name:
+                returned[ref] = returned.get(ref, Decimal("0")) + qty_abs
+                continue
+            # Fallback when ERPNext/legacy return omitted pos_invoice_item: allocate FIFO by item_code.
+            remaining = qty_abs
+            for cand in by_code.get(_field(row, "item_code"), []):
+                cname = _field(cand, "name")
+                cap = _dec(_field(cand, "qty", 0)) - returned.get(cname, Decimal("0"))
+                if cap <= 0:
+                    continue
+                take = min(remaining, cap)
+                returned[cname] = returned.get(cname, Decimal("0")) + take
+                remaining -= take
+                if remaining <= 0:
+                    break
+    return returned
+
+
+def _net_original_payments(orig, precision: int) -> list[dict[str, Any]]:
+    """Return original positive payment modes net of `change_amount`."""
+    raw_payments = [
+        {"mode_of_payment": _field(p, "mode_of_payment"), "amount": _dec(_field(p, "amount", 0))}
+        for p in (_field(orig, "payments") or [])
+        if _dec(_field(p, "amount", 0)) > 0 and _field(p, "mode_of_payment")
+    ]
+    change = _dec(_field(orig, "change_amount", 0))
+    if change > 0 and raw_payments:
+        # Deduct change from Cash tender first (standard POS convention), then last tender.
+        remaining_change = change
+        for p in raw_payments:
+            mop_type = _f().db.get_value("Mode of Payment", p["mode_of_payment"], "type")
+            if mop_type == "Cash" or p["mode_of_payment"].strip().lower() == "cash":
+                deduct = min(p["amount"], remaining_change)
+                p["amount"] -= deduct
+                remaining_change -= deduct
+                if remaining_change <= 0:
+                    break
+        if remaining_change > 0:
+            for p in reversed(raw_payments):
+                deduct = min(p["amount"], remaining_change)
+                p["amount"] -= deduct
+                remaining_change -= deduct
+                if remaining_change <= 0:
+                    break
+
+    # Aggregate by mode_of_payment preserving original order
+    agg: dict[str, Decimal] = {}
+    order: list[str] = []
+    for p in raw_payments:
+        amt = _q(p["amount"], precision)
+        if amt <= 0:
+            continue
+        mop = p["mode_of_payment"]
+        if mop not in agg:
+            order.append(mop)
+            agg[mop] = Decimal("0")
+        agg[mop] += amt
+    return [{"mode_of_payment": mop, "amount": agg[mop]} for mop in order]
+
+
+def _default_refund_payments_for_amount(
+    orig,
+    prior_returns: list[Any],
+    target_refund: Decimal,
+    precision: int,
+) -> list[dict[str, float]]:
+    if target_refund <= 0:
+        return []
+    orig_net = _net_original_payments(orig, precision)
+    prior_by_mop: dict[str, Decimal] = {}
+    for ret in prior_returns:
+        for p in _field(ret, "payments") or []:
+            mop = _field(p, "mode_of_payment")
+            amt = abs(_dec(_field(p, "amount", 0)))
+            if mop and amt > 0:
+                prior_by_mop[mop] = prior_by_mop.get(mop, Decimal("0")) + amt
+
+    available: list[dict[str, Any]] = []
+    for entry in orig_net:
+        rem = entry["amount"] - prior_by_mop.get(entry["mode_of_payment"], Decimal("0"))
+        if rem > 0:
+            available.append({"mode_of_payment": entry["mode_of_payment"], "amount": rem})
+
+    out: list[dict[str, float]] = []
+    left = target_refund
+    for entry in available:
+        if left <= 0:
+            break
+        take = _q(min(left, entry["amount"]), precision)
+        if take > 0:
+            out.append({"mode_of_payment": entry["mode_of_payment"], "amount": float(take)})
+            left -= take
+    return out
+
+
+def _compute_return_plan(
+    orig,
+    prior_returns: list[Any],
+    items_req: Any,
+    refund_payments_req: Any = None,
+    allow_different_tender: int = 0,
+    pos_profile_doc=None,
+) -> dict[str, Any]:
+    """Compute exact proportional discount/tax/refund tender plan with cumulative-remainder closure."""
+    fr = _f()
+    parsed_items = _parse_json_arg(items_req)
+    if not isinstance(parsed_items, list) or not parsed_items:
+        _refuse(CODE_RETURN_INVALID_LINE, "Select at least one item to return.", fr.ValidationError)
+
+    currency = _field(orig, "currency") or "UGX"
+    precision = _currency_precision(currency)
+    orig_items = list(_field(orig, "items") or [])
+    orig_by_name = {_field(r, "name"): r for r in orig_items if _field(r, "name")}
+    prior_qty = _prior_returned_qty_by_line(orig, prior_returns)
+
+    # Aggregate requested qty per original row so duplicate payload entries cannot bypass caps.
+    req_by_row: dict[str, Decimal] = {}
+    req_order: list[str] = []
+    for entry in parsed_items:
+        if not isinstance(entry, dict):
+            _refuse(CODE_RETURN_INVALID_LINE, "Each return line must be an object.", fr.ValidationError)
+        row_name = entry.get("item_row_name") or entry.get("pos_invoice_item") or entry.get("name")
+        if not isinstance(row_name, str) or row_name not in orig_by_name:
+            _refuse(CODE_RETURN_INVALID_LINE, "Return item line was not found on the original check.", fr.ValidationError)
+        qty_d = _dec(entry.get("qty", 0))
+        if qty_d <= 0:
+            _refuse(CODE_RETURN_INVALID_LINE, "Return quantity must be greater than zero.", fr.ValidationError)
+        if row_name not in req_by_row:
+            req_order.append(row_name)
+            req_by_row[row_name] = Decimal("0")
+        req_by_row[row_name] += qty_d
+
+    selected_lines: list[dict[str, Any]] = []
+    this_gross = Decimal("0")
+    for row_name in req_order:
+        orig_row = orig_by_name[row_name]
+        sold = _dec(_field(orig_row, "qty", 0))
+        already = prior_qty.get(row_name, Decimal("0"))
+        remaining = sold - already
+        req_qty = req_by_row[row_name]
+        if req_qty > remaining + Decimal("1e-9"):
+            _refuse(
+                CODE_RETURN_OVER_QTY,
+                f"Cannot return {req_qty} of {_field(orig_row, 'item_name') or _field(orig_row, 'item_code')}; only {remaining} remaining.",
+                fr.ValidationError,
+            )
+        rate = _dec(_field(orig_row, "rate", 0))
+        line_gross = req_qty * rate
+        this_gross += line_gross
+        selected_lines.append({
+            "item_row_name": row_name,
+            "item_code": _field(orig_row, "item_code"),
+            "item_name": _field(orig_row, "item_name") or _field(orig_row, "item_code"),
+            "qty": float(req_qty),
+            "rate": float(rate),
+            "gross": float(_q(line_gross, precision)),
+            "orig_row": orig_row,
+        })
+
+    orig_gross = sum(_dec(_field(r, "qty", 0)) * _dec(_field(r, "rate", 0)) for r in orig_items)
+    if orig_gross <= 0:
+        _refuse(CODE_RETURN_INVALID_LINE, "Original check has no returnable line total.", fr.ValidationError)
+
+    prior_gross = Decimal("0")
+    prior_discount = Decimal("0")
+    prior_excl_tax = Decimal("0")
+    prior_total = Decimal("0")
+    prior_paid_refunded = Decimal("0")
+    for ret in prior_returns:
+        prior_gross += sum(abs(_dec(_field(r, "qty", 0))) * _dec(_field(r, "rate", 0)) for r in (_field(ret, "items") or []))
+        prior_discount += abs(_dec(_field(ret, "discount_amount", 0)))
+        prior_excl_tax += sum(
+            abs(_dec(_field(t, "tax_amount", 0)))
+            for t in (_field(ret, "taxes") or [])
+            if cint(_field(t, "included_in_print_rate", 0)) == 0
+        )
+        prior_total += abs(_dec(_field(ret, "rounded_total") or _field(ret, "grand_total") or 0))
+        prior_paid_refunded += sum(abs(_dec(_field(p, "amount", 0))) for p in (_field(ret, "payments") or []))
+
+    # Cumulative-remainder proportional discount allocation (zero drift in UGX whole shillings!).
+    orig_discount = abs(_dec(_field(orig, "discount_amount", 0)))
+    cum_gross = prior_gross + this_gross
+    if orig_discount > 0:
+        cum_discount = _q(min(orig_discount, orig_discount * cum_gross / orig_gross), precision)
+        this_discount = max(Decimal("0"), cum_discount - prior_discount)
+    else:
+        this_discount = Decimal("0")
+
+    # Cumulative-remainder proportional exclusive tax allocation.
+    orig_taxes = list(_field(orig, "taxes") or [])
+    orig_excl_tax = sum(
+        _dec(_field(t, "tax_amount", 0))
+        for t in orig_taxes
+        if cint(_field(t, "included_in_print_rate", 0)) == 0
+    )
+    orig_net = orig_gross - orig_discount
+    this_net = _q(this_gross, precision) - this_discount
+    prior_net = _q(prior_gross, precision) - prior_discount
+
+    if orig_excl_tax > 0 and orig_net > 0:
+        cum_net = prior_net + this_net
+        cum_excl_tax = _q(min(orig_excl_tax, orig_excl_tax * cum_net / orig_net), precision)
+        this_excl_tax = max(Decimal("0"), cum_excl_tax - prior_excl_tax)
+    else:
+        this_excl_tax = Decimal("0")
+
+    orig_grand = _q(_dec(_field(orig, "rounded_total") or _field(orig, "grand_total") or (orig_net + orig_excl_tax)), precision)
+    # Check if this return exhausts every remaining line on the check -> guarantee exact grand_total closure.
+    is_final_return = all(
+        (prior_qty.get(_field(r, "name"), Decimal("0")) + req_by_row.get(_field(r, "name"), Decimal("0"))) >= _dec(_field(r, "qty", 0)) - Decimal("1e-9")
+        for r in orig_items
+        if _dec(_field(r, "qty", 0)) > 0
+    )
+    if is_final_return:
+        refund_total = max(Decimal("0"), orig_grand - prior_total)
+        # Reconcile any 1-unit rounding remainder cleanly into tax/discount.
+        computed = this_net + this_excl_tax
+        diff = refund_total - computed
+        if diff != 0:
+            if orig_excl_tax > 0:
+                this_excl_tax += diff
+            else:
+                this_discount -= diff
+    else:
+        refund_total = max(Decimal("0"), min(orig_grand - prior_total, this_net + this_excl_tax))
+
+    # Proportional per-tax-row amounts for native ERPNext return taxes child table.
+    tax_rows_out: list[dict[str, Any]] = []
+    excl_rows = [t for t in orig_taxes if cint(_field(t, "included_in_print_rate", 0)) == 0]
+    if excl_rows and this_excl_tax > 0 and orig_excl_tax > 0:
+        allocated = Decimal("0")
+        for idx, t in enumerate(excl_rows):
+            if idx == len(excl_rows) - 1:
+                amt = this_excl_tax - allocated
+            else:
+                amt = _q(this_excl_tax * _dec(_field(t, "tax_amount", 0)) / orig_excl_tax, precision)
+                allocated += amt
+            tax_rows_out.append({
+                "charge_type": _field(t, "charge_type") or "Actual",
+                "account_head": _field(t, "account_head"),
+                "description": _field(t, "description") or _field(t, "account_head"),
+                "rate": float(_field(t, "rate") or 0),
+                "tax_amount": -float(amt),
+                "included_in_print_rate": 0,
+            })
+
+    # Refund payment cap: never hand back more cash/tender than was actually paid!
+    orig_net_payments = _net_original_payments(orig, precision)
+    orig_net_paid = sum(p["amount"] for p in orig_net_payments)
+    remaining_paid = max(Decimal("0"), orig_net_paid - prior_paid_refunded)
+    max_cash_refundable = min(refund_total, remaining_paid)
+    unpaid_credit_reduction = max(Decimal("0"), refund_total - max_cash_refundable)
+
+    default_payments = _default_refund_payments_for_amount(orig, prior_returns, max_cash_refundable, precision)
+    is_room_charge = _is_room_charge_invoice(orig)
+
+    # Validate caller-supplied refund_payments if given; else use default same-tender payments.
+    if refund_payments_req is not None:
+        parsed_pay = _parse_json_arg(refund_payments_req)
+        if not isinstance(parsed_pay, list):
+            _refuse(CODE_RETURN_TENDER_MISMATCH, "Refund payments must be a list.", fr.ValidationError)
+        orig_modes = {p["mode_of_payment"] for p in orig_net_payments}
+        profile_modes = (
+            {_field(p, "mode_of_payment") for p in (_field(pos_profile_doc, "payments") or []) if _field(p, "mode_of_payment")}
+            if pos_profile_doc is not None
+            else set()
+        )
+        normalized_payments: list[dict[str, float]] = []
+        pay_sum = Decimal("0")
+        for p in parsed_pay:
+            mop = p.get("mode_of_payment") if isinstance(p, dict) else None
+            amt = _q(_dec(p.get("amount", 0) if isinstance(p, dict) else 0), precision)
+            if not isinstance(mop, str) or not mop.strip() or amt <= 0:
+                _refuse(CODE_RETURN_TENDER_MISMATCH, "Each refund tender must have a valid payment method and positive amount.", fr.ValidationError)
+            mop = mop.strip()
+            if is_room_charge and not _is_room_charge_mode(mop):
+                _refuse(
+                    CODE_RETURN_ROOM_CHARGE,
+                    "A room charge check can only be refunded back to the room folio, not cash or card.",
+                    fr.ValidationError,
+                )
+            if mop not in orig_modes:
+                if cint(allow_different_tender) != 1:
+                    _refuse(
+                        CODE_RETURN_DIFFERENT_TENDER,
+                        "Refund must use the original payment method unless a manager approves a different tender.",
+                        fr.ValidationError,
+                    )
+                if profile_modes and mop not in profile_modes:
+                    _refuse(
+                        CODE_RETURN_DIFFERENT_TENDER,
+                        f"Payment method '{mop}' is not enabled on this till.",
+                        fr.ValidationError,
+                    )
+            pay_sum += amt
+            normalized_payments.append({"mode_of_payment": mop, "amount": float(amt)})
+
+        if pay_sum > max_cash_refundable + Decimal("1e-9"):
+            _refuse(
+                CODE_RETURN_OVER_PAID,
+                f"Refund tenders ({pay_sum}) cannot exceed the paid amount available to refund ({max_cash_refundable}).",
+                fr.ValidationError,
+            )
+        if abs(pay_sum - max_cash_refundable) > Decimal("1e-9"):
+            _refuse(
+                CODE_RETURN_TENDER_MISMATCH,
+                f"Refund tenders ({pay_sum}) must equal the refundable paid amount ({max_cash_refundable}).",
+                fr.ValidationError,
+            )
+        final_payments = normalized_payments
+    else:
+        final_payments = default_payments
+
+    return {
+        "currency": currency,
+        "precision": precision,
+        "items": selected_lines,
+        "subtotal": float(_q(this_gross, precision)),
+        "discount_amount": float(this_discount),
+        "tax_amount": float(this_excl_tax),
+        "refund_total": float(refund_total),
+        "max_cash_refundable": float(max_cash_refundable),
+        "unpaid_credit_reduction": float(unpaid_credit_reduction),
+        "default_refund_payments": default_payments,
+        "refund_payments": final_payments,
+        "tax_rows": tax_rows_out,
+        "is_room_charge": is_room_charge,
+        "is_fiscalised": is_fiscalised_invoice(orig),
+    }
+
+
+def _resolve_efris_credit_reason(reason_code: str, explicit_code: str | None = None) -> str:
+    if isinstance(explicit_code, str) and explicit_code.strip():
+        return explicit_code.strip()
+    return EFRIS_REASON_MAP.get((reason_code or "").strip().upper(), DEFAULT_EFRIS_CREDIT_REASON)
+
+
+@_default_frappe.whitelist()
+def get_returnable_check(invoice_id: str) -> dict[str, Any]:
+    """Return a closed check's remaining returnable lines, tenders, and flags for the till UI."""
+    fr = _f()
+    orig = fr.get_doc("POS Invoice", invoice_id)
+    _assert_same_outlet(_field(orig, "branch"))
+    if cint(_field(orig, "docstatus", 0)) != 1:
+        _refuse(CODE_RETURN_NOT_CLOSED, "Only closed checks can be returned.", fr.ValidationError)
+    if cint(_field(orig, "is_return", 0)) == 1:
+        _refuse(CODE_RETURN_OF_RETURN, "A return check cannot be returned again.", fr.ValidationError)
+    if _field(orig, "custom_merged_pos_invoice"):
+        _refuse(CODE_RETURN_MERGED, "Legacy linked merged checks cannot be returned individually.", fr.ValidationError)
+    _assert_not_consolidated_or_day_closed(orig)
+
+    prior_returns = _load_prior_returns(orig.name, for_update=False)
+    prior_qty = _prior_returned_qty_by_line(orig, prior_returns)
+    currency = _field(orig, "currency") or "UGX"
+    precision = _currency_precision(currency)
+    orig_net_payments = _net_original_payments(orig, precision)
+    orig_net_paid = sum(p["amount"] for p in orig_net_payments)
+    prior_paid_refunded = sum(
+        abs(_dec(_field(p, "amount", 0)))
+        for ret in prior_returns
+        for p in (_field(ret, "payments") or [])
+    )
+
+    items_out = []
+    for row in _field(orig, "items") or []:
+        rname = _field(row, "name")
+        sold = _dec(_field(row, "qty", 0))
+        returned = prior_qty.get(rname, Decimal("0"))
+        rem = max(Decimal("0"), sold - returned)
+        items_out.append({
+            "item_row_name": rname,
+            "item_code": _field(row, "item_code"),
+            "item_name": _field(row, "item_name") or _field(row, "item_code"),
+            "sold_qty": float(sold),
+            "returned_qty": float(returned),
+            "remaining_qty": float(rem),
+            "rate": float(_field(row, "rate", 0)),
+            "amount": float(_field(row, "amount", 0)),
+        })
+
+    profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
+    profile_modes = [
+        _field(p, "mode_of_payment")
+        for p in (_field(profile_doc, "payments") or [])
+        if _field(p, "mode_of_payment")
+    ]
+    return {
+        "invoice": orig.name,
+        "pos_profile": profile_name,
+        "branch": _field(orig, "branch"),
+        "customer": _field(orig, "customer"),
+        "currency": currency,
+        "precision": precision,
+        "grand_total": float(_field(orig, "rounded_total") or _field(orig, "grand_total") or 0),
+        "discount_amount": float(_field(orig, "discount_amount") or 0),
+        "total_taxes_and_charges": float(_field(orig, "total_taxes_and_charges") or 0),
+        "net_paid_amount": float(orig_net_paid),
+        "already_refunded_amount": float(prior_paid_refunded),
+        "remaining_refundable_amount": float(max(Decimal("0"), orig_net_paid - prior_paid_refunded)),
+        "original_payments": [{"mode_of_payment": p["mode_of_payment"], "amount": float(p["amount"])} for p in orig_net_payments],
+        "available_modes": profile_modes,
+        "is_room_charge": _is_room_charge_invoice(orig),
+        "room_number": _field(orig, "room_number"),
+        "is_fiscalised": is_fiscalised_invoice(orig),
+        "items": items_out,
+        "reasons": _active_pos_reasons("return"),
+    }
+
+
+@_default_frappe.whitelist()
+def preview_pos_return(
+    original_invoice: str,
+    items: Any,
+    refund_payments: Any = None,
+    allow_different_tender: int = 0,
+) -> dict[str, Any]:
+    """Read-only calculation of proportional discount, tax, and default refund tenders."""
+    fr = _f()
+    orig = fr.get_doc("POS Invoice", original_invoice)
+    _assert_same_outlet(_field(orig, "branch"))
+    if cint(_field(orig, "docstatus", 0)) != 1:
+        _refuse(CODE_RETURN_NOT_CLOSED, "Only closed checks can be returned.", fr.ValidationError)
+    if cint(_field(orig, "is_return", 0)) == 1:
+        _refuse(CODE_RETURN_OF_RETURN, "A return check cannot be returned again.", fr.ValidationError)
+    if _field(orig, "custom_merged_pos_invoice"):
+        _refuse(CODE_RETURN_MERGED, "Legacy linked merged checks cannot be returned individually.", fr.ValidationError)
+    _assert_not_consolidated_or_day_closed(orig)
+
+    profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
+    prior_returns = _load_prior_returns(orig.name, for_update=False)
+    plan = _compute_return_plan(
+        orig,
+        prior_returns,
+        items,
+        refund_payments_req=refund_payments,
+        allow_different_tender=cint(allow_different_tender),
+        pos_profile_doc=profile_doc,
+    )
+    return {
+        "original_invoice": orig.name,
+        "currency": plan["currency"],
+        "precision": plan["precision"],
+        "items": [{k: v for k, v in ln.items() if k != "orig_row"} for ln in plan["items"]],
+        "subtotal": plan["subtotal"],
+        "discount_amount": plan["discount_amount"],
+        "tax_amount": plan["tax_amount"],
+        "refund_total": plan["refund_total"],
+        "max_cash_refundable": plan["max_cash_refundable"],
+        "unpaid_credit_reduction": plan["unpaid_credit_reduction"],
+        "default_refund_payments": plan["default_refund_payments"],
+        "refund_payments": plan["refund_payments"],
+        "is_room_charge": plan["is_room_charge"],
+        "is_fiscalised": plan["is_fiscalised"],
+    }
+
+
+@_default_frappe.whitelist()
+def create_pos_return(
+    original_invoice: str,
+    items: Any,
+    reason: Any,
+    note: Any = None,
+    refund_payments: Any = None,
+    allow_different_tender: int = 0,
+    approval_token: str | None = None,
+    efris_reason_code: str | None = None,
+    offline_captured: int = 0,
+) -> dict[str, Any]:
+    """Create and submit a native ERPNext POS Return against a closed check (Matrix row 9)."""
+    fr = _f()
+    if cint(offline_captured) == 1:
+        _refuse(CODE_OFFLINE_NOT_ALLOWED, "Returns and refunds cannot be processed offline.", fr.ValidationError)
+
+    # Lock original check and prior returns in deterministic order to block concurrent double-return
+    # and concurrent day-close consolidation races.
+    orig = fr.get_doc("POS Invoice", original_invoice, for_update=True)
+    _assert_same_outlet(_field(orig, "branch"))
+    if cint(_field(orig, "docstatus", 0)) != 1:
+        _refuse(CODE_RETURN_NOT_CLOSED, "Only closed checks can be returned.", fr.ValidationError)
+    if cint(_field(orig, "is_return", 0)) == 1:
+        _refuse(CODE_RETURN_OF_RETURN, "A return check cannot be returned again.", fr.ValidationError)
+    if _field(orig, "custom_merged_pos_invoice"):
+        _refuse(CODE_RETURN_MERGED, "Legacy linked merged checks cannot be returned individually.", fr.ValidationError)
+
+    # Re-check consolidation & day close AFTER acquiring FOR UPDATE lock.
+    _assert_not_consolidated_or_day_closed(orig)
+    prior_returns = _load_prior_returns(orig.name, for_update=True)
+
+    profile_name = _safe_profile_name(_field(orig, "pos_profile"))
+    profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
+
+    plan = _compute_return_plan(
+        orig,
+        prior_returns,
+        items,
+        refund_payments_req=refund_payments,
+        allow_different_tender=cint(allow_different_tender),
+        pos_profile_doc=profile_doc,
+    )
+
+    reason_info = resolve_pos_reason("return", profile_name, reason, note=note)
+
+    session_user = getattr(getattr(fr, "session", None), "user", None) or ""
+    check_actors = {
+        a for a in (_field(orig, "owner"), _field(orig, "cashier"), _field(orig, "waiter"))
+        if isinstance(a, str) and a.strip()
+    }
+    is_own_check = bool(session_user and session_user in check_actors)
+
+    claim = {
+        "original_invoice": orig.name,
+        "items": sorted(
+            [
+                {
+                    "item_row_name": ln["item_row_name"],
+                    "item_code": ln["item_code"],
+                    "qty": float(ln["qty"]),
+                }
+                for ln in plan["items"]
+            ],
+            key=lambda x: (x["item_row_name"], x["item_code"]),
+        ),
+        "refund_total": float(plan["refund_total"]),
+        "currency": plan["currency"],
+        "refund_payments": sorted(
+            [{"mode_of_payment": p["mode_of_payment"], "amount": float(p["amount"])} for p in plan["refund_payments"]],
+            key=lambda x: x["mode_of_payment"],
+        ),
+        "allow_different_tender": 1 if cint(allow_different_tender) == 1 else 0,
+        "reason": reason_info["code"],
+        "note": reason_info["note"],
+    }
+
+    # Four-eyes: never return own check alone; even an approving manager cannot be an original check actor.
+    approver = require_pos_override(
+        "return",
+        profile_name,
+        "POS Invoice",
+        orig.name,
+        claim,
+        approval_token=approval_token,
+        amount=float(plan["refund_total"]),
+        forbid_solo=is_own_check,
+    )
+    if approval_token and approver in check_actors:
+        _refuse(
+            CODE_RETURN_OWN_CHECK,
+            "The person who served or settled this check cannot approve its return.",
+            fr.PermissionError,
+        )
+
+    ret = fr.new_doc("POS Invoice")
+    ret.is_return = 1
+    ret.return_against = orig.name
+    ret.company = _field(orig, "company")
+    ret.branch = _field(orig, "branch")
+    ret.pos_profile = profile_name
+    ret.customer = _field(orig, "customer")
+    ret.customer_name = _field(orig, "customer_name") or _field(orig, "customer")
+    ret.currency = plan["currency"]
+    ret.selling_price_list = _field(orig, "selling_price_list")
+    ret.posting_date = _today_date()
+    ret.posting_time = _now_time()
+    ret.set_posting_time = 1
+    ret.invoice_printed = 0
+    ret.restaurant_table = None
+    ret.cashier = session_user
+    ret.waiter = session_user
+    ret.update_billed_amount_in_sales_order = 0
+    ret.update_billed_amount_in_delivery_note = 1
+    if plan["is_room_charge"] and _field(orig, "room_number"):
+        ret.room_number = _field(orig, "room_number")
+
+    for ln in plan["items"]:
+        orow = ln["orig_row"]
+        ret.append("items", {
+            "item_code": ln["item_code"],
+            "item_name": ln["item_name"],
+            "qty": -float(ln["qty"]),
+            "rate": float(ln["rate"]),
+            "uom": _field(orow, "uom") or "Nos",
+            "warehouse": _field(orow, "warehouse") or (_field(profile_doc, "warehouse") if profile_doc else None),
+            "income_account": _field(orow, "income_account"),
+            "cost_center": _field(orow, "cost_center") or (_field(profile_doc, "cost_center") if profile_doc else None),
+            "pos_invoice_item": ln["item_row_name"],
+            "ury_held": 0,
+        })
+
+    if plan["discount_amount"] > 0:
+        ret.apply_discount_on = _field(orig, "apply_discount_on") or "Grand Total"
+        ret.discount_amount = -float(plan["discount_amount"])
+
+    for trow in plan["tax_rows"]:
+        ret.append("taxes", trow)
+
+    for prow in plan["refund_payments"]:
+        ret.append("payments", {
+            "mode_of_payment": prow["mode_of_payment"],
+            "amount": -float(prow["amount"]),
+        })
+
+    efris_code = None
+    if plan["is_fiscalised"] or _has_field("POS Invoice", "efris_creditnote_reasoncode"):
+        efris_code = _resolve_efris_credit_reason(reason_info["code"], efris_reason_code)
+        if _has_field("POS Invoice", "efris_creditnote_reasoncode"):
+            ret.efris_creditnote_reasoncode = efris_code
+        if _has_field("POS Invoice", "efris_creditnote_reason"):
+            ret.efris_creditnote_reason = reason_info["stored"]
+
+    if _has_field("POS Invoice", "custom_return_approver"):
+        ret.custom_return_approver = approver
+    if _has_field("POS Invoice", "cancel_reason"):
+        ret.cancel_reason = reason_info["stored"]
+
+    mark_verified_pos_approval(ret, "return")
+    ret.insert(ignore_permissions=True)
+    ret.submit()
+
+    return {
+        "return_invoice": ret.name,
+        "original_invoice": orig.name,
+        "currency": plan["currency"],
+        "subtotal": plan["subtotal"],
+        "discount_amount": plan["discount_amount"],
+        "tax_amount": plan["tax_amount"],
+        "refund_total": plan["refund_total"],
+        "max_cash_refundable": plan["max_cash_refundable"],
+        "unpaid_credit_reduction": plan["unpaid_credit_reduction"],
+        "refund_payments": plan["refund_payments"],
+        "approver": approver,
+        "reason": reason_info["code"],
+        "is_room_charge": plan["is_room_charge"],
+        "is_fiscalised": plan["is_fiscalised"],
+        "efris_creditnote_reasoncode": efris_code,
+    }
+
+
+@_default_frappe.whitelist()
+def create_unreferenced_return(
+    pos_profile: str,
+    customer: str,
+    items: Any,
+    refund_payments: Any,
+    reason: Any,
+    note: Any = None,
+    approval_token: str | None = None,
+    offline_captured: int = 0,
+) -> dict[str, Any]:
+    """Create a standalone return without an original check — default DENIED unless dedicated roles configured."""
+    fr = _f()
+    if cint(offline_captured) == 1:
+        _refuse(CODE_OFFLINE_NOT_ALLOWED, "Unreferenced returns cannot be processed offline.", fr.ValidationError)
+
+    profile_name = _safe_profile_name(pos_profile)
+    if not profile_name or not fr.db.exists("POS Profile", profile_name):
+        _refuse(CODE_RETURN_INVALID_LINE, "Select a valid POS Profile.", fr.ValidationError)
+    profile_doc = fr.get_doc("POS Profile", profile_name)
+    _assert_same_outlet(_field(profile_doc, "branch"))
+
+    # Dedicated privilege gate: default-empty `custom_unreferenced_return_roles` denies EVERYONE!
+    allowed_roles = _unreferenced_return_roles(profile_doc)
+    if not allowed_roles:
+        _refuse(
+            CODE_RETURN_UNREFERENCED_NOT_ALLOWED,
+            "Unreferenced returns are disabled on this till. Configure dedicated approval roles on the POS Profile.",
+            fr.PermissionError,
+        )
+
+    parsed_items = _parse_json_arg(items)
+    if not isinstance(parsed_items, list) or not parsed_items:
+        _refuse(CODE_RETURN_INVALID_LINE, "Add at least one item to return.", fr.ValidationError)
+
+    currency = _field(profile_doc, "currency") or "UGX"
+    precision = _currency_precision(currency)
+    price_list = _field(profile_doc, "selling_price_list") or "Standard Selling"
+
+    normalized_items = []
+    total_refund = Decimal("0")
+    for entry in parsed_items:
+        code = entry.get("item_code") if isinstance(entry, dict) else None
+        qty_d = _dec(entry.get("qty", 0) if isinstance(entry, dict) else 0)
+        if not isinstance(code, str) or not code.strip() or qty_d <= 0:
+            _refuse(CODE_RETURN_INVALID_LINE, "Each unreferenced return line needs a valid item and positive quantity.", fr.ValidationError)
+        code = code.strip()
+        item_info = fr.db.get_value("Item", code, ["item_name", "stock_uom"], as_dict=True)
+        if not item_info:
+            _refuse(CODE_RETURN_INVALID_LINE, f"Item '{code}' was not found.", fr.ValidationError)
+        rate_val = fr.db.get_value("Item Price", {"item_code": code, "price_list": price_list}, "price_list_rate")
+        rate_d = _q(_dec(rate_val if rate_val is not None else entry.get("rate", 0)), precision)
+        if rate_d <= 0:
+            _refuse(CODE_RETURN_INVALID_LINE, f"Item '{code}' has no valid selling price.", fr.ValidationError)
+        total_refund += _q(qty_d * rate_d, precision)
+        normalized_items.append({
+            "item_code": code,
+            "item_name": _field(item_info, "item_name") or code,
+            "uom": _field(item_info, "stock_uom") or "Nos",
+            "qty": float(qty_d),
+            "rate": float(rate_d),
+        })
+
+    parsed_pay = _parse_json_arg(refund_payments)
+    if not isinstance(parsed_pay, list) or not parsed_pay:
+        _refuse(CODE_RETURN_TENDER_MISMATCH, "Select a refund payment method.", fr.ValidationError)
+    profile_modes = {_field(p, "mode_of_payment") for p in (_field(profile_doc, "payments") or []) if _field(p, "mode_of_payment")}
+    normalized_pay = []
+    pay_sum = Decimal("0")
+    for p in parsed_pay:
+        mop = p.get("mode_of_payment") if isinstance(p, dict) else None
+        amt = _q(_dec(p.get("amount", 0) if isinstance(p, dict) else 0), precision)
+        if not isinstance(mop, str) or not mop.strip() or amt <= 0:
+            _refuse(CODE_RETURN_TENDER_MISMATCH, "Each refund tender must have a valid payment method and positive amount.", fr.ValidationError)
+        mop = mop.strip()
+        if profile_modes and mop not in profile_modes:
+            _refuse(CODE_RETURN_DIFFERENT_TENDER, f"Payment method '{mop}' is not enabled on this till.", fr.ValidationError)
+        pay_sum += amt
+        normalized_pay.append({"mode_of_payment": mop, "amount": float(amt)})
+    if abs(pay_sum - total_refund) > Decimal("1e-9"):
+        _refuse(CODE_RETURN_TENDER_MISMATCH, "Refund tenders must equal the unreferenced return total.", fr.ValidationError)
+
+    reason_info = resolve_pos_reason("return", profile_name, reason, note=note)
+    claim = {
+        "unreferenced": 1,
+        "pos_profile": profile_name,
+        "customer": customer,
+        "items": sorted(
+            [{"item_code": i["item_code"], "qty": i["qty"], "rate": i["rate"]} for i in normalized_items],
+            key=lambda x: x["item_code"],
+        ),
+        "refund_total": float(total_refund),
+        "currency": currency,
+        "refund_payments": sorted(normalized_pay, key=lambda x: x["mode_of_payment"]),
+        "reason": reason_info["code"],
+        "note": reason_info["note"],
+    }
+
+    # Unreferenced returns ALWAYS require a distinct manager PIN (`forbid_solo=True`), AND the
+    # approving manager MUST hold one of the profile's configured `custom_unreferenced_return_roles`!
+    approver = require_pos_override(
+        "return",
+        profile_name,
+        "POS Profile",
+        profile_name,
+        claim,
+        approval_token=approval_token,
+        amount=float(total_refund),
+        forbid_solo=True,
+    )
+    approver_roles = _user_roles(approver)
+    if not (approver_roles & allowed_roles):
+        _refuse(
+            CODE_RETURN_UNREFERENCED_NOT_ALLOWED,
+            "Approving manager does not hold the dedicated privilege for unreferenced returns.",
+            fr.PermissionError,
+        )
+
+    session_user = getattr(getattr(fr, "session", None), "user", None) or ""
+    ret = fr.new_doc("POS Invoice")
+    ret.is_return = 1
+    ret.return_against = None
+    ret.company = _field(profile_doc, "company")
+    ret.branch = _field(profile_doc, "branch")
+    ret.pos_profile = profile_name
+    ret.customer = customer
+    ret.currency = currency
+    ret.selling_price_list = price_list
+    ret.posting_date = _today_date()
+    ret.posting_time = _now_time()
+    ret.set_posting_time = 1
+    ret.invoice_printed = 0
+    ret.restaurant_table = None
+    ret.cashier = session_user
+    ret.waiter = session_user
+    for i in normalized_items:
+        ret.append("items", {
+            "item_code": i["item_code"],
+            "item_name": i["item_name"],
+            "qty": -float(i["qty"]),
+            "rate": float(i["rate"]),
+            "uom": i["uom"],
+            "warehouse": _field(profile_doc, "warehouse"),
+            "cost_center": _field(profile_doc, "cost_center"),
+            "ury_held": 0,
+        })
+    for prow in normalized_pay:
+        ret.append("payments", {
+            "mode_of_payment": prow["mode_of_payment"],
+            "amount": -float(prow["amount"]),
+        })
+    if _has_field("POS Invoice", "custom_return_approver"):
+        ret.custom_return_approver = approver
+    if _has_field("POS Invoice", "cancel_reason"):
+        ret.cancel_reason = reason_info["stored"]
+
+    mark_verified_pos_approval(ret, "return")
+    ret.insert(ignore_permissions=True)
+    ret.submit()
+
+    return {
+        "return_invoice": ret.name,
+        "unreferenced": True,
+        "currency": currency,
+        "refund_total": float(total_refund),
+        "refund_payments": normalized_pay,
+        "approver": approver,
+        "reason": reason_info["code"],
+    }
+
+
+def validate_pos_return_doc(doc) -> None:
+    """Mutation-level POS Invoice validation hook for `is_return=1` (blocks REST/Desk bypass)."""
+    fr = _f()
+    if getattr(fr.flags, "in_patch", False) or getattr(fr.flags, "in_migrate", False):
+        return
+
+    # Always keep return checks detached from tables and unprinted on creation.
+    if doc.is_new():
+        doc.restaurant_table = None
+        doc.invoice_printed = 0
+
+    ov = _override_module()
+    has_verified = bool(ov is not None and hasattr(ov, "has_verified_approval") and ov.has_verified_approval(doc, "return"))
+    actor = getattr(getattr(fr, "session", None), "user", None) or ""
+
+    return_against = _field(doc, "return_against")
+    if return_against:
+        orig = fr.get_doc("POS Invoice", return_against)
+        if _field(orig, "custom_merged_pos_invoice"):
+            _refuse(CODE_RETURN_MERGED, "Legacy linked merged checks cannot be returned individually.", fr.ValidationError)
+        _assert_not_consolidated_or_day_closed(orig)
+        prior_returns = [
+            r for r in _load_prior_returns(orig.name, for_update=False)
+            if _field(r, "name") != _field(doc, "name")
+        ]
+        prior_qty = _prior_returned_qty_by_line(orig, prior_returns)
+        orig_by_name = {_field(r, "name"): r for r in (_field(orig, "items") or []) if _field(r, "name")}
+        req_by_name: dict[str, Decimal] = {}
+        for row in _field(doc, "items") or []:
+            qty_abs = abs(_dec(_field(row, "qty", 0)))
+            ref = _field(row, "pos_invoice_item")
+            if ref and ref in orig_by_name:
+                req_by_name[ref] = req_by_name.get(ref, Decimal("0")) + qty_abs
+        for ref, req_qty in req_by_name.items():
+            sold = _dec(_field(orig_by_name[ref], "qty", 0))
+            rem = sold - prior_qty.get(ref, Decimal("0"))
+            if req_qty > rem + Decimal("1e-9"):
+                _refuse(
+                    CODE_RETURN_OVER_QTY,
+                    f"Return quantity ({req_qty}) exceeds remaining returnable quantity ({rem}).",
+                    fr.ValidationError,
+                )
+        if not has_verified and actor != "Administrator":
+            check_actors = {
+                a for a in (_field(orig, "owner"), _field(orig, "cashier"), _field(orig, "waiter"))
+                if isinstance(a, str) and a.strip()
+            }
+            if actor in check_actors:
+                _refuse(CODE_AUTH_REQUIRED, "You cannot approve a return on your own check.", fr.PermissionError)
+    else:
+        # Unreferenced return: ALWAYS blocked unless profile grants dedicated roles AND verified approval!
+        profile_name = _safe_profile_name(_field(doc, "pos_profile"))
+        profile_doc = fr.get_doc("POS Profile", profile_name) if profile_name and fr.db.exists("POS Profile", profile_name) else None
+        allowed_roles = _unreferenced_return_roles(profile_doc) if profile_doc else set()
+        if not allowed_roles or (not has_verified and actor != "Administrator"):
+            _refuse(
+                CODE_RETURN_UNREFERENCED_NOT_ALLOWED,
+                "Unreferenced returns require dedicated POS Profile roles and manager PIN approval.",
+                fr.PermissionError,
+            )
