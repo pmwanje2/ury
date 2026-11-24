@@ -896,6 +896,7 @@ def getPosProfile():
         "pos_profile": pos_profile_name,
         "branch": branch,
         "company": company,
+        "currency": pos_profiles.get("currency") or frappe.db.get_value("Company", company, "default_currency"),
         "country": getattr(pos_profiles, "country", None) or frappe.db.get_value("Company", company, "country"),
         "waiter": waiter,
         "warehouse": warehouse,
@@ -1059,7 +1060,60 @@ def getPosInvoiceItems(invoice):
     paymentDetails = []
     room_number = orderdItems.get("room_number")
     room_modes = None
+    received_rows = []
+    matched_pr_names = set()
+    matched_phone_modes = {}
     for payment in orderdItems.get("payments") or []:
+        amt = frappe.utils.flt(payment.get("amount"))
+        if amt <= 0 or frappe.utils.cint(payment.get("custom_tender_received")) != 1:
+            continue
+        received_rows.append(payment)
+        ref = (payment.get("reference_no") or "").strip()
+        if ref:
+            matched_pr_names.add(ref)
+        mode = payment.get("mode_of_payment")
+        if payment.get("type") == "Phone" and mode:
+            matched_phone_modes[mode] = matched_phone_modes.get(mode, 0.0) + amt
+
+    pr_filters = {
+        "reference_doctype": "POS Invoice",
+        "reference_name": orderdItems.name,
+        "docstatus": 1,
+        "payment_channel": "Phone",
+        "payment_request_type": "Inward",
+        "status": ["in", ["Paid", "Partially Paid"]],
+    }
+    if orderdItems.get("company"):
+        pr_filters["company"] = orderdItems.get("company")
+    paid_requests = frappe.get_all(
+        "Payment Request",
+        filters=pr_filters,
+        fields=["name", "mode_of_payment", "payment_account", "grand_total", "outstanding_amount", "status"],
+        order_by="creation asc",
+    )
+    if isinstance(paid_requests, (list, tuple)):
+        for pr in paid_requests:
+            pr_name = pr.get("name")
+            if pr_name in matched_pr_names:
+                continue
+            paid_amt = frappe.utils.flt(pr.get("grand_total")) - frappe.utils.flt(pr.get("outstanding_amount"))
+            mode = pr.get("mode_of_payment")
+            if not mode or paid_amt <= 0:
+                continue
+            if matched_phone_modes.get(mode, 0.0) >= paid_amt:
+                matched_phone_modes[mode] -= paid_amt
+                continue
+            received_rows.append(
+                {
+                    "mode_of_payment": mode,
+                    "amount": paid_amt,
+                    "reference_no": pr_name,
+                    "type": "Phone",
+                    "custom_tender_received": 1,
+                }
+            )
+
+    for payment in received_rows:
         amt = frappe.utils.flt(payment.get("amount"))
         if amt <= 0:
             continue
@@ -1081,7 +1135,7 @@ def getPosInvoiceItems(invoice):
                         {"parent": row.get("mode_of_payment"), "company": orderdItems.company},
                         "default_account",
                     )
-                    for row in (orderdItems.get("payments") or [])
+                    for row in received_rows
                     if row.get("mode_of_payment")
                 }
                 room_modes = set(_room_charge_modes(payment_mode_accounts, orderdItems.company))

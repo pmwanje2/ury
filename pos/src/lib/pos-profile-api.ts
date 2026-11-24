@@ -7,6 +7,7 @@ export interface PosProfileLimited {
   pos_profile: string;
   branch: string;
   company: string;
+  currency?: string | null;
   country?: string;
   waiter: string;
   warehouse: string;
@@ -179,6 +180,7 @@ export async function getCombinedPosProfile(): Promise<PosProfileCombined> {
   // Merge both profiles
   const combinedProfile: PosProfileCombined = {
     ...fullProfile,
+    currency: fullProfile.currency || limitedProfile.currency || '',
     country: fullProfile.country || limitedProfile.country || '',
     owner: limitedProfile.owner,
     waiter: limitedProfile.waiter,

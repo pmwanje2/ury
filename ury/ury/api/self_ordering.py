@@ -804,7 +804,7 @@ def add_customer_items(session, items):
             default_mode = posprofile.payments[0].mode_of_payment if posprofile.payments else None
             if not default_mode:
                 frappe.throw(_("POS Profile has no mode of payment configured"), frappe.ValidationError)
-            invoice.append("payments", dict(mode_of_payment=default_mode, amount=invoice.grand_total))
+            invoice.append("payments", dict(mode_of_payment=default_mode, amount=0, custom_tender_received=0))
             invoice.invoice_created = 1
 
         try:
@@ -1185,6 +1185,8 @@ def create_payment_request(session):
         phone_payment.account = payment_account
         phone_payment.type = "Phone"
         phone_payment.amount = outstanding_amount
+        # Provisional request row only — money is NOT received until the gateway confirms Paid.
+        phone_payment.custom_tender_received = 0
         invoice.save(ignore_permissions=True)
 
         # make_payment_request() derives its own amount from the reference
@@ -1217,6 +1219,72 @@ def _payment_request_response(pr, payment_url, paid_amount, remaining_amount):
         # The check balance; after growth it can exceed a kept request.
         "remaining_amount": max(0, remaining_amount),
     }
+
+
+def mark_phone_payment_received(doc, method=None, status=None):
+    """Mark a draft POS Invoice's Phone payment row as received when its Payment Request
+    reaches Paid via a confirmed gateway callback (on_payment_authorized)."""
+    if (
+        doc.get("reference_doctype") != "POS Invoice"
+        or not doc.get("reference_name")
+        or doc.get("payment_channel") != "Phone"
+        or doc.get("payment_request_type") != "Inward"
+        or cint(doc.get("docstatus")) != 1
+        or doc.get("status") != "Paid"
+    ):
+        return
+
+    paid_amount = flt(doc.get("grand_total")) - flt(doc.get("outstanding_amount"))
+    if paid_amount <= 0:
+        return
+
+    mode_of_payment = doc.get("mode_of_payment")
+    if not mode_of_payment:
+        return
+
+    with _elevated():
+        invoice = frappe.get_doc("POS Invoice", doc.reference_name, for_update=True)
+        if cint(invoice.get("docstatus")) != 0:
+            return
+
+        row = next(
+            (
+                p for p in (invoice.get("payments") or [])
+                if (p.get("reference_no") or "").strip() == doc.name
+            ),
+            None,
+        )
+        if row is None:
+            row = next(
+                (
+                    p for p in (invoice.get("payments") or [])
+                    if p.get("mode_of_payment") == mode_of_payment
+                    and not (p.get("reference_no") or "").strip()
+                ),
+                None,
+            )
+        if row is None:
+            row = invoice.append("payments", {})
+
+        row.mode_of_payment = mode_of_payment
+        if doc.get("payment_account"):
+            row.account = doc.payment_account
+        row.type = "Phone"
+        row.amount = paid_amount
+        row.reference_no = doc.name
+        row.custom_tender_received = 1
+
+        if callable(getattr(invoice, "set_paid_amount", None)):
+            invoice.set_paid_amount()
+        if callable(getattr(invoice, "set_outstanding_amount", None)):
+            invoice.set_outstanding_amount()
+
+        prev_flag = getattr(frappe.flags, "ury_server_tender_received", False)
+        frappe.flags.ury_server_tender_received = True
+        try:
+            invoice.save(ignore_permissions=True)
+        finally:
+            frappe.flags.ury_server_tender_received = prev_flag
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])

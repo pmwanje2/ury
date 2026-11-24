@@ -57,6 +57,7 @@ export interface POSInvoicePayment {
   reference_date?: string | null;
   clearance_date?: string | null;
   room_number?: string | null;
+  custom_tender_received?: number | boolean;
 }
 
 export interface SplitGroupInvoice extends POSInvoice {

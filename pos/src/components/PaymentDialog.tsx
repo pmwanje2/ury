@@ -78,6 +78,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const user = useRootStore((state) => state.user);
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile, currency: storeCurrency } = usePOSStore();
   const currencyCode = storePosProfile?.currency || storeCurrency || '';
+  const formatMoney = (amount: number) =>
+    currencyCode ? formatCurrency(amount, currencyCode) : formatCurrency(amount);
   const enablePaymentWithoutPrinting = Boolean(
     Number(storePosProfile?.enable_payment_without_printing) === 1 ||
     Number((storePosProfile as any)?.custom_enable_payment_without_printing) === 1
@@ -97,7 +99,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   // Totals the server priced for a discount applied in this dialog; null keeps the order's own.
   const [serverTotals, setServerTotals] = useState<{ grand_total: number; rounded_total: number } | null>(null);
   const receivedPayments = (existingPayments ?? order?.payments ?? []).filter(
-    (row) => Number(row?.amount) > 0,
+    (row) => Number(row?.amount) > 0 && row?.custom_tender_received !== 0 && row?.custom_tender_received !== false,
   );
   const receivedTotal = roundToCurrency(
     receivedPayments.reduce((sum, row) => sum + Number(row.amount), 0),
@@ -397,7 +399,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           return;
         }
       }
-      showToast.success(t('payment.success', { amount: formatCurrency(totalTendered) }));
+      showToast.success(t('payment.success', { amount: formatMoney(totalTendered) }));
       onClose();
       clearSelectedOrder();
       await fetchOrders();
@@ -489,7 +491,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                           </span>
                         )}
                       </span>
-                      <span className="font-semibold tabular-nums">{formatCurrency(Number(row.amount))}</span>
+                      <span className="font-semibold tabular-nums">{formatMoney(Number(row.amount))}</span>
                     </div>
                   );
                 })}
@@ -580,23 +582,23 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             <div className="flex justify-between mt-2 text-sm">
               <span className="font-medium">{t('payment.total_entered')}</span>
               <span className={`${isShort ? 'text-amber-700' : 'text-green-600'} font-semibold flex items-center gap-1`}>
-                {formatCurrency(newPaymentsTotal)} / {formatCurrency(balanceDue)}
+                {formatMoney(newPaymentsTotal)} / {formatMoney(balanceDue)}
                 {changeDue > 0 && (
                   <span className="text-yellow-700 font-semibold">
                     <Coins className="inline w-4 h-4 ms-1 text-yellow-500" />
-                    <span className="text-yellow-500 font-bold ms-1">{formatCurrency(changeDue)}</span>
+                    <span className="text-yellow-500 font-bold ms-1">{formatMoney(changeDue)}</span>
                   </span>
                 )}
               </span>
             </div>
             {isShort && (
               <p role="status" className="text-amber-700 text-sm font-medium">
-                {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatCurrency(shortfall) })}
+                {t(canPayOnAccount ? 'payment.account_amount' : 'payment.short_by', { amount: formatMoney(shortfall) })}
               </p>
             )}
             {changeDue > 0 && (
               <p className="text-yellow-700 text-sm font-medium">
-                {t('payment.change_due', { amount: formatCurrency(changeDue) })}
+                {t('payment.change_due', { amount: formatMoney(changeDue) })}
               </p>
             )}
           </div>
@@ -624,39 +626,39 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
               {/* Subtotal (Grand Total) */}
               <div className="flex justify-between">
                 <span className="text-gray-600">{t('payment.subtotal')}</span>
-                <span>{formatCurrency(subtotal)}</span>
+                <span>{formatMoney(subtotal)}</span>
               </div>
               {/* Discount */}
               {appliedDiscount > 0 && (
                 <div className="flex justify-between text-green-600">
                   <span>{t('payment.discount')}</span>
-                  <span>-{formatCurrency(appliedDiscount)}</span>
+                  <span>-{formatMoney(appliedDiscount)}</span>
                 </div>
               )}
               {/* Adjustment (if any) */}
               {showFinalAdjustment && (
                 <div className="flex justify-between text-blue-600">
                   <span>{t('payment.adjustment')}</span>
-                  <span>{roundedFinalAdjustment > 0 ? '+' : ''}{formatCurrency(roundedFinalAdjustment)}</span>
+                  <span>{roundedFinalAdjustment > 0 ? '+' : ''}{formatMoney(roundedFinalAdjustment)}</span>
                 </div>
               )}
               {/* Final Total (Rounded) */}
               <div className="border-t pt-2">
                 <div className="flex justify-between font-semibold text-lg">
                   <span>{t('payment.total')}</span>
-                  <span>{formatCurrency(finalTotal)}</span>
+                  <span>{formatMoney(finalTotal)}</span>
                 </div>
               </div>
               {receivedTotal > 0 && (
                 <>
                   <div className="flex justify-between text-emerald-700">
                     <span>{t('payment.already_received')}</span>
-                    <span>-{formatCurrency(receivedTotal)}</span>
+                    <span>-{formatMoney(receivedTotal)}</span>
                   </div>
                   <div className="border-t pt-2">
                     <div className="flex justify-between font-semibold text-lg" data-testid="balance-due">
                       <span>{t('payment.balance_due')}</span>
-                      <span>{formatCurrency(balanceDue)}</span>
+                      <span>{formatMoney(balanceDue)}</span>
                     </div>
                   </div>
                 </>
@@ -691,7 +693,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             variant={paymentDisabled ? "secondary" : "default"}
             className="w-full"
           >
-            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(newPaymentsTotal > 0 ? newPaymentsTotal : balanceDue) })}
+            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatMoney(newPaymentsTotal > 0 ? newPaymentsTotal : balanceDue) })}
           </Button>
         </div>
       </DialogContent>

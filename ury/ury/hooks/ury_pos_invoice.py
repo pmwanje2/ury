@@ -15,6 +15,7 @@ def validate(doc, method):
     validate_invoice(doc, method)
     validate_customer(doc, method)
     validate_price_list(doc, method)
+    validate_server_only_tender_received(doc, method)
     set_commission_attribution(doc, method)
     apply_staff_discount_policy(doc, method)
     validate_table_reservation_lock(doc, method)
@@ -23,6 +24,7 @@ def validate(doc, method):
 def before_submit(doc, method):
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
+    validate_confirmed_phone_payments(doc, method)
     ro_reload_submit(doc, method)
     set_commission_attribution(doc, method)
     apply_disposable_items(doc, method)
@@ -394,6 +396,131 @@ def validate_invoice(doc, method):
 def validate_customer(doc, method):
     if not doc.customer and not doc.customer_name:
         frappe.throw(_("Customer is required."))
+
+
+def _is_phone_payment_row(row):
+    if row.get("type") == "Phone":
+        return True
+    mode = row.get("mode_of_payment")
+    if not mode:
+        return False
+    return frappe.db.get_value("Mode of Payment", mode, "type") == "Phone"
+
+
+def validate_server_only_tender_received(doc, method=None):
+    """custom_tender_received on payment rows may only be set by confirmed server flows."""
+    if getattr(frappe.flags, "ury_server_tender_received", False):
+        return
+    if getattr(frappe.flags, "in_patch", False) or getattr(frappe.flags, "in_migrate", False):
+        return
+    if getattr(getattr(frappe, "session", None), "user", None) == "Administrator":
+        return
+
+    flagged = [
+        row for row in (doc.get("payments") or []) if int(row.get("custom_tender_received") or 0) == 1
+    ]
+    if not flagged:
+        return
+
+    if doc.is_new():
+        frappe.throw(
+            frappe._("Only confirmed server payment flows can mark a tender as received."),
+            frappe.ValidationError,
+        )
+
+    existing_rows = frappe.get_all(
+        "Sales Invoice Payment",
+        filters={
+            "parent": doc.name,
+            "parenttype": "POS Invoice",
+            "custom_tender_received": 1,
+        },
+        fields=["name", "mode_of_payment", "amount", "reference_no"],
+    )
+    if not isinstance(existing_rows, (list, tuple)):
+        existing_rows = []
+    by_name = {r.get("name"): r for r in existing_rows if r.get("name")}
+
+    precision = doc.precision("paid_amount") if callable(getattr(doc, "precision", None)) else 2
+    if not isinstance(precision, int) or isinstance(precision, bool):
+        precision = 2
+
+    for row in flagged:
+        stored = by_name.get(row.get("name"))
+        if not stored:
+            frappe.throw(
+                frappe._("Only confirmed server payment flows can mark a tender as received."),
+                frappe.ValidationError,
+            )
+        if (
+            stored.get("mode_of_payment") != row.get("mode_of_payment")
+            or round(flt(stored.get("amount")), precision) != round(flt(row.get("amount")), precision)
+            or (stored.get("reference_no") or "").strip() != (row.get("reference_no") or "").strip()
+        ):
+            frappe.throw(
+                frappe._("Only confirmed server payment flows can mark a tender as received."),
+                frappe.ValidationError,
+            )
+
+
+def validate_confirmed_phone_payments(doc, method=None):
+    """Refuse submitting any Phone payment row without a confirmed Paid Payment Request.
+
+    ERPNext POSInvoice.check_phone_payments() skips validation when no Paid Payment Request
+    exists (paid_amt is None), which lets an unconfirmed mobile-money check close as paid.
+    """
+    if doc.get("is_return"):
+        return
+
+    phone_totals = {}
+    for row in doc.get("payments") or []:
+        amt = flt(row.get("amount"))
+        if amt <= 0:
+            continue
+        if not _is_phone_payment_row(row):
+            continue
+        mode = row.get("mode_of_payment")
+        phone_totals[mode] = phone_totals.get(mode, 0.0) + amt
+
+    if not phone_totals:
+        return
+
+    precision = doc.precision("paid_amount") if callable(getattr(doc, "precision", None)) else 2
+    if not isinstance(precision, int) or isinstance(precision, bool):
+        precision = 2
+
+    for mode, requested_total in phone_totals.items():
+        paid_requests = frappe.get_all(
+            "Payment Request",
+            filters={
+                "reference_doctype": "POS Invoice",
+                "reference_name": doc.name,
+                "mode_of_payment": mode,
+                "docstatus": 1,
+                "status": ["in", ["Paid", "Partially Paid"]],
+            },
+            fields=["name", "grand_total", "outstanding_amount"],
+        )
+        if not isinstance(paid_requests, (list, tuple)):
+            paid_requests = []
+        paid_total = sum(
+            max(0.0, flt(pr.get("grand_total")) - flt(pr.get("outstanding_amount")))
+            for pr in paid_requests
+        )
+        if round(flt(paid_total), precision) <= 0:
+            frappe.throw(
+                frappe._(
+                    "Payment for {0} has not been confirmed yet. Confirm the payment or choose another payment method."
+                ).format(mode),
+                frappe.ValidationError,
+            )
+        if round(flt(requested_total), precision) != round(flt(paid_total), precision):
+            frappe.throw(
+                frappe._("Confirmed payment for {0} is {1}, not {2}.").format(
+                    mode, round(flt(paid_total), precision), round(flt(requested_total), precision)
+                ),
+                frappe.ValidationError,
+            )
 
 
 def calculate_and_set_times(doc, method=None):

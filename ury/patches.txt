@@ -52,3 +52,4 @@ ury.patches.v2_0.fix_waiter_order_slip_print_format #2026-11-23 escaped record v
 ury.patches.v2_0.hold_fire_fields
 ury.patches.v2_0.unique_item_availability
 ury.patches.v2_0.no_copy_merge_split_fields
+ury.patches.v2_0.add_sales_invoice_payment_tender_received
