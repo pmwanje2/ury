@@ -86,6 +86,7 @@ vi.mock("@ury/core", () => ({
   getSessionUser: () => "cashier@example.com",
   formatCurrency: (amount: number) => `Rs. ${amount}`,
   normalizeFrappeTime: (time: any) => time || "2026-11-03 12:00:00",
+  parseFrappeError: (err: any) => (err instanceof Error ? err.message : String(err || "")),
   call: {
     get: vi.fn().mockResolvedValue({ message: { has_permission: true } }),
   },
@@ -161,6 +162,17 @@ vi.mock("../components/SplitGroupPanel", () => ({
 
 vi.mock("../components/MergedBillPanel", () => ({
   default: () => <div data-testid="merged-bill-panel" />,
+}));
+
+vi.mock("../components/ManagerApproval", () => ({
+  default: ({ open, amount, claim }: any) =>
+    open ? (
+      <div
+        data-testid="manager-approval-dialog"
+        data-amount={String(amount)}
+        data-claim={JSON.stringify(claim)}
+      />
+    ) : null,
 }));
 
 describe("Orders Page", () => {
@@ -332,5 +344,172 @@ describe("Orders guest label", () => {
     expect(mockPosStore.setOrderForUpdate).toHaveBeenCalledWith(order.name, order.customer, order.modified, []);
     expect(setGuestLabel).toHaveBeenCalledWith("Susan");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("Orders modifiers edit and void parity (R1 M2)", () => {
+  const order = {
+    name: "ACC-PSINV-MOD-1",
+    status: "Draft",
+    invoice_printed: 1,
+    rounded_total: 133000,
+    customer: "Walk In",
+    custom_guest_label: "",
+    posting_date: "2026-11-24",
+    posting_time: "14:00:00",
+    order_type: "Take Away",
+    restaurant_table: null,
+  } as any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRootStoreState.orders = [order] as any;
+    mockRootStoreState.selectedOrder = order;
+    mockRootStoreState.selectedOrderItems = [];
+  });
+
+  it("handleEditOrder preserves modifier and bundle linkage/override fields into the cart", async () => {
+    const addToOrder = vi.fn().mockResolvedValue(undefined);
+    Object.assign(mockPosStore, {
+      resetOrderState: vi.fn(),
+      setSelectedOrderType: vi.fn(),
+      setOrderForUpdate: vi.fn(),
+      setSelectedTable: vi.fn(),
+      setSelectedCustomer: vi.fn(),
+      addToOrder,
+      setGuestLabel: vi.fn(),
+    });
+    const serverItems = [
+      {
+        name: "row-rib",
+        item_code: "RIBEYE",
+        item_name: "Ribeye Steak",
+        qty: 1,
+        rate: 45000,
+        amount: 45000,
+        reservation_line_key: "key-rib",
+        custom_line_role: "Standard",
+        custom_is_modifier: 0,
+        custom_modifiers_json: JSON.stringify([
+          { group: "Cooking Temperature", option_code: "MED-RARE", label: "Medium Rare", price_mode: "Unpriced Prep", hide_on_receipt: 1 },
+        ]),
+        custom_hide_unpriced_on_receipt: 1,
+      },
+      {
+        name: "row-ch",
+        item_code: "EXTRA-CHEESE",
+        item_name: "Aged Cheddar",
+        qty: 1,
+        rate: 4000,
+        amount: 4000,
+        reservation_line_key: "key-ch",
+        custom_parent_line_key: "key-rib",
+        custom_line_role: "Modifier",
+        custom_is_modifier: 1,
+        custom_modifier_prefix: "Extra",
+        custom_modifier_group: "Steak Toppings",
+        custom_modifier_option: "EXTRA-CHEESE",
+        custom_inherit_parent_routing: 1,
+      },
+      {
+        name: "row-combo",
+        item_code: "BURGER-COMBO",
+        item_name: "Burger Meal Combo",
+        qty: 1,
+        rate: 35000,
+        amount: 35000,
+        reservation_line_key: "key-combo",
+        custom_line_role: "Combo Header",
+        custom_is_modifier: 0,
+        custom_bundle_overrides_json: JSON.stringify([
+          { group: "Combo Side", slot_item: "FRIES", chosen_item: "ONION-RINGS", option_code: "ONION-RINGS", label: "Onion Rings", qty: 1 },
+        ]),
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ message: { ...order, items: serverItems } }),
+      })),
+    );
+    try {
+      render(<Orders />);
+      fireEvent.click(screen.getByRole("button", { name: "orders.edit_order" }));
+      await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/register"));
+
+      expect(addToOrder).toHaveBeenCalledTimes(3);
+      expect(addToOrder.mock.calls[0][0]).toMatchObject({
+        id: "RIBEYE",
+        reservationLineKey: "key-rib",
+        isModifier: false,
+        hideUnpricedOnReceipt: true,
+        selectedModifiers: [expect.objectContaining({ option_code: "MED-RARE", label: "Medium Rare" })],
+      });
+      expect(addToOrder.mock.calls[1][0]).toMatchObject({
+        id: "EXTRA-CHEESE",
+        reservationLineKey: "key-ch",
+        parentLineKey: "key-rib",
+        isModifier: true,
+        lineRole: "Modifier",
+        modifierPrefix: "Extra",
+        modifierGroup: "Steak Toppings",
+        modifierOption: "EXTRA-CHEESE",
+        inheritParentRouting: true,
+      });
+      expect(addToOrder.mock.calls[2][0]).toMatchObject({
+        id: "BURGER-COMBO",
+        lineRole: "Combo Header",
+        bundleOverrides: [expect.objectContaining({ slot_item: "FRIES", chosen_item: "ONION-RINGS" })],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("void approval amount includes linked child modifier rows proportionally", async () => {
+    const orderApi = await import("../lib/order-api");
+    vi.mocked(orderApi.reduceOrderItemQty).mockRejectedValueOnce(
+      new Error("Removing or reducing a sent item requires manager approval. [POS-AUTH-REQUIRED]"),
+    );
+
+    mockRootStoreState.selectedOrderItems = [
+      {
+        name: "row-rib",
+        item_code: "RIBEYE",
+        item_name: "Ribeye Steak",
+        qty: 2,
+        rate: 45000,
+        price_list_rate: 45000,
+        amount: 90000,
+        reservation_line_key: "key-rib",
+        custom_is_modifier: 0,
+      },
+      {
+        name: "row-ch",
+        item_code: "EXTRA-CHEESE",
+        item_name: "Aged Cheddar",
+        qty: 2,
+        rate: 4000,
+        price_list_rate: 4000,
+        amount: 8000,
+        reservation_line_key: "key-ch",
+        custom_parent_line_key: "key-rib",
+        custom_is_modifier: 1,
+        custom_modifier_prefix: "Extra",
+      },
+    ] as never;
+
+    try {
+      render(<Orders />);
+      fireEvent.click(screen.getByRole("button", { name: "Reduce quantity of Ribeye Steak" }));
+      const approvalDialog = await screen.findByTestId("manager-approval-dialog");
+      // 1 × Ribeye (45,000) + proportionally scaled 1 × Aged Cheddar (4,000) = 49,000
+      expect(approvalDialog).toHaveAttribute("data-amount", "49000");
+      const claim = JSON.parse(approvalDialog.getAttribute("data-claim") || "{}");
+      expect(claim.amount).toBe(49000);
+    } finally {
+      mockRootStoreState.selectedOrderItems = [];
+    }
   });
 });

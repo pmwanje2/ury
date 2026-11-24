@@ -302,6 +302,170 @@ class TestKOTModifierParentRoutingAndComboSplit(unittest.TestCase):
 			self.assertEqual([r.item for r in bar_items], ["MANGO-JUICE"])
 			self.assertEqual(bar_items[0].parent_line_key, "combo-1")
 
+	def test_cancel_kot_emits_swapped_combo_components_to_all_stations(self):
+		"""R1 H3 RED: Reducing a swapped combo (2 -> 1) must emit cancel KOTs for swapped components
+		on EVERY station that received them (Hot Kitchen ONION-RINGS AND Bar MANGO-JUICE)."""
+		with patch.dict(sys.modules, self.modules):
+			_load("ury.ury.api.ury_bundle_resolver", "ury/api/ury_bundle_resolver.py")
+			kot_gen = _load("ury.ury.api.ury_kot_generate", "ury/api/ury_kot_generate.py")
+
+			overrides = [
+				{
+					"group": "Choose Side",
+					"slot_item": "FRIES",
+					"chosen_item": "ONION-RINGS",
+					"label": "Onion Rings",
+					"qty": 1,
+					"inherit_parent_routing": 1,
+				},
+				{
+					"group": "Choose Drink",
+					"slot_item": "COLA",
+					"chosen_item": "MANGO-JUICE",
+					"label": "Fresh Mango Juice",
+					"qty": 1,
+					"inherit_parent_routing": 0,
+				},
+			]
+			cancel_items = [
+				{
+					"item_code": "BURGER-COMBO",
+					"item_name": "Burger Combo",
+					"qty": -1,
+					"comments": "Onion Rings · Fresh Mango Juice",
+					"reservation_line_key": "ref:BURGER-COMBO:combo-1",
+					"custom_line_role": "Combo Header",
+					"custom_bundle_overrides_json": json.dumps(overrides),
+				},
+				{
+					"item_code": "COMBO-UPGRADE-FEE",
+					"item_name": "Upgrade: Onion Rings",
+					"qty": -1,
+					"comments": "",
+					"reservation_line_key": "ref:COMBO-UPGRADE-FEE:combo-1-side",
+					"custom_parent_line_key": "combo-1",
+					"custom_is_modifier": 1,
+					"custom_line_role": "Combo Upcharge",
+					"custom_inherit_parent_routing": 1,
+				},
+			]
+			invoice_items = [
+				{
+					"item_code": "BURGER-COMBO",
+					"item_name": "Burger Combo",
+					"qty": 2.0,
+					"comments": "Onion Rings · Fresh Mango Juice",
+					"reservation_line_key": "ref:BURGER-COMBO:combo-1",
+					"custom_line_role": "Combo Header",
+					"custom_bundle_overrides_json": json.dumps(overrides),
+				},
+				{
+					"item_code": "COMBO-UPGRADE-FEE",
+					"item_name": "Upgrade: Onion Rings",
+					"qty": 2.0,
+					"comments": "",
+					"reservation_line_key": "ref:COMBO-UPGRADE-FEE:combo-1-side",
+					"custom_parent_line_key": "combo-1",
+					"custom_is_modifier": 1,
+					"custom_line_role": "Combo Upcharge",
+					"custom_inherit_parent_routing": 1,
+				},
+			]
+
+			created = kot_gen.process_items_for_cancel_kot(
+				"POS-009",
+				"Walk-in",
+				"T-1",
+				cancel_items,
+				"Guest changed 2 to 1",
+				"Main POS",
+				"CNCL-KOT-.#####",
+				"Partially cancelled",
+				invoice_items,
+			)
+			self.assertEqual(len(created), 2)
+			by_station = {t.production: t for t in self.tickets}
+			self.assertIn("Hot Kitchen", by_station)
+			self.assertIn("Bar", by_station)
+
+			hk_rows = by_station["Hot Kitchen"].kot_items
+			self.assertEqual([r.item for r in hk_rows], ["BURGER-COMBO", "ONION-RINGS"])
+			self.assertEqual(hk_rows[0].cancelled_qty, 1.0)
+			self.assertEqual(hk_rows[0].quantity, 2.0)
+			self.assertEqual(hk_rows[1].cancelled_qty, 1.0)
+			self.assertEqual(hk_rows[1].quantity, 2.0)
+			self.assertEqual(hk_rows[1].is_modifier, 1)
+			self.assertEqual(hk_rows[1].parent_line_key, "combo-1")
+
+			bar_rows = by_station["Bar"].kot_items
+			self.assertEqual([r.item for r in bar_rows], ["MANGO-JUICE"])
+			self.assertEqual(bar_rows[0].cancelled_qty, 1.0)
+			self.assertEqual(bar_rows[0].quantity, 2.0)
+			self.assertEqual(bar_rows[0].is_modifier, 1)
+			self.assertEqual(bar_rows[0].parent_line_key, "combo-1")
+
+	def test_desk_kot_execute_preserves_child_modifier_metadata_and_routing_with_held_lines(self):
+		"""R1 H4 RED: _execute_kot(desk=True) / kot_execute must NOT strip child modifier metadata
+		when held/reservation lines exist on the POS Invoice."""
+		with patch.dict(sys.modules, self.modules):
+			_load("ury.ury.api.ury_bundle_resolver", "ury/api/ury_bundle_resolver.py")
+			kot_gen = _load("ury.ury.api.ury_kot_generate", "ury/api/ury_kot_generate.py")
+
+			self.pos_invoice.items = [
+				Row(
+					name="row-rib",
+					item_code="RIBEYE",
+					item_name="Ribeye Steak",
+					qty=1,
+					comment="Medium Rare",
+					reservation_line_key="hk-rib",
+					ury_held=0,
+					custom_is_modifier=0,
+					custom_line_role="Standard",
+					custom_modifiers_json=json.dumps([
+						{"group": "Meat Temperature", "option_code": "MED-RARE", "label": "Medium Rare"}
+					]),
+					custom_inherit_parent_routing=1,
+				),
+				Row(
+					name="row-ch",
+					item_code="EXTRA-CHEESE",
+					item_name="Aged Cheddar",
+					qty=1,
+					comment="",
+					reservation_line_key="hk-ch",
+					ury_held=0,
+					custom_parent_line_key="hk-rib",
+					custom_is_modifier=1,
+					custom_line_role="Modifier",
+					custom_modifier_prefix="Extra",
+					custom_inherit_parent_routing=1,
+				),
+				Row(
+					name="row-held",
+					item_code="CHICKEN",
+					item_name="Grilled Chicken",
+					qty=1,
+					comment="",
+					reservation_line_key="hk-chk",
+					ury_held=1,
+					custom_is_modifier=0,
+					custom_line_role="Standard",
+				),
+			]
+
+			kot_gen.kot_execute(
+				"POS-009", "Walk-in", restaurant_table="T-1", current_items=[], previous_items=[]
+			)
+
+			self.assertEqual(len(self.tickets), 1)
+			ticket = self.tickets[0]
+			self.assertEqual(ticket.production, "Hot Kitchen")
+			self.assertEqual([r.item for r in ticket.kot_items], ["RIBEYE", "EXTRA-CHEESE"])
+			self.assertEqual(ticket.kot_items[1].is_modifier, 1)
+			self.assertEqual(ticket.kot_items[1].parent_line_key, "hk-rib")
+			self.assertIn("Extra", ticket.kot_items[1].modifier_summary)
+
 
 class TestPrintFormatsModifiersAndOpt79Suppression(unittest.TestCase):
 	def _render(self, fmt_name, doc):

@@ -368,6 +368,127 @@ describe('POS-PR-8 G3 Modifiers & G4 Combo Meals UI', () => {
     expect(usePOSStore.getState().activeOrders).toHaveLength(0);
   });
 
+  it('ProductDialog uses currency-resolved unit_price for multi-currency Combo Upcharge (R1 M1)', async () => {
+    const user = userEvent.setup();
+    const kwdCombo: MenuItem = {
+      ...COMBO_ITEM,
+      price: 3.75,
+      modifier_groups: [
+        {
+          ...COMBO_ITEM.modifier_groups![0],
+          options: [
+            COMBO_ITEM.modifier_groups![0].options[0],
+            {
+              ...COMBO_ITEM.modifier_groups![0].options[1],
+              upcharge_amount: 3000, // legacy base currency amount
+              unit_price: 0.375, // server-resolved KWD Item Price
+            },
+          ],
+        },
+      ],
+    };
+    usePOSStore.setState({
+      currency: 'KWD',
+      posProfile: {
+        ...(usePOSStore.getState().posProfile as any),
+        currency: 'KWD',
+      },
+      menuItems: [kwdCombo],
+      selectedItem: kwdCombo,
+    });
+    const onClose = vi.fn();
+    render(<ProductDialog onClose={onClose} />);
+
+    await user.click(screen.getByRole('button', { name: /Onion Rings/i }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    const orders = usePOSStore.getState().activeOrders;
+    expect(orders).toHaveLength(2);
+    expect(orders[1].price).toBe(0.375);
+  });
+
+  it('addConfiguredItems preserves stable parent and child keys on edit (R1 M3)', async () => {
+    usePOSStore.setState({
+      activeOrders: [
+        {
+          ...STEAK_ITEM,
+          quantity: 1,
+          price: 45000,
+          uniqueId: 'row-parent-1',
+          invoiceItemName: 'row-parent-1',
+          reservationLineKey: 'key-parent-1',
+          isModifier: false,
+          selectedModifiers: [
+            { group: 'Meat Temperature', option_code: 'MED-RARE', label: 'Medium Rare', price_mode: 'Unpriced Prep' },
+          ],
+        },
+        {
+          id: 'EXTRA-CHEESE',
+          item: 'EXTRA-CHEESE',
+          name: 'Aged Cheddar',
+          item_name: 'Aged Cheddar',
+          image: null,
+          price: 4000,
+          quantity: 1,
+          course: 'Mains',
+          special_dish: 0,
+          tax_rate: 0,
+          uniqueId: 'row-child-1',
+          invoiceItemName: 'row-child-1',
+          reservationLineKey: 'key-child-1',
+          parentLineKey: 'key-parent-1',
+          isModifier: true,
+          lineRole: 'Modifier',
+          modifierGroup: 'Steak Extras',
+          modifierOption: 'EXTRA-CHEESE',
+          modifierPrefix: 'Extra',
+        },
+      ],
+    });
+
+    await usePOSStore.getState().addConfiguredItems(
+      {
+        ...STEAK_ITEM,
+        quantity: 2,
+        price: 45000,
+        isModifier: false,
+        selectedModifiers: [
+          { group: 'Meat Temperature', option_code: 'WELL-DONE', label: 'Well Done', price_mode: 'Unpriced Prep' },
+        ],
+      },
+      [
+        {
+          id: 'EXTRA-CHEESE',
+          item: 'EXTRA-CHEESE',
+          name: 'Aged Cheddar',
+          item_name: 'Aged Cheddar',
+          image: null,
+          price: 4000,
+          quantity: 2,
+          course: 'Mains',
+          special_dish: 0,
+          tax_rate: 0,
+          isModifier: true,
+          lineRole: 'Modifier',
+          modifierGroup: 'Steak Extras',
+          modifierOption: 'EXTRA-CHEESE',
+          modifierPrefix: 'Extra',
+        },
+      ],
+      'row-parent-1',
+    );
+
+    const updated = usePOSStore.getState().activeOrders;
+    expect(updated).toHaveLength(2);
+    expect(updated[0].uniqueId).toBe('row-parent-1');
+    expect(updated[0].invoiceItemName).toBe('row-parent-1');
+    expect(updated[0].reservationLineKey).toBe('key-parent-1');
+    expect(updated[1].uniqueId).toBe('row-child-1');
+    expect(updated[1].invoiceItemName).toBe('row-child-1');
+    expect(updated[1].reservationLineKey).toBe('key-child-1');
+    expect(updated[1].parentLineKey).toBe('key-parent-1');
+  });
+
   it('maintains 4-locale parity (en/fr/es/ar) with zero vendor terms for all modifier & combo keys', () => {
     const REQUIRED_KEYS: Record<string, string> = {
       'product_dialog.required_badge': '',

@@ -235,6 +235,9 @@ class _FakeModifierDB:
 		self.modifier_groups = {}  # name -> Row
 		self.modifier_options = []  # rows of URY Modifier Option
 		self.item_prices = {}  # (item_code, price_list) -> rate
+		self.item_price_currencies = {}  # (item_code, price_list) -> currency
+		self.price_list_currencies = {}  # price_list -> currency
+		self.company_currency = "UGX"
 		self.availability = {}  # (branch, item) -> Row(status, countdown_enabled, remaining_qty)
 		self.bundles = {}  # new_item_code -> bundle_name
 		self.bundle_items = {}  # bundle_name -> [Row(item_code, qty, uom, description)]
@@ -253,8 +256,11 @@ class _FakeModifierDB:
 			description=item_name or code,
 		)
 
-	def add_price(self, item_code, rate, price_list="Menu A"):
+	def add_price(self, item_code, rate, price_list="Menu A", currency=None):
 		self.item_prices[(item_code, price_list)] = rate
+		if currency:
+			self.item_price_currencies[(item_code, price_list)] = currency
+			self.price_list_currencies[price_list] = currency
 
 	def add_group(self, name, **kwargs):
 		grp = Row(
@@ -392,6 +398,13 @@ class _FakeModifierDB:
 				return None
 			if dt == "Branch" and fieldname == "company":
 				return "Maximus Hospitality"
+			if dt == "Company" and fieldname == "default_currency":
+				return self.company_currency
+			if dt == "Price List" and fieldname == "currency":
+				return self.price_list_currencies.get(filters)
+			if dt == "Currency" and fieldname == "fraction_units":
+				prec = self.currency_precision.get(filters)
+				return 10 ** prec if prec is not None else None
 			if dt == "POS Profile" and fieldname == "cost_center":
 				return "Main - MH"
 			return None
@@ -403,7 +416,16 @@ class _FakeModifierDB:
 				rate = self.item_prices.get((item_code, price_list))
 				if rate is None:
 					return []
-				return [Row(name=f"IP-{item_code}", item_code=item_code, price_list=price_list, price_list_rate=rate, uom="Nos")]
+				return [
+					Row(
+						name=f"IP-{item_code}",
+						item_code=item_code,
+						price_list=price_list,
+						price_list_rate=rate,
+						currency=self.item_price_currencies.get((item_code, price_list)),
+						uom="Nos",
+					)
+				]
 			return []
 
 		framework.db.exists.side_effect = exists
@@ -870,6 +892,391 @@ class TestModifiersAndCombosEngine(unittest.TestCase):
 			self.assertNotIn("FRIES", packed_codes)
 			self.assertNotIn("COLA", packed_codes)
 			self.assertEqual([r.qty for r in si_doc.packed_items], [2.0, 2.0, 2.0])
+
+	def test_apply_bundle_overrides_is_idempotent_across_repeated_saves_and_submit(self):
+		"""R1 H1 RED: ERPNext make_packing_list() keeps swapped rows and re-appends default bundle
+		slots on every draft save / submit; apply_bundle_overrides_to_packed_items must stay 1:1."""
+		with patch.dict(sys.modules, self.modules):
+			_, _, bundle, _ = self._load_engines()
+
+			overrides = [
+				{"group": "Choose Side", "slot_item": "FRIES", "chosen_item": "ONION-RINGS", "qty": 1, "inherit_parent_routing": 1},
+				{"group": "Choose Drink", "slot_item": "COLA", "chosen_item": "MANGO-JUICE", "qty": 1, "inherit_parent_routing": 0},
+			]
+			inv_item = Row(
+				name="PII-COMBO-1",
+				item_code="BURGER-COMBO",
+				qty=1,
+				warehouse="Kitchen Store - MH",
+				custom_bundle_overrides_json=json.dumps(overrides),
+			)
+			doc = Doc(
+				doctype="POS Invoice",
+				company="Maximus Hospitality",
+				branch="Main",
+				update_stock=1,
+				items=[inv_item],
+				packed_items=[
+					Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="BURGER", item_name="Classic Burger", qty=1, warehouse="Kitchen Store - MH", uom="Nos"),
+					Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="FRIES", item_name="French Fries", qty=1, warehouse="Kitchen Store - MH", uom="Nos"),
+					Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="COLA", item_name="Cola", qty=1, warehouse="Kitchen Store - MH", uom="Nos"),
+				],
+			)
+
+			# Save 1
+			bundle.apply_bundle_overrides_to_packed_items(doc)
+			self.assertEqual(
+				[(r.item_code, r.qty) for r in doc.packed_items],
+				[("BURGER", 1.0), ("ONION-RINGS", 1.0), ("MANGO-JUICE", 1.0)],
+			)
+
+			# Save 2: simulate ERPNext make_packing_list() keeping swapped rows + re-adding default FRIES & COLA
+			doc.packed_items.extend([
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="FRIES", item_name="French Fries", qty=1, warehouse="Kitchen Store - MH", uom="Nos"),
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="COLA", item_name="Cola", qty=1, warehouse="Kitchen Store - MH", uom="Nos"),
+			])
+			bundle.apply_bundle_overrides_to_packed_items(doc)
+			self.assertEqual(
+				[(r.item_code, r.qty) for r in doc.packed_items],
+				[("BURGER", 1.0), ("ONION-RINGS", 1.0), ("MANGO-JUICE", 1.0)],
+			)
+
+			# Save 3 / submit with qty bumped 1 -> 2 and ERPNext regenerating default slots at qty=2
+			inv_item.qty = 2
+			doc.packed_items[0].qty = 2
+			doc.packed_items.extend([
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="FRIES", item_name="French Fries", qty=2, warehouse="Kitchen Store - MH", uom="Nos"),
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="COLA", item_name="Cola", qty=2, warehouse="Kitchen Store - MH", uom="Nos"),
+			])
+			bundle.apply_bundle_overrides_to_packed_items(doc)
+			self.assertEqual(
+				[(r.item_code, r.qty) for r in doc.packed_items],
+				[("BURGER", 2.0), ("ONION-RINGS", 2.0), ("MANGO-JUICE", 2.0)],
+			)
+
+			# Negative-qty return keeps exact -1.0 swapped components
+			inv_item.qty = -1
+			doc.packed_items = [
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="BURGER", item_name="Classic Burger", qty=-1, warehouse="Kitchen Store - MH", uom="Nos"),
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="FRIES", item_name="French Fries", qty=-1, warehouse="Kitchen Store - MH", uom="Nos"),
+				Row(parent_item="BURGER-COMBO", parent_detail_docname="PII-COMBO-1", item_code="COLA", item_name="Cola", qty=-1, warehouse="Kitchen Store - MH", uom="Nos"),
+			]
+			bundle.apply_bundle_overrides_to_packed_items(doc)
+			self.assertEqual(
+				[(r.item_code, r.qty) for r in doc.packed_items],
+				[("BURGER", -1.0), ("ONION-RINGS", -1.0), ("MANGO-JUICE", -1.0)],
+			)
+
+	def test_pos_invoice_validate_and_before_submit_block_rest_modifier_and_bundle_bypasses(self):
+		"""R1 H2 RED: Direct REST POST/PUT and frappe.client.submit must enforce all modifier & bundle rules."""
+		self.db.add_item("AVOCADO", "Smoked Avocado", item_group="Sides")
+		self.db.add_price("AVOCADO", 5000, "Menu A")
+		self.db.add_option(
+			"Steak Extras",
+			item="AVOCADO",
+			option_code="AVOCADO",
+			label="Smoked Avocado",
+			price_mode="Menu Item Price",
+		)
+		self.db.availability[("Main", "AVOCADO")] = Row(
+			branch="Main", item="AVOCADO", status="Sold Out", countdown_enabled=0, remaining_qty=0
+		)
+
+		extra_modules = {
+			**self.modules,
+			"ury.ury.doctype.ury_order.ury_order": _stub(
+				"ury.ury.doctype.ury_order.ury_order", release_merge_cluster_tables=MagicMock()
+			),
+			"ury.ury.doctype.staff_discount_policy.staff_discount_policy": _stub(
+				"ury.ury.doctype.staff_discount_policy.staff_discount_policy",
+				get_applicable_policy=MagicMock(return_value=None),
+			),
+			"ury.ury_pos.discount": _stub(
+				"ury.ury_pos.discount",
+				prorate_return_discount=MagicMock(),
+				validate_pos_discount=MagicMock(),
+			),
+		}
+		extra_modules["frappe.utils"].now = lambda: "2026-11-24 14:00:00"
+		extra_modules["frappe.utils"].get_time = lambda v=None: v
+		extra_modules["frappe.utils"].get_first_day = lambda v=None: v
+		extra_modules["frappe.utils"].get_last_day = lambda v=None: v
+
+		with patch.dict(sys.modules, extra_modules):
+			self._load_engines()
+			hooks = _load_module("ury.ury.hooks.ury_pos_invoice", "ury/hooks/ury_pos_invoice.py")
+			self.framework.db.sql.return_value = []
+
+			def make_doc(items, packed_items=None):
+				doc = Doc(
+					name="REST-BYPASS-1",
+					doctype="POS Invoice",
+					company="Maximus Hospitality",
+					branch="Main",
+					restaurant=None,
+					pos_profile="Main POS",
+					customer="Walk-in",
+					customer_name="Walk-in",
+					waiter="cashier@maximus.test",
+					cashier="cashier@maximus.test",
+					posting_date="2026-11-24",
+					selling_price_list="Menu A",
+					currency="UGX",
+					is_return=0,
+					docstatus=0,
+					invoice_printed=1,
+					restaurant_table=None,
+					items=list(items),
+					packed_items=list(packed_items or []),
+					payments=[],
+					flags=SimpleNamespace(),
+				)
+				doc.is_new = lambda: True
+				doc.precision = lambda field=None: 0
+				return doc
+
+			def assert_blocked_both(doc, expected_code):
+				with self.assertRaises(self.framework.ValidationError) as ctx_v:
+					hooks.validate(doc, "validate")
+				self.assertIn(expected_code, str(ctx_v.exception), f"validate missed {expected_code}")
+				self.assertIsNone(FORBIDDEN_VENDOR_RE.search(str(ctx_v.exception)))
+
+				with self.assertRaises(self.framework.ValidationError) as ctx_s:
+					hooks.before_submit(doc, "before_submit")
+				self.assertIn(expected_code, str(ctx_s.exception), f"before_submit missed {expected_code}")
+				self.assertIsNone(FORBIDDEN_VENDOR_RE.search(str(ctx_s.exception)))
+
+			# 1. Missing required Meat Temperature on RIBEYE
+			assert_blocked_both(
+				make_doc([Row(name="r1", item_code="RIBEYE", item_name="Ribeye Steak", qty=1, rate=65000, reservation_line_key="k1")]),
+				"[POS-MODIFIER-MIN-REQUIRED]",
+			)
+
+			# 2a. max_selections exceeded (3 separate EXTRA-CHEESE rows > max 2)
+			ribeye_ok = Row(
+				name="r1",
+				item_code="RIBEYE",
+				item_name="Ribeye Steak",
+				qty=1,
+				rate=65000,
+				reservation_line_key="k1",
+				custom_modifiers_json=json.dumps([{"group": "Meat Temperature", "option_code": "MED-RARE", "label": "Medium Rare"}]),
+			)
+			three_cheese_rows = [
+				Row(
+					name=f"c{i}",
+					item_code="EXTRA-CHEESE",
+					item_name="Aged Cheddar",
+					qty=1,
+					rate=3000,
+					reservation_line_key=f"kc{i}",
+					custom_parent_line_key="k1",
+					custom_is_modifier=1,
+					custom_line_role="Modifier",
+					custom_modifier_group="Steak Extras",
+					custom_modifier_option="EXTRA-CHEESE",
+				)
+				for i in range(3)
+			]
+			assert_blocked_both(make_doc([ribeye_ok, *three_cheese_rows]), "[POS-MODIFIER-MAX-EXCEEDED]")
+
+			# 2b. max_selections exceeded via single row qty=3 on qty=1 parent
+			assert_blocked_both(
+				make_doc([
+					ribeye_ok,
+					Row(
+						name="c-big",
+						item_code="EXTRA-CHEESE",
+						item_name="Aged Cheddar",
+						qty=3,
+						rate=3000,
+						reservation_line_key="kc-big",
+						custom_parent_line_key="k1",
+						custom_is_modifier=1,
+						custom_line_role="Modifier",
+						custom_modifier_group="Steak Extras",
+						custom_modifier_option="EXTRA-CHEESE",
+					),
+				]),
+				"[POS-MODIFIER-MAX-EXCEEDED]",
+			)
+
+			# 3. 86'd (Sold Out) AVOCADO modifier
+			assert_blocked_both(
+				make_doc([
+					ribeye_ok,
+					Row(
+						name="c-avo",
+						item_code="AVOCADO",
+						item_name="Smoked Avocado",
+						qty=1,
+						rate=5000,
+						reservation_line_key="kc-avo",
+						custom_parent_line_key="k1",
+						custom_is_modifier=1,
+						custom_line_role="Modifier",
+						custom_modifier_group="Steak Extras",
+						custom_modifier_option="AVOCADO",
+					),
+				]),
+				"[POS-MODIFIER-UNAVAILABLE]",
+			)
+
+			# 4. Forged modifier rate=0.01 on available EXTRA-CHEESE (server price 3000)
+			assert_blocked_both(
+				make_doc([
+					ribeye_ok,
+					Row(
+						name="c-forge",
+						item_code="EXTRA-CHEESE",
+						item_name="Aged Cheddar",
+						qty=1,
+						rate=0.01,
+						price_list_rate=3000,
+						reservation_line_key="kc-forge",
+						custom_parent_line_key="k1",
+						custom_is_modifier=1,
+						custom_line_role="Modifier",
+						custom_modifier_group="Steak Extras",
+						custom_modifier_option="EXTRA-CHEESE",
+					),
+				]),
+				"[POS-MODIFIER-RATE-MISMATCH]",
+			)
+
+			# 5. Forged Product Bundle swap: RIBEYE swapped into FRIES slot on BURGER-COMBO
+			forged_combo_doc = make_doc(
+				[
+					Row(
+						name="r-combo",
+						item_code="BURGER-COMBO",
+						item_name="Burger Combo",
+						qty=1,
+						rate=25000,
+						reservation_line_key="k-combo",
+						custom_line_role="Combo Header",
+						custom_bundle_overrides_json=json.dumps([
+							{"group": "Choose Side", "slot_item": "FRIES", "chosen_item": "RIBEYE", "qty": 1},
+							{"group": "Choose Drink", "slot_item": "COLA", "chosen_item": "COLA", "qty": 1},
+						]),
+					)
+				],
+				packed_items=[
+					Row(parent_item="BURGER-COMBO", parent_detail_docname="r-combo", item_code="BURGER", qty=1),
+					Row(parent_item="BURGER-COMBO", parent_detail_docname="r-combo", item_code="FRIES", qty=1),
+					Row(parent_item="BURGER-COMBO", parent_detail_docname="r-combo", item_code="COLA", qty=1),
+				],
+			)
+			assert_blocked_both(forged_combo_doc, "[POS-MODIFIER-NOT-ALLOWED]")
+			self.assertNotIn("RIBEYE", [p.item_code for p in forged_combo_doc.packed_items])
+
+			# 6. Valid invoice passes both validate and before_submit cleanly
+			valid_doc = make_doc([
+				ribeye_ok,
+				Row(
+					name="c-ok",
+					item_code="EXTRA-CHEESE",
+					item_name="Aged Cheddar",
+					qty=1,
+					rate=3000,
+					price_list_rate=3000,
+					reservation_line_key="kc-ok",
+					custom_parent_line_key="k1",
+					custom_is_modifier=1,
+					custom_line_role="Modifier",
+					custom_modifier_group="Steak Extras",
+					custom_modifier_option="EXTRA-CHEESE",
+					custom_modifier_prefix="Extra",
+				),
+				Row(
+					name="r-combo-ok",
+					item_code="BURGER-COMBO",
+					item_name="Burger Combo",
+					qty=1,
+					rate=25000,
+					reservation_line_key="k-combo-ok",
+					custom_line_role="Combo Header",
+					custom_bundle_overrides_json=json.dumps([
+						{"group": "Choose Side", "slot_item": "FRIES", "chosen_item": "ONION-RINGS", "option_code": "ONION-RINGS", "label": "Onion Rings", "qty": 1},
+						{"group": "Choose Drink", "slot_item": "COLA", "chosen_item": "COLA", "option_code": "COLA", "label": "Cola", "qty": 1},
+					]),
+				),
+				Row(
+					name="c-fee-ok",
+					item_code="COMBO-UPGRADE-FEE",
+					item_name="Onion Rings",
+					qty=1,
+					rate=3000,
+					price_list_rate=3000,
+					reservation_line_key="k-fee-ok",
+					custom_parent_line_key="k-combo-ok",
+					custom_is_modifier=1,
+					custom_line_role="Combo Upcharge",
+					custom_modifier_group="Choose Side",
+					custom_modifier_option="ONION-RINGS",
+				),
+			])
+			hooks.validate(valid_doc, "validate")
+			hooks.before_submit(valid_doc, "before_submit")
+
+	def test_combo_upcharge_resolves_multi_currency_item_price_at_0_2_3dp(self):
+		"""R1 M1 RED: Combo Upcharge resolves currency-aware Item Price for UGX (0dp), USD (2dp), KWD (3dp)
+		with safe fallback to upcharge_amount when no Item Price exists."""
+		with patch.dict(sys.modules, self.modules):
+			_, _, _, mods = self._load_engines()
+
+			self.db.add_price("COMBO-UPGRADE-FEE", 3000, "PL-UGX", currency="UGX")
+			self.db.add_price("COMBO-UPGRADE-FEE", 1.50, "PL-USD", currency="USD")
+			self.db.add_price("COMBO-UPGRADE-FEE", 0.375, "PL-KWD", currency="KWD")
+			self.db.price_list_currencies["PL-UGX-NO-IP"] = "UGX"
+
+			cases = (
+				("PL-UGX", "UGX", 0, 3000.0),
+				("PL-USD", "USD", 2, 1.5),
+				("PL-KWD", "KWD", 3, 0.375),
+				("PL-UGX-NO-IP", "UGX", 0, 3000.0),
+			)
+			for price_list, currency, precision, expected_fee in cases:
+				with self.subTest(price_list=price_list, currency=currency):
+					meta = mods.get_modifier_groups_for_items(
+						["BURGER-COMBO"], price_list=price_list, branch="Main", company="Maximus Hospitality"
+					)
+					side_grp = next(g for g in meta["BURGER-COMBO"]["modifier_groups"] if g["name"] == "Choose Side")
+					onion_opt = next(o for o in side_grp["options"] if o["option_code"] == "ONION-RINGS")
+					fries_opt = next(o for o in side_grp["options"] if o["option_code"] == "FRIES")
+					self.assertEqual(onion_opt["unit_price"], expected_fee)
+					self.assertEqual(fries_opt["unit_price"], 0.0)
+
+					payload = [
+						{
+							"item": "BURGER-COMBO",
+							"item_name": "Burger Combo",
+							"qty": 1,
+							"reservation_line_key": f"c-{currency}",
+							"custom_line_role": "Combo Header",
+							"custom_bundle_overrides_json": json.dumps([
+								{"group": "Choose Side", "slot_item": "FRIES", "chosen_item": "ONION-RINGS", "label": "Onion Rings", "qty": 1},
+								{"group": "Choose Drink", "slot_item": "COLA", "chosen_item": "COLA", "label": "Cola", "qty": 1},
+							]),
+						},
+						{
+							"item": "COMBO-UPGRADE-FEE",
+							"item_name": "Onion Rings",
+							"qty": 1,
+							"rate": 9999,
+							"reservation_line_key": f"c-{currency}-fee",
+							"custom_parent_line_key": f"c-{currency}",
+							"custom_is_modifier": 1,
+							"custom_line_role": "Combo Upcharge",
+							"custom_modifier_group": "Choose Side",
+							"custom_modifier_option": "ONION-RINGS",
+						},
+					]
+					norm, price_map = mods.validate_and_normalize_order_items(
+						payload, [], "Menu A", price_list, "Main", "Maximus Hospitality", currency_precision=precision
+					)
+					self.assertEqual(price_map[f"c-{currency}-fee"]["rate"], expected_fee)
+					self.assertEqual(norm[1]["rate"], expected_fee)
 
 
 class TestSplitBillAtomicParentChildModifiers(unittest.TestCase):
