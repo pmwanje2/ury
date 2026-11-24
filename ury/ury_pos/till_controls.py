@@ -126,6 +126,44 @@ def _may_perform_till_privilege(
 	return False
 
 
+def _approver_covers_amount(override_mod, approver: str, profile, code: str, amount: float) -> bool:
+	"""Verify that ``approver`` holds an active authorise rule covering server-computed ``amount``.
+
+	Blocks blind-close / claim-omitted-amount cap bypasses where ``override.authorise`` minted a
+	token without an ``amount`` key in the claim (e.g. blind over/short variance or HALO tender).
+	"""
+	if not approver or not profile or not _has_configured_rules(profile.company, code):
+		return True
+	matcher = getattr(override_mod, "_matching_authorise_rules", None) if override_mod else None
+	if callable(matcher):
+		return bool(matcher(approver, profile, code, amount=amount))
+	roles = list(frappe.get_roles(approver))
+	if not roles:
+		return False
+	rows = frappe.get_all(
+		"POS Privilege Rule",
+		filters={
+			"company": profile.company,
+			"privilege": code,
+			"role": ["in", roles],
+			"pos_profile": ["in", [profile.name, "", None]],
+		},
+		fields=["pos_profile", "role", "may_authorise", "max_amount"],
+	)
+	effective: dict[str, Any] = {}
+	for row in rows or []:
+		role = row.get("role")
+		if not role:
+			continue
+		if role not in effective or row.get("pos_profile"):
+			effective[role] = row
+	return any(
+		cint(r.get("may_authorise")) == 1
+		and (flt(r.get("max_amount")) <= 0 or flt(amount) <= flt(r.get("max_amount")) + 1e-9)
+		for r in effective.values()
+	)
+
+
 def _require_till_privilege(
 	profile,
 	privilege: str,
@@ -157,6 +195,14 @@ def _require_till_privilege(
 		if approver.casefold() in excluded:
 			frappe.throw(
 				coded_message("AUTH-SELF", _("You cannot approve your own request. Ask another manager.")),
+				frappe.PermissionError,
+			)
+		if amount is not None and not _approver_covers_amount(override_mod, approver, profile, code, float(amount)):
+			frappe.throw(
+				coded_message(
+					"AUTH-NOT-ELIGIBLE",
+					_("This manager's approval limit does not cover this amount. Ask a higher-level manager to approve."),
+				),
 				frappe.PermissionError,
 			)
 		return approval

@@ -183,6 +183,21 @@ class FakeOverride:
             return True
         return False
 
+    def _matching_authorise_rules(self, approver, profile, privilege, percent=None, amount=None, privilege_group=0):
+        roles = set(self.store.user_roles.get(approver, ()))
+        rules = self.store.privilege_rules.get(profile.company, [])
+        matched = []
+        for rule in rules:
+            if rule["privilege"] != privilege or rule["role"] not in roles:
+                continue
+            if not rule.get("may_authorise"):
+                continue
+            max_amt = float(rule.get("max_amount") or 0)
+            if amount is not None and max_amt > 0 and float(amount) > max_amt + 1e-9:
+                continue
+            matched.append(rule)
+        return matched
+
     def consume(self, token, privilege, pos_profile, reference_name, claim):
         if not token or token not in self.tokens or token in self.consumed or self.tokens[token]["expired"]:
             raise Refused("This manager approval is missing or has expired. [POS-AUTH-EXPIRED]")
@@ -601,6 +616,7 @@ def _build_env():
     override_stub.PRIVILEGES = override.PRIVILEGES
     override_stub.is_policy_active = override.is_policy_active
     override_stub.may_perform = override.may_perform
+    override_stub._matching_authorise_rules = override._matching_authorise_rules
     override_stub.consume = override.consume
     override_stub.require = override.require
     override_stub._is_non_interactive_or_agent_session = lambda user=None: bool(
