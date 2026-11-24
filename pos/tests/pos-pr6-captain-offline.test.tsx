@@ -144,6 +144,7 @@ describe('POS-PR-6 R2 (Finding 6): CaptainTables offline cached fallback', () =>
     firstRender.unmount();
 
     // Phase 2 (offline after submitting an offline order): API calls fail with network error
+    const consoleErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
     mockGetCaptainContext.mockRejectedValueOnce(new Error('There was an error.'));
     mockGetRooms.mockRejectedValueOnce(new Error('There was an error.'));
@@ -176,5 +177,7 @@ describe('POS-PR-6 R2 (Finding 6): CaptainTables offline cached fallback', () =>
     expect(screen.queryByText(/Unable to load tables/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('captain-offline-pill')).toBeInTheDocument();
     expect(screen.getByTestId('captain-queued-badge')).toBeInTheDocument();
+    expect(consoleErrSpy).not.toHaveBeenCalled();
+    consoleErrSpy.mockRestore();
   });
 });
