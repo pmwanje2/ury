@@ -1067,5 +1067,55 @@ class TestBlocker4MultiCurrencyCostAndRestTamper(unittest.TestCase):
                 f.flags.ury_server_discount_write = False
 
 
+class TestCustomPOSInvoiceSuperBinding(unittest.TestCase):
+    """Regression: CustomPOSInvoice.calculate_taxes_and_totals must bind super() outside the lambda."""
+
+    def test_custom_pos_invoice_calculate_taxes_and_totals_calls_base_without_super_error(self):
+        f, _state, modules = _make_harness()
+        called = []
+
+        class FakeBasePOSInvoice(FakeInv):
+            def calculate_taxes_and_totals(self):
+                called.append("base")
+                return FakeInv.calculate_taxes_and_totals(self)
+
+        pos_inv_mod = ModuleType("erpnext.accounts.doctype.pos_invoice.pos_invoice")
+        pos_inv_mod.POSInvoice = FakeBasePOSInvoice
+        pos_inv_mod.get_stock_availability = MagicMock()
+        erp_pkg = ModuleType("erpnext")
+        erp_acc = ModuleType("erpnext.accounts")
+        erp_dt = ModuleType("erpnext.accounts.doctype")
+        erp_pi = ModuleType("erpnext.accounts.doctype.pos_invoice")
+        tender_stub = ModuleType("ury.ury.hooks.ury_pos_tender")
+        tender_stub.calculate_taxes_and_totals_excluding_tip = lambda doc, fn: fn()
+        modules.update({
+            "erpnext": erp_pkg,
+            "erpnext.accounts": erp_acc,
+            "erpnext.accounts.doctype": erp_dt,
+            "erpnext.accounts.doctype.pos_invoice": erp_pi,
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice": pos_inv_mod,
+            "ury.ury.hooks.ury_pos_tender": tender_stub,
+        })
+
+        with patch.dict(sys.modules, modules):
+            for modname in (
+                "ury.ury_pos.privileged_auth",
+                "ury.ury_pos.pricing_actions",
+                "ury.ury.class_overrides.pos_invoice",
+            ):
+                sys.modules.pop(modname, None)
+            _load_mod("ury.ury_pos.pricing_actions", "ury/ury_pos/pricing_actions.py")
+            pi_override = _load_mod("ury.ury.class_overrides.pos_invoice", "ury/ury/class_overrides/pos_invoice.py")
+            inv = pi_override.CustomPOSInvoice({
+                "name": "INV-SUPER-1",
+                "currency": "UGX",
+                "items": [FakeRow({"item_code": "STEAK", "qty": 1, "rate": 10000.0})],
+                "taxes": [],
+            })
+            inv.calculate_taxes_and_totals()
+            self.assertEqual(called, ["base"])
+            self.assertEqual(inv["grand_total"], 10000.0)
+
+
 if __name__ == "__main__":
     unittest.main()
