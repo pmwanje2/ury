@@ -1289,6 +1289,240 @@ class TestAuthoritativeOutletTimeAndPriceListAntiSpoofing(unittest.TestCase):
             self.assertEqual(seen_in_super[0]["set_posting_time"], 1)
             self.assertEqual(doc.set_posting_time, 0)
 
+    def test_override_line_price_and_validate_preserve_authorized_rate_under_active_sales_time_pricing(self):
+        """R3 live coexistence fix: #152 override_line_price clears prior Pricing Rule discounts,
+        and CustomPOSInvoice.validate() shields verified/persisted #152 overridden rows from
+        ERPNext's apply_pricing_rule() re-applying sales-time-pricing@1 discounts while leaving
+        normal rows and untrusted forged rows untouched.
+        """
+        frappe_mock, utils = _make_frappe()
+        frappe_mock.session.user = "manager@example.com"
+        frappe_mock.get_roles = MagicMock(return_value=["URY Manager"])
+        frappe_mock.has_permission = MagicMock(return_value=True)
+        frappe_mock.db.table_exists = MagicMock(return_value=False)
+
+        # Part 1: override_line_price on a row carrying PRLE-0001 (-20%) must clear discount & pricing_rules
+        ov_row = Row(
+            name="ROW-OV-1",
+            item_code="KH-BURGER-18",
+            qty=1.0,
+            price_list_rate=20000.0,
+            discount_percentage=20.0,
+            discount_amount=4000.0,
+            rate=16000.0,
+            pricing_rules='["PRLE-0001"]',
+            warehouse="Stores - MFU",
+        )
+        inv_doc = Row(
+            name="MFUA00066",
+            docstatus=0,
+            pos_profile="POS Profile A",
+            currency="UGX",
+            conversion_rate=1.0,
+            items=[ov_row],
+            taxes=[],
+            flags=SimpleNamespace(),
+        )
+
+        def _recalc_from_disc():
+            for r in inv_doc["items"]:
+                disc_pct = float(r.get("discount_percentage") or 0)
+                r.discount_amount = float(r.price_list_rate or 0) * disc_pct / 100.0
+                r.rate = float(r.price_list_rate or 0) - r.discount_amount
+            inv_doc.grand_total = sum(float(r.rate or 0) * float(r.qty or 0) for r in inv_doc["items"])
+
+        inv_doc.calculate_taxes_and_totals = _recalc_from_disc
+        inv_doc.save = MagicMock()
+        inv_doc.precision = MagicMock(return_value=0)
+        profile_doc = Row(
+            name="POS Profile A",
+            company="Maximus Foods UG",
+            allow_rate_change=1,
+            warehouse="Stores - MFU",
+            buying_price_list=None,
+        )
+        frappe_mock.get_doc = MagicMock(
+            side_effect=lambda dt, name=None, **kw: inv_doc if dt == "POS Invoice" else profile_doc
+        )
+        frappe_mock.db.get_value = MagicMock(return_value=0)
+
+        modules_p1 = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.brand": _stub("ury.brand", coded_message=lambda k, m="": f"[POS-{k}] {m}"),
+            "ury.ury_pos.discount": _stub(
+                "ury.ury_pos.discount",
+                currency_precision=lambda doc=None, currency=None: 0,
+                with_currency_precision=lambda doc, prec=None: patch.dict({}, {}),
+            ),
+            "ury.ury_pos.privileged_auth": _stub(
+                "ury.ury_pos.privileged_auth",
+                DEFAULT_MANAGER_ROLES=frozenset({"URY Manager", "URY Admin"}),
+                assert_not_efris_fiscalised=MagicMock(),
+                assert_not_offline_replay=MagicMock(),
+                authorize_or_perform=MagicMock(
+                    return_value={"approver": "manager@example.com", "via_pin": False, "reason": "PRICE-SPECIAL", "reason_note": "Special"}
+                ),
+            ),
+        }
+        with patch.dict(sys.modules, modules_p1):
+            pricing_mod = _load("ury.ury_pos.pricing_actions", URY_PKG / "ury_pos/pricing_actions.py")
+            with patch.object(pricing_mod, "sync_service_charge", MagicMock()):
+                pricing_mod.override_line_price(
+                    invoice="MFUA00066",
+                    pos_profile="POS Profile A",
+                    item_row_name="ROW-OV-1",
+                    new_rate=12500.0,
+                    reason="PRICE-SPECIAL",
+                    reason_note="Special",
+                )
+
+        self.assertEqual(ov_row.price_list_rate, 12500.0)
+        self.assertEqual(ov_row.discount_percentage, 0)
+        self.assertEqual(ov_row.discount_amount, 0)
+        self.assertFalse(ov_row.get("pricing_rules"))
+        self.assertEqual(ov_row.rate, 12500.0)
+
+        # Part 2: CustomPOSInvoice.validate() shields verified/persisted overridden rows from
+        # ERPNext's apply_pricing_rule() re-applying PRLE-0001 while keeping normal rows discounted
+        # and NEVER shielding untrusted forged rows.
+        recalc_calls = []
+
+        class BasePOSInvoice:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+                self.flags = SimpleNamespace()
+
+            def get(self, key, default=None):
+                return self.__dict__.get(key, default)
+
+            def calculate_taxes_and_totals(self):
+                recalc_calls.append(self.get("name"))
+                for r in self.get("items") or []:
+                    disc_pct = float(r.get("discount_percentage") or 0)
+                    r.discount_amount = float(r.get("price_list_rate") or 0) * disc_pct / 100.0
+                    r.rate = float(r.get("price_list_rate") or 0) - r.discount_amount
+
+            def validate(self):
+                # Simulate ERPNext apply_pricing_rule_on_transaction applying PRLE-0001 (-20%) to ALL rows
+                self.pricing_rules = []
+                for r in self.get("items") or []:
+                    r.discount_percentage = 20.0
+                    r.discount_amount = float(r.price_list_rate or 0) * 0.20
+                    r.rate = float(r.price_list_rate or 0) * 0.80
+                    r.pricing_rules = '["PRLE-0001"]'
+                    self.pricing_rules.append(
+                        Row(pricing_rule="PRLE-0001", item_code=r.item_code, child_docname=r.name, rule_applied=1)
+                    )
+
+        erpnext_pos_mod = _stub(
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice",
+            POSInvoice=BasePOSInvoice,
+            get_stock_availability=MagicMock(),
+        )
+        modules_p2 = {
+            "frappe": frappe_mock,
+            "frappe.utils": utils,
+            "ury.ury.hooks.ury_pos_tender": _stub(
+                "ury.ury.hooks.ury_pos_tender",
+                calculate_taxes_and_totals_excluding_tip=lambda doc, fn: fn(),
+            ),
+            "ury.ury_pos.pricing_actions": _stub(
+                "ury.ury_pos.pricing_actions",
+                calculate_taxes_and_totals_for_service_charge=lambda doc, fn: fn(),
+            ),
+            "erpnext": _stub("erpnext"),
+            "erpnext.accounts": _stub("erpnext.accounts"),
+            "erpnext.accounts.doctype": _stub("erpnext.accounts.doctype"),
+            "erpnext.accounts.doctype.pos_invoice": _stub("erpnext.accounts.doctype.pos_invoice"),
+            "erpnext.accounts.doctype.pos_invoice.pos_invoice": erpnext_pos_mod,
+        }
+        with patch.dict(sys.modules, modules_p2):
+            pos_inv_mod = _load("ury.ury.class_overrides.pos_invoice", URY_PKG / "ury/class_overrides/pos_invoice.py")
+            row_authorized = Row(
+                name="ROW-AUTH",
+                item_code="KH-BURGER-18",
+                qty=1.0,
+                price_list_rate=12500.0,
+                rate=12500.0,
+                base_price_list_rate=12500.0,
+                base_rate=12500.0,
+                discount_percentage=0.0,
+                discount_amount=0.0,
+                pricing_rules=None,
+                custom_price_overridden=1,
+                custom_price_override_approver="manager@example.com",
+            )
+            row_normal = Row(
+                name="ROW-NORM",
+                item_code="KH-BURGER-18",
+                qty=1.0,
+                price_list_rate=20000.0,
+                rate=20000.0,
+                base_price_list_rate=20000.0,
+                base_rate=20000.0,
+                discount_percentage=0.0,
+                discount_amount=0.0,
+                pricing_rules=None,
+                custom_price_overridden=0,
+            )
+            doc = pos_inv_mod.CustomPOSInvoice(
+                name="MFUA00066",
+                is_return=0,
+                items=[row_authorized, row_normal],
+                pricing_rules=[],
+            )
+            doc.is_new = lambda: False
+            doc.get_doc_before_save = lambda: Row(
+                name="MFUA00066",
+                items=[
+                    Row(
+                        name="ROW-AUTH",
+                        custom_price_overridden=1,
+                        custom_price_override_approver="manager@example.com",
+                    ),
+                    Row(name="ROW-NORM", custom_price_overridden=0),
+                ],
+            )
+            doc.validate()
+
+            # Persisted #152 override keeps exact 12,500 without PRLE-0001 double-discount
+            self.assertEqual(row_authorized.rate, 12500.0)
+            self.assertEqual(row_authorized.price_list_rate, 12500.0)
+            self.assertEqual(row_authorized.discount_percentage, 0.0)
+            self.assertEqual(row_authorized.discount_amount, 0.0)
+            self.assertFalse(row_authorized.pricing_rules)
+            # Sibling normal row STILL gets PRLE-0001 (-20% -> 16,000)
+            self.assertEqual(row_normal.rate, 16000.0)
+            self.assertEqual(row_normal.discount_percentage, 20.0)
+            self.assertEqual(len(doc.pricing_rules), 1)
+            self.assertEqual(doc.pricing_rules[0].child_docname, "ROW-NORM")
+            self.assertIn("MFUA00066", recalc_calls)
+
+            # Negative check: untrusted forged override row (not persisted & no ury_privileged_action_verified) is NOT shielded
+            forged_row = Row(
+                name="ROW-FORGED",
+                item_code="KH-BURGER-18",
+                qty=1.0,
+                price_list_rate=20000.0,
+                rate=20000.0,
+                discount_percentage=0.0,
+                discount_amount=0.0,
+                pricing_rules=None,
+                custom_price_overridden=1,
+            )
+            forged_doc = pos_inv_mod.CustomPOSInvoice(
+                name=None,
+                is_return=0,
+                items=[forged_row],
+                pricing_rules=[],
+            )
+            forged_doc.is_new = lambda: True
+            forged_doc.get_doc_before_save = lambda: None
+            forged_doc.validate()
+            self.assertEqual(forged_row.rate, 16000.0)
+            self.assertEqual(forged_row.discount_percentage, 20.0)
+
 
 class TestStampInvoiceOutletClock(unittest.TestCase):
     def setUp(self):
