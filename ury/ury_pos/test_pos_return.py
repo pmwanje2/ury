@@ -508,14 +508,14 @@ class ReturnHarness:
                 if "for update" in q:
                     h.for_update_locks.append(("prior_returns", orig_name))
                 return [{"name": m.name} for m in matches] if as_dict else [(m.name,) for m in matches]
-            if "tabpos closing entry detail" in q:
+            if "tabpos closing entry" in q:
                 orig_name = params[0] if isinstance(params, (list, tuple)) else params
                 rows = [
                     ce["name"] for ce in h.closing_entries
                     if ce.get("docstatus") == 1 and orig_name in ce.get("invoices", [])
                 ]
                 return [{"parent": r} for r in rows] if as_dict else [(r,) for r in rows]
-            if "tabpos invoice merge log" in q or "tabpos invoice reference" in q:
+            if "tabpos invoice merge log" in q:
                 orig_name = params[0] if isinstance(params, (list, tuple)) else params
                 rows = [
                     ml["name"] for ml in h.merge_logs

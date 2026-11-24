@@ -486,8 +486,20 @@ def can_perform_pos_privilege(
     return bool(_user_roles(actor) & DEFAULT_MANAGER_ROLES)
 
 
+class _VerifiedNewReturnProof:
+    """In-process proof for newly inserted POS Return docs whose name is assigned during `insert()`."""
+
+    __slots__ = ("doc", "privilege")
+
+    def __init__(self, doc: Any, privilege: str):
+        self.doc = doc
+        self.privilege = privilege
+
+
 def mark_verified_pos_approval(doc, privilege: str, approval=None) -> None:
     """Attach B2a's unforgeable in-process approval proof to `doc` when available."""
+    if doc is not None and hasattr(doc, "flags"):
+        setattr(doc.flags, f"_pos_verified_{privilege}_proof", _VerifiedNewReturnProof(doc, privilege))
     ov = _override_module()
     if ov is not None and hasattr(ov, "mark_verified_approval") and doc is not None:
         ov.mark_verified_approval(doc, privilege, approval)
@@ -504,7 +516,7 @@ def _select_token_claim_and_privilege(
     """Choose between B5a's claim/privilege and B2a's compat claim without weakening hash checks."""
     if not fallback_privileges and alt_claim is None:
         return privilege, claim
-    hash_fn = getattr(ov, "_hash_token", None)
+    hash_fn = getattr(ov, "_token_digest", None) or getattr(ov, "_hash_token", None)
     if not callable(hash_fn):
         return privilege, claim
     fr = _f()
@@ -513,7 +525,7 @@ def _select_token_claim_and_privilege(
             return privilege, claim
         row = fr.db.get_value(
             "POS Authorisation Log",
-            {"token_hash": hash_fn(token), "outcome": "Approved"},
+            {"token_hash": hash_fn(str(token).strip()), "outcome": "Approved"},
             ["privilege", "claim_values"],
             as_dict=True,
         )
@@ -915,7 +927,8 @@ def _assert_not_consolidated_or_day_closed(orig) -> None:
                 """
                 SELECT piml.name
                 FROM `tabPOS Invoice Merge Log` piml
-                INNER JOIN `tabPOS Invoice Reference` pir ON pir.parent = piml.name
+                INNER JOIN `tabPOS Invoice Reference` pir
+                    ON pir.parent = piml.name AND pir.parenttype = 'POS Invoice Merge Log'
                 WHERE piml.docstatus = 1 AND pir.pos_invoice = %s
                 LIMIT 1
                 """,
@@ -927,13 +940,13 @@ def _assert_not_consolidated_or_day_closed(orig) -> None:
                     "This check is included in a submitted consolidation log and cannot be returned at the till.",
                     fr.ValidationError,
                 )
-        if fr.db.table_exists("POS Closing Entry Detail") is True:
             close_rows = fr.db.sql(
                 """
                 SELECT pce.name
                 FROM `tabPOS Closing Entry` pce
-                INNER JOIN `tabPOS Closing Entry Detail` pced ON pced.parent = pce.name
-                WHERE pce.docstatus = 1 AND pced.pos_invoice = %s
+                INNER JOIN `tabPOS Invoice Reference` pir
+                    ON pir.parent = pce.name AND pir.parenttype = 'POS Closing Entry'
+                WHERE pce.docstatus = 1 AND pir.pos_invoice = %s
                 LIMIT 1
                 """,
                 (orig_name,),
@@ -1805,7 +1818,11 @@ def validate_pos_return_doc(doc) -> None:
         doc.invoice_printed = 0
 
     ov = _override_module()
-    has_verified = bool(ov is not None and hasattr(ov, "has_verified_approval") and ov.has_verified_approval(doc, "return"))
+    local_proof = getattr(getattr(doc, "flags", None), "_pos_verified_return_proof", None)
+    has_verified = bool(
+        (isinstance(local_proof, _VerifiedNewReturnProof) and local_proof.doc is doc and local_proof.privilege == "return")
+        or (ov is not None and hasattr(ov, "has_verified_approval") and ov.has_verified_approval(doc, "return"))
+    )
     actor = getattr(getattr(fr, "session", None), "user", None) or ""
 
     return_against = _field(doc, "return_against")
@@ -1863,13 +1880,14 @@ def validate_pos_return_doc(doc) -> None:
 def _assert_shift_still_open(orig) -> None:
     fr = _f()
     orig_name = _field(orig, "name")
-    if isinstance(orig_name, str) and orig_name and fr.db.table_exists("POS Closing Entry Detail") is True:
+    if isinstance(orig_name, str) and orig_name and fr.db.table_exists("POS Invoice Reference") is True:
         close_rows = fr.db.sql(
             """
             SELECT pce.name
             FROM `tabPOS Closing Entry` pce
-            INNER JOIN `tabPOS Closing Entry Detail` pced ON pced.parent = pce.name
-            WHERE pce.docstatus = 1 AND pced.pos_invoice = %s
+            INNER JOIN `tabPOS Invoice Reference` pir
+                ON pir.parent = pce.name AND pir.parenttype = 'POS Closing Entry'
+            WHERE pce.docstatus = 1 AND pir.pos_invoice = %s
             LIMIT 1
             """,
             (orig_name,),
@@ -1917,7 +1935,8 @@ def _validate_reopen_or_adjust_base(orig, *, credit_and_rebill: int = 0) -> bool
             """
             SELECT piml.name
             FROM `tabPOS Invoice Merge Log` piml
-            INNER JOIN `tabPOS Invoice Reference` pir ON pir.parent = piml.name
+            INNER JOIN `tabPOS Invoice Reference` pir
+                ON pir.parent = piml.name AND pir.parenttype = 'POS Invoice Merge Log'
             WHERE piml.docstatus = 1 AND pir.pos_invoice = %s
             LIMIT 1
             """,
@@ -2334,6 +2353,18 @@ def reopen_closed_check(
     reopened.waiter = _field(orig, "waiter") or session_user
     reopened.cashier = session_user
     reopened.payments = []
+    default_mop = None
+    orig_pays = _field(orig, "payments") or []
+    if orig_pays:
+        default_mop = _field(orig_pays[0], "mode_of_payment")
+    if not default_mop and profile_name and fr.db.exists("POS Profile", profile_name):
+        prof = fr.get_doc("POS Profile", profile_name)
+        prof_pays = _field(prof, "payments") or []
+        if prof_pays:
+            default_mop = _field(prof_pays[0], "mode_of_payment")
+    if default_mop:
+        # ERPNext v16 requires at least one payment row on POS Invoice drafts (zero-amount unpaid).
+        reopened.append("payments", {"mode_of_payment": default_mop, "amount": 0.0})
     if _has_field("POS Invoice", "custom_reopened_from"):
         reopened.custom_reopened_from = orig.name
 

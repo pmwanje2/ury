@@ -409,10 +409,10 @@ class ReopenHarness:
                     and int(inv.get("docstatus") or 0) == 1
                 ]
                 return [(m.name,) for m in matches]
-            if "tabpos closing entry detail" in q:
+            if "tabpos closing entry" in q:
                 rows = [ce["name"] for ce in h.closing_entries if ce.get("docstatus") == 1 and orig_name in ce.get("invoices", [])]
                 return [(r,) for r in rows]
-            if "tabpos invoice merge log" in q or "tabpos invoice reference" in q:
+            if "tabpos invoice merge log" in q:
                 rows = [ml["name"] for ml in h.merge_logs if ml.get("docstatus") == 1 and orig_name in ml.get("invoices", [])]
                 return [(r,) for r in rows]
             return []
@@ -584,7 +584,7 @@ class TestReopenAndAdjustClosedCheck(unittest.TestCase):
         reopened1 = self.h.invoices[res1["reopened_invoice"]]
         self.assertEqual(reopened1.docstatus, 0)
         self.assertEqual(reopened1.invoice_printed, 0)
-        self.assertEqual(reopened1.payments, [])
+        self.assertTrue(all(float(p.amount) == 0.0 for p in reopened1.payments))
         self.assertEqual(reopened1.custom_reopened_from, inv1.name)
         self.assertTrue(res1["table_restored"])
         self.assertEqual(reopened1.restaurant_table, "T1")
