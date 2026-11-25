@@ -647,6 +647,7 @@ def _consolidation_keys(checks, snapshots):
                 txn, base = amounts.get(key, (0, 0))
                 amounts[key] = (txn + _decimal(detail["amount"]),
                                 base + _decimal(detail.get("base_amount", detail["amount"])))
+        held_keys = Counter(row.get("reservation_line_key") for row in doc.items if row.get("reservation_line_key"))
         pricing = {}
         for row in doc.items:
             quantity = _decimal(row.qty)
@@ -691,8 +692,11 @@ def _consolidation_keys(checks, snapshots):
                 (child.item_code, pricing[child.name], _decimal(child.qty) / quantity if quantity else child.qty)
                 for child in children.get(row.get("reservation_line_key") or row.name, ())
             )
+            # A legacy key used twice on the same invoice cannot identify an
+            # interchangeable kitchen group, even if its unit prices match.
+            legacy_line = row.name if cint(row.get("ury_held")) and held_keys[row.get("reservation_line_key")] > 1 else None
             signature = (origin, pricing[row.name], parent_pricing.get(row.get("custom_parent_line_key")),
-                         modifiers, chain, scope, rounding_sources)
+                         modifiers, chain, scope, rounding_sources, legacy_line)
             representative = representatives.setdefault(signature, row.name)
             # Existing destination rows already have independent allocations.
             keys[row.name] = row.name if doc is checks[0] else representative

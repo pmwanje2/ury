@@ -342,6 +342,25 @@ def reduce_order_item_qty(
 			alt_claim=b2a_compat_claim,
 		)
 
+	# A held-line cancellation removes precisely its share of the existing
+	# split bill. Keep every surviving line, fee and stock allocation frozen.
+	remaining_balance = None
+	if held and pos_invoice.get("custom_split_balance"):
+		from ury.ury.doctype.ury_order.ury_order import _split_balance_precisions
+		from ury.ury_pos.split_balances import allocate_split_balances, set_split_balance
+
+		removed = {item_row.name: -delta}
+		removed.update({child.name: before - after for child, before, after in child_updates})
+		remaining_balance = allocate_split_balances(
+			pos_invoice, removed, *_split_balance_precisions(pos_invoice, pos_invoice.company)
+		)[0]
+		header = remaining_balance["header"]
+		if received_paid > 0 and received_paid > (header.get("rounded_total") or header["grand_total"]):
+			raise QtyReductionError(
+				CODE_VOID_PARTIAL_PAYMENT,
+				_("Cannot reduce items below payments already received on this check. [{0}]").format(CODE_VOID_PARTIAL_PAYMENT),
+			)
+
 	from ury.ury.api.ury_availability import apply_count_delta
 
 	prev_count_rows = [{"item": item_code, "qty": current_qty}] + [
@@ -396,6 +415,8 @@ def reduce_order_item_qty(
 				if child_new_qty == 0:
 					pos_invoice.remove(child)
 			pos_invoice.remove(item_row)
+		if remaining_balance is not None:
+			set_split_balance(pos_invoice, remaining_balance, [row.name for row in pos_invoice.items])
 		pos_invoice.save(ignore_permissions=False)
 	finally:
 		frappe.flags.ury_qty_reduction = False

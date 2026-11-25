@@ -3130,3 +3130,4 @@ Kitchen ticket {0} was not found.,لم يتم العثور على تذكرة ا�
 You do not have permission to modify this KOT.,ليس لديك صلاحية تعديل تذكرة المطبخ هذه.,
 You do not have permission to modify KOTs from other branches.,ليس لديك صلاحية تعديل تذاكر المطبخ من الفروع الأخرى.,
 Hold and fire requires an online connection.,يلزم الاتصال لتأجيل الأصناف أو إرسالها إلى المطبخ.,
+Held kitchen lines have an ambiguous reservation key.,تشترك أصناف معلّقة في المطبخ في مفتاح حجز لا يميّز بينها.,

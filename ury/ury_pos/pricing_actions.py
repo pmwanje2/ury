@@ -108,6 +108,7 @@ def _getdate(val=None):
     return _dt.date.fromisoformat(str(val or _nowdate())[:10])
 
 from ury.brand import coded_message
+from ury.ury_pos.complimentary import check_is_comped_for_room_charge
 from ury.ury_pos.approval_currency import (
     company_approval_amount,
     invoice_approval_currency,
@@ -2456,7 +2457,7 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
             )
 
     # 2. Comp vs Room Charge collision guard (both directions).
-    if cint(doc.get("custom_is_complimentary")) == 1 and _invoice_has_room_charge(doc):
+    if check_is_comped_for_room_charge(doc) and _invoice_has_room_charge(doc):
         frappe.throw(
             coded_message(
                 "COMP-ROOM-CHARGE-FORBIDDEN",

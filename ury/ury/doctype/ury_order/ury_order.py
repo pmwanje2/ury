@@ -3,7 +3,7 @@
 
 import hashlib
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import ExitStack, contextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
@@ -17,6 +17,7 @@ from frappe.utils import cint, flt, get_datetime, get_system_timezone, now_datet
 from erpnext.controllers.queries import item_query
 from ury.brand import coded_message
 from ury.ury_pos.api import getBranch, getBranchRoom, getRoom, posOpening
+from ury.ury_pos.complimentary import check_is_comped_for_room_charge, set_split_comp_headers
 from ury.ury_pos.default_customer import get_default_customer_config, resolve_default_customer
 from ury.ury_pos import void_return_reopen as _void_ops
 from ury.ury_pos.discount import (
@@ -1249,6 +1250,7 @@ def _apply_check_split(
 
     for item in items_to_remove:
         source.remove(item)
+    set_split_comp_headers(source, new_invoice)
     if balances:
         set_split_balance(source, balances[0], source_names)
         set_split_balance(new_invoice, balances[1], child_names)
@@ -2101,16 +2103,13 @@ def _merged_kitchen_keys(checks, line_keys):
     updates = {}
     for check in checks:
         parents = defaultdict(list)
-        assigned = {}
         for row in check.items:
             old = row.get("reservation_line_key") or row.name
             key = old
             if cint(row.get("ury_held")):
                 representative = line_keys.get(row.name, row.name)
                 if representative not in representatives:
-                    if old not in assigned:
-                        assigned[old] = frappe.generate_hash(length=20) if old in claimed else old
-                    key = assigned[old]
+                    key = frappe.generate_hash(length=20) if old in claimed else old
                     representatives[representative] = key
                     claimed.add(key)
                 key = representatives[representative]
@@ -2124,7 +2123,9 @@ def _merged_kitchen_keys(checks, line_keys):
                 candidates = parents[parent]
                 matches = {key for deadline, key in candidates
                            if len(candidates) == 1 or deadline == row.get("fire_at")}
-                if len(matches) == 1 and parent not in matches:
+                if len(matches) != 1:
+                    _ambiguous_held_lines()
+                if parent not in matches:
                     updates.setdefault(row.name, {})["custom_parent_line_key"] = matches.pop()
     return updates
 
@@ -2195,18 +2196,18 @@ def consolidate_checks(destination, sources):
     ).reservation_control_enabled
     split_balance, dependants, line_keys = _prepare_split_consolidation(destination, sources, company)
     split_consolidation = dependants is not None
-    destination_before = _reservation_lines(destination.items)
-
     merged_comp = _consolidated_check_is_complimentary(checks)
-    kitchen_updates = _merged_kitchen_keys(checks, line_keys) if split_consolidation else {}
+    kitchen_updates = _merged_kitchen_keys(checks, line_keys)
     if reservations_enabled and kitchen_updates:
         from ury.ury.api.ury_order_reservation_service import rebind_merged_reservations
 
         for check in checks:
             rebind_merged_reservations(check, kitchen_updates)
-    for row in destination.items:
-        if row.name in kitchen_updates:
-            row.update(kitchen_updates[row.name])
+    for check in checks:
+        for row in check.items:
+            if row.name in kitchen_updates:
+                row.update(kitchen_updates[row.name])
+    destination_before = _reservation_lines(destination.items)
     merge_rate_prec = currency_precision(destination)
     verified_priv_child_rates = {}
     merged_items = {line_keys[row.name]: row for row in destination.items} if split_consolidation else {}
@@ -2226,7 +2227,6 @@ def consolidate_checks(destination, sources):
                 if split_consolidation:
                     values["custom_origin_invoice_item"] = origin
                     values["reservation_line_key"] = row.get("reservation_line_key") or row.name
-                values.update(kitchen_updates.get(row.name, {}))
                 appended = destination.append("items", values)
                 if appended is None and destination.items:
                     appended = destination.items[-1]
@@ -3929,17 +3929,22 @@ def _selected_held_rows(invoice, line, course):
     return _held_release_group(invoice, selected)
 
 
+def _ambiguous_held_lines():
+    frappe.throw(coded_message("HOLD-AMBIGUOUS-LINE", _("Held kitchen lines have an ambiguous reservation key.")))
+
+
 def _held_release_group(invoice, selected):
     """A parent and its persisted kitchen modifiers release as one group."""
     selected_keys = {row.get("reservation_line_key") or row.name for row in selected}
     parents = {row.get("custom_parent_line_key") for row in selected if row.get("custom_parent_line_key")}
     group_keys = selected_keys | parents
-    return [
-        row for row in invoice.items
-        if cint(row.get("ury_held")) and flt(row.get("qty")) > 0
-        and ((row.get("reservation_line_key") or row.name) in group_keys
-             or row.get("custom_parent_line_key") in group_keys)
-    ]
+    keys = Counter(row.get("reservation_line_key") or row.name for row in invoice.items)
+    group = [row for row in invoice.items
+             if (row.get("reservation_line_key") or row.name) in group_keys
+             or row.get("custom_parent_line_key") in group_keys]
+    if any(keys[row.get("reservation_line_key") or row.name] > 1 for row in group):
+        _ambiguous_held_lines()
+    return [row for row in group if cint(row.get("ury_held")) and flt(row.get("qty")) > 0]
 
 
 def _check_held_version(invoice, last_modified_time):
@@ -6828,7 +6833,7 @@ def make_invoice(
     # Room Charge: the cashier's room/folio text, for a hotel bridge that adds
     # POS Invoice.room_number; set before payments so its hooks can read it.
     incoming_room = str(room_number).strip() if room_number is not None else ""
-    if incoming_room and cint(invoice.get("custom_is_complimentary")) == 1:
+    if incoming_room and check_is_comped_for_room_charge(invoice):
         frappe.throw(
             coded_message(
                 "COMP-ROOM-CHARGE-FORBIDDEN",
