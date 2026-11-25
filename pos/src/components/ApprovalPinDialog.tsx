@@ -295,7 +295,7 @@ export default function ApprovalPinDialog({
               )}
 
               {error && (
-                <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-800">
+                <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-900">
                   {error}
                 </p>
               )}
@@ -352,7 +352,7 @@ export default function ApprovalPinDialog({
                 </div>
               )}
               {error && (
-                <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-800">
+                <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-900">
                   {error}
                 </p>
               )}
