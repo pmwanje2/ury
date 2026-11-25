@@ -15,6 +15,7 @@ from frappe.utils import (
 from datetime import datetime, timedelta, time
 from math import ceil
 
+from ury.brand import coded_message
 from ury.ury.api.table_lifecycle import assert_outlet_access
 from ury.ury.report.average_table_time.average_table_time import (
     get_branch_last_day_avg_time,
@@ -1624,13 +1625,13 @@ _WAITLIST_OPEN = ("Waiting", "Waitlist Notified")
 def _waitlist_access(branch, perm):
     assert_outlet_access(branch)
     if not frappe.has_permission("URY Table Reservation", perm):
-        frappe.throw(_("Not permitted to manage the wait list."), frappe.PermissionError)
+        frappe.throw(coded_message("WAITLIST-ACCESS", _("Not permitted to manage the wait list.")), frappe.PermissionError)
     ensure_reservations_enabled(branch)
 
 
 def _validate_waitlist_room(branch, requested_room):
     if requested_room and frappe.db.get_value("URY Room", requested_room, "branch") != branch:
-        frappe.throw(_("The requested room does not belong to this outlet."), frappe.PermissionError)
+        frappe.throw(coded_message("WAITLIST-ROOM-OUTLET", _("The requested room does not belong to this outlet.")), frappe.PermissionError)
 
 
 def _waitlist_integer(value, minimum):
@@ -1640,7 +1641,7 @@ def _waitlist_integer(value, minimum):
     except (ValueError, TypeError, OverflowError):
         valid = False
     if not valid:
-        frappe.throw(_("Enter a valid party size or wait time."))
+        frappe.throw(coded_message("WAITLIST-INVALID-SIZE-OR-TIME", _("Enter a valid party size or wait time.")))
     return result
 
 
@@ -1703,7 +1704,7 @@ def list_walkin_waitlist(branch):
 def validate_waitlist_phone(value):
     phone = value.strip() if isinstance(value, str) else ""
     if not re.fullmatch(r"\+?(?=[0-9 ().-]*[0-9])[0-9 ().-]{1,63}", phone):
-        frappe.throw(_("Enter a valid phone number."))
+        frappe.throw(coded_message("WAITLIST-INVALID-PHONE", _("Enter a valid phone number.")))
     return phone
 
 
@@ -1717,7 +1718,7 @@ def add_walkin_waitlist(branch, customer_name, customer_phone, no_of_pax, reques
     quoted = _waitlist_integer(0 if quoted is None else quoted, 0)
     name = (customer_name or "").strip()
     if not name:
-        frappe.throw(_("Enter the party name."))
+        frappe.throw(coded_message("WAITLIST-MISSING-NAME", _("Enter the party name.")))
     phone = validate_waitlist_phone(customer_phone)
     joined = now_datetime()
     party = frappe.get_doc(dict(
@@ -1735,7 +1736,7 @@ def _lock_waitlist_party(name):
     # Scope before examining the party or locking a table in another outlet.
     assert_outlet_access(party.branch)
     if not party.is_waitlist or party.status not in _WAITLIST_OPEN:
-        frappe.throw(_("This party is no longer on the wait list."))
+        frappe.throw(coded_message("WAITLIST-PARTY-UNAVAILABLE", _("This party is no longer on the wait list.")))
     return party
 
 
@@ -1757,25 +1758,22 @@ def seat_waitlist_party(reservation, table):
     target = frappe.get_doc("URY Table", table, for_update=True)
     party = _lock_waitlist_party(reservation)
     if target.branch != party.branch:
-        frappe.throw(_("The table does not belong to this outlet."), frappe.PermissionError)
+        frappe.throw(coded_message("WAITLIST-TABLE-OUTLET", _("The table does not belong to this outlet.")), frappe.PermissionError)
     if target.custom_table_state == "Dirty":
-        # Translate in this endpoint so callers receive the same coded error.
-        from ury.brand import coded_message
-
         frappe.throw(coded_message("TABLE-DIRTY-NEEDS-BUSSING", _("Mark this table clean before seating.")))
     party.check_permission("write")
     target.check_permission("read")
     ensure_reservations_enabled(party.branch)
     if (target.custom_table_state not in (None, "Available") or cint(target.occupied)
             or cint(target.is_take_away) or open_checks_on([table], for_update=True)):
-        frappe.throw(_("Select an available table."))
+        frappe.throw(coded_message("WAITLIST-TABLE-UNAVAILABLE", _("Select an available table.")))
     if party.requested_room and party.requested_room != target.restaurant_room:
-        frappe.throw(_("Select a table in the requested room."))
+        frappe.throw(coded_message("WAITLIST-TABLE-ROOM", _("Select a table in the requested room.")))
     if not _party_fits(target, party.no_of_pax):
-        frappe.throw(_("This table does not fit the party."))
+        frappe.throw(coded_message("WAITLIST-TABLE-SIZE", _("This table does not fit the party.")))
     active = check_table_reservation(table, for_update=True)
     if active and active.get("is_lock_window_active"):
-        frappe.throw(_("This table is held for a reservation."))
+        frappe.throw(coded_message("WAITLIST-TABLE-RESERVED", _("This table is held for a reservation.")))
     seated_at = now_datetime()
     validate_reservation_conflicts(table, party.branch, seated_at)
     party.reserved_table = table

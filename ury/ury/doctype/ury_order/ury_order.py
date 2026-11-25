@@ -4,7 +4,7 @@
 import hashlib
 import json
 from collections import defaultdict
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from uuid import UUID
@@ -5735,6 +5735,20 @@ def get_check_discounts(invoice):
     return _get_check_discounts_impl(invoice)
 
 
+@contextmanager
+def _split_discount_pricing(bill, partner, *, preview=False, requested=True):
+    from ury.ury_pos.split_balances import reprice_split_discount
+
+    documents = (bill, partner) if requested else ()
+    precisions = None if preview else _split_balance_precisions
+    with reprice_split_discount(documents, precisions=precisions) as checks:
+        yield
+        if not preview:
+            for check in checks:
+                with with_currency_precision(check):
+                    check.calculate_taxes_and_totals()
+
+
 @frappe.whitelist()
 def preview_settlement_totals(
     invoice,
@@ -5782,14 +5796,15 @@ def preview_settlement_totals(
         _sync_service_charge(bill, profile)
         if partner is not None:
             _sync_service_charge(partner, profile)
-        return apply_discount_to_invoice(
-            bill,
-            profile,
-            spec,
-            require_reason=False,
-            enforce_auth=False,
-            linked_partner=partner,
-        )
+        with _split_discount_pricing(bill, partner, preview=True, requested=spec["has_any_arg"]):
+            return apply_discount_to_invoice(
+                bill,
+                profile,
+                spec,
+                require_reason=False,
+                enforce_auth=False,
+                linked_partner=partner,
+            )
     finally:
         bill.set("taxes", bill_orig_taxes)
         _restore_doc_discount_state(bill, bill_snap)
@@ -5838,17 +5853,18 @@ def apply_check_discount(
         if bill.custom_merged_pos_invoice
         else None
     )
-    summary = apply_discount_to_invoice(
-        bill,
-        profile,
-        spec,
-        require_reason=True,
-        enforce_auth=True,
-        linked_partner=partner,
-    )
-    _sync_service_charge(bill, profile)
-    if partner is not None:
-        _sync_service_charge(partner, profile)
+    with _split_discount_pricing(bill, partner, requested=spec["has_any_arg"]):
+        summary = apply_discount_to_invoice(
+            bill,
+            profile,
+            spec,
+            require_reason=True,
+            enforce_auth=True,
+            linked_partner=partner,
+        )
+        _sync_service_charge(bill, profile)
+        if partner is not None:
+            _sync_service_charge(partner, profile)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
     frappe.flags.ury_server_discount_write = True
     try:
@@ -5882,58 +5898,59 @@ def remove_check_discount(invoice, pos_profile, row=None, approval=None):
         if bill.custom_merged_pos_invoice
         else None
     )
-    if row:
-        target_row = next((r for r in (bill.get("items") or []) if str(r.get("name")) == str(row)), None)
-        if not target_row:
-            frappe.throw(_("Line item {0} is not on this check.").format(row), frappe.ValidationError)
-        _set_row_field(target_row, "discount_percentage", 0)
-        _set_row_field(target_row, "discount_amount", 0)
-        if target_row.get("price_list_rate") is not None:
-            _set_row_field(target_row, "rate", target_row.get("price_list_rate"))
-        bill.calculate_taxes_and_totals()
-        has_remaining = bool(
-            flt(bill.get("discount_amount")) > 0
-            or flt(bill.get("additional_discount_percentage")) > 0
-            or any(
-                flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
-                for r in (bill.get("items") or [])
+    with _split_discount_pricing(bill, partner):
+        if row:
+            target_row = next((r for r in (bill.get("items") or []) if str(r.get("name")) == str(row)), None)
+            if not target_row:
+                frappe.throw(_("Line item {0} is not on this check.").format(row), frappe.ValidationError)
+            _set_row_field(target_row, "discount_percentage", 0)
+            _set_row_field(target_row, "discount_amount", 0)
+            if target_row.get("price_list_rate") is not None:
+                _set_row_field(target_row, "rate", target_row.get("price_list_rate"))
+            bill.calculate_taxes_and_totals()
+            has_remaining = bool(
+                flt(bill.get("discount_amount")) > 0
+                or flt(bill.get("additional_discount_percentage")) > 0
+                or any(
+                    flt(r.get("discount_percentage")) > 0 or flt(r.get("discount_amount")) > 0
+                    for r in (bill.get("items") or [])
+                )
             )
-        )
-        if not has_remaining:
+            if not has_remaining:
+                spec = parse_discount_request(clear_discount=1)
+                summary = apply_discount_to_invoice(
+                    bill, profile, spec, require_reason=False, enforce_auth=True, linked_partner=partner
+                )
+            else:
+                from ury.ury_pos.discount import _compute_manual_discount_summary, _read_meta, _write_discount_audit_fields
+
+                prec = currency_precision(bill, bill.get("currency") or profile.get("currency"))
+                meta_data = _read_meta(bill)
+                line_reasons = dict(meta_data.get("line_reasons") or {})
+                line_reasons.pop(str(row), None)
+                _write_discount_audit_fields(
+                    bill,
+                    reason=bill.get("custom_discount_reason") or meta_data.get("reason"),
+                    reason_description=meta_data.get("reason_description"),
+                    note=bill.get("custom_discount_note") or meta_data.get("note"),
+                    coupon=bill.get("coupon_code") or meta_data.get("coupon_code"),
+                    approver=bill.get("custom_discount_approver") or meta_data.get("approver"),
+                    approved_percent=bill.get("custom_discount_approved_percent") or meta_data.get("approved_percent"),
+                    line_reasons=line_reasons,
+                    c_hash=meta_data.get("claim_hash"),
+                )
+                summary = _compute_manual_discount_summary(bill, prec)
+                summary["currency"] = bill.get("currency") or profile.get("currency") or ""
+                summary["precision"] = prec
+        else:
             spec = parse_discount_request(clear_discount=1)
             summary = apply_discount_to_invoice(
                 bill, profile, spec, require_reason=False, enforce_auth=True, linked_partner=partner
             )
-        else:
-            from ury.ury_pos.discount import _compute_manual_discount_summary, _read_meta, _write_discount_audit_fields
 
-            prec = currency_precision(bill, bill.get("currency") or profile.get("currency"))
-            meta_data = _read_meta(bill)
-            line_reasons = dict(meta_data.get("line_reasons") or {})
-            line_reasons.pop(str(row), None)
-            _write_discount_audit_fields(
-                bill,
-                reason=bill.get("custom_discount_reason") or meta_data.get("reason"),
-                reason_description=meta_data.get("reason_description"),
-                note=bill.get("custom_discount_note") or meta_data.get("note"),
-                coupon=bill.get("coupon_code") or meta_data.get("coupon_code"),
-                approver=bill.get("custom_discount_approver") or meta_data.get("approver"),
-                approved_percent=bill.get("custom_discount_approved_percent") or meta_data.get("approved_percent"),
-                line_reasons=line_reasons,
-                c_hash=meta_data.get("claim_hash"),
-            )
-            summary = _compute_manual_discount_summary(bill, prec)
-            summary["currency"] = bill.get("currency") or profile.get("currency") or ""
-            summary["precision"] = prec
-    else:
-        spec = parse_discount_request(clear_discount=1)
-        summary = apply_discount_to_invoice(
-            bill, profile, spec, require_reason=False, enforce_auth=True, linked_partner=partner
-        )
-
-    _sync_service_charge(bill, profile)
-    if partner is not None:
-        _sync_service_charge(partner, profile)
+        _sync_service_charge(bill, profile)
+        if partner is not None:
+            _sync_service_charge(partner, profile)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
     frappe.flags.ury_server_discount_write = True
     try:
@@ -6505,14 +6522,15 @@ def make_invoice(
                 mark_verified_fx_override(target, proof.mode_of_payment, proof.from_currency, proof.to_currency, proof.rate)
 
     if discount_spec["has_any_arg"]:
-        apply_discount_to_invoice(
-            invoice,
-            pos_prof,
-            discount_spec,
-            require_reason=True,
-            enforce_auth=True,
-            linked_partner=target,
-        )
+        with _split_discount_pricing(invoice, target):
+            apply_discount_to_invoice(
+                invoice,
+                pos_prof,
+                discount_spec,
+                require_reason=True,
+                enforce_auth=True,
+                linked_partner=target,
+            )
     else:
         invoice.calculate_taxes_and_totals()
         if target is not None:
@@ -7059,39 +7077,45 @@ def change_order_type(
                     frappe.PermissionError,
                 )
 
-        if table != old_table:
-            if cint(table_info.get("occupied")) == 1 or frappe.db.exists(
-                "POS Invoice",
-                {"restaurant_table": table, "docstatus": 0, "name": ["!=", inv.name]},
+    seating_table = table or old_table
+    if order_type == "Dine In" and seating_table and (seating_table != old_table or old_order_type != "Dine In"):
+        from ury.ury.api.table_lifecycle import assert_table_seatable
+
+        assert_table_seatable(seating_table, table_info.get("branch") if table_info else inv.get("branch"))
+
+    if table and table != old_table:
+        if cint(table_info.get("occupied")) == 1 or frappe.db.exists(
+            "POS Invoice",
+            {"restaurant_table": table, "docstatus": 0, "name": ["!=", inv.name]},
+        ):
+            frappe.throw(
+                _("Table {0} is already occupied.").format(table),
+                frappe.ValidationError,
+            )
+
+        if order_type == "Dine In":
+            from ury.ury.api.table_reservation import check_table_reservation, parse_to_datetime
+
+            active_res = check_table_reservation(table)
+            if (
+                active_res
+                and active_res.get("is_lock_window_active")
+                and active_res.get("status") == "Confirmed"
             ):
+                res_time_raw = active_res.get("reserved_at")
+                formatted_res_time = ""
+                if res_time_raw:
+                    try:
+                        res_dt = parse_to_datetime(res_time_raw)
+                        formatted_res_time = res_dt.strftime("%I:%M %p").lstrip("0")
+                    except Exception:
+                        formatted_res_time = str(res_time_raw)
                 frappe.throw(
-                    _("Table {0} is already occupied.").format(table),
+                    _("Table {0} is reserved for {1}. Please choose another table.").format(
+                        table, formatted_res_time
+                    ),
                     frappe.ValidationError,
                 )
-
-            if order_type == "Dine In":
-                from ury.ury.api.table_reservation import check_table_reservation, parse_to_datetime
-
-                active_res = check_table_reservation(table)
-                if (
-                    active_res
-                    and active_res.get("is_lock_window_active")
-                    and active_res.get("status") == "Confirmed"
-                ):
-                    res_time_raw = active_res.get("reserved_at")
-                    formatted_res_time = ""
-                    if res_time_raw:
-                        try:
-                            res_dt = parse_to_datetime(res_time_raw)
-                            formatted_res_time = res_dt.strftime("%I:%M %p").lstrip("0")
-                        except Exception:
-                            formatted_res_time = str(res_time_raw)
-                    frappe.throw(
-                        _("Table {0} is reserved for {1}. Please choose another table.").format(
-                            table, formatted_res_time
-                        ),
-                        frappe.ValidationError,
-                    )
 
     inv.order_type = order_type
     if order_type == "Dine In":

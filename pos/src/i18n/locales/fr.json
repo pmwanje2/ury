@@ -1315,6 +1315,18 @@
     "quoted_badge": "{{minutes}} min annoncées",
     "waitlist_empty": "Aucun groupe en attente.",
     "waitlist_error": "Impossible de mettre à jour la liste d’attente.",
+    "waitlist_access": "Vous n’avez pas l’autorisation de gérer la liste d’attente.",
+    "waitlist_room_outlet": "La salle demandée ne fait pas partie de cet établissement.",
+    "waitlist_invalid_size_or_time": "Saisissez un nombre de personnes ou un temps d’attente valide.",
+    "waitlist_invalid_phone": "Saisissez un numéro de téléphone valide.",
+    "waitlist_missing_name": "Saisissez le nom du groupe.",
+    "waitlist_party_unavailable": "Ce groupe ne figure plus sur la liste d’attente.",
+    "waitlist_table_outlet": "La table ne fait pas partie de cet établissement.",
+    "waitlist_table_unavailable": "Sélectionnez une table disponible.",
+    "waitlist_table_room": "Sélectionnez une table dans la salle demandée.",
+    "waitlist_table_size": "Cette table ne peut pas accueillir le groupe.",
+    "waitlist_table_reserved": "Cette table est gardée pour une réservation.",
+    "waitlist_table_dirty": "Indiquez que la table est propre avant d’y installer le groupe.",
     "clean_failed": "Impossible de marquer la table comme propre."
   }
 }

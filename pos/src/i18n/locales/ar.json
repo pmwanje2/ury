@@ -1515,6 +1515,18 @@
     "quoted_badge": "{{minutes}} دقيقة مقدرة",
     "waitlist_empty": "لا توجد مجموعات في الانتظار.",
     "waitlist_error": "تعذر تحديث قائمة الانتظار.",
+    "waitlist_access": "ليس لديك إذن لإدارة قائمة الانتظار.",
+    "waitlist_room_outlet": "الصالة المطلوبة لا تتبع هذا الفرع.",
+    "waitlist_invalid_size_or_time": "أدخل عدد ضيوف أو مدة انتظار صالحة.",
+    "waitlist_invalid_phone": "أدخل رقم هاتف صالحًا.",
+    "waitlist_missing_name": "أدخل اسم المجموعة.",
+    "waitlist_party_unavailable": "هذه المجموعة لم تعد في قائمة الانتظار.",
+    "waitlist_table_outlet": "الطاولة لا تتبع هذا الفرع.",
+    "waitlist_table_unavailable": "اختر طاولة متاحة.",
+    "waitlist_table_room": "اختر طاولة في الصالة المطلوبة.",
+    "waitlist_table_size": "هذه الطاولة لا تتسع للمجموعة.",
+    "waitlist_table_reserved": "هذه الطاولة مخصصة لحجز.",
+    "waitlist_table_dirty": "ضع علامة على أن الطاولة نظيفة قبل إجلاس الضيوف.",
     "clean_failed": "تعذر تحديد الطاولة كنظيفة."
   }
 }

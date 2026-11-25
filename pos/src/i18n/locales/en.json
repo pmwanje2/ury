@@ -1508,6 +1508,18 @@
     "quoted_badge": "{{minutes}} min quoted",
     "waitlist_empty": "No parties waiting.",
     "waitlist_error": "Could not update the wait list.",
+    "waitlist_access": "Not permitted to manage the wait list.",
+    "waitlist_room_outlet": "The requested room does not belong to this outlet.",
+    "waitlist_invalid_size_or_time": "Enter a valid party size or wait time.",
+    "waitlist_invalid_phone": "Enter a valid phone number.",
+    "waitlist_missing_name": "Enter the party name.",
+    "waitlist_party_unavailable": "This party is no longer on the wait list.",
+    "waitlist_table_outlet": "The table does not belong to this outlet.",
+    "waitlist_table_unavailable": "Select an available table.",
+    "waitlist_table_room": "Select a table in the requested room.",
+    "waitlist_table_size": "This table does not fit the party.",
+    "waitlist_table_reserved": "This table is held for a reservation.",
+    "waitlist_table_dirty": "Mark this table clean before seating.",
     "clean_failed": "Could not mark the table clean."
   }
 }

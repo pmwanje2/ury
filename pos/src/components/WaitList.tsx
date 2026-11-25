@@ -9,6 +9,28 @@ import { t } from '../i18n';
 
 const SELECT = 'min-h-11 min-w-0 w-full rounded-md border border-input bg-background px-2 text-foreground';
 
+const WAITLIST_ERROR_KEYS: Record<string, string> = {
+  'WAITLIST-ACCESS': 'floor.waitlist_access',
+  'WAITLIST-ROOM-OUTLET': 'floor.waitlist_room_outlet',
+  'WAITLIST-INVALID-SIZE-OR-TIME': 'floor.waitlist_invalid_size_or_time',
+  'WAITLIST-INVALID-PHONE': 'floor.waitlist_invalid_phone',
+  'WAITLIST-MISSING-NAME': 'floor.waitlist_missing_name',
+  'WAITLIST-PARTY-UNAVAILABLE': 'floor.waitlist_party_unavailable',
+  'WAITLIST-TABLE-OUTLET': 'floor.waitlist_table_outlet',
+  'WAITLIST-TABLE-UNAVAILABLE': 'floor.waitlist_table_unavailable',
+  'WAITLIST-TABLE-ROOM': 'floor.waitlist_table_room',
+  'WAITLIST-TABLE-SIZE': 'floor.waitlist_table_size',
+  'WAITLIST-TABLE-RESERVED': 'floor.waitlist_table_reserved',
+  'TABLE-DIRTY-NEEDS-BUSSING': 'floor.waitlist_table_dirty',
+};
+
+function waitlistError(error: unknown): string {
+  const message = parseFrappeError(error, t('floor.waitlist_error'));
+  const code = message.match(/\[(?:[A-Z][A-Z0-9]{1,9}-)?(WAITLIST-[A-Z-]+|TABLE-DIRTY-NEEDS-BUSSING)\]/)?.[1];
+  const key = code && WAITLIST_ERROR_KEYS[code];
+  return key ? t(key) : message;
+}
+
 export function WaitList({ branch, rooms, onSeated }: {
   branch: string;
   rooms: Room[];
@@ -39,7 +61,7 @@ export function WaitList({ branch, rooms, onSeated }: {
   }, [branch, rooms]);
 
   useEffect(() => {
-    const load = () => { void refresh().catch((err) => setError(parseFrappeError(err, t('floor.waitlist_error')))); };
+    const load = () => { void refresh().catch((err) => setError(waitlistError(err))); };
     load();
     const poll = window.setInterval(load, 30000);
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
@@ -52,7 +74,7 @@ export function WaitList({ branch, rooms, onSeated }: {
     try {
       await operation();
     } catch (err) {
-      setError(parseFrappeError(err, t('floor.waitlist_error')));
+      setError(waitlistError(err));
     } finally {
       setBusy(false);
     }
