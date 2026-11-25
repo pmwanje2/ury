@@ -1037,7 +1037,7 @@ class TestOverrideContract(unittest.TestCase):
     def test_pin_enrolment_stores_in_auth_table_never_user_and_allows_shared_pin(self):
         api = self.api()
         self.frappe.session.user = "manager@example.test"
-        self.frappe.form_dict = {"password": "secret-pass-1", "pin": "2468", "new_pin": "2468"}
+        self.frappe.form_dict = {"password": "secret-pass-1", "pin_secret": "2468", "new_pin": "2468"}
         result = api.set_my_pin("secret-pass-1", "2468")
         self.assertEqual(result, {"ok": True, "has_pin": True})
         self.assertNotIn("pin", self.frappe.form_dict)
@@ -1140,7 +1140,7 @@ class TestOverrideContract(unittest.TestCase):
         manager = MagicMock(return_value={"ok": True})
         self.install_external_pin_hooks(manager)
 
-        self.frappe.form_dict = {"password": "wrong", "pin": "2468"}
+        self.frappe.form_dict = {"password": "wrong", "pin_secret": "2468"}
         self.refused("POS-AUTH-PASSWORD", Invalid, lambda: api.set_my_pin("wrong", "2468"))
         self.assertEqual(self.frappe.form_dict, {})
         with self.assertRaisesRegex(Invalid, "4 to 8 digits"):
@@ -1219,7 +1219,7 @@ class TestOverrideContract(unittest.TestCase):
         api = self.api()
         self.frappe.session.user = "manager@example.test"
         test_pin = "4829"
-        self.frappe.form_dict = {"pin": test_pin, "password": "secret-pass-1"}
+        self.frappe.form_dict = {"pin_secret": test_pin, "password": "secret-pass-1"}
         self.frappe.get_hooks.side_effect = RuntimeError("Unavailable provider registry handling " + test_pin)
 
         def dispatch(**kwargs):
@@ -1246,7 +1246,7 @@ class TestOverrideContract(unittest.TestCase):
         for endpoint in (api.authorise, api.set_my_pin):
             with self.subTest(endpoint=endpoint.__name__):
                 parameters = signature(endpoint).parameters
-                self.assertFalse({"pin", "password", "current_password"} & parameters.keys())
+                self.assertFalse({"pin", "pin_secret", "password", "current_password"} & parameters.keys())
                 self.assertFalse(any(parameter.kind == parameter.VAR_KEYWORD for parameter in parameters.values()))
 
     def test_pin_request_scrubs_wire_credentials_before_dispatch(self):
@@ -1260,7 +1260,7 @@ class TestOverrideContract(unittest.TestCase):
         ):
             with self.subTest(path=path, cmd=cmd):
                 self.frappe.local.request = SimpleNamespace(path=path)
-                self.frappe.form_dict = {"pin": "4829", "current_password": "secret-pass-1"}
+                self.frappe.form_dict = {"pin_secret": "4829", "current_password": "secret-pass-1"}
                 if cmd:
                     self.frappe.form_dict["cmd"] = cmd
                 api.scrub_pin_request()
@@ -1275,13 +1275,52 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.local.request = SimpleNamespace(path="/api/method/ury.ury_pos.override.set_my_pin")
         for before_request in (True, False):
             with self.subTest(before_request=before_request):
-                self.frappe.form_dict = {"pin_secret": "4829", "pin": "invalid", "current_password": "secret-pass-1"}
+                self.frappe.form_dict = {"pin_secret": "4829", "current_password": "secret-pass-1"}
                 if before_request:
                     api.scrub_pin_request()
                     self.assertEqual(self.frappe.form_dict, {})
                 self.assertTrue(api.set_my_pin()["ok"])
                 self.assertEqual(self.frappe.form_dict, {})
         self.assertTrue(api.set_my_pin(password="secret-pass-1", pin_secret="4829")["ok"])
+
+    def test_legacy_pin_wire_field_is_rejected_and_scrubbed_for_both_endpoints(self):
+        api = self.api()
+        manager = "manager@example.test"
+        self.frappe.session.user = manager
+        provider = MagicMock(return_value={"ok": True})
+        self.install_external_pin_hooks(provider)
+        verifier = self.hooks["__attr__:custom_app.pin.verify"]
+        verifier.return_value = {"ok": True}
+
+        for endpoint, args in (
+            (api.set_my_pin, {}),
+            (api.authorise, {
+                "pos_profile": "Main Till", "privilege": "void_sent_item",
+                "approver": manager, "reference_doctype": "POS Invoice",
+                "reference_name": "POS-INV-100", "claim": {"reason": "Guest changed mind"},
+            }),
+        ):
+            if endpoint is api.authorise:
+                self.frappe.session.user = "cashier@example.test"
+            command = f"ury.ury_pos.override.{endpoint.__name__}"
+            self.frappe.local.request = SimpleNamespace(path=f"/api/method/{command}")
+            for with_hook in (False, True):
+                for include_secret_field in (False, True):
+                    with self.subTest(endpoint=endpoint.__name__, with_hook=with_hook,
+                                      include_secret_field=include_secret_field):
+                        form = {"pin": "4829", "password": "secret-pass-1", **args}
+                        if include_secret_field:
+                            form["pin_secret"] = "4829"
+                        self.frappe.form_dict = form
+                        if with_hook:
+                            api.scrub_pin_request()
+                            self.assertNotIn("pin", self.frappe.form_dict)
+                        with self.assertRaisesRegex(Invalid, "Refresh the till") as caught:
+                            endpoint(**args)
+                        self.assertTrue(getattr(caught.exception, "skip_error_log", False))
+                        self.assertEqual(self.frappe.form_dict, args)
+        provider.assert_not_called()
+        verifier.assert_not_called()
 
     def test_expected_pin_error_preserves_type_and_disables_developer_snapshot(self):
         api = self.api()
@@ -1493,7 +1532,7 @@ class TestOverrideContract(unittest.TestCase):
         self.frappe.session.user = "manager@example.test"
         current = "secret-pass-1"
         submitted = "2468"
-        self.frappe.form_dict = {"pin": submitted, "current_password": current}
+        self.frappe.form_dict = {"pin_secret": submitted, "current_password": current}
         provider_error = f"Third-party storage failed while processing {submitted}"
         self.install_external_pin_hooks(MagicMock(side_effect=RuntimeError(provider_error)))
 
@@ -1689,7 +1728,7 @@ class TestOverrideContract(unittest.TestCase):
 
         claim = {"amount": 25, "reason": "Guest changed mind"}
         for _ in range(2):
-            self.frappe.form_dict = {"pin": "9999"}
+            self.frappe.form_dict = {"pin_secret": "9999"}
             msg = self.refused("POS-AUTH-PIN", Invalid, lambda: api.authorise(
                 "Main Till", "void_sent_item", "manager@example.test", "9999",
                 "POS Invoice", "POS-INV-100", claim,
