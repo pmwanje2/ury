@@ -127,6 +127,8 @@ class TestKitchenOwnership(unittest.TestCase):
                 self.assertEqual(doc.grand_total, 15)
 
     def test_net_release_and_cancellation_move_to_owning_check(self):
+        from ury.ury.api.kitchen_ticket_history import current_ticket_owner, ticket_ownership
+
         for currency, places in self.checks.fixture.currencies:
             with self.subTest(currency=currency):
                 first, other = self.prepare(currency, places, keys=("issued", "held"), qty=2)
@@ -146,7 +148,10 @@ class TestKitchenOwnership(unittest.TestCase):
                         order, "get_branch_stock_policy", return_value=frappe._dict(reservation_control_enabled=0)):
                     order._apply_check_split(doc, {doc.items[0].name: 1, doc.items[-1].name: 1}, doc.company)
                 child = frappe.get_doc("POS Invoice", child.name)
-                self.assertEqual([ticket.reload().invoice for ticket in (issued, cancelled)], [child.name] * 2)
+                self.assertEqual((issued.reload().invoice, cancelled.reload().invoice), (first.name, doc.name))
+                self.assertEqual(ticket_ownership(child), {issued.name: True, cancelled.name: True})
+                for ticket in (issued, cancelled):
+                    self.assertEqual(current_ticket_owner(frappe, ticket.name, ticket.invoice).name, child.name)
                 self.assertFalse(child.items[0].custom_kitchen_anchor)
                 self.assertEqual(self.reduce(child, child.items[0]).original_kot, issued.name)
                 self.assertEqual((doc.reload().grand_total, child.grand_total), (100, 15))

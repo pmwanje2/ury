@@ -115,6 +115,8 @@ class TestPOSPR9R3(unittest.TestCase):
         self.assertEqual(sum(Decimal(str(qty)) for qty in posted), Decimal("-0.500"))
 
     def test_add_check_reunites_shared_line_and_keeps_direct_discard_guard(self):
+        from ury.ury.api.kitchen_ticket_history import ticket_ownership
+
         for reverse in (False, True):
             with self.subTest(merge_into_child=reverse):
                 root = _check("MERGE-ROOT", items=[_line("original", stock_qty=0.5)], grand_total=10)
@@ -153,7 +155,9 @@ class TestPOSPR9R3(unittest.TestCase):
                     with self.assertRaisesRegex(frappe.ValidationError, "SPLIT-KITCHEN-SHARED"):
                         source.discard()
                     order.consolidate_checks(destination, [source])
-                self.assertEqual(ticket["invoice"], destination.name)
+                self.assertEqual(ticket["invoice"], root.name)
+                self.assertEqual(ticket_ownership(root), {"KOT-1": child.name} if reverse else {})
+                self.assertEqual(ticket_ownership(child), {"KOT-1": True} if reverse else {})
                 self.assertEqual(len(destination.items), 1)
                 self.assertEqual(destination.items[0].qty, 1)
                 self.assertEqual(destination.grand_total, 10)
