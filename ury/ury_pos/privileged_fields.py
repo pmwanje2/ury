@@ -182,7 +182,6 @@ def get_privileged_action_custom_fields() -> dict[str, list[dict]]:
             {
                 "fieldname": "custom_comp_type",
                 "fieldtype": "Select",
-                "length": 64,
                 "options": "\nComplimentary\nHouse\nNon-Revenue",
                 "length": 64,
                 "label": "Comp Type",

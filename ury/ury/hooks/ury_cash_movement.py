@@ -302,8 +302,10 @@ def validate_closing_cash(doc, method=None):
 			)
 		)
 	differences = _cash_differences(doc)
+	fx_variances = _fx_cash_variances(doc)
 	if differences:
 		_over_short_account(doc)
+	if differences or fx_variances:
 		require_reason, tolerance = frappe.db.get_value(
 			"POS Profile",
 			doc.pos_profile,
@@ -312,7 +314,10 @@ def validate_closing_cash(doc, method=None):
 		if cint(require_reason):
 			precision = frappe.get_precision("POS Closing Entry Detail", "difference") or 2
 			tol = flt(tolerance, precision)
-			exceeds = any(flt(abs(diff), precision) > tol for _mode, diff in differences)
+			exceeds = any(flt(abs(diff), precision) > tol for _mode, diff in differences) or any(
+				flt(abs(diff), precision) > tol or (tol <= 0 and abs(fx_diff) > 0)
+				for _mode, diff, fx_diff in fx_variances
+			)
 			if exceeds and not (doc.get("custom_over_short_reason") or "").strip():
 				frappe.throw(
 					coded_message(
@@ -391,10 +396,34 @@ def _open_shift(doc):
 	return opening
 
 
+def _till_currency(profile, company):
+	profile_curr = profile.get("currency") if profile else None
+	if isinstance(profile_curr, str) and profile_curr.strip():
+		return profile_curr.strip().upper()
+	comp_curr = frappe.get_cached_value("Company", company, "default_currency") if company else None
+	return comp_curr.strip().upper() if isinstance(comp_curr, str) and comp_curr.strip() else ""
+
+
+def _is_fx_mode(mode, till_currency):
+	"""Return True when Mode of Payment has a foreign custom_tender_currency != till_currency."""
+	if not mode or not till_currency:
+		return False
+	try:
+		curr = frappe.db.get_value("Mode of Payment", mode, "custom_tender_currency")
+	except Exception:
+		curr = None
+	if not isinstance(curr, str) or not curr.strip():
+		return False
+	return curr.strip().upper() != till_currency
+
+
 def _drawer_accounts(profile, company):
 	accounts = set()
+	till_curr = _till_currency(profile, company)
 	for row in profile.get("payments") or []:
 		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") == "Cash":
+			if _is_fx_mode(row.mode_of_payment, till_curr):
+				continue
 			account = _mode_account(row.mode_of_payment, company, required=False)
 			if account:
 				accounts.add(account)
@@ -480,14 +509,48 @@ def _check_counter(profile, kind, counter):
 		)
 
 
+def _is_fx_reconciliation_row(doc, row):
+	curr = (row.get("custom_tender_currency") or "").strip().upper()
+	if not curr:
+		return False
+	home = (
+		(frappe.db.get_value("POS Profile", doc.pos_profile, "currency") if doc.get("pos_profile") else None)
+		or (frappe.get_cached_value("Company", doc.company, "default_currency") if doc.get("company") else None)
+		or ""
+	).strip().upper()
+	return bool(home and curr != home)
+
+
 def _cash_differences(doc):
 	precision = frappe.get_precision("POS Closing Entry Detail", "difference")
 	differences = []
 	for row in doc.get("payment_reconciliation") or []:
+		if _is_fx_reconciliation_row(doc, row):
+			# FX cash variance is posted once inside post_fx_vault_sweep_journal_entry
+			# so FX Till Clearing nets to 0 without double-posting Over/Short.
+			continue
 		difference = flt(row.difference, precision)
 		if difference and frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") == "Cash":
 			differences.append((row.mode_of_payment, difference))
 	return differences
+
+
+def _fx_cash_variances(doc):
+	"""Return (mode, base_difference, foreign_difference) for FX rows with non-zero variance.
+
+	Used by validate_closing_cash() so custom_require_over_short_reason is enforced
+	even when the shift's only drawer variance is on a foreign-currency tender row.
+	"""
+	precision = frappe.get_precision("POS Closing Entry Detail", "difference") or 2
+	variances = []
+	for row in doc.get("payment_reconciliation") or []:
+		if not _is_fx_reconciliation_row(doc, row):
+			continue
+		base_diff = flt(row.get("difference"), precision)
+		fx_diff = flt(row.get("custom_foreign_difference"), 4)
+		if base_diff or fx_diff:
+			variances.append((row.mode_of_payment, base_diff, fx_diff))
+	return variances
 
 
 def _over_short_account(doc):

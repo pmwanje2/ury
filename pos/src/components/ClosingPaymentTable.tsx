@@ -10,6 +10,8 @@ interface ClosingPaymentTableProps {
   /** Modes the cashier has explicitly entered a closing amount for (see Fix 2). */
   touchedModes: Set<string>;
   onChange: (modeOfPayment: string, closingAmount: number) => void;
+  /** Physical count in native foreign tender currency for FX modes (G22). */
+  onForeignChange?: (modeOfPayment: string, closingForeignAmount: number) => void;
   /** Mask Expected and Difference (display only; values are still computed and submitted). */
   hideExpected?: boolean;
   /** Blind cash count: omit the Expected and Difference columns entirely. */
@@ -18,10 +20,39 @@ interface ClosingPaymentTableProps {
   currency?: string;
 }
 
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'TZS', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+]);
+const THREE_DECIMAL_CURRENCIES = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
+
+function currencyDecimalPlaces(code?: string | null): number {
+  const norm = (code || '').trim().toUpperCase();
+  if (!norm) return 2;
+  if (ZERO_DECIMAL_CURRENCIES.has(norm)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.has(norm)) return 3;
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency: norm }).resolvedOptions()
+      .maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
+function currencyVarianceEpsilon(code?: string | null): number {
+  const digits = currencyDecimalPlaces(code);
+  return 0.5 * Math.pow(10, -digits);
+}
+
+function fxStepForCurrency(code?: string | null): string {
+  const digits = currencyDecimalPlaces(code);
+  return digits <= 0 ? '1' : digits === 3 ? '0.001' : '0.01';
+}
+
 const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
   rows,
   touchedModes,
   onChange,
+  onForeignChange,
   hideExpected = false,
   blindCashCount = false,
   currency,
@@ -34,10 +65,25 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
     onChange(modeOfPayment, closingAmount);
   };
 
+  const handleForeignAmountChange = (row: ClosingPaymentSummary, value: string) => {
+    const parsed = parseFloat(value);
+    const fxAmount = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    if (onForeignChange) {
+      onForeignChange(row.mode_of_payment, fxAmount);
+    } else {
+      const rate =
+        row.effective_exchange_rate ||
+        (row.custom_expected_foreign_amount && row.custom_expected_foreign_amount > 0
+          ? row.expected_amount / row.custom_expected_foreign_amount
+          : 1);
+      onChange(row.mode_of_payment, fxAmount * rate);
+    }
+  };
+
   return (
     <div className="w-full overflow-x-auto">
-      <table className="w-full border-collapse">
-        <thead>
+      <table className="w-full border-collapse block sm:table">
+        <thead className="hidden sm:table-header-group">
           <tr className="border-b border-border bg-gray-50">
             <th className="text-start py-3 px-4 font-semibold text-gray-900">
               {t('pos_closing.payment_mode')}
@@ -93,52 +139,113 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
             )}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="block space-y-3 sm:table-row-group sm:space-y-0">
           {rows.map((row) => {
             // Positive = overage (cashier has more than expected), negative
             // = shortage. Must match the sign convention used in the submit
             // payload built by POSClosingDialog.handleSubmit.
+            const fxCurrency =
+              row.custom_tender_currency && row.custom_tender_currency !== currency
+                ? row.custom_tender_currency
+                : null;
+            const expectedFx = Number(row.custom_expected_foreign_amount) || 0;
+            const closingFx = Number(row.custom_closing_foreign_amount) || 0;
+            const foreignDiff = closingFx - expectedFx;
             const difference = row.closing_amount - row.expected_amount;
-            const hasDifference = Math.abs(difference) > 0.001;
+            const fxEpsilon = currencyVarianceEpsilon(fxCurrency);
+            const baseEpsilon = currencyVarianceEpsilon(currency);
+            const hasDifference = fxCurrency
+              ? Math.abs(foreignDiff) > fxEpsilon
+              : Math.abs(difference) > baseEpsilon;
             const isTouched = touchedModes.has(row.mode_of_payment);
 
             return (
               <tr
                 key={row.mode_of_payment}
                 className={cn(
-                  'border-b border-border hover:bg-gray-50 transition-colors',
+                  'block rounded-lg border border-border p-3 sm:table-row sm:rounded-none sm:border-0 sm:border-b sm:p-0 hover:bg-gray-50 transition-colors',
                   !isTouched && 'bg-amber-50/60'
                 )}
               >
-                <td className="py-3 px-4 text-gray-900 font-medium">
-                  {row.mode_of_payment}
+                <td className="block pb-2 mb-1.5 border-b border-border/60 sm:mb-0 sm:border-0 sm:table-cell sm:py-3 sm:px-4 text-gray-900 font-medium">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span>{row.mode_of_payment}</span>
+                    {fxCurrency && (
+                      <span className="inline-flex items-center rounded bg-blue-50 px-1.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200">
+                        {fxCurrency}
+                      </span>
+                    )}
+                  </div>
                 </td>
-                <td className="py-3 px-4 text-end text-gray-700">
-                  {formatCurrency(row.opening_amount, currency)}
-                </td>
-                {!blindCashCount && (
-                <td className="py-3 px-4 text-end text-gray-700">
-                  {hideExpected ? '—' : formatCurrency(row.expected_amount, currency)}
-                </td>
-                )}
-                <td className="py-3 px-4">
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={row.closing_amount > 0 ? String(row.closing_amount) : ''}
-                    onChange={(e) =>
-                      handleClosingAmountChange(row.mode_of_payment, e.target.value)
-                    }
-                    placeholder="0.00"
-                    className={cn('w-full text-center', !isTouched && 'border-amber-400')}
-                    size="sm"
-                  />
+                <td
+                  data-label={t('pos_closing.opening')}
+                  className="flex items-center justify-between gap-2 py-1.5 text-end text-gray-700 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
+                >
+                  {formatCurrency(row.opening_amount, fxCurrency || currency)}
                 </td>
                 {!blindCashCount && (
                 <td
+                  data-label={t('pos_closing.expected')}
+                  className="flex items-center justify-between gap-2 py-1.5 text-end text-gray-700 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
+                >
+                  {hideExpected ? (
+                    '—'
+                  ) : fxCurrency ? (
+                    <div className="tabular-nums text-end">
+                      <div className="font-medium">{formatCurrency(expectedFx, fxCurrency)}</div>
+                      <div className="text-xs text-gray-500">
+                        {t('pos_closing.fx_base_equivalent', { amount: formatCurrency(row.expected_amount, currency) })}
+                      </div>
+                    </div>
+                  ) : (
+                    formatCurrency(row.expected_amount, currency)
+                  )}
+                </td>
+                )}
+                <td
+                  data-label={t('pos_closing.closing')}
+                  className="flex items-center justify-between gap-2 py-1.5 before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4"
+                >
+                  {fxCurrency ? (
+                    <div className="w-36 sm:w-full space-y-1">
+                      <Input
+                        data-testid={`closing-fx-input-${row.mode_of_payment}`}
+                        aria-label={t('pos_closing.fx_native_count', { currency: fxCurrency })}
+                        type="number"
+                        min="0"
+                        step={fxStepForCurrency(fxCurrency)}
+                        value={closingFx > 0 ? String(closingFx) : ''}
+                        onChange={(e) => handleForeignAmountChange(row, e.target.value)}
+                        placeholder={t('pos_closing.fx_native_count', { currency: fxCurrency })}
+                        className={cn('w-full text-center', !isTouched && 'border-amber-400')}
+                        size="sm"
+                      />
+                      <div className="text-center text-xs text-gray-500 tabular-nums">
+                        {formatCurrency(row.closing_amount, currency)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-36 sm:w-full">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={row.closing_amount > 0 ? String(row.closing_amount) : ''}
+                        onChange={(e) =>
+                          handleClosingAmountChange(row.mode_of_payment, e.target.value)
+                        }
+                        placeholder="0.00"
+                        className={cn('w-full text-center', !isTouched && 'border-amber-400')}
+                        size="sm"
+                      />
+                    </div>
+                  )}
+                </td>
+                {!blindCashCount && (
+                <td
+                  data-label={t('pos_closing.difference')}
                   className={cn(
-                    'py-3 px-4 text-end font-medium',
+                    'flex items-center justify-between gap-2 py-1.5 text-end font-medium before:content-[attr(data-label)] before:text-xs before:font-medium before:text-gray-500 sm:before:content-none sm:table-cell sm:py-3 sm:px-4',
                     hideExpected
                       ? 'text-gray-700'
                       : hasDifference
@@ -146,7 +253,16 @@ const ClosingPaymentTable: React.FC<ClosingPaymentTableProps> = ({
                         : 'text-green-600'
                   )}
                 >
-                  {hideExpected ? '—' : formatCurrency(difference, currency)}
+                  {hideExpected ? (
+                    '—'
+                  ) : fxCurrency ? (
+                    <div className="tabular-nums text-end">
+                      <div>{formatCurrency(foreignDiff, fxCurrency)}</div>
+                      <div className="text-xs opacity-80">{formatCurrency(difference, currency)}</div>
+                    </div>
+                  ) : (
+                    formatCurrency(difference, currency)
+                  )}
                 </td>
                 )}
               </tr>

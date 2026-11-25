@@ -20,6 +20,8 @@ import {
 import { parseFrappeError } from '../../lib/pos-opening-api';
 import { printOrder } from '../../lib/print';
 import { useOnline } from '../../offline/use-online';
+import { submitOrderOfflineAware } from '../../offline/cashier';
+import { createOfflinePeerSync } from '../../offline/peer-sync';
 import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
 import { type SplitGroupInvoice, resolvePrintFormat } from '../../lib/invoice-api';
 import { getVacantTablesForBranch, Table } from '../../lib/table-api';
@@ -279,7 +281,67 @@ export default function CaptainOrder() {
         ...(guestLabel?.trim() || isUpdatingOrder ? { guest_label: guestLabel?.trim() ?? '' } : {}),
       };
 
-      const result = await syncOrder(orderData);
+      const offlineCapableUser = {
+        name: user.name,
+        roles: Array.isArray((user as { roles?: string[] }).roles) ? (user as { roles?: string[] }).roles! : [],
+      };
+      const submitted = await submitOrderOfflineAware({
+        profile: posProfile,
+        user: offlineCapableUser,
+        order: {
+          pos_profile: posProfile.name,
+          customer: orderData.customer,
+          cashier: orderData.cashier,
+          owner: orderData.owner,
+          waiter: orderData.waiter,
+          items: orderData.items,
+          no_of_pax: orderData.no_of_pax,
+          invoice: orderData.invoice ?? null,
+          last_invoice: orderData.last_invoice ?? null,
+          mode_of_payment: orderData.mode_of_payment,
+          order_type: orderData.order_type,
+          table: orderData.table,
+          room: orderData.room,
+          comments: orderData.comments,
+        },
+        total,
+        onlineSubmit: (ids) =>
+          syncOrder({
+            ...orderData,
+            ...(ids ? { client_order_id: ids.clientOrderId, round_id: ids.roundId } : {}),
+          }),
+      });
+
+      if (submitted.offline) {
+        if (posProfile.branch && posProfile.name) {
+          const peerSync = createOfflinePeerSync({
+            branch: posProfile.branch,
+            posProfile: posProfile.name,
+            relayUrl: posProfile.custom_offline_peer_relay_url,
+          });
+          void peerSync
+            .broadcast({
+              type: 'outbox_snapshot',
+              sender: user.name,
+              pendingTables: [
+                {
+                  table: table || '',
+                  clientOrderId: submitted.entry.client_order_id,
+                  waiter: user.name,
+                  itemCount: orderData.items.length,
+                  updatedAt: new Date().toISOString(),
+                },
+              ],
+            })
+            .finally(() => peerSync.close());
+        }
+        clearTableOrder();
+        showToast.success(t('offline.saved'));
+        navigate('/order');
+        return;
+      }
+
+      const result = submitted.response;
 
       if (result?.message && typeof result.message === 'object' && 'status' in result.message && result.message.status === 'Failure') {
         showToast.error(refusalMessage(result, t('errors.order_sync_failed')));
@@ -777,6 +839,14 @@ export default function CaptainOrder() {
           />
         </div>
       </div>
+
+      {!online && (
+        <div className="px-3 pt-2" data-testid="captain-offline-pill">
+          <div className="inline-flex items-center rounded-full bg-amber-100 border border-amber-300 px-3 py-1 text-xs font-medium text-amber-900">
+            {t('offline.waiter_offline_pill')}
+          </div>
+        </div>
+      )}
 
       {!canModify && (
         <div className="px-3 pt-3">

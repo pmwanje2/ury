@@ -55,6 +55,11 @@ from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
 from ury.ury.hooks.ury_pos_tender import sync_charged_tip
+from ury.ury_pos.fx import (
+    build_offline_collision_plan,
+    ensure_local_change_payment_row,
+    prepare_settlement_payments,
+)
 
 try:
     from ury.ury_pos.pricing_actions import sync_service_charge as _sync_service_charge
@@ -3071,8 +3076,13 @@ def _refuse_client_order_rebind(invoice, client_order_id):
         _offline_refusal("URY_CLIENT_ORDER_ID_REBIND", _("Client order ID cannot be changed for an existing order."))
 
 
-def _offline_capture_time(captured_at, pos_profile):
-    """Capture time in the site timezone, inside this cashier's open shift and not in the future."""
+def _offline_capture_time(captured_at, pos_profile, billing_user=True):
+    """Capture time in the site timezone, inside the open POS shift and not in the future.
+
+    Billing/cashier users remain strictly bound to their own open POS Opening Entry.
+    Floor/waiter roles (who cannot open a till themselves) authorize against an active
+    open POS Opening Entry on the same POS Profile.
+    """
     message = _("Capture must be inside your open POS shift and not in the future.")
     try:
         captured = get_datetime(captured_at)
@@ -3082,9 +3092,12 @@ def _offline_capture_time(captured_at, pos_profile):
         captured = None
     if not captured:
         _offline_refusal("URY_OFFLINE_OUTSIDE_SHIFT", message)
+    opening_filters = {"pos_profile": pos_profile, "docstatus": 1, "status": "Open"}
+    if billing_user:
+        opening_filters["user"] = frappe.session.user
     opening = frappe.db.get_value(
         "POS Opening Entry",
-        {"user": frappe.session.user, "pos_profile": pos_profile, "docstatus": 1, "status": "Open"},
+        opening_filters,
         "period_start_date",
         order_by="period_start_date desc",
     )
@@ -3236,13 +3249,82 @@ def sync_order(
         )
         return {"status": "Failure"}
 
-    invoice = client_invoice or get_order_invoice(table, invoice, order_type)
+    is_offline_replay = (captured_at is not None) or (cint(offline_printed) == 1)
+    collision_plan = None
+    collision_split_create = False
+    collision_merge = False
+    pre_merge_grand_total = 0.0
+    effective_round_id = round_id
+
+    # G46: Check for offline table collision BEFORE get_order_invoice() enforces single-waiter
+    # ownership on an existing check opened by another waiter on the same table.
+    invoice_doc = None
+    if is_offline_replay and table and client_order_id and not client_invoice and not invoice:
+        existing_meta = frappe.db.get_value(
+            "POS Invoice",
+            {"restaurant_table": table, "docstatus": 0, "invoice_printed": 0},
+            [
+                "name",
+                "pos_profile",
+                "restaurant",
+                "branch",
+                "selling_price_list",
+                "taxes_and_charges",
+                "custom_split_group",
+                "ury_client_order_id",
+            ],
+            as_dict=True,
+        )
+        if existing_meta and (existing_meta.get("ury_client_order_id") or "") != client_order_id:
+            if existing_meta.get("pos_profile") and existing_meta.get("pos_profile") != pos_profile:
+                frappe.throw(
+                    coded_message("PROFILE-MISMATCH", _("This order belongs to a different POS Profile.")),
+                    frappe.PermissionError,
+                )
+            collision_plan = build_offline_collision_plan(
+                existing_invoice=existing_meta,
+                table=table,
+                client_order_id=client_order_id,
+                round_id=round_id,
+                policy=posprofile.get("custom_offline_collision_policy"),
+            )
+            if collision_plan["action"] == "merge_rounds":
+                invoice_doc = frappe.get_doc("POS Invoice", existing_meta["name"])
+                pre_merge_grand_total = flt(invoice_doc.grand_total)
+                effective_round_id = collision_plan["collision_round_id"]
+                if _is_applied_round(invoice_doc, effective_round_id, round_digest):
+                    return invoice_doc.as_dict()
+                collision_merge = True
+                append = 1
+                invoice_doc.custom_offline_conflict = 1
+            else:
+                invoice_doc = get_order_invoice(None, None, order_type)
+                invoice_doc.restaurant_table = table
+                invoice_doc.restaurant = existing_meta.get("restaurant") or posprofile.restaurant
+                invoice_doc.branch = existing_meta.get("branch") or posprofile.branch
+                if existing_meta.get("selling_price_list"):
+                    invoice_doc.selling_price_list = existing_meta.get("selling_price_list")
+                if existing_meta.get("taxes_and_charges"):
+                    invoice_doc.taxes_and_charges = existing_meta.get("taxes_and_charges")
+                invoice_doc.custom_split_from = collision_plan["custom_split_from"]
+                invoice_doc.custom_split_group = collision_plan["custom_split_group"]
+                invoice_doc.custom_offline_conflict = 1
+                if not guest_label:
+                    guest_label = collision_plan["custom_guest_label"]
+                collision_split_create = True
+
+    invoice = invoice_doc or client_invoice or get_order_invoice(table, invoice, order_type)
     if invoice.name and invoice.pos_profile and invoice.pos_profile != pos_profile:
-        frappe.throw(_("URY_PROFILE_MISMATCH: This order belongs to a different POS Profile."), frappe.PermissionError)
+        frappe.throw(
+            coded_message("PROFILE-MISMATCH", _("This order belongs to a different POS Profile.")),
+            frappe.PermissionError,
+        )
     hold_enabled = cint(getattr(posprofile, "ury_enable_hold_fire", 0)) == 1
     if hold_enabled:
         _lock_hold_order(invoice, preserve_resolved=True)
-    _refuse_client_order_rebind(invoice, client_order_id)
+
+    if not collision_merge:
+        _refuse_client_order_rebind(invoice, client_order_id)
 
     if client_invoice:
         # A retry of any round already saved returns the saved order: one invoice, one KOT.
@@ -3251,7 +3333,7 @@ def sync_order(
         if invoice.docstatus != 0:
             _offline_refusal("URY_ORDER_NOT_OPEN", _("This order is no longer open."))
 
-    if invoice.name and not frappe.has_permission("POS Invoice", "write", doc=invoice):
+    if invoice.name and not collision_merge and not frappe.has_permission("POS Invoice", "write", doc=invoice):
         frappe.throw(_("Not permitted to modify this order"), frappe.PermissionError)
 
     # Reuse Phase 2's ownership formula (_has_role + is_mine/elevated/billing)
@@ -3262,7 +3344,7 @@ def sync_order(
     elevated_user = _has_role(user_role, posprofile.transfer_role_permissions)
     is_super_user = frappe.session.user == "Administrator" or "System Manager" in user_role
     picked_up_with_pin = False
-    if invoice.name:
+    if invoice.name and not collision_merge:
         is_mine = frappe.session.user == invoice.waiter
         can_view_order = is_super_user or is_mine or elevated_user or billing_user
         if not is_mine and not is_super_user:
@@ -3407,7 +3489,7 @@ def sync_order(
             )
             return {"status": "Failure"}
     elif not (last_invoice and last_modified_time):
-        if invoice.name and invoice.invoice_printed == 0 and not billing_user:
+        if invoice.name and invoice.invoice_printed == 0 and not billing_user and not collision_merge:
             frappe.msgprint(
                 title="Table occupied ",
                 indicator="red",
@@ -3620,7 +3702,7 @@ def sync_order(
                 ]
 
     if captured_at is not None:
-        captured = _offline_capture_time(captured_at, pos_profile)
+        captured = _offline_capture_time(captured_at, pos_profile, billing_user=billing_user)
         invoice.ury_offline_captured_at = captured
         invoice.set_posting_time = 0
         invoice.posting_date = captured.date()
@@ -3638,7 +3720,9 @@ def sync_order(
 
     # Privilege gates for changing order type (`order_type_change`) and guest count
     # (`guest_count_change`) on an existing open check (Simphony Opt 7 & Opt 33).
-    if invoice.name:
+    # Offline Merge Rounds collision reconciliation appends items onto an occupied check
+    # without altering its existing order_type or no_of_pax, so skip these mutation gates.
+    if invoice.name and not collision_merge:
         DEFAULT_MANAGER_ROLES = _PA_DEFAULT_MANAGER_ROLES
         _is_valid_str = _pa_is_valid_str
         assert_not_offline_replay = _pa_assert_not_offline_replay
@@ -3714,7 +3798,7 @@ def sync_order(
                     allow_fallback_predicate=True,
                 )
 
-    if order_type:
+    if order_type and not collision_merge:
         invoice.order_type = order_type
 
     # role_restricted_for_table_order blocks the Dine-In/table-order path
@@ -3736,8 +3820,9 @@ def sync_order(
         invoice.custom_guest_label = ""
     elif guest_label:
         invoice.custom_guest_label = guest_label
-    effective_order_type = order_type or invoice.order_type
-    invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
+    effective_order_type = invoice.order_type if collision_merge else (order_type or invoice.order_type)
+    if not collision_merge:
+        invoice.no_of_pax = _validate_dine_in_pax(no_of_pax, effective_order_type)
     invoice.pos_profile = pos_profile
     invoice.company = posprofile.company
     invoice.currency = posprofile.currency
@@ -3968,16 +4053,23 @@ def sync_order(
         invoice.set_missing_values(for_validate=True)
         invoice.calculate_taxes_and_totals()
         precision = invoice.precision("grand_total")
-        if flt(expected_total, precision) != flt(invoice.grand_total, precision):
+        actual_total = flt(invoice.grand_total, precision)
+        expected_val = flt(expected_total, precision)
+        merge_delta = flt(invoice.grand_total - pre_merge_grand_total, precision) if collision_merge else None
+        if expected_val != actual_total and (not collision_merge or expected_val != merge_delta):
             _offline_refusal(
                 "URY_OFFLINE_TOTAL_MISMATCH", _("Server-priced invoice total differs from the captured total.")
             )
 
     if client_order_id:
-        invoice.ury_client_order_id = client_order_id
-        if round_id is not None:
-            _record_round(invoice, round_id, round_digest)
+        if not collision_merge:
+            invoice.ury_client_order_id = client_order_id
+        if effective_round_id is not None:
+            _record_round(invoice, effective_round_id, round_digest)
 
+    prev_split_flag = getattr(frappe.flags, "ury_bill_split", False)
+    if collision_split_create:
+        frappe.flags.ury_bill_split = True
     prev_void_flag = getattr(frappe.flags, "ury_authorized_void", False)
     if sent_void_reason_info is not None:
         frappe.flags.ury_authorized_void = True
@@ -3985,7 +4077,7 @@ def sync_order(
     if hasattr(invoice, "flags"):
         invoice.flags.ury_privileged_action_verified = True
     try:
-        invoice.save()
+        invoice.save(ignore_permissions=collision_merge)
     except frappe.UniqueValidationError as e:
         # Lost a race with a concurrent first send of the same client order.
         if client_order_id and frappe.db.get_value(
@@ -3999,9 +4091,26 @@ def sync_order(
     except Exception as e:
         frappe.throw(f"Error while updating order: {e}")
     finally:
+        frappe.flags.ury_bill_split = prev_split_flag
         frappe.flags.ury_authorized_void = prev_void_flag
         if hasattr(invoice, "flags"):
             invoice.flags.ury_privileged_action_verified = prev_priv_verified
+
+    if collision_plan:
+        try:
+            frappe.publish_realtime(
+                "offline_table_collision",
+                {
+                    "invoice": invoice.name,
+                    "table": table,
+                    "policy": collision_plan["action"],
+                    "client_order_id": client_order_id,
+                    "waiter": frappe.session.user,
+                    "branch": invoice.branch,
+                },
+            )
+        except Exception:
+            pass
 
     current_kitchen = _kitchen_snapshot(items)
     previous_kitchen = [] if append else _kitchen_snapshot(past_item)
@@ -4014,14 +4123,17 @@ def sync_order(
     if not held_only_edit:
         try:
             kot_kwargs = {"offline_printed": offline_printed}
-            if sent_void_reason_info is not None:
+            if sent_void_reason_info is not None or collision_merge:
                 import inspect
 
                 sig_params = inspect.signature(kot_execute).parameters
-                if "cancel_reason" in sig_params:
-                    kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
-                if "void_reason_code" in sig_params:
-                    kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
+                if sent_void_reason_info is not None:
+                    if "cancel_reason" in sig_params:
+                        kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
+                    if "void_reason_code" in sig_params:
+                        kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
+                if collision_merge and "ignore_permissions" in sig_params:
+                    kot_kwargs["ignore_permissions"] = True
             kot_res = kot_execute(
                 invoice.name, customer, table, current_kitchen, previous_kitchen, invoice.custom_comments,
                 **kot_kwargs,
@@ -5278,6 +5390,10 @@ def _copy_payment_row(row):
                 "type",
                 "default",
                 "custom_tender_received",
+                "custom_tender_currency",
+                "custom_tender_amount",
+                "custom_exchange_rate",
+                "custom_exchange_rate_date",
             )
             if row.get(k) is not None
         }
@@ -5295,7 +5411,15 @@ def _incoming_payment_dict(d):
         "mode_of_payment": d["mode_of_payment"],
         "amount": flt(d["amount"]),
     }
-    for field in ("reference_no", "reference_date", "clearance_date"):
+    for field in (
+        "reference_no",
+        "reference_date",
+        "clearance_date",
+        "custom_tender_currency",
+        "custom_tender_amount",
+        "custom_exchange_rate",
+        "custom_exchange_rate_date",
+    ):
         if d.get(field):
             entry[field] = d[field]
     return entry
@@ -5329,6 +5453,10 @@ def _reconcile_settlement_payments(invoice, incoming_payments):
                 "reference_no": (d.get("reference_no") or "").strip(),
                 "reference_date": d.get("reference_date"),
                 "clearance_date": d.get("clearance_date"),
+                "custom_tender_currency": d.get("custom_tender_currency"),
+                "custom_tender_amount": d.get("custom_tender_amount"),
+                "custom_exchange_rate": d.get("custom_exchange_rate"),
+                "custom_exchange_rate_date": d.get("custom_exchange_rate_date"),
             }
         )
 
@@ -5443,7 +5571,15 @@ def _reconcile_settlement_payments(invoice, incoming_payments):
                 "mode_of_payment": entry["mode_of_payment"],
                 "amount": entry["amount"],
             }
-            for field in ("reference_no", "reference_date", "clearance_date"):
+            for field in (
+                "reference_no",
+                "reference_date",
+                "clearance_date",
+                "custom_tender_currency",
+                "custom_tender_amount",
+                "custom_exchange_rate",
+                "custom_exchange_rate_date",
+            ):
                 if entry.get(field):
                     row_dict[field] = entry[field]
             result.append(row_dict)
@@ -5543,14 +5679,14 @@ def make_invoice(
     if isinstance(payments, str):
         payments = frappe.parse_json(payments) or []
 
-    if not invoice.get("is_return"):
-        for d in payments or []:
-            if flt(d.get("amount")) < 0:
-                frappe.throw(
-                    _("Negative payment amount for {0} is not allowed.").format(
-                        d.get("mode_of_payment") or _("tender")
-                    )
-                )
+    payments = prepare_settlement_payments(
+        payments=payments,
+        pos_profile=pos_prof,
+        posting_date=invoice.get("posting_date"),
+        invoice_name=invoice.name,
+        is_return=bool(invoice.get("is_return")),
+        invoice_doc=invoice,
+    )
 
     existing_received_tenders = _received_payment_rows(invoice)
 
@@ -5594,6 +5730,11 @@ def make_invoice(
         target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice, for_update=True)
         target.cashier = frappe.session.user
         _sync_service_charge(target, pos_prof)
+        fx_proofs = getattr(getattr(invoice, "flags", None), "get", lambda *a: None)("pos_verified_fx_overrides")
+        if fx_proofs:
+            from ury.ury_pos.fx import mark_verified_fx_override
+            for proof in fx_proofs:
+                mark_verified_fx_override(target, proof.mode_of_payment, proof.from_currency, proof.to_currency, proof.rate)
 
     if discount_spec["has_any_arg"]:
         apply_discount_to_invoice(
@@ -5641,34 +5782,102 @@ def make_invoice(
             target_req = target.rounded_total or target.grand_total
             alloc_rows = payments
 
+        alloc_base_prec = invoice.precision("paid_amount") if callable(getattr(invoice, "precision", None)) else 2
+        if not isinstance(alloc_base_prec, int) or isinstance(alloc_base_prec, bool):
+            alloc_base_prec = 2
+        fx_alloc_prec = 4
+
         for d in alloc_rows:
             amt = float(d["amount"])
             mode = d["mode_of_payment"]
-            
+            extra_fields = {
+                k: d[k]
+                for k in (
+                    "reference_no",
+                    "reference_date",
+                    "clearance_date",
+                    "custom_tender_currency",
+                    "custom_exchange_rate",
+                    "custom_exchange_rate_date",
+                )
+                if d.get(k)
+            }
+            orig_total = amt if amt > 0 else 1.0
+            orig_fx = flt(d.get("custom_tender_amount"))
+            rem_fx = flt(orig_fx, fx_alloc_prec) if orig_fx > 0 else 0.0
+            primary_row = None
+
             if doc_req > 0:
                 give = min(amt, doc_req)
-                invoice.append("payments", dict(mode_of_payment=mode, amount=give))
-                amt -= give
-                doc_req -= give
-                
+                row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
+                if orig_fx > 0:
+                    give_fx = (
+                        flt(rem_fx, fx_alloc_prec)
+                        if abs(amt - give) <= 1e-9
+                        else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
+                    )
+                    row_payload["custom_tender_amount"] = give_fx
+                    rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
+                primary_row = invoice.append("payments", row_payload)
+                amt = flt(amt - give, alloc_base_prec)
+                doc_req = flt(doc_req - give, alloc_base_prec)
+
             if target_req > 0 and amt > 0:
                 give = min(amt, target_req)
-                target.append("payments", dict(mode_of_payment=mode, amount=give))
-                amt -= give
-                target_req -= give
+                row_payload = dict(mode_of_payment=mode, amount=give, **extra_fields)
+                if orig_fx > 0:
+                    give_fx = (
+                        flt(rem_fx, fx_alloc_prec)
+                        if abs(amt - give) <= 1e-9
+                        else min(rem_fx, flt(orig_fx * (give / orig_total), fx_alloc_prec))
+                    )
+                    row_payload["custom_tender_amount"] = give_fx
+                    rem_fx = flt(rem_fx - give_fx, fx_alloc_prec)
+                target.append("payments", row_payload)
+                amt = flt(amt - give, alloc_base_prec)
+                target_req = flt(target_req - give, alloc_base_prec)
 
             if amt > 0:
                 # Preserve any remaining over-tender on the primary bill so
                 # ury_pos_tender.before_validate applies the tender's over-tender
-                # rule (Refuse / Post to Charged Tip) or cash change.
-                existing = next(
-                    (row for row in reversed(invoice.payments) if row.mode_of_payment == mode),
-                    None,
-                )
-                if existing:
-                    existing.amount = flt(existing.amount) + amt
+                # rule (Refuse / Post to Charged Tip) or cash change, keeping FX
+                # fields and converted base-amount math exact across both branches.
+                existing = primary_row
+                if existing is None:
+                    d_curr = extra_fields.get("custom_tender_currency")
+                    d_rate = flt(extra_fields.get("custom_exchange_rate"), 9) if extra_fields.get("custom_exchange_rate") else None
+                    existing = next(
+                        (
+                            row
+                            for row in reversed(invoice.payments)
+                            if row.mode_of_payment == mode
+                            and (
+                                orig_fx <= 0
+                                or (
+                                    row.get("custom_tender_currency") == d_curr
+                                    and (d_rate is None or abs(flt(row.get("custom_exchange_rate"), 9) - d_rate) <= 1e-6)
+                                )
+                            )
+                        ),
+                        None,
+                    )
+                if existing is not None:
+                    existing.amount = flt(flt(existing.amount) + amt, alloc_base_prec)
+                    if orig_fx > 0:
+                        existing.custom_tender_amount = flt(
+                            flt(existing.get("custom_tender_amount")) + rem_fx,
+                            fx_alloc_prec,
+                        )
+                        for k, v in extra_fields.items():
+                            if not existing.get(k):
+                                setattr(existing, k, v)
+                        rem_fx = 0.0
                 else:
-                    invoice.append("payments", dict(mode_of_payment=mode, amount=amt))
+                    row_payload = dict(mode_of_payment=mode, amount=amt, **extra_fields)
+                    if orig_fx > 0:
+                        row_payload["custom_tender_amount"] = flt(rem_fx, fx_alloc_prec)
+                        rem_fx = 0.0
+                    invoice.append("payments", row_payload)
                 
         if not target.payments and payments:
             target.append("payments", dict(mode_of_payment=payments[0]["mode_of_payment"], amount=0))
@@ -5750,6 +5959,15 @@ def make_invoice(
             consume_token=bool(submit_invoice),
         )
     invoice.set_outstanding_amount()
+    if not invoice.get("is_return"):
+        due_total = flt(invoice.rounded_total or invoice.grand_total)
+        paid_total = flt(invoice.paid_amount)
+        if paid_total > due_total:
+            if callable(getattr(invoice, "calculate_change_amount", None)):
+                invoice.calculate_change_amount()
+            if flt(invoice.get("change_amount")) <= 0:
+                invoice.change_amount = flt(paid_total - due_total, invoice.precision("change_amount"))
+            ensure_local_change_payment_row(invoice, pos_profile=pos_prof)
     if client_order_id:
         invoice.ury_client_order_id = client_order_id
         if round_id is not None:

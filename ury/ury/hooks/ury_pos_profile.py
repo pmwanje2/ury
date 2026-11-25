@@ -15,6 +15,8 @@ from ury.ury_pos.default_customer import validate_order_type_customers
 
 
 def validate(doc, method):
+    from ury.ury_pos.fx import validate_fx_payment_modes, validate_offline_peer_relay_url
+
     validate_bill_check(doc, method)
     validate_cost_center(doc, method)
     validate_order_type_customers(doc, method)
@@ -23,6 +25,8 @@ def validate(doc, method):
     validate_paid_out_approval_threshold(doc, method)
     validate_till_cash_thresholds(doc, method)
     validate_print_format(doc, method)
+    validate_fx_payment_modes(doc)
+    validate_offline_peer_relay_url(doc.get("custom_offline_peer_relay_url"))
     validate_service_charge_rules(doc, method)
 
 

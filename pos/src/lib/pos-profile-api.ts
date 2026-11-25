@@ -159,6 +159,10 @@ export interface PosProfileFull {
   efris_print_wait_seconds?: number;
   tax_category?: string | null;
   order_type_tax_categories?: Record<string, string>;
+  custom_allow_fx_rate_override?: number;
+  custom_max_fx_variance_pct?: number;
+  custom_offline_peer_relay_url?: string;
+  custom_offline_collision_policy?: string;
   custom_drawer_pin?: number | string | null;
   custom_drawer_kick_hex?: string | null;
   custom_auto_kick_on_cash_tender?: number | boolean | null;

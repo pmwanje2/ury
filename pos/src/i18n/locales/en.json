@@ -242,7 +242,18 @@
     "room_over_limit": "Charge exceeds the room charge limit. Manager approval is required.",
     "request_room_override": "Request manager approval",
     "override_approved_by": "Override approved by {{approver}}",
-    "account_over_limit_notice": "This charge exceeds the customer's available credit. Manager approval is required."
+    "account_over_limit_notice": "This charge exceeds the customer's available credit. Manager approval is required.",
+    "reference_label_default": "Payment reference",
+    "reference_placeholder_default": "Enter transaction reference or auth code",
+    "reference_required": "Enter a payment reference for {{mode}}.",
+    "reference_invalid": "Payment reference for {{mode}} does not match the required format.",
+    "reference_date": "Reference date",
+    "reference_date_required": "Select a reference date for {{mode}}.",
+    "fx_rate_badge": "1 {{currency}} = {{rate}} {{home}}",
+    "fx_equivalent": "Local equivalent: {{amount}}",
+    "fx_stale_rate": "Exchange rate for {{currency}} is stale or missing. Update the rate before taking payment.",
+    "fx_override_rate": "Manager override rate",
+    "fx_change_local": "Change due in {{currency}}: {{amount}}"
   },
   "pos": {
     "not_opened_title": "POS Not Opened",
@@ -322,7 +333,9 @@
     "force_close_reason": "Force close reason",
     "force_close_reason_placeholder": "e.g. Night audit cutoff",
     "approve_force_close": "Approve Force Close",
-    "no_sale_summary": "No Sales this shift: {{count}}"
+    "no_sale_summary": "No Sales this shift: {{count}}",
+    "fx_native_count": "Count in {{currency}}",
+    "fx_base_equivalent": "Base equivalent: {{amount}}"
   },
   "checklist": {
     "title_opening": "Opening Checklist",
@@ -1076,7 +1089,10 @@
     "approve_and_replay": "Approve & replay",
     "approval_title": "Approve offline tender",
     "approval_summary": "{{mode}} offline tender of {{amount}} exceeds limit {{limit}}",
-    "approved_and_replayed": "Offline tender approved and replayed."
+    "approved_and_replayed": "Offline tender approved and replayed.",
+    "waiter_offline_pill": "Offline · Orders queued locally",
+    "waiter_queued_badge": "{{count}} queued offline",
+    "waiter_settle_blocked": "Offline settlement requires cashier billing access."
   },
   "bill_requests": {
     "choose_check": "Choose an open check",

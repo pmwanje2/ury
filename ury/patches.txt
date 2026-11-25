@@ -61,4 +61,5 @@ ury.patches.v2_0.setup_pos_privileged_actions
 ury.patches.v2_0.setup_pos_service_charge_rules
 ury.patches.v2_0.setup_pos_void_return_reopen
 ury.patches.v2_0.setup_credit_and_offline_limits
+ury.patches.v3_46.add_pos_fx_ref_offline_fields
 ury.patches.v2_0.setup_pos_tax_and_dayparts

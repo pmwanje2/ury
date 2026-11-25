@@ -46,7 +46,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Privilege",
-   "options": "discount\ndiscount_remove\ncomplimentary\nvoid_sent_item\nreduce_sent_qty\ncancel_check\nreturn\nreopen_check\nadjust_closed_check\nprice_override\nopen_item\nservice_charge_waive\ntax_exempt\ntransfer_check\npickup_other_check\nmerge_checks\nsplit_check\nguest_count_change\norder_type_change\nreprint_bill\nreprint_kot\nno_sale\npaid_out\ncash_pickup\ncash_loan\nover_short_close\nover_halo_tender\non_account_over_limit\nroom_charge_over_limit\ntip_adjust\nitem_86_restore\nreservation_cancel\noffline_tender\nclose_other_till\nreopen_till",
+   "options": "discount\ndiscount_remove\ncomplimentary\nvoid_sent_item\nreduce_sent_qty\ncancel_check\nreturn\nreopen_check\nadjust_closed_check\nprice_override\nopen_item\nservice_charge_waive\ntax_exempt\ntransfer_check\npickup_other_check\nmerge_checks\nsplit_check\nguest_count_change\norder_type_change\nreprint_bill\nreprint_kot\nno_sale\npaid_out\ncash_pickup\ncash_loan\nover_short_close\nover_halo_tender\non_account_over_limit\nroom_charge_over_limit\ntip_adjust\nitem_86_restore\nreservation_cancel\noffline_tender\nclose_other_till\nreopen_till\nfx_rate_override",
    "reqd": 1,
    "search_index": 1
   },
