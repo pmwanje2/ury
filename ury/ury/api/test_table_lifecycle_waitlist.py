@@ -80,8 +80,8 @@ class TableLifecycleWaitlistTest(unittest.TestCase):
         with (
             patch.object(table_reservation, "assert_outlet_access", create=True),
             patch.object(frappe, "get_doc", side_effect=[
-                frappe._dict(is_waitlist=1, branch="B", status="Waiting", no_of_pax=2),
                 frappe._dict(name="T1", branch="B", custom_table_state="Dirty", occupied=0),
+                frappe._dict(is_waitlist=1, branch="B", status="Waiting", no_of_pax=2),
             ]),
             patch.object(table_reservation, "_", lambda value: value),
         ):

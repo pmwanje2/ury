@@ -206,6 +206,10 @@ class TestSplitBillAndPrintRelease(unittest.TestCase):
 
     def _wire_invoice(self, invoice, room="Main Hall"):
         profile = self._profile()
+        self.enterContext(patch(
+            "ury.ury_pos.outlet_context.get_authorized_outlets",
+            return_value=[{"pos_profile": profile.name, "branch": invoice.branch}],
+        ))
         self.framework.get_doc.side_effect = lambda doctype, name=None: (
             invoice if doctype == "POS Invoice" else profile
         )
