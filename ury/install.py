@@ -75,10 +75,12 @@ def after_install():
     from ury.patches.v2_0 import (
         setup_pos_manager_authorisation,
         setup_pos_tax_and_dayparts,
+        setup_pos_timeclock_tips_fields,
         setup_pos_void_return_reopen,
     )
     setup_pos_manager_authorisation.execute()
     setup_pos_tax_and_dayparts.execute()
+    setup_pos_timeclock_tips_fields.execute()
     setup_pos_void_return_reopen.execute()
 
 

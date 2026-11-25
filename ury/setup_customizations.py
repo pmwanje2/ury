@@ -97,7 +97,7 @@ def before_uninstall():
  
 def get_custom_fields():
 	"""URY specific custom fields that need to be added to the masters in ERPNext"""
-	return {
+	return _merge_extra_custom_fields({
      	"POS Invoice": [
 				{
 					"fieldname": "mobile_number",
@@ -417,6 +417,7 @@ def get_custom_fields():
 					{
 					"fieldname": "mobile_number",
 					"fieldtype": "Data",
+					"length": 64,
 					"fetch_from": "customer.mobile_number",
 					"label": "Mobile Number",
 					"insert_after": "customer_name",
@@ -486,6 +487,7 @@ def get_custom_fields():
 				{
 					"fieldname": "no_of_pax",
 					"fieldtype": "Data",
+					"length": 64,
 					"label": "Pax",
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,
@@ -1251,7 +1253,19 @@ def get_custom_fields():
 				"hidden": 1,
 			},
 		],
-    }
+    })
+
+
+def _merge_extra_custom_fields(base_fields):
+    from ury.ury_pos.timeclock_tips_fields import get_timeclock_tips_custom_fields
+
+    for dt, extras in get_timeclock_tips_custom_fields().items():
+        existing = base_fields.setdefault(dt, [])
+        existing_names = {f["fieldname"] for f in existing}
+        for field in extras:
+            if field["fieldname"] not in existing_names:
+                existing.append(field)
+    return base_fields
  
 def delete_custom_fields(custom_fields):
     for doctype, fields in custom_fields.items():

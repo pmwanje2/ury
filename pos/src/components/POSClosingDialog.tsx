@@ -21,6 +21,11 @@ import ChecklistGateDialog from './ChecklistGateDialog';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { getChecklist } from '../lib/checklist-api';
 import { getShiftCashMovementTotals } from '../lib/till-cash-api';
+import { currencyPrecisionFor } from '../lib/discount-api';
+import {
+  getShiftTipDeclarationRows,
+  type ShiftTipDeclarationRow,
+} from '../lib/tips-declaration-api';
 import {
   closeTillWithControls,
   forceCloseTill,
@@ -430,6 +435,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pendingCashMovements, setPendingCashMovements] = useState(0);
   const [overShortReason, setOverShortReason] = useState('');
+  const [tipRows, setTipRows] = useState<ShiftTipDeclarationRow[]>([]);
+  const [touchedTipUsers, setTouchedTipUsers] = useState<Set<string>>(new Set());
+  const [requireTipDeclaration, setRequireTipDeclaration] = useState(false);
+  const [tipCurrencyPrecision, setTipCurrencyPrecision] = useState<number>(2);
   const [blindVarianceMessage, setBlindVarianceMessage] = useState<string | null>(null);
   const [showForceClose, setShowForceClose] = useState(false);
   const [forceCloseReason, setForceCloseReason] = useState('');
@@ -500,7 +509,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPeriodEndDate(now);
       const end = formatDateTime(now);
 
-      const [invoiceResult, openingDoc, cashMovements, preview] = await Promise.all([
+      const [invoiceResult, openingDoc, cashMovements, preview, tipDeclarationData] = await Promise.all([
         subCashier
           ? getSubCashierPosInvoices(selectedEntry.period_start_date, end, posProfile.name, selectedEntry.user)
           : getMainCashierPosInvoices(selectedEntry.period_start_date, end, posProfile.name, selectedEntry.user),
@@ -511,6 +520,9 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         subCashier
           ? Promise.resolve(null)
           : getTillClosePreview(posProfile.name, selectedEntry.name),
+        subCashier
+          ? Promise.resolve(null)
+          : getShiftTipDeclarationRows(selectedEntry.name).catch(() => null),
       ]);
 
       setClosePreview(preview);
@@ -518,6 +530,25 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
       setPendingCashMovements(cashMovements.pending_count);
+      if (tipDeclarationData && Array.isArray(tipDeclarationData.rows)) {
+        setTipRows(tipDeclarationData.rows);
+        setRequireTipDeclaration(
+          Boolean(
+            tipDeclarationData.require_tip_declaration ||
+              Number(posProfile.require_tip_declaration ?? 0) === 1,
+          ),
+        );
+        setTipCurrencyPrecision(
+          typeof tipDeclarationData.currency_precision === 'number'
+            ? tipDeclarationData.currency_precision
+            : currencyPrecisionFor(tipDeclarationData.currency || tillCurrency),
+        );
+      } else {
+        setTipRows([]);
+        setRequireTipDeclaration(Number(posProfile.require_tip_declaration ?? 0) === 1);
+        setTipCurrencyPrecision(currencyPrecisionFor(tillCurrency));
+      }
+      setTouchedTipUsers(new Set());
       const {
         totals: aggregatedTotals,
         expectedByMode,
@@ -649,6 +680,35 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     });
   };
 
+  const handleTipCashChange = (serverUser: string, rawValue: string) => {
+    const parsed = parseFloat(rawValue);
+    const factor = 10 ** tipCurrencyPrecision;
+    const cleaned = Number.isFinite(parsed)
+      ? Math.round(Math.max(0, parsed) * factor) / factor
+      : 0;
+    setTipRows((prev) =>
+      prev.map((row) =>
+        row.user === serverUser ? { ...row, declared_cash_tips: cleaned } : row,
+      ),
+    );
+    setTouchedTipUsers((prev) => {
+      if (prev.has(serverUser)) return prev;
+      const next = new Set(prev);
+      next.add(serverUser);
+      return next;
+    });
+  };
+
+  const handleTipRemarksChange = (serverUser: string, remarks: string) => {
+    setTipRows((prev) =>
+      prev.map((row) => (row.user === serverUser ? { ...row, remarks } : row)),
+    );
+  };
+
+  const tipInputStep =
+    tipCurrencyPrecision === 0 ? '1' : (1 / 10 ** tipCurrencyPrecision).toFixed(tipCurrencyPrecision);
+  const tipInputPlaceholder =
+    tipCurrencyPrecision === 0 ? '0' : (0).toFixed(tipCurrencyPrecision);
   const handleOpenChange = (next: boolean) => {
     if (isSubmitting) return;
     if (!next) {
@@ -780,6 +840,18 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       };
     }
 
+    if (
+      requireTipDeclaration &&
+      tipRows.length > 0 &&
+      tipRows.some((row) => !touchedTipUsers.has(row.user))
+    ) {
+      return {
+        isValid: false,
+        blockingMessage: t('pos_closing.tip_declaration_required'),
+        warningMessage: null as string | null,
+      };
+    }
+
     const zeroRowsWithActivity = rows.filter(
       (row) =>
         touchedModes.has(row.mode_of_payment) &&
@@ -792,7 +864,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       zeroRowsWithActivity.length > 0 ? t('pos_closing.validation_zero_row_warning') : null;
 
     return { isValid: true, blockingMessage: null as string | null, warningMessage };
-  }, [rows, touchedModes, blindCashCount, needsOverShortReason, overShortReason, overShortTolerance, posProfile?.currency]);
+  }, [rows, touchedModes, blindCashCount, needsOverShortReason, overShortReason, overShortTolerance, posProfile?.currency, requireTipDeclaration, tipRows, touchedTipUsers]);
 
   const openCloseApproval = async (
     kind: 'close_other_till' | 'over_short_close' | 'force_close',
@@ -862,6 +934,19 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     setBlindVarianceMessage(null);
 
     try {
+      const tipDeclarationsPayload =
+        tipRows.length > 0
+          ? tipRows.map((row) => ({
+              user: row.user,
+              employee: row.employee || undefined,
+              currency: row.currency || tillCurrency,
+              charged_tips_collected: row.charged_tips_collected,
+              tips_paid_from_till: row.tips_paid_from_till,
+              net_tips_payable: row.net_tips_payable,
+              declared_cash_tips: row.declared_cash_tips,
+              remarks: row.remarks || '',
+            }))
+          : undefined;
       await closeTillWithControls({
         pos_profile: posProfile.name,
         pos_opening_entry: openingEntry.name,
@@ -871,6 +956,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         close_other_approval_token: tokens?.closeOtherToken ?? closeOtherToken ?? undefined,
         close_other_reason: tokens?.closeOtherReasonOverride ?? closeOtherReason ?? undefined,
         period_end_date: formatDateTime(periodEndDate),
+        tip_declarations: tipDeclarationsPayload,
       });
       setPendingCloseDoc(null);
       setCloseOtherToken(null);
@@ -1012,6 +1098,20 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             net_total: totals.netTotal,
             total_quantity: totals.totalQty,
             ...(overShortReason.trim() ? { custom_over_short_reason: overShortReason.trim() } : {}),
+            ...(tipRows.length > 0
+              ? {
+                  custom_tip_declarations: tipRows.map((row) => ({
+                    user: row.user,
+                    employee: row.employee || undefined,
+                    currency: row.currency || tillCurrency,
+                    charged_tips_collected: row.charged_tips_collected,
+                    tips_paid_from_till: row.tips_paid_from_till,
+                    net_tips_payable: row.net_tips_payable,
+                    declared_cash_tips: row.declared_cash_tips,
+                    remarks: row.remarks || '',
+                  })),
+                }
+              : {}),
           });
           docName = doc.name;
         }
@@ -1129,6 +1229,19 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           approval_token: result.token,
           over_short_reason: overShortReason.trim() || undefined,
           period_end_date: formatDateTime(periodEndDate),
+          tip_declarations:
+            tipRows.length > 0
+              ? tipRows.map((row) => ({
+                  user: row.user,
+                  employee: row.employee || undefined,
+                  currency: row.currency || tillCurrency,
+                  charged_tips_collected: row.charged_tips_collected,
+                  tips_paid_from_till: row.tips_paid_from_till,
+                  net_tips_payable: row.net_tips_payable,
+                  declared_cash_tips: row.declared_cash_tips,
+                  remarks: row.remarks || '',
+                }))
+              : undefined,
         });
         setShowForceClose(false);
         await onClosingSubmitted?.();
@@ -1258,7 +1371,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           <DialogDescription>{t('pos_closing.description')}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-4">
+        <div
+          data-testid="pos-closing-scroll-body"
+          className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-4"
+        >
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Spinner message={t('pos_closing.loading')} />
@@ -1348,6 +1464,93 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                 <p className="py-8 text-center text-sm text-gray-500">
                   {t('pos_closing.no_invoices')}
                 </p>
+              )}
+
+              {hasRows && tipRows.length > 0 && (
+                <div className="mt-5 rounded-lg border border-border bg-white p-4">
+                  <div className="mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">
+                      {t('pos_closing.tips_section_title')}
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {t('pos_closing.tips_section_note')}
+                    </p>
+                  </div>
+                  <div className="w-full overflow-x-auto">
+                    <table className="w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-gray-50">
+                          <th className="py-2 px-3 text-start font-semibold text-gray-800">
+                            {t('pos_closing.tip_server')}
+                          </th>
+                          <th className="py-2 px-3 text-end font-semibold text-gray-800">
+                            {t('pos_closing.tip_charged')}
+                          </th>
+                          <th className="py-2 px-3 text-end font-semibold text-gray-800">
+                            {t('pos_closing.tip_paid_from_till')}
+                          </th>
+                          <th className="py-2 px-3 text-end font-semibold text-gray-800">
+                            {t('pos_closing.tip_net_payable')}
+                          </th>
+                          <th className="py-2 px-3 text-center font-semibold text-gray-800">
+                            {t('pos_closing.tip_declared_cash')}
+                          </th>
+                          <th className="py-2 px-3 text-start font-semibold text-gray-800">
+                            {t('pos_closing.tip_remarks')}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {tipRows.map((row) => (
+                          <tr key={row.user} className="border-b border-border last:border-b-0">
+                            <td className="py-2 px-3 font-medium text-gray-900 whitespace-nowrap">
+                              {row.full_name}
+                            </td>
+                            <td className="py-2 px-3 text-end text-gray-700 whitespace-nowrap">
+                              {formatCurrency(row.charged_tips_collected, row.currency || tillCurrency)}
+                            </td>
+                            <td className="py-2 px-3 text-end text-gray-700 whitespace-nowrap">
+                              {formatCurrency(row.tips_paid_from_till, row.currency || tillCurrency)}
+                            </td>
+                            <td className="py-2 px-3 text-end font-medium text-gray-900 whitespace-nowrap">
+                              {formatCurrency(row.net_tips_payable, row.currency || tillCurrency)}
+                            </td>
+                            <td className="py-2 px-3">
+                              <Input
+                                type="number"
+                                min="0"
+                                step={tipInputStep}
+                                aria-label={t('pos_closing.declared_cash_tips_for', { name: row.full_name })}
+                                value={
+                                  touchedTipUsers.has(row.user) || row.declared_cash_tips > 0
+                                    ? String(row.declared_cash_tips)
+                                    : ''
+                                }
+                                onChange={(e) => handleTipCashChange(row.user, e.target.value)}
+                                placeholder={tipInputPlaceholder}
+                                disabled={isSubmitting}
+                                size="sm"
+                                className="w-28 text-center"
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <Input
+                                type="text"
+                                aria-label={`${t('pos_closing.tip_remarks')} (${row.user})`}
+                                value={row.remarks}
+                                onChange={(e) => handleTipRemarksChange(row.user, e.target.value)}
+                                placeholder={t('pos_closing.tip_remarks_placeholder')}
+                                disabled={isSubmitting}
+                                size="sm"
+                                className="w-36"
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
 
               {hasRows && needsOverShortReason && !cashVarianceInfo.exceeds && (
@@ -1534,7 +1737,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           <p className="shrink-0 px-6 pb-2 text-sm font-medium text-red-600 break-words">{submitError}</p>
         )}
 
-        <DialogFooter className="shrink-0 border-t border-border bg-card px-4 sm:px-6 py-3 sm:py-4">
+        <DialogFooter className="shrink-0 border-t border-border bg-card px-4 sm:px-6 py-3 sm:py-4 flex-wrap">
           <TillLogout />
           {!isSubCashier && openingEntry && (
             <Button
