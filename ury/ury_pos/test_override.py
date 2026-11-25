@@ -13,6 +13,7 @@ Tests the fixed shared contract + Amendment 1 + R2 security fixes in `ury/ury_po
 
 import hashlib
 import importlib.util
+from inspect import signature
 import json
 import re
 import secrets
@@ -1240,6 +1241,34 @@ class TestOverrideContract(unittest.TestCase):
         self.assertNotIn(test_pin, repr(self.frappe.logger.return_value.error.call_args))
         self.assertNotIn("Unavailable provider registry", repr(self.frappe.logger.return_value.error.call_args))
 
+    def test_pin_endpoint_signatures_do_not_bind_credentials_for_frappe_dispatch(self):
+        api = self.api()
+        for endpoint in (api.authorise, api.set_my_pin):
+            with self.subTest(endpoint=endpoint.__name__):
+                parameters = signature(endpoint).parameters
+                self.assertFalse({"pin", "password", "current_password"} & parameters.keys())
+                self.assertFalse(any(parameter.kind == parameter.VAR_KEYWORD for parameter in parameters.values()))
+
+    def test_pin_request_scrubs_wire_credentials_before_dispatch(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        for path, cmd in (
+            ("/api/method/ury.ury_pos.override.set_my_pin", None),
+            ("/api/v1/method/ury.ury_pos.override.set_my_pin", None),
+            ("/api/v2/method/ury.ury_pos.override.set_my_pin", None),
+            ("/", "ury.ury_pos.override.set_my_pin"),
+        ):
+            with self.subTest(path=path, cmd=cmd):
+                self.frappe.local.request = SimpleNamespace(path=path)
+                self.frappe.form_dict = {"pin": "4829", "current_password": "secret-pass-1"}
+                if cmd:
+                    self.frappe.form_dict["cmd"] = cmd
+                api.scrub_pin_request()
+                self.assertFalse({"pin", "password", "current_password"} & self.frappe.form_dict.keys())
+                newargs = {name: value for name, value in self.frappe.form_dict.items()
+                           if name in signature(api.set_my_pin).parameters}
+                self.assertTrue(api.set_my_pin(**newargs)["ok"])
+
     def test_expected_pin_error_preserves_type_and_disables_developer_snapshot(self):
         api = self.api()
         self.frappe.session.user = "manager@example.test"
@@ -1271,9 +1300,12 @@ class TestOverrideContract(unittest.TestCase):
         )
         till_controls = ModuleType("ury.ury_pos.till_controls")
         till_controls.over_short_approval_amount = MagicMock(return_value=15000.0)
-        with patch.dict(sys.modules, {"ury.ury_pos.till_controls": till_controls}):
-            issued = api.authorise("Main Till", "over_short_close", "manager@example.test", "1357",
-                                   "POS Opening Entry", reference, claim)
+        till_controls.over_short_approval_context = lambda *args, **kwargs: (
+            till_controls.over_short_approval_amount(*args, **kwargs), (("Cash", "UGX", -15000),),
+        )
+        self.enterContext(patch.dict(sys.modules, {"ury.ury_pos.till_controls": till_controls}))
+        issued = api.authorise("Main Till", "over_short_close", "manager@example.test", "1357",
+                               "POS Opening Entry", reference, claim)
 
         till_controls.over_short_approval_amount.assert_called_once()
         verifier.assert_called_once_with(
@@ -1290,6 +1322,46 @@ class TestOverrideContract(unittest.TestCase):
             issued["token"], "over_short_close", "Main Till", reference, claim,
             reference_doctype="POS Opening Entry", approval_amount=15000,
         ).approver, "manager@example.test")
+
+    def test_till_close_token_binds_each_signed_tender_variance(self):
+        api = self.api()
+        self.install_external_pin_hooks()
+        self.hooks["__attr__:custom_app.pin.verify"].return_value = {"ok": True}
+        opening = "OPEN-MAIN-1"
+        claim = {
+            "action": "over_short_close", "pos_profile": "Main Till",
+            "pos_opening_entry": opening,
+            "counted_payments": [{"mode_of_payment": "Cash", "closing_amount": 10000}],
+            "reason": "Other: Recount confirmed shortage",
+        }
+        initial = (("Cash", "UGX", -5000), ("Cash USD", "USD", -1.25))
+        scenarios = (
+            ("shortage changes to overage", (("Cash", "UGX", 5000), ("Cash USD", "USD", -1.25)), False),
+            ("second tender changes", (("Cash", "UGX", -5000), ("Cash USD", "USD", -1.50)), False),
+            ("signed amounts unchanged", initial, True),
+        )
+        for description, changed, matches in scenarios:
+            with self.subTest(description=description):
+                till_controls = ModuleType("ury.ury_pos.till_controls")
+                till_controls.over_short_approval_amount = MagicMock(return_value=5000)
+                till_controls.over_short_approval_context = MagicMock(return_value=(5000, initial))
+                with patch.dict(sys.modules, {"ury.ury_pos.till_controls": till_controls}):
+                    issued = api.authorise(
+                        "Main Till", "over_short_close", "manager@example.test", "1357",
+                        "POS Opening Entry", opening, claim,
+                    )
+                    till_controls.over_short_approval_context.return_value = (5000, changed)
+
+                    def consume():
+                        return api.consume(
+                            issued["token"], "over_short_close", "Main Till", opening, claim,
+                            reference_doctype="POS Opening Entry",
+                        )
+
+                    if matches:
+                        self.assertEqual(consume().approver, "manager@example.test")
+                    else:
+                        self.refused("POS-AUTH-CHANGED", Invalid, consume)
 
     def test_consume_rejects_a_token_approved_for_a_different_document_type(self):
         api = self.api()

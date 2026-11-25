@@ -394,6 +394,19 @@ class TestOverShortToleranceAndBlindClose(LoadedSlice2):
         self.assertFalse(self.cs.closings)
         self.assertEqual(self.store.openings["OPEN-MAIN-1"]["status"], "Open")
 
+    def test_over_short_context_keeps_signed_cash_and_foreign_values_sorted(self):
+        profile = self.frappe.get_doc("POS Profile", "Main Till")
+        profile.custom_over_short_tolerance = 5000
+        self.frappe.get_cached_value.side_effect = lambda *args, **kwargs: "Cash"
+        closing = Row(payment_reconciliation=[
+            Row(mode_of_payment="FX Cash", difference=1000, custom_tender_currency="USD",
+                custom_foreign_difference=0.25),
+            Row(mode_of_payment="Cash", difference=-15000),
+        ])
+        self.assertEqual(self.tc._signed_cash_variances(closing, profile), (
+            ("Cash", "UGX", -15000), ("FX Cash", "USD", 0.25),
+        ))
+
     def test_variance_above_tolerance_requires_manager_pin_and_reason_and_stamps_audit(self):
         # Expected = 150,000; counted = 135,000 (diff = -15,000 > tolerance 5,000)
         self.store.current_user = "cashier@example.com"
