@@ -19,7 +19,7 @@ import { submitOrderOfflineAware } from '../offline/cashier';
 import { syncOrder, type SavedInvoice, type SyncOrderRequest } from '../lib/order-api';
 import { formatPreviewTaxLabel } from '../lib/tax-preview-label';
 import { useOrderPreview } from '../lib/use-order-preview';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import { extractAuthChallenge } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { useRootStore } from '../store/root-store';
@@ -451,7 +451,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         return;
       }
       console.error('Failed to sync order:', error);
-      showToast.error(overrideErrorMessage(error, 'errors.failed_process_order'));
+      showToast.error(overrideActionErrorMessage(error, 'errors.failed_process_order'));
     } finally {
       setIsSubmitting(false);
     }

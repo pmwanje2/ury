@@ -1244,6 +1244,7 @@
     "error_expired": "This approval has expired or was already used. Ask a manager to approve again.",
     "error_changed": "The check or values changed after approval. Ask a manager to approve again.",
     "error_required": "A manager must approve this action.",
+    "error_unavailable": "The approval PIN service is unavailable. Try again later.",
     "error_generic": "Approval could not be completed. Try again.",
     "pin_entered_count": "{{count}} digits entered",
     "error_reason": "Choose an active reason (and add a short note if required)."

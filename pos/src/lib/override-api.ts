@@ -11,7 +11,8 @@ export type AuthRefusalCode =
   | 'POS-AUTH-NO-PIN'
   | 'POS-AUTH-REASON'
   | 'POS-AUTH-EXPIRED'
-  | 'POS-AUTH-CHANGED';
+  | 'POS-AUTH-CHANGED'
+  | 'POS-AUTH-UNAVAILABLE';
 
 export interface OverrideApprover {
   user: string;
@@ -51,6 +52,7 @@ export interface MyPinStatus extends PinStatus {
 }
 
 export interface PinUserStatus extends PinStatus {
+  can_clear?: boolean;
   user: string;
   full_name: string;
 }
@@ -73,6 +75,7 @@ const REFUSAL_CODES: readonly AuthRefusalCode[] = [
   'POS-AUTH-REASON',
   'POS-AUTH-EXPIRED',
   'POS-AUTH-CHANGED',
+  'POS-AUTH-UNAVAILABLE',
 ];
 
 export function extractAuthErrorCode(errorOrMessage: unknown): AuthRefusalCode | null {
@@ -114,11 +117,17 @@ export function overrideErrorMessage(error: unknown, fallbackKey = 'manager_appr
       return t('manager_approval.error_changed');
     case 'POS-AUTH-REQUIRED':
       return t('manager_approval.error_required');
-    default: {
-      const parsed = parseFrappeError(error, '');
-      return parsed || t(fallbackKey);
-    }
+    case 'POS-AUTH-UNAVAILABLE':
+      return t('manager_approval.error_unavailable');
+    default:
+      return t(fallbackKey);
   }
+}
+
+// Business actions preserve their server validation messages after handling approval refusals.
+export function overrideActionErrorMessage(error: unknown, fallbackKey = 'manager_approval.error_generic'): string {
+  if (extractAuthErrorCode(error)) return overrideErrorMessage(error, fallbackKey);
+  return parseFrappeError(error, '') || t(fallbackKey);
 }
 
 export async function listApprovers(params: {

@@ -20,7 +20,7 @@ import {
   mergeBills,
   type MergeBillCandidate,
 } from '../lib/invoice-api';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 interface BillMergeDialogProps {
@@ -194,7 +194,7 @@ const BillMergeDialog = ({
         });
         return;
       }
-      setError(overrideErrorMessage(err, 'bill_merge.merge_failed'));
+      setError(overrideActionErrorMessage(err, 'bill_merge.merge_failed'));
     } finally {
       setIsSubmitting(false);
     }

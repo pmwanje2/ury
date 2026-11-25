@@ -15,7 +15,7 @@ import { useRootStore } from '../store/root-store';
 import { availabilityPermissions, type AvailabilityChange } from '@ury/core/availability';
 import { setItemAvailability } from '../lib/availability-api';
 import { SoldOutSheet } from '../components/SoldOutSheet';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import { showToast } from '@ury/ui';
 
@@ -90,7 +90,7 @@ export default function POS({ onCashierCheck }: React.ComponentProps<typeof Orde
         setPending86Approval({ branch: targetBranch, item, change });
         return;
       }
-      showToast.error(overrideErrorMessage(err));
+      showToast.error(overrideActionErrorMessage(err));
       throw err;
     }
   };

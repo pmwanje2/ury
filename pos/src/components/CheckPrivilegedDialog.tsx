@@ -15,7 +15,7 @@ import { t } from '../i18n';
 import {
   isAuthRequiredError,
   listReasons,
-  overrideErrorMessage,
+  overrideActionErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
 import {
@@ -246,7 +246,7 @@ export default function CheckPrivilegedDialog({
         });
         return;
       }
-      setError(overrideErrorMessage(err));
+      setError(overrideActionErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

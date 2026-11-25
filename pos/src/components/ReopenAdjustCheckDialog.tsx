@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import {
   isAuthRequiredError,
   listReasons,
-  overrideErrorMessage,
+  overrideActionErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
 import {
@@ -235,7 +235,7 @@ export default function ReopenAdjustCheckDialog({
           });
         }
       } else {
-        setError(overrideErrorMessage(err) || msg || t('void_return.reopen_failed'));
+        setError(overrideActionErrorMessage(err) || msg || t('void_return.reopen_failed'));
       }
     } finally {
       setSubmitting(false);

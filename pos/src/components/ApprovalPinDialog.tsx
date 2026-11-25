@@ -335,7 +335,7 @@ export default function ApprovalPinDialog({
                         <p className="truncate text-sm font-medium text-foreground">{member.full_name}</p>
                         <PinStatusBadges {...member} />
                       </div>
-                      {(member.has_pin || member.locked) && (
+                      {member.can_clear !== false && (member.has_pin || member.locked) && (
                         <Button
                           type="button"
                           size="sm"

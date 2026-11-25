@@ -15,7 +15,7 @@ import { t } from '../i18n';
 import {
   isAuthRequiredError,
   listReasons,
-  overrideErrorMessage,
+  overrideActionErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
 import { adjustClosedCheckTip, extractAuthChallenge } from '../lib/privileged-actions-api';
@@ -120,7 +120,7 @@ export default function TipAdjustDialog({
         });
         return;
       }
-      setError(overrideErrorMessage(err));
+      setError(overrideActionErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

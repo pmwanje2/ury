@@ -1003,6 +1003,7 @@
     "error_expired": "Esta aprobación expiró o ya fue utilizada. Solicita una nueva aprobación.",
     "error_changed": "La cuenta o los valores cambiaron tras la aprobación. Solicita una nueva aprobación.",
     "error_required": "Un encargado debe aprobar esta acción.",
+    "error_unavailable": "El servicio de PIN de aprobación no está disponible. Inténtalo más tarde.",
     "error_generic": "No se pudo completar la aprobación. Inténtalo de nuevo.",
     "pin_entered_count": "{{count}} dígitos introducidos",
     "error_reason": "Elige un motivo activo (y añade una nota breve si es obligatoria)."

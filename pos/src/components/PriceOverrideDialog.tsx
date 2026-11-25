@@ -15,7 +15,7 @@ import { t } from '../i18n';
 import {
   isAuthRequiredError,
   listReasons,
-  overrideErrorMessage,
+  overrideActionErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
 import { addOpenItem, extractAuthChallenge, overrideLinePrice } from '../lib/privileged-actions-api';
@@ -207,7 +207,7 @@ export default function PriceOverrideDialog({
         });
         return;
       }
-      setError(overrideErrorMessage(err));
+      setError(overrideActionErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

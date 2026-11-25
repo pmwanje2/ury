@@ -443,7 +443,7 @@ export default function ManagerApproval({
             type="button"
             onClick={handleClose}
             disabled={submitting}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-50"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-50"
           >
             <span className="sr-only">{t('common.dismiss')}</span>
             <X className="h-4 w-4" aria-hidden="true" />
