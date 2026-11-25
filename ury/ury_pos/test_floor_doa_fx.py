@@ -264,3 +264,28 @@ class TestFloorDoaFx(unittest.TestCase):
             with patch.dict(db, {"get_value": get_value}):
                 with self.assertRaisesRegex(pricing.FakeValidationError, "POS-FX-RATE-INVALID"):
                     actions.profile_approval_currency(profile, case.h.frappe)
+
+    def test_service_charge_save_caps_post_redistribution_charge(self):
+        case = self.pricing_invoice("UGX", 3700)
+        doc = pricing.FlatGrandTotalDiscountInvoice(case.invoice)
+        doc["items"][0].update(qty=1, rate=1000, amount=1000, net_amount=1000)
+        doc.update(taxes=[], apply_discount_on="Grand Total", discount_amount=500)
+        doc.calculate_taxes_and_totals()
+        case.h.docs[("POS Invoice", doc.name)] = doc
+        actions, _ = case._import_pricing_actions()
+
+        def authorize(**kwargs):
+            if kwargs["amount"] > 195000:
+                raise pricing.FakePermissionError("POS-AUTH-NOT-ELIGIBLE")
+            return {"reason": "SVC-WAIVE", "reason_note": "", "approver": "manager@example.com", "via_pin": True}
+
+        with patch.object(actions, "authorize_or_perform", side_effect=authorize) as consume:
+            with self.assertRaisesRegex(pricing.FakePermissionError, "POS-AUTH-NOT-ELIGIBLE"):
+                actions.adjust_service_charge(
+                    doc.name, "Main Till", action="change", new_rate=10,
+                    reason="SVC-WAIVE", approval_token="token",
+                )
+        self.assertEqual(consume.call_args.kwargs["amount"], 201835)
+        self.assertEqual(consume.call_args.kwargs["claim"]["new_rate"], 10)
+        self.assertEqual(doc.net_total, 500)
+        self.assertEqual(doc.taxes, [])

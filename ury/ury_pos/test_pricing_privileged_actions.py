@@ -187,6 +187,23 @@ class FakeDoc(FakeDict):
             self._db_sets.append((field, value))
 
 
+
+class FlatGrandTotalDiscountInvoice(FakeDoc):
+    """Mirror native redistribution for one item and a net-total service charge."""
+
+    def calculate_taxes_and_totals(self):
+        gross_items = sum(row["qty"] * row["rate"] for row in self["items"])
+        charges = [row for row in self["taxes"] if row.get("custom_pos_charge_kind") == "Service Charge"]
+        rate = sum(float(row.get("rate") or 0) for row in charges) / 100
+        discount_basis = gross_items * (1 + rate)
+        discount = self["discount_amount"]
+        self["net_total"] = round(gross_items - discount * gross_items / discount_basis, 2)
+        for row in charges:
+            row["tax_amount"] = round(gross_items * float(row["rate"]) / 100, 2)
+            row["tax_amount_after_discount_amount"] = round(self["net_total"] * float(row["rate"]) / 100, 2)
+        self["grand_total"] = self["rounded_total"] = round(discount_basis - discount, 2)
+
+
 class FakeFrappeHarness:
     """Self-contained fake Frappe runtime for site-less unit and adversarial tests."""
 

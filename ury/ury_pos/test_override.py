@@ -1594,5 +1594,31 @@ class TestOverrideContract(unittest.TestCase):
                 ))
 
 
+    def test_service_charge_token_uses_post_redistribution_charge(self):
+        from ury.ury_pos.test_pricing_privileged_actions import FlatGrandTotalDiscountInvoice
+
+        api = self.prepare_foreign_approval("service_charge_waive")
+        profile = self.store.profiles["Main Till"]
+        profile.update(custom_service_charge_account="Service Charge - HC", custom_service_charge_rate=5)
+        saved_invoice = self.store.invoices["POS-INV-100"]
+        doc = FlatGrandTotalDiscountInvoice(saved_invoice)
+        doc.update(taxes=[], apply_discount_on="Grand Total", discount_amount=500)
+        doc.calculate_taxes_and_totals()
+        original_get_doc = self.frappe.get_doc
+        self.frappe.get_doc = lambda dt, name=None, **kw: (
+            doc if (dt, name) == ("POS Invoice", "POS-INV-100") else original_get_doc(dt, name, **kw)
+        )
+        for rule in self.store.privilege_rules:
+            if rule.privilege == "service_charge_waive" and rule.role == "URY Manager":
+                rule.max_amount = 195000
+
+        claim = {"sc_action": "change", "new_rate": 10, "reason": "Other: Guest request"}
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", "service_charge_waive", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+        ))
+        self.assertEqual(doc.net_total, 500)
+        self.assertEqual(doc.taxes, [])
+
+
 if __name__ == "__main__":
     unittest.main()

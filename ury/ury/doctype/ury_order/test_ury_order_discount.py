@@ -3089,3 +3089,50 @@ class TestForeignDiscountAmountCap(DiscountBase):
                 self.invoice._doc_before_save = previous
                 with self.assertRaisesRegex(NotPermitted, "SITEOPS-DISC-007"):
                     self.hook.validate_pos_discount(self.invoice)
+
+    def test_undiscounted_save_verifies_the_first_and_changed_exchange_rates(self):
+        for previous in (None, FakePOSInvoice("CHK-FX", currency="USD", conversion_rate=3700)):
+            with self.subTest(is_new=previous is None):
+                self.invoice._is_new = previous is None
+                self.invoice._doc_before_save = previous
+                self.invoice.conversion_rate = 1
+                with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+                    self.hook.validate_pos_discount(self.invoice)
+
+    def test_first_discount_verifies_unchanged_legacy_exchange_rate(self):
+        self.invoice._doc_before_save = FakePOSInvoice(
+            "CHK-FX", currency="USD", conversion_rate=1, items=[_item("r1", "FISH", 1, 1000)]
+        )
+        self.invoice.conversion_rate = 1
+        self.invoice.additional_discount_percentage = 5
+        self.invoice.custom_discount_reason = "Complaint"
+        self.invoice.calculate_taxes_and_totals()
+        with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+            self.hook.validate_pos_discount(self.invoice)
+
+    def test_apply_first_discount_verifies_legacy_exchange_rate_before_authorization(self):
+        self.invoice.conversion_rate = 1
+        spec = self.discount.parse_discount_request(discount_percent=5, discount_reason="Complaint")
+        with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+            self.discount.apply_discount_to_invoice(self.invoice, self.profile, spec)
+        self.assertEqual(self.invoice.discount_amount, 0)
+
+    def test_invoice_verifies_the_selling_quote_when_buying_quote_differs(self):
+        rates = {"for_buying": 3400, "for_selling": 3700}
+
+        def get_exchange_rate(source, target, date, args=None):
+            self.assertEqual((source, target), ("USD", "UGX"))
+            return rates[args or "for_buying"]
+
+        erp_utils = ModuleType("erpnext.setup.utils")
+        erp_utils.get_exchange_rate = get_exchange_rate
+        self.invoice._is_new = True
+        self.invoice.additional_discount_percentage = 1
+        self.invoice.custom_discount_reason = "Complaint"
+        self.invoice.calculate_taxes_and_totals()
+        with patch.dict(sys.modules, {erp_utils.__name__: erp_utils}):
+            try:
+                self.hook.validate_pos_discount(self.invoice)
+            except Refused as exc:
+                self.fail(f"The valid selling quote was rejected: {exc}")
+        self.assertEqual(self.invoice.conversion_rate, rates["for_selling"])
