@@ -103,6 +103,7 @@ class TestCancelOrderReason(unittest.TestCase):
         self.invoice.branch = "Test Branch"
         self.invoice.restaurant_table = "T1"
         self.invoice.docstatus = 0
+        self.invoice.get = lambda key, default=None: vars(self.invoice).get(key, default)
         self.framework = MagicMock()
         self.framework.PermissionError = frappe.PermissionError
         self.framework.get_doc.return_value = self.invoice
@@ -117,6 +118,9 @@ class TestCancelOrderReason(unittest.TestCase):
         availability = ModuleType("ury.ury.api.ury_availability")
         availability.apply_count_delta = self.count_delta
         self.enterContext(patch.dict(sys.modules, {availability.__name__: availability}))
+        self.enterContext(patch.object(ury_order._void_ops, "has_sent_kot_for_invoice", return_value=False))
+        self.enterContext(patch.object(ury_order._void_ops, "_active_pos_reasons", return_value=[]))
+        self.enterContext(patch("ury.ury.api.table_lifecycle.table_policy", return_value={}))
         for target, replacement in (
             ("frappe", self.framework),
             ("_", lambda message: message),

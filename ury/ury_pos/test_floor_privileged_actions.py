@@ -578,6 +578,8 @@ class FloorHarness:
                 return list(h.profiles.values())
             if doctype == "URY Table":
                 return list(h.tables.values())
+            if doctype == "URY Table Reservation":
+                return list(h.reservations.values())
             if doctype == "URY User":
                 return h.branch_users
             if doctype == "URY Bill Reprint Log":
@@ -599,8 +601,16 @@ class FloorHarness:
             return [FakeDoc(dict(r)) for r in rows]
 
         f.get_all = get_all
+        f.get_precision = lambda doctype, fieldname: 3
 
-        db = SimpleNamespace()
+        def db_get_all(doctype, *, run=True, **kwargs):
+            if run:
+                return get_all(doctype, **kwargs)
+            return SimpleNamespace(for_update=lambda: SimpleNamespace(
+                run=lambda **options: get_all(doctype, **kwargs),
+            ))
+
+        db = SimpleNamespace(get_all=db_get_all)
         db.has_column = lambda dt_name, col: True
         db.table_exists = lambda dt_name: dt_name in {
             "POS Privilege Rule",
@@ -695,6 +705,9 @@ class FloorHarness:
 
         def sql(query, params=(), as_dict=False, **kwargs):
             if "tabURY User" in query:
+                if "b.name AS branch" in query:
+                    (user,) = params
+                    return [{"branch": r["parent"]} for r in h.branch_users if r["user"] == user]
                 branch, user = params
                 return [{"room": r["room"]} for r in h.branch_users if r["parent"] == branch and r["user"] == user]
             if "tabPOS Opening Entry" in query:
@@ -853,10 +866,10 @@ class TestFloorPrivilegedActions(unittest.TestCase):
         self.availability.apply_count_delta = MagicMock()
 
         self.reservation_api = _load_module("ury.ury.api.table_reservation", "ury/api/table_reservation.py")
-        self.reservation_api.check_table_reservation = lambda tbl: None
+        self.reservation_api.check_table_reservation = lambda tbl, *, for_update=False: None
         self.reservation_api.validate_seated_reservation_transfer = MagicMock()
         self.reservation_api.transfer_seated_reservation = MagicMock()
-        self.reservation_api.open_checks_on = lambda tables: []
+        self.reservation_api.open_checks_on = lambda tables, *, for_update=False: []
         self.reservation_api._bound_check_or_split_is_open = lambda inv: False
 
         self.reservation_dt = _load_module(
