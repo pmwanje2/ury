@@ -113,7 +113,7 @@ describe('VoidItemDialog (sent item void & waste)', () => {
   });
 
   it('includes proportionally scaled linked child modifier values in VoidItemDialog display and ManagerApproval amount', async () => {
-    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+    const getSpy = vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
       if (method === 'ury.ury_pos.override.list_reasons') {
         return {
           message: [
@@ -130,7 +130,7 @@ describe('VoidItemDialog (sent item void & waste)', () => {
       return { message: [] };
     });
 
-    const postSpy = vi.spyOn(call, 'post').mockImplementation(async (method: string, payload?: unknown) => {
+    vi.spyOn(call, 'post').mockImplementation(async (method: string, payload?: unknown) => {
       const body = (payload || {}) as Record<string, unknown>;
       if (method === 'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty') {
         if (!body.approval_token) {
@@ -198,14 +198,14 @@ describe('VoidItemDialog (sent item void & waste)', () => {
     fireEvent.click(screen.getByRole('button', { name: /confirm void/i }));
 
     await screen.findByText(/Alice Manager/);
+    const approversCall = getSpy.mock.calls.find((c) => c[0] === 'ury.ury_pos.override.list_approvers');
+    expect((approversCall?.[1] as Record<string, unknown>)?.amount).toBe(49000);
     for (const digit of ['1', '2', '3', '4']) {
       fireEvent.click(screen.getByRole('button', { name: digit }));
     }
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
     await waitFor(() => expect(onCompleted).toHaveBeenCalledTimes(1));
-    const authCall = postSpy.mock.calls.find((c) => c[0] === 'ury.ury_pos.override.authorise');
-    expect((authCall?.[1] as Record<string, unknown>)?.amount).toBe(49000);
   });
 });
 
