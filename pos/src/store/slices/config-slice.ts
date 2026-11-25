@@ -2,7 +2,13 @@ import { getSessionUser, ownedSessionKey } from '@ury/core';
 import { StateCreator } from 'zustand';
 import { bindOfflineUser } from '../../pwa/register-offline';
 import { AuthSlice } from './auth-slice';
-import { getCombinedPosProfile, PosProfileCombined } from '../../lib/pos-profile-api';
+import {
+  getCombinedPosProfile,
+  getPosProfileOrSelection,
+  isOutletSelectionRequiredError,
+  PosProfileCombined,
+} from '../../lib/pos-profile-api';
+import type { AvailableOutlet } from '../../lib/outlet-api';
 
 interface RolePermission {
   name: string;
@@ -25,6 +31,8 @@ export interface ConfigState {
   error: string | null;
   hasAccess: boolean;
   posProfile: PosProfileCombined | null;
+  requiresOutletSelection: boolean;
+  availableOutlets: AvailableOutlet[];
 }
 
 /**
@@ -84,6 +92,8 @@ const initialState: ConfigState = {
   error: null,
   hasAccess: false,
   posProfile: null,
+  requiresOutletSelection: false,
+  availableOutlets: [],
 };
 
 export const createConfigSlice: StateCreator<
@@ -107,7 +117,11 @@ export const createConfigSlice: StateCreator<
       if (cached && !forceRefresh) {
         const profile = JSON.parse(cached);
         if (profile && profile.country && profile.enable_payment_without_printing !== undefined) {
-          set({ posProfile: profile });
+          set({
+            posProfile: profile,
+            requiresOutletSelection: false,
+            availableOutlets: [],
+          });
           // Allowed to enter the app: any role this POS Profile references
           // anywhere (billing, transfer, table-order-restricted) — see
           // deriveAllowedRoles for why this isn't billing-role-only.
@@ -118,19 +132,51 @@ export const createConfigSlice: StateCreator<
         }
       }
 
-      // If not in cache or forcing refresh, fetch from API
-      const profile = await getCombinedPosProfile();
+      // If not in cache or forcing refresh, fetch from API without calling getPosProfileFull(undefined)
+      const bootstrap = typeof getPosProfileOrSelection === 'function'
+        ? await getPosProfileOrSelection()
+        : { requiresOutletSelection: false, availableOutlets: [], profile: await getCombinedPosProfile() };
 
-      // Cache the profile
       if (owner !== getSessionUser()) return;
+
+      if (bootstrap.requiresOutletSelection || !bootstrap.profile) {
+        if (key) sessionStorage.removeItem(key);
+        set({
+          posProfile: null,
+          requiresOutletSelection: true,
+          availableOutlets: bootstrap.availableOutlets,
+          error: null,
+          isLoading: false,
+        });
+        return;
+      }
+
+      const profile = bootstrap.profile;
+      // Cache the profile
       if (key) sessionStorage.setItem(key, JSON.stringify(profile));
-      set({ posProfile: profile });
+      set({
+        posProfile: profile,
+        requiresOutletSelection: false,
+        availableOutlets: [],
+      });
 
       // Allowed to enter the app: see deriveAllowedRoles.
       const allowedRoles = deriveAllowedRoles(profile);
       get().setAllowedRoles(allowedRoles);
       set({ isLoading: false });
     } catch (error) {
+      if (isOutletSelectionRequiredError(error)) {
+        const key = ownedSessionKey('posProfile');
+        if (key) sessionStorage.removeItem(key);
+        set({
+          posProfile: null,
+          requiresOutletSelection: true,
+          availableOutlets: error.availableOutlets,
+          error: null,
+          isLoading: false,
+        });
+        return;
+      }
       set({ 
         error: (error as Error).message,
         isLoading: false,

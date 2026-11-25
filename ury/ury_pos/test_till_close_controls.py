@@ -10,6 +10,7 @@ and SAP POS Store Manager / Customer Checkout parity.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import unittest
 from datetime import datetime
@@ -1284,6 +1285,104 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
         )
         self.assertEqual(res["docstatus"], 1)
         self.assertEqual(self.cs.closings[res["name"]].custom_over_short_approver, "admin_mgr@example.com")
+
+
+class TestTipDeclarationJsonStringParsing(LoadedSlice2):
+    """[R3 P1] Form-encoded / JSON-string `tip_declarations` must persist on controlled & force close."""
+
+    def setUp(self):
+        super().setUp()
+        self.frappe.parse_json = json.loads
+
+    def test_parse_tip_declarations_parses_json_string_and_does_not_swallow_unexpected_errors(self):
+        payload = json.dumps(
+            [
+                {
+                    "user": "waiter@example.com",
+                    "employee": "HR-EMP-0001",
+                    "currency": "UGX",
+                    "charged_tips_collected": 5000,
+                    "tips_paid_from_till": 0,
+                    "net_tips_payable": 5000,
+                    "declared_cash_tips": 15000,
+                    "remarks": "Form-encoded shift tips",
+                }
+            ]
+        )
+        rows = self.tc._parse_tip_declarations(payload)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["user"], "waiter@example.com")
+        self.assertEqual(rows[0]["employee"], "HR-EMP-0001")
+        self.assertEqual(rows[0]["declared_cash_tips"], 15000)
+        self.assertEqual(rows[0]["remarks"], "Form-encoded shift tips")
+
+        # Malformed JSON returns [] safely via (ValueError, TypeError)
+        self.assertEqual(self.tc._parse_tip_declarations("{not-valid-json"), [])
+
+        # Unexpected runtime/name errors MUST NOT be silently swallowed into []
+        def _boom(_val):
+            raise NameError("simulated unexpected error")
+
+        self.frappe.parse_json = _boom
+        with self.assertRaises(NameError):
+            self.tc._parse_tip_declarations("[]")
+
+    def test_close_till_with_controls_persists_json_string_tip_declarations(self):
+        self.store.current_user = "cashier@example.com"
+        res = self.tc.close_till_with_controls(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=json.dumps([{"mode_of_payment": "Cash", "closing_amount": 150000}]),
+            tip_declarations=json.dumps(
+                [
+                    {
+                        "user": "waiter@example.com",
+                        "currency": "UGX",
+                        "charged_tips_collected": 0,
+                        "tips_paid_from_till": 0,
+                        "net_tips_payable": 0,
+                        "declared_cash_tips": 15000,
+                        "remarks": "Form-encoded close tips",
+                    }
+                ]
+            ),
+        )
+        self.assertEqual(res["docstatus"], 1)
+        closing = self.cs.closings[res["name"]]
+        tip_rows = closing.get("custom_tip_declarations") or []
+        self.assertEqual(len(tip_rows), 1)
+        self.assertEqual(tip_rows[0]["user"], "waiter@example.com")
+        self.assertEqual(float(tip_rows[0]["declared_cash_tips"]), 15000.0)
+        self.assertEqual(tip_rows[0]["remarks"], "Form-encoded close tips")
+
+    def test_force_close_till_persists_json_string_tip_declarations(self):
+        self.store.current_user = "manager@example.com"
+        res = self.tc.force_close_till(
+            pos_profile="Main Till",
+            pos_opening_entry="OPEN-MAIN-1",
+            counted_payments=json.dumps([{"mode_of_payment": "Cash", "closing_amount": 150000}]),
+            reason="Manager force close with JSON-string tips",
+            tip_declarations=json.dumps(
+                [
+                    {
+                        "user": "waiter@example.com",
+                        "currency": "UGX",
+                        "charged_tips_collected": 0,
+                        "tips_paid_from_till": 0,
+                        "net_tips_payable": 0,
+                        "declared_cash_tips": 22000,
+                        "remarks": "Force close tips",
+                    }
+                ]
+            ),
+        )
+        self.assertEqual(res["docstatus"], 1)
+        closing = self.cs.closings[res["name"]]
+        tip_rows = closing.get("custom_tip_declarations") or []
+        self.assertEqual(len(tip_rows), 1)
+        self.assertEqual(tip_rows[0]["user"], "waiter@example.com")
+        self.assertEqual(float(tip_rows[0]["declared_cash_tips"]), 22000.0)
+        self.assertEqual(tip_rows[0]["remarks"], "Force close tips")
 
 
 if __name__ == "__main__":

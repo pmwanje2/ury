@@ -51,12 +51,22 @@ vi.mock("../store/root-store", () => ({
   },
 }));
 
+const mockPosProfile = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }));
+
 vi.mock("../store/pos-store", () => ({
-  usePOSStore: () => ({
-    searchQuery: "",
-    setSearchQuery: vi.fn(),
-    setShowVoluntaryClosing: vi.fn(),
-  }),
+  usePOSStore: (selector?: (state: any) => unknown) => {
+    const state = {
+      searchQuery: "",
+      setSearchQuery: vi.fn(),
+      setShowVoluntaryClosing: vi.fn(),
+      posProfile: mockPosProfile.value,
+      availableOutlets: [],
+      requiresOutletSelection: false,
+      activeOrders: [],
+      switchOutlet: vi.fn(),
+    };
+    return typeof selector === "function" ? selector(state) : state;
+  },
 }));
 
 vi.mock("@ury/ui", async () => {
@@ -79,6 +89,7 @@ describe("Header", () => {
     localStorage.clear();
     sessionStorage.clear();
     vi.clearAllMocks();
+    mockPosProfile.value = null;
     mockIsPrintStatusDisabled.mockReturnValue(false);
   });
 
@@ -207,6 +218,37 @@ describe("Header", () => {
 
     expect(screen.getAllByRole("button", { name: /Test User/i })).toHaveLength(1);
     expect(screen.getAllByTestId("printer-status-button")).toHaveLength(1);
+  });
+
+  it("renders G44 business date badge and Shift X/Z Report action when installed, hides when absent", async () => {
+    // Absent: neither badge nor Shift Report menu item appears
+    mockPosProfile.value = { name: "Main Grill POS", currency: "UGX" };
+    const { rerender } = render(
+      <BrowserRouter>
+        <Header />
+      </BrowserRouter>
+    );
+    expect(screen.queryByTestId("business-date-badge")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Test User/i }));
+    expect(screen.queryByText("header.shift_report")).toBeNull();
+
+    // Present (siteops#8609 installed): badge displays business date & menu shows Shift Report
+    mockPosProfile.value = {
+      name: "Main Grill POS",
+      currency: "UGX",
+      active_business_date: "2026-11-24",
+      active_opening_entry: "POS-OPE-001",
+      shift_report_available: true,
+    };
+    rerender(
+      <BrowserRouter>
+        <Header />
+      </BrowserRouter>
+    );
+    const badge = screen.getByTestId("business-date-badge");
+    expect(badge).toBeInTheDocument();
+    expect(badge.textContent).toContain("2026-11-24");
+    expect(screen.getByText("header.shift_report")).toBeInTheDocument();
   });
 });
 

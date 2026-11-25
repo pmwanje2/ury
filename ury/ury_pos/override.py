@@ -583,23 +583,32 @@ def _is_outlet_member(user: str, profile) -> bool:
 
 
 def _is_clocked_in_if_attendance_active(user: str, company: str) -> bool:
-    """Simphony Opt 182: only enforced when Employee Checkin attendance data exists."""
-    if not frappe.db.table_exists("Employee Checkin"):
-        return True
-    employee = frappe.db.get_value(
-        "Employee", {"user_id": user, "company": company, "status": "Active"}, "name"
-    )
-    if not employee:
-        return True
-    if not frappe.db.exists("Employee Checkin", {"employee": employee}):
-        return True
-    latest = frappe.db.get_value(
-        "Employee Checkin",
-        {"employee": employee},
-        "log_type",
-        order_by="time desc",
-    )
-    return str(latest or "").upper() == "IN"
+    """Simphony Opt 182: delegate to `ury_pos.timeclock.is_user_clocked_in` when available."""
+    try:
+        from ury.ury_pos import timeclock
+
+        return timeclock.is_user_clocked_in(
+            user,
+            company=company,
+            allow_if_no_history_without_hrms=True,
+        )
+    except Exception:
+        if not frappe.db.table_exists("Employee Checkin"):
+            return True
+        employee = frappe.db.get_value(
+            "Employee", {"user_id": user, "company": company, "status": "Active"}, "name"
+        )
+        if not employee:
+            return True
+        if not frappe.db.exists("Employee Checkin", {"employee": employee}):
+            return True
+        latest = frappe.db.get_value(
+            "Employee Checkin",
+            {"employee": employee},
+            "log_type",
+            order_by="time desc",
+        )
+        return str(latest or "").upper() == "IN"
 
 
 def _effective_rules_for_roles(company: str, pos_profile: str, privilege: str, roles: set[str]) -> dict[str, Any]:

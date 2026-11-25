@@ -1,5 +1,6 @@
 import frappe
 import json
+import sys
 from frappe import _
 from datetime import date, datetime, timedelta
 from frappe.utils import cint, nestedset, validate_phone_number
@@ -26,6 +27,25 @@ def _efris_print_wait_seconds(profile):
     if raw is None or raw == "":
         return _DEFAULT_EFRIS_PRINT_WAIT_SECONDS
     return max(0, min(cint(raw), _MAX_EFRIS_PRINT_WAIT_SECONDS))
+
+
+def _permission_error_types():
+    types = []
+    exc = getattr(frappe, "PermissionError", None)
+    if isinstance(exc, type) and issubclass(exc, BaseException):
+        types.append(exc)
+    real_frappe = sys.modules.get("frappe")
+    real_exc = getattr(real_frappe, "PermissionError", None) if real_frappe is not None else None
+    if isinstance(real_exc, type) and issubclass(real_exc, BaseException) and real_exc not in types:
+        types.append(real_exc)
+    return tuple(types)
+
+
+def _safe_flt_value(value, default=0.0):
+    try:
+        return frappe.utils.flt(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _safe_int_value(value, default=0):
@@ -222,12 +242,23 @@ def resolve_restaurant_menu(branch, room=None, order_type=None, cashier=False):
 def getRestaurantMenu(pos_profile, room=None, order_type=None):
     user_role = frappe.get_roles()
 
+    pos_profile_name = pos_profile if isinstance(pos_profile, str) else getattr(pos_profile, "name", "")
+    try:
+        from ury.ury_pos import outlet_context
+
+        if pos_profile_name and outlet_context.get_authorized_outlets(frappe.session.user):
+            outlet_context.assert_outlet_access(pos_profile_name, user=frappe.session.user)
+    except _permission_error_types():
+        raise
+    except Exception:
+        pass
+
     pos_profile = frappe.get_doc("POS Profile", pos_profile)
 
     cashier = any(
         role.role in user_role for role in pos_profile.role_allowed_for_billing
     )
-    branch_name = getBranch()
+    branch_name = getattr(pos_profile, "branch", None) or getBranch(pos_profile=pos_profile.name)
 
     return resolve_restaurant_menu(branch_name, room, order_type, cashier)
 
@@ -236,13 +267,31 @@ def getMenuCourses():
     courses = frappe.get_all("URY Menu Course", fields=["name", "icon"])
     return [{"name": d.name, "label": _(d.name), "icon": d.icon} for d in courses]
 
-def _user_branch_assignments():
+def _user_branch_assignments(pos_profile=None):
+    selected_branch = None
+    try:
+        from ury.ury_pos import outlet_context
+
+        selected_branch = outlet_context.resolve_session_selected_branch(
+            pos_profile=pos_profile, user=frappe.session.user
+        )
+    except _permission_error_types():
+        raise
+    except Exception:
+        selected_branch = None
+
     rows = frappe.db.sql("""
         SELECT b.name AS branch, a.room
         FROM `tabURY User` AS a
         INNER JOIN `tabBranch` AS b ON a.parent = b.name
         WHERE a.user = %s AND a.parenttype = 'Branch'
     """, frappe.session.user, as_dict=True)
+    if selected_branch:
+        matched = [row for row in (rows or []) if row.get("branch") == selected_branch]
+        if matched:
+            return matched
+        return [frappe._dict(branch=selected_branch, room=None)]
+
     if not rows:
         frappe.throw("User is not Associated with any Branch.Please refresh Page")
 
@@ -264,8 +313,8 @@ def _user_branch_assignments():
 
 
 @frappe.whitelist()
-def getBranch():
-    return _user_branch_assignments()[0].get("branch")
+def getBranch(pos_profile=None):
+    return _user_branch_assignments(pos_profile=pos_profile)[0].get("branch")
 
 @frappe.whitelist()
 def getBranchRoom():
@@ -304,10 +353,15 @@ def getRoom():
 
 @frappe.whitelist()
 def getModeOfPayment():
+    posDetails = getPosProfile()
+    if (
+        not isinstance(posDetails, dict)
+        or posDetails.get("requires_outlet_selection")
+        or not posDetails.get("pos_profile")
+    ):
+        return []
     from ury.ury_pos.fx import currency_precision, get_mode_payment_config, resolve_pos_exchange_rate
     from ury.ury_pos.offline_tenders import profile_offline_payment_modes
-
-    posDetails = getPosProfile()
     posProfile = posDetails["pos_profile"]
     posProfiles = frappe.get_doc("POS Profile", posProfile)
     company = posProfiles.company
@@ -574,7 +628,7 @@ def get_split_group(invoice):
         if inv.name != invoice:
             try:
                 check_split_target_access(frappe.get_doc("POS Invoice", inv.name), "read")
-            except frappe.PermissionError:
+            except _permission_error_types():
                 frappe.clear_last_message()
                 continue
         valid_invoices.append(inv)
@@ -943,15 +997,42 @@ def getCashier(room):
     
 
 @frappe.whitelist()
-def getPosProfile():
-    branchName = getBranch()
+def getPosProfile(pos_profile=None):
+    authorized_outlets = []
+    resolved_outlet = None
+    try:
+        from ury.ury_pos import outlet_context
+
+        authorized_outlets = outlet_context.get_authorized_outlets(frappe.session.user)
+        if authorized_outlets or pos_profile:
+            resolved_outlet = outlet_context.resolve_active_pos_profile(
+                pos_profile=pos_profile,
+                user=frappe.session.user,
+                allow_ambiguous=True,
+            )
+            if resolved_outlet is None and len(authorized_outlets) > 1:
+                return {
+                    "requires_outlet_selection": True,
+                    "available_outlets": authorized_outlets,
+                }
+    except _permission_error_types():
+        raise
+    except Exception:
+        authorized_outlets = []
+        resolved_outlet = None
+
+    if resolved_outlet:
+        posProfile = resolved_outlet["pos_profile"]
+        branchName = resolved_outlet["branch"]
+    else:
+        branchName = getBranch()
+        posProfile = frappe.db.exists("POS Profile", {"branch": branchName})
     waiter = frappe.session.user
     bill_present = False
     qz_host = None
     printer = None
     cashier = None
     owner = None
-    posProfile = frappe.db.exists("POS Profile", {"branch": branchName})
     pos_profiles = frappe.get_doc("POS Profile", posProfile)
     global_defaults = frappe.get_single('Global Defaults')
     disable_rounded_total = global_defaults.disable_rounded_total
@@ -1048,9 +1129,26 @@ def getPosProfile():
     from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
 
     offline_payment_modes = profile_offline_payment_modes(
-        pos_profiles, room_charge_modes, _frappe=frappe
+        pos_profiles, room_charge_modes=room_charge_modes, _frappe=frappe
     )
     till_offline_limit = offline_tender_limit(pos_profiles)
+
+    try:
+        from ury.ury_pos import outlet_context
+
+        business_date_meta = outlet_context.get_business_date_and_report_meta(
+            pos_profile_name, user=frappe.session.user
+        )
+    except Exception:
+        business_date_meta = {
+            "active_opening_entry": None,
+            "active_business_date": None,
+            "shift_report_available": False,
+            "shift_z_print_format_available": False,
+        }
+
+    raw_block_open = pos_profiles.get("custom_block_clock_out_with_open_work")
+    block_clock_out_with_open_work = 1 if raw_block_open in (None, "") else cint(raw_block_open)
 
     invoice_details = {
         "pos_profile": pos_profile_name,
@@ -1089,7 +1187,7 @@ def getPosProfile():
                 "overtender_rule": frappe.db.get_value(
                     "Mode of Payment", payment.mode_of_payment, "custom_overtender_rule"
                 ) or "Refuse",
-                "halo_max_amount": frappe.utils.flt(
+                "halo_max_amount": _safe_flt_value(
                     frappe.db.get_value("Mode of Payment", payment.mode_of_payment, "custom_halo_max_amount")
                 ),
             }
@@ -1098,6 +1196,12 @@ def getPosProfile():
         "enable_cash_movements": cint(pos_profiles.get("custom_enable_cash_movements")),
         "require_over_short_reason": cint(pos_profiles.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_reason_tolerance")),
+        "require_clock_in_to_order": cint(pos_profiles.get("custom_require_clock_in_to_order")),
+        "block_clock_out_with_open_work": block_clock_out_with_open_work,
+        "require_tip_declaration": cint(pos_profiles.get("custom_require_tip_declaration")),
+        "requires_outlet_selection": False,
+        "available_outlets_count": len(authorized_outlets) if authorized_outlets else 1,
+        **business_date_meta,
         "over_short_tolerance": frappe.utils.flt(pos_profiles.get("custom_over_short_tolerance")),
         "cash_pull_threshold": frappe.utils.flt(pos_profiles.get("custom_cash_pull_threshold")),
         "paid_out_approval_threshold": (
@@ -1168,11 +1272,30 @@ def getPosProfileFull(pos_profile):
     `/api/resource/POS Profile/<name>` REST read - this whitelisted method
     reads server-side instead, scoped to the caller's own branch.
     """
-    branch_name = getBranch()
+    try:
+        branch_name = getBranch(pos_profile=pos_profile)
+    except TypeError:
+        branch_name = getBranch()
     profile = frappe.get_doc("POS Profile", pos_profile)
     if profile.branch != branch_name:
         frappe.throw(frappe._("Not permitted to view this POS Profile"), frappe.PermissionError)
 
+    try:
+        from ury.ury_pos import outlet_context
+
+        business_date_meta = outlet_context.get_business_date_and_report_meta(
+            profile.name, user=frappe.session.user
+        )
+    except Exception:
+        business_date_meta = {
+            "active_opening_entry": None,
+            "active_business_date": None,
+            "shift_report_available": False,
+            "shift_z_print_format_available": False,
+        }
+
+    raw_block_open = profile.get("custom_block_clock_out_with_open_work")
+    block_clock_out_with_open_work = 1 if raw_block_open in (None, "") else cint(raw_block_open)
     from ury.ury_pos.offline_tenders import offline_tender_limit, profile_offline_payment_modes
 
     return {
@@ -1251,6 +1374,10 @@ def getPosProfileFull(pos_profile):
         "custom_void_reasons": profile.get("custom_void_reasons"),
         "require_over_short_reason": cint(profile.get("custom_require_over_short_reason")),
         "over_short_reason_tolerance": frappe.utils.flt(profile.get("custom_over_short_reason_tolerance")),
+        "require_clock_in_to_order": cint(profile.get("custom_require_clock_in_to_order")),
+        "block_clock_out_with_open_work": block_clock_out_with_open_work,
+        "require_tip_declaration": cint(profile.get("custom_require_tip_declaration")),
+        **business_date_meta,
         "efris_print_wait_seconds": _efris_print_wait_seconds(profile),
         **_drawer_kick_profile_fields(profile),
         **get_default_customer_config(profile),
@@ -1946,6 +2073,17 @@ def create_pos_opening_entry(pos_profile: str, company: str = None, balance_deta
 
     if not frappe.has_permission("POS Profile", "read", doc=pos_profile_doc):
         frappe.throw(_("Not permitted to use this POS Profile."), frappe.PermissionError)
+
+    # G43: prevent opening a second till on another outlet while the user holds an open shift elsewhere.
+    from ury.ury_pos import outlet_context
+
+    outlet_context.assert_no_conflicting_open_till(pos_profile, user=frappe.session.user)
+
+    # G36: optional clock-in gate before opening a shift.
+    if cint(pos_profile_doc.get("custom_require_clock_in_to_order")) == 1:
+        from ury.ury_pos import timeclock
+
+        timeclock.enforce_clock_in_for_profile(pos_profile_doc, user=frappe.session.user)
 
     # U24: derive company from the resolved POS Profile the same way
     # branch/restaurant already are, rather than trusting a caller-supplied
@@ -2955,6 +3093,14 @@ def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=
                 frappe.throw(_("Only bills of the same order type can be merged."))
 
         pos_profile_name = getattr(primary_doc, "pos_profile", None)
+        if _is_valid_str(pos_profile_name):
+            raw_clock_in_req = frappe.db.get_value(
+                "POS Profile", pos_profile_name, "custom_require_clock_in_to_order"
+            )
+            if isinstance(raw_clock_in_req, (int, float, str)) and cint(raw_clock_in_req) == 1:
+                from ury.ury_pos import timeclock
+
+                timeclock.enforce_clock_in_for_profile_name(pos_profile_name, user=frappe.session.user)
         raw_company = getattr(primary_doc, "company", None)
         company = raw_company if _is_valid_str(raw_company) else None
         policy_active = is_company_policy_active(company)
@@ -3015,7 +3161,7 @@ def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=
         }
 
 
-    except frappe.PermissionError:
+    except _permission_error_types():
 
         frappe.db.rollback()
 
@@ -3027,7 +3173,17 @@ def merge_bills(primary_invoice, secondary_invoice, approval_token=None, reason=
         frappe.db.rollback()
 
         msg = str(e)
-        if any(code in msg for code in ("POS-AUTH-", "POS-REASON-", "POS-OFFLINE-", "EFRIS_FISCALISED")):
+        if any(
+            code in msg
+            for code in (
+                "POS-AUTH-",
+                "POS-REASON-",
+                "POS-OFFLINE-",
+                "POS-TIMECARD-",
+                "POS-OUTLET-",
+                "EFRIS_FISCALISED",
+            )
+        ):
             raise
 
         frappe.log_error(

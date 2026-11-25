@@ -95,8 +95,15 @@ def _extract_dict_literal_from_function(py_path: Path, func_name: str) -> dict[s
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
             for stmt in node.body:
-                if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Dict):
-                    return ast.literal_eval(stmt.value)
+                if isinstance(stmt, ast.Return):
+                    if isinstance(stmt.value, ast.Dict):
+                        return ast.literal_eval(stmt.value)
+                    if (
+                        isinstance(stmt.value, ast.Call)
+                        and stmt.value.args
+                        and isinstance(stmt.value.args[0], ast.Dict)
+                    ):
+                        return ast.literal_eval(stmt.value.args[0])
     raise AssertionError(f"Could not extract dict literal from {py_path}:{func_name}")
 
 
@@ -133,11 +140,18 @@ def load_ury_pos_invoice_sources() -> dict[str, dict[str, dict]]:
             APP_ROOT / "patches" / "v3_46" / "add_pos_fx_ref_offline_fields.py", "CUSTOM_FIELDS"
         ).get("POS Invoice", [])
     }
+    pr10_pos = {
+        row["fieldname"]: row
+        for row in _extract_dict_literal_from_function(
+            APP_ROOT / "ury_pos" / "timeclock_tips_fields.py", "get_timeclock_tips_custom_fields"
+        ).get("POS Invoice", [])
+    }
     return {
         "fixtures/custom_field.json": fixture_pos,
         "setup_customizations.py": setup_pos,
         "ury_pos/privileged_fields.py": priv_pos,
         "patches/v3_46/add_pos_fx_ref_offline_fields.py": pr6_pos,
+        "ury_pos/timeclock_tips_fields.py": pr10_pos,
     }
 
 

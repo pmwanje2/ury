@@ -58,7 +58,7 @@ page_js = {"point-of-sale": ["public/js/pos_extend.js"]}
 
 # include js in doctype views
 doctype_js = {
-    "POS Closing Entry": "ury/public/js/pos_closing_entry.js",
+    "POS Closing Entry": "public/js/pos_closing_entry.js",
     "Production Plan": [
         "public/js/production_plan_cancel_guard.js",
         "public/js/production_plan_prepare.js",
@@ -878,6 +878,12 @@ fixtures = [
                     "Mode of Payment Account-custom_fx_vault_account",
                     "POS Profile-custom_override_max_attempts",
                     "POS Profile-custom_override_lock_minutes",
+                    "POS Profile-custom_require_clock_in_to_order",
+                    "POS Profile-custom_block_clock_out_with_open_work",
+                    "POS Profile-custom_require_tip_declaration",
+                    "POS Profile-custom_tips_salary_component",
+                    "POS Closing Entry-custom_tip_declarations_section",
+                    "POS Closing Entry-custom_tip_declarations",
                     "POS Profile-custom_allow_fx_rate_override",
                     "POS Profile-custom_max_fx_variance_pct",
                     "POS Profile-custom_fx_clearing_loss_account",

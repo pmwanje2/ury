@@ -1,0 +1,107 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-11-24 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "employee",
+  "currency",
+  "charged_tips_collected",
+  "tips_paid_from_till",
+  "net_tips_payable",
+  "declared_cash_tips",
+  "remarks",
+  "custom_additional_salary_ref"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Server",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "charged_tips_collected",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Charged Tips Collected",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "tips_paid_from_till",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Tips Paid from Till",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "net_tips_payable",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Net Tips Payable",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Direct cash tips received by the server at tables. Recorded for compliance and payroll reporting only; does not affect cash drawer expected balance or Over/Short variance.",
+   "fieldname": "declared_cash_tips",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Declared Cash Tips",
+   "options": "currency"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Data",
+   "label": "Remarks"
+  },
+  {
+   "description": "Payroll additional salary reference created for unpaid net tips (populated only when HR payroll is installed).",
+   "fieldname": "custom_additional_salary_ref",
+   "fieldtype": "Data",
+   "label": "Additional Salary Reference",
+   "no_copy": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-24 15:28:00.000000",
+ "modified_by": "Administrator",
+ "module": "URY",
+ "name": "POS Tip Declaration",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

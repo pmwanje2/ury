@@ -4,12 +4,31 @@ import { canCaptureOfflineOrder, OUTBOX_CHANGED, type OfflineEntry, type Offline
 
 export function useOutbox(profile?: OfflineProfile | null, user?: OfflineUser | null, replay = false) {
   const queue = profile && user && profile.ury_offline_capture ? cashierOutbox(profile, user) : null;
-  const [state, setState] = useState({ rows: [] as OfflineEntry[], replaying: false, offline: typeof navigator !== 'undefined' && navigator.onLine === false });
+  const provisional = Boolean((user as { provisional?: boolean } | null | undefined)?.provisional);
+  const provisionalOffline = Boolean(queue && !queue.sessionBlocked && provisional && !queue.verified);
+  const computeOffline = () =>
+    !queue?.sessionBlocked &&
+    ((typeof navigator !== 'undefined' && navigator.onLine === false) ||
+      queue?.reachable === false ||
+      provisionalOffline);
+  const [state, setState] = useState(() => ({
+    rows: [] as OfflineEntry[],
+    replaying: false,
+    offline: computeOffline(),
+  }));
   useEffect(() => {
     let disposed = false;
     const refresh = async () => {
       const rows = queue ? await queue.list() : [];
-      if (!disposed) setState({ rows, replaying: !!queue?.replaying, offline: !queue?.sessionBlocked && (navigator.onLine === false || queue?.reachable === false) });
+      if (!disposed) {
+        setState({
+          rows,
+          replaying: !!queue?.replaying,
+          offline:
+            !queue?.sessionBlocked &&
+            (navigator.onLine === false || queue?.reachable === false || (provisional && !queue?.verified)),
+        });
+      }
     };
     const wake = () => { void refresh(); if (replay && navigator.onLine !== false && canCaptureOfflineOrder(profile, user)) void queue?.replay(); };
     const update = () => { void refresh(); };
@@ -18,6 +37,11 @@ export function useOutbox(profile?: OfflineProfile | null, user?: OfflineUser | 
     const timer = replay ? window.setInterval(wake, 5000) : undefined;
     if (replay) wake(); else update();
     return () => { disposed = true; window.removeEventListener(OUTBOX_CHANGED, update); window.removeEventListener('offline', update); window.removeEventListener('online', wake); if (timer) window.clearInterval(timer); };
-  }, [queue, profile, user, replay]);
-  return { ...state, rows: queue ? state.rows.filter((row) => row.owner === user?.name && row.profile === profile?.name) : [], queue };
+  }, [queue, profile, user, replay, provisional]);
+  return {
+    ...state,
+    offline: !queue?.sessionBlocked && (state.offline || provisionalOffline),
+    rows: queue ? state.rows.filter((row) => row.owner === user?.name && row.profile === profile?.name) : [],
+    queue,
+  };
 }
