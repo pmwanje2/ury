@@ -783,8 +783,14 @@ def apply_complimentary(
         doc.custom_comp_approver = auth["approver"]
         doc.remarks = f"{comp_type}: {full_reason}"
 
-    sync_service_charge(doc, profile)
-    doc.calculate_taxes_and_totals()
+    if doc.get("custom_split_balance"):
+        from ury.ury.doctype.ury_order.ury_order import _split_discount_pricing
+
+        with _split_discount_pricing(doc, None):
+            sync_service_charge(doc, profile)
+    else:
+        sync_service_charge(doc, profile)
+        doc.calculate_taxes_and_totals()
     _save_verified(doc)
 
     return {

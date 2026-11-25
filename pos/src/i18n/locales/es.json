@@ -235,6 +235,9 @@
     }
   },
   "pos_closing": {
+    "job_summary": "Tiempo trabajado y propinas cobradas por código de puesto",
+    "labor_minutes": "Minutos trabajados",
+    "job_code_unassigned": "Sin asignar",
     "title": "Cerrar POS",
     "description": "Revisa las ventas de tu sesión e ingresa los montos reales de cierre.",
     "loading": "Cargando datos de cierre...",
@@ -803,6 +806,7 @@
     "acknowledged": "Confirmado"
   },
   "floor_pin": {
+    "enter_staff_pin": "Introduce tu PIN de empleado",
     "offline_notice": "Sin conexión. Vuelve a iniciar sesión antes de tomar pedidos.",
     "title": "Acceso del personal",
     "pin_prompt": "Introduce tu PIN de 4 dígitos",
@@ -833,6 +837,7 @@
     "login_disabled": "El acceso con PIN de sala está desactivado en este perfil POS. Actívalo primero en el perfil POS."
   },
   "staff_pins": {
+    "policy_conflict": "Antes de emitir el PIN, unifica la longitud del PIN de sala en los perfiles de punto de venta que puede usar este empleado.",
     "title": "PIN del personal",
     "description": "Asigna un PIN de sala a un miembro del personal autorizado.",
     "shown_once": "Este PIN solo se muestra una vez. Entrégalo al empleado en privado.",
@@ -1122,6 +1127,8 @@
     "sc_summary_toggle": "Ver desglose"
   },
   "timeclock": {
+    "job_code": "Código de puesto",
+    "select_job_code": "Selecciona un código de puesto",
     "clock_in": "Marcar entrada",
     "clock_out_pill": "Entrada {{time}} · Salida",
     "clock_in_title": "Marcar entrada",

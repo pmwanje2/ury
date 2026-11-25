@@ -22,6 +22,7 @@ TAX_AMOUNTS = (
 _SERVER_BALANCE = object()
 _DISCOUNT_REPRICE = object()
 _PREVIOUS_TAX = {"On Previous Row Amount": "amount", "On Previous Row Total": "total"}
+_ITEM_RATE_CHARGES = {"On Net Total", "On Item Quantity", *_PREVIOUS_TAX}
 _TAX_PRICING_FIELDS = (
     "charge_type", "rate", "row_id", "included_in_print_rate", "included_in_paid_amount", "dont_recompute_tax",
 )
@@ -227,7 +228,7 @@ def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_
                 moved_units = sign * sum(_units(detail.get(detail_key), places) for detail in child_details)
                 left[key], right[key] = _amount(total - moved_units, places), _amount(moved_units, places)
     # Keep an explicit empty scope when the last taxable item moves away.
-    if rule.get("charge_type") == "On Net Total" and details and "item_rates" not in rule:
+    if rule.get("charge_type") in _ITEM_RATE_CHARGES and details and "item_rates" not in rule:
         rule["item_rates"] = {detail["item"]: detail["rate"] for detail in details}
     source["taxes"].append({**labels, **rule, **left})
     child["taxes"].append({**labels, **rule, **right})
@@ -464,7 +465,7 @@ def _restore_tax_pricing(check, snapshot):
         native = live[index] if index < len(live) else None
         values = native.as_dict() if native and _matching_tax_account(native, saved) else {}
         rates = saved.get("item_rates", detail_rates.get(index))
-        if rule.get("charge_type") == "On Net Total" and rates is not None:
+        if rule.get("charge_type") in _ITEM_RATE_CHARGES and rates is not None:
             scopes[len(tax_rows)] = rates
         tax_rows.append({
             **values, **saved,
@@ -558,7 +559,7 @@ def combine_split_balances(checks, currency_places, base_places):
             target_index = tax_indexes[index] = taxes_by_account[identity]
             target = combined["taxes"][target_index]
             add_amounts(target, tax, TAX_AMOUNTS)
-            if rule.get("charge_type") == "On Net Total":
+            if rule.get("charge_type") in _ITEM_RATE_CHARGES:
                 rates = tax.get("item_rates", detail_rates.get(index))
                 if rates is None:
                     # Older snapshots without a breakup still belong to their original check.

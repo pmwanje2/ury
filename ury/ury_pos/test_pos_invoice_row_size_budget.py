@@ -152,6 +152,11 @@ def load_ury_pos_invoice_sources() -> dict[str, dict[str, dict]]:
         "ury_pos/privileged_fields.py": priv_pos,
         "patches/v3_46/add_pos_fx_ref_offline_fields.py": pr6_pos,
         "ury_pos/timeclock_tips_fields.py": pr10_pos,
+        "patches/v3_46/add_floor_lifecycle_fields.py": {
+            row["fieldname"]: row for row in _extract_module_constant(
+                APP_ROOT / "patches" / "v3_46" / "add_floor_lifecycle_fields.py", "SPLIT_BALANCE_FIELDS"
+            )["POS Invoice"]
+        },
     }
 
 
