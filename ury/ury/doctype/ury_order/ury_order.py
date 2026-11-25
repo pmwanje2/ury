@@ -3957,14 +3957,17 @@ def sync_order(
     if not held_only_edit:
         try:
             kot_kwargs = {"offline_printed": offline_printed}
-            if sent_void_reason_info is not None:
+            if sent_void_reason_info is not None or collision_merge:
                 import inspect
 
                 sig_params = inspect.signature(kot_execute).parameters
-                if "cancel_reason" in sig_params:
-                    kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
-                if "void_reason_code" in sig_params:
-                    kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
+                if sent_void_reason_info is not None:
+                    if "cancel_reason" in sig_params:
+                        kot_kwargs["cancel_reason"] = sent_void_reason_info["display"]
+                    if "void_reason_code" in sig_params:
+                        kot_kwargs["void_reason_code"] = sent_void_reason_info["code"]
+                if collision_merge and "ignore_permissions" in sig_params:
+                    kot_kwargs["ignore_permissions"] = True
             kot_res = kot_execute(
                 invoice.name, customer, table, current_kitchen, previous_kitchen, invoice.custom_comments,
                 **kot_kwargs,
