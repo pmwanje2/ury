@@ -208,6 +208,7 @@ interface POSState {
   isUpdatingOrder: boolean;
   orderId: string | null;
   originalSentItems: Array<{
+    invoice_item_name?: string;
     item_code: string;
     item_name: string;
     reservation_line_key: string;
@@ -1164,6 +1165,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           isUpdatingOrder: true,
           orderId: order.name,
           originalSentItems: order.items.map((item) => ({
+            invoice_item_name: item.name,
             item_code: item.item_code,
             item_name: item.item_name,
             reservation_line_key: item.reservation_line_key || '',

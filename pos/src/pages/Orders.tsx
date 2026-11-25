@@ -551,6 +551,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         order.customer,
         order.modified,
         (order.items || []).map((item: any) => ({
+          invoice_item_name: item.name,
           item_code: item.item_code,
           item_name: item.item_name,
           reservation_line_key: item.reservation_line_key || '',

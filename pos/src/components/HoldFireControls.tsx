@@ -11,7 +11,7 @@ interface HeldUpdate {
   invoice: string;
   previous_modified: string;
   modified: string;
-  items: Pick<POSInvoiceItem, 'name' | 'ury_held' | 'fire_at' | 'fire_confirmation_pending'>[];
+  items: Pick<POSInvoiceItem, 'name' | 'ury_held' | 'fire_at' | 'fire_confirmation_pending' | 'reservation_line_key'>[];
 }
 
 function applyHeldUpdate(invoice: string, expectedVersion: string | null, modified: string | null, rows: HeldUpdate['items']) {
@@ -19,6 +19,7 @@ function applyHeldUpdate(invoice: string, expectedVersion: string | null, modifi
     // Keep local edits and don't advance the version over unrelated server edits.
     if (state.orderId !== invoice || state.lastModifiedTime !== expectedVersion) return {};
     const byName = new Map(rows.map(row => [row.name, row]));
+    const byLineKey = new Map(rows.filter(row => row.reservation_line_key).map(row => [row.reservation_line_key, row]));
     return {
       activeOrders: state.activeOrders.map(item => {
         const row = item.invoiceItemName && byName.get(item.invoiceItemName);
@@ -28,6 +29,11 @@ function applyHeldUpdate(invoice: string, expectedVersion: string | null, modifi
           fireAt: row.fire_at,
           fireConfirmationPending: !!row.fire_confirmation_pending,
         } : item;
+      }),
+      originalSentItems: state.originalSentItems.map(item => {
+        const row = (item.invoice_item_name && byName.get(item.invoice_item_name))
+          || byLineKey.get(item.reservation_line_key);
+        return row ? { ...item, ury_held: row.ury_held || 0 } : item;
       }),
       lastModifiedTime: modified,
     };
@@ -115,8 +121,7 @@ function FireActions({ selection, label, disabled, fireAt, pending }: {
         applyHeldUpdate(message.name, lastModifiedTime, message.modified || null, message.items);
       }
     } catch (error) {
-      const message = parseFrappeError(error, t('hold_fire.failed')).replace(/\bURY_HOLD_DISABLED:\s*/g, '');
-      showToast.error(message);
+      showToast.error(parseFrappeError(error, t('hold_fire.failed')));
     } finally {
       pendingOrders.delete(orderId);
       setBusy(false);

@@ -101,7 +101,7 @@ class HoldFireTests(OrderingCases, TestCase):
 
     def test_hold_and_fire_default_off_refuses_hold(self):
         self.pos_profile.ury_enable_hold_fire = 0
-        with self.assertRaisesRegex(ValueError, "URY_HOLD_DISABLED"):
+        with self.assertRaisesRegex(ValueError, "HOLD-DISABLED"):
             self.sync([self.request()])
         self.invoice.save.assert_not_called()
 
@@ -191,7 +191,7 @@ class HoldFireTests(OrderingCases, TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 self.fire(**kwargs)
         self.pos_profile.ury_enable_hold_fire = 0
-        with self.assertRaisesRegex(ValueError, "URY_HOLD_DISABLED"):
+        with self.assertRaisesRegex(ValueError, "HOLD-DISABLED"):
             self.fire(line="held-1")
         self.pos_profile.ury_enable_hold_fire = 1
         self.invoice.docstatus = 1

@@ -42,6 +42,7 @@ from ury.ury_pos.discount import (
 )
 from ury.ury.api.ury_kot_generate import _execute_kot as kot_execute
 from ury.ury.api.ury_kot_generate import process_items_for_cancel_kot
+from ury.ury.api.ury_production_validation import DIRECT_RETAIL
 from ury.ury.api.ury_order_reservation_service import (
     _line_key,
     _line_ref,
@@ -701,6 +702,8 @@ def _copy_invoice_item_fields(item_row, qty):
         comment=item_row.get("comment"),
         custom_course=item_row.get("custom_course"),
         ury_held=cint(item_row.get("ury_held")),
+        fire_at=item_row.get("fire_at"),
+        fire_confirmation_pending=cint(item_row.get("fire_confirmation_pending")),
         cost_center=item_row.cost_center,
         uom=item_row.uom,
         conversion_factor=item_row.conversion_factor,
@@ -3403,7 +3406,7 @@ def _staff_held_order(invoice, *, scheduling=False):
     _enforce_order_access(invoice, require_modify=True)
     profile = frappe.get_doc("POS Profile", invoice.pos_profile)
     if not cint(getattr(profile, "ury_enable_hold_fire", 0)):
-        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this outlet."))
+        frappe.throw(coded_message("HOLD-DISABLED", _("Hold and fire is disabled for this outlet.")))
     if profile.get("branch") != invoice.branch:
         frappe.throw(_("Not permitted outside your active branch"), frappe.PermissionError)
     if invoice.docstatus != 0:
@@ -3452,7 +3455,8 @@ def _publish_held_updates(invoice, modified_before, rows):
             "previous_modified": str(modified_before),
             "modified": str(invoice.modified),
             "items": [
-                {"name": row.name, "ury_held": row.get("ury_held"), "fire_at": row.get("fire_at"),
+                {"name": row.name, "reservation_line_key": row.get("reservation_line_key"),
+                 "ury_held": row.get("ury_held"), "fire_at": row.get("fire_at"),
                  "fire_confirmation_pending": cint(row.get("fire_confirmation_pending"))}
                 for row in rows
             ],
@@ -3500,7 +3504,10 @@ def schedule_held_items(invoice, line=None, course=None, delay_minutes=None, fir
                         last_modified_time=None):
     invoice, profile = _staff_held_order(invoice, scheduling=True)
     held = _selected_held_rows(invoice, line, course)
-    if not held:
+    # Legacy callers can set an initial timer. Once one exists, only a
+    # current check version authorizes replacing it. Retries without that
+    # version return the existing deadline, even for a relative delay.
+    if not held or (not last_modified_time and any(row.get("fire_at") for row in held)):
         response = invoice.as_dict()
         response["held_update_previous_modified"] = str(invoice.modified)
         return response
@@ -3590,24 +3597,27 @@ def _fire_next_held_course(invoice, bumped_tickets):
     ]
     if not held or not bumped_tickets:
         return
+    from ury.ury.api.ury_kot_display import _get_cancel_confirmed_original_kots
+
     tickets = frappe.db.sql(
         """
-        SELECT kot.name, kot.order_status, item.course
+        SELECT kot.name, kot.order_status, item.course,
+               (kot.docstatus = 1 AND item.quantity > IFNULL(item.cancelled_qty, 0)) AS has_remaining_qty
         FROM `tabURY KOT` kot
         JOIN `tabURY KOT Items` item ON item.parent = kot.name
-        WHERE kot.invoice = %s AND kot.docstatus = 1
+        WHERE kot.invoice = %s AND kot.docstatus IN (1, 2)
           AND IFNULL(kot.type, '') NOT IN ('Cancelled', 'Partially cancelled')
-          AND item.quantity > IFNULL(item.cancelled_qty, 0)
         FOR UPDATE
         """,
         (invoice.name,),
         as_dict=True,
     )
-    invoice_courses = {
-        row.get("custom_course") for row in invoice.items
+    course_items = [
+        row for row in invoice.items
         if flt(row.get("qty")) > 0 and not row.get("custom_parent_line_key") and row.get("custom_course")
-    }
-    courses = invoice_courses | {row["course"] for row in tickets if row["course"]}
+    ]
+    ticket_courses = {row["course"] for row in tickets if row["course"]}
+    courses = ticket_courses | {row.get("custom_course") for row in course_items}
     priorities = {
         row["name"]: cint(row["custom_serving_priority"]) for row in frappe.get_all(
             "URY Menu Course", filters={"name": ["in", sorted(courses)]},
@@ -3620,15 +3630,21 @@ def _fire_next_held_course(invoice, bumped_tickets):
         return
     course = min(held_courses, key=lambda course: (ranked[course], course))
     earlier = [row for row in tickets if 0 < ranked.get(row["course"], 0) < ranked[course]]
-    if not earlier or any(row["order_status"] != "Served" for row in earlier):
+    if not any(row["name"] in bumped_tickets for row in earlier):
         return
-    # A retry of the same bump must never advance over an intermediate
-    # course. Only a ticket from the last earlier course can trigger this.
-    previous_priority = max(
-        ranked[name] for name in courses if 0 < ranked.get(name, 0) < ranked[course]
-    )
-    if not any(row["name"] in bumped_tickets and ranked[row["course"]] == previous_priority for row in earlier):
+    cancelled = _get_cancel_confirmed_original_kots(invoice.branch, invoice=invoice.name)
+    if any(row["order_status"] != "Served" and row["name"] not in cancelled
+           and row.get("has_remaining_qty", True) for row in earlier):
         return
+
+    # A sent earlier course with no ticket history cannot be considered
+    # served. Direct retail can legitimately have no kitchen ticket.
+    for row in course_items:
+        name = row.get("custom_course")
+        if name not in ticket_courses and 0 < ranked.get(name, 0) < ranked[course]:
+            context = resolve_production_context(row.get("item_code"), invoice.branch, company=invoice.company)
+            if not context or context.production_policy != DIRECT_RETAIL:
+                return
     group = _selected_held_rows(invoice, None, course)
     # An explicit schedule takes precedence over the course bump.
     if any(row.get("fire_at") for row in group):
@@ -3989,7 +4005,7 @@ def sync_order(
             row["ury_held"] = parent_holds[row["custom_parent_line_key"]]
     has_held = any(cint(item.get("ury_held")) for item in items)
     if has_held and not hold_enabled:
-        frappe.throw(_("URY_HOLD_DISABLED: Hold and fire is disabled for this POS Profile."))
+        frappe.throw(coded_message("HOLD-DISABLED", _("Hold and fire is disabled for this outlet.")))
     if has_held and (captured_at is not None or cint(offline_printed)):
         frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
     seen_line_names = set()

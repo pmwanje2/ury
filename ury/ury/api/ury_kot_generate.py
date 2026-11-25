@@ -8,6 +8,7 @@ from frappe.utils import cint, flt, get_datetime
 from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
 from ury.ury.api.ury_kot_routing import resolve_production_units
 from ury.ury.api.ury_production_context import resolve_production_context
+from ury.ury.api.ury_production_validation import DIRECT_RETAIL
 # Reuse the reservation service's stable per-line key derivation instead of
 # inventing a second concept. `_line_ref` prefers an explicit client-supplied
 # identifier (reservation_line_key/name/etc.); `_line_context` falls back to
@@ -452,14 +453,10 @@ def process_items_for_kot(
 
     created_kot_names = []
 
-    # Verify production units exist for the branch
-    productions = frappe.db.get_all(
+    if not require_routing and not frappe.db.get_all(
         "URY Production Unit", filters={"branch": pos_profile.branch}, fields=["name"]
-    )
-    if not productions:
-        frappe.throw(
-            "Create Restaurant Production unit against POS Profile: %s " % pos_profile.name
-        )
+    ):
+        frappe.throw(_("Configure a kitchen station for POS Profile {0}.").format(pos_profile.name))
 
     # Build a map of production unit -> items using Opt 22 parent inheritance + combo split
     # while forwarding pos_profile, order_type, and room for G27 routing overrides & failover.
@@ -484,6 +481,9 @@ def process_items_for_kot(
         if item.get("custom_line_role") == "Combo Upcharge" or id(item) in routed_rows:
             continue
         if require_routing:
+            context = resolve_production_context(item["item_code"], pos_profile.branch, company=pos_invoice.company)
+            if context and context.production_policy == DIRECT_RETAIL:
+                continue
             frappe.throw(_("No active kitchen station is configured for {0}.").format(
                 item["item_name"] or item["item_code"]
             ))
@@ -491,6 +491,9 @@ def process_items_for_kot(
         frappe.msgprint(
             f"Item group '{item_group}' for item '{item['item_code']}' is not in any production."
         )
+
+    if production_items_map and not kot_naming_series:
+        frappe.throw(_("Configure a kitchen ticket naming series for this outlet."))
 
     # Create one KOT per production unit
     for production_unit, production_items in production_items_map.items():
@@ -884,13 +887,9 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
     pos_profile_id = pos_invoice.pos_profile
     pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
     kot_naming_series = pos_profile.custom_kot_naming_series
-    if kot_naming_series:
-        cancel_kot_naming_series = "CNCL-" + kot_naming_series
-    else:
-        frappe.throw(
-            "KOT Naming Series is mandatory for the auto creation of KOT.Ensure it is configured in the POS Profile: %s"
-            % pos_profile.name
-        )
+    cancel_kot_naming_series = ("CNCL-" + kot_naming_series) if kot_naming_series else None
+    if not kot_naming_series and (not require_routing or negative_qty_items or removed_item):
+        frappe.throw(_("Configure a kitchen ticket naming series for this outlet."))
 
     from ury.ury.api.ury_waiter_print import print_combined_waiter_order_slip
 

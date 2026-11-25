@@ -317,7 +317,7 @@ def _ensure_ready_before_serve(kot_name):
 
 
 # Function to mark it as verified in a cancel type KOT.
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def confirm_cancel_kot(name):
     manager_roles = {"URY Manager", "URY Admin", "System Manager"}
     if not manager_roles.intersection(frappe.get_roles()) and frappe.session.user != "Administrator":
@@ -351,8 +351,14 @@ def confirm_cancel_kot(name):
             frappe.PermissionError,
         )
 
+    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None))
+    if invoice and frappe.db.get_value("URY KOT", name, "verified", for_update=True):
+        return
     frappe.db.set_value("URY KOT", name, "verified", 1)
     frappe.db.set_value("URY KOT", name, "verified_by", frappe.session.user)
+    if invoice and invoice.branch == kot_doc.branch and kot_doc.type in ("Cancelled", "Partially cancelled"):
+        originals = (kot_doc.get("original_kot") or "").split(",")
+        _advance_course(invoice, [original.strip() for original in originals if original.strip()])
 
 
 @frappe.whitelist(methods=["POST"])
@@ -457,7 +463,7 @@ def set_check_priority(invoice, is_rush=None, is_vip=None, reason=None):
 
 @frappe.whitelist(methods=["POST"])
 def expo_bump_order(invoice, production_unit=None, tickets=None):
-    """Serve all active non-cancelled KOTs for an invoice from the Expo screen."""
+    """Serve the active tickets displayed for an invoice on Expo."""
     if frappe.request and frappe.request.method != "POST":
         frappe.throw(
             coded_message("KOT-EXPO-POST-ONLY", _("POST requests only")),
@@ -494,14 +500,14 @@ def expo_bump_order(invoice, production_unit=None, tickets=None):
 
     # The board supplies the ticket names it displayed. Retries then cannot
     # accidentally bump the new course created by the original request.
+    if tickets is None:
+        frappe.throw(_("Select the displayed kitchen tickets to bump."))
     if isinstance(tickets, str):
         try:
             tickets = json.loads(tickets)
         except ValueError:
             frappe.throw(_("Invalid kitchen ticket selection."))
-    if tickets is not None and (
-        not isinstance(tickets, list) or any(not isinstance(name, str) for name in tickets)
-    ):
+    if not isinstance(tickets, list) or any(not isinstance(name, str) or not name.strip() for name in tickets):
         frappe.throw(_("Invalid kitchen ticket selection."))
     if tickets == []:
         return {"invoice": invoice, "served_kots": []}
@@ -516,10 +522,8 @@ def expo_bump_order(invoice, production_unit=None, tickets=None):
         "docstatus": 1,
         "order_status": "Ready For Prepare",
         "type": ["not in", ["Cancelled", "Partially cancelled"]],
+        "name": ["in", tickets],
     }
-
-    if tickets is not None:
-        filters["name"] = ["in", tickets]
 
     kots = frappe.get_all("URY KOT", filters=filters, fields=["name", "branch"])
     if not kots:
@@ -1052,7 +1056,7 @@ def build_dashboard_summary(kot_list):
     return list(summary.values())
 
 
-def _get_cancel_confirmed_original_kots(branch):
+def _get_cancel_confirmed_original_kots(branch, *, invoice=None):
     """Names of KOTs that a verified cancel-KOT references via `original_kot`."""
     filters = {
         "type": ["in", ["Cancelled", "Partially cancelled"]],
@@ -1062,17 +1066,20 @@ def _get_cancel_confirmed_original_kots(branch):
     if branch:
         filters["branch"] = branch
 
-    cancel_rows = frappe.get_all(
-        "URY KOT",
-        fields=["original_kot"],
-        filters=filters,
-    )
-    original_names = set()
-    for row in cancel_rows:
-        if not row.get("original_kot"):
-            continue
-        original_names.update(name.strip() for name in row.get("original_kot").split(",") if name.strip())
-    return original_names
+    if invoice:
+        # Course advancement already holds the order lock. Read the current
+        # cancel records so a waiter on that lock cannot use an old snapshot.
+        cancel_rows = frappe.db.get_values(
+            "URY KOT", {**filters, "invoice": invoice}, ["original_kot"], as_dict=True, for_update=True,
+        )
+    else:
+        cancel_rows = frappe.get_all("URY KOT", fields=["original_kot"], filters=filters)
+    return {
+        name.strip()
+        for row in cancel_rows
+        for name in (row.get("original_kot") or "").split(",")
+        if name.strip()
+    }
 
 
 KOT_DISPLAY_WINDOW_HOURS = 3  # default when the POS Profile sets no window
