@@ -3004,3 +3004,51 @@ class TestHydrogenR2Regressions(DiscountBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestForeignDiscountAmountCap(DiscountBase):
+    def setUp(self):
+        super().setUp()
+        self.has_privilege_rule_doctype = True
+        self.approval_limits["Lakeside Hotel"] = Row(
+            discount_limits_by_role="URY Cashier: 10",
+            max_document_discount_percent=0,
+        )
+        self.privilege_rules = [
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Cashier",
+                may_perform=1, may_authorise=0, max_percent=10, max_amount=100000)
+        ]
+        get_value = self.frappe.db.get_value.side_effect
+        self.frappe.db.get_value.side_effect = (
+            lambda dt, *args, **kw: "UGX" if dt == "Company" else get_value(dt, *args, **kw)
+        )
+        self.invoice = FakePOSInvoice("CHK-FX", currency="USD", conversion_rate=3700, items=[_item("r1", "FISH", 1, 1000)])
+        self.docs[("POS Invoice", self.invoice.name)] = self.invoice
+
+    def test_rest_post_and_put_refuse_foreign_line_discount_above_cap(self):
+        for new in (True, False):
+            with self.subTest(new=new):
+                self.invoice._is_new = new
+                if not new:
+                    self.invoice._doc_before_save = FakePOSInvoice(
+                        "CHK-FX", currency="USD", conversion_rate=3700, items=[_item("r1", "FISH", 1, 1000)]
+                    )
+                self.invoice.items[0].update(discount_percentage=5, rate=950, amount=950)
+                self.invoice.calculate_taxes_and_totals()
+                self.invoice.custom_discount_reason = "Complaint"
+                with self.assertRaisesRegex(NotPermitted, "POS-AUTH-REQUIRED"):
+                    self.hook.validate_pos_discount(self.invoice)
+
+    def test_discount_options_reflect_monetary_cap_on_check(self):
+        options = self.discount.list_discount_options("Lakeside Till", self.invoice.name)
+        self.assertAlmostEqual(options["limit_percent"], 100000 / 3700000 * 100, places=4)
+
+    def test_discount_requires_manager_with_server_claim_and_company_amount(self):
+        self.frappe.local.response = {}
+        spec = self.discount.parse_discount_request(discount_percent=5, discount_reason="Complaint")
+        with self.assertRaisesRegex(NotPermitted, "POS-AUTH-REQUIRED"):
+            self.discount.apply_discount_to_invoice(self.invoice, self.profile, spec)
+        challenge = self.frappe.local.response.get("pos_auth_challenge", {})
+        self.assertEqual(challenge.get("amount"), 185000)
+        self.assertEqual(challenge["claim"]["percent"], 5)
+        self.assertIsNone(challenge["claim"]["amount"])

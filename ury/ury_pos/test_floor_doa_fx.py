@@ -122,3 +122,96 @@ class TestFloorDoaFx(unittest.TestCase):
                 with self.assertRaisesRegex(case.h.frappe.PermissionError, "POS-AUTH-REQUIRED"):
                     case.qty_mod.reduce_order_item_qty(inv.name, "ROW-1", 1, reason="VOID-GUEST")
         self.assertEqual(inv.items[0].qty, 2)
+
+    def test_foreign_unreferenced_return_uses_profile_exchange_rate(self):
+        import sys
+        from types import ModuleType
+
+        case = self.set_up_harness(returns.TestPOSReturnAndRefund)
+        profile = case.h.profiles["Till A"]
+        profile.currency = "USD"
+        profile.custom_unreferenced_return_roles = "URY Admin"
+        db = case.h.frappe.db
+        original_get_value = db.get_value
+
+        def get_value(doctype, *args, **kwargs):
+            if doctype == "Company":
+                return "UGX"
+            if doctype == "Item Price":
+                return 50
+            return original_get_value(doctype, *args, **kwargs)
+
+        setup_utils = ModuleType("erpnext.setup.utils")
+        setup_utils.get_exchange_rate = lambda source, target, date: 3700 if (source, target) == ("USD", "UGX") else 0
+        with patch.dict(sys.modules, {setup_utils.__name__: setup_utils}):
+            with patch.object(db, "get_value", side_effect=get_value):
+                with patch.object(case.mod, "require_pos_override", side_effect=case.h.frappe.PermissionError) as authorize:
+                    try:
+                        case.mod.create_unreferenced_return(
+                            "Till A", "Walk-in", [{"item_code": "BURGER", "qty": 1}],
+                            [{"mode_of_payment": "Cash", "amount": 50}], reason="RET-QUALITY",
+                        )
+                    except (case.h.frappe.ValidationError, case.h.frappe.PermissionError) as exc:
+                        failure = str(exc)
+        self.assertTrue(authorize.called, failure)
+        self.assertEqual(authorize.call_args.kwargs["amount"], 185000)
+        self.assertEqual(authorize.call_args.args[4]["refund_total"], 50)
+
+    def test_price_override_cap_uses_whole_line_and_preserves_claim(self):
+        case = self.pricing_invoice("UGX", 3700)
+        case.invoice["items"][0].update(rate=100, price_list_rate=100, qty=3)
+        case.h.rules[0].update(max_percent=100, max_amount=100000)
+        actions, priv_auth = case._import_pricing_actions()
+        with patch.object(actions, "authorize_or_perform", wraps=priv_auth.authorize_or_perform) as authorize:
+            with self.assertRaisesRegex(pricing.FakePermissionError, "POS-AUTH-REQUIRED"):
+                actions.override_line_price("POS-INV-100", "Main Till", "ITEM-ROW-1", 80, reason="PRICE-MATCH")
+        self.assertEqual(authorize.call_args.kwargs["amount"], 222000)
+        self.assertEqual(authorize.call_args.kwargs["claim"]["amount"], 20)
+
+    def test_open_item_halo_and_minimum_are_company_unit_prices(self):
+        case = self.pricing_invoice("UGX", 3700)
+        item = case.h.docs[("Item", "OPEN-FISH")]
+        item.update(custom_halo_max_price=100000, custom_min_price=20000)
+        actions, _ = case._import_pricing_actions()
+        with patch.object(actions, "_resolve_item_cost", return_value=0):
+            with patch.object(actions, "authorize_or_perform", side_effect=pricing.FakePermissionError) as authorize:
+                for rate, force_pin in ((10, False), (30, True)):
+                    with self.subTest(rate=rate):
+                        with self.assertRaises(pricing.FakePermissionError):
+                            actions.add_open_item("POS-INV-100", "Main Till", "OPEN-FISH", rate=rate, qty=2, reference_name_text="Fish")
+                        self.assertEqual(authorize.call_args.kwargs["force_pin"], force_pin)
+                        self.assertEqual(authorize.call_args.kwargs["amount"], rate * 2 * 3700)
+                        self.assertEqual(authorize.call_args.kwargs["claim"]["rate"], rate)
+
+    def test_waive_service_charge_uses_current_company_amount(self):
+        case = self.pricing_invoice("UGX", 3700)
+        case.invoice["taxes"] = [pricing.FakeDoc({"custom_pos_charge_kind": "Service Charge", "tax_amount": 50})]
+        actions, _ = case._import_pricing_actions()
+        with patch.object(actions, "authorize_or_perform", side_effect=pricing.FakePermissionError) as authorize:
+            with self.assertRaises(pricing.FakePermissionError):
+                actions.adjust_service_charge("POS-INV-100", "Main Till", action="waive", reason="SVC-WAIVE")
+        self.assertEqual(authorize.call_args.kwargs["amount"], 185000)
+        self.assertIsNone(authorize.call_args.kwargs["claim"]["new_amount"])
+
+    def test_foreign_tender_halo_uses_company_currency(self):
+        from ury.ury_pos import test_tender_halo
+
+        case = self.set_up_harness(test_tender_halo.TestTenderHalo)
+        doc = case._invoice(total=50, currency="USD", payments=[{"mode_of_payment": "Cash", "amount": 50}])
+        doc.conversion_rate = 3700
+        db = case.frappe.db
+        original_get_value = db.get_value
+
+        def get_value(doctype, *args, **kwargs):
+            if doctype == "Company" and args[-1] == "default_currency":
+                return "UGX"
+            if doctype == "Mode of Payment" and args[-1] == "custom_halo_max_amount":
+                return 100000
+            return original_get_value(doctype, *args, **kwargs)
+
+        with patch.object(db, "get_value", side_effect=get_value):
+            with patch.object(case.tc, "_require_till_privilege", side_effect=PermissionError) as authorize:
+                with self.assertRaises(PermissionError):
+                    case.tc.apply_halo_approval_token(doc, "token")
+        self.assertEqual(authorize.call_args.kwargs["amount"], 185000)
+        self.assertEqual(authorize.call_args.args[3]["tenders"], [{"mode_of_payment": "Cash", "amount": 50}])

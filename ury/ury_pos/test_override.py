@@ -1477,5 +1477,78 @@ class TestOverrideContract(unittest.TestCase):
         self.assertEqual(approved.approver, "manager@example.test")
 
 
+    def prepare_foreign_approval(self, privilege):
+        api = self.api()
+        self.enroll("manager@example.test", "2468")
+        original_get_value = self.frappe.db.get_value
+
+        def get_value(doctype, *args, **kwargs):
+            if doctype == "Company":
+                return "UGX"
+            return original_get_value(doctype, *args, **kwargs)
+
+        self.frappe.db.get_value = get_value
+        profile = self.store.profiles["Main Till"]
+        profile["currency"] = "USD"
+        invoice = self.store.invoices["POS-INV-100"]
+        invoice.update(currency="USD", conversion_rate=3700, net_total=1000, total=1000, grand_total=1000)
+        invoice["items"] = [Doc(name="ROW-1", item_code="FISH", qty=5, rate=200, amount=1000, price_list_rate=200)]
+        original_get_doc = self.frappe.get_doc
+        self.frappe.get_doc = lambda dt, name=None, **kw: (
+            invoice if dt == "POS Invoice" and name == "POS-INV-100" else original_get_doc(dt, name, **kw)
+        )
+        for rule in self.store.privilege_rules:
+            if rule.privilege == privilege and rule.role == "URY Manager":
+                rule.update(max_percent=100, max_amount=100000, requires_reason=0)
+        return api
+
+    def assert_capped_claim(self, privilege, claim, name="POS-INV-100", doctype="POS Invoice"):
+        api = self.prepare_foreign_approval(privilege)
+        claim.setdefault("reason", "Other: Guest request")
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", privilege, "manager@example.test", "2468", doctype, name, claim,
+        ))
+
+    def test_percentage_check_discount_issuance_is_capped(self):
+        self.assert_capped_claim("discount", {"percent": 5, "amount": None, "lines": []})
+
+    def test_percentage_line_discount_issuance_is_capped(self):
+        self.assert_capped_claim("discount", {"lines": [{"row": "ROW-1", "percent": 5, "amount": None}]})
+
+    def test_sent_reduction_issuance_is_capped_without_top_level_amount(self):
+        self.assert_capped_claim("reduce_sent_qty", {
+            "item_row_name": "ROW-1", "previous_qty": 5, "new_qty": 4, "delta": -1,
+        })
+
+    def test_sent_void_issuance_is_capped_without_top_level_amount(self):
+        self.assert_capped_claim("void_sent_item", {
+            "items": [{"item_code": "FISH", "from_qty": 5, "to_qty": 0}],
+        })
+
+    def test_new_open_item_issuance_is_capped_using_profile_fx(self):
+        import sys
+        from types import ModuleType
+
+        setup_utils = ModuleType("erpnext.setup.utils")
+        setup_utils.get_exchange_rate = lambda source, target, date: 3700
+        with patch.dict(sys.modules, {setup_utils.__name__: setup_utils}):
+            self.assert_capped_claim("open_item", {"rate": 25, "qty": 2, "amount": 50}, name="NEW")
+
+    def test_on_account_issuance_caps_company_currency_proposed_charge(self):
+        self.assert_capped_claim("on_account_over_limit", {"proposed": 185000, "currency": "UGX", "limit": 100000})
+
+    def test_room_charge_issuance_converts_foreign_claim_amount(self):
+        self.assert_capped_claim("room_charge_over_limit", {"amount": 50, "currency": "USD"})
+
+    def test_offline_tender_issuance_converts_foreign_claim_amount(self):
+        self.assert_capped_claim("offline_tender", {"amount": 50, "limit": 100000, "modes": ["Cash"]})
+
+    def test_require_converts_document_claim_when_amount_is_omitted(self):
+        api = self.prepare_foreign_approval("price_override")
+        self.frappe.session.user = "manager@example.test"
+        with self.assertRaisesRegex(Denied, "POS-AUTH-REQUIRED"):
+            api.require("price_override", "Main Till", "POS-INV-100", {"amount": 50, "percent": 10, "reason": "Other: Guest request"})
+
+
 if __name__ == "__main__":
     unittest.main()
