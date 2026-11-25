@@ -542,11 +542,12 @@ def _db_failed_password_count(user: str, lock_minutes: int) -> int:
 class _PinInput:
     """Keep credential values out of frame-local representations in error reports."""
 
-    __slots__ = ("pin", "password")
+    __slots__ = ("pin", "password", "legacy_wire_pin")
 
-    def __init__(self, pin, password=None):
+    def __init__(self, pin, password=None, *, legacy_wire_pin: bool = False):
         self.pin = pin
         self.password = password
+        self.legacy_wire_pin = legacy_wire_pin
 
 
 _PIN_PROVIDER_CODES = {
@@ -584,10 +585,11 @@ def _read_pin_form() -> _PinInput:
     form = getattr(frappe, "form_dict", None)
     if not isinstance(form, dict):
         return _PinInput(None)
-    credentials = _PinInput(
-        form.get("pin_secret", form.get("pin")),
-        form.get("password", form.get("current_password")),
-    )
+    if "pin" in form:
+        # Keep only the refusal flag when a stale HTTP client sends the retired field.
+        credentials = _PinInput(None, legacy_wire_pin=True)
+    else:
+        credentials = _PinInput(form.get("pin_secret"), form.get("password", form.get("current_password")))
     _scrub_form_secrets()
     return credentials
 
@@ -617,12 +619,15 @@ def scrub_pin_request():
 
 
 def _take_pin_request(endpoint_name) -> _PinInput:
-    form_credentials = _read_pin_form()
+    credentials = _read_pin_form()
     request_credentials = getattr(frappe.local, "ury_pin_request", None)
     if request_credentials and request_credentials[0] == endpoint_name:
         frappe.local.ury_pin_request = None
-        return request_credentials[1]
-    return form_credentials
+        if not credentials.legacy_wire_pin:
+            credentials = request_credentials[1]
+    if credentials.legacy_wire_pin:
+        _refuse("POS-AUTH-REFRESH", "Refresh the till and try again.", frappe.ValidationError)
+    return credentials
 
 
 def _protect_pin_endpoint(*credential_positions):
@@ -1844,7 +1849,10 @@ def authorise(
     *,
     credentials: _PinInput,
 ) -> dict[str, Any]:
-    """Verify an eligible manager's PIN and mint a single-use 120 s approval token."""
+    """Verify an eligible manager's PIN and mint a single-use 120 s approval token.
+
+    HTTP callers send the PIN in the Frappe-redacted `pin_secret` field.
+    """
 
     _validate_privilege(privilege)
     parsed_claim = _parse_claim(claim)
@@ -2413,6 +2421,8 @@ def my_pin_status() -> dict[str, bool]:
 @_protect_pin_endpoint((0, "password"), (1, "pin"))
 def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
     """Enrol or update the signed-in user's own approval PIN after password re-entry.
+
+    HTTP callers send the PIN in the Frappe-redacted `pin_secret` field.
 
     P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
     counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
