@@ -617,6 +617,10 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     nonCashModes.every((mode) => modeMeta[mode]?.overtender_rule === 'Post to Charged Tip');
 
   // High Amount Lockout (HALO): sum per mode_of_payment to prevent split-row evasion.
+  const approvalCurrency = storePosProfile?.approval_currency || currencyCode;
+  const approvalRate = approvalCurrency.toUpperCase() === currencyCode.toUpperCase()
+    ? 1
+    : Number(order?.conversion_rate || storePosProfile?.approval_conversion_rate || 0);
   const overHaloTenders = (() => {
     const totalsByMode = new Map<string, number>();
     for (const row of combinedPayments) {
@@ -626,12 +630,13 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
         roundToCurrency((totalsByMode.get(row.mode_of_payment) || 0) + row.amount, currencyCode),
       );
     }
-    const exceeded: Array<{ mode_of_payment: string; amount: number; halo: number }> = [];
+    const exceeded: Array<{ mode_of_payment: string; amount: number; halo: number; approvalAmount: number }> = [];
     for (const mode of Array.from(totalsByMode.keys()).sort()) {
       const amount = totalsByMode.get(mode) || 0;
-      const halo = roundToCurrency(Number(modeMeta[mode]?.halo_max_amount) || 0, currencyCode);
-      if (halo > 0 && amount > halo + 1e-6) {
-        exceeded.push({ mode_of_payment: mode, amount, halo });
+      const halo = Number(modeMeta[mode]?.halo_max_amount) || 0;
+      const approvalAmount = roundToCurrency(amount * approvalRate, approvalCurrency);
+      if (halo > 0 && approvalAmount > halo + 1e-9) {
+        exceeded.push({ mode_of_payment: mode, amount, halo, approvalAmount });
       }
     }
     return exceeded;
@@ -1541,7 +1546,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                     {t('payment.halo_warning', {
                       mode: row.mode_of_payment,
                       amount: formatMoney(row.amount),
-                      limit: formatMoney(row.halo),
+                      limit: formatCurrency(row.halo, approvalCurrency || undefined),
                     })}
                   </p>
                 ))}
@@ -1816,11 +1821,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             t('payment.halo_warning', {
               mode: row.mode_of_payment,
               amount: formatMoney(row.amount),
-              limit: formatMoney(row.halo),
+              limit: formatCurrency(row.halo, approvalCurrency || undefined),
             }),
           )}
           reference={{ doctype: 'POS Invoice', name: invoice }}
-          amount={Math.max(...overHaloTenders.map((row) => row.amount))}
+          amount={Math.max(...overHaloTenders.map((row) => row.approvalAmount))}
           claim={{
             action: 'over_halo_tender',
             invoice,

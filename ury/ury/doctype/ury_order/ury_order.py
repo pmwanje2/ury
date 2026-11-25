@@ -5248,6 +5248,7 @@ def _enforce_on_account(
             profile.name,
             invoice.name,
             claim,
+            approval_amount=rounded_proposed,
         )
         approver = consumed.get("approver") if isinstance(consumed, dict) else getattr(consumed, "approver", None)
         approved_reason = (

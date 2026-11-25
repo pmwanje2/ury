@@ -1304,6 +1304,14 @@ def getPosProfile(pos_profile=None):
         pos_profiles, room_charge_modes=room_charge_modes, _frappe=frappe
     )
     till_offline_limit = offline_tender_limit(pos_profiles)
+    from ury.ury_pos.approval_currency import company_currency_for, profile_approval_quote
+
+    approval_currency = company_currency_for(company, frappe)
+    approval_conversion_rate = None
+    if cint(pos_profiles.get("ury_offline_capture")) and till_offline_limit > 0:
+        _, quote = profile_approval_quote(pos_profiles, frappe)
+        approval_conversion_rate = float(quote) if quote is not None else None
+
 
     try:
         from ury.ury_pos import outlet_context
@@ -1397,6 +1405,8 @@ def getPosProfile(pos_profile=None):
         "room_charge_unconfigured": room_charge_unconfigured,
         # optional room lookup before a Room Charge; blank keeps free-text room
         "room_lookup_method": room_lookup_method,
+        "approval_currency": approval_currency,
+        "approval_conversion_rate": approval_conversion_rate,
         "offline_tender_limit": till_offline_limit,
         "offline_payment_modes": offline_payment_modes,
         "efris_print_wait_seconds": _efris_print_wait_seconds(pos_profiles),

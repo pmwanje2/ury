@@ -1,5 +1,6 @@
 """Company-currency amounts for POS approval limits."""
 
+from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from ury.brand import coded_message
@@ -35,12 +36,64 @@ def currency_precision(currency: str | None, db) -> int:
     return 2
 
 
+def company_currency_for(company, framework) -> str:
+    company_currency = framework.db.get_value("Company", company, "default_currency") if company else None
+    return company_currency.strip().upper() if isinstance(company_currency, str) else ""
+
+
+def _positive_rate(value):
+    try:
+        rate = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return rate if rate.is_finite() and rate > 0 else None
+
+
+def _invalid_rate(framework):
+    framework.throw(
+        coded_message(
+            "FX-RATE-INVALID",
+            framework._("A foreign-currency check requires a valid exchange rate for approval."),
+        ),
+        framework.ValidationError,
+    )
+
+
+def profile_approval_quote(profile, framework, *, posting_date=None, currency=None) -> tuple[str, Decimal | None]:
+    """Look up FX for an action without a saved invoice rate."""
+    currency = str(currency or profile.get("currency") or "").strip().upper()
+    company_currency = company_currency_for(profile.get("company"), framework)
+    if not currency or not company_currency or currency == company_currency:
+        return company_currency or currency, Decimal(1)
+
+    posting_date = posting_date or date.today().isoformat()
+    try:
+        from erpnext.setup.utils import get_exchange_rate
+
+        rate = _positive_rate(get_exchange_rate(currency, company_currency, posting_date))
+    except (ImportError, framework.ValidationError):
+        rate = None
+    if rate is None:
+        rate = _positive_rate(framework.db.get_value(
+            "Currency Exchange",
+            {"from_currency": currency, "to_currency": company_currency, "date": ["<=", posting_date]},
+            "exchange_rate",
+            order_by="date desc",
+        ))
+    return company_currency, rate
+
+
+def profile_approval_currency(profile, framework, *, posting_date=None, currency=None) -> tuple[str, Decimal]:
+    company_currency, rate = profile_approval_quote(profile, framework, posting_date=posting_date, currency=currency)
+    if rate is None:
+        _invalid_rate(framework)
+    return company_currency, rate
+
+
 def invoice_approval_currency(invoice, framework) -> tuple[str, Decimal]:
     """Read the company currency and the saved POS invoice exchange rate."""
     currency = str(invoice.get("currency") or "").strip().upper()
-    company = invoice.get("company")
-    company_currency = framework.db.get_value("Company", company, "default_currency") if company else None
-    company_currency = company_currency.strip().upper() if isinstance(company_currency, str) else ""
+    company_currency = company_currency_for(invoice.get("company"), framework)
     if not currency or currency == company_currency:
         return company_currency, Decimal(1)
 
@@ -48,18 +101,9 @@ def invoice_approval_currency(invoice, framework) -> tuple[str, Decimal]:
     # A legacy invoice without currency metadata can still use its original units.
     if not company_currency and not raw_rate:
         return "", Decimal(1)
-    try:
-        rate = Decimal(str(raw_rate))
-    except InvalidOperation:
-        rate = Decimal(0)
-    if not rate.is_finite() or rate <= 0:
-        framework.throw(
-            coded_message(
-                "FX-RATE-INVALID",
-                framework._("A foreign-currency check requires a valid exchange rate for approval."),
-            ),
-            framework.ValidationError,
-        )
+    rate = _positive_rate(raw_rate)
+    if rate is None:
+        _invalid_rate(framework)
     return company_currency or currency, rate
 
 

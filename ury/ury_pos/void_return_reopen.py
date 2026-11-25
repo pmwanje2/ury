@@ -20,7 +20,7 @@ from typing import Any
 
 import frappe as _default_frappe
 
-from ury.ury_pos.approval_currency import company_approval_amount
+from ury.ury_pos.approval_currency import company_approval_amount, company_currency_for, profile_approval_currency
 from ury.ury_pos.auth_challenge import attach_auth_challenge
 try:
     from frappe.utils import cint as _frappe_cint
@@ -2180,7 +2180,7 @@ def create_unreferenced_return(
     if not isinstance(parsed_items, list) or not parsed_items:
         _refuse(CODE_RETURN_INVALID_LINE, "Add at least one item to return.", fr.ValidationError)
 
-    currency = _field(profile_doc, "currency") or "UGX"
+    currency = _field(profile_doc, "currency") or company_currency_for(_field(profile_doc, "company"), fr) or "UGX"
     precision = _currency_precision(currency)
     price_list = _field(profile_doc, "selling_price_list") or "Standard Selling"
 
@@ -2245,6 +2245,8 @@ def create_unreferenced_return(
 
     # Unreferenced returns ALWAYS require a distinct manager PIN (`forbid_solo=True`), AND the
     # approving manager MUST hold one of the profile's configured `custom_unreferenced_return_roles`!
+    posting_date = _today_date()
+    approval_currency = profile_approval_currency(profile_doc, fr, posting_date=posting_date)
     approver = require_pos_override(
         "return",
         profile_name,
@@ -2252,7 +2254,7 @@ def create_unreferenced_return(
         profile_name,
         claim,
         approval_token=approval_token,
-        amount=company_approval_amount(profile_doc, total_refund, fr),
+        amount=company_approval_amount(profile_doc, total_refund, fr, currency_and_rate=approval_currency),
         forbid_solo=True,
     )
     approver_roles = _user_roles(approver)
@@ -2273,7 +2275,8 @@ def create_unreferenced_return(
     ret.customer = customer
     ret.currency = currency
     ret.selling_price_list = price_list
-    ret.posting_date = _today_date()
+    ret.posting_date = posting_date
+    ret.conversion_rate = float(approval_currency[1])
     ret.posting_time = _now_time()
     ret.set_posting_time = 0
     ret.update_stock = cint(_field(profile_doc, "update_stock", 0))

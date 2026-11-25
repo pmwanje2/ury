@@ -48,10 +48,12 @@ _THREE_DECIMAL_CURRENCIES = frozenset({"KWD", "BHD", "OMR", "JOD", "TND", "LYD",
 try:
     from ury.ury_pos.discount import (
         currency_precision as _disc_currency_precision,
+        validate_manual_line_discount_cap,
         with_currency_precision as _disc_with_currency_precision,
     )
 except ImportError:  # pragma: no cover - site-less test stub without discount module
     _disc_currency_precision = None
+    validate_manual_line_discount_cap = None
     _disc_with_currency_precision = None
 
 
@@ -105,7 +107,11 @@ def _getdate(val=None):
     return _dt.date.fromisoformat(str(val or _nowdate())[:10])
 
 from ury.brand import coded_message
-from ury.ury_pos.approval_currency import company_approval_amount, invoice_approval_currency
+from ury.ury_pos.approval_currency import (
+    company_approval_amount,
+    invoice_approval_currency,
+    profile_approval_currency,
+)
 from ury.ury_pos.privileged_auth import (
     DEFAULT_MANAGER_ROLES,
     assert_not_efris_fiscalised,
@@ -336,7 +342,10 @@ def override_line_price(
         claim=claim,
         token=approval_token,
         percent=pct,
-        amount=company_approval_amount(doc, delta, frappe, currency_and_rate=approval_currency),
+        amount=company_approval_amount(
+            doc, delta * abs(Decimal(str(flt(target_row.get("qty"))))), frappe,
+            currency_and_rate=approval_currency,
+        ),
         reason=reason,
         reason_note=reason_note,
         require_reason=True,
@@ -540,11 +549,15 @@ def add_open_item(
     min_price = flt(item_doc.get("custom_min_price"))
     priv_group = cint(item_doc.get("custom_privilege_group"))
     item_cost = _resolve_item_cost(item_code, profile.get("warehouse"), profile.get("buying_price_list"))
-    approval_currency = invoice_approval_currency(doc, frappe)
+    if is_new_invoice:
+        approval_currency = profile_approval_currency(profile, frappe, posting_date=doc.get("posting_date"))
+        doc.conversion_rate = float(approval_currency[1])
+    else:
+        approval_currency = invoice_approval_currency(doc, frappe)
     base_rate_val = flt(rate_val * float(approval_currency[1]))
 
-    over_halo = halo_max > 0 and rate_val > halo_max
-    below_min = min_price > 0 and rate_val < min_price and not (rate_val == 0 and allow_zero)
+    over_halo = halo_max > 0 and base_rate_val > halo_max
+    below_min = min_price > 0 and base_rate_val < min_price and not (rate_val == 0 and allow_zero)
     below_cost = item_cost > 0 and base_rate_val < item_cost and not (rate_val == 0 and allow_zero)
     line_total = Decimal(str(rate_val)) * Decimal(str(qty_val))
 
@@ -1941,6 +1954,14 @@ def prorate_return_service_charge(doc, *, recalc: bool = True) -> None:
 
 
 @frappe.whitelist(methods=["GET"])
+def current_service_charge_amount(doc) -> float:
+    return sum(
+        _effective_tax_row_amount(doc, row)
+        for row in (doc.get("taxes") or [])
+        if _clean_str(row.get("custom_pos_charge_kind")) == "Service Charge"
+    )
+
+
 def get_service_charge_status(invoice: str, pos_profile: str | None = None) -> dict[str, Any]:
     """Return active matched Service Charge rule, waived/override state, and current amounts for UI."""
     doc = frappe.get_doc("POS Invoice", invoice)
@@ -1949,11 +1970,7 @@ def get_service_charge_status(invoice: str, pos_profile: str | None = None) -> d
     eff_profile = pos_profile or doc.get("pos_profile")
     profile = frappe.get_doc("POS Profile", eff_profile) if eff_profile else None
     matched = match_service_charge_rule(doc, profile) if profile else None
-    sc_amount = sum(
-        _effective_tax_row_amount(doc, t)
-        for t in (doc.get("taxes") or [])
-        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge"
-    )
+    sc_amount = current_service_charge_amount(doc)
     sc_tax_amount = sum(
         _effective_tax_row_amount(doc, t)
         for t in (doc.get("taxes") or [])
@@ -2068,6 +2085,7 @@ def adjust_service_charge(
         reason_note=reason_note or "",
     )
 
+    approval_amount = current_service_charge_amount(doc) if action == "waive" else amount_val
     auth = authorize_or_perform(
         privilege="service_charge_waive",
         pos_profile=profile.name,
@@ -2077,8 +2095,8 @@ def adjust_service_charge(
         token=approval_token,
         percent=rate_val,
         amount=(
-            company_approval_amount(doc, amount_val, frappe, currency_and_rate=approval_currency)
-            if amount_val is not None else None
+            company_approval_amount(doc, approval_amount, frappe, currency_and_rate=approval_currency)
+            if approval_amount is not None else None
         ),
         reason=reason,
         reason_note=reason_note,
@@ -2445,14 +2463,16 @@ def validate_privileged_pricing_mutations(doc, method=None) -> None:
         return
 
     before = doc.get_doc_before_save() if callable(getattr(doc, "get_doc_before_save", None)) else None
-    if before is None:
-        return
-
     server_disc_write = bool(getattr(frappe.flags, "ury_server_discount_write", False))
     has_disc_approval = bool(
         getattr(getattr(doc, "flags", None), "discount_approval", None)
         or getattr(getattr(doc, "flags", None), "discount_removal", None)
     )
+    if not server_disc_write and not has_disc_approval and validate_manual_line_discount_cap is not None:
+        validate_manual_line_discount_cap(doc, before)
+    if before is None:
+        return
+
     prec = _doc_precision(doc, "rate")
     rate_tol = max(1e-2, 10 ** (-prec))
     price_list = _clean_str(doc.get("selling_price_list"))

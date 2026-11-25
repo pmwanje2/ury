@@ -8,7 +8,9 @@ import { currencyFractionDigits, formatCurrency, parseFrappeError } from '@ury/c
 import {
   canCaptureOfflineOrder,
   canSettleOffline,
-  offlineTolerance,
+  exceedsOfflineTenderLimit,
+  offlineCompanyAmount,
+  type OfflineProfile,
   type OfflineEntry,
   type OfflineOutbox,
   type OfflinePaymentModeConfig,
@@ -26,7 +28,7 @@ function PendingOrder({
   row,
   queue,
   eligibleModes,
-  offlineLimit,
+  profile,
   currencyCode,
   canSettle,
   disabled,
@@ -34,7 +36,7 @@ function PendingOrder({
   row: OfflineEntry;
   queue: OfflineOutbox;
   eligibleModes: OfflinePaymentModeConfig[];
-  offlineLimit: number;
+  profile: OfflineProfile | null;
   currencyCode?: string;
   canSettle: boolean;
   disabled: boolean;
@@ -49,7 +51,8 @@ function PendingOrder({
     refModes[0]?.mode_of_payment ||
     '';
   const total = row.rounds[row.rounds.length - 1].expected_total;
-  const overLimit = offlineLimit > 0 && total > offlineLimit + offlineTolerance(currencyCode);
+  const offlineLimit = Number(profile?.offline_tender_limit || 0);
+  const overLimit = profile ? exceedsOfflineTenderLimit(profile, total) : false;
   const formatAmount = (amount: number) =>
     currencyCode ? formatCurrency(amount, currencyCode) : String(amount);
 
@@ -102,7 +105,7 @@ function PendingOrder({
         <div className="space-y-1.5 mt-1">
           {overLimit && (
             <p className="text-xs font-medium text-amber-900">
-              {t('offline.over_limit_notice', { limit: formatAmount(offlineLimit) })}
+              {t('offline.over_limit_notice', { limit: formatCurrency(offlineLimit, profile?.approval_currency || currencyCode) })}
             </p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -258,7 +261,7 @@ export default function OfflineBanner() {
                   row={row}
                   queue={queue}
                   eligibleModes={eligibleModes}
-                  offlineLimit={offlineLimit}
+                  profile={posProfile}
                   currencyCode={currencyCode}
                   canSettle={canSettle}
                   disabled={replaying || queue.sessionBlocked || !canCaptureOrder}
@@ -298,7 +301,7 @@ export default function OfflineBanner() {
             t('offline.approval_summary', {
               mode: approvalRow.settlement?.mode_of_payment || '',
               amount: formatAmount(approvalAmount),
-              limit: formatAmount(offlineLimit),
+              limit: formatCurrency(offlineLimit, posProfile.approval_currency || currencyCode),
             }),
             `${t('offline.client_order')}: ${approvalRow.client_order_id.slice(0, 8)}`,
           ]}
@@ -308,7 +311,7 @@ export default function OfflineBanner() {
             limit: roundForCurrency(offlineLimit, currencyCode),
             modes: approvalRow.settlement ? [approvalRow.settlement.mode_of_payment] : [],
           }}
-          amount={approvalAmount}
+          amount={offlineCompanyAmount(posProfile, approvalAmount) ?? undefined}
           requireReason={true}
           onApproved={handleApprovalGranted}
           onCancel={() => setApprovalRow(null)}

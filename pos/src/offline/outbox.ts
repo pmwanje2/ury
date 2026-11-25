@@ -26,12 +26,31 @@ export interface OfflineProfile extends DefaultCustomerConfig {
   custom_offline_collision_policy?: string | null;
   branch?: string | null;
   offline_tender_limit?: number;
+  approval_currency?: string;
+  approval_conversion_rate?: number | null;
   offline_payment_modes?: OfflinePaymentModeConfig[];
   room_charge_modes?: string[];
   print_type?: string;
   qz_host?: string | null;
   print_format?: string | null;
   efris_print_wait_seconds?: number;
+}
+
+export function offlineCompanyAmount(profile: OfflineProfile, amount: number): number | null {
+  const currency = profile.approval_currency || profile.currency;
+  const rate = currency?.toUpperCase() === profile.currency?.toUpperCase()
+    ? 1
+    : Number(profile.approval_conversion_rate);
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  const factor = 10 ** (currency ? currencyFractionDigits(currency) : 2);
+  return Math.round((amount * rate + 1e-12) * factor) / factor;
+}
+
+export function exceedsOfflineTenderLimit(profile: OfflineProfile, amount: number): boolean {
+  const limit = Number(profile.offline_tender_limit || 0);
+  if (limit <= 0) return false;
+  const companyAmount = offlineCompanyAmount(profile, amount);
+  return companyAmount === null || companyAmount > limit;
 }
 
 export function resolveOfflineModeConfig(
@@ -353,7 +372,7 @@ export class OfflineOutbox {
       throw new Error('Type the manual mobile-money reference.');
     }
     const limit = Number(this.options.profile.offline_tender_limit || 0);
-    if (limit > 0 && tender.amount > limit + offlineTolerance(this.options.profile.currency) && !tender.needs_online_approval) {
+    if (exceedsOfflineTenderLimit(this.options.profile, tender.amount) && !tender.needs_online_approval) {
       throw new Error(t('offline.over_limit_error', { limit }));
     }
   }

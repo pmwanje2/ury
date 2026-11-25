@@ -56,7 +56,11 @@ from typing import Any, NamedTuple
 import frappe
 from frappe.utils import cint, flt, get_datetime, now_datetime
 
-from ury.ury_pos.approval_currency import company_approval_amount
+from ury.ury_pos.approval_currency import (
+    company_approval_amount,
+    company_currency_for,
+    profile_approval_currency,
+)
 
 
 def _get_fullname(user: str) -> str:
@@ -1356,37 +1360,197 @@ _INVOICE_APPROVAL_AMOUNT_FIELDS = {
     "reduce_sent_qty": "amount",
     "return": "refund_total",
     "reopen_check": "grand_total",
-    "adjust_closed_check": None,
-    "cancel_check": None,
+    "adjust_closed_check": "amount",
+    "cancel_check": "amount",
+    "offline_tender": "amount",
+    "room_charge_over_limit": "amount",
+    "over_halo_tender": "amount",
 }
+_TILL_AMOUNT_APPROVALS = {"paid_out", "cash_pickup", "cash_loan", "no_sale"}
+_SENT_ITEM_APPROVALS = {"void_sent_item", "reduce_sent_qty"}
+
+
+def _open_item_claim_amount(claim):
+    rate = _parse_optional_number(claim.get("rate"))
+    qty = _parse_optional_number(claim.get("qty"))
+    return abs(rate * qty) if rate is not None and qty is not None else _parse_optional_number(claim.get("amount"))
+
+
+def _discount_claim_amount(invoice, profile, claim):
+    try:
+        from ury.ury_pos import discount
+    except ImportError:
+        discount = None
+
+    lines = claim.get("lines")
+    percent = _parse_optional_number(claim.get("percent")) or 0
+    amount = _parse_optional_number(claim.get("amount")) or 0
+    coupon = claim.get("coupon")
+    # On ERPNext use the same calculation as the mutation, including rule,
+    # tax, rounding, and linked-check treatment.
+    if discount and callable(getattr(invoice, "calculate_taxes_and_totals", None)) and (lines or coupon or "lines" in claim):
+        spec = discount.parse_discount_request(
+            discount_percent=percent or None, discount_amount=amount or None,
+            coupon_code=coupon, line_discounts=lines or None,
+        )
+        partner_name = invoice.get("custom_merged_pos_invoice")
+        partner = frappe.get_doc("POS Invoice", partner_name) if partner_name else None
+        summary = discount.apply_discount_to_invoice(
+            invoice, profile, spec, require_reason=False, enforce_auth=False, linked_partner=partner
+        )
+        return summary["discount_total"]
+
+    # Older clients can send a simple percent or amount without a canonical line list.
+    if coupon and discount:
+        preset = discount._resolve_coupon_preset(
+            coupon, company=invoice.get("company"),
+            price_list=invoice.get("selling_price_list") or profile.get("selling_price_list"),
+            posting_date=invoice.get("posting_date"),
+        )
+        percent, amount = flt(preset.get("discount_percentage")), flt(preset.get("discount_amount"))
+    apply_on = (invoice.get("apply_discount_on") or "Grand Total")
+    basis = flt(
+        (invoice.get("net_total") if apply_on == "Net Total" else invoice.get("grand_total"))
+        or invoice.get("total")
+    ) + flt(invoice.get("discount_amount"))
+    rows = {row.get("name"): row for row in (invoice.get("items") or [])}
+    line_total = 0.0
+    for line in lines or []:
+        if not isinstance(line, dict) or line.get("row") not in rows:
+            continue
+        row = rows[line["row"]]
+        rate = flt(row.get("price_list_rate") or row.get("rate"))
+        line_total += abs(flt(row.get("qty"))) * max(flt(line.get("amount")), rate * flt(line.get("percent")) / 100)
+    return line_total + max(amount, max(0, basis - line_total) * percent / 100)
+
+
+def _sent_item_claim_amount(invoice, claim):
+    rows = invoice.get("items") or []
+    by_name = {row.get("name"): row for row in rows}
+    by_key = {
+        row.get("reservation_line_key"): row for row in rows
+        if row.get("reservation_line_key") and not cint(row.get("ury_held"))
+    }
+    by_code = {}
+    for row in rows:
+        if not cint(row.get("ury_held")):
+            by_code.setdefault(row.get("item_code"), row)
+
+    reductions = claim.get("reductions") or claim.get("items")
+    single_row = not isinstance(reductions, list)
+    if single_row:
+        reductions = [claim]
+    total = None
+    for reduction in reductions:
+        if not isinstance(reduction, dict):
+            continue
+        row = (
+            by_name.get(reduction.get("item_row_name"))
+            or by_key.get(reduction.get("line_key"))
+            or by_code.get(reduction.get("item_code"))
+        )
+        if not row:
+            continue
+        previous_qty = flt(row.get("qty"))
+        if not single_row:
+            sent_qty = _parse_optional_number(reduction.get("from_qty"))
+            if sent_qty is not None:
+                previous_qty = sent_qty
+        new_qty = _parse_optional_number(reduction.get("new_qty"))
+        if new_qty is None:
+            new_qty = _parse_optional_number(reduction.get("to_qty"))
+        if new_qty is None:
+            delta = _parse_optional_number(reduction.get("delta"))
+            if delta is None:
+                continue
+            new_qty = previous_qty - abs(delta)
+        reduced_qty = max(0, previous_qty - max(0, new_qty))
+        if total is None:
+            total = 0
+        total += abs(flt(row.get("rate"))) * reduced_qty
+        if single_row and reduction.get("item_row_name") and previous_qty > 0:
+            parent_key = row.get("reservation_line_key")
+            for child in rows:
+                if not parent_key or not cint(child.get("custom_is_modifier")) or child.get("custom_parent_line_key") != parent_key:
+                    continue
+                child_qty = flt(child.get("qty"))
+                scaled = child_qty * max(0, new_qty) / previous_qty
+                if abs(scaled - round(scaled)) < 1e-6:
+                    total += abs(flt(child.get("rate"))) * max(0, child_qty - round(scaled))
+    return total
 
 
 def _claim_approval_amount(reference_doctype, reference_name, profile, privilege, claim):
-    """Use persisted FX data when screening PIN requests before mutation."""
-    field = _INVOICE_APPROVAL_AMOUNT_FIELDS.get(privilege)
-    amount = _parse_optional_number(claim.get(field or "amount"))
-    if privilege not in _INVOICE_APPROVAL_AMOUNT_FIELDS:
-        return amount
-    if reference_doctype == "POS Profile" and privilege == "return":
-        amount = _parse_optional_number(claim.get("refund_total"))
-        return company_approval_amount(profile, amount, frappe) if amount is not None else None
-    if reference_doctype != "POS Invoice" or not reference_name:
+    """Price the action against persisted FX and keep the signed claim in transaction units."""
+    amount_field = _INVOICE_APPROVAL_AMOUNT_FIELDS.get(privilege, "amount")
+    amount = _parse_optional_number(claim.get(amount_field))
+    if privilege == "on_account_over_limit":
+        # Credit is calculated and claimed in company currency at settlement.
+        return _parse_optional_number(claim.get("proposed"))
+    if privilege == "open_item":
+        amount = _open_item_claim_amount(claim)
+    if privilege == "over_halo_tender" and isinstance(claim.get("tenders"), list):
+        amount = max(
+            (abs(flt(row.get("amount"))) for row in claim["tenders"] if isinstance(row, dict)),
+            default=0,
+        )
+    if (
+        (reference_doctype == "POS Profile" and privilege == "return")
+        or (privilege == "open_item" and reference_name == "NEW")
+        or (
+            reference_doctype != "POS Invoice" and privilege in _TILL_AMOUNT_APPROVALS
+            and claim.get("action") != "approve_cash_movement"
+        )
+    ):
+        if amount is None:
+            return None
+        approval_currency = profile_approval_currency(profile, frappe)
+        return company_approval_amount(profile, amount, frappe, currency_and_rate=approval_currency)
+    if privilege not in _INVOICE_APPROVAL_AMOUNT_FIELDS or reference_doctype != "POS Invoice" or not reference_name:
         return amount
 
     invoice = frappe.db.get_value(
-        "POS Invoice", reference_name, ["company", "currency", "conversion_rate", "rounded_total", "grand_total"],
+        "POS Invoice", reference_name,
+        ["company", "currency", "conversion_rate", "rounded_total", "grand_total", "posting_date"],
         as_dict=True,
     )
     if not invoice or invoice.get("company") != profile.get("company"):
-        return amount
+        return None
 
     if privilege == "cancel_check":
         amount = flt(invoice.get("rounded_total") or invoice.get("grand_total"))
     elif privilege == "adjust_closed_check" and isinstance(claim.get("payments"), list):
         amount = sum(
-            _parse_optional_number(payment.get("amount")) or 0
-            for payment in claim["payments"] if isinstance(payment, dict)
+            flt(payment.get("amount")) for payment in claim["payments"] if isinstance(payment, dict)
         )
+    elif privilege == "discount" or (privilege == "complimentary" and "lines" in claim):
+        if claim.get("coupon") or claim.get("lines") or _parse_optional_number(claim.get("percent")):
+            doc = frappe.get_doc("POS Invoice", reference_name)
+            amount = _discount_claim_amount(doc, profile, claim)
+    elif privilege in _SENT_ITEM_APPROVALS and any(claim.get(key) for key in ("item_row_name", "reductions", "items")):
+        doc = frappe.get_doc("POS Invoice", reference_name)
+        computed = _sent_item_claim_amount(doc, claim)
+        if computed is not None:
+            amount = max(amount or 0, computed)
+    elif privilege == "price_override" and claim.get("item_row_name"):
+        doc = frappe.get_doc("POS Invoice", reference_name)
+        row = next((r for r in doc.get("items") or [] if r.get("name") == claim["item_row_name"]), None)
+        new_rate = _parse_optional_number(claim.get("new_rate"))
+        if row is not None and new_rate is not None:
+            original = flt(row.get("custom_original_price_list_rate") or row.get("price_list_rate") or row.get("rate"))
+            amount = abs(new_rate - original) * abs(flt(row.get("qty")))
+    elif privilege == "service_charge_waive" and claim.get("sc_action") == "waive":
+        from ury.ury_pos.pricing_actions import current_service_charge_amount
+
+        amount = current_service_charge_amount(frappe.get_doc("POS Invoice", reference_name))
+    elif privilege == "room_charge_over_limit" and amount is not None:
+        currency = str(claim.get("currency") or invoice.get("currency") or "").strip().upper()
+        company_currency = company_currency_for(profile.get("company"), frappe)
+        if currency and currency == company_currency:
+            return abs(amount)
+        if currency and currency != (invoice.get("currency") or "").strip().upper():
+            approval_currency = profile_approval_currency(profile, frappe, posting_date=invoice.get("posting_date"), currency=currency)
+            return company_approval_amount(profile, amount, frappe, currency_and_rate=approval_currency)
     return company_approval_amount(invoice, amount, frappe) if amount is not None else None
 
 
@@ -1461,6 +1625,12 @@ def authorise(
     matching_rules = _matching_authorise_rules(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
     )
+
+    if amt is None and privilege in {
+        "discount", "open_item", "price_override", "void_sent_item", "reduce_sent_qty",
+        "offline_tender", "room_charge_over_limit", "on_account_over_limit", "over_halo_tender",
+    }:
+        matching_rules = [rule for rule in matching_rules if flt(rule.get("max_amount")) <= 0]
 
     if approver_user.casefold() in _check_owners(reference_doctype, reference_name, profile=profile):
         if not matching_rules or not _allows_check_owner_self_approval(privilege, matching_rules, pct):
@@ -1735,7 +1905,6 @@ def consume(
     pct = _parse_optional_number(parsed_claim.get("percent"))
     # Mutation handlers supply the amount computed from locked invoice data.
     # The canonical claim still uses the original transaction amounts.
-    amt = approval_amount if approval_amount is not None else _parse_optional_number(parsed_claim.get("amount"))
     pg = cint(parsed_claim.get("privilege_group") or 0)
 
     approved, already_consumed = _read_approved_and_consumed(token_hash)
@@ -1801,6 +1970,10 @@ def consume(
             "You cannot approve your own request. Ask another manager.",
             frappe.PermissionError,
         )
+
+    amt = approval_amount
+    if amt is None:
+        amt = _claim_approval_amount(approved.get("reference_doctype") or "POS Invoice", reference_name, profile, privilege, parsed_claim)
 
     matching_rules = _matching_authorise_rules(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
@@ -1874,15 +2047,19 @@ def require(
     percent: float | None = None,
     amount: float | None = None,
     privilege_group: int = 0,
+    *,
+    reference_doctype: str = "POS Invoice",
 ):
     """Return None when caller may act alone, consumed approval with token, or raise POS-AUTH-REQUIRED."""
     _validate_privilege(privilege)
     if token:
-        return consume(token, privilege, pos_profile, reference_name, claim)
+        return consume(token, privilege, pos_profile, reference_name, claim, approval_amount=amount)
 
     parsed_claim = _parse_claim(claim)
     eff_pct = percent if percent is not None else _parse_optional_number(parsed_claim.get("percent"))
-    eff_amt = amount if amount is not None else _parse_optional_number(parsed_claim.get("amount"))
+    eff_amt = amount
+    if eff_amt is None and (profile := _get_profile(pos_profile)):
+        eff_amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
     eff_pg = privilege_group or cint(parsed_claim.get("privilege_group") or 0)
 
     if may_perform(
