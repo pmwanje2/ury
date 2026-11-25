@@ -12,7 +12,7 @@ Matrix rows 5-10, tracker G8 & G34:
 from __future__ import annotations
 
 import datetime as _dt
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import json
 import re
 import sys
@@ -87,6 +87,7 @@ CODE_REOPEN_ALREADY_RETURNED = "POS-REOPEN-ALREADY-RETURNED"
 CODE_REOPEN_FISCALISED = "POS-REOPEN-FISCALISED"
 CODE_ADJUST_ITEMS_FORBIDDEN = "POS-ADJUST-ITEMS-FORBIDDEN"
 CODE_ADJUST_TOTAL_MISMATCH = "POS-ADJUST-TOTAL-MISMATCH"
+CODE_MODIFIER_ORPHAN = "POS-MODIFIER-ORPHAN"
 
 ZERO_DECIMAL_CURRENCIES = frozenset({"UGX", "RWF", "BIF", "JPY", "KRW", "VND", "TZS", "XAF", "XOF"})
 THREE_DECIMAL_CURRENCIES = frozenset({"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"})
@@ -730,8 +731,129 @@ def require_pos_override(
     return user
 
 
+_MODIFIER_BUNDLE_ITEM_FIELDS = (
+    "reservation_line_key",
+    "custom_parent_line_key",
+    "custom_line_role",
+    "custom_is_modifier",
+    "custom_modifier_prefix",
+    "custom_modifier_group",
+    "custom_modifier_option",
+    "custom_modifiers_json",
+    "custom_bundle_overrides_json",
+    "custom_inherit_parent_routing",
+    "custom_hide_unpriced_on_receipt",
+    "comment",
+    "custom_course",
+)
+
+_PRIVILEGED_PRICING_ITEM_FIELDS = (
+    "custom_original_price_list_rate",
+    "custom_price_overridden",
+    "custom_price_override_reason",
+    "custom_price_override_approver",
+    "custom_is_open_item",
+    "custom_open_item_reference",
+    "custom_is_complimentary",
+    "custom_comp_type",
+    "custom_comp_reason",
+    "custom_comp_approver",
+    "custom_efris_tax_category",
+)
+
+_PRIVILEGED_PRICING_HEADER_FIELDS = (
+    "custom_is_complimentary",
+    "custom_comp_type",
+    "custom_comp_reason",
+    "custom_comp_approver",
+    "custom_tax_exempt",
+    "custom_tax_exempt_reason",
+    "custom_tax_exempt_certificate",
+    "custom_tax_exempt_approver",
+    "custom_tax_exempt_customer",
+    "custom_efris_tax_category",
+    "custom_service_charge_waived",
+    "custom_service_charge_override_rate",
+    "custom_service_charge_override_amount",
+    "custom_service_charge_reason",
+    "custom_service_charge_approver",
+)
+
+
+def _copy_item_modifier_and_bundle_fields(src_row: Any, dst_payload: dict[str, Any]) -> None:
+    """Copy #156 modifier linkage, prep notes, and Product Bundle override metadata onto a target item dict."""
+    for fname in _MODIFIER_BUNDLE_ITEM_FIELDS:
+        val = _field(src_row, fname, None)
+        if val is None:
+            continue
+        if fname in ("custom_is_modifier", "custom_inherit_parent_routing", "custom_hide_unpriced_on_receipt"):
+            dst_payload[fname] = cint(val)
+        else:
+            dst_payload[fname] = val
+
+
+def _copy_item_privileged_pricing_fields(src_row: Any, dst_payload: dict[str, Any]) -> None:
+    """Copy #152 privileged item pricing/override/comp metadata onto a target item dict."""
+    for fname in _PRIVILEGED_PRICING_ITEM_FIELDS:
+        val = _field(src_row, fname, None)
+        if val not in (None, "", 0, 0.0):
+            dst_payload[fname] = val
+    base_plr = _field(src_row, "base_price_list_rate", None)
+    if base_plr not in (None, 0, 0.0):
+        dst_payload["base_price_list_rate"] = flt(base_plr)
+    if (
+        cint(_field(src_row, "ignore_pricing_rule", 0)) == 1
+        or cint(_field(src_row, "custom_price_overridden", 0)) == 1
+        or cint(_field(src_row, "custom_is_complimentary", 0)) == 1
+    ):
+        dst_payload["ignore_pricing_rule"] = 1
+
+
+def _linked_child_rows_for_parent(orig_items: list[Any], parent_row: Any) -> list[Any]:
+    """Return priced child modifier / combo upcharge rows linked to `parent_row`."""
+    if cint(_field(parent_row, "custom_is_modifier", 0)) == 1:
+        return []
+    parent_key = (_field(parent_row, "reservation_line_key") or "").strip()
+    if not parent_key:
+        return []
+    parent_name = _field(parent_row, "name")
+    return [
+        row
+        for row in orig_items
+        if _field(row, "name") != parent_name
+        and cint(_field(row, "custom_is_modifier", 0)) == 1
+        and (_field(row, "custom_parent_line_key") or "").strip() == parent_key
+        and _dec(_field(row, "qty", 0)) > 0
+    ]
+
+
+def _required_child_return_qty(
+    parent_sold: Decimal,
+    parent_rem: Decimal,
+    req_parent: Decimal,
+    child_sold: Decimal,
+    child_rem: Decimal,
+) -> Decimal:
+    """Minimum linked child qty that must accompany a parent return so no child is left orphaned."""
+    if req_parent <= 0 or child_rem <= 0:
+        return Decimal("0")
+    parent_rem_after = parent_rem - req_parent
+    if parent_rem_after <= Decimal("1e-9"):
+        return child_rem
+    if parent_sold > 0:
+        scaled = (child_sold * req_parent) / parent_sold
+        rounded = scaled.to_integral_value(rounding=ROUND_HALF_UP)
+        if abs(scaled - rounded) < Decimal("1e-6"):
+            return min(child_rem, rounded)
+        max_remaining_child = ((child_sold * parent_rem_after) / parent_sold).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+        return max(Decimal("0"), min(child_rem, child_rem - max_remaining_child))
+    return Decimal("0")
+
+
 def _expand_stock_waste_items(waste_items: list[dict[str, Any]], default_warehouse: str | None) -> list[dict[str, Any]]:
-    """Expand Product Bundles and filter to stock items (`is_stock_item == 1`) only."""
+    """Expand Product Bundles (honoring `custom_bundle_overrides_json`) and filter to stock items only."""
     fr = _f()
     expanded: list[dict[str, Any]] = []
     for entry in waste_items:
@@ -739,10 +861,48 @@ def _expand_stock_waste_items(waste_items: list[dict[str, Any]], default_warehou
         qty = flt(entry.get("qty"))
         if not item_code or qty <= 0:
             continue
+        if (entry.get("custom_line_role") or "") == "Combo Upcharge":
+            continue
         warehouse = entry.get("warehouse") or default_warehouse
 
+        raw_overrides = entry.get("custom_bundle_overrides_json") or entry.get("bundle_overrides")
         bundle_name = fr.db.exists("Product Bundle", {"new_item_code": item_code})
+        if not (isinstance(bundle_name, str) and bundle_name):
+            bundle_val = fr.db.get_value("Product Bundle", {"new_item_code": item_code}, "name")
+            if isinstance(bundle_val, str) and bundle_val:
+                bundle_name = bundle_val
+            elif fr.db.exists("Product Bundle", item_code):
+                bundle_name = item_code
+
         if isinstance(bundle_name, str) and bundle_name:
+            resolved_components = []
+            try:
+                from ury.ury.api.ury_bundle_resolver import resolve_bundle_components
+
+                resolved_components = resolve_bundle_components(
+                    item_code, overrides=raw_overrides, qty=qty
+                ) or []
+            except Exception:
+                resolved_components = []
+
+            if resolved_components:
+                for comp in resolved_components:
+                    comp_code = _field(comp, "item_code")
+                    comp_qty = flt(_field(comp, "qty"))
+                    if not comp_code or comp_qty <= 0:
+                        continue
+                    comp_info = fr.db.get_value(
+                        "Item", comp_code, ["is_stock_item", "stock_uom"], as_dict=True
+                    )
+                    if comp_info is not None and cint(_field(comp_info, "is_stock_item", 0)) == 1:
+                        expanded.append({
+                            "item_code": comp_code,
+                            "qty": comp_qty,
+                            "uom": _field(comp, "uom") or _field(comp_info, "stock_uom"),
+                            "warehouse": warehouse,
+                        })
+                continue
+
             components = fr.get_all(
                 "Product Bundle Item",
                 filters={"parent": bundle_name, "parenttype": "Product Bundle"},
@@ -1332,6 +1492,32 @@ def _compute_return_plan(
             req_by_row[row_name] = Decimal("0")
         req_by_row[row_name] += qty_d
 
+    # Proportionally include linked child modifiers / combo upcharges whenever a parent row is
+    # returned so partial parent returns can never orphan priced child modifier lines.
+    for row_name in list(req_order):
+        parent_row = orig_by_name[row_name]
+        linked_children = _linked_child_rows_for_parent(orig_items, parent_row)
+        if not linked_children:
+            continue
+        parent_sold = _dec(_field(parent_row, "qty", 0))
+        parent_rem = max(Decimal("0"), parent_sold - prior_qty.get(row_name, Decimal("0")))
+        req_parent = req_by_row[row_name]
+        insert_pos = req_order.index(row_name) + 1
+        for child in linked_children:
+            child_name = _field(child, "name")
+            if not child_name:
+                continue
+            child_sold = _dec(_field(child, "qty", 0))
+            child_rem = max(Decimal("0"), child_sold - prior_qty.get(child_name, Decimal("0")))
+            min_child = _required_child_return_qty(parent_sold, parent_rem, req_parent, child_sold, child_rem)
+            if min_child > Decimal("0"):
+                existing_req = req_by_row.get(child_name, Decimal("0"))
+                if existing_req + Decimal("1e-9") < min_child:
+                    req_by_row[child_name] = min_child
+                    if child_name not in req_order:
+                        req_order.insert(insert_pos, child_name)
+                        insert_pos += 1
+
     selected_lines: list[dict[str, Any]] = []
     this_gross = Decimal("0")
     for row_name in req_order:
@@ -1659,6 +1845,15 @@ def get_returnable_check(invoice_id: str) -> dict[str, Any]:
             "remaining_qty": float(rem),
             "rate": float(_field(row, "rate", 0)),
             "amount": float(_field(row, "amount", 0)),
+            "reservation_line_key": _field(row, "reservation_line_key") or None,
+            "custom_parent_line_key": _field(row, "custom_parent_line_key") or None,
+            "custom_is_modifier": cint(_field(row, "custom_is_modifier", 0)),
+            "custom_line_role": _field(row, "custom_line_role") or "Standard",
+            "custom_modifier_prefix": _field(row, "custom_modifier_prefix") or "",
+            "custom_modifier_group": _field(row, "custom_modifier_group") or None,
+            "custom_modifier_option": _field(row, "custom_modifier_option") or None,
+            "custom_modifiers_json": _field(row, "custom_modifiers_json") or "",
+            "custom_bundle_overrides_json": _field(row, "custom_bundle_overrides_json") or "",
         })
 
     profile_name = _safe_profile_name(_field(orig, "pos_profile"))
@@ -1874,6 +2069,7 @@ def create_pos_return(
             "ury_held": 0,
         }
         _copy_item_tax_fields(orow, item_payload)
+        _copy_item_modifier_and_bundle_fields(orow, item_payload)
         ret.append("items", item_payload)
 
     if plan["discount_amount"] > 0:
@@ -2189,6 +2385,37 @@ def validate_pos_return_doc(doc, *, on_submit_check: bool = False) -> None:
                         fr.ValidationError,
                     )
 
+        # Prevent direct REST/Desk partial parent returns from orphaning linked priced child modifiers.
+        for ref, req_parent in req_by_name.items():
+            parent_row = orig_by_name.get(ref)
+            if not parent_row or req_parent <= 0:
+                continue
+            linked_children = _linked_child_rows_for_parent(orig_items, parent_row)
+            if not linked_children:
+                continue
+            parent_sold = _dec(_field(parent_row, "qty", 0))
+            parent_rem = max(Decimal("0"), parent_sold - prior_qty.get(ref, Decimal("0")))
+            for child in linked_children:
+                child_name = _field(child, "name")
+                if not child_name:
+                    continue
+                child_sold = _dec(_field(child, "qty", 0))
+                child_rem = max(Decimal("0"), child_sold - prior_qty.get(child_name, Decimal("0")))
+                min_child = _required_child_return_qty(parent_sold, parent_rem, req_parent, child_sold, child_rem)
+                if min_child <= 0:
+                    continue
+                actual_child = req_by_name.get(child_name, Decimal("0"))
+                if actual_child + Decimal("1e-9") < min_child:
+                    _refuse(
+                        CODE_MODIFIER_ORPHAN,
+                        (
+                            f"Returning {_field(parent_row, 'item_name') or _field(parent_row, 'item_code')} "
+                            f"requires also returning {min_child} of its linked modifier "
+                            f"{_field(child, 'item_name') or _field(child, 'item_code')}."
+                        ),
+                        fr.ValidationError,
+                    )
+
         if not has_verified and actor != "Administrator":
             _assert_same_outlet(_field(orig, "branch"))
             orig_profile = _safe_profile_name(_field(orig, "pos_profile"))
@@ -2433,6 +2660,7 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
             "ury_held": 0,
         }
         _copy_item_tax_fields(row, item_payload)
+        _copy_item_modifier_and_bundle_fields(row, item_payload)
         rev.append("items", item_payload)
 
     disc = abs(flt(_field(orig, "discount_amount", 0)))
@@ -2491,8 +2719,11 @@ def _build_full_reversal_return(orig, reason_info: dict[str, Any], approver: str
     return rev
 
 
-def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
+def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> dict[tuple[str, Any], float]:
     tips_account = _tips_payable_account(src, pos_profile_doc)
+    currency = _field(src, "currency") or _field(dst, "currency") or "UGX"
+    precision = _currency_precision(currency, doc=src)
+    verified_priv_child_rates: dict[tuple[str, Any], float] = {}
     has_line_discount = False
     for row in _field(src, "items") or []:
         qty = flt(_field(row, "qty", 0))
@@ -2524,7 +2755,29 @@ def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
             item_payload["margin_type"] = margin_type
             item_payload["margin_rate_or_amount"] = margin_val
         _copy_item_tax_fields(row, item_payload)
-        dst.append("items", item_payload)
+        _copy_item_modifier_and_bundle_fields(row, item_payload)
+        _copy_item_privileged_pricing_fields(row, item_payload)
+        appended = dst.append("items", item_payload)
+        if appended is None and _field(dst, "items"):
+            appended = _field(dst, "items")[-1]
+        if (
+            appended is not None
+            and cint(_field(row, "custom_is_modifier", 0)) == 1
+            and (
+                cint(_field(row, "custom_price_overridden", 0)) == 1
+                or cint(_field(row, "custom_is_complimentary", 0)) == 1
+            )
+        ):
+            verified_rate = flt(rate, precision)
+            verified_priv_child_rates[("row_id", id(appended))] = verified_rate
+            rkey = _field(row, "reservation_line_key")
+            if rkey:
+                verified_priv_child_rates[("rkey", str(rkey))] = verified_rate
+
+    for priv_hdr in _PRIVILEGED_PRICING_HEADER_FIELDS:
+        val = _field(src, priv_hdr, None)
+        if val not in (None, "", 0, 0.0) and _has_field("POS Invoice", priv_hdr):
+            setattr(dst, priv_hdr, val)
 
     disc = abs(flt(_field(src, "discount_amount", 0)))
     add_disc_pct = flt(_field(src, "additional_discount_percentage", 0))
@@ -2560,6 +2813,8 @@ def _clone_check_lines_and_taxes(src, dst, *, pos_profile_doc=None) -> None:
         if _is_tip_tax_row(t, tips_account):
             continue
         dst.append("taxes", _clone_tax_row_dict(t, tax_amount=flt(_field(t, "tax_amount", 0))))
+
+    return verified_priv_child_rates
 
 
 def _record_before_after_audit(orig, replacement, action: str, before: dict[str, Any], after: dict[str, Any], approver: str, reason_info: dict[str, Any]) -> None:
@@ -2702,7 +2957,7 @@ def adjust_closed_check(
     if _field(orig, "room_number") and any(_is_room_charge_mode(p["mode_of_payment"]) for p in normalized_payments):
         rep.room_number = _field(orig, "room_number")
 
-    _clone_check_lines_and_taxes(orig, rep, pos_profile_doc=profile_doc)
+    verified_priv_child_rates = _clone_check_lines_and_taxes(orig, rep, pos_profile_doc=profile_doc)
 
     # Wire adjusted tips through #145's real charged-tip model (`custom_charged_tip` +
     # `custom_tip_server` + Tips Payable `Sales Taxes and Charges` `Actual` row).
@@ -2732,11 +2987,16 @@ def adjust_closed_check(
         })
 
     prev_reopen_copy = getattr(fr.flags, "ury_reopen_adjust_copy", False)
+    prev_verified_rates = getattr(getattr(rep, "flags", None), "ury_verified_privileged_child_rates", None)
     fr.flags.ury_reopen_adjust_copy = True
+    if verified_priv_child_rates and getattr(rep, "flags", None) is not None:
+        rep.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
     try:
         rep.insert(ignore_permissions=True)
         rep.submit()
     finally:
+        if getattr(rep, "flags", None) is not None:
+            rep.flags.ury_verified_privileged_child_rates = prev_verified_rates
         fr.flags.ury_reopen_adjust_copy = prev_reopen_copy
 
     after_snapshot = {
@@ -2867,12 +3127,17 @@ def reopen_closed_check(
     if _has_field("POS Invoice", "custom_tip_server"):
         reopened.custom_tip_server = None
 
-    _clone_check_lines_and_taxes(orig, reopened, pos_profile_doc=profile_doc)
+    verified_priv_child_rates = _clone_check_lines_and_taxes(orig, reopened, pos_profile_doc=profile_doc)
     prev_reopen_copy = getattr(fr.flags, "ury_reopen_adjust_copy", False)
+    prev_verified_rates = getattr(getattr(reopened, "flags", None), "ury_verified_privileged_child_rates", None)
     fr.flags.ury_reopen_adjust_copy = True
+    if verified_priv_child_rates and getattr(reopened, "flags", None) is not None:
+        reopened.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
     try:
         reopened.insert(ignore_permissions=True)
     finally:
+        if getattr(reopened, "flags", None) is not None:
+            reopened.flags.ury_verified_privileged_child_rates = prev_verified_rates
         fr.flags.ury_reopen_adjust_copy = prev_reopen_copy
 
     after_snapshot = {

@@ -3805,17 +3805,31 @@ def sync_order(
                 alt_claim=b2a_compat_claim,
             )
             if sent_void_reason_info["is_waste"]:
-                wh_by_code = {row.get("item_code"): row.get("warehouse") for row in invoice.items}
-                uom_by_code = {row.get("item_code"): row.get("uom") for row in invoice.items}
-                sent_waste_items = [
-                    {
-                        "item_code": r["item_code"],
-                        "qty": abs(r["delta"]),
-                        "warehouse": wh_by_code.get(r["item_code"]),
-                        "uom": uom_by_code.get(r["item_code"]),
-                    }
-                    for r in sent_reductions
-                ]
+                row_by_line = {
+                    row.get("reservation_line_key"): row
+                    for row in (invoice.items or [])
+                    if row.get("reservation_line_key")
+                }
+                row_by_code = {}
+                for row in (invoice.items or []):
+                    code = row.get("item_code")
+                    if code and code not in row_by_code:
+                        row_by_code[code] = row
+                sent_waste_items = []
+                for r in sent_reductions:
+                    src_row = row_by_line.get(r["line_key"]) or row_by_code.get(r["item_code"]) or {}
+                    if (src_row.get("custom_line_role") or "") == "Combo Upcharge":
+                        continue
+                    sent_waste_items.append(
+                        {
+                            "item_code": r["item_code"],
+                            "qty": abs(r["delta"]),
+                            "warehouse": src_row.get("warehouse"),
+                            "uom": src_row.get("uom"),
+                            "custom_line_role": src_row.get("custom_line_role"),
+                            "custom_bundle_overrides_json": src_row.get("custom_bundle_overrides_json"),
+                        }
+                    )
 
     if captured_at is not None:
         captured = _offline_capture_time(captured_at, pos_profile, billing_user=billing_user)
@@ -4838,9 +4852,13 @@ def cancel_order(invoice_id, reason, note=None, is_waste=0, approval_token=None)
                 "qty": flt(r.get("qty")),
                 "warehouse": r.get("warehouse"),
                 "uom": r.get("uom"),
+                "custom_line_role": r.get("custom_line_role"),
+                "custom_bundle_overrides_json": r.get("custom_bundle_overrides_json"),
             }
             for r in (pos_invoice.get("items") or [])
-            if flt(r.get("qty")) > 0 and cint(r.get("ury_held")) == 0
+            if flt(r.get("qty")) > 0
+            and cint(r.get("ury_held")) == 0
+            and (r.get("custom_line_role") or "") != "Combo Upcharge"
         ]
         if sent_rows:
             pos_profile_doc = frappe.get_doc("POS Profile", profile_name)

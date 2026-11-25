@@ -401,17 +401,37 @@ def reduce_order_item_qty(
 			"Partially cancelled", previous_items_snapshot, **cancel_kwargs,
 		)
 		if reason_info and reason_info["is_waste"]:
+			waste_rows = [
+				{
+					"item_code": item_code,
+					"qty": abs(delta),
+					"warehouse": item_row.get("warehouse"),
+					"uom": item_row.get("uom"),
+					"custom_line_role": item_row.get("custom_line_role"),
+					"custom_bundle_overrides_json": item_row.get("custom_bundle_overrides_json"),
+				}
+			]
+			for child, child_prev_qty, child_new_qty in child_updates:
+				if cint(child.get("ury_held")) == 1:
+					continue
+				if (child.get("custom_line_role") or "") == "Combo Upcharge":
+					continue
+				child_delta = flt(child_prev_qty) - flt(child_new_qty)
+				if child_delta > 0:
+					waste_rows.append(
+						{
+							"item_code": child.get("item_code"),
+							"qty": child_delta,
+							"warehouse": child.get("warehouse"),
+							"uom": child.get("uom"),
+							"custom_line_role": child.get("custom_line_role"),
+							"custom_bundle_overrides_json": child.get("custom_bundle_overrides_json"),
+						}
+					)
 			waste_stock_entry = post_waste_stock_entry(
 				pos_invoice,
 				pos_profile,
-				[
-					{
-						"item_code": item_code,
-						"qty": abs(delta),
-						"warehouse": item_row.get("warehouse"),
-						"uom": item_row.get("uom"),
-					}
-				],
+				waste_rows,
 				reason_info,
 				cancel_kot_names=created_kot_names,
 				approver=approver,

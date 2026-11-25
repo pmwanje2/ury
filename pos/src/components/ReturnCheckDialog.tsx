@@ -11,10 +11,32 @@ import {
   previewPosReturn,
   type CreatePosReturnResponse,
   type RefundPaymentEntry,
+  type ReturnableCheckItem,
   type ReturnableCheckResponse,
   type ReturnPreviewResponse,
 } from '../lib/void-return-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
+
+function requiredChildReturnQty(
+  parent: ReturnableCheckItem,
+  parentReturnQty: number,
+  child: ReturnableCheckItem,
+): number {
+  if (parentReturnQty <= 0 || child.remaining_qty <= 0) return 0;
+  const parentRemAfter = parent.remaining_qty - parentReturnQty;
+  if (parentRemAfter <= 1e-9) {
+    return child.remaining_qty;
+  }
+  if (parent.sold_qty > 0) {
+    const scaled = (child.sold_qty * parentReturnQty) / parent.sold_qty;
+    if (Math.abs(scaled - Math.round(scaled)) < 1e-6) {
+      return Math.min(child.remaining_qty, Math.round(scaled));
+    }
+    const maxRemainingChild = Math.ceil((child.sold_qty * parentRemAfter) / parent.sold_qty - 1e-9);
+    return Math.max(0, Math.min(child.remaining_qty, child.remaining_qty - maxRemainingChild));
+  }
+  return 0;
+}
 
 export interface ReturnCheckDialogProps {
   open: boolean;
@@ -88,13 +110,54 @@ export default function ReturnCheckDialog({
     };
   }, [open, invoiceId]);
 
-  const selectedItems = useMemo(
-    () =>
-      Object.entries(qtyByRow)
+  const selectedItems = useMemo(() => {
+    if (!checkData) {
+      return Object.entries(qtyByRow)
         .filter(([, qty]) => qty > 0)
-        .map(([item_row_name, qty]) => ({ item_row_name, qty })),
-    [qtyByRow],
-  );
+        .map(([item_row_name, qty]) => ({ item_row_name, qty }));
+    }
+    return checkData.items
+      .filter((row) => (qtyByRow[row.item_row_name] || 0) > 0)
+      .map((row) => ({ item_row_name: row.item_row_name, qty: qtyByRow[row.item_row_name] || 0 }));
+  }, [checkData, qtyByRow]);
+
+  const parentByLineKey = useMemo(() => {
+    const map = new Map<string, ReturnableCheckItem>();
+    if (!checkData) return map;
+    for (const row of checkData.items) {
+      if (Number(row.custom_is_modifier || 0) !== 1 && row.reservation_line_key) {
+        map.set(row.reservation_line_key, row);
+      }
+    }
+    return map;
+  }, [checkData]);
+
+  const childrenByParentKey = useMemo(() => {
+    const map = new Map<string, ReturnableCheckItem[]>();
+    if (!checkData) return map;
+    for (const row of checkData.items) {
+      if (Number(row.custom_is_modifier || 0) === 1 && row.custom_parent_line_key) {
+        const list = map.get(row.custom_parent_line_key) || [];
+        list.push(row);
+        map.set(row.custom_parent_line_key, list);
+      }
+    }
+    return map;
+  }, [checkData]);
+
+  function updateRowQty(row: ReturnableCheckItem, nextQty: number) {
+    const clamped = Math.max(0, Math.min(row.remaining_qty, nextQty));
+    setQtyByRow((prev) => {
+      const updated: Record<string, number> = { ...prev, [row.item_row_name]: clamped };
+      if (Number(row.custom_is_modifier || 0) !== 1 && row.reservation_line_key) {
+        const linked = childrenByParentKey.get(row.reservation_line_key) || [];
+        for (const child of linked) {
+          updated[child.item_row_name] = requiredChildReturnQty(row, clamped, child);
+        }
+      }
+      return updated;
+    });
+  }
 
   useEffect(() => {
     if (!open || !checkData || selectedItems.length === 0) {
@@ -178,15 +241,21 @@ export default function ReturnCheckDialog({
     } catch (err) {
       const msg = parseFrappeError(err, '') || (err instanceof Error ? err.message : '');
       if (!approvalToken && isAuthRequiredError(msg || err)) {
-        const sortedItems = selectedItems
-          .map((sel) => {
-            const meta = checkData.items.find((i) => i.item_row_name === sel.item_row_name);
-            return {
-              item_row_name: sel.item_row_name,
-              item_code: meta?.item_code || '',
-              qty: Number(sel.qty),
-            };
-          })
+        const claimSource = preview.items.length > 0
+          ? preview.items.map((item) => ({
+              item_row_name: item.item_row_name,
+              item_code: item.item_code,
+              qty: Number(item.qty),
+            }))
+          : selectedItems.map((sel) => {
+              const meta = checkData.items.find((i) => i.item_row_name === sel.item_row_name);
+              return {
+                item_row_name: sel.item_row_name,
+                item_code: meta?.item_code || '',
+                qty: Number(sel.qty),
+              };
+            });
+        const sortedItems = claimSource
           .sort((a, b) =>
             a.item_row_name.localeCompare(b.item_row_name) || a.item_code.localeCompare(b.item_code),
           );
@@ -288,13 +357,32 @@ export default function ReturnCheckDialog({
                 <div className="divide-y divide-gray-200 rounded-lg border border-gray-200">
                   {checkData.items.map((row) => {
                     const chosen = qtyByRow[row.item_row_name] || 0;
+                    const isChildMod =
+                      Number(row.custom_is_modifier || 0) === 1 && Boolean(row.custom_parent_line_key);
+                    const linkedParent =
+                      isChildMod && row.custom_parent_line_key
+                        ? parentByLineKey.get(row.custom_parent_line_key)
+                        : undefined;
+                    const minChildQty = linkedParent
+                      ? requiredChildReturnQty(
+                          linkedParent,
+                          qtyByRow[linkedParent.item_row_name] || 0,
+                          row,
+                        )
+                      : 0;
+                    const modPrefix = (row.custom_modifier_prefix || '').trim();
+                    const displayLabel = isChildMod
+                      ? `+ ${modPrefix ? `${modPrefix} ` : ''}${row.item_name}`
+                      : row.item_name;
                     return (
                       <div
                         key={row.item_row_name}
-                        className="flex items-center justify-between gap-3 p-3"
+                        className={`flex items-center justify-between gap-3 p-3${isChildMod ? ' ps-7 bg-gray-50/70' : ''}`}
                       >
                         <div className="min-w-0">
-                          <div className="font-medium text-gray-900 truncate">{row.item_name}</div>
+                          <div className={`${isChildMod ? 'text-sm text-gray-700' : 'font-medium text-gray-900'} truncate`}>
+                            {displayLabel}
+                          </div>
                           <div className="text-xs text-gray-600">
                             {formatMoneyAmount(row.rate, checkData.currency, checkData.precision)} ·{' '}
                             {t('void_return.remaining_qty_label', {
@@ -307,13 +395,8 @@ export default function ReturnCheckDialog({
                           <button
                             type="button"
                             aria-label={t('void_return.decrease_return_qty', { item: row.item_name })}
-                            disabled={chosen <= 0 || submitting}
-                            onClick={() =>
-                              setQtyByRow((prev) => ({
-                                ...prev,
-                                [row.item_row_name]: Math.max(0, (prev[row.item_row_name] || 0) - 1),
-                              }))
-                            }
+                            disabled={chosen <= minChildQty || submitting}
+                            onClick={() => updateRowQty(row, chosen - 1)}
                             className="h-11 w-11 rounded-lg border border-gray-300 bg-white font-semibold disabled:opacity-40"
                           >
                             −
@@ -325,15 +408,7 @@ export default function ReturnCheckDialog({
                             type="button"
                             aria-label={t('void_return.increase_return_qty', { item: row.item_name })}
                             disabled={chosen >= row.remaining_qty || submitting}
-                            onClick={() =>
-                              setQtyByRow((prev) => ({
-                                ...prev,
-                                [row.item_row_name]: Math.min(
-                                  row.remaining_qty,
-                                  (prev[row.item_row_name] || 0) + 1,
-                                ),
-                              }))
-                            }
+                            onClick={() => updateRowQty(row, chosen + 1)}
                             className="h-11 w-11 rounded-lg border border-gray-300 bg-white font-semibold disabled:opacity-40"
                           >
                             +

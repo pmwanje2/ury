@@ -54,6 +54,12 @@ def get_product_bundle_name(item_code):
 	if not item_code:
 		return None
 	bundle = frappe.db.get_value("Product Bundle", {"new_item_code": item_code}, "name")
+	if not isinstance(bundle, str) or not bundle:
+		exists_match = frappe.db.exists("Product Bundle", {"new_item_code": item_code})
+		if isinstance(exists_match, str) and exists_match:
+			bundle = exists_match
+		else:
+			bundle = None
 	if not bundle and frappe.db.exists("Product Bundle", item_code):
 		bundle = item_code
 	return bundle

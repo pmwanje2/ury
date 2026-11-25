@@ -270,46 +270,61 @@ export function ProductConfigurator({
                         </div>
                       </div>
 
-                      {group.allowPrefixes && group.allowedPrefixes.length > 0 && (
-                        <div
-                          role="group"
-                          aria-label={labels.prefixStripLabel || 'Modifier prefix'}
-                          className="flex flex-wrap gap-1.5"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => onSelectModifierPrefix?.(group.name, null)}
-                            aria-pressed={!group.activePrefix}
-                            className={cn(
-                              'min-h-[44px] min-w-[44px] rounded-md border px-3 py-2 text-xs font-medium transition-colors touch-manipulation',
-                              !group.activePrefix
-                                ? 'border-blue-600 bg-blue-600 text-white'
-                                : 'border-border bg-white text-gray-700 hover:bg-gray-50'
-                            )}
+                      {group.allowPrefixes && group.allowedPrefixes.length > 0 && (() => {
+                        const regularLabel = labels.regularPrefix || 'Regular'
+                        const regularNormalized = regularLabel.trim().toLowerCase()
+                        const seenPrefixes = new Set<string>(['regular', regularNormalized])
+                        const extraPrefixes = group.allowedPrefixes.filter((prefix) => {
+                          const key = prefix.trim().toLowerCase()
+                          if (!key || seenPrefixes.has(key)) return false
+                          seenPrefixes.add(key)
+                          return true
+                        })
+                        const isRegularActive =
+                          !group.activePrefix ||
+                          group.activePrefix.trim().toLowerCase() === 'regular' ||
+                          group.activePrefix.trim().toLowerCase() === regularNormalized
+                        return (
+                          <div
+                            role="group"
+                            aria-label={labels.prefixStripLabel || 'Modifier prefix'}
+                            className="flex flex-wrap gap-1.5"
                           >
-                            {labels.regularPrefix || 'Regular'}
-                          </button>
-                          {group.allowedPrefixes.map((prefix) => {
-                            const active = group.activePrefix === prefix
-                            return (
-                              <button
-                                key={prefix}
-                                type="button"
-                                onClick={() => onSelectModifierPrefix?.(group.name, active ? null : prefix)}
-                                aria-pressed={active}
-                                className={cn(
-                                  'min-h-[44px] min-w-[44px] rounded-md border px-3 py-2 text-xs font-medium transition-colors touch-manipulation',
-                                  active
-                                    ? 'border-blue-600 bg-blue-600 text-white'
-                                    : 'border-border bg-white text-gray-700 hover:bg-gray-50'
-                                )}
-                              >
-                                {prefix}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
+                            <button
+                              type="button"
+                              onClick={() => onSelectModifierPrefix?.(group.name, null)}
+                              aria-pressed={isRegularActive}
+                              className={cn(
+                                'min-h-[44px] min-w-[44px] rounded-md border px-3 py-2 text-xs font-medium transition-colors touch-manipulation',
+                                isRegularActive
+                                  ? 'border-blue-600 bg-blue-600 text-white'
+                                  : 'border-border bg-white text-gray-700 hover:bg-gray-50'
+                              )}
+                            >
+                              {regularLabel}
+                            </button>
+                            {extraPrefixes.map((prefix) => {
+                              const active = group.activePrefix === prefix
+                              return (
+                                <button
+                                  key={prefix}
+                                  type="button"
+                                  onClick={() => onSelectModifierPrefix?.(group.name, active ? null : prefix)}
+                                  aria-pressed={active}
+                                  className={cn(
+                                    'min-h-[44px] min-w-[44px] rounded-md border px-3 py-2 text-xs font-medium transition-colors touch-manipulation',
+                                    active
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : 'border-border bg-white text-gray-700 hover:bg-gray-50'
+                                  )}
+                                >
+                                  {prefix}
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )
+                      })()}
 
                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                         {group.options.map((opt) => (

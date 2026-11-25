@@ -1835,6 +1835,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           invoiceId={selectedOrder.name}
           currency={selectedOrderCurrency || profileCurrency}
           item={voidDialogItem}
+          orderItems={selectedOrderItems}
           onCompleted={(result) => {
             setVoidDialogItem(null);
             showToast.success(qtyReductionMessage(voidDialogItem.item_name, result.new_qty, result.cancel_kot_names));

@@ -1243,6 +1243,7 @@ def validate_pos_invoice_modifiers(doc, method=None, *, is_submit=False):
 	in_verified_split_or_merge = bool(
 		getattr(frappe.flags, "ury_bill_split", False)
 		or getattr(frappe.flags, "in_bill_merge_sync", False)
+		or getattr(frappe.flags, "ury_reopen_adjust_copy", False)
 	)
 	rate_tol = (10 ** (-precision)) / 2.0 if precision > 0 else 0.001
 
