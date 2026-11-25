@@ -195,7 +195,7 @@ describe('Orders void_sent_item manager PIN flow', () => {
         pos_profile: 'Main Till',
         privilege: 'void_sent_item',
         approver: 'mgr@example.com',
-        pin: '7412',
+        pin_secret: '7412',
         reference_doctype: 'POS Invoice',
         reference_name: 'POS-INV-900',
         claim: expect.objectContaining({

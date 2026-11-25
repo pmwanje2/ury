@@ -45,7 +45,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     await waitFor(() => {
       expect(call.post).toHaveBeenCalledWith('ury.ury_pos.override.set_my_pin', {
         password: 'MySecretPass1!',
-        pin: '4826',
+        pin_secret: '4826',
       });
     });
 
@@ -143,7 +143,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
 
     expect(save).toHaveBeenCalledWith('ury.ury_pos.override.set_my_pin', {
       password: 'MySecretPass1!',
-      pin: '4826',
+      pin_secret: '4826',
     });
     expect(await screen.findByText('Approval PIN set')).toBeInTheDocument();
     expect(screen.queryByText('Reset required')).not.toBeInTheDocument();

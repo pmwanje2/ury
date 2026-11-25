@@ -270,7 +270,7 @@ describe("POS room charge lookup: surname/shared room, limit & balance, ManagerA
           pos_profile: "Till A",
           privilege: "room_charge_over_limit",
           approver: "duty@hotel.test",
-          pin: "4321",
+          pin_secret: "4321",
           reference_doctype: "POS Invoice",
           reference_name: "BILL-1",
         }),

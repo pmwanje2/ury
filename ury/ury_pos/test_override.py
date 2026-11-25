@@ -1269,6 +1269,20 @@ class TestOverrideContract(unittest.TestCase):
                            if name in signature(api.set_my_pin).parameters}
                 self.assertTrue(api.set_my_pin(**newargs)["ok"])
 
+    def test_redacted_pin_wire_field_is_accepted_and_scrubbed(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        self.frappe.local.request = SimpleNamespace(path="/api/method/ury.ury_pos.override.set_my_pin")
+        for before_request in (True, False):
+            with self.subTest(before_request=before_request):
+                self.frappe.form_dict = {"pin_secret": "4829", "pin": "invalid", "current_password": "secret-pass-1"}
+                if before_request:
+                    api.scrub_pin_request()
+                    self.assertEqual(self.frappe.form_dict, {})
+                self.assertTrue(api.set_my_pin()["ok"])
+                self.assertEqual(self.frappe.form_dict, {})
+        self.assertTrue(api.set_my_pin(password="secret-pass-1", pin_secret="4829")["ok"])
+
     def test_expected_pin_error_preserves_type_and_disables_developer_snapshot(self):
         api = self.api()
         self.frappe.session.user = "manager@example.test"

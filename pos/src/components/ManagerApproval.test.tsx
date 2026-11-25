@@ -154,7 +154,7 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
         pos_profile: 'Main Till',
         privilege: 'void_sent_item',
         approver: 'mgr.a@example.com',
-        pin: '4826',
+        pin_secret: '4826',
         reference_doctype: 'POS Invoice',
         reference_name: 'POS-INV-001',
       }),
@@ -215,7 +215,7 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     });
     expect(call.post).toHaveBeenCalledWith(
       'ury.ury_pos.override.authorise',
-      expect.objectContaining({ pin: '1234' }),
+      expect.objectContaining({ pin_secret: '1234' }),
     );
   });
 
