@@ -1550,5 +1550,49 @@ class TestOverrideContract(unittest.TestCase):
             api.require("price_override", "Main Till", "POS-INV-100", {"amount": 50, "percent": 10, "reason": "Other: Guest request"})
 
 
+    def test_service_charge_change_tokens_price_zero_and_nonzero_overrides(self):
+        api = self.prepare_foreign_approval("service_charge_waive")
+        doc = self.store.invoices["POS-INV-100"]
+        doc["taxes"] = [Doc(custom_pos_charge_kind="Service Charge", tax_amount=50)]
+        for rate, amount in ((0, None), (None, 0), (5, None)):
+            with self.subTest(rate=rate, amount=amount):
+                claim = {"sc_action": "change", "new_rate": rate, "new_amount": amount, "reason": "Other: Guest request"}
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+                    "Main Till", "service_charge_waive", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+                ))
+
+    def test_top_approver_cannot_mint_over_cap_discount_or_comp(self):
+        for privilege, percent in (("discount", 5), ("complimentary", 100)):
+            with self.subTest(privilege=privilege):
+                api = self.prepare_foreign_approval(privilege)
+                self.store.approval_limits["Hotel Co"] = Doc(
+                    discount_limits_by_role="URY Manager: 100",
+                    discount_approver_role="URY Manager",
+                )
+                claim = {"amount": 50, "percent": percent, "reason": "Other: Guest request"}
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+                    "Main Till", privilege, "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+                ))
+
+    def test_top_approver_cannot_consume_discount_or_comp_after_cap_changes(self):
+        api = self.prepare_foreign_approval("discount")
+        self.store.approval_limits["Hotel Co"] = Doc(
+            discount_limits_by_role="URY Manager: 100",
+            discount_approver_role="URY Manager",
+        )
+        for privilege, percent in (("discount", 5), ("complimentary", 100)):
+            with self.subTest(privilege=privilege):
+                rule = next(r for r in self.store.privilege_rules if r.privilege == privilege and r.role == "URY Manager")
+                rule.update(max_percent=100, max_amount=200000)
+                claim = {"amount": 50, "percent": percent, "reason": "Other: Guest request"}
+                issued = api.authorise(
+                    "Main Till", privilege, "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+                )
+                rule.update(max_amount=100000)
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
+                    issued["token"], privilege, "Main Till", "POS-INV-100", claim, approval_amount=185000,
+                ))
+
+
 if __name__ == "__main__":
     unittest.main()

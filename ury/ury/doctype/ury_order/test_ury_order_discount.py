@@ -3009,6 +3009,7 @@ if __name__ == "__main__":
 class TestForeignDiscountAmountCap(DiscountBase):
     def setUp(self):
         super().setUp()
+        self.set_company_fx_quote(3700)
         self.has_privilege_rule_doctype = True
         self.approval_limits["Lakeside Hotel"] = Row(
             discount_limits_by_role="URY Cashier: 10",
@@ -3052,3 +3053,39 @@ class TestForeignDiscountAmountCap(DiscountBase):
         self.assertEqual(challenge.get("amount"), 185000)
         self.assertEqual(challenge["claim"]["percent"], 5)
         self.assertIsNone(challenge["claim"]["amount"])
+
+    def set_company_fx_quote(self, rate):
+        erp_utils = ModuleType("erpnext.setup.utils")
+        erp_utils.get_exchange_rate = lambda source, target, date: rate
+        self.enterContext(patch.dict(sys.modules, {erp_utils.__name__: erp_utils}))
+
+    def test_rest_insert_rejects_client_rate_that_understates_discount(self):
+        self.set_company_fx_quote(3700)
+        self.invoice._is_new = True
+        self.invoice.conversion_rate = 1
+        self.invoice.additional_discount_percentage = 5
+        self.invoice.custom_discount_reason = "Complaint"
+        self.invoice.calculate_taxes_and_totals()
+        with self.assertRaisesRegex(Refused, "POS-FX-RATE-INVALID"):
+            self.hook.validate_pos_discount(self.invoice)
+
+    def test_approved_discount_requires_fresh_approval_when_fx_changes_push_it_over_cap(self):
+        self.set_company_fx_quote(3700)
+        self.privilege_rules.append(
+            Row(company="Lakeside Hotel", pos_profile="", privilege="discount", role="URY Manager",
+                may_perform=1, may_authorise=1, max_percent=10, max_amount=100000)
+        )
+        for currency, rate in (("USD", 1000), ("UGX", 1)):
+            with self.subTest(previous_currency=currency):
+                previous = FakePOSInvoice(
+                    "CHK-FX", currency=currency, conversion_rate=rate, items=[_item("r1", "FISH", 1, 1000)]
+                )
+                for doc in (self.invoice, previous):
+                    doc.additional_discount_percentage = 5
+                    doc.custom_discount_reason = "Complaint"
+                    doc.custom_discount_approver = "manager@example.com"
+                    doc.custom_discount_approved_percent = 5
+                    doc.calculate_taxes_and_totals()
+                self.invoice._doc_before_save = previous
+                with self.assertRaisesRegex(NotPermitted, "SITEOPS-DISC-007"):
+                    self.hook.validate_pos_discount(self.invoice)

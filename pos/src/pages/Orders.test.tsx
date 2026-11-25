@@ -128,6 +128,9 @@ vi.mock("../i18n", () => ({
     if (key === 'orders.pagination.page' && opts?.number) {
       return `Page ${opts.number}`;
     }
+    if (key === 'manager_approval.amount_line') {
+      return opts?.amount;
+    }
     if (key === 'orders.reduce_item_qty' && opts?.item) {
       return `Reduce quantity of ${opts.item}`;
     }
@@ -165,12 +168,13 @@ vi.mock("../components/MergedBillPanel", () => ({
 }));
 
 vi.mock("../components/ManagerApproval", () => ({
-  default: ({ open, amount, claim }: any) =>
+  default: ({ open, amount, claim, summaryLines }: any) =>
     open ? (
       <div
         data-testid="manager-approval-dialog"
         data-amount={String(amount)}
         data-claim={JSON.stringify(claim)}
+        data-summary={JSON.stringify(summaryLines)}
       />
     ) : null,
 }));
@@ -507,6 +511,7 @@ describe("Orders modifiers edit and void parity (R1 M2)", () => {
       fireEvent.click(screen.getByRole("button", { name: "Reduce quantity of Ribeye Steak" }));
       const approvalDialog = await screen.findByTestId("manager-approval-dialog");
       expect(approvalDialog).toHaveAttribute("data-amount", "181300");
+      expect(JSON.parse(approvalDialog.getAttribute("data-summary") || "[]")).toContain("Rs. 49000");
       // Keep the linked modifier's document-currency amount in the compatibility claim.
       const claim = JSON.parse(approvalDialog.getAttribute("data-claim") || "{}");
       expect(claim.amount).toBe(49000);

@@ -198,7 +198,7 @@ class FakeOverride:
             matched.append(rule)
         return matched
 
-    def consume(self, token, privilege, pos_profile, reference_name, claim):
+    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
         if not token or token not in self.tokens or token in self.consumed or self.tokens[token]["expired"]:
             raise Refused("This manager approval is missing or has expired. [POS-AUTH-EXPIRED]")
         rec = self.tokens[token]
@@ -213,6 +213,10 @@ class FakeOverride:
             or rec["claim_json"] != self._canonical(claim)
         ):
             raise Refused("The approved values changed after manager approval. [POS-AUTH-CHANGED]")
+        if approval_amount is not None and not self._matching_authorise_rules(
+            rec["approver"], self.store.profiles[pos_profile], privilege, amount=approval_amount,
+        ):
+            raise PermissionDenied("The manager's approval limit does not cover this amount. [POS-AUTH-NOT-ELIGIBLE]")
         self.consumed.add(token)
         self.logs.append({"outcome": "Consumed", **rec})
         return Row(approver=rec["approver"], amount=(claim or {}).get("amount"), claim=dict(claim or {}))

@@ -215,3 +215,52 @@ class TestFloorDoaFx(unittest.TestCase):
                     case.tc.apply_halo_approval_token(doc, "token")
         self.assertEqual(authorize.call_args.kwargs["amount"], 185000)
         self.assertEqual(authorize.call_args.args[3]["tenders"], [{"mode_of_payment": "Cash", "amount": 50}])
+
+    def test_change_service_charge_prices_zero_and_nonzero_overrides(self):
+        case = self.pricing_invoice("UGX", 3700)
+        case.invoice["items"][0].update(qty=1, rate=1000, amount=1000, net_amount=1000)
+        case.invoice.update(net_total=1000, taxes=[
+            pricing.FakeDoc({"custom_pos_charge_kind": "Service Charge", "tax_amount": 50}),
+        ])
+        actions, _ = case._import_pricing_actions()
+        with patch.object(actions, "authorize_or_perform", side_effect=pricing.FakePermissionError) as authorize:
+            for change in ({"new_amount": 0}, {"new_rate": 0}, {"new_rate": 5}):
+                with self.subTest(change=change):
+                    with self.assertRaises(pricing.FakePermissionError):
+                        actions.adjust_service_charge("POS-INV-100", "Main Till", action="change", reason="SVC-WAIVE", **change)
+                    self.assertEqual(authorize.call_args.kwargs["amount"], 185000)
+                    self.assertEqual(authorize.call_args.kwargs["claim"]["sc_action"], "change")
+
+    def test_only_service_charge_status_has_get_whitelist(self):
+        case = self.pricing_invoice("UGX", 3700)
+
+        def whitelist(*, methods=None):
+            def decorate(function):
+                function.allowed_methods = methods
+                return function
+            return decorate
+
+        with patch.object(case.h.frappe, "whitelist", whitelist):
+            actions, _ = case._import_pricing_actions()
+        self.assertEqual(getattr(actions.get_service_charge_status, "allowed_methods", None), ["GET"])
+        self.assertIsNone(getattr(actions.current_service_charge_amount, "allowed_methods", None))
+
+    def test_profile_quote_does_not_reuse_rate_excluded_by_erpnext_policy(self):
+        import sys
+        from types import ModuleType
+
+        case = self.pricing_invoice("UGX", 3700)
+        actions, _ = case._import_pricing_actions()
+        erp_utils = ModuleType("erpnext.setup.utils")
+        erp_utils.get_exchange_rate = lambda source, target, date: 0
+        db = case.h.frappe.db
+        original_get_value = db.get_value
+
+        def get_value(doctype, *args, **kwargs):
+            return 3700 if doctype == "Currency Exchange" else original_get_value(doctype, *args, **kwargs)
+
+        profile = pricing.FakeDoc({"company": "Test Co", "currency": "USD"})
+        with patch.dict(sys.modules, {erp_utils.__name__: erp_utils}):
+            with patch.dict(db, {"get_value": get_value}):
+                with self.assertRaisesRegex(pricing.FakeValidationError, "POS-FX-RATE-INVALID"):
+                    actions.profile_approval_currency(profile, case.h.frappe)
