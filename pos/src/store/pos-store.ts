@@ -129,6 +129,11 @@ export interface Category {
   icon?: string;
 }
 
+function offlineMenuReadFailed(error: unknown, profile: PosProfileCombined | null): boolean {
+  return !!profile && offlineCaptureEnabled(profile) && isLinkDown(error)
+    && cachedOfflineProfile(getSessionUser())?.name === profile.name;
+}
+
 function categoriesFromItems(items: MenuItem[]): Category[] {
   const seen = new Map<string, string>();
   for (const item of items) {
@@ -196,6 +201,7 @@ interface POSState {
   cartId: string | null;
   loading: boolean;
   menuLoading: boolean;
+  menuUnavailableOffline: boolean;
   orderLoading: boolean;
   profileLoading: boolean;
   error: string | null;
@@ -353,6 +359,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   cartId: null,
   loading: false,
   menuLoading: false,
+  menuUnavailableOffline: false,
   orderLoading: false,
   profileLoading: false,
   error: null,
@@ -588,7 +595,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
     if (!posProfile?.restaurant) return;
 
     try {
-      set({ menuLoading: true, error: null });
+      set({ menuLoading: true, menuUnavailableOffline: false, error: null });
       const payload = Object.prototype.hasOwnProperty.call(menuApi, 'getRestaurantMenuWithMeta')
         ? await menuApi.getRestaurantMenuWithMeta(
             posProfile.name,
@@ -639,6 +646,10 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         activePriceList: payload.price_list ?? null,
       }));
     } catch (error) {
+      if (offlineMenuReadFailed(error, posProfile)) {
+        set({ menuUnavailableOffline: true });
+        return;
+      }
       set({ error: 'Failed to load menu items' });
       console.error('Error loading menu items:', error);
     } finally {
@@ -648,7 +659,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   fetchAggregatorMenu: async (aggregator: string) => {
     try {
-      set({ menuLoading: true, error: null });
+      set({ menuLoading: true, menuUnavailableOffline: false, error: null });
       const items = await menuApi.getAggregatorMenu(aggregator);
       
       const menuItems: MenuItem[] = items.map((item: any) => ({
@@ -677,7 +688,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       try {
         courses = await getMenuCourses();
       } catch (error) {
-        if (cached) return;
+        // The category rail can already derive courses from available menu items.
+        if (cached || offlineMenuReadFailed(error, get().posProfile)) return;
         throw error;
       }
       sessionStorage.setItem('menuCategories', JSON.stringify(courses));

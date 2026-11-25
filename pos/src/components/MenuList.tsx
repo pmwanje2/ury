@@ -21,6 +21,7 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
   const {
     menuItems,
     menuLoading,
+    menuUnavailableOffline,
     error,
     selectedCategory,
     searchQuery,
@@ -61,11 +62,11 @@ const MenuList: React.FC<MenuListProps> = ({ onItemClick, availabilityMap = EMPT
           <div className="h-96">
             <Spinner message={t('common.loading_menu_items')} />
           </div>
-        ) : error ? (
+        ) : error || menuUnavailableOffline ? (
           <div className="flex items-center justify-center h-96">
             <div className="text-red-600 text-center">
               <p className="text-lg font-medium">{t('common.error_loading_menu_items')}</p>
-              <p className="text-sm mt-2">{error}</p>
+              {error && <p className="text-sm mt-2">{error}</p>}
             </div>
           </div>
         ) : filteredItems.length === 0 ? (

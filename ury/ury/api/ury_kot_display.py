@@ -380,14 +380,19 @@ def confirm_cancel_kot(name):
 
     message_log = getattr(frappe.local, "message_log", None)
     message_count = len(message_log) if message_log is not None else 0
+    # Frappe's msgprint raises missing-document errors even when muted. Scope
+    # suppression to the lookup so its internal DocType never reaches clients.
+    previous_mute = getattr(frappe.flags, "mute_messages", False)
+    frappe.flags.mute_messages = True
     try:
         kot_doc = frappe.get_doc("URY KOT", name)
     except frappe.DoesNotExistError:
-        # A deletion between the two reads can queue Frappe's default DocType
-        # message. Keep earlier messages and emit only our localized error.
+        # Preserve earlier messages if a document hook wrote directly to the log.
         if message_log is not None:
             del message_log[message_count:]
         kot_doc = None
+    finally:
+        frappe.flags.mute_messages = previous_mute
 
     if kot_doc is None:
         frappe.throw(_("Kitchen ticket {0} was not found.").format(name), frappe.DoesNotExistError)
