@@ -1505,7 +1505,8 @@ def _claim_approval_amount(reference_doctype, reference_name, profile, privilege
     ):
         if amount is None:
             return None
-        approval_currency = profile_approval_currency(profile, frappe)
+        rate_type = "for_selling" if privilege in ("return", "open_item") else None
+        approval_currency = profile_approval_currency(profile, frappe, rate_type=rate_type)
         return company_approval_amount(profile, amount, frappe, currency_and_rate=approval_currency)
     if privilege not in _INVOICE_APPROVAL_AMOUNT_FIELDS or reference_doctype != "POS Invoice" or not reference_name:
         return amount

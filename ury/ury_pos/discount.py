@@ -1223,6 +1223,10 @@ def apply_discount_to_invoice(
     reason_code = spec["reason"] or (coupon_info.get("discount_reason") if coupon_info else None)
     has_positive_discount = bool(is_explicit_comp or has_open_header or has_open_lines or coupon_info)
 
+    approval_currency = None
+    if has_positive_discount and prev_summary["discount_total"] <= 0:
+        approval_currency = verified_invoice_approval_currency(invoice, frappe)
+
     resolved_reason = _resolve_reason(reason_code, required=(require_reason and has_positive_discount))
     note = spec["note"]
     if resolved_reason and cint(resolved_reason.get("requires_note")) == 1 and require_reason and has_positive_discount:
@@ -1411,7 +1415,8 @@ def apply_discount_to_invoice(
 
     # Authority check (min(Approval Limit, POS Privilege Rule); blank base = 0%; 100% comp ALWAYS needs 2nd person)
     approval_amount = (
-        company_approval_amount(invoice, summary["discount_total"], frappe) if has_positive_discount else None
+        company_approval_amount(invoice, summary["discount_total"], frappe, currency_and_rate=approval_currency)
+        if has_positive_discount else None
     )
     limit_pct = user_discount_limit(
         frappe.session.user, company, pos_profile_doc.name, approval_amount=approval_amount
@@ -1783,11 +1788,6 @@ def _discount_fx_changed(doc, previous):
     )
 
 
-def _validated_discount_amount(doc, amount, *, verify_fx):
-    currency_and_rate = verified_invoice_approval_currency(doc, frappe) if verify_fx else None
-    return company_approval_amount(doc, amount, frappe, currency_and_rate=currency_and_rate)
-
-
 def validate_manual_line_discount_cap(doc, previous):
     """Check company-currency authority when a pricing save adds or increases manual line discounts."""
     if not any(
@@ -1807,9 +1807,11 @@ def validate_manual_line_discount_cap(doc, previous):
     user = frappe.session.user
     company = doc.get("company")
     profile = doc.get("pos_profile")
-    amount = _validated_discount_amount(
-        doc, summary["discount_total"], verify_fx=_discount_fx_changed(doc, previous)
+    first_discount = previous is None or _compute_manual_discount_summary(previous, precision)["discount_total"] <= 0
+    approval_currency = (
+        verified_invoice_approval_currency(doc, frappe) if first_discount or _discount_fx_changed(doc, previous) else None
     )
+    amount = company_approval_amount(doc, summary["discount_total"], frappe, currency_and_rate=approval_currency)
     limit = user_discount_limit(user, company, profile, approval_amount=amount)
     if _above_limit(summary["discount_total"], summary["discount_basis"], None, limit, precision):
         frappe.throw(
@@ -1929,11 +1931,17 @@ def validate_pos_discount(doc, method=None):
                     frappe.PermissionError,
                 )
 
+    fx_changed = _discount_fx_changed(doc, previous)
+    is_new_discount = prev_summary["discount_total"] <= 0
+    approval_currency = None
+    if fx_changed or (is_new_discount and curr_summary["discount_total"] > 0):
+        approval_currency = verified_invoice_approval_currency(doc, frappe)
     if curr_summary["discount_total"] <= 0:
         return
 
-    fx_changed = _discount_fx_changed(doc, previous)
-    approval_amount = _validated_discount_amount(doc, curr_summary["discount_total"], verify_fx=fx_changed)
+    approval_amount = company_approval_amount(
+        doc, curr_summary["discount_total"], frappe, currency_and_rate=approval_currency
+    )
     is_comp = curr_summary["effective_percent"] >= 100.0 or (
         curr_summary["discount_basis"] > 0 and flt(curr_summary["after_total"], prec) <= 0
     )
@@ -1985,7 +1993,6 @@ def validate_pos_discount(doc, method=None):
             discount_increased |= fx_changed or approval_amount > company_approval_amount(
                 previous, prev_summary["discount_total"], frappe
             )
-    is_new_discount = previous is None or prev_summary["discount_total"] <= 0
 
     if approval_flag and approval_flag.get("action") != "remove":
         approver = approval_flag.get("approver")

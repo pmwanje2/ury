@@ -142,7 +142,7 @@ class TestFloorDoaFx(unittest.TestCase):
             return original_get_value(doctype, *args, **kwargs)
 
         setup_utils = ModuleType("erpnext.setup.utils")
-        setup_utils.get_exchange_rate = lambda source, target, date: 3700 if (source, target) == ("USD", "UGX") else 0
+        setup_utils.get_exchange_rate = lambda source, target, date, args=None: 3700 if (source, target) == ("USD", "UGX") else 0
         with patch.dict(sys.modules, {setup_utils.__name__: setup_utils}):
             with patch.object(db, "get_value", side_effect=get_value):
                 with patch.object(case.mod, "require_pos_override", side_effect=case.h.frappe.PermissionError) as authorize:
@@ -252,7 +252,7 @@ class TestFloorDoaFx(unittest.TestCase):
         case = self.pricing_invoice("UGX", 3700)
         actions, _ = case._import_pricing_actions()
         erp_utils = ModuleType("erpnext.setup.utils")
-        erp_utils.get_exchange_rate = lambda source, target, date: 0
+        erp_utils.get_exchange_rate = lambda source, target, date, args=None: 0
         db = case.h.frappe.db
         original_get_value = db.get_value
 

@@ -17,6 +17,7 @@ Covers matrix rows 11–15 and 30 (tracker G5, G19 part, G34):
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from decimal import Decimal
 import json
 import math
@@ -550,7 +551,9 @@ def add_open_item(
     priv_group = cint(item_doc.get("custom_privilege_group"))
     item_cost = _resolve_item_cost(item_code, profile.get("warehouse"), profile.get("buying_price_list"))
     if is_new_invoice:
-        approval_currency = profile_approval_currency(profile, frappe, posting_date=doc.get("posting_date"))
+        approval_currency = profile_approval_currency(
+            profile, frappe, posting_date=doc.get("posting_date"), rate_type="for_selling"
+        )
         doc.conversion_rate = float(approval_currency[1])
     else:
         approval_currency = invoice_approval_currency(doc, frappe)
@@ -1961,6 +1964,15 @@ def current_service_charge_amount(doc) -> float:
     )
 
 
+def _recalculate_service_charge(doc, profile, action, *, new_rate=None, new_amount=None):
+    waived = action == "waive" or (action == "change" and (new_rate == 0 or new_amount == 0))
+    doc.custom_service_charge_waived = int(waived)
+    doc.custom_service_charge_override_rate = flt(new_rate) if action == "change" and not waived else 0.0
+    doc.custom_service_charge_override_amount = flt(new_amount) if action == "change" and not waived else 0.0
+    sync_service_charge(doc, profile)
+    doc.calculate_taxes_and_totals()
+
+
 def service_charge_approval_amount(doc, profile, action, *, new_rate=None, new_amount=None):
     """Return the monetary exposure of a service charge override in invoice currency."""
     if action == "restore":
@@ -1976,13 +1988,12 @@ def service_charge_approval_amount(doc, profile, action, *, new_rate=None, new_a
     elif new_rate == 0:
         proposed = 0
     else:
-        rule = _resolve_override_rule(doc, profile, match_service_charge_rule(doc, profile))
-        prec = _doc_precision(doc, "total_taxes_and_charges")
-        basis = doc.get("net_total")
-        if basis is None or (rule and rule.get("calculation_basis") == "Pre-Discount Subtotal"):
-            base_rows, _tip_rows = _partition_tax_rows(doc, profile)
-            basis = _compute_pre_discount_net(doc, base_rows, prec)
-        proposed = flt(flt(basis) * new_rate / 100, prec)
+        # Round and redistribute the discount on a detached copy of the check.
+        # Keep the locked invoice untouched until approval succeeds.
+        preview = frappe.get_doc(doc.as_dict()) if callable(getattr(doc, "as_dict", None)) else deepcopy(doc)
+        with _with_currency_precision(preview, _doc_precision(preview, "total_taxes_and_charges")):
+            _recalculate_service_charge(preview, profile, action, new_rate=new_rate)
+        proposed = current_service_charge_amount(preview)
     return max(abs(proposed), abs(current - proposed))
 
 
@@ -2131,45 +2142,21 @@ def adjust_service_charge(
         fallback_roles=DEFAULT_MANAGER_ROLES,
     )
 
-    full_reason = f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
-    if action == "waive":
-        doc.custom_service_charge_waived = 1
-        doc.custom_service_charge_override_rate = 0.0
-        doc.custom_service_charge_override_amount = 0.0
-        doc.custom_service_charge_reason = full_reason
-        doc.custom_service_charge_approver = auth["approver"]
-    elif action == "change":
-        is_zero_override = (rate_val is not None and flt(rate_val) == 0) or (
-            amount_val is not None and flt(amount_val) == 0
-        )
-        if is_zero_override:
-            doc.custom_service_charge_waived = 1
-            doc.custom_service_charge_override_rate = 0.0
-            doc.custom_service_charge_override_amount = 0.0
-        else:
-            doc.custom_service_charge_waived = 0
-            doc.custom_service_charge_override_rate = flt(rate_val) if rate_val is not None else 0.0
-            doc.custom_service_charge_override_amount = flt(amount_val) if amount_val is not None else 0.0
-        doc.custom_service_charge_reason = full_reason
-        doc.custom_service_charge_approver = auth["approver"]
-    else:
-        doc.custom_service_charge_waived = 0
-        doc.custom_service_charge_override_rate = 0.0
-        doc.custom_service_charge_override_amount = 0.0
+    if action == "restore":
         doc.custom_service_charge_reason = ""
         doc.custom_service_charge_approver = ""
+    else:
+        doc.custom_service_charge_reason = (
+            f"{auth['reason']}: {auth['reason_note']}" if auth["reason_note"] else auth["reason"]
+        )
+        doc.custom_service_charge_approver = auth["approver"]
 
     prec = _doc_precision(doc, "total_taxes_and_charges")
     with _with_currency_precision(doc, prec):
-        sync_service_charge(doc, profile)
-        doc.calculate_taxes_and_totals()
+        _recalculate_service_charge(doc, profile, action, new_rate=rate_val, new_amount=amount_val)
         _save_verified(doc)
 
-    sc_amount = sum(
-        _effective_tax_row_amount(doc, t)
-        for t in (doc.get("taxes") or [])
-        if _clean_str(t.get("custom_pos_charge_kind")) == "Service Charge"
-    )
+    sc_amount = current_service_charge_amount(doc)
     sc_tax_amount = sum(
         _effective_tax_row_amount(doc, t)
         for t in (doc.get("taxes") or [])

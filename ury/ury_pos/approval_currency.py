@@ -59,7 +59,7 @@ def _invalid_rate(framework):
     )
 
 
-def profile_approval_quote(profile, framework, *, posting_date=None, currency=None) -> tuple[str, Decimal | None]:
+def profile_approval_quote(profile, framework, *, posting_date=None, currency=None, rate_type=None) -> tuple[str, Decimal | None]:
     """Look up FX for an action without a saved invoice rate."""
     currency = str(currency or profile.get("currency") or "").strip().upper()
     company_currency = company_currency_for(profile.get("company"), framework)
@@ -70,14 +70,16 @@ def profile_approval_quote(profile, framework, *, posting_date=None, currency=No
     try:
         from erpnext.setup.utils import get_exchange_rate
 
-        rate = _positive_rate(get_exchange_rate(currency, company_currency, posting_date))
+        rate = _positive_rate(get_exchange_rate(currency, company_currency, posting_date, args=rate_type))
     except (ImportError, framework.ValidationError):
         rate = None
     return company_currency, rate
 
 
-def profile_approval_currency(profile, framework, *, posting_date=None, currency=None) -> tuple[str, Decimal]:
-    company_currency, rate = profile_approval_quote(profile, framework, posting_date=posting_date, currency=currency)
+def profile_approval_currency(profile, framework, *, posting_date=None, currency=None, rate_type=None) -> tuple[str, Decimal]:
+    company_currency, rate = profile_approval_quote(
+        profile, framework, posting_date=posting_date, currency=currency, rate_type=rate_type
+    )
     if rate is None:
         _invalid_rate(framework)
     return company_currency, rate
@@ -100,7 +102,6 @@ def invoice_approval_currency(invoice, framework) -> tuple[str, Decimal]:
     return company_currency or currency, rate
 
 
-
 def verified_invoice_approval_currency(invoice, framework) -> tuple[str, Decimal]:
     """Verify a new or changed invoice rate against the ERPNext posting-date quote."""
     company_currency, recorded = invoice_approval_currency(invoice, framework)
@@ -109,7 +110,7 @@ def verified_invoice_approval_currency(invoice, framework) -> tuple[str, Decimal
         return company_currency, recorded
 
     _, authoritative = profile_approval_currency(
-        invoice, framework, posting_date=invoice.get("posting_date")
+        invoice, framework, posting_date=invoice.get("posting_date"), rate_type="for_selling"
     )
     # ERPNext rounds the stored conversion rate to nine decimal places.
     if recorded != authoritative and abs(recorded - authoritative) > Decimal("0.0000000005"):

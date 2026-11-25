@@ -2246,7 +2246,7 @@ def create_unreferenced_return(
     # Unreferenced returns ALWAYS require a distinct manager PIN (`forbid_solo=True`), AND the
     # approving manager MUST hold one of the profile's configured `custom_unreferenced_return_roles`!
     posting_date = _today_date()
-    approval_currency = profile_approval_currency(profile_doc, fr, posting_date=posting_date)
+    approval_currency = profile_approval_currency(profile_doc, fr, posting_date=posting_date, rate_type="for_selling")
     approver = require_pos_override(
         "return",
         profile_name,

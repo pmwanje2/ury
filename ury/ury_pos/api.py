@@ -1309,7 +1309,7 @@ def getPosProfile(pos_profile=None):
     approval_currency = company_currency_for(company, frappe)
     approval_conversion_rate = None
     if cint(pos_profiles.get("ury_offline_capture")) and till_offline_limit > 0:
-        _, quote = profile_approval_quote(pos_profiles, frappe)
+        _, quote = profile_approval_quote(pos_profiles, frappe, rate_type="for_selling")
         approval_conversion_rate = float(quote) if quote is not None else None
 
 

@@ -1530,7 +1530,7 @@ class TestOverrideContract(unittest.TestCase):
         from types import ModuleType
 
         setup_utils = ModuleType("erpnext.setup.utils")
-        setup_utils.get_exchange_rate = lambda source, target, date: 3700
+        setup_utils.get_exchange_rate = lambda source, target, date, args=None: 3700
         with patch.dict(sys.modules, {setup_utils.__name__: setup_utils}):
             self.assert_capped_claim("open_item", {"rate": 25, "qty": 2, "amount": 50}, name="NEW")
 
@@ -1551,9 +1551,15 @@ class TestOverrideContract(unittest.TestCase):
 
 
     def test_service_charge_change_tokens_price_zero_and_nonzero_overrides(self):
+        from ury.ury_pos.test_pricing_privileged_actions import FakeDoc
+
         api = self.prepare_foreign_approval("service_charge_waive")
-        doc = self.store.invoices["POS-INV-100"]
-        doc["taxes"] = [Doc(custom_pos_charge_kind="Service Charge", tax_amount=50)]
+        invoice = FakeDoc(self.store.invoices["POS-INV-100"])
+        invoice["taxes"] = [Doc(custom_pos_charge_kind="Service Charge", tax_amount=50)]
+        original_get_doc = self.frappe.get_doc
+        self.frappe.get_doc = lambda dt, name=None, **kw: (
+            invoice if (dt, name) == ("POS Invoice", "POS-INV-100") else original_get_doc(dt, name, **kw)
+        )
         for rate, amount in ((0, None), (None, 0), (5, None)):
             with self.subTest(rate=rate, amount=amount):
                 claim = {"sc_action": "change", "new_rate": rate, "new_amount": amount, "reason": "Other: Guest request"}

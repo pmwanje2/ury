@@ -3056,7 +3056,7 @@ class TestForeignDiscountAmountCap(DiscountBase):
 
     def set_company_fx_quote(self, rate):
         erp_utils = ModuleType("erpnext.setup.utils")
-        erp_utils.get_exchange_rate = lambda source, target, date: rate
+        erp_utils.get_exchange_rate = lambda source, target, date, args=None: rate
         self.enterContext(patch.dict(sys.modules, {erp_utils.__name__: erp_utils}))
 
     def test_rest_insert_rejects_client_rate_that_understates_discount(self):
