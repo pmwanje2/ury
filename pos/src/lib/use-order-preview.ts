@@ -12,7 +12,14 @@ interface UseOrderPreviewOptions {
   posProfile?: string | null;
   orderType?: string | null;
   customer?: string | null;
-  items?: Array<{ item: string; qty: number; rate?: number; item_name?: string }>;
+  items?: Array<{
+    name?: string;
+    item: string;
+    qty: number;
+    rate?: number;
+    item_name?: string;
+    reservation_line_key?: string;
+  }>;
   noOfPax?: number;
   invoiceName?: string | null;
   additionalDiscountPercentage?: number;
@@ -44,7 +51,13 @@ export function useOrderPreview({
   const itemsKey = useMemo(
     () =>
       JSON.stringify(
-        (items || []).map((r) => [r.item, r.qty, r.rate ?? null]),
+        (items || []).map((r) => [
+          r.name ?? null,
+          r.reservation_line_key ?? null,
+          r.item,
+          r.qty,
+          r.rate ?? null,
+        ]),
       ),
     [items],
   );

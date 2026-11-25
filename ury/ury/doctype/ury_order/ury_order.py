@@ -89,20 +89,46 @@ except ImportError:  # pragma: no cover - site-less test stubs without full frap
 from frappe import cache
 
 
+def _load_ury_pos_submodule(name: str):
+    import importlib.util
+    import pathlib
+    import sys
+
+    fqn = f"ury.ury_pos.{name}"
+    existing = sys.modules.get(fqn)
+    if existing is not None:
+        return existing
+    try:
+        pkg = __import__("ury.ury_pos", fromlist=[name])
+        mod = getattr(pkg, name, None)
+        if mod is not None:
+            return mod
+    except ImportError:
+        pass
+    sub_path = pathlib.Path(__file__).resolve().parents[3] / "ury_pos" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(fqn, sub_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load {fqn} from {sub_path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[fqn] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _dayparts_mod():
     import sys
-    from ury.ury_pos import dayparts
 
-    if "frappe" not in sys.modules or dayparts.frappe is None:
+    dayparts = _load_ury_pos_submodule("dayparts")
+    if "frappe" not in sys.modules or getattr(dayparts, "frappe", None) is None:
         dayparts.frappe = frappe
     return dayparts
 
 
 def _tax_mod():
     import sys
-    from ury.ury_pos import tax_determination
 
-    if "frappe" not in sys.modules or tax_determination.frappe is None:
+    tax_determination = _load_ury_pos_submodule("tax_determination")
+    if "frappe" not in sys.modules or getattr(tax_determination, "frappe", None) is None:
         tax_determination.frappe = frappe
     return tax_determination
 

@@ -4155,6 +4155,166 @@ def _build_preview_tax_rows(doc, prec: int) -> list[dict]:
     return result
 
 
+def _is_privileged_preview_row(row, orig_invoice=None) -> bool:
+    from frappe.utils import flt
+
+    if (
+        cint(row.get("custom_price_overridden")) == 1
+        or cint(row.get("custom_is_open_item")) == 1
+        or cint(row.get("custom_is_complimentary")) == 1
+        or cint(row.get("ignore_pricing_rule")) == 1
+    ):
+        return True
+    return bool(
+        orig_invoice is not None
+        and cint(orig_invoice.get("custom_is_complimentary")) == 1
+        and flt(row.get("rate")) == 0
+        and flt(row.get("discount_percentage")) >= 100
+    )
+
+
+def _append_orig_preview_row(
+    doc,
+    row,
+    *,
+    qty=None,
+    cost_center=None,
+    warehouse=None,
+    privileged_snapshots=None,
+    orig_invoice=None,
+):
+    from frappe.utils import flt
+
+    is_privileged_row = _is_privileged_preview_row(row, orig_invoice=orig_invoice)
+    raw_plr = row.get("price_list_rate")
+    plr = flt(raw_plr) if raw_plr is not None else flt(row.get("rate"))
+    raw_base_plr = row.get("base_price_list_rate")
+    base_plr = flt(raw_base_plr) if raw_base_plr is not None else plr
+    raw_base_rate = row.get("base_rate")
+    base_rate = flt(raw_base_rate) if raw_base_rate is not None else flt(row.get("rate"))
+    eff_qty = flt(qty) if qty is not None else flt(row.get("qty"))
+
+    item_entry = {
+        "item_code": row.get("item_code"),
+        "item_name": row.get("item_name") or row.get("item_code"),
+        "qty": eff_qty,
+        "rate": flt(row.get("rate")),
+        "base_rate": base_rate,
+        "price_list_rate": plr,
+        "base_price_list_rate": base_plr,
+        "discount_percentage": flt(row.get("discount_percentage")),
+        "discount_amount": flt(row.get("discount_amount")),
+        "ignore_pricing_rule": 1 if is_privileged_row else cint(row.get("ignore_pricing_rule")),
+        "custom_price_overridden": cint(row.get("custom_price_overridden")),
+        "custom_is_open_item": cint(row.get("custom_is_open_item")),
+        "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
+        "uom": row.get("uom"),
+        "cost_center": row.get("cost_center") or cost_center,
+        "warehouse": row.get("warehouse") or warehouse,
+    }
+    if row.get("pricing_rules") is not None:
+        item_entry["pricing_rules"] = row.get("pricing_rules")
+    for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
+        if row.get(tax_field) is not None:
+            item_entry[tax_field] = row.get(tax_field)
+
+    cloned_row = doc.append("items", item_entry)
+    if is_privileged_row and cloned_row is not None and privileged_snapshots is not None:
+        privileged_snapshots[id(cloned_row)] = {
+            "price_list_rate": plr,
+            "base_price_list_rate": base_plr,
+            "rate": flt(row.get("rate")),
+            "base_rate": base_rate,
+            "discount_percentage": flt(row.get("discount_percentage")),
+            "discount_amount": flt(row.get("discount_amount")),
+            "pricing_rules": row.get("pricing_rules"),
+            "ignore_pricing_rule": 1,
+            "custom_price_overridden": cint(row.get("custom_price_overridden")),
+            "custom_is_open_item": cint(row.get("custom_is_open_item")),
+            "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
+        }
+    return cloned_row
+
+
+def _match_preview_items_to_orig_rows(raw_items, orig_rows):
+    """Match incoming cart preview items 1-to-1 to saved POS Invoice Item rows.
+
+    Pass 1 binds explicit row identities (`name` / `invoice_item_name`, then
+    `reservation_line_key` / `reservation_line_ref` / `line_ref`) with same
+    `item_code` so edits, qty changes, and newly added duplicate items stay
+    unambiguously separated. Pass 2 falls back to unclaimed rows of the same
+    `item_code` only for callers that omitted explicit row identities.
+    """
+    from frappe.utils import flt
+
+    candidates = [
+        (o_idx, row)
+        for o_idx, row in enumerate(orig_rows or [])
+        if cint(row.get("is_disposable")) != 1 and row.get("item_code")
+    ]
+    claimed: set[int] = set()
+    matched: dict[int, dict] = {}
+    has_explicit_key: dict[int, bool] = {}
+
+    for idx, raw in enumerate(raw_items or []):
+        code = raw.get("item") or raw.get("item_code")
+        if not code:
+            continue
+        raw_name = str(raw.get("name") or raw.get("invoice_item_name") or "").strip()
+        raw_key = str(
+            raw.get("reservation_line_key")
+            or raw.get("reservation_line_ref")
+            or raw.get("line_ref")
+            or ""
+        ).strip()
+        has_explicit_key[idx] = bool(raw_name or raw_key)
+
+        chosen = None
+        if raw_name:
+            for o_idx, row in candidates:
+                if o_idx in claimed or row.get("item_code") != code:
+                    continue
+                if str(row.get("name") or "").strip() == raw_name:
+                    chosen = (o_idx, row)
+                    break
+        if chosen is None and raw_key:
+            for o_idx, row in candidates:
+                if o_idx in claimed or row.get("item_code") != code:
+                    continue
+                row_key = str(row.get("reservation_line_key") or "").strip()
+                row_name = str(row.get("name") or "").strip()
+                if (row_key and row_key == raw_key) or (row_name and row_name == raw_key):
+                    chosen = (o_idx, row)
+                    break
+        if chosen is not None:
+            claimed.add(chosen[0])
+            matched[idx] = chosen[1]
+
+    for idx, raw in enumerate(raw_items or []):
+        if idx in matched or has_explicit_key.get(idx):
+            continue
+        code = raw.get("item") or raw.get("item_code")
+        if not code:
+            continue
+        pool = [(o_idx, row) for o_idx, row in candidates if o_idx not in claimed and row.get("item_code") == code]
+        if not pool:
+            continue
+        raw_item_name = str(raw.get("item_name") or "").strip()
+        raw_rate = raw.get("rate") if raw.get("rate") is not None else raw.get("price")
+
+        def _rank(entry):
+            o_idx, row = entry
+            name_miss = 0 if (raw_item_name and str(row.get("item_name") or "").strip() == raw_item_name) else 1
+            rate_diff = abs(flt(row.get("rate")) - flt(raw_rate)) if raw_rate is not None else 0.0
+            return (name_miss, rate_diff, o_idx)
+
+        best_idx, best_row = min(pool, key=_rank)
+        claimed.add(best_idx)
+        matched[idx] = best_row
+
+    return matched
+
+
 @frappe.whitelist()
 def preview_order_totals(
     pos_profile,
@@ -4283,10 +4443,12 @@ def preview_order_totals(
         customer=effective_customer,
         local_dt=local_dt,
     )
+    orig_order_type = (orig_invoice.get("order_type") or "").strip() if orig_invoice else ""
+    same_order_type = bool(orig_invoice) and (not orig_order_type or orig_order_type == effective_order_type)
+    active_price_list = resolved.get("price_list") or profile.get("selling_price_list")
     price_list = (
-        (orig_invoice.get("selling_price_list") if orig_invoice and orig_invoice.get("custom_serving_period") else None)
-        or resolved.get("price_list")
-        or profile.get("selling_price_list")
+        (orig_invoice.get("selling_price_list") if same_order_type and orig_invoice.get("selling_price_list") else None)
+        or active_price_list
     )
     doc.selling_price_list = price_list
     if getattr(doc, "flags", None) is not None:
@@ -4302,74 +4464,50 @@ def preview_order_totals(
         for row in orig_invoice.get("items") or []:
             if cint(row.get("is_disposable")) == 1:
                 continue
-            is_privileged_row = (
-                cint(row.get("custom_price_overridden")) == 1
-                or cint(row.get("custom_is_open_item")) == 1
-                or cint(row.get("custom_is_complimentary")) == 1
-                or cint(row.get("ignore_pricing_rule")) == 1
+            _append_orig_preview_row(
+                doc,
+                row,
+                cost_center=cost_center,
+                warehouse=warehouse,
+                privileged_snapshots=privileged_snapshots,
+                orig_invoice=orig_invoice,
             )
-            raw_plr = row.get("price_list_rate")
-            plr = flt(raw_plr) if raw_plr is not None else flt(row.get("rate"))
-            raw_base_plr = row.get("base_price_list_rate")
-            base_plr = flt(raw_base_plr) if raw_base_plr is not None else plr
-            raw_base_rate = row.get("base_rate")
-            base_rate = flt(raw_base_rate) if raw_base_rate is not None else flt(row.get("rate"))
-            item_entry = {
-                "item_code": row.get("item_code"),
-                "item_name": row.get("item_name") or row.get("item_code"),
-                "qty": flt(row.get("qty")),
-                "rate": flt(row.get("rate")),
-                "base_rate": base_rate,
-                "price_list_rate": plr,
-                "base_price_list_rate": base_plr,
-                "discount_percentage": flt(row.get("discount_percentage")),
-                "discount_amount": flt(row.get("discount_amount")),
-                "ignore_pricing_rule": 1 if is_privileged_row else cint(row.get("ignore_pricing_rule")),
-                "custom_price_overridden": cint(row.get("custom_price_overridden")),
-                "custom_is_open_item": cint(row.get("custom_is_open_item")),
-                "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
-                "uom": row.get("uom"),
-                "cost_center": row.get("cost_center") or cost_center,
-                "warehouse": row.get("warehouse") or warehouse,
-            }
-            if row.get("pricing_rules") is not None:
-                item_entry["pricing_rules"] = row.get("pricing_rules")
-            for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
-                if row.get(tax_field) is not None:
-                    item_entry[tax_field] = row.get(tax_field)
-            cloned_row = doc.append("items", item_entry)
-            if is_privileged_row and cloned_row is not None:
-                privileged_snapshots[id(cloned_row)] = {
-                    "price_list_rate": plr,
-                    "base_price_list_rate": base_plr,
-                    "rate": flt(row.get("rate")),
-                    "base_rate": base_rate,
-                    "discount_percentage": flt(row.get("discount_percentage")),
-                    "discount_amount": flt(row.get("discount_amount")),
-                    "pricing_rules": row.get("pricing_rules"),
-                    "ignore_pricing_rule": 1,
-                    "custom_price_overridden": cint(row.get("custom_price_overridden")),
-                    "custom_is_open_item": cint(row.get("custom_is_open_item")),
-                    "custom_is_complimentary": cint(row.get("custom_is_complimentary")),
-                }
     else:
+        matched_orig_rows = (
+            _match_preview_items_to_orig_rows(items, orig_invoice.get("items") or [])
+            if orig_invoice is not None
+            else {}
+        )
+        new_line_price_list = active_price_list or price_list
         release_field, released = (None, None)
-        if price_list:
+        if new_line_price_list:
             try:
                 release_field, released = item_price_release_states()
             except Exception:
                 release_field, released = (None, None)
 
-        for raw in items:
+        for idx, raw in enumerate(items):
             code = raw.get("item") or raw.get("item_code")
             qty = flt(raw.get("qty") or raw.get("quantity") or 0)
             if not code or qty <= 0:
                 continue
+            orig_row = matched_orig_rows.get(idx)
+            if orig_row is not None and (_is_privileged_preview_row(orig_row, orig_invoice=orig_invoice) or same_order_type):
+                _append_orig_preview_row(
+                    doc,
+                    orig_row,
+                    qty=qty,
+                    cost_center=cost_center,
+                    warehouse=warehouse,
+                    privileged_snapshots=privileged_snapshots,
+                    orig_invoice=orig_invoice,
+                )
+                continue
             resolved_rate = None
-            if price_list:
+            if new_line_price_list:
                 try:
                     ip = price_valid_on(
-                        code, price_list, posting_date, release_field, released, customer=effective_customer
+                        code, new_line_price_list, posting_date, release_field, released, customer=effective_customer
                     )
                     if ip and ip.get("price_list_rate") is not None:
                         resolved_rate = flt(ip.get("price_list_rate"))
@@ -4385,13 +4523,16 @@ def preview_order_totals(
                 "rate": resolved_rate,
                 "price_list_rate": resolved_rate,
                 "base_price_list_rate": resolved_rate,
-                "cost_center": cost_center,
+                "cost_center": (orig_row.get("cost_center") if orig_row else None) or cost_center,
             }
-            if warehouse:
-                item_entry["warehouse"] = warehouse
+            eff_warehouse = (orig_row.get("warehouse") if orig_row else None) or warehouse
+            if eff_warehouse:
+                item_entry["warehouse"] = eff_warehouse
             for tax_field in ("item_tax_template", "item_tax_rate", "custom_tax_exempt"):
                 if raw.get(tax_field) is not None:
                     item_entry[tax_field] = raw.get(tax_field)
+                elif orig_row is not None and orig_row.get(tax_field) is not None and tax_field == "custom_tax_exempt":
+                    item_entry[tax_field] = orig_row.get(tax_field)
             doc.append("items", item_entry)
 
     disc_pct = flt(additional_discount_percentage)

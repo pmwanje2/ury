@@ -369,7 +369,14 @@ export interface PreviewOrderTotalsRequest {
   pos_profile: string;
   order_type: string;
   customer?: string;
-  items?: Array<{ item: string; qty: number; rate?: number; item_name?: string }>;
+  items?: Array<{
+    name?: string;
+    item: string;
+    qty: number;
+    rate?: number;
+    item_name?: string;
+    reservation_line_key?: string;
+  }>;
   no_of_pax?: number;
   invoice_name?: string | null;
   additional_discount_percentage?: number;

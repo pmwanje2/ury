@@ -116,7 +116,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   }, [orderId, lastModifiedTime]);
 
   const calculateItemTotal = (item: typeof activeOrders[0]) => {
-    const basePrice = item.selectedVariant?.price || item.price;
+    const basePrice = item.selectedVariant?.price ?? item.price;
     const addonsTotal = item.selectedAddons?.reduce((sum, addon) => sum + addon.price, 0) || 0;
     return (basePrice + addonsTotal) * item.quantity;
   };
@@ -153,10 +153,14 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const previewItems = useMemo(
     () =>
       activeOrders.map((item) => ({
+        ...(item.invoiceItemName ? { name: item.invoiceItemName } : {}),
         item: item.id,
         item_name: item.name,
         qty: item.quantity,
-        rate: item.selectedVariant?.price || item.price,
+        rate: item.selectedVariant?.price ?? item.price,
+        ...(item.reservationLineKey || item.uniqueId
+          ? { reservation_line_key: item.reservationLineKey || item.uniqueId }
+          : {}),
       })),
     [activeOrders],
   );
