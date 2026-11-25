@@ -594,6 +594,27 @@ def process_items_for_cancel_kot(
     return created_kot_names
 
 
+def consume_kot_releases(releases, item, key, note, qty, originals=None):
+    """Apply a cancellation to the newest matching release rows first."""
+    matched = []
+    for release in reversed(releases):
+        name, row, remaining = release
+        if originals is not None and name not in originals:
+            continue
+        if row.get("item") != item or (row.get("comments") or "") != (note or ""):
+            continue
+        if key and row.get("reservation_line_key") and key != row.get("reservation_line_key"):
+            continue
+        take = min(qty, remaining)
+        if take > 0:
+            matched.append(name)
+            release[2] -= take
+            qty -= take
+        if qty <= 0:
+            break
+    return matched
+
+
 # Create a cancel KOT document
 def create_cancel_kot_doc(
     invoice_id,
@@ -621,37 +642,23 @@ def create_cancel_kot_doc(
     )
     releases = []
 
-    def consume(item, key, note, qty, originals=None):
-        matched = []
-        for release in reversed(releases):
-            name, row, remaining = release
-            if originals is not None and name not in originals:
-                continue
-            if row.item != item or (row.get("comments") or "") != (note or ""):
-                continue
-            if key and row.get("reservation_line_key") and key != row.get("reservation_line_key"):
-                continue
-            take = min(qty, remaining)
-            if take > 0:
-                matched.append(name)
-                release[2] -= take
-                qty -= take
-            if qty <= 0:
-                break
-        return matched
-
     for entry in history:
         ticket = frappe.get_doc("URY KOT", entry.name)
         if ticket.get("type") in ("Cancelled", "Partially cancelled"):
             originals = {name.strip() for name in (ticket.get("original_kot") or "").split(",")}
             for row in ticket.kot_items:
-                consume(row.item, row.get("reservation_line_key"), row.get("comments"), flt(row.cancelled_qty), originals)
+                consume_kot_releases(
+                    releases, row.item, row.get("reservation_line_key"), row.get("comments"),
+                    flt(row.cancelled_qty), originals,
+                )
         else:
             releases.extend([ticket.name, row, flt(row.get("quantity"))] for row in ticket.kot_items)
 
     original_kots = []
     for row in cancel_items:
-        original_kots.extend(consume(row["item_code"], row.get("reservation_line_key"), row.get("comments"), abs(flt(row["qty"]))))
+        original_kots.extend(consume_kot_releases(
+            releases, row["item_code"], row.get("reservation_line_key"), row.get("comments"), abs(flt(row["qty"])),
+        ))
     set_kots = ",".join(dict.fromkeys(original_kots))
     kot_cancel_doc = frappe.get_doc(
         {

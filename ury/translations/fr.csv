@@ -24,3 +24,8 @@ Not permitted to modify this order,Vous n’êtes pas autorisé à modifier cett
 Not permitted outside your active branch,Action interdite en dehors de votre établissement actif,
 This order is no longer open.,Cette commande n’est plus ouverte.,
 You are not permitted to take Dine In table orders.,Vous n’êtes pas autorisé à prendre des commandes en salle.,
+Only a manager can confirm a cancelled KOT.,Seul un responsable peut confirmer un bon de cuisine annulé.,
+Kitchen ticket {0} was not found.,Le bon de cuisine {0} est introuvable.,
+You do not have permission to modify this KOT.,Vous n’êtes pas autorisé à modifier ce bon de cuisine.,
+You do not have permission to modify KOTs from other branches.,Vous n’êtes pas autorisé à modifier les bons de cuisine d’autres établissements.,
+Hold and fire requires an online connection.,Une connexion est nécessaire pour mettre en attente ou envoyer en cuisine.,

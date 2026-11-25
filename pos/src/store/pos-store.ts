@@ -14,6 +14,7 @@ import type {
 import { getCurrencyInfo, PosProfileCombined, getCombinedPosProfile, getPosProfileOrSelection } from '../lib/pos-profile-api';
 import { getAvailableOutlets, setActiveOutlet, type AvailableOutlet } from '../lib/outlet-api';
 import { getMenuCourses } from '../lib/menu-course-api';
+import { t } from '../i18n';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
@@ -911,7 +912,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   },
 
   setItemHeld: (uniqueId, held) => {
-    if (navigator.onLine === false || !get().posProfile?.ury_enable_hold_fire) throw new Error('URY_HOLD_OFFLINE');
+    if (navigator.onLine === false || !get().posProfile?.ury_enable_hold_fire) throw new Error(t('hold_fire.offline'));
     const items = get().activeOrders;
     const target = items.find(item => item.uniqueId === uniqueId);
     if (!target || target.invoiceItemName || target.parentLineKey) return;

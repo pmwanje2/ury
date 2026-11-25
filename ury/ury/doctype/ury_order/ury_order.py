@@ -4007,7 +4007,7 @@ def sync_order(
     if has_held and not hold_enabled:
         frappe.throw(coded_message("HOLD-DISABLED", _("Hold and fire is disabled for this outlet.")))
     if has_held and (captured_at is not None or cint(offline_printed)):
-        frappe.throw(_("URY_HOLD_OFFLINE: Hold and fire requires an online connection."))
+        frappe.throw(coded_message("HOLD-OFFLINE", _("Hold and fire requires an online connection.")))
     seen_line_names = set()
     seen_keys = {row["reservation_line_key"] for row in past_item if row.get("reservation_line_key")} if append else set()
     for item in items:

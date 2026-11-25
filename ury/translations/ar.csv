@@ -3112,3 +3112,8 @@ Configure a kitchen station for POS Profile {0}.,هيّئ محطة مطبخ لم
 Configure a kitchen ticket naming series for this outlet.,هيّئ سلسلة ترقيم تذاكر المطبخ لهذا الفرع.,
 Not permitted outside your active branch,الإجراء غير مسموح خارج فرعك النشط,
 This order is no longer open.,هذا الطلب لم يعد مفتوحًا.,
+Only a manager can confirm a cancelled KOT.,يمكن للمدير فقط تأكيد إلغاء تذكرة المطبخ.,
+Kitchen ticket {0} was not found.,لم يتم العثور على تذكرة المطبخ {0}.,
+You do not have permission to modify this KOT.,ليس لديك صلاحية تعديل تذكرة المطبخ هذه.,
+You do not have permission to modify KOTs from other branches.,ليس لديك صلاحية تعديل تذاكر المطبخ من الفروع الأخرى.,
+Hold and fire requires an online connection.,يلزم الاتصال لتأجيل الأصناف أو إرسالها إلى المطبخ.,

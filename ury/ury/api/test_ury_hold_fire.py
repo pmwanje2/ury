@@ -106,7 +106,7 @@ class HoldFireTests(OrderingCases, TestCase):
         self.invoice.save.assert_not_called()
 
     def test_offline_replay_refuses_held_lines(self):
-        with self.assertRaisesRegex(ValueError, "URY_HOLD_OFFLINE"):
+        with self.assertRaisesRegex(ValueError, "HOLD-OFFLINE"):
             self.sync([self.request()], offline_printed=1)
 
     def test_desk_callback_uses_saved_release_state_keys_and_notes(self):

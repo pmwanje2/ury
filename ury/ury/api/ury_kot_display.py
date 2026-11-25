@@ -76,7 +76,56 @@ def _lock_course_fire_order(invoice, profile):
 def _advance_course(invoice, bumped):
     from ury.ury.doctype.ury_order.ury_order import _fire_next_held_course
 
-    _fire_next_held_course(invoice, bumped)
+    savepoint = "advance_kitchen_course"
+    discard_release_effects = _capture_course_release_effects()
+    frappe.db.savepoint(savepoint)
+    try:
+        _fire_next_held_course(invoice, bumped)
+    except Exception:
+        traceback = frappe.get_traceback()
+        # Keep the completed bump and discard writes and queued notifications
+        # from the failed release. The outer request still owns the commit.
+        frappe.db.rollback(save_point=savepoint)
+        discard_release_effects()
+        frappe.log_error(title="Automatic kitchen course release failed", message=traceback)
+    frappe.db.release_savepoint(savepoint)
+
+
+def _capture_course_release_effects():
+    try:
+        from frappe.desk.form.linked_with import capture_pending_side_effects, discard_side_effects_since
+    except ImportError:
+        # Older v16 benches do not export Frappe's savepoint side-effect helpers.
+        queues = {
+            hook: getattr(frappe.db, hook)._functions
+            for hook in ("before_commit", "after_commit", "before_rollback", "after_rollback")
+        }
+        counts = {hook: len(queue) for hook, queue in queues.items()}
+        logs = {
+            key: list(getattr(frappe.local, key) or []) if hasattr(frappe.local, key) else None
+            for key in ("message_log", "_realtime_log", "_webhook_queue")
+        }
+        currently_saving = list(frappe.flags.currently_saving or [])
+
+        def discard():
+            frappe.flags.currently_saving = currently_saving
+            for hook, queue in queues.items():
+                callbacks = []
+                while len(queue) > counts[hook]:
+                    callbacks.append(queue.pop())
+                if hook.endswith("_rollback"):
+                    for callback in reversed(callbacks):
+                        callback()
+            for key, saved in logs.items():
+                if saved is not None:
+                    setattr(frappe.local, key, saved)
+                elif hasattr(frappe.local, key):
+                    delattr(frappe.local, key)
+
+        return discard
+
+    snapshot = capture_pending_side_effects()
+    return lambda: discard_side_effects_since(snapshot)
 
 
 def record_kot_served(name, creation_time, kot_doc=None):
@@ -322,18 +371,18 @@ def confirm_cancel_kot(name):
     manager_roles = {"URY Manager", "URY Admin", "System Manager"}
     if not manager_roles.intersection(frappe.get_roles()) and frappe.session.user != "Administrator":
         frappe.throw(
-            "Only a manager can confirm a cancelled KOT.",
+            _("Only a manager can confirm a cancelled KOT."),
             frappe.PermissionError,
         )
 
     try:
         kot_doc = frappe.get_doc("URY KOT", name)
     except frappe.DoesNotExistError:
-        frappe.throw(f"Restaurant KOT {name} not found.", frappe.DoesNotExistError)
+        frappe.throw(_("Kitchen ticket {0} was not found.").format(name), frappe.DoesNotExistError)
 
     if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
         frappe.throw(
-            "You do not have permission to modify this KOT.",
+            _("You do not have permission to modify this KOT."),
             frappe.PermissionError,
         )
 
@@ -347,7 +396,7 @@ def confirm_cancel_kot(name):
 
     if session_branch and kot_doc.branch != session_branch:
         frappe.throw(
-            "You do not have permission to modify KOTs from other branches.",
+            _("You do not have permission to modify KOTs from other branches."),
             frappe.PermissionError,
         )
 
@@ -1056,8 +1105,8 @@ def build_dashboard_summary(kot_list):
     return list(summary.values())
 
 
-def _get_cancel_confirmed_original_kots(branch, *, invoice=None):
-    """Names of KOTs that a verified cancel-KOT references via `original_kot`."""
+def _get_cancel_confirmed_original_kots(branch, *, invoice=None, candidates=None):
+    """Return originals with no quantity left after confirmed cancellations."""
     filters = {
         "type": ["in", ["Cancelled", "Partially cancelled"]],
         "verified": 1,
@@ -1066,19 +1115,60 @@ def _get_cancel_confirmed_original_kots(branch, *, invoice=None):
     if branch:
         filters["branch"] = branch
 
+    fields = ["name", "type", "original_kot"]
+    order_by = "creation asc, name asc"
     if invoice:
         # Course advancement already holds the order lock. Read the current
         # cancel records so a waiter on that lock cannot use an old snapshot.
         cancel_rows = frappe.db.get_values(
-            "URY KOT", {**filters, "invoice": invoice}, ["original_kot"], as_dict=True, for_update=True,
+            "URY KOT", {**filters, "invoice": invoice}, fields, as_dict=True,
+            for_update=True, order_by=order_by,
         )
     else:
-        cancel_rows = frappe.get_all("URY KOT", fields=["original_kot"], filters=filters)
-    return {
-        name.strip()
-        for row in cancel_rows
-        for name in (row.get("original_kot") or "").split(",")
-        if name.strip()
+        cancel_rows = frappe.get_all("URY KOT", fields=fields, filters=filters, order_by=order_by)
+
+    fully_cancelled = set()
+    partials = []
+    for row in cancel_rows:
+        originals = {name.strip() for name in (row.get("original_kot") or "").split(",") if name.strip()}
+        if row.get("type") == "Partially cancelled":
+            if originals and (candidates is None or originals & candidates):
+                partials.append((row["name"], originals))
+        else:
+            fully_cancelled.update(originals)
+
+    if partials:
+        fully_cancelled.update(_fully_consumed_kots(partials, for_update=bool(invoice)))
+    return fully_cancelled
+
+
+def _fully_consumed_kots(partials, *, for_update):
+    from ury.ury.api.ury_kot_generate import consume_kot_releases
+
+    originals = set().union(*(names for _, names in partials))
+    rows = frappe.db.get_values(
+        "URY KOT Items", {"parent": ["in", sorted(originals | {name for name, _ in partials})]},
+        ["parent", "item", "quantity", "cancelled_qty", "comments", "reservation_line_key"],
+        order_by="creation asc, parent asc, idx asc", as_dict=True, for_update=for_update,
+    )
+    releases = []
+    cancel_items = {}
+    for row in rows:
+        if row["parent"] in originals:
+            releases.append([row["parent"], row, _flt(row.get("quantity"))])
+        else:
+            cancel_items.setdefault(row["parent"], []).append(row)
+
+    for ticket, referenced in partials:
+        for row in cancel_items.get(ticket, []):
+            consume_kot_releases(
+                releases, row["item"], row.get("reservation_line_key"), row.get("comments"),
+                _flt(row.get("cancelled_qty")), referenced,
+            )
+
+    precision = frappe.get_precision("URY KOT Items", "quantity")
+    return {name for name, _, _ in releases} - {
+        name for name, _, quantity in releases if round(quantity, precision) > 0
     }
 
 
@@ -1247,7 +1337,7 @@ def kot_list(production_unit=None):
         filters=filters,
         order_by="creation desc",
     )
-    cancelled_original_kots = _get_cancel_confirmed_original_kots(branch)
+    cancelled_original_kots = _get_cancel_confirmed_original_kots(branch, candidates={kot.name for kot in kotList})
     production_filters = {}
     KOT = []
     for kot in kotList:
