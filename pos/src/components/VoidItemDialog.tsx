@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import {
   isAuthRequiredError,
   listReasons,
-  overrideErrorMessage,
+  overrideActionErrorMessage,
   type OverrideReason,
 } from '../lib/override-api';
 import {
@@ -191,7 +191,7 @@ export default function VoidItemDialog({
           },
         });
       } else {
-        setError(overrideErrorMessage(err) || msg || t('void_return.void_failed'));
+        setError(overrideActionErrorMessage(err) || msg || t('void_return.void_failed'));
       }
     } finally {
       setSubmitting(false);

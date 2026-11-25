@@ -51,6 +51,8 @@ import re
 import secrets
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
+from functools import wraps
+from inspect import Parameter, signature
 from typing import Any, NamedTuple
 
 import frappe
@@ -113,8 +115,9 @@ PIN_AUTH_DOCTYPE = "POS Override PIN"
 PIN_AUTH_FIELDNAME = "pin_hash"
 
 AGENT_ROLES = frozenset({"Kamra Agent", "AI Agent", "HUF Agent"})
-SECRET_FORM_KEYS = ("pin", "password", "current_password", "new_pin", "confirm_pin")
-FORBIDDEN_CLAIM_KEYS = frozenset({"pin", "password", "pin_hash", "custom_override_pin_hash"})
+# Frappe masks "secret" keys in Error Log metadata before request hooks run.
+SECRET_FORM_KEYS = ("pin_secret", "pin", "password", "current_password", "new_pin", "confirm_pin")
+FORBIDDEN_CLAIM_KEYS = frozenset({"pin_secret", "pin", "password", "pin_hash", "custom_override_pin_hash"})
 
 _MGR_ROLES = ("URY Manager", "URY Admin", "Accounts Manager")
 _FLOOR_AND_MGR = ("URY Captain", "URY Cashier", "URY Manager", "URY Admin", "Accounts Manager")
@@ -536,17 +539,266 @@ def _db_failed_password_count(user: str, lock_minutes: int) -> int:
     return _with_isolated_db(_query, commit=False)
 
 
-def _external_pin_verifier():
-    hooks = frappe.get_hooks("pos_override_pin_verifier") or []
+class _PinInput:
+    """Keep credential values out of frame-local representations in error reports."""
+
+    __slots__ = ("pin", "password", "legacy_wire_pin")
+
+    def __init__(self, pin, password=None, *, legacy_wire_pin: bool = False):
+        self.pin = pin
+        self.password = password
+        self.legacy_wire_pin = legacy_wire_pin
+
+
+_PIN_PROVIDER_CODES = {
+    "POS-AUTH-NOT-ELIGIBLE": "POS-AUTH-NOT-ELIGIBLE",
+    "POS-AUTH-SELF": "POS-AUTH-SELF",
+    "POS-AUTH-LOCKED": "POS-AUTH-LOCKED",
+    "POS-AUTH-NO-PIN": "POS-AUTH-NO-PIN",
+    "POS-AUTH-PIN": "POS-AUTH-PIN",
+    "POS-AUTH-PASSWORD": "POS-AUTH-PASSWORD",
+    "SITEOPS-DOA-SELF": "POS-AUTH-SELF",
+    "SITEOPS-DOA-ELIGIBLE": "POS-AUTH-NOT-ELIGIBLE",
+    "SITEOPS-DOA-ROLE": "POS-AUTH-NOT-ELIGIBLE",
+    "SITEOPS-DOA-LIMIT": "POS-AUTH-NOT-ELIGIBLE",
+    "SITEOPS-DOA-LOCKED": "POS-AUTH-LOCKED",
+    "SITEOPS-DOA-PIN": "POS-AUTH-PIN",
+    "PIN_LOCKED": "POS-AUTH-LOCKED",
+    "PIN_NOT_SET": "POS-AUTH-NO-PIN",
+    "PIN_MUST_RESET": "POS-AUTH-NO-PIN",
+}
+
+
+def _pin_provider_exception_code(error: Exception) -> str:
+    # frappe.throw() also queues the original provider message.
+    frappe.clear_messages()
+    message = str(error)
+    for tag, code in _PIN_PROVIDER_CODES.items():
+        if tag in message:
+            return code
+    if isinstance(error, (frappe.PermissionError, PermissionError)):
+        return "POS-AUTH-NOT-ELIGIBLE"
+    return "POS-AUTH-UNAVAILABLE"
+
+
+def _read_pin_form() -> _PinInput:
+    form = getattr(frappe, "form_dict", None)
+    if not isinstance(form, dict):
+        return _PinInput(None)
+    if "pin" in form:
+        # Keep only the refusal flag when a stale HTTP client sends the retired field.
+        credentials = _PinInput(None, legacy_wire_pin=True)
+    else:
+        credentials = _PinInput(form.get("pin_secret"), form.get("password", form.get("current_password")))
+    _scrub_form_secrets()
+    return credentials
+
+
+def scrub_pin_request():
+    """Move credentials out of the RPC form before Frappe checks and dispatches it.
+
+    Frappe initializes the HTTP request before this hook. Its original request
+    body and raw kwargs passed explicitly by a Python caller to frappe.call
+    belong to Frappe's upstream frames.
+    """
+    form = getattr(frappe, "form_dict", None)
+    if not isinstance(form, dict):
+        return
+    command = form.get("cmd")
+    if not command:
+        request = getattr(frappe.local, "request", None)
+        path = getattr(request, "path", "")
+        for prefix in ("/api/method/", "/api/v1/method/", "/api/v2/method/"):
+            if path.startswith(prefix):
+                command = path[len(prefix):].split("/", 1)[0]
+                break
+    if command == "ury.ury_pos.override.authorise":
+        frappe.local.ury_pin_request = ("authorise", _read_pin_form())
+    elif command == "ury.ury_pos.override.set_my_pin":
+        frappe.local.ury_pin_request = ("set_my_pin", _read_pin_form())
+
+
+def _take_pin_request(endpoint_name) -> _PinInput:
+    credentials = _read_pin_form()
+    request_credentials = getattr(frappe.local, "ury_pin_request", None)
+    if request_credentials and request_credentials[0] == endpoint_name:
+        frappe.local.ury_pin_request = None
+        if not credentials.legacy_wire_pin:
+            credentials = request_credentials[1]
+    if credentials.legacy_wire_pin:
+        _refuse("POS-AUTH-REFRESH", "Refresh the till and try again.", frappe.ValidationError)
+    return credentials
+
+
+def _protect_pin_endpoint(*credential_positions):
+    """Keep the wire credentials out of the whitelisted signature and preserve direct Python calls."""
+    positional_indices = {position for position, _ in credential_positions}
+
+    def protect(endpoint):
+        @wraps(endpoint)
+        def guarded(*args, **kwargs):
+            try:
+                credentials = _take_pin_request(endpoint.__name__)
+                if "current_password" in kwargs:
+                    credentials.password = kwargs.pop("current_password")
+                for position, name in credential_positions:
+                    if position < len(args):
+                        setattr(credentials, name, args[position])
+                    if name in kwargs:
+                        setattr(credentials, name, kwargs.pop(name))
+                if "pin_secret" in kwargs:
+                    credentials.pin = kwargs.pop("pin_secret")
+                args = tuple(value for position, value in enumerate(args) if position not in positional_indices)
+                return endpoint(*args, credentials=credentials, **kwargs)
+            except Exception as error:
+                del args
+                kwargs.clear()
+                expected = (
+                    getattr(frappe, name, None) for name in (
+                        "ValidationError", "PermissionError", "AuthenticationError", "DoesNotExistError",
+                        "FrappeTypeError", "CSRFTokenError", "SessionExpired", "SessionStopped",
+                        "TooManyRequestsError", "DuplicateEntryError",
+                    )
+                )
+                if any(isinstance(cls, type) and isinstance(error, cls) for cls in expected):
+                    # Developer mode also snapshots handled errors. Dispatcher frames still hold credentials.
+                    error.skip_error_log = True
+                    raise
+
+            try:
+                _scrub_form_secrets()
+                frappe.clear_messages()
+                frappe.logger().error("Unexpected approval PIN endpoint failure in %s", endpoint.__name__)
+            except Exception:
+                # Error reporting must never expose the original request via a second exception.
+                pass
+            try:
+                _refuse_pin_provider_unavailable()
+            except frappe.ValidationError as error:
+                error.skip_error_log = True
+                raise
+            except Exception:
+                # Translation or message handling may be unavailable during a framework failure.
+                pass
+            error = frappe.ValidationError(f"{_PIN_UNAVAILABLE_MESSAGE} [POS-AUTH-UNAVAILABLE]")
+            error.skip_error_log = True
+            raise error
+
+        # Frappe whitelist wraps this function, then frappe.call filters newargs by
+        # this signature. Only the before_request hook can scrub the original HTTP
+        # kwargs. An in-process frappe.call supplied explicit secrets owns those kwargs.
+        endpoint_signature = signature(endpoint)
+        guarded.__signature__ = endpoint_signature.replace(parameters=[
+            parameter for name, parameter in endpoint_signature.parameters.items()
+            if name != "credentials"
+        ])
+        return guarded
+
+    return protect
+
+
+_PIN_UNAVAILABLE_MESSAGE = "The approval PIN service is unavailable. Try again later."
+
+
+def _refuse_pin_provider_unavailable():
+    _refuse("POS-AUTH-UNAVAILABLE", _PIN_UNAVAILABLE_MESSAGE, frappe.ValidationError)
+
+
+def _pin_hook_path(name: str) -> str | None:
+    hooks = frappe.get_hooks(name) or []
     if isinstance(hooks, str):
         hooks = [hooks]
-    valid = [h for h in hooks if isinstance(h, str) and h.strip()]
-    if not valid:
+    return next((h.strip() for h in reversed(hooks) if isinstance(h, str) and h.strip()), None)
+
+
+def _resolve_pin_hook(path: str):
+    try:
+        hook = frappe.get_attr(path)
+    except Exception:
+        frappe.clear_messages()
+    else:
+        if callable(hook):
+            return hook
+    _refuse_pin_provider_unavailable()
+
+
+def _external_pin_verifier():
+    path = _pin_hook_path("pos_override_pin_verifier")
+    if path:
+        return _resolve_pin_hook(path)
+    if _pin_hook_path("pos_override_pin_manager"):
+        _refuse(
+            "POS-AUTH-UNAVAILABLE",
+            "Approval PIN verification must be configured before enabling external PIN management.",
+            frappe.ValidationError,
+        )
+    return None
+
+
+def _external_pin_manager():
+    """Resolve the optional provider for PIN status, setting and clearing."""
+    path = _pin_hook_path("pos_override_pin_manager")
+    if path:
+        _external_pin_verifier()  # Require the companion verifier to resolve successfully.
+        return _resolve_pin_hook(path)
+    return None
+
+
+def _hook_parameters(hook):
+    try:
+        return signature(hook).parameters
+    except (TypeError, ValueError):
+        return {}
+
+
+def _call_pin_manager(manager, action: str, *, credentials=None, skip_denied=False, **kwargs):
+    try:
+        if credentials is None:
+            result = manager(action, **kwargs)
+        elif "current_password" in _hook_parameters(manager):
+            result = manager(action, pin=credentials.pin, current_password=credentials.password, **kwargs)
+        else:
+            result = manager(action, pin=credentials.pin, **kwargs)
+    except Exception as error:
+        code = _pin_provider_exception_code(error)
+    else:
+        if action != "status" or isinstance(result, dict):
+            return result
+        code = "POS-AUTH-UNAVAILABLE"
+
+    if code == "POS-AUTH-NOT-ELIGIBLE":
+        if skip_denied:
+            return None
+        _refuse(code, "This account cannot manage approval PINs.", frappe.PermissionError)
+    if code == "POS-AUTH-LOCKED":
+        _refuse(code, "Too many failed attempts. Try again later.", frappe.ValidationError)
+    if code == "POS-AUTH-PASSWORD":
+        _refuse(code, "Your current password did not match.", frappe.ValidationError)
+    _refuse_pin_provider_unavailable()
+
+
+def _external_pin_status(manager, user: str, *, pos_profile: str | None = None) -> dict[str, bool] | None:
+    scope = {}
+    if pos_profile and "pos_profile" in _hook_parameters(manager):
+        scope["pos_profile"] = pos_profile
+    status = _call_pin_manager(manager, "status", user=user, skip_denied=bool(pos_profile), **scope)
+    if status is None:
         return None
-    return frappe.get_attr(valid[-1])
+    return {
+        "has_pin": bool(status.get("has_pin")),
+        "must_reset": bool(status.get("must_reset", False)),
+        "locked": bool(status.get("locked", False)),
+    }
 
 
-def _is_outlet_member(user: str, profile) -> bool:
+def _refuse_external_pin_management():
+    frappe.throw(
+        frappe._("Approval PINs on this site are managed by the property's cashier PIN store."),
+        frappe.ValidationError,
+    )
+
+
+def _is_outlet_member(user: str, profile, *, require_assignment: bool = False) -> bool:
     """Enabled, non-Admin/Guest user assigned to this POS Profile/branch/company."""
     if not user or user in ("Administrator", "Guest") or not profile:
         return False
@@ -579,7 +831,7 @@ def _is_outlet_member(user: str, profile) -> bool:
     if in_profile or in_branch:
         return True
 
-    if not branch and not applicable_users:
+    if not require_assignment and not branch and not applicable_users:
         if company_perms and profile.company in company_perms:
             return True
         if frappe.db.exists("Employee", {"user_id": user, "company": profile.company}):
@@ -1303,43 +1555,43 @@ def list_approvers(
     return result
 
 
-def _verify_approver_pin(approver: str, pin: Any, profile) -> tuple[bool, str | None]:
+def _verify_approver_pin(approver: str, credentials: _PinInput, profile, **context) -> tuple[bool, str | None]:
     verifier = _external_pin_verifier()
     if verifier is not None:
-        if not isinstance(pin, str) or not pin.strip():
+        if not isinstance(credentials.pin, str) or not credentials.pin.strip():
             return False, "POS-AUTH-PIN"
+        parameters = _hook_parameters(verifier)
+        accepts_kwargs = any(param.kind == Parameter.VAR_KEYWORD for param in parameters.values())
+
+        def accepts_keyword(name):
+            return accepts_kwargs or (
+                name in parameters and parameters[name].kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+            )
+
         try:
-            outcome = verifier(approver, pin, profile.name)
-        except Exception as err:
-            text = str(err)
-            for code in (
-                "POS-AUTH-LOCKED",
-                "POS-AUTH-NO-PIN",
-                "POS-AUTH-NOT-ELIGIBLE",
-                "POS-AUTH-SELF",
-                "POS-AUTH-PIN",
-            ):
-                if code in text:
-                    return False, code
-            if "PIN_LOCKED" in text:
-                return False, "POS-AUTH-LOCKED"
-            if "PIN_NOT_SET" in text or "PIN_MUST_RESET" in text:
-                return False, "POS-AUTH-NO-PIN"
-            return False, "POS-AUTH-PIN"
+            if accepts_keyword("currency"):
+                context["currency"] = company_currency_for(profile.company, frappe)
+            verifier_context = {name: value for name, value in context.items() if accepts_keyword(name)}
+            outcome = verifier(approver, credentials.pin, profile.name, **verifier_context)
+        except Exception as error:
+            return False, _pin_provider_exception_code(error)
         if isinstance(outcome, dict):
             if outcome.get("ok"):
                 return True, None
-            return False, outcome.get("code") or "POS-AUTH-PIN"
+            code = outcome.get("code") or "POS-AUTH-PIN"
+            if isinstance(code, str):
+                return False, _PIN_PROVIDER_CODES.get(code, "POS-AUTH-UNAVAILABLE")
+            return False, "POS-AUTH-UNAVAILABLE"
         return (True, None) if bool(outcome) else (False, "POS-AUTH-PIN")
 
     if not _has_override_pin(approver):
         return False, "POS-AUTH-NO-PIN"
-    if not isinstance(pin, str) or not PIN_PATTERN.fullmatch(pin):
+    if not isinstance(credentials.pin, str) or not PIN_PATTERN.fullmatch(credentials.pin):
         return False, "POS-AUTH-PIN"
     try:
         _check_password(
             approver,
-            pin,
+            credentials.pin,
             doctype=PIN_AUTH_DOCTYPE,
             fieldname=PIN_AUTH_FIELDNAME,
             delete_tracker_cache=False,
@@ -1481,8 +1733,26 @@ def _sent_item_claim_amount(invoice, claim):
     return total
 
 
+def _over_short_claim_context(reference_doctype, reference_name, profile, claim):
+    if (
+        reference_doctype != "POS Opening Entry" or not reference_name
+        or claim.get("pos_opening_entry") != reference_name
+        or claim.get("pos_profile") != profile.name
+    ):
+        _refuse("POS-AUTH-CHANGED", "The till shift changed. Request approval again.", frappe.ValidationError)
+    from ury.ury_pos.till_controls import over_short_approval_context
+
+    return over_short_approval_context(
+        profile, reference_name, claim.get("counted_payments"),
+        period_end_date=claim.get("period_end_date"),
+    )
+
+
 def _claim_approval_amount(reference_doctype, reference_name, profile, privilege, claim):
     """Price the action against persisted FX and keep the signed claim in transaction units."""
+    if privilege == "over_short_close":
+        amount, _ = _over_short_claim_context(reference_doctype, reference_name, profile, claim)
+        return amount
     amount_field = _INVOICE_APPROVAL_AMOUNT_FIELDS.get(privilege, "amount")
     amount = _parse_optional_number(claim.get(amount_field))
     if privilege == "on_account_over_limit":
@@ -1559,23 +1829,34 @@ def _claim_approval_amount(reference_doctype, reference_name, profile, privilege
     return company_approval_amount(invoice, amount, frappe) if amount is not None else None
 
 
+def _approval_claim_digest(claim_json: str, amount: float | None, variances) -> str:
+    if variances is not None:
+        claim_json = _canonical_claim_json({
+            "claim": claim_json, "variance": amount, "tenders": sorted(variances),
+        })
+    return hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
+
+
 @frappe.whitelist(methods=["POST"])
+@_protect_pin_endpoint((3, "pin"))
 def authorise(
     pos_profile: str,
     privilege: str,
     approver: str,
-    pin: str,
     reference_doctype: str,
     reference_name: str,
     claim: dict[str, Any] | str,
+    *,
+    credentials: _PinInput,
 ) -> dict[str, Any]:
-    """Verify an eligible manager's PIN and mint a single-use 120 s approval token."""
-    _scrub_form_secrets()
+    """Verify an eligible manager's PIN and mint a single-use 120 s approval token.
+
+    HTTP callers send the PIN in the Frappe-redacted `pin_secret` field.
+    """
 
     _validate_privilege(privilege)
     parsed_claim = _parse_claim(claim)
     claim_json = _canonical_claim_json(parsed_claim)
-    claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
     pct = _parse_optional_number(parsed_claim.get("percent"))
     pg = cint(parsed_claim.get("privilege_group") or 0)
 
@@ -1626,7 +1907,12 @@ def authorise(
             frappe.PermissionError,
         )
 
-    amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
+    variances = None
+    if privilege == "over_short_close":
+        amt, variances = _over_short_claim_context(reference_doctype, reference_name, profile, parsed_claim)
+    else:
+        amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
+    claim_hash = _approval_claim_digest(claim_json, amt, variances)
     matching_rules = _matching_authorise_rules(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
     )
@@ -1698,7 +1984,17 @@ def authorise(
             frappe.ValidationError,
         )
 
-    ok, code = _verify_approver_pin(approver_user, pin, profile)
+    action = parsed_claim.get("action")
+    ok, code = _verify_approver_pin(
+        approver_user, credentials, profile,
+        amount=amt,
+        action=action if isinstance(action, str) and action.strip() else privilege,
+        privilege=privilege,
+        reference_doctype=reference_doctype,
+        reference_name=reference_name,
+        requester=requester,
+    )
+    del credentials
     if not ok:
         if code == "POS-AUTH-NO-PIN":
             _write_log(
@@ -1880,6 +2176,8 @@ def consume(
     claim: dict[str, Any] | str,
     *,
     approval_amount: float | None = None,
+    approval_variances=None,
+    reference_doctype: str = "POS Invoice",
 ):
     """Atomically consume a single-use approval token bound to session, check, and claim.
 
@@ -1906,7 +2204,6 @@ def consume(
     token_hash = _token_digest(token.strip())
     parsed_claim = _parse_claim(claim)
     claim_json = _canonical_claim_json(parsed_claim)
-    expected_claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
     pct = _parse_optional_number(parsed_claim.get("percent"))
     # Mutation handlers supply the amount computed from locked invoice data.
     # The canonical claim still uses the original transaction amounts.
@@ -1944,18 +2241,12 @@ def consume(
     if (
         approved.get("privilege") != privilege
         or approved.get("pos_profile") != pos_profile
+        or approved.get("reference_doctype") != reference_doctype
         or (approved.get("reference_name") or "") != (reference_name or "")
     ):
         _refuse(
             "POS-AUTH-CHANGED",
             "The check or action changed after manager approval. Ask a manager to approve again.",
-            frappe.ValidationError,
-        )
-
-    if not hmac.compare_digest(str(approved.get("claim_hash") or ""), expected_claim_hash):
-        _refuse(
-            "POS-AUTH-CHANGED",
-            "The approved values changed after manager approval. Ask a manager to approve again.",
             frappe.ValidationError,
         )
 
@@ -1977,9 +2268,25 @@ def consume(
         )
 
     amt = approval_amount
-    if amt is None:
-        amt = _claim_approval_amount(approved.get("reference_doctype") or "POS Invoice", reference_name, profile, privilege, parsed_claim)
+    variances = None
+    if privilege == "over_short_close":
+        variances = approval_variances
+        if amt is None or variances is None:
+            calculated_amount, variances = _over_short_claim_context(
+                reference_doctype, reference_name, profile, parsed_claim,
+            )
+            if amt is None:
+                amt = calculated_amount
+    expected_claim_hash = _approval_claim_digest(claim_json, amt, variances)
+    if not hmac.compare_digest(str(approved.get("claim_hash") or ""), expected_claim_hash):
+        _refuse(
+            "POS-AUTH-CHANGED",
+            "The approved values changed after manager approval. Ask a manager to approve again.",
+            frappe.ValidationError,
+        )
 
+    if amt is None:
+        amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
     matching_rules = _matching_authorise_rules(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
     )
@@ -1990,8 +2297,7 @@ def consume(
             frappe.PermissionError,
         )
 
-    ref_doctype = approved.get("reference_doctype") or "POS Invoice"
-    if approver_user.casefold() in _check_owners(ref_doctype, reference_name, profile=profile):
+    if approver_user.casefold() in _check_owners(reference_doctype, reference_name, profile=profile):
         if not _allows_check_owner_self_approval(privilege, matching_rules, pct):
             _refuse(
                 "POS-AUTH-SELF",
@@ -2010,7 +2316,7 @@ def consume(
             privilege=privilege,
             pos_profile=pos_profile,
             company=approved.get("company") or profile.company,
-            reference_doctype=ref_doctype,
+            reference_doctype=reference_doctype,
             reference_name=reference_name,
             claim_json=claim_json,
             reason=validated_reason or str(approved.get("reason") or ""),
@@ -2058,7 +2364,10 @@ def require(
     """Return None when caller may act alone, consumed approval with token, or raise POS-AUTH-REQUIRED."""
     _validate_privilege(privilege)
     if token:
-        return consume(token, privilege, pos_profile, reference_name, claim, approval_amount=amount)
+        return consume(
+            token, privilege, pos_profile, reference_name, claim,
+            approval_amount=amount, reference_doctype=reference_doctype,
+        )
 
     parsed_claim = _parse_claim(claim)
     eff_pct = percent if percent is not None else _parse_optional_number(parsed_claim.get("percent"))
@@ -2090,19 +2399,34 @@ def my_pin_status() -> dict[str, bool]:
     user = frappe.session.user
     if not user or user in ("Administrator", "Guest") or _is_non_interactive_or_agent_session(user):
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts in interactive sessions.", frappe.PermissionError)
-    external = _external_pin_verifier() is not None
-    has_pin = _has_override_pin(user) if not external else True
-    return {"has_pin": has_pin, "external_verifier": external}
+    manager = _external_pin_manager()
+    if manager is not None:
+        return {
+            **_external_pin_status(manager, user),
+            "external_verifier": True,
+            "can_manage_here": True,
+        }
+    if _external_pin_verifier() is not None:
+        return {"has_pin": True, "external_verifier": True, "can_manage_here": False}
+    return {
+        "has_pin": _has_override_pin(user),
+        "must_reset": False,
+        "locked": False,
+        "external_verifier": False,
+        "can_manage_here": True,
+    }
 
 
 @frappe.whitelist(methods=["POST"])
-def set_my_pin(password: str, pin: str) -> dict[str, Any]:
-    """Enrol or update the signed-in user's own approval PIN in Frappe `__Auth` after password re-entry.
+@_protect_pin_endpoint((0, "password"), (1, "pin"))
+def set_my_pin(*, credentials: _PinInput) -> dict[str, Any]:
+    """Enrol or update the signed-in user's own approval PIN after password re-entry.
+
+    HTTP callers send the PIN in the Frappe-redacted `pin_secret` field.
 
     P0 #2: Never allows `AuthenticationError` (401) to escape and terminate the live till session;
     counts failed password checks durably in DB + Redis and raises `ValidationError` (417).
     """
-    _scrub_form_secrets()
     user = frappe.session.user
     if not user or user in ("Administrator", "Guest"):
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Approval PINs are for named staff accounts only.", frappe.PermissionError)
@@ -2114,12 +2438,10 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
         )
     if cint(frappe.db.get_value("User", user, "enabled")) != 1:
         _refuse("POS-AUTH-NOT-ELIGIBLE", "This account is disabled.", frappe.PermissionError)
-    if _external_pin_verifier() is not None:
-        frappe.throw(
-            frappe._("Approval PINs on this site are managed by the property's cashier PIN store."),
-            frappe.ValidationError,
-        )
-    if not isinstance(password, str) or not password:
+    manager = _external_pin_manager()
+    if manager is None and _external_pin_verifier() is not None:
+        _refuse_external_pin_management()
+    if not isinstance(credentials.password, str) or not credentials.password:
         frappe.throw(frappe._("Enter your account password to confirm."), frappe.ValidationError)
 
     pw_tracker, pw_max, pw_lock_min = _password_tracker(user)
@@ -2131,8 +2453,12 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
         )
 
     try:
-        _check_password(user, password, delete_tracker_cache=False)
+        _check_password(user, credentials.password, delete_tracker_cache=False)
     except frappe.AuthenticationError:
+        password_matched = False
+    else:
+        password_matched = True
+    if not password_matched:
         _write_log(
             requester=user,
             approver=user,
@@ -2160,26 +2486,31 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
             frappe.ValidationError,
         )
 
-    if not isinstance(pin, str) or not PIN_PATTERN.fullmatch(pin):
+    if not isinstance(credentials.pin, str) or not PIN_PATTERN.fullmatch(credentials.pin):
         frappe.throw(
             frappe._("Enter an approval PIN of 4 to 8 digits."),
             frappe.ValidationError,
         )
 
-    had_pin_or_failures = (
-        _has_override_pin(user)
-        or _db_failed_password_count(user, pw_lock_min) > 0
-        or bool(frappe.db.exists("POS Authorisation Log", {"approver": user, "outcome": "Failed PIN"}))
-    )
-    _update_password(
-        user,
-        pin,
-        doctype=PIN_AUTH_DOCTYPE,
-        fieldname=PIN_AUTH_FIELDNAME,
-        logout_all_sessions=False,
-    )
+    if manager is not None:
+        _call_pin_manager(manager, "set", user=user, credentials=credentials)
+        log_pin_reset = True
+    else:
+        log_pin_reset = (
+            _has_override_pin(user)
+            or _db_failed_password_count(user, pw_lock_min) > 0
+            or bool(frappe.db.exists("POS Authorisation Log", {"approver": user, "outcome": "Failed PIN"}))
+        )
+        _update_password(
+            user,
+            credentials.pin,
+            doctype=PIN_AUTH_DOCTYPE,
+            fieldname=PIN_AUTH_FIELDNAME,
+            logout_all_sessions=False,
+        )
+    del credentials
     pw_tracker.add_success_attempt()
-    if had_pin_or_failures:
+    if log_pin_reset:
         _write_log(
             requester=user,
             approver=user,
@@ -2197,24 +2528,20 @@ def set_my_pin(password: str, pin: str) -> dict[str, Any]:
     return {"ok": True, "has_pin": True}
 
 
-def _can_manage_pin_for(caller: str, target: str, pos_profile: str | None = None) -> bool:
-    if not caller or caller == "Guest":
+def _can_manage_outlet_pins(caller: str, profile) -> bool:
+    if not profile or not frappe.has_permission("POS Profile", "write", profile):
         return False
-    if caller.casefold() == target.casefold():
-        return True
-    if pos_profile:
-        profile = _get_profile(pos_profile)
-        if not profile:
-            return False
-        if not frappe.has_permission("POS Profile", "write", profile):
-            return False
-        return _is_outlet_member(target, profile)
-    return bool(frappe.has_permission("POS Privilege Rule", "write"))
+    return (
+        caller == "Administrator"
+        or "System Manager" in frappe.get_roles(caller)
+        or _is_outlet_member(caller, profile, require_assignment=True)
+    )
 
 
 @frappe.whitelist(methods=["POST"])
 def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
-    """Allow a manager (or the owner) to clear a staff member's approval PIN. Never reads or sets."""
+    """Allow a manager to clear another staff member's PIN for a scoped till."""
+    _scrub_form_secrets()
     caller = frappe.session.user
     if not caller or caller == "Guest":
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Sign in to clear an approval PIN.", frappe.PermissionError)
@@ -2226,26 +2553,39 @@ def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
         _refuse("POS-AUTH-NOT-ELIGIBLE", "Select a valid staff user.", frappe.PermissionError)
     target = str(canonical)
 
-    if not _can_manage_pin_for(caller, target, pos_profile=pos_profile):
+    profile = _get_profile(pos_profile)
+    if not _can_manage_outlet_pins(caller, profile) or not _is_outlet_member(target, profile):
         _refuse(
             "POS-AUTH-NOT-ELIGIBLE",
             "Only a manager for this till can clear another user's approval PIN.",
             frappe.PermissionError,
         )
 
-    _clear_override_pin(target)
-    if pos_profile:
-        profile = _get_profile(pos_profile)
-        if profile:
-            tracker, _, _ = _pin_tracker(target, profile)
-            tracker.add_success_attempt()
+    manager = _external_pin_manager()
+    if manager is None and _external_pin_verifier() is not None:
+        _refuse_external_pin_management()
+
+    if caller.casefold() == target.casefold():
+        _refuse(
+            "POS-AUTH-NOT-ELIGIBLE",
+            "Use your account password to change your own approval PIN.",
+            frappe.PermissionError,
+        )
+
+    if manager is not None:
+        _call_pin_manager(manager, "clear", user=target, caller=caller, pos_profile=profile.name)
+    else:
+        _clear_override_pin(target)
+
+    tracker, _, _ = _pin_tracker(target, profile)
+    tracker.add_success_attempt()
     pw_tracker, _, _ = _password_tracker(target)
     pw_tracker.add_success_attempt()
     _write_log(
         requester=caller,
         approver=target,
         privilege="pin_enrolment",
-        pos_profile=pos_profile or None,
+        pos_profile=profile.name,
         company=None,
         reference_doctype="User",
         reference_name=target,
@@ -2255,6 +2595,8 @@ def clear_user_pin(user: str, pos_profile: str | None = None) -> dict[str, Any]:
         isolated=True,
     )
     _add_authentication_log(f"Approval PIN cleared for {target} by {caller}", caller)
+    if manager is not None:
+        return {"ok": True, "has_pin": False, "must_reset": True}
     return {"ok": True, "user": target, "has_pin": False}
 
 
@@ -2269,13 +2611,14 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
             frappe.PermissionError,
         )
     profile = _get_profile(pos_profile)
-    if not profile or not frappe.has_permission("POS Profile", "write", profile):
+    if not _can_manage_outlet_pins(caller, profile):
         _refuse(
             "POS-AUTH-NOT-ELIGIBLE",
             "Only a manager for this till can view staff approval PIN status.",
             frappe.PermissionError,
         )
-    enrolled_users = _users_with_override_pin()
+    manager = _external_pin_manager()
+    enrolled_users = _users_with_override_pin() if manager is None else set()
     users = frappe.get_all(
         "User",
         filters={"enabled": 1, "user_type": "System User"},
@@ -2287,10 +2630,19 @@ def list_pin_users(pos_profile: str) -> list[dict[str, Any]]:
         uid = row.get("name")
         if not uid or uid in ("Administrator", "Guest"):
             continue
-        if _is_outlet_member(uid, profile):
-            out.append({
-                "user": uid,
-                "full_name": row.get("full_name") or _get_fullname(uid) or uid,
-                "has_pin": uid.casefold() in enrolled_users,
-            })
+        if not _is_outlet_member(uid, profile):
+            continue
+        if manager is not None:
+            status = _external_pin_status(manager, uid, pos_profile=profile.name)
+            if status is None:
+                continue
+        else:
+            status = {"has_pin": uid.casefold() in enrolled_users}
+        if uid.casefold() == caller.casefold():
+            status["can_clear"] = False
+        out.append({
+            "user": uid,
+            "full_name": row.get("full_name") or _get_fullname(uid) or uid,
+            **status,
+        })
     return out

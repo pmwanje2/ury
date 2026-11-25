@@ -168,7 +168,7 @@ class ContractOverrideStub(ModuleType):
         }
         return token
 
-    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
+    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None, reference_doctype="POS Invoice"):
         entry = self._tokens.get(token)
         if not entry or entry["used"]:
             self._h.frappe.throw("This manager approval is missing or has expired. [POS-AUTH-EXPIRED]", self._h.frappe.ValidationError)

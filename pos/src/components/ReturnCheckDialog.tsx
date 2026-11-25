@@ -3,7 +3,7 @@ import { AlertTriangle, BedDouble, FileWarning, RotateCcw, X } from 'lucide-reac
 import { Button, Textarea } from '@ury/ui';
 import { parseFrappeError } from '@ury/core';
 import { t } from '../i18n';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import {
   createPosReturn,
   formatMoneyAmount,
@@ -280,7 +280,7 @@ export default function ReturnCheckDialog({
           },
         });
       } else {
-        setError(overrideErrorMessage(err) || msg || t('void_return.return_failed'));
+        setError(overrideActionErrorMessage(err) || msg || t('void_return.return_failed'));
       }
     } finally {
       setSubmitting(false);

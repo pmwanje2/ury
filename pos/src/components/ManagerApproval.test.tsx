@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
-import { initI18n } from '../i18n';
+import { initI18n, t } from '../i18n';
+import { overrideErrorMessage } from '../lib/override-api';
 import ManagerApproval from './ManagerApproval';
 
 const APPROVERS = [
@@ -60,6 +61,69 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it('localizes unrecognized provider errors without showing provider details', () => {
+    const error = new Error('Third-party provider traceback and internal storage error');
+    expect(overrideErrorMessage(error, 'approval_pin.save_failed')).toBe(t('approval_pin.save_failed'));
+  });
+
+  it.each([
+    ['POS-AUTH-REFRESH', 'Actualisez la caisse et réessayez.'],
+    ['POS-AUTH-PROVIDER-UNKNOWN', undefined],
+  ])('displays the localized approval failure for HTTP 417 %s', async (code, expected) => {
+    await initI18n('fr');
+    mockServer({
+      approvers: [APPROVERS[0]],
+      authoriseImpl: async () => {
+        throw {
+          httpStatus: 417,
+          _server_messages: JSON.stringify([JSON.stringify({ message: `Server response [${code}]` })]),
+        };
+      },
+    });
+    const user = userEvent.setup();
+    const onApproved = vi.fn();
+    render(
+      <ManagerApproval
+        open
+        posProfile="Main Till"
+        privilege="void_sent_item"
+        reference="POS-INV-001"
+        summaryLines={[]}
+        claim={{}}
+        onApproved={onApproved}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('combobox', { name: t('manager_approval.manager') });
+    for (const digit of '4826') {
+      await user.click(screen.getByRole('button', { name: digit }));
+    }
+    await user.click(screen.getByRole('button', { name: t('manager_approval.approve') }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(expected ?? t('manager_approval.error_generic'));
+    expect(onApproved).not.toHaveBeenCalled();
+  });
+
+  it('gives the dismiss button a 44px touch target', async () => {
+    mockServer();
+    render(
+      <ManagerApproval
+        open
+        posProfile="Main Till"
+        privilege="void_sent_item"
+        reference="POS-INV-001"
+        summaryLines={[]}
+        claim={{}}
+        onApproved={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    await screen.findByRole('combobox', { name: /manager/i });
+    const dismiss = screen.getByRole('button', { name: t('common.dismiss') });
+    expect([...dismiss.classList]).toEqual(expect.arrayContaining(['h-11', 'w-11']));
   });
 
   it('renders action summary, approver picker, masked PIN pad with >=48px keys, and calls onApproved', async () => {
@@ -129,7 +193,7 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
         pos_profile: 'Main Till',
         privilege: 'void_sent_item',
         approver: 'mgr.a@example.com',
-        pin: '4826',
+        pin_secret: '4826',
         reference_doctype: 'POS Invoice',
         reference_name: 'POS-INV-001',
       }),
@@ -190,7 +254,7 @@ describe('ManagerApproval (B2a unified Simphony/SAP prompt)', () => {
     });
     expect(call.post).toHaveBeenCalledWith(
       'ury.ury_pos.override.authorise',
-      expect.objectContaining({ pin: '1234' }),
+      expect.objectContaining({ pin_secret: '1234' }),
     );
   });
 

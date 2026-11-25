@@ -42,7 +42,7 @@ import {
   isOrderTypeNotAllowedError,
   isLastItemCannotBeRemovedError,
 } from '../lib/order-api';
-import { isAuthRequiredError, listReasons, overrideErrorMessage, type OverrideReason } from '../lib/override-api';
+import { isAuthRequiredError, listReasons, overrideActionErrorMessage, type OverrideReason } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import VoidItemDialog from '../components/VoidItemDialog';
 import ReturnCheckDialog from '../components/ReturnCheckDialog';
@@ -690,7 +690,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
       } else if (isLastItemCannotBeRemovedError(parsedMessage)) {
         showToast.error(t('orders.last_item_cannot_remove'));
       } else {
-        showToast.error(overrideErrorMessage(err) || parsedMessage || 'Failed to reduce item quantity.');
+        showToast.error(overrideActionErrorMessage(err) || parsedMessage || 'Failed to reduce item quantity.');
       }
     } finally {
       setReducingItemKey(null);
@@ -767,7 +767,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         });
         return;
       }
-      showToast.error(overrideErrorMessage(err) || t('errors.print_failed', { reason: err?.message || String(err) }));
+      showToast.error(overrideActionErrorMessage(err) || t('errors.print_failed', { reason: err?.message || String(err) }));
     } finally {
       setIsPrinting(false);
     }
@@ -796,7 +796,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         });
         return;
       }
-      showToast.error(overrideErrorMessage(err));
+      showToast.error(overrideActionErrorMessage(err));
     }
   }
 

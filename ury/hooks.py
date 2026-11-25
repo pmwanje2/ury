@@ -515,6 +515,7 @@ website_path_resolver = [
 ]
 # Sets Service-Worker-Allowed + JS content-type for the Serve PWA worker.
 before_request = [
+    "ury.ury_pos.override.scrub_pin_request",
     "ury.ury.api.wa_signature.guard_whatsapp_webhook",
     "ury.ury.api.chairman_link.guard_brief_only_session",
 ]

@@ -46,7 +46,7 @@ import TableReservationCompleteDialog from '../components/TableReservationComple
 import TableReservationTimeline from '../components/TableReservationTimeline';
 import { DatePicker } from '../components/DatePicker';
 import { DINE_IN } from '../data/order-types';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import { isReasonRequiredError } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 
@@ -299,7 +299,7 @@ export default function Reservations() {
         return;
       }
       console.error('Failed to cancel reservation:', err);
-      showToast.error(overrideErrorMessage(err) || extractErrorMessage(err, t('reservations.update_failed')));
+      showToast.error(overrideActionErrorMessage(err) || extractErrorMessage(err, t('reservations.update_failed')));
     } finally {
       setCancelLoading(false);
     }
@@ -327,7 +327,7 @@ export default function Reservations() {
         return;
       }
       console.error('Failed to mark the reservation No Show:', err);
-      showToast.error(overrideErrorMessage(err) || extractErrorMessage(err, t('reservations.update_failed')));
+      showToast.error(overrideActionErrorMessage(err) || extractErrorMessage(err, t('reservations.update_failed')));
     }
   };
 

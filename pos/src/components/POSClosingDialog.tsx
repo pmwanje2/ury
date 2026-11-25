@@ -1291,6 +1291,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
           pos_profile: posProfile.name,
           pos_opening_entry: openingEntry.name,
           counted_payments: countedPaymentsPayload,
+          period_end_date: formatDateTime(periodEndDate),
           reason: effectiveReason,
         },
       };
@@ -1319,6 +1320,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     cashVarianceInfo.maxAbsDiff,
     overShortReason,
     countedPaymentsPayload,
+    periodEndDate,
     forceCloseReason,
     discardPendingOnForce,
   ]);

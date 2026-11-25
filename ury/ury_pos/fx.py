@@ -628,7 +628,10 @@ def _authorize_fx_rate_override(
         "reason": (reason or "").strip(),
     }
     if token:
-        override.consume(token, "fx_rate_override", pos_profile.get("name"), invoice_name or pos_profile.get("name"), claim)
+        override.consume(
+            token, "fx_rate_override", pos_profile.get("name"), invoice_name or pos_profile.get("name"), claim,
+            reference_doctype="POS Invoice" if invoice_name else "POS Profile",
+        )
     elif override.may_perform(frappe.session.user, pos_profile.get("name"), "fx_rate_override"):
         validated_reason = override._validate_reason(pos_profile.get("name"), "fx_rate_override", claim)
         if invoice_name and callable(getattr(override, "_write_log", None)):

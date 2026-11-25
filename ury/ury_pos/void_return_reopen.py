@@ -665,7 +665,9 @@ def require_pos_override(
         chosen_priv, chosen_claim = _select_token_claim_and_privilege(
             ov, approval_token, privilege, claim, fallback_privileges, alt_claim
         )
-        limit_kwargs = {"approval_amount": amount} if amount is not None else {}
+        limit_kwargs = {"reference_doctype": reference_doctype}
+        if amount is not None:
+            limit_kwargs["approval_amount"] = amount
         consumed = ov.consume(approval_token, chosen_priv, profile_name, reference_name, chosen_claim, **limit_kwargs)
         if doc is not None:
             mark_verified_pos_approval(doc, chosen_priv, consumed)

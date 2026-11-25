@@ -576,7 +576,7 @@ def _make_override_stub(harness: FakeFrappeHarness):
             return True
         return False
 
-    def consume(token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
+    def consume(token, privilege, pos_profile, reference_name, claim, *, approval_amount=None, reference_doctype="POS Invoice"):
         if not token or token in harness.consumed_tokens or token not in harness.tokens:
             raise FakeValidationError("Approval expired or already used [POS-AUTH-EXPIRED]")
         rec = harness.tokens[token]

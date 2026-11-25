@@ -384,6 +384,78 @@ class TestOverShortToleranceAndBlindClose(LoadedSlice2):
         over_short = [je for je in self.store.journal_entries.values() if je.get("custom_pos_closing_entry") == closing.name]
         self.assertEqual(len(over_short), 1)
 
+    def test_over_short_approval_prices_persisted_opening_and_payments_without_a_write(self):
+        profile = self.frappe.get_doc("POS Profile", "Main Till")
+        counts = [{"mode_of_payment": "Cash", "closing_amount": 135000}]
+        amount = self.tc.over_short_approval_amount(
+            profile, "OPEN-MAIN-1", counts, period_end_date="2026-11-24 10:00:00",
+        )
+        self.assertEqual(amount, 15000)
+        self.assertFalse(self.cs.closings)
+        self.assertEqual(self.store.openings["OPEN-MAIN-1"]["status"], "Open")
+
+    def test_over_short_context_keeps_signed_cash_and_foreign_values_sorted(self):
+        profile = self.frappe.get_doc("POS Profile", "Main Till")
+        profile.custom_over_short_tolerance = 5000
+        self.frappe.get_cached_value.side_effect = lambda *args, **kwargs: "Cash"
+        closing = Row(payment_reconciliation=[
+            Row(mode_of_payment="FX Cash", difference=1000, custom_tender_currency="USD",
+                custom_foreign_difference=0.25),
+            Row(mode_of_payment="Cash", difference=-15000),
+        ])
+        self.assertEqual(self.tc._signed_cash_variances(closing, profile), (
+            ("Cash", "UGX", -15000), ("FX Cash", "USD", 0.25, "UGX", 1000),
+        ))
+
+    def test_till_token_rejects_fx_company_variance_change_with_same_native_variance_and_cap(self):
+        from ury.ury_pos.test_override import Invalid, TestOverrideContract
+
+        profile = self.frappe.get_doc("POS Profile", "Main Till")
+        self.frappe.get_cached_value.side_effect = lambda *args, **kwargs: "Cash"
+        domestic = Row(mode_of_payment="Cash", difference=-15000)
+        foreign = Row(mode_of_payment="FX Cash", difference=3500, custom_tender_currency="USD",
+                      custom_foreign_difference=1)
+        closing = Row(payment_reconciliation=[domestic, foreign])
+
+        def approval_context(*args, **kwargs):
+            return 15000, self.tc._signed_cash_variances(closing, profile)
+
+        contract = TestOverrideContract()
+        contract.setUp()
+        self.addCleanup(contract.doCleanups)
+        contract.install_external_pin_hooks()
+        verifier = contract.hooks["__attr__:custom_app.pin.verify"]
+        verifier.return_value = {"ok": True}
+        tc_bridge = ModuleType("ury.ury_pos.till_controls")
+        tc_bridge.over_short_approval_context = approval_context
+        api = contract.api()
+        claim = {
+            "action": "over_short_close", "pos_profile": "Main Till",
+            "pos_opening_entry": "OPEN-MAIN-1",
+            "counted_payments": [{"mode_of_payment": "FX Cash", "closing_amount": 7000,
+                                  "custom_closing_foreign_amount": 2}],
+            "reason": "Other: Confirmed till count",
+        }
+        with patch.dict(sys.modules, {"ury.ury_pos.till_controls": tc_bridge}):
+            issued = api.authorise(
+                "Main Till", "over_short_close", "manager@example.test", "1357",
+                "POS Opening Entry", "OPEN-MAIN-1", claim,
+            )
+        self.assertEqual(verifier.call_args.kwargs["amount"], 15000)
+
+        def consume():
+            return api.consume(
+                issued["token"], "over_short_close", "Main Till", "OPEN-MAIN-1", claim,
+                reference_doctype="POS Opening Entry", approval_amount=15000,
+                approval_variances=self.tc._signed_cash_variances(closing, profile),
+            )
+
+        foreign.difference = 4000
+        with self.assertRaisesRegex(Invalid, "POS-AUTH-CHANGED"):
+            consume()
+        foreign.difference = 3500
+        self.assertEqual(consume().approver, "manager@example.test")
+
     def test_variance_above_tolerance_requires_manager_pin_and_reason_and_stamps_audit(self):
         # Expected = 150,000; counted = 135,000 (diff = -15,000 > tolerance 5,000)
         self.store.current_user = "cashier@example.com"

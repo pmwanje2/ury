@@ -139,8 +139,10 @@ def _require_till_privilege(
 	reference_name: str,
 	claim: dict[str, Any],
 	*,
+	reference_doctype: str = "POS Opening Entry",
 	token: str | None = None,
 	amount: float | None = None,
+	approval_variances=None,
 	fallback_privilege: str | None = None,
 	allow_cashier_default: bool = False,
 	require_second_person: bool = False,
@@ -157,7 +159,9 @@ def _require_till_privilege(
 				frappe.PermissionError,
 			)
 		approval = override_mod.consume(
-			token, code, profile.name, reference_name, claim, approval_amount=amount,
+			token, code, profile.name, reference_name, claim,
+			approval_amount=amount, reference_doctype=reference_doctype,
+			approval_variances=approval_variances,
 		)
 		approver = (approval.get("approver") or "").strip()
 		excluded = {(frappe.session.user or "").casefold()}
@@ -1399,6 +1403,84 @@ def _parse_counted_payments(counted_payments: Any, currency: str | None) -> list
 	return parsed
 
 
+def _new_counted_closing(profile, opening, counts, period_end_date):
+	end_dt = get_datetime(period_end_date) if period_end_date else now_datetime()
+	closing = frappe.new_doc("POS Closing Entry")
+	closing.pos_opening_entry = opening.name
+	closing.pos_profile = profile.name
+	closing.company = profile.company
+	# Native ERPNext rule: closing.user MUST equal opening.user (till holder)
+	closing.user = opening.user
+	closing.period_start_date = opening.period_start_date
+	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+	closing.posting_date = end_dt.strftime("%Y-%m-%d")
+	closing.posting_time = end_dt.strftime("%H:%M:%S.%f")
+	for row in counts:
+		rec_row: dict[str, Any] = {
+			"mode_of_payment": row["mode_of_payment"],
+			"closing_amount": row["closing_amount"],
+		}
+		if "custom_closing_foreign_amount" in row:
+			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
+		closing.append("payment_reconciliation", rec_row)
+	return closing
+
+
+def _signed_cash_variances(closing, profile):
+	"""Include both tender and company currency for FX cash rows, even within tolerance."""
+	currency = (profile.get("currency") or frappe.db.get_value(
+		"Company", profile.company, "default_currency"
+	) or "").strip().upper()
+	precision = currency_precision(currency)
+	company_quote = None
+	variances = []
+	for row in closing.get("payment_reconciliation") or []:
+		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") != "Cash":
+			continue
+		difference = flt(row.get("difference"), precision)
+		tender_currency = (row.get("custom_tender_currency") or "").strip().upper()
+		foreign_variance = row.get("custom_foreign_difference")
+		if tender_currency and tender_currency != currency and foreign_variance not in (None, ""):
+			if company_quote is None:
+				company_quote = profile_approval_currency(profile, frappe, posting_date=closing.get("posting_date"))
+			company_amount = company_approval_amount(profile, difference, frappe, currency_and_rate=company_quote)
+			variances.append((
+				row.mode_of_payment,
+				tender_currency,
+				flt(foreign_variance, currency_precision(tender_currency)),
+				company_quote[0],
+				math.copysign(company_amount, difference),
+			))
+		else:
+			variances.append((row.mode_of_payment, currency, difference))
+	return tuple(sorted(variances))
+
+
+def over_short_approval_amount(profile, opening_name, counted_payments, *, period_end_date=None):
+	amount, _ = over_short_approval_context(profile, opening_name, counted_payments, period_end_date=period_end_date)
+	return amount
+
+
+def over_short_approval_context(profile, opening_name, counted_payments, *, period_end_date=None):
+	"""Price the cap and collect signed tenders from an unsaved closing document."""
+	from ury.ury.hooks import ury_pos_closing_entry
+
+	opening = _resolve_open_shift(profile, pos_opening_entry=opening_name, required=True)
+	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	counts = _parse_counted_payments(counted_payments, currency)
+	closing = _new_counted_closing(profile, opening, counts, period_end_date)
+	if ury_pos_closing_entry._is_pos_invoice_mode():
+		ury_pos_closing_entry._set_expected_amounts(closing)
+	ury_pos_closing_entry.calculate_closing_amount(closing, None)
+	variances, _, _ = _cash_variances_above_tolerance(closing, profile)
+	return _company_over_short_amount(closing, profile, variances), _signed_cash_variances(closing, profile)
+
+
+def _company_over_short_amount(closing, profile, variances):
+	max_abs_diff = max((abs(diff) for _, diff in variances), default=0.0)
+	return _company_till_amount(profile, max_abs_diff, posting_date=closing.get("posting_date"))
+
+
 @frappe.whitelist(methods=["GET"])
 def list_open_tills(pos_profile: str) -> list[dict[str, Any]]:
 	"""List all open shifts for ``pos_profile`` (no financial totals exposed; safe for blind mode)."""
@@ -1617,25 +1699,7 @@ def close_till_with_controls(
 				frappe.PermissionError,
 			)
 
-	end_dt = get_datetime(period_end_date) if period_end_date else now_datetime()
-	closing = frappe.new_doc("POS Closing Entry")
-	closing.pos_opening_entry = opening.name
-	closing.pos_profile = profile.name
-	closing.company = profile.company
-	# Native ERPNext rule: closing.user MUST equal opening.user (till holder)
-	closing.user = opening.user
-	closing.period_start_date = opening.period_start_date
-	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S.%f")
-	closing.posting_date = end_dt.strftime("%Y-%m-%d")
-	closing.posting_time = end_dt.strftime("%H:%M:%S.%f")
-	for row in parsed_counts:
-		rec_row: dict[str, Any] = {
-			"mode_of_payment": row["mode_of_payment"],
-			"closing_amount": row["closing_amount"],
-		}
-		if "custom_closing_foreign_amount" in row:
-			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
-		closing.append("payment_reconciliation", rec_row)
+	closing = _new_counted_closing(profile, opening, parsed_counts, period_end_date)
 	for tip_row in _parse_tip_declarations(tip_declarations):
 		closing.append("custom_tip_declarations", tip_row)
 	closing.flags.ignore_permissions = True
@@ -1674,13 +1738,16 @@ def close_till_with_controls(
 			"counted_payments": parsed_counts,
 			"reason": clean_os_reason,
 		}
+		if period_end_date:
+			os_claim["period_end_date"] = period_end_date
 		over_short_approval = _require_till_privilege(
 			profile,
 			"over_short_close",
 			opening.name,
 			os_claim,
 			token=over_short_approval_token,
-			amount=_company_till_amount(profile, max_abs_diff, posting_date=closing.get("posting_date")),
+			amount=_company_over_short_amount(closing, profile, exceeding),
+			approval_variances=_signed_cash_variances(closing, profile),
 			require_second_person=True,
 			excluded_approvers={frappe.session.user, opening.user},
 		)
@@ -1840,6 +1907,7 @@ def reopen_till(
 		"reopen_till",
 		closing_meta.name,
 		claim,
+		reference_doctype="POS Closing Entry",
 		token=approval_token,
 		allow_cashier_default=False,
 	)
@@ -1933,26 +2001,9 @@ def force_close_till(
 			frappe.PermissionError,
 		)
 
-	end_dt = get_datetime(period_end_date) if period_end_date else now_datetime()
-	closing = frappe.new_doc("POS Closing Entry")
-	closing.pos_opening_entry = opening.name
-	closing.pos_profile = profile.name
-	closing.company = profile.company
-	closing.user = opening.user
-	closing.period_start_date = opening.period_start_date
-	closing.period_end_date = end_dt.strftime("%Y-%m-%d %H:%M:%S.%f")
-	closing.posting_date = end_dt.strftime("%Y-%m-%d")
-	closing.posting_time = end_dt.strftime("%H:%M:%S.%f")
+	closing = _new_counted_closing(profile, opening, parsed_counts, period_end_date)
 	closing.custom_force_closed = 1
 	closing.custom_force_close_reason = clean_reason
-	for row in parsed_counts:
-		rec_row: dict[str, Any] = {
-			"mode_of_payment": row["mode_of_payment"],
-			"closing_amount": row["closing_amount"],
-		}
-		if "custom_closing_foreign_amount" in row:
-			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
-		closing.append("payment_reconciliation", rec_row)
 	for tip_row in _parse_tip_declarations(tip_declarations):
 		closing.append("custom_tip_declarations", tip_row)
 	closing.flags.ignore_permissions = True
@@ -1990,13 +2041,16 @@ def force_close_till(
 			"counted_payments": parsed_counts,
 			"reason": effective_os_reason,
 		}
+		if period_end_date:
+			os_claim["period_end_date"] = period_end_date
 		os_app = _require_till_privilege(
 			profile,
 			"over_short_close",
 			opening.name,
 			os_claim,
 			token=over_short_approval_token,
-			amount=_company_till_amount(profile, max_abs_diff, posting_date=closing.get("posting_date")),
+			amount=_company_over_short_amount(closing, profile, exceeding),
+			approval_variances=_signed_cash_variances(closing, profile),
 			require_second_person=True,
 			excluded_approvers={frappe.session.user, opening.user},
 		)
@@ -2226,6 +2280,7 @@ def apply_halo_approval_token(doc, approval_token: str | None, reason: str | Non
 		"over_halo_tender",
 		doc.get("name") or "",
 		claim,
+		reference_doctype="POS Invoice",
 		token=approval_token,
 		amount=max(r["approval_amount"] for r in exceeded),
 		allow_cashier_default=False,

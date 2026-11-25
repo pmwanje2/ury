@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import en from './locales/en.json';
 import ar from './locales/ar.json';
+import es from './locales/es.json';
+import fr from './locales/fr.json';
 import { ORDER_TYPES, orderTypeLabel } from '../data/order-types';
 
 type Tree = { [k: string]: string | Tree };
@@ -49,4 +51,23 @@ describe('Arabic locale', () => {
       expect(arFlat[`order_types.${key}`]).toBeTruthy();
     }
   });
+});
+
+describe('PIN approval locale parity', () => {
+  it.each([['en', en], ['fr', fr], ['es', es], ['ar', ar]] as const)(
+    'ships the refresh notice and matches English approval keys in %s',
+    (_locale, catalog) => {
+      const strings = flatten(catalog as Tree);
+      const english = flatten(en as Tree);
+      const approvalKeys = (entries: Record<string, string>) =>
+        Object.keys(entries).filter((k) => /^(?:manager_approval|approval_pin)\./.test(k)).sort();
+
+      expect(strings['manager_approval.error_refresh']?.trim()).toBeTruthy();
+      expect(approvalKeys(strings)).toEqual(approvalKeys(english));
+      for (const key of approvalKeys(english)) {
+        expect(strings[key].trim()).toBeTruthy();
+        expect(placeholders(strings[key])).toBe(placeholders(english[key]));
+      }
+    },
+  );
 });

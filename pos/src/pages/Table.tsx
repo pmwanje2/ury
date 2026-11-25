@@ -42,7 +42,7 @@ import { resolveTableServiceRequest, useOpenServiceRequestTables } from '../comp
 import MergeLinkConnector from '../components/MergeLinkConnector';
 import TableReservationDialog, { type ReservationFormData } from '../components/TableReservationDialog';
 import TableReservationWarningDialog from '../components/TableReservationWarningDialog';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 
 const TableView = () => {
@@ -481,7 +481,7 @@ const TableView = () => {
         });
         return;
       }
-      showToast.error(overrideErrorMessage(error, 'tables.merge_failed'));
+      showToast.error(overrideActionErrorMessage(error, 'tables.merge_failed'));
       throw error;
     }
   };
@@ -590,7 +590,7 @@ const TableView = () => {
         });
         return;
       }
-      showToast.error(overrideErrorMessage(error, 'tables.transfer_failed'));
+      showToast.error(overrideActionErrorMessage(error, 'tables.transfer_failed'));
       throw error;
     }
   };
@@ -623,7 +623,7 @@ const TableView = () => {
         });
         return;
       }
-      showToast.error(overrideErrorMessage(error, 'tables.transfer_failed'));
+      showToast.error(overrideActionErrorMessage(error, 'tables.transfer_failed'));
       throw error;
     }
   };

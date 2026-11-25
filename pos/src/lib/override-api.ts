@@ -11,7 +11,9 @@ export type AuthRefusalCode =
   | 'POS-AUTH-NO-PIN'
   | 'POS-AUTH-REASON'
   | 'POS-AUTH-EXPIRED'
-  | 'POS-AUTH-CHANGED';
+  | 'POS-AUTH-CHANGED'
+  | 'POS-AUTH-REFRESH'
+  | 'POS-AUTH-UNAVAILABLE';
 
 export interface OverrideApprover {
   user: string;
@@ -39,15 +41,28 @@ export interface AuthoriseResponse {
   expires_in: number;
 }
 
-export interface MyPinStatus {
+interface PinStatus {
   has_pin: boolean;
-  external_verifier: boolean;
+  must_reset?: boolean;
+  locked?: boolean;
 }
 
-export interface PinUserStatus {
+export interface MyPinStatus extends PinStatus {
+  external_verifier: boolean;
+  can_manage_here?: boolean;
+}
+
+export interface PinUserStatus extends PinStatus {
+  can_clear?: boolean;
   user: string;
   full_name: string;
+}
+
+interface ClearPinResponse {
+  ok: boolean;
   has_pin: boolean;
+  user?: string;
+  must_reset?: boolean;
 }
 
 const REFUSAL_CODES: readonly AuthRefusalCode[] = [
@@ -61,6 +76,8 @@ const REFUSAL_CODES: readonly AuthRefusalCode[] = [
   'POS-AUTH-REASON',
   'POS-AUTH-EXPIRED',
   'POS-AUTH-CHANGED',
+  'POS-AUTH-REFRESH',
+  'POS-AUTH-UNAVAILABLE',
 ];
 
 export function extractAuthErrorCode(errorOrMessage: unknown): AuthRefusalCode | null {
@@ -102,11 +119,19 @@ export function overrideErrorMessage(error: unknown, fallbackKey = 'manager_appr
       return t('manager_approval.error_changed');
     case 'POS-AUTH-REQUIRED':
       return t('manager_approval.error_required');
-    default: {
-      const parsed = parseFrappeError(error, '');
-      return parsed || t(fallbackKey);
-    }
+    case 'POS-AUTH-REFRESH':
+      return t('manager_approval.error_refresh');
+    case 'POS-AUTH-UNAVAILABLE':
+      return t('manager_approval.error_unavailable');
+    default:
+      return t(fallbackKey);
   }
+}
+
+// Business actions preserve their server validation messages after handling approval refusals.
+export function overrideActionErrorMessage(error: unknown, fallbackKey = 'manager_approval.error_generic'): string {
+  if (extractAuthErrorCode(error)) return overrideErrorMessage(error, fallbackKey);
+  return parseFrappeError(error, '') || t(fallbackKey);
 }
 
 export async function listApprovers(params: {
@@ -167,7 +192,7 @@ export async function authoriseOverride(params: {
     pos_profile: params.posProfile,
     privilege: params.privilege,
     approver: params.approver,
-    pin: params.pin,
+    pin_secret: params.pin,
     reference_doctype: params.referenceDoctype,
     reference_name: params.referenceName,
     claim: params.claim,
@@ -183,15 +208,15 @@ export async function getMyPinStatus(): Promise<MyPinStatus> {
 export async function setMyPin(password: string, pin: string): Promise<{ ok: boolean; has_pin: boolean }> {
   const res = await call.post<{ message: { ok: boolean; has_pin: boolean } }>('ury.ury_pos.override.set_my_pin', {
     password,
-    pin,
+    pin_secret: pin,
   });
   return res.message;
 }
 
-export async function clearUserPin(user: string, posProfile?: string): Promise<{ ok: boolean; user: string; has_pin: boolean }> {
+export async function clearUserPin(user: string, posProfile?: string): Promise<ClearPinResponse> {
   const payload: Record<string, unknown> = { user };
   if (posProfile) payload.pos_profile = posProfile;
-  const res = await call.post<{ message: { ok: boolean; user: string; has_pin: boolean } }>(
+  const res = await call.post<{ message: ClearPinResponse }>(
     'ury.ury_pos.override.clear_user_pin',
     payload,
   );

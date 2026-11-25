@@ -24,6 +24,18 @@ import {
 
 const PIN_RE = /^[0-9]{4,8}$/;
 
+function PinStatusBadges({ has_pin, must_reset, locked }: Pick<MyPinStatus, 'has_pin' | 'must_reset' | 'locked'>) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <Badge variant={has_pin ? 'success' : 'outline'}>
+        {t(has_pin ? 'approval_pin.status_set' : 'approval_pin.status_not_set')}
+      </Badge>
+      {must_reset && <Badge variant="warning">{t('approval_pin.status_reset_required')}</Badge>}
+      {locked && <Badge variant="destructive">{t('approval_pin.status_locked')}</Badge>}
+    </div>
+  );
+}
+
 export interface ApprovalPinDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,7 +63,8 @@ export default function ApprovalPinDialog({
   const [staffLoading, setStaffLoading] = useState(false);
   const [clearingUser, setClearingUser] = useState<string | null>(null);
 
-  const showStaffTab = Boolean(canManagePins && posProfile && !status.external_verifier);
+  const canManageHere = status.can_manage_here ?? !status.external_verifier;
+  const showStaffTab = Boolean(canManagePins && posProfile && canManageHere && !loading);
 
   useEffect(() => {
     if (!open) {
@@ -130,6 +143,13 @@ export default function ApprovalPinDialog({
       setPin('');
       setConfirmPin('');
       setSuccess(t('approval_pin.saved'));
+      if (status.external_verifier) {
+        try {
+          setStatus(await getMyPinStatus());
+        } catch (err) {
+          setError(overrideErrorMessage(err, 'approval_pin.load_failed'));
+        }
+      }
     } catch (err) {
       setError(overrideErrorMessage(err, 'approval_pin.save_failed'));
     } finally {
@@ -143,8 +163,10 @@ export default function ApprovalPinDialog({
     setError(null);
     setSuccess(null);
     try {
-      await clearUserPin(member.user, posProfile);
-      setStaff((prev) => prev.map((row) => (row.user === member.user ? { ...row, has_pin: false } : row)));
+      const result = await clearUserPin(member.user, posProfile);
+      setStaff((prev) => prev.map((row) => row.user === member.user
+        ? { ...row, has_pin: result.has_pin, must_reset: result.must_reset, locked: false }
+        : row));
       setSuccess(t('approval_pin.cleared', { name: member.full_name }));
     } catch (err) {
       setError(overrideErrorMessage(err, 'approval_pin.clear_failed'));
@@ -159,7 +181,11 @@ export default function ApprovalPinDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent onClose={() => handleOpenChange(false)}>
+      <DialogContent
+        onClose={() => handleOpenChange(false)}
+        closeLabel={t('staff_pins.close')}
+        className="overflow-y-auto [&>button]:min-h-11 [&>button]:min-w-11"
+      >
         <DialogHeader>
           <DialogTitle>{t('approval_pin.title')}</DialogTitle>
           <DialogDescription>{t('approval_pin.description')}</DialogDescription>
@@ -170,6 +196,7 @@ export default function ApprovalPinDialog({
             <Button
               type="button"
               size="sm"
+              className="min-h-11"
               variant={tab === 'self' ? 'default' : 'outline'}
               onClick={() => {
                 setTab('self');
@@ -182,6 +209,7 @@ export default function ApprovalPinDialog({
             <Button
               type="button"
               size="sm"
+              className="min-h-11"
               variant={tab === 'staff' ? 'default' : 'outline'}
               onClick={() => {
                 setTab('staff');
@@ -199,24 +227,23 @@ export default function ApprovalPinDialog({
             <div className="space-y-4 px-6 pb-5">
               {loading ? (
                 <Spinner message={t('common.loading')} />
-              ) : status.external_verifier ? (
-                <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              ) : status.external_verifier && !canManageHere ? (
+                <p className="rounded-lg border border-border bg-muted p-3 text-sm text-foreground">
                   {t('approval_pin.external_managed')}
                 </p>
-              ) : (
+              ) : canManageHere && (
                 <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">{t('approval_pin.status_label')}</span>
-                    <Badge variant={status.has_pin ? 'default' : 'outline'}>
-                      {status.has_pin ? t('approval_pin.status_set') : t('approval_pin.status_not_set')}
-                    </Badge>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm text-muted-foreground">{t('approval_pin.status_label')}</span>
+                    <PinStatusBadges {...status} />
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="approval-pin-password" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="approval-pin-password" className="block text-sm font-medium text-foreground">
                       {t('approval_pin.current_password')}
                     </label>
                     <Input
+                      className="min-h-11 border-muted-foreground hover:border-foreground disabled:bg-muted"
                       id="approval-pin-password"
                       type="password"
                       autoComplete="current-password"
@@ -228,10 +255,11 @@ export default function ApprovalPinDialog({
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="approval-pin-new" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="approval-pin-new" className="block text-sm font-medium text-foreground">
                       {t('approval_pin.new_pin')}
                     </label>
                     <Input
+                      className="min-h-11 border-muted-foreground hover:border-foreground disabled:bg-muted"
                       id="approval-pin-new"
                       type="password"
                       inputMode="numeric"
@@ -246,10 +274,11 @@ export default function ApprovalPinDialog({
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="approval-pin-confirm" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="approval-pin-confirm" className="block text-sm font-medium text-foreground">
                       {t('approval_pin.confirm_pin')}
                     </label>
                     <Input
+                      className="min-h-11 border-muted-foreground hover:border-foreground disabled:bg-muted"
                       id="approval-pin-confirm"
                       type="password"
                       inputMode="numeric"
@@ -266,22 +295,22 @@ export default function ApprovalPinDialog({
               )}
 
               {error && (
-                <p role="alert" className="text-sm text-rose-700">
+                <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-900">
                   {error}
                 </p>
               )}
               {success && (
-                <p role="status" className="text-sm text-emerald-700">
+                <p role="status" className="text-sm text-success">
                   {success}
                 </p>
               )}
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={busy}>
+              <Button type="button" variant="outline" className="min-h-11" onClick={() => handleOpenChange(false)} disabled={busy}>
                 {t('common.cancel')}
               </Button>
-              {!status.external_verifier && (
-                <Button type="submit" disabled={busy || loading}>
+              {canManageHere && (
+                <Button type="submit" className="min-h-11" disabled={busy || loading}>
                   {busy ? t('common.loading') : t('approval_pin.save_button')}
                 </Button>
               )}
@@ -290,28 +319,27 @@ export default function ApprovalPinDialog({
         ) : (
           <>
             <div className="space-y-3 px-6 pb-5">
-              <p className="text-xs text-gray-600">{t('approval_pin.clear_policy_note')}</p>
+              <p className="text-xs text-muted-foreground">{t('approval_pin.clear_policy_note')}</p>
               {staffLoading ? (
                 <Spinner message={t('common.loading')} />
               ) : staff.length === 0 ? (
-                <p className="py-4 text-sm text-gray-500">{t('staff_pins.no_staff')}</p>
+                <p className="py-4 text-sm text-muted-foreground">{t('staff_pins.no_staff')}</p>
               ) : (
                 <div className="max-h-72 space-y-2 overflow-y-auto">
                   {staff.map((member) => (
                     <div
                       key={member.user}
-                      className="flex items-center justify-between gap-3 border-b border-gray-100 py-2.5"
+                      className="flex items-center justify-between gap-3 border-b border-border py-2.5"
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-gray-900">{member.full_name}</p>
-                        <p className="text-xs text-gray-500">
-                          {member.has_pin ? t('approval_pin.status_set') : t('approval_pin.status_not_set')}
-                        </p>
+                        <p className="truncate text-sm font-medium text-foreground">{member.full_name}</p>
+                        <PinStatusBadges {...member} />
                       </div>
-                      {member.has_pin && (
+                      {member.can_clear !== false && (member.has_pin || member.locked) && (
                         <Button
                           type="button"
                           size="sm"
+                          className="min-h-11"
                           variant="outline"
                           disabled={clearingUser !== null}
                           onClick={() => void handleClearStaffPin(member)}
@@ -324,12 +352,12 @@ export default function ApprovalPinDialog({
                 </div>
               )}
               {error && (
-                <p role="alert" className="text-sm text-rose-700">
+                <p role="alert" className="text-sm text-destructive-700 dark:text-destructive-900">
                   {error}
                 </p>
               )}
               {success && (
-                <p role="status" className="text-sm text-emerald-700">
+                <p role="status" className="text-sm text-success">
                   {success}
                 </p>
               )}
@@ -338,7 +366,7 @@ export default function ApprovalPinDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="w-full"
+                className="w-full min-h-11"
                 onClick={() => handleOpenChange(false)}
                 disabled={clearingUser !== null}
               >

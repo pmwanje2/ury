@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '@ury/core';
-import { initI18n } from '../i18n';
+import { initI18n, t } from '../i18n';
 import ApprovalPinDialog from './ApprovalPinDialog';
 
 describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
@@ -45,13 +45,34 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     await waitFor(() => {
       expect(call.post).toHaveBeenCalledWith('ury.ury_pos.override.set_my_pin', {
         password: 'MySecretPass1!',
-        pin: '4826',
+        pin_secret: '4826',
       });
     });
 
     // Inputs must clear after save
     expect((pwInput as HTMLInputElement).value).toBe('');
     expect((pinInput as HTMLInputElement).value).toBe('');
+  });
+
+  it.each([
+    ['POS-AUTH-REFRESH', 'Actualiza la caja e inténtalo de nuevo.'],
+    ['POS-AUTH-PROVIDER-UNKNOWN', undefined],
+  ])('displays the localized enrolment failure for HTTP 417 %s', async (code, expected) => {
+    await initI18n('es');
+    vi.spyOn(call, 'get').mockResolvedValue({ message: { has_pin: false, external_verifier: false } });
+    vi.spyOn(call, 'post').mockRejectedValue({
+      httpStatus: 417,
+      _server_messages: JSON.stringify([JSON.stringify({ message: `Server response [${code}]` })]),
+    });
+
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} />);
+    await user.type(await screen.findByLabelText(t('approval_pin.current_password')), 'fixture-password');
+    await user.type(screen.getByLabelText(t('approval_pin.new_pin')), '4826');
+    await user.type(screen.getByLabelText(t('approval_pin.confirm_pin')), '4826');
+    await user.click(screen.getByRole('button', { name: t('approval_pin.save_button') }));
+
+    expect((await screen.findByRole('alert')).textContent).toBe(expected ?? t('approval_pin.save_failed'));
   });
 
   it('lets a manager clear another user approval PIN, never read or set it', async () => {
@@ -74,7 +95,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     const user = userEvent.setup();
     render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
 
-    await user.click(await screen.findByRole('button', { name: /clear staff pin/i }));
+    await user.click(await screen.findByRole('button', { name: /staff pins/i }));
 
     expect(await screen.findByText('Bob Supervisor')).toBeInTheDocument();
     expect(screen.getByText('Grace Cashier')).toBeInTheDocument();
@@ -101,7 +122,7 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
 
     const { rerender } = render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /clear staff pin/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /staff pins/i })).not.toBeInTheDocument();
     });
 
     // When built-in store is active and password is wrong, show neutral POS-AUTH-PASSWORD message
@@ -119,5 +140,60 @@ describe('ApprovalPinDialog (Set my approval PIN + manager clear)', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toMatch(/password/i);
     expect(alert.textContent).not.toMatch(/POS-AUTH-PASSWORD|URY|HUF|Kamra/i);
+  });
+  it('shows external PIN status and lets staff enrol a PIN when management is enabled', async () => {
+    vi.spyOn(call, 'get')
+      .mockResolvedValueOnce({
+        message: { has_pin: false, external_verifier: true, can_manage_here: true, must_reset: true, locked: true },
+      })
+      .mockResolvedValue({
+        message: { has_pin: true, external_verifier: true, can_manage_here: true, must_reset: false, locked: false },
+      });
+    const save = vi.spyOn(call, 'post').mockResolvedValue({ message: { ok: true, has_pin: true } });
+
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} />);
+
+    expect(await screen.findByText('Reset required')).toBeInTheDocument();
+    expect(screen.getByText('Locked')).toBeInTheDocument();
+    expect(screen.queryByText(/property.s cashier PIN store/)).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText(/current password/i), 'MySecretPass1!');
+    await user.type(screen.getByLabelText(/new approval pin/i), '4826');
+    await user.type(screen.getByLabelText(/confirm approval pin/i), '4826');
+    await user.click(screen.getByRole('button', { name: /save approval pin/i }));
+
+    expect(save).toHaveBeenCalledWith('ury.ury_pos.override.set_my_pin', {
+      password: 'MySecretPass1!',
+      pin_secret: '4826',
+    });
+    expect(await screen.findByText('Approval PIN set')).toBeInTheDocument();
+    expect(screen.queryByText('Reset required')).not.toBeInTheDocument();
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
+  });
+
+  it('shows external staff flags and updates the row after a manager clears its PIN', async () => {
+    vi.spyOn(call, 'get').mockImplementation(async (method: string) => {
+      if (method === 'ury.ury_pos.override.my_pin_status') {
+        return { message: { has_pin: true, external_verifier: true, can_manage_here: true } };
+      }
+      return { message: [{ user: 'staff@example.com', full_name: 'Staff Member', has_pin: true, locked: true }] };
+    });
+    const clear = vi.spyOn(call, 'post').mockResolvedValue({
+      message: { ok: true, has_pin: false, must_reset: true },
+    });
+
+    const user = userEvent.setup();
+    render(<ApprovalPinDialog open onOpenChange={vi.fn()} posProfile="Main Till" canManagePins />);
+
+    await user.click(await screen.findByRole('button', { name: 'Staff PINs' }));
+    expect(await screen.findByText('Locked')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /clear pin/i }));
+
+    expect(clear).toHaveBeenCalledWith('ury.ury_pos.override.clear_user_pin', {
+      user: 'staff@example.com',
+      pos_profile: 'Main Till',
+    });
+    expect(await screen.findByText('Reset required')).toBeInTheDocument();
+    expect(screen.queryByText('Locked')).not.toBeInTheDocument();
   });
 });

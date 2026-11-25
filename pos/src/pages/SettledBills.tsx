@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { call, parseFrappeError, printWithQz } from '@ury/core';
 import { Button } from '@ury/ui';
 import { t, tData } from '../i18n';
-import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { isAuthRequiredError, overrideActionErrorMessage } from '../lib/override-api';
 import { extractAuthChallenge, isReasonRequiredError } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from '../components/ManagerApproval';
 import TipAdjustDialog from '../components/TipAdjustDialog';
@@ -154,7 +154,7 @@ export default function SettledBills() {
         return;
       }
       setOutcome('ERROR');
-      setMessage(overrideErrorMessage(error));
+      setMessage(overrideActionErrorMessage(error));
     } finally {
       setBusy(false);
     }
