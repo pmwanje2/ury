@@ -19,6 +19,10 @@ TAX_AMOUNTS = (
     "base_tax_amount_after_discount_amount", "net_amount", "base_net_amount",
 )
 _SERVER_BALANCE = object()
+DETAIL_AMOUNTS = ("amount", "taxable_amount", "base_amount", "base_taxable_amount")
+TAX_DETAIL_FIELDS = {
+    "tax_amount": "amount", "tax_amount_after_discount_amount": "amount", "net_amount": "taxable_amount",
+}
 HEADER_AMOUNTS = (
     "total", "base_total", "net_total", "base_net_total", "grand_total",
     "base_grand_total", "rounded_total", "base_rounded_total",
@@ -42,13 +46,18 @@ def _amount(minor, places):
     return float(Decimal(minor).scaleb(-places))
 
 
-def _partition(fields, row, ratios, currency_places, base_places):
+def _partition(fields, row, ratios, currency_places, base_places, *, stock_places=None):
     parent, child = {}, {}
     for field in fields:
         value = row.get(field)
         if value is None:
             continue
-        places = 4 if field == "stock_qty" else base_places if field.startswith("base_") else currency_places
+        if field == "stock_qty":
+            places = 4 if stock_places is None else stock_places
+            if stock_places is not None:
+                value = flt(value, places)
+        else:
+            places = base_places if field.startswith("base_") else currency_places
         minor = _units(value, places)
         ratio = ratios.get(field, ratios.get("*", Decimal(0)))
         moved = int((minor * ratio).to_integral_value(rounding=ROUND_HALF_UP))
@@ -65,18 +74,127 @@ def _ratio(part, whole):
     return min(Decimal(1), max(Decimal(0), part / whole)) if whole else Decimal(0)
 
 
+def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_places, base_places):
+    """Recover transaction detail from native company-currency detail and the tax row."""
+    sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
+    txn_tax = tax.get("tax_amount_after_discount_amount")
+    if txn_tax is None:
+        txn_tax = tax.get("tax_amount")
+    weights = [_decimal(row.get("amount")) for row in details]
+    if tax.get("charge_type") == "On Net Total" or not any(weights):
+        # Use the original line rates where available. Company-currency
+        # rounding may have erased the tax on a small taxable line.
+        txn_weights = [_net(source_rows[row.get("item_row")]) * _decimal(row.get("rate")) for row in details]
+        if sum(txn_weights):
+            weights = txn_weights
+    total_weight = sum(weights)
+    total_units = _units(txn_tax, currency_places) * sign
+    running_weight = Decimal(0)
+    previous_units = 0
+    for detail, weight in zip(details, weights, strict=True):
+        running_weight += weight
+        units = int((total_units * running_weight / total_weight).to_integral_value(
+            rounding=ROUND_HALF_UP,
+        )) if total_weight else 0
+        yield {
+            "item": detail.get("item_row"),
+            "rate": flt(detail.get("rate")),
+            "amount": _amount(units - previous_units, currency_places),
+            "taxable_amount": _amount(_units(_decimal(detail.get("taxable_amount")) / exchange_rate,
+                                              currency_places), currency_places),
+            "base_amount": _amount(_units(detail.get("amount"), base_places), base_places),
+            "base_taxable_amount": _amount(_units(detail.get("taxable_amount"), base_places), base_places),
+        }
+        previous_units = units
+
+
+def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_places, source, child):
+    sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
+    row_ratios = dict(fallback)
+    totals = {field: sum((_decimal(detail.get(field)) for detail in details), Decimal(0))
+              for field in DETAIL_AMOUNTS}
+    moved = {field: sum((_decimal(detail.get(field)) * ratios[detail["item"]] for detail in details), Decimal(0))
+             for field in DETAIL_AMOUNTS}
+    for prefix in ("", "base_"):
+        for field, detail_field in TAX_DETAIL_FIELDS.items():
+            key = prefix + detail_field
+            if totals[key]:
+                row_ratios[prefix + field] = _ratio(moved[key], totals[key])
+    left, right = _partition(TAX_AMOUNTS, tax, row_ratios, currency_places, base_places)
+    labels = {
+        field: tax.get(field)
+        for field in ("account_head", "description", "cost_center", "add_deduct_tax", "custom_pos_charge_kind")
+        if tax.get(field) is not None
+    }
+    child_details = []
+    for detail in details:
+        key = detail["item"]
+        parent_detail, child_detail = _partition(DETAIL_AMOUNTS, detail, {"*": ratios[key]},
+                                                currency_places, base_places)
+        if key in source["items"]:
+            source["details"].append(dict(parent_detail, item=key, tax=index, rate=detail["rate"]))
+        if key in child["items"]:
+            child_details.append(dict(child_detail, item=key, tax=index, rate=detail["rate"]))
+    child["details"].extend(child_details)
+
+    # Where the native breakup accounts for the row total, use the sum of the
+    # rounded shares even when some lines (or the entire row) are tax exempt.
+    for prefix, places in (("", currency_places), ("base_", base_places)):
+        for field, detail_field in TAX_DETAIL_FIELDS.items():
+            key = prefix + field
+            detail_key = prefix + detail_field
+            total = sign * _units(totals[detail_key], places)
+            if details and key in right and _units(tax.get(key), places) == total:
+                moved_units = sign * sum(_units(detail.get(detail_key), places) for detail in child_details)
+                left[key], right[key] = _amount(total - moved_units, places), _amount(moved_units, places)
+    source["taxes"].append({**labels, **left})
+    child["taxes"].append({**labels, **right})
+
+
+def _allocated_tax_details(check, taxes, source_rows):
+    """Use exact transaction shares from a prior split when splitting again."""
+    if not check.get("custom_split_balance"):
+        return {}
+    saved = get_saved_split_balance(check)
+    if not saved:
+        return {}
+
+    prior_taxes = [
+        index for index, tax in enumerate(saved["taxes"]) if tax.get("custom_pos_charge_kind") != "Charged Tip"
+    ]
+    current_taxes = [
+        tax.name for tax in taxes if tax.get("custom_pos_charge_kind") != "Charged Tip"
+    ]
+    if len(prior_taxes) != len(current_taxes):
+        return {}
+    tax_map = dict(zip(prior_taxes, current_taxes, strict=True))
+    row_map = {row.get("custom_origin_invoice_item") or row.name: row.name for row in source_rows.values()}
+    details = {}
+    for detail in saved["details"]:
+        key = row_map.get(detail["item"])
+        if key and detail["tax"] in tax_map and "base_amount" in detail:
+            details.setdefault(tax_map[detail["tax"]], []).append(dict(detail, item=key))
+    return details
+
+
 def allocate_split_balances(check, move_map, currency_places, base_places):
     """Allocate in integer minor units and leave the exact residual on Check 1."""
     source = {"items": {}, "taxes": [], "details": [], "header": {}}
     child = {"items": {}, "taxes": [], "details": [], "header": {}}
     ratios_by_name = {}
+    # Match ERPNext's stock ledger rounding on actual POS documents. Plain
+    # allocation inputs without site metadata use the commercial ceiling.
+    stock_places = (min(4, frappe.get_precision("Stock Ledger Entry", "actual_qty"))
+                    if getattr(check, "doctype", None) == "POS Invoice" else None)
     local_total = base_total = local_move = base_move = Decimal(0)
     total_qty = moved_qty = Decimal(0)
     for row in check.get("items") or ():
         qty = _decimal(row.get("qty"))
         move = _decimal(move_map.get(row.name))
         ratio = ratios_by_name[row.name] = _ratio(move, qty)
-        parent_values, child_values = _partition(LINE_AMOUNTS, row, {"*": ratio}, currency_places, base_places)
+        parent_values, child_values = _partition(
+            LINE_AMOUNTS, row, {"*": ratio}, currency_places, base_places, stock_places=stock_places,
+        )
         if qty > move:
             source["items"][row.name] = parent_values
         if move:
@@ -96,39 +214,20 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
     }
     details_by_tax = {}
     for detail in check.get("item_wise_tax_details") or ():
-        if detail.get("item") in ratios_by_name:
-            details_by_tax.setdefault(detail.get("tax"), []).append(detail)
-    for index, tax in enumerate(check.get("taxes") or ()):
-        details = details_by_tax.get(tax.get("name"), ())
-        total = sum((_decimal(detail.get("amount")) for detail in details), Decimal(0))
-        moved = sum((_decimal(detail.get("amount")) * ratios_by_name[detail.get("item")] for detail in details), Decimal(0))
-        row_ratios = {field: _ratio(moved, total) for field in TAX_AMOUNTS} if total else field_ratios
-        left, right = _partition(TAX_AMOUNTS, tax, row_ratios, currency_places, base_places)
-        labels = {
-            field: tax.get(field)
-            for field in ("account_head", "description", "cost_center", "add_deduct_tax", "custom_pos_charge_kind")
-            if tax.get(field) is not None
-        }
-        source["taxes"].append({**labels, **left})
-        child["taxes"].append({**labels, **right})
-        start = len(child["details"])
-        for detail in details:
-            key = detail.get("item")
-            left, right = _partition(("amount", "taxable_amount"), detail, {"*": ratios_by_name[key]},
-                                     currency_places, base_places)
-            for snapshot, amounts in ((source, left), (child, right)):
-                if key in snapshot["items"]:
-                    snapshot["details"].append(dict(amounts, item=key, tax=index, rate=flt(detail.get("rate"))))
-        # Allocate the tax row from the individually rounded item detail when
-        # those details represent the row total. Every item's remaining detail
-        # and the accounting row then carry the same residual.
-        detail_total = _units(total, currency_places)
-        moved_detail = sum(_units(detail.get("amount"), currency_places) for detail in child["details"][start:])
-        if details:
-            for field in ("tax_amount", "tax_amount_after_discount_amount"):
-                if field in child["taxes"][-1] and _units(tax.get(field), currency_places) == detail_total:
-                    source["taxes"][-1][field] = _amount(detail_total - moved_detail, currency_places)
-                    child["taxes"][-1][field] = _amount(moved_detail, currency_places)
+        if detail.get("item_row") in ratios_by_name:
+            details_by_tax.setdefault(detail.get("tax_row"), []).append(detail)
+    taxes = check.get("taxes") or ()
+    rows_by_name = {row.name: row for row in check.get("items") or ()}
+    saved_details = _allocated_tax_details(check, taxes, rows_by_name)
+    exchange_rate = _decimal(check.get("conversion_rate")) or Decimal(1)
+    for index, tax in enumerate(taxes):
+        details = saved_details.get(tax.get("name"))
+        if details is None:
+            details = list(_tax_detail_allocations(
+                tax, details_by_tax.get(tax.get("name"), ()), rows_by_name, exchange_rate, currency_places, base_places,
+            ))
+        _partition_tax(tax, index, details, ratios_by_name, field_ratios, currency_places, base_places,
+                       source, child)
 
     source["header"], child["header"] = _partition(HEADER_AMOUNTS, check, field_ratios, currency_places, base_places)
     for prefix, places in (("", currency_places), ("base_", base_places)):
@@ -149,6 +248,13 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
                     (-1 if row.get("add_deduct_tax") == "Deduct" else 1) * _units(row.get(tax_amount), places)
                     for row in tax_rows
                 ), places)
+            for field, deducted in (("taxes_and_charges_added", False), ("taxes_and_charges_deducted", True)):
+                key = prefix + field
+                original_units = sum(_units(row.get(tax_amount), places) for row in check.get("taxes") or ()
+                                     if (row.get("add_deduct_tax") == "Deduct") == deducted)
+                if key in header and _units(check.get(key), places) == original_units:
+                    header[key] = _amount(sum(_units(row.get(tax_amount), places) for row in tax_rows
+                                              if (row.get("add_deduct_tax") == "Deduct") == deducted), places)
         # Preserve the exact original grand total and any difference between
         # its total and the sum of net lines plus taxes (for example a tip).
         child_header = child["header"]
@@ -180,6 +286,7 @@ def set_split_balance(doc, snapshot, row_names):
         row.get("custom_origin_invoice_item") or row.name: dict(snapshot["items"][key],
             qty=row.qty, item_code=row.get("item_code"), conversion_factor=row.get("conversion_factor"))
         for row, key in zip(doc.items, row_names, strict=True)
+        if key in snapshot["items"]
     }
     snapshot["details"] = [
         dict(detail, item=row.get("custom_origin_invoice_item") or row.name)
@@ -213,6 +320,65 @@ def get_saved_split_balance(doc):
     if not raw:
         doc.custom_split_balance = None
     return json.loads(raw) if raw else None
+
+
+def combine_split_balances(checks, currency_places, base_places):
+    """Sum the saved charges, including the item and tax identities on each check."""
+    saved = [get_saved_split_balance(doc) if doc.get("custom_split_balance") else None for doc in checks]
+    if not any(saved):
+        return None
+
+    destination = checks[0]
+    combined = {"items": {}, "taxes": [], "details": [], "header": {}}
+    taxes_by_account, details_by_row = {}, {}
+
+    def add_amounts(merged, values, fields):
+        for field in fields:
+            if field in values:
+                merged[field] = float(_decimal(merged.get(field)) + _decimal(values[field]))
+
+    for doc, snapshot in zip(checks, saved, strict=True):
+        if (doc.get("currency"), _decimal(doc.get("conversion_rate")) or Decimal(1)) != (
+            destination.get("currency"), _decimal(destination.get("conversion_rate")) or Decimal(1),
+        ):
+            frappe.throw(coded_message(
+                "SPLIT-ALLOCATION-CURRENCY", _("Split checks must have matching currencies and exchange rates."),
+            ))
+
+        origins = {row.name: row.get("custom_origin_invoice_item") or row.name for row in doc.items}
+        has_saved = snapshot is not None
+        if has_saved:
+            rows = _allocated_rows(doc, snapshot)
+        else:
+            snapshot, _ = allocate_split_balances(doc, {}, currency_places, base_places)
+            rows = ((row.name, row, snapshot["items"][row.name])
+                    for row in doc.items if row.name in snapshot["items"])
+        for _, row, values in rows:
+            add_amounts(combined["items"].setdefault(origins[row.name], {}), values, LINE_AMOUNTS)
+        add_amounts(combined["header"], snapshot["header"], HEADER_AMOUNTS)
+
+        tax_indexes = {}
+        for index, tax in enumerate(snapshot["taxes"]):
+            labels = {key: val for key, val in tax.items() if key not in TAX_AMOUNTS}
+            identity = tuple(sorted(labels.items()))
+            if identity not in taxes_by_account:
+                taxes_by_account[identity] = len(combined["taxes"])
+                combined["taxes"].append(labels)
+            target_index = tax_indexes[index] = taxes_by_account[identity]
+            add_amounts(combined["taxes"][target_index], tax, TAX_AMOUNTS)
+        for detail in snapshot["details"]:
+            key = detail["item"] if has_saved else origins[detail["item"]]
+            index = tax_indexes[detail["tax"]]
+            identity = (key, index, detail["rate"])
+            if identity not in details_by_row:
+                details_by_row[identity] = {"item": key, "tax": index, "rate": detail["rate"]}
+                combined["details"].append(details_by_row[identity])
+            add_amounts(details_by_row[identity], {
+                **detail,
+                "base_amount": detail.get("base_amount", detail.get("amount")),
+                "base_taxable_amount": detail.get("base_taxable_amount", detail.get("taxable_amount")),
+            }, DETAIL_AMOUNTS)
+    return combined
 
 
 def _allocated_rows(doc, snapshot):
@@ -292,11 +458,18 @@ def restore_split_balance(doc, snapshot):
     doc.set("taxes", tax_rows)
     if doc.meta.has_field("item_wise_tax_details"):
         doc.set("item_wise_tax_details", [])
-        for detail in snapshot["details"]:
-            item = allocated_rows[detail["item"]]
-            tax = tax_rows_by_index.get(detail["tax"])
-            if tax and item.name and tax.name:
-                doc.append("item_wise_tax_details", dict(detail, item=item.name, tax=tax.name))
+        doc._item_wise_tax_details = [
+            frappe._dict(
+                item=allocated_rows[detail["item"]],
+                tax=tax_rows_by_index[detail["tax"]],
+                rate=detail["rate"],
+                amount=detail.get("base_amount", detail.get("amount")),
+                taxable_amount=detail.get("base_taxable_amount", detail.get("taxable_amount")),
+            )
+            for detail in snapshot["details"]
+            if detail["tax"] in tax_rows_by_index
+        ]
+        doc.update_item_wise_tax_details = True
     # A new tender may add a tip after splitting. The saved bill amount
     # remains fixed while the separate payable row follows that tender.
     tip_delta = _decimal(live_tip.get("tax_amount_after_discount_amount") if live_tip else 0) - existing_tip

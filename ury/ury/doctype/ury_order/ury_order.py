@@ -794,10 +794,12 @@ def _guest_label(value):
 
 
 def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None):
-    """Move connected tickets only when all their reserved lines move together."""
+    """Move connected tickets only when all their issued lines move together."""
     by_key = defaultdict(dict)
+    by_item = defaultdict(list)
     moving_dishes = set()
     for item in source.items:
+        by_item[item.item_code].append(item)
         for key in (item.get("reservation_line_key") or item.name, _line_key(item.item_code, item, 1)):
             by_key[key][item.name] = item
         if move_map.get(item.name, 0) and not cint(item.get("ury_held")):
@@ -811,6 +813,7 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
             fields=["reservation_line_key", "item", "quantity"],
         )
         line_qty = defaultdict(Decimal)
+        possible_lines, issued_lines = set(), set()
         whole = bool(rows)
         for row in rows:
             matches = [
@@ -818,16 +821,20 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
                 if not row.get("item") or item.item_code == row.get("item")
             ]
             if len(matches) != 1:
+                possible = matches or by_item.get(row.get("item"), ())
                 if reservations_enabled and (row.get("item") in moving_dishes
-                        or any(move_map.get(item.name, 0) for item in matches)):
+                        or any(move_map.get(item.name, 0) for item in possible)):
                     frappe.throw(coded_message(
                         "SPLIT-RESERVED-KOT",
                         _("The released kitchen line cannot be matched to its stock reservation."),
                     ))
+                possible_lines.update(item.name for item in possible)
                 whole = False
                 continue
             line = matches[0]
             line_qty[line.name] += abs(Decimal(str(row.get("quantity") or 0)))
+            if row.get("item") or row.get("quantity"):
+                issued_lines.add(line.name)
             quantity = Decimal(str(line.qty))
             if (line.get("custom_kitchen_anchor") or Decimal(str(move_map.get(line.name, 0))) != quantity
                     or line_qty[line.name] > quantity):
@@ -836,14 +843,15 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
         if whole:
             candidates[ticket] = lines
         else:
-            retained.update(lines)
+            # A blank historical placeholder cannot establish issued stock.
+            # An unkeyed row with a dish can still identify possible owners.
+            retained.update(issued_lines | possible_lines)
 
     # A line may have been sent in several rounds and can appear on more
     # than one ticket. Propagate the anchor across the entire component.
-    if reservations_enabled:
-        while blocked := [ticket for ticket, lines in candidates.items() if lines & retained]:
-            for ticket in blocked:
-                retained.update(candidates.pop(ticket))
+    while blocked := [ticket for ticket, lines in candidates.items() if lines & retained]:
+        for ticket in blocked:
+            retained.update(candidates.pop(ticket))
     if anchored is not None:
         anchored.update(retained)
     return list(candidates)
@@ -1067,6 +1075,15 @@ def _check_split_kitchen_plan(source, move_map, company):
     return reservations_enabled, movable, anchored
 
 
+def _split_balance_precisions(check, company):
+    currency_places = 2 if check.get("currency") == "USD" else currency_precision(check)
+    base_currency = check.get("company_currency") or (
+        frappe.db.get_value("Company", company, "default_currency") if company else None
+    )
+    base_places = currency_precision(currency=base_currency) if base_currency else currency_places
+    return currency_places, base_places
+
+
 def _apply_check_split(
     source, move_map, company, customer=None, guest_label=None, approval=None, items_to_move=None,
     *, kitchen_plan=None,
@@ -1093,12 +1110,7 @@ def _apply_check_split(
     # use native pricing when no previous calculation is available.
     balances = None
     if source.get("grand_total") is not None:
-        currency_places = 2 if source.get("currency") == "USD" else currency_precision(source)
-        base_currency = source.get("company_currency") or (
-            frappe.db.get_value("Company", company, "default_currency") if company else None
-        )
-        base_places = currency_precision(currency=base_currency) if base_currency else currency_places
-        balances = allocate_split_balances(source, move_map, currency_places, base_places)
+        balances = allocate_split_balances(source, move_map, *_split_balance_precisions(source, company))
 
     new_invoice = frappe.new_doc("POS Invoice")
     header_fields = [
@@ -1622,16 +1634,32 @@ def _apply_check_split(
 
 
 
+_ADDED_CHECK_DISCARD = object()
+
+
+def _shared_kitchen_dependants(check_names):
+    item = frappe.qb.DocType("POS Invoice Item")
+    invoice = frappe.qb.DocType("POS Invoice")
+    return (
+        frappe.qb.from_(item)
+        .inner_join(invoice).on(invoice.name == item.parent)
+        .select(item.name, item.custom_origin_invoice_item)
+        .where(item.custom_kitchen_anchor.isin(check_names))
+        .where(invoice.name.notin(check_names) & (invoice.docstatus != 2))
+        .for_update()
+        .run(as_dict=True)
+    )
+
+
 def assert_no_shared_kitchen_void(invoice, method=None):
     """A payment share cannot void a physical ticket or release its stock."""
     if not invoice.get("custom_split_group"):
         return
+    if (method == "before_discard"
+            and getattr(getattr(invoice, "flags", None), "ury_added_check_discard", None) is _ADDED_CHECK_DISCARD):
+        return
     attached = any(row.get("custom_kitchen_anchor") for row in invoice.get("items") or [])
-    dependants = frappe.db.exists(
-        "POS Invoice Item",
-        {"custom_kitchen_anchor": invoice.name, "parent": ["!=", invoice.name], "docstatus": ["!=", 2]},
-    )
-    if attached or dependants:
+    if attached or _shared_kitchen_dependants([invoice.name]):
         frappe.throw(coded_message(
             "SPLIT-KITCHEN-SHARED",
             _("Shared kitchen items must be consolidated before the check can be voided."),
@@ -2008,6 +2036,59 @@ def _validate_and_collect_source_tenders(destination, sources):
     return movable, carried_room
 
 
+def _prepare_split_consolidation(destination, sources, company):
+    from ury.ury_pos.split_balances import combine_split_balances
+
+    checks = [destination, *sources]
+    if not any(doc.get("custom_split_group") or doc.get("custom_split_balance") for doc in checks):
+        return None, None
+    if not destination.get("custom_split_group"):
+        destination.custom_split_group = next((doc.get("custom_split_group") for doc in sources
+                                               if doc.get("custom_split_group")), None)
+    dependants = _shared_kitchen_dependants([doc.name for doc in checks])
+    return combine_split_balances(checks, *_split_balance_precisions(destination, company)), dependants
+
+
+def _reassign_merged_kitchen_anchors(destination, sources, dependants):
+    owners = {doc.name for doc in (destination, *sources)}
+    external_origins = {row.custom_origin_invoice_item for row in dependants}
+    for row in destination.items:
+        if row.get("custom_kitchen_anchor") in owners:
+            origin = row.get("custom_origin_invoice_item") or row.name
+            row.custom_kitchen_anchor = destination.name if origin in external_origins or None in external_origins else None
+
+
+def _discard_added_check(source, destination, company, split_consolidation, reservations_enabled):
+    for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
+        frappe.db.set_value("URY KOT", ticket, "invoice", destination.name, update_modified=False)
+
+    if split_consolidation and reservations_enabled:
+        # Ownership follows the issued ticket, including quantities reserved
+        # for any sibling left outside this merge.
+        frappe.db.set_value("URY Stock Reservation", {"order_ref": source.name}, "order_ref",
+                            destination.name, update_modified=False)
+    elif reservations_enabled:
+        reconcile_order_reservations(
+            order_ref=source.name,
+            previous_items=_reservation_lines(source.items),
+            accepted_items=[],
+            branch=destination.branch,
+            company=company,
+            actor=frappe.session.user,
+        )
+
+    if split_consolidation:
+        # The normal draft discard guard stays in force for all other calls.
+        source.flags.ury_added_check_discard = _ADDED_CHECK_DISCARD
+        try:
+            source.discard()
+        finally:
+            source.flags.ury_added_check_discard = None
+    else:
+        source.discard()
+    source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
+
+
 def consolidate_checks(destination, sources):
     """Add Check (Oracle Simphony Add/Transfer Check): move every line, bill-level discount
     and movable received tender of the source checks onto the destination check, so the guest
@@ -2028,18 +2109,39 @@ def consolidate_checks(destination, sources):
     reservations_enabled = get_branch_stock_policy(
         branch=destination.branch, company=company
     ).reservation_control_enabled
+    split_balance, dependants = _prepare_split_consolidation(destination, sources, company)
+    split_consolidation = dependants is not None
     destination_before = _reservation_lines(destination.items)
 
     merge_rate_prec = currency_precision(destination)
     verified_priv_child_rates = {}
+    items_by_origin = {
+        row.get("custom_origin_invoice_item") or row.name: row for row in destination.items
+    } if split_consolidation else {}
     for source in sources:
         for row in source.items:
-            appended = destination.append(
-                "items",
-                row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True),
-            )
-            if appended is None and destination.items:
-                appended = destination.items[-1]
+            origin = row.get("custom_origin_invoice_item") or row.name
+            appended = items_by_origin.get(origin)
+            if appended is not None:
+                if (appended.item_code != row.item_code
+                        or flt(appended.get("conversion_factor")) != flt(row.get("conversion_factor"))):
+                    frappe.throw(coded_message(
+                        "SPLIT-ALLOCATION-LOCKED", _("This split check contains conflicting item quantities."),
+                    ))
+                appended.qty = float(Decimal(str(appended.qty)) + Decimal(str(row.qty)))
+                appended.custom_kitchen_anchor = (
+                    appended.get("custom_kitchen_anchor") or row.get("custom_kitchen_anchor")
+                )
+            else:
+                values = row.as_dict(no_default_fields=True, no_child_table_fields=True, no_private_properties=True)
+                if split_consolidation:
+                    values["custom_origin_invoice_item"] = origin
+                    values["reservation_line_key"] = row.get("reservation_line_key") or row.name
+                appended = destination.append("items", values)
+                if appended is None and destination.items:
+                    appended = destination.items[-1]
+                if split_consolidation and appended is not None:
+                    items_by_origin[origin] = appended
             if (
                 appended is not None
                 and cint(row.get("custom_is_modifier")) == 1
@@ -2052,6 +2154,16 @@ def consolidate_checks(destination, sources):
                 verified_priv_child_rates[("row_id", id(appended))] = verified_rate
                 if row.get("reservation_line_key"):
                     verified_priv_child_rates[("rkey", str(row.get("reservation_line_key")))] = verified_rate
+
+    if split_consolidation:
+        _reassign_merged_kitchen_anchors(destination, sources, dependants)
+        if split_balance:
+            from ury.ury_pos.split_balances import set_split_balance
+
+            set_split_balance(destination, split_balance, [
+                row.get("custom_origin_invoice_item") or row.name for row in destination.items
+            ])
+        ensure_share_quantity_precision(destination)
 
     if discount_plan is not None:
         if discount_plan.get("has_header_discount"):
@@ -2148,22 +2260,13 @@ def consolidate_checks(destination, sources):
         frappe.flags.ury_server_discount_write = prev_disc_flag
         frappe.flags.in_bill_merge_sync = prev_merge_flag
 
+    for dependant in dependants or ():
+        frappe.db.set_value("POS Invoice Item", dependant.name, "custom_kitchen_anchor",
+                            destination.name, update_modified=False)
     for source in sources:
-        for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
-            frappe.db.set_value("URY KOT", ticket, "invoice", destination.name, update_modified=False)
-        if reservations_enabled:
-            reconcile_order_reservations(
-                order_ref=source.name,
-                previous_items=_reservation_lines(source.items),
-                accepted_items=[],
-                branch=destination.branch,
-                company=company,
-                actor=frappe.session.user,
-            )
-        source.discard()
-        source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
+        _discard_added_check(source, destination, company, split_consolidation, reservations_enabled)
 
-    if reservations_enabled:
+    if reservations_enabled and not split_consolidation:
         reconcile_order_reservations(
             order_ref=destination.name,
             previous_items=destination_before,
