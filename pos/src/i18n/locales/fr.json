@@ -6,14 +6,19 @@
   "hold_fire": {
     "title": "Mise en attente et envoi en cuisine",
     "held": "En attente",
-    "sent": "Envoyé",
-    "ready": "Prêt",
-    "hold": "Attendre",
-    "fire_line": "Envoyer la ligne",
-    "fire_course": "Envoyer le service : {{course}}",
-    "save_first": "Enregistrez la commande pour garder ces articles en attente. Envoyez-les quand vous êtes prêt.",
+    "hold": "Mettre en attente pour la cuisine",
+    "fire_now": "Envoyer maintenant",
+    "schedule_course": "Programmer le service",
+    "schedule_line": "Programmer l’envoi",
+    "delay": "Délai avant l’envoi",
+    "minutes": "+{{minutes}} min",
+    "countdown": "Envoi dans {{time}}",
+    "due": "Envoi prévu maintenant",
+    "confirmation_pending": "En attente de confirmation au passe",
+    "save_first": "Enregistrez la commande avant de programmer ou d’envoyer les articles en attente.",
     "offline": "Une connexion est nécessaire pour mettre en attente ou envoyer.",
-    "failed": "Envoi impossible. Rechargez la commande et réessayez."
+    "reload": "L’heure d’envoi a changé. Rechargez la commande pour afficher son état.",
+    "failed": "Impossible de modifier l’heure d’envoi. Rechargez la commande et réessayez."
   },
   "common": {
     "loading": "Chargement...",

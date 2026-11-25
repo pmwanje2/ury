@@ -204,6 +204,34 @@
       </div>
     </div>
 
+    <section v-if="isExpo && heldKitchenItems.length"
+      class="mx-3 my-3 rounded-lg border border-[var(--hair2)] bg-[var(--panel)] p-3 text-[var(--t1)] dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+      <h2 class="mb-2 font-semibold">{{ __("Held for kitchen") }}</h2>
+      <ul class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <li v-for="item in heldKitchenItems" :key="item.line"
+          class="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--hair2)] p-2 dark:border-slate-700">
+          <div class="min-w-0">
+            <p class="text-xs text-[var(--t2)] dark:text-slate-300">
+              {{ item.restaurant_table || item.order_no || item.invoice }}
+              <span v-if="item.course"> · {{ item.course }}</span>
+            </p>
+            <p v-if="item.seconds_until_fire !== null" class="break-words text-sm font-medium">
+              {{ item.qty }} × {{ item.item_name }}
+            </p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded bg-[var(--bg)] px-2 py-1 text-xs font-semibold tabular-nums dark:bg-slate-800">
+              {{ heldFireLabel(item) }}
+            </span>
+            <button type="button" class="rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-50"
+              :disabled="Boolean(firingHeld[item.invoice])" @click="fireHeldKitchenItem(item)">
+              {{ __("Fire now") }}
+            </button>
+          </div>
+        </li>
+      </ul>
+    </section>
+
     <!-- Expo Mode Board: unified multi-station cards per check -->
     <div v-if="isExpo" data-testid="expo-board">
       <div v-if="expoOrders.length === 0 && !loadingKots" class="text-center py-10 text-xl" style="color: var(--t3)">
@@ -658,6 +686,11 @@ export default {
       showRecentServed: false,
       loadingServed: false,
       timeInterval: null,
+      heldFireInterval: null,
+      heldFireRows: [],
+      heldClock: Date.now(),
+      heldPollPending: false,
+      firingHeld: {},
       stationPrinter: null,
       stationSettings: { enabled: false, enabledAt: null, printer: "", host: "", port: 9100, backupPrinter: "", backupHost: "", backupPort: 9100, printFormat: "", pageWidth: 576, commandMode: "standard" },
       installedPrinters: [],
@@ -879,6 +912,53 @@ export default {
           });
       });
     },
+    async fetchHeldKitchenItems() {
+      if (!this.isExpo || this.heldPollPending) return;
+      this.heldPollPending = true;
+      const generation = this.resyncGeneration;
+      try {
+        const { message } = await this.call.get("ury.ury.api.ury_kot_display.list_held_kitchen_items", {
+          production_unit: this.production,
+        });
+        if (generation !== this.resyncGeneration || !this.isExpo) return;
+        this.heldClock = Date.now();
+        this.heldFireRows = (Array.isArray(message) ? message : []).map(item => ({
+          ...item,
+          deadline: item.seconds_until_fire === null ? null : this.heldClock + item.seconds_until_fire * 1000,
+        }));
+      } catch (error) {
+        if (generation === this.resyncGeneration) {
+          this.heldFireRows = [];
+          console.error("Failed to load held kitchen items", error);
+        }
+      } finally {
+        this.heldPollPending = false;
+      }
+    },
+    heldFireLabel(item) {
+      if (item.deadline === null) return t("Awaiting confirmation");
+      const seconds = Math.max(0, Math.ceil((item.deadline - this.heldClock) / 1000));
+      if (!seconds) return t("Fire due");
+      const countdown = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+      return t("Fires in {0}", countdown);
+    },
+    async fireHeldKitchenItem(item) {
+      if (this.firingHeld[item.invoice]) return;
+      this.firingHeld[item.invoice] = true;
+      this.actionError = "";
+      try {
+        await this.call.post("ury.ury.api.ury_kot_display.fire_held_kitchen_items", {
+          production_unit: this.production,
+          invoice: item.invoice,
+          line: item.line,
+        });
+        await this.fetchKOT();
+      } catch (error) {
+        this.actionError = kitchenErrorMessage(error, t("Could not fire the held items. Please try again."));
+      } finally {
+        delete this.firingHeld[item.invoice];
+      }
+    },
     fetchKOT(resync = false) {
       const generation = this.resyncGeneration;
       return new Promise((resolve, reject) => {
@@ -904,6 +984,8 @@ export default {
                 this.recallWindowMinutes = Math.max(1, Math.min(240, Math.floor(configuredRecall)));
               }
               this.isExpo = Boolean(result.message.is_expo);
+              if (this.isExpo) void this.fetchHeldKitchenItems();
+              else this.heldFireRows = [];
               if (result.message.station_device_config) {
                 this.serverDeviceConfig = result.message.station_device_config;
                 if (this.stationPrinter && typeof this.stationPrinter.hydrateFromServer === "function") {
@@ -1055,8 +1137,11 @@ export default {
         await this.call.post("ury.ury.api.ury_kot_display.expo_bump_order", {
           invoice: order.invoice,
           production_unit: this.production,
+          tickets: order.stations.map(station => station.kot_name),
         });
-        this.kot = this.kot.filter(card => card.invoice !== order.invoice);
+        const bumped = new Set(order.stations.map(station => station.kot_name));
+        this.kot = this.kot.filter(card => !bumped.has(card.name));
+        if (this.isExpo) await this.fetchKOT();
         if (this.showRecentServed) await this.fetchRecentServed();
       } catch (error) {
         this.actionError = kitchenErrorMessage(error, t("Could not bump order {0}. Please try again.", order.invoice));
@@ -1436,6 +1521,12 @@ export default {
         this.showModal = true;
       });
     this.timeInterval = setInterval(this.updateTimeRemaining, 60000);
+    let ticks = 0;
+    this.heldFireInterval = setInterval(() => {
+      if (!this.isExpo) return;
+      this.heldClock = Date.now();
+      if (++ticks % 10 === 0) void this.fetchHeldKitchenItems();
+    }, 1000);
   },
   beforeUnmount() {
     this.socketActive = false;
@@ -1446,6 +1537,7 @@ export default {
     this.stopServiceRequests();
     this.cancelPendingServes();
     clearInterval(this.timeInterval);
+    clearInterval(this.heldFireInterval);
     this.stopStationHeartbeat();
     window.removeEventListener("resize", this.masonryLoading);
     window.removeEventListener("online", this.handleOnline);
@@ -1494,6 +1586,16 @@ export default {
       return [...totals.values()].sort(
         (a, b) => (b.rush_qty - a.rush_qty) || (b.total_qty - a.total_qty) || a.item_name.localeCompare(b.item_name),
       );
+    },
+    heldKitchenItems() {
+      const shown = new Set();
+      return this.heldFireRows.filter(item => {
+        if (item.seconds_until_fire !== null) return true;
+        const key = JSON.stringify([item.invoice, item.course]);
+        if (shown.has(key)) return false;
+        shown.add(key);
+        return true;
+      });
     },
     expoOrders() {
       if (!this.isExpo) return [];

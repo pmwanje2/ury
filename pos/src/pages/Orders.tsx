@@ -587,6 +587,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         course: item.custom_course || '',
         invoiceItemName: item.name,
         ury_held: item.ury_held || 0,
+        fireAt: item.fire_at,
+        fireConfirmationPending: !!item.fire_confirmation_pending,
         comment: item.comment || '',
         description: item.description || '',
         special_dish: 0 as 0 | 1,

@@ -2,6 +2,7 @@ import json
 from collections import defaultdict
 
 import frappe
+from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
 from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
@@ -66,6 +67,9 @@ def create_order_items(items):
             # computed one (see _line_keyed_items below) so it survives the
             # trip through KOT item creation instead of being dropped.
             "reservation_line_key": item.get("reservation_line_key"),
+            "raw_line_key": item.get("raw_line_key"),
+            "custom_course": item.get("custom_course"),
+            "custom_seat_no": item.get("custom_seat_no"),
             "custom_parent_line_key": item.get("custom_parent_line_key") or None,
             "custom_line_role": item.get("custom_line_role") or "Standard",
             "custom_is_modifier": cint(item.get("custom_is_modifier")),
@@ -109,6 +113,8 @@ def _line_keyed_items(items):
                 "item_name": row.get("item_name"),
                 "qty": 0,
                 "comments": row.get("comment", row.get("comments", "")),
+                "custom_course": row.get("custom_course"),
+                "custom_seat_no": row.get("custom_seat_no") or row.get("seat_no"),
                 "custom_parent_line_key": row.get("custom_parent_line_key") or None,
                 "custom_line_role": row.get("custom_line_role") or "Standard",
                 "custom_is_modifier": cint(row.get("custom_is_modifier")),
@@ -190,8 +196,17 @@ def create_kot_doc(
         # (_resolve_or_create_pos_invoice not setting invoice.branch).
         menu = frappe.db.get_value("URY Restaurant", {"branch": pos_invoice.branch}, "active_menu")
 
+    saved_lines = {
+        row.get("reservation_line_key") or row.get("name"): row for row in (pos_invoice.get("items") or [])
+    }
     for item in items:
-        course = frappe.db.get_value("URY Menu Item", {"item": item["item_code"],"parent":menu}, "course")
+        source = saved_lines.get(item.get("custom_parent_line_key") or _extract_raw_line_key(item))
+        course = item.get("custom_course") or (source and source.get("custom_course"))
+        if not course:
+            course = frappe.db.get_value(
+                "URY Menu Item", {"item": item["item_code"], "parent": menu}, "course"
+            )
+        seat = item.get("custom_seat_no") or (source and source.get("custom_seat_no")) or 0
         kot_doc.append(
             "kot_items",
             {
@@ -200,6 +215,7 @@ def create_kot_doc(
                 "quantity": item["qty"],
                 "comments": item["comments"],
                 "course": course,
+                "seat_no": seat,
                 "reservation_line_key": item.get("reservation_line_key"),
                 "parent_line_key": item.get("custom_parent_line_key") or None,
                 "is_modifier": cint(item.get("custom_is_modifier")),
@@ -207,7 +223,6 @@ def create_kot_doc(
             },
         )
     if ignore_permissions:
-        kot_doc.flags.ignore_permissions = True
         kot_doc.insert(ignore_permissions=True)
     else:
         kot_doc.insert()
@@ -363,6 +378,8 @@ def _route_items_with_modifiers_and_combos(
                     "comments": ov.get("group") or "",
                     "reservation_line_key": f"{raw_key}::combo::{chosen_code}" if raw_key else None,
                     "custom_parent_line_key": raw_key or item.get("reservation_line_key"),
+                    "custom_course": item.get("custom_course"),
+                    "custom_seat_no": item.get("custom_seat_no"),
                     "custom_line_role": "Combo Component",
                     "custom_is_modifier": 1,
                     "custom_modifier_prefix": "",
@@ -427,6 +444,7 @@ def process_items_for_kot(
     kot_type,
     offline_printed=0,
     ignore_permissions=False,
+    require_routing=False,
 ):
     kot_items = create_order_items(items)
     pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
@@ -459,29 +477,29 @@ def process_items_for_kot(
         room=room,
     )
 
-    # Print warning if any non-fee item was not routed (legacy behavior)
-    all_routed_items = set()
-    for items_list in production_items_map.values():
-        for item in items_list:
-            all_routed_items.add(item["item_code"])
+    # Compare by row identity so two instances of the same dish cannot
+    # conceal a missing route for an independently routed modifier.
+    routed_rows = {id(row) for rows in production_items_map.values() for row in rows}
     for item in kot_items:
-        if item.get("custom_line_role") == "Combo Upcharge":
+        if item.get("custom_line_role") == "Combo Upcharge" or id(item) in routed_rows:
             continue
-        if item["item_code"] not in all_routed_items:
-            item_group = frappe.db.get_value("Item", item["item_code"], "item_group")
-            frappe.msgprint(
-                f"Item group '{item_group}' for item '{item['item_code']}' is not in any production."
-            )
+        if require_routing:
+            frappe.throw(_("No active kitchen station is configured for {0}.").format(
+                item["item_name"] or item["item_code"]
+            ))
+        item_group = frappe.db.get_value("Item", item["item_code"], "item_group")
+        frappe.msgprint(
+            f"Item group '{item_group}' for item '{item['item_code']}' is not in any production."
+        )
 
     # Create one KOT per production unit
     for production_unit, production_items in production_items_map.items():
-        invoice_exist = frappe.db.exists(
-            "URY KOT",
-            {
-                "invoice": invoice_id,
-                "docstatus": 1,
-                "production": production_unit,
-            },
+        filters = {"invoice": invoice_id, "docstatus": 1, "production": production_unit}
+        # Held release owns the invoice lock and must also read current KOTs
+        # if another transaction created the first one while it waited.
+        invoice_exist = (
+            frappe.db.get_value("URY KOT", filters, "name", for_update=True)
+            if require_routing else frappe.db.exists("URY KOT", filters)
         )
         # This is the same "no KOT exists yet for this invoice+production" case
         # the scheduler's create_kot() fallback guards against with validation_dedup_key --
@@ -757,7 +775,7 @@ def kot_execute(
 
 def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None, previous_items=None,
                  comments=None, offline_printed=0, *, desk=False, cancel_reason=None, void_reason_code=None,
-                 ignore_permissions=False):
+                 ignore_permissions=False, require_routing=False):
     from frappe import _
 
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
@@ -892,6 +910,7 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
                 "New Order",
                 offline_printed=offline_printed,
                 ignore_permissions=ignore_permissions,
+                require_routing=require_routing,
             )
         )
     if total_cancel_items:

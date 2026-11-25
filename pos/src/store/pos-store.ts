@@ -102,6 +102,8 @@ export interface OrderItem extends MenuItem {
    */
   invoiceItemName?: string;
   ury_held?: number;
+  fireAt?: string | null;
+  fireConfirmationPending?: boolean;
   parentLineKey?: string | null;
   lineRole?: 'Standard' | 'Modifier' | 'Combo Header' | 'Combo Upcharge';
   isModifier?: boolean;
@@ -770,6 +772,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       let parentKey = parent.reservationLineKey || parent.uniqueId || uuidv4();
       let parentUniqueId = parent.uniqueId || parentKey;
       let parentInvoiceItemName = parent.invoiceItemName;
+      let heldState = {
+        ury_held: parent.ury_held,
+        fireAt: parent.fireAt,
+        fireConfirmationPending: parent.fireConfirmationPending,
+      };
       let oldChildren: OrderItem[] = [];
       let baseOrders = current;
       let insertAt = current.length;
@@ -783,6 +790,11 @@ export const usePOSStore = create<POSStore>((set, get) => ({
           parentKey = oldKey || parentKey;
           parentUniqueId = oldParent.uniqueId || parentKey;
           parentInvoiceItemName = oldParent.invoiceItemName ?? parentInvoiceItemName;
+          heldState = {
+            ury_held: oldParent.ury_held,
+            fireAt: oldParent.fireAt,
+            fireConfirmationPending: oldParent.fireConfirmationPending,
+          };
           oldChildren = oldKey
             ? current.filter((o) => o.uniqueId !== replaceParentUniqueId && o.parentLineKey === oldKey)
             : [];
@@ -794,6 +806,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
       const normalizedParent: OrderItem = {
         ...parent,
+        ...heldState,
         uniqueId: parentUniqueId,
         reservationLineKey: parentKey,
         ...(parentInvoiceItemName ? { invoiceItemName: parentInvoiceItemName } : {}),
@@ -823,6 +836,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         const childInvoiceItemName = matchedPrev?.invoiceItemName ?? child.invoiceItemName;
         return {
           ...child,
+          ...heldState,
           uniqueId: childUniqueId,
           reservationLineKey: childResKey,
           ...(childInvoiceItemName ? { invoiceItemName: childInvoiceItemName } : {}),
@@ -897,8 +911,15 @@ export const usePOSStore = create<POSStore>((set, get) => ({
 
   setItemHeld: (uniqueId, held) => {
     if (navigator.onLine === false || !get().posProfile?.ury_enable_hold_fire) throw new Error('URY_HOLD_OFFLINE');
-    set({ activeOrders: get().activeOrders.map(item => item.uniqueId === uniqueId && !item.invoiceItemName
-      ? { ...item, ury_held: held ? 1 : 0 } : item) });
+    const items = get().activeOrders;
+    const target = items.find(item => item.uniqueId === uniqueId);
+    if (!target || target.invoiceItemName || target.parentLineKey) return;
+    const key = target.reservationLineKey || uniqueId;
+    set({ activeOrders: items.map(item =>
+      !item.invoiceItemName && (item === target || item.parentLineKey === key)
+        ? { ...item, ury_held: held ? 1 : 0 }
+        : item
+    ) });
   },
 
   clearOrder: async () => {
@@ -1094,6 +1115,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             course: item.custom_course || '',
             invoiceItemName: item.name,
             ury_held: item.ury_held || 0,
+            fireAt: item.fire_at,
+            fireConfirmationPending: !!item.fire_confirmation_pending,
             description: item.description || '',
             special_dish: 0 as 0 | 1,
             tax_rate: 0,

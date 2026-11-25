@@ -643,7 +643,7 @@ export default function CaptainOrder() {
         <CustomerSelect disabled={isInteractionDisabled} />
       )}
 
-      {canModify && <HoldFireControls />}
+      {canModify && <HoldFireControls disabled={isInteractionDisabled || isSubmitting} />}
       {canModify && (
         <input
           type="text"
@@ -728,6 +728,8 @@ export default function CaptainOrder() {
                           onRemove={canModify && canRemove ? () => handleConfirmedRemove(line) : undefined}
                           onEditNote={canModify ? () => handleEditConfirmedNote(line) : undefined}
                         />
+                        {canModify && <HoldFireControls lineId={line.uniqueId}
+                          disabled={isInteractionDisabled || isSubmitting} />}
                         {children.map((child) => (
                           <CaptainOrderLine
                             key={`confirmed-child-${child.uniqueId}`}
@@ -790,6 +792,8 @@ export default function CaptainOrder() {
                           onDecrement={() => handleDeltaDecrement(line)}
                           onEditNote={() => handleEditNewOrChanged(line)}
                         />
+                        {canModify && line.baseQty === 0 && <HoldFireControls lineId={line.uniqueId}
+                          disabled={isInteractionDisabled || isSubmitting} />}
                         {children.map((child) => (
                           <CaptainOrderLine
                             key={`delta-child-${child.uniqueId}`}

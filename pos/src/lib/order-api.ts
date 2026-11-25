@@ -3,6 +3,8 @@ import { call } from '@ury/core';
 
 export interface POSInvoiceItem {
   ury_held?: number;
+  fire_at?: string | null;
+  fire_confirmation_pending?: number;
   custom_course?: string;
   name: string;
   item_code: string;
@@ -66,6 +68,7 @@ export interface POSInvoice {
   ury_client_order_id?: string | null;
   custom_guest_label?: string | null;
   modified?: string;
+  held_update_previous_modified?: string;
 }
 
 export interface TableOrder {
@@ -158,9 +161,20 @@ export const syncOrder = async (data: SyncOrderRequest) => {
   return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
 };
 
-export async function fireItems(invoice: string, selection: { line?: string; course?: string; last_modified_time?: string }) {
+export interface HeldSelection {
+  line?: string;
+  course?: string;
+  last_modified_time?: string;
+}
+
+export async function fireItems(invoice: string, selection: HeldSelection) {
   await assertOfflineActionAllowed('hold/fire');
   return call.post('ury.ury.doctype.ury_order.ury_order.fire_items', { invoice, ...selection }) as Promise<{ message: POSInvoice }>;
+}
+
+export async function scheduleItems(invoice: string, selection: HeldSelection & { delay_minutes: number }) {
+  await assertOfflineActionAllowed('hold/fire');
+  return call.post('ury.ury.doctype.ury_order.ury_order.schedule_held_items', { invoice, ...selection }) as Promise<{ message: POSInvoice }>;
 }
 
 export interface SplitBillItemMove {
