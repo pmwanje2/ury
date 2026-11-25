@@ -1054,7 +1054,7 @@ const DiscountPanel: React.FC<DiscountPanelProps> = ({
         reference={{ doctype: 'POS Invoice', name: invoice }}
         claim={(preview?.claim as unknown as Record<string, unknown>) || {}}
         percent={preview?.effective_percent}
-        amount={preview?.discount_total}
+        amount={preview?.approval_amount ?? undefined}
         requireReason={false}
         onApproved={(res) => {
           setSubmitError(null);

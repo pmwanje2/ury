@@ -61,6 +61,7 @@ export interface DiscountPreviewLine {
 }
 
 export interface DiscountPreviewResponse {
+  approval_amount?: number | null;
   before_total: number;
   discount_total: number;
   header_discount_amount: number;

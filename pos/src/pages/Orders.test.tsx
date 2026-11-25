@@ -470,7 +470,9 @@ describe("Orders modifiers edit and void parity (R1 M2)", () => {
   it("void approval amount includes linked child modifier rows proportionally", async () => {
     const orderApi = await import("../lib/order-api");
     vi.mocked(orderApi.reduceOrderItemQty).mockRejectedValueOnce(
-      new Error("Removing or reducing a sent item requires manager approval. [POS-AUTH-REQUIRED]"),
+      Object.assign(new Error("Removing or reducing a sent item requires manager approval. [POS-AUTH-REQUIRED]"), {
+        pos_auth_challenge: { amount: 181300 },
+      }),
     );
 
     mockRootStoreState.selectedOrderItems = [
@@ -504,8 +506,8 @@ describe("Orders modifiers edit and void parity (R1 M2)", () => {
       render(<Orders />);
       fireEvent.click(screen.getByRole("button", { name: "Reduce quantity of Ribeye Steak" }));
       const approvalDialog = await screen.findByTestId("manager-approval-dialog");
-      // 1 × Ribeye (45,000) + proportionally scaled 1 × Aged Cheddar (4,000) = 49,000
-      expect(approvalDialog).toHaveAttribute("data-amount", "49000");
+      expect(approvalDialog).toHaveAttribute("data-amount", "181300");
+      // Keep the linked modifier's document-currency amount in the compatibility claim.
       const claim = JSON.parse(approvalDialog.getAttribute("data-claim") || "{}");
       expect(claim.amount).toBe(49000);
     } finally {

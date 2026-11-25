@@ -17,6 +17,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
+from ury.ury_pos.approval_currency import company_approval_amount
+
 from ury.brand import coded_message
 
 _CURRENCY_PRECISION_FIELDS = frozenset(
@@ -314,12 +316,13 @@ def _privilege_rules_for(company, privilege, pos_profile=None):
     return True, resolved
 
 
-def user_discount_limit(user, company, pos_profile=None):
+def user_discount_limit(user, company, pos_profile=None, *, approval_amount=None):
     """Effective solo discount % limit for `user` at `pos_profile`:
     - Starts from company Approval Limit ('Role: %' lines; blank base = 0%).
     - When POS Privilege Rule rows exist for (company, 'discount'), Amendment 1 applies:
       no rule for a role = 0% alone; may_perform=0 = 0% alone; min(Approval Limit, rule.max_percent)
       wins when rule.max_percent > 0 (0 on rule defers to Approval Limit).
+    - When supplied, approval_amount must fit the same role rule in company currency.
     - Administrator and System Manager get no free pass."""
     policy = company_discount_policy(company)
     roles = frappe.get_roles(user) or []
@@ -336,6 +339,9 @@ def user_discount_limit(user, company, pos_profile=None):
     for role in roles:
         rule = rules_by_role.get(role)
         if not rule or cint(rule.get("may_perform")) != 1:
+            continue
+        amount_cap = flt(rule.get("max_amount"))
+        if approval_amount is not None and amount_cap > 0 and approval_amount > amount_cap + 1e-9:
             continue
         rule_max = flt(rule.get("max_percent"))
         if has_approval_limit:
@@ -1408,7 +1414,12 @@ def apply_discount_to_invoice(
         )
 
     # Authority check (min(Approval Limit, POS Privilege Rule); blank base = 0%; 100% comp ALWAYS needs 2nd person)
-    limit_pct = user_discount_limit(frappe.session.user, company, pos_profile_doc.name)
+    approval_amount = (
+        company_approval_amount(invoice, summary["discount_total"], frappe) if has_positive_discount else None
+    )
+    limit_pct = user_discount_limit(
+        frappe.session.user, company, pos_profile_doc.name, approval_amount=approval_amount
+    )
     effective_pct = summary["effective_percent"]
     is_comp = bool(
         has_positive_discount
@@ -1492,6 +1503,7 @@ def apply_discount_to_invoice(
                 pos_profile_doc.name,
                 invoice.name,
                 claim,
+                approval_amount=approval_amount,
             )
             approver = consumed.get("approver")
             if not approver or approver == frappe.session.user:
@@ -1570,6 +1582,7 @@ def apply_discount_to_invoice(
             "currency": currency,
             "precision": prec,
             "limit_percent": limit_pct,
+            "approval_amount": approval_amount,
             "needs_approval": needs_approval,
             "is_comp": is_comp,
             "privilege": privilege,

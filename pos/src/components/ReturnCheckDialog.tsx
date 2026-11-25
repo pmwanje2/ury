@@ -15,6 +15,7 @@ import {
   type ReturnableCheckResponse,
   type ReturnPreviewResponse,
 } from '../lib/void-return-api';
+import { extractAuthChallenge } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 function requiredChildReturnQty(
@@ -65,6 +66,7 @@ export default function ReturnCheckDialog({
   const [pendingApproval, setPendingApproval] = useState<{
     claim: Record<string, unknown>;
     refundTotal: number;
+    approvalAmount?: number;
     refundPayments: RefundPaymentEntry[];
   } | null>(null);
 
@@ -264,6 +266,7 @@ export default function ReturnCheckDialog({
           .sort((a, b) => a.mode_of_payment.localeCompare(b.mode_of_payment));
         setPendingApproval({
           refundTotal: preview.refund_total,
+          approvalAmount: extractAuthChallenge(err)?.amount ?? undefined,
           refundPayments: sortedPayments,
           claim: {
             original_invoice: checkData.invoice,
@@ -594,7 +597,7 @@ export default function ReturnCheckDialog({
           ]}
           reference={{ doctype: 'POS Invoice', name: checkData.invoice }}
           claim={pendingApproval.claim}
-          amount={pendingApproval.refundTotal}
+          amount={pendingApproval.approvalAmount}
           requireReason={false}
           onApproved={handleApproved}
           onCancel={() => setPendingApproval(null)}

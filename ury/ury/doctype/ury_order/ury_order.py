@@ -55,6 +55,8 @@ from ury.ury.doctype.alert_settings.alert_settings import get_alert_rule
 from ury.ury.api.ury_kot_notification import create_system_notification, get_users_with_role
 from ury.ury.api.item_price import item_price_release_states, price_valid_on
 from ury.ury.hooks.ury_pos_tender import sync_charged_tip
+from ury.ury_pos.approval_currency import company_approval_amount
+from ury.ury_pos.auth_challenge import attach_auth_challenge
 from ury.ury_pos.fx import (
     build_offline_collision_plan,
     ensure_local_change_payment_row,
@@ -3875,6 +3877,7 @@ def sync_order(
             privilege = "void_sent_item" if has_full_void else "reduce_sent_qty"
             fallback_privs = ("void_sent_item",) if privilege == "reduce_sent_qty" else ()
             sent_reductions.sort(key=lambda r: (r["item_code"], r["line_key"]))
+            approval_amount = company_approval_amount(invoice, voided_amount, frappe)
 
             # Authorization check precedes reason validation when caller lacks
             # solo privilege and supplied no approval token (keeps unauthorized
@@ -3883,9 +3886,14 @@ def sync_order(
                 frappe.session.user,
                 pos_profile,
                 privilege,
-                amount=voided_amount,
+                amount=approval_amount,
                 fallback_privileges=fallback_privs,
             ):
+                attach_auth_challenge(
+                    privilege=privilege, pos_profile=pos_profile,
+                    reference_doctype="POS Invoice", reference_name=invoice.name,
+                    claim={}, amount=approval_amount, framework=frappe,
+                )
                 frappe.throw(
                     _("You are not permitted to reduce or remove items from this order without manager approval.")
                     + f" [{_void_ops.CODE_AUTH_REQUIRED}]",
@@ -3920,7 +3928,7 @@ def sync_order(
                 invoice.name,
                 claim,
                 approval_token=approval_token,
-                amount=voided_amount,
+                amount=approval_amount,
                 doc=invoice,
                 fallback_privileges=fallback_privs,
                 alt_claim=b2a_compat_claim,
@@ -5020,6 +5028,9 @@ def cancel_order(invoice_id, reason, note=None, is_waste=0, approval_token=None)
             invoice_id,
             claim,
             approval_token=approval_token,
+            amount=company_approval_amount(
+                pos_invoice, flt(pos_invoice.get("rounded_total") or pos_invoice.get("grand_total")), frappe
+            ),
         )
         # Ensure the approving manager holds cancel/write authority on the check.
         if approval_token and not frappe.has_permission("POS Invoice", "cancel", doc=pos_invoice, user=approver):

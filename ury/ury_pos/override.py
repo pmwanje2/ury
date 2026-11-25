@@ -56,6 +56,8 @@ from typing import Any, NamedTuple
 import frappe
 from frappe.utils import cint, flt, get_datetime, now_datetime
 
+from ury.ury_pos.approval_currency import company_approval_amount
+
 
 def _get_fullname(user: str) -> str:
     try:
@@ -1342,6 +1344,52 @@ def _verify_approver_pin(approver: str, pin: Any, profile) -> tuple[bool, str | 
         return False, "POS-AUTH-PIN"
 
 
+# These claim fields remain in invoice currency for token hash compatibility.
+_INVOICE_APPROVAL_AMOUNT_FIELDS = {
+    "price_override": "amount",
+    "open_item": "amount",
+    "complimentary": "amount",
+    "discount": "amount",
+    "service_charge_waive": "new_amount",
+    "tip_adjust": "amount",
+    "void_sent_item": "amount",
+    "reduce_sent_qty": "amount",
+    "return": "refund_total",
+    "reopen_check": "grand_total",
+    "adjust_closed_check": None,
+    "cancel_check": None,
+}
+
+
+def _claim_approval_amount(reference_doctype, reference_name, profile, privilege, claim):
+    """Use persisted FX data when screening PIN requests before mutation."""
+    field = _INVOICE_APPROVAL_AMOUNT_FIELDS.get(privilege)
+    amount = _parse_optional_number(claim.get(field or "amount"))
+    if privilege not in _INVOICE_APPROVAL_AMOUNT_FIELDS:
+        return amount
+    if reference_doctype == "POS Profile" and privilege == "return":
+        amount = _parse_optional_number(claim.get("refund_total"))
+        return company_approval_amount(profile, amount, frappe) if amount is not None else None
+    if reference_doctype != "POS Invoice" or not reference_name:
+        return amount
+
+    invoice = frappe.db.get_value(
+        "POS Invoice", reference_name, ["company", "currency", "conversion_rate", "rounded_total", "grand_total"],
+        as_dict=True,
+    )
+    if not invoice or invoice.get("company") != profile.get("company"):
+        return amount
+
+    if privilege == "cancel_check":
+        amount = flt(invoice.get("rounded_total") or invoice.get("grand_total"))
+    elif privilege == "adjust_closed_check" and isinstance(claim.get("payments"), list):
+        amount = sum(
+            _parse_optional_number(payment.get("amount")) or 0
+            for payment in claim["payments"] if isinstance(payment, dict)
+        )
+    return company_approval_amount(invoice, amount, frappe) if amount is not None else None
+
+
 @frappe.whitelist(methods=["POST"])
 def authorise(
     pos_profile: str,
@@ -1360,7 +1408,6 @@ def authorise(
     claim_json = _canonical_claim_json(parsed_claim)
     claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
     pct = _parse_optional_number(parsed_claim.get("percent"))
-    amt = _parse_optional_number(parsed_claim.get("amount"))
     pg = cint(parsed_claim.get("privilege_group") or 0)
 
     requester = frappe.session.user
@@ -1410,6 +1457,7 @@ def authorise(
             frappe.PermissionError,
         )
 
+    amt = _claim_approval_amount(reference_doctype, reference_name, profile, privilege, parsed_claim)
     matching_rules = _matching_authorise_rules(
         approver_user, profile, privilege, percent=pct, amount=amt, privilege_group=pg
     )
@@ -1655,6 +1703,8 @@ def consume(
     pos_profile: str,
     reference_name: str,
     claim: dict[str, Any] | str,
+    *,
+    approval_amount: float | None = None,
 ):
     """Atomically consume a single-use approval token bound to session, check, and claim.
 
@@ -1683,7 +1733,9 @@ def consume(
     claim_json = _canonical_claim_json(parsed_claim)
     expected_claim_hash = hashlib.sha256(claim_json.encode("utf-8")).hexdigest()
     pct = _parse_optional_number(parsed_claim.get("percent"))
-    amt = _parse_optional_number(parsed_claim.get("amount"))
+    # Mutation handlers supply the amount computed from locked invoice data.
+    # The canonical claim still uses the original transaction amounts.
+    amt = approval_amount if approval_amount is not None else _parse_optional_number(parsed_claim.get("amount"))
     pg = cint(parsed_claim.get("privilege_group") or 0)
 
     approved, already_consumed = _read_approved_and_consumed(token_hash)

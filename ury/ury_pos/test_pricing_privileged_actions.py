@@ -559,7 +559,7 @@ def _make_override_stub(harness: FakeFrappeHarness):
             return True
         return False
 
-    def consume(token, privilege, pos_profile, reference_name, claim):
+    def consume(token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
         if not token or token in harness.consumed_tokens or token not in harness.tokens:
             raise FakeValidationError("Approval expired or already used [POS-AUTH-EXPIRED]")
         rec = harness.tokens[token]
@@ -867,15 +867,13 @@ class TestPricingPrivilegedActions(unittest.TestCase):
 
     def _import_pricing_actions(self):
         ury_brand = types.ModuleType("ury.brand")
-        ury_brand.coded_message = lambda code, msg: f"[{code}] {msg}"
+        ury_brand.coded_message = lambda code, msg: f"[{code if code.startswith('POS-') else 'POS-' + code}] {msg}"
         ury_api = types.ModuleType("ury.ury_pos.api")
         ury_api.getBranch = lambda: self.h.branch_by_user.get(self.h.frappe.session.user, "Main Branch")
         extra = {
             "frappe": self.h.frappe,
             "frappe.utils": self.h.frappe.utils,
-            "ury": types.ModuleType("ury"),
             "ury.brand": ury_brand,
-            "ury.ury_pos": types.ModuleType("ury.ury_pos"),
             "ury.ury_pos.api": ury_api,
             "ury.ury_pos.override": self.override_stub,
         }

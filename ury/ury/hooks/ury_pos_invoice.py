@@ -478,6 +478,7 @@ def validate_invoice(doc, method):
         orig_branch = before_doc.get("branch")
         if orig_company and orig_pos_profile:
             from ury.ury_pos import override
+            from ury.ury_pos.approval_currency import company_approval_amount
 
             orig_sent = {}
             orig_by_code = {}
@@ -547,7 +548,7 @@ def validate_invoice(doc, method):
                     voided_amount = max(voided_amount, code_voided_amount)
 
                 if sent_reduced:
-                    rounded_amt = round(voided_amount, 4)
+                    approval_amount = company_approval_amount(before_doc, voided_amount, frappe)
                     has_verified_fn = getattr(override, "has_verified_approval", None)
                     has_verified = bool(
                         callable(has_verified_fn)
@@ -557,11 +558,11 @@ def validate_invoice(doc, method):
                         )
                     )
                     may_act = override.may_perform(
-                        frappe.session.user, orig_pos_profile, "void_sent_item", amount=rounded_amt
+                        frappe.session.user, orig_pos_profile, "void_sent_item", amount=approval_amount
                     ) or (
                         not has_full_void
                         and override.may_perform(
-                            frappe.session.user, orig_pos_profile, "reduce_sent_qty", amount=rounded_amt
+                            frappe.session.user, orig_pos_profile, "reduce_sent_qty", amount=approval_amount
                         )
                     )
                     if not has_verified and not may_act:
