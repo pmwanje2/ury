@@ -548,6 +548,10 @@ class DiscountBase(unittest.TestCase):
                 ),
             )
         )
+        from ury.ury_pos import outlet_context
+
+        self.enterContext(patch.object(outlet_context, "frappe", self.frappe))
+        self.enterContext(patch.object(outlet_context, "_", self.frappe._))
         self.frappe.db.sql.side_effect = self._db_sql
         self.pos_reasons = []
         self.roles_by_user = {
@@ -862,6 +866,13 @@ class DiscountBase(unittest.TestCase):
                 if u not in ("Administrator", "Guest")
             ]
             return [r.get(pluck) for r in rows] if pluck else rows
+        if doctype == "POS Profile":
+            return [self.profile] if self.profile.disabled == filters.get("disabled", 0) else []
+        if doctype == "POS Profile User":
+            return [
+                Row(parent=self.profile.name, user=row.user)
+                for row in self.profile.applicable_for_users
+            ]
         if doctype == "POS Invoice":
             out = []
             for (dt, _), doc in self.docs.items():
