@@ -8,7 +8,6 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "seat_no",
   "item",
   "item_name",
   "quantity",
@@ -25,13 +24,6 @@
   "modifier_summary"
  ],
  "fields": [
-  {
-   "fieldname": "seat_no",
-   "fieldtype": "Int",
-   "label": "Seat Number",
-   "default": "0",
-   "non_negative": 1
-  },
   {
    "fieldname": "item",
    "fieldtype": "Link",
@@ -85,7 +77,9 @@
   {
    "fieldname": "seat_no",
    "fieldtype": "Int",
-   "label": "Seat",
+   "label": "Seat Number",
+   "default": "0",
+   "non_negative": 1,
    "read_only": 1
   },
   {

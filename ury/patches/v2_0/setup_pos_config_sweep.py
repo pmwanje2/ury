@@ -18,6 +18,11 @@ POS_COVERS_FIELD = {
     "default": "1",
 }
 
+LEGACY_COVERS_FIELD = {
+    "fieldname": "custom_legacy_covers", "fieldtype": "Small Text", "label": "Original Covers",
+    "insert_after": "no_of_pax", "hidden": 1, "read_only": 1, "no_copy": 1, "translatable": 0,
+}
+
 PIN_LABELS = {
     "min_length": "Minimum Floor PIN Length",
     "max_length": "Maximum Floor PIN Length",
@@ -37,10 +42,7 @@ def _convert_legacy_covers():
 
     # Preserve the exact original text in a hidden, off-row field before converting.
     # Historical values with no exact Int representation remain available for audit.
-    create_custom_fields({"POS Invoice": [{
-        "fieldname": "custom_legacy_covers", "fieldtype": "Small Text", "label": "Original Covers",
-        "insert_after": "no_of_pax", "hidden": 1, "read_only": 1, "no_copy": 1, "translatable": 0,
-    }]})
+    create_custom_fields({"POS Invoice": [LEGACY_COVERS_FIELD]})
     frappe.db.sql("""
         UPDATE `tabPOS Invoice`
         SET custom_legacy_covers = no_of_pax

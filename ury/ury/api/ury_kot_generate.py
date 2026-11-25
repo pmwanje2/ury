@@ -125,7 +125,7 @@ def _line_keyed_items(items):
         if key not in result:
             result[key] = {
                 "reservation_line_key": key,
-                "raw_line_key": row.get("reservation_line_key") or None,
+                "raw_line_key": row.get("reservation_line_key") or row.get("raw_line_key"),
                 "item_code": item_code,
                 "item_name": row.get("item_name"),
                 "qty": 0,

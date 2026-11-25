@@ -5,6 +5,8 @@ import json
 from erpnext.controllers.taxes_and_totals import calculate_taxes_and_totals
 from erpnext.stock.get_item_details import NOT_APPLICABLE_TAX
 
+from ury.ury_pos.split_balances import fixed_fee_shares
+
 
 class ScopedSplitTaxes(calculate_taxes_and_totals):
     def update_item_tax_map(self):
@@ -31,6 +33,18 @@ class ScopedSplitTaxes(calculate_taxes_and_totals):
         if key in item_tax_map:
             return super()._get_tax_rate(tax, {tax.account_head: item_tax_map[key]})
         return super()._get_tax_rate(tax, item_tax_map)
+
+    def get_current_tax_and_net_amount(self, item, tax, item_tax_map):
+        shares = fixed_fee_shares(self.doc, tax)
+        if shares is None:
+            return super().get_current_tax_and_net_amount(item, tax, item_tax_map)
+        key = item.get("custom_origin_invoice_item") or item.name
+        if key not in shares:
+            return 0, 0
+        fee = shares[key]
+        if not tax.get("dont_recompute_tax"):
+            self.set_item_wise_tax(item, tax, self._get_tax_rate(tax, item_tax_map), fee, item.net_amount)
+        return item.net_amount, fee
 
     def calculate(self, *args, **kwargs):
         try:

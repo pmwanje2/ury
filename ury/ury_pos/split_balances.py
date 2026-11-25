@@ -90,7 +90,9 @@ def _fixed_tax_weights(item_names, source_rows, amount):
     return [Decimal(0)] * (len(nets) - 1) + [_decimal(amount)] if nets else []
 
 
-def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_places, base_places, previous):
+def _tax_detail_allocations(
+    tax, details, source_rows, exchange_rate, currency_places, base_places, previous, fixed_fees=None,
+):
     """Recover transaction detail from native company-currency detail and the tax row."""
     sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
     txn_tax = tax.get("tax_amount_after_discount_amount")
@@ -111,7 +113,11 @@ def _tax_detail_allocations(tax, details, source_rows, exchange_rate, currency_p
         if not sum(txn_weights):
             txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
     elif charge_type == "Actual":
-        txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
+        if fixed_fees is None:
+            txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
+        else:
+            txn_weights = [_decimal(fixed_fees.get(source_rows[name].get("custom_origin_invoice_item") or name))
+                           for name in item_names]
     elif charge_type == "On Item Quantity":
         txn_weights = [_decimal(source_rows[name].get("qty")) * _decimal(detail.get("rate"))
                        for name, detail in zip(item_names, details, strict=True)]
@@ -322,6 +328,7 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
             details, unrounded = _tax_detail_allocations(
                 tax, details_by_tax.get(id(tax) if pending_details else tax.get("name"), ()),
                 rows_by_name, exchange_rate, currency_places, base_places, basis,
+                fixed_fee_shares(check, tax) if repricing else None,
             )
         else:
             sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
@@ -451,12 +458,26 @@ def _repricing_split_discount(doc):
     return getattr(getattr(doc, "flags", None), "ury_split_discount_reprice", None) is _DISCOUNT_REPRICE
 
 
+def fixed_fee_shares(check, tax):
+    """Use saved shares while the native charge still has its allocated amount."""
+    allocation = (check.flags.ury_split_fixed_fees or {}).get(id(tax))
+    if allocation and allocation[0] == flt(tax.get("tax_amount")):
+        return allocation[1]
+    return None
+
+
 def _restore_tax_pricing(check, snapshot):
     if not snapshot["taxes"]:
         return
     live = list(check.get("taxes") or ())
     tax_rows = []
     scopes = {}
+    fixed_fees = {}
+    fee_amounts = {}
+    for detail in snapshot["details"]:
+        amounts = fee_amounts.setdefault(detail["tax"], {})
+        key = detail["item"]
+        amounts[key] = amounts.get(key, Decimal(0)) + _decimal(detail["amount"])
     detail_rates = _item_rates_by_tax(snapshot)
     rules = _saved_tax_pricing_rules(check, snapshot)
     for index, (saved, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
@@ -467,6 +488,14 @@ def _restore_tax_pricing(check, snapshot):
         rates = saved.get("item_rates", detail_rates.get(index))
         if rule.get("charge_type") in _ITEM_RATE_CHARGES and rates is not None:
             scopes[len(tax_rows)] = rates
+        elif rule.get("charge_type") == "Actual" and index in fee_amounts:
+            sign = -1 if saved.get("add_deduct_tax") == "Deduct" else 1
+            shares = fee_amounts[index]
+            total = _decimal(saved.get("tax_amount"))
+            if sum(shares.values()) == sign * total:
+                position = len(tax_rows)
+                fixed_fees[position] = (float(total), {key: float(sign * value) for key, value in shares.items()})
+                scopes[position] = detail_rates[index]
         tax_rows.append({
             **values, **saved,
             "charge_type": "Actual", "row_id": None, "included_in_print_rate": 0, "dont_recompute_tax": 0,
@@ -474,6 +503,7 @@ def _restore_tax_pricing(check, snapshot):
         })
     check.set("taxes", tax_rows + [row for row in live if row.get("custom_pos_charge_kind") == "Charged Tip"])
     check.flags.ury_split_tax_scopes = {id(check.taxes[index]): rates for index, rates in scopes.items()}
+    check.flags.ury_split_fixed_fees = {id(check.taxes[i]): allocation for i, allocation in fixed_fees.items()}
     # The restored rows have new object identities. Native pricing rebuilds the per-item details.
     check._item_wise_tax_details = []
 
@@ -499,6 +529,7 @@ def reprice_split_discount(checks, *, precisions=None):
         for doc, _ in active:
             doc.flags.ury_split_discount_reprice = None
             doc.flags.ury_split_tax_scopes = None
+            doc.flags.ury_split_fixed_fees = None
 
 
 def _item_rates_by_tax(snapshot):
@@ -506,6 +537,29 @@ def _item_rates_by_tax(snapshot):
     for detail in snapshot["details"]:
         rates.setdefault(detail["tax"], {})[detail["item"]] = detail["rate"]
     return rates
+
+
+def _original_fee_details(index, tax, items, applicable, currency_places, base_places):
+    """Recover missing Actual breakup on its original check, before other items join."""
+    if not applicable:
+        return []
+    weights = _fixed_tax_weights(applicable, items, 1)
+    sign = -1 if tax.get("add_deduct_tax") == "Deduct" else 1
+    running = Decimal(0)
+    previous = {"amount": 0, "base_amount": 0}
+    details = []
+    for key, weight in zip(applicable, weights, strict=True):
+        running += weight
+        detail = {"item": key, "tax": index, "rate": flt(tax.get("rate"))}
+        for prefix, places in (("", currency_places), ("base_", base_places)):
+            field = prefix + "amount"
+            total = sign * _units(tax.get(prefix + "tax_amount"), places)
+            cumulative = int((running * total).to_integral_value(rounding=ROUND_HALF_UP))
+            detail[field] = _amount(cumulative - previous[field], places)
+            previous[field] = cumulative
+            detail[prefix + "taxable_amount"] = float(sign * _net(items[key], base=bool(prefix)))
+        details.append(detail)
+    return details
 
 
 def combine_split_balances(checks, currency_places, base_places):
@@ -544,6 +598,7 @@ def combine_split_balances(checks, currency_places, base_places):
         add_amounts(combined["header"], snapshot["header"], HEADER_AMOUNTS)
 
         detail_rates = _item_rates_by_tax(snapshot)
+        details = list(snapshot["details"])
         tax_indexes = {}
         rules = _saved_tax_pricing_rules(doc, snapshot)
         for index, (tax, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
@@ -559,6 +614,16 @@ def combine_split_balances(checks, currency_places, base_places):
             target_index = tax_indexes[index] = taxes_by_account[identity]
             target = combined["taxes"][target_index]
             add_amounts(target, tax, TAX_AMOUNTS)
+            if rule.get("charge_type") == "Actual" and index not in detail_rates:
+                applicable = []
+                for row in doc.items:
+                    key = origins[row.name] if has_saved else row.name
+                    rates = json.loads(row.get("item_tax_rate") or "{}")
+                    if key in snapshot["items"] and rates.get(tax.get("account_head")) != "N/A":
+                        applicable.append(key)
+                details.extend(_original_fee_details(
+                    index, tax, snapshot["items"], applicable, currency_places, base_places,
+                ))
             if rule.get("charge_type") in _ITEM_RATE_CHARGES:
                 rates = tax.get("item_rates", detail_rates.get(index))
                 if rates is None:
@@ -568,7 +633,7 @@ def combine_split_balances(checks, currency_places, base_places):
                     key if has_saved else origins[key]: rate for key, rate in rates.items()
                     if key in snapshot["items"]
                 })
-        for detail in snapshot["details"]:
+        for detail in details:
             key = detail["item"] if has_saved else origins[detail["item"]]
             index = tax_indexes[detail["tax"]]
             identity = (key, index, detail["rate"])

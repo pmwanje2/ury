@@ -3780,6 +3780,8 @@ def _kitchen_snapshot(items):
         if key:
             row["reservation_line_key"] = key
         else:
+            # Keep the saved row for course validation without changing its legacy kitchen identity.
+            row["raw_line_key"] = item.get("name")
             legacy[code, note, course, seat] = row
         rows.append(row)
     return rows
