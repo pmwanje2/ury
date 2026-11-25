@@ -36,6 +36,9 @@ export interface POSClosingPayment {
   mode_of_payment: string;
   amount: number;
   account: string;
+  custom_tender_currency?: string | null;
+  custom_tender_amount?: number | null;
+  custom_exchange_rate?: number | null;
 }
 
 /**
@@ -76,6 +79,11 @@ export interface ClosingPaymentSummary {
   expected_amount: number;
   closing_amount: number;
   difference: number;
+  custom_tender_currency?: string | null;
+  custom_expected_foreign_amount?: number;
+  custom_closing_foreign_amount?: number;
+  custom_foreign_difference?: number;
+  effective_exchange_rate?: number;
 }
 
 /**

@@ -38,7 +38,15 @@ type Bill = {
   waiter?: string;
   items: { name?: string; item_code?: string; item_name: string; qty: number; rate?: number; amount: number }[];
   taxes: { description: string; tax_amount: number }[];
-  payments: { mode_of_payment: string; amount: number }[];
+  payments: {
+    mode_of_payment: string;
+    amount: number;
+    reference_no?: string | null;
+    reference_date?: string | null;
+    custom_tender_currency?: string | null;
+    custom_tender_amount?: number | null;
+    custom_exchange_rate?: number | null;
+  }[];
 };
 
 const filters = {
@@ -302,8 +310,23 @@ export default function SettledBills() {
           {bill.payments
             .filter((p) => p.amount !== 0)
             .map((r, i) => (
-              <p key={i}>
-                <span>{r.mode_of_payment}</span>: {bill.currency} {r.amount}
+              <p key={i} className="text-sm">
+                <span className="font-medium">{r.mode_of_payment}</span>:{' '}
+                {r.custom_tender_currency && r.custom_tender_amount ? (
+                  <span>
+                    {r.custom_tender_currency} {r.custom_tender_amount}
+                    {r.custom_exchange_rate ? ` @ ${r.custom_exchange_rate}` : ''} ={' '}
+                  </span>
+                ) : null}
+                <span>
+                  {bill.currency} {r.amount}
+                </span>
+                {r.reference_no ? (
+                  <span className="ms-2 text-xs text-gray-600">
+                    · Ref: {r.reference_no}
+                    {r.reference_date ? ` (${r.reference_date})` : ''}
+                  </span>
+                ) : null}
               </p>
             ))}
           <p>

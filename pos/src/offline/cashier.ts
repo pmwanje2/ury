@@ -1,7 +1,21 @@
 import { clearAppStorage, logout, purgeOfflineSession } from '@ury/core';
 import { t } from '../i18n';
 import { v4 as uuid } from 'uuid';
-import { OfflineOutbox, canCaptureOffline, offlineTolerance, openTableRow, resolveOfflineModeConfig, withEmptyOutbox, purgeEmptyOutbox, type OfflineProfile, type OfflineUser, type OfflineOrder, type OfflineEntry, type OfflineSettlement } from './outbox';
+import {
+  OfflineOutbox,
+  canCaptureOfflineOrder,
+  canSettleOffline,
+  offlineTolerance,
+  openTableRow,
+  resolveOfflineModeConfig,
+  withEmptyOutbox,
+  purgeEmptyOutbox,
+  type OfflineProfile,
+  type OfflineUser,
+  type OfflineOrder,
+  type OfflineEntry,
+  type OfflineSettlement,
+} from './outbox';
 import { gatewayStatusOf } from './gateway';
 import { readOpenTableCheck } from './open-table-checks';
 import { triggerPostReplayFiscalPrint } from '../lib/efris-print';
@@ -72,7 +86,7 @@ export async function submitOrderOfflineAware<T>({ profile, user, order, total, 
   }
   // The id goes out on the live write. A free table keeps that id if the
   // gateway drops the ack. An occupied table reuses its open check id.
-  const queueable = canCaptureOffline(profile, user) && !order.invoice && !order.last_invoice;
+  const queueable = canCaptureOfflineOrder(profile, user, order.order_type) && !order.invoice && !order.last_invoice;
   const occupied = queueable && order.table ? await openClientForTable(queue, user.name, order.table) : undefined;
   const ids = queueable ? { clientOrderId: occupied || uuid(), roundId: uuid() } : undefined;
   try {
@@ -107,10 +121,10 @@ export function resolveOfflineTender(
 }
 
 export async function submitSettlementOfflineAware<T>({ profile, user, invoice, customer, table, cashier, owner,
-  clientOrderId, amount, due, modeOfPayment, reference, roomNumber, discount, tip, orderType, onlineSettle }: {
+  clientOrderId, amount, due, modeOfPayment, reference, referenceDate, roomNumber, discount, tip, orderType, onlineSettle }: {
   profile: OfflineProfile; user: OfflineUser; invoice: string; customer?: string; table?: string | null;
   cashier?: string; owner?: string; clientOrderId?: string | null; amount: number; due: number; modeOfPayment: string;
-  reference?: string; roomNumber?: string; discount?: number; tip?: number; orderType?: string;
+  reference?: string; referenceDate?: string; roomNumber?: string; discount?: number; tip?: number; orderType?: string;
   onlineSettle: (ids?: { clientOrderId: string; roundId: string }) => Promise<T>;
 }) {
   const queue = cashierOutbox(profile, user);
@@ -125,7 +139,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
       .payment_mode_meta?.[modeOfPayment]?.halo_max_amount,
   ) || 0;
   const exceedsHalo = haloLimit > 0 && amount > haloLimit + 1e-6;
-  const queueable = !!kind && paidInFull && canCaptureOffline(profile, user) && !(discount && discount > 0)
+  const queueable = !!kind && paidInFull && canSettleOffline(profile, user) && !(discount && discount > 0)
     && !(tip && tip > 0) && !exceedsHalo;
   if (!queueable) return { offline: false as const, response: await onlineSettle() };
   const existing = clientOrderId
@@ -143,6 +157,7 @@ export async function submitSettlementOfflineAware<T>({ profile, user, invoice, 
     const cleanedRoom = roomNumber?.trim() || undefined;
     const settlement: OfflineSettlement = {
       kind: kind!, mode_of_payment: modeOfPayment, amount, reference,
+      ...(referenceDate ? { reference_date: referenceDate } : {}),
       ...(cleanedRoom ? { room_number: cleanedRoom } : {}),
     };
     if (existing && !existing.settlement && !existing.next_round) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ury/core';
 import SplitInvoiceDetails from '../components/SplitInvoiceDetails';
 import { getPOSInvoiceItems, getSplitGroup, type POSInvoiceItem } from '../../lib/invoice-api';
@@ -22,9 +22,57 @@ import {
 } from '../lib/captain-table-api';
 import { useOpenServiceRequestTables } from '../../components/ServiceRequestAlert';
 import { floorSignOut } from '../../lib/floor-session';
+import { useRootStore } from '../../store/root-store';
+import { useOutbox } from '../../offline/use-outbox';
+import { createOfflinePeerSync, type OfflinePeerTableSummary } from '../../offline/peer-sync';
 import CaptainTableCard, {
   type CaptainTableOwnership,
 } from '../components/CaptainTableCard';
+
+const CAPTAIN_ROOMS_CACHE_PREFIX = 'ury_captain_rooms_cache:';
+const CAPTAIN_TABLES_CACHE_PREFIX = 'ury_captain_tables_cache:';
+
+function readCachedRooms(branchName: string): Room[] {
+  if (typeof localStorage === 'undefined' || !branchName) return [];
+  try {
+    const raw = localStorage.getItem(`${CAPTAIN_ROOMS_CACHE_PREFIX}${branchName}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Room[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedRooms(branchName: string, roomsList: Room[]): void {
+  if (typeof localStorage === 'undefined' || !branchName) return;
+  try {
+    localStorage.setItem(`${CAPTAIN_ROOMS_CACHE_PREFIX}${branchName}`, JSON.stringify(roomsList));
+  } catch {
+    // Ignore storage quota errors.
+  }
+}
+
+function readCachedTables(roomName: string): Table[] | null {
+  if (typeof localStorage === 'undefined' || !roomName) return null;
+  try {
+    const raw = localStorage.getItem(`${CAPTAIN_TABLES_CACHE_PREFIX}${roomName}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Table[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedTables(roomName: string, tableList: Table[]): void {
+  if (typeof localStorage === 'undefined' || !roomName) return;
+  try {
+    localStorage.setItem(`${CAPTAIN_TABLES_CACHE_PREFIX}${roomName}`, JSON.stringify(tableList));
+  } catch {
+    // Ignore storage quota errors.
+  }
+}
 
 /**
  * Captain "Tables" home screen (`/order`). See PLAN.md §5/§6 for the
@@ -44,9 +92,43 @@ export default function CaptainTables() {
     error: contextError,
   } = useCaptainContext();
 
-  const tillCurrency = usePOSStore((s) => s.posProfile?.currency || s.currency);
+  const posProfile = usePOSStore((s) => s.posProfile);
+  const tillCurrency = posProfile?.currency || usePOSStore((s) => s.currency);
+  const rootUser = useRootStore((s) => s.user);
+  const { rows: outboxRows, offline: outboxOffline } = useOutbox(posProfile, rootUser, true);
+  const isOffline = outboxOffline || (typeof navigator !== 'undefined' && navigator.onLine === false);
+  const [peerPendingTables, setPeerPendingTables] = useState<OfflinePeerTableSummary[]>([]);
   const currentUser = context?.user ?? null;
   const canAccessOtherCaptainsTables = Boolean(capabilities?.canAccessOtherCaptainsTables);
+
+  useEffect(() => {
+    if (!branch || !posProfile?.name || !posProfile.ury_offline_capture) return;
+    const sync = createOfflinePeerSync({
+      branch,
+      posProfile: posProfile.name,
+      relayUrl: posProfile.custom_offline_peer_relay_url,
+      onPeerUpdate: (msg) => {
+        if (msg.type === 'outbox_snapshot') {
+          setPeerPendingTables(msg.pendingTables || []);
+        } else if (msg.type === 'outbox_cleared') {
+          setPeerPendingTables([]);
+        }
+      },
+    });
+    void sync.pollRelay();
+    return () => sync.close();
+  }, [branch, posProfile?.name, posProfile?.ury_offline_capture, posProfile?.custom_offline_peer_relay_url]);
+
+  const queuedOfflineCount = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of outboxRows) {
+      if (row.state === 'pending') ids.add(row.client_order_id);
+    }
+    for (const peer of peerPendingTables) {
+      if (peer.clientOrderId) ids.add(peer.clientOrderId);
+    }
+    return ids.size;
+  }, [outboxRows, peerPendingTables]);
 
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
   const [branchRooms, setBranchRooms] = useState<Room[]>([]);
@@ -71,6 +153,9 @@ export default function CaptainTables() {
   // assignment, since room-level restriction (if any) is enforced
   // server-side (captain_transfer's room-match, table_transfer's branch
   // check), not by hiding rooms from the picker.
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
+
   useEffect(() => {
     if (!branch) return;
     let cancelled = false;
@@ -78,10 +163,19 @@ export default function CaptainTables() {
     getRooms(branch)
       .then((fetched) => {
         if (cancelled) return;
+        saveCachedRooms(branch, fetched);
         setBranchRooms(fetched);
       })
       .catch(() => {
-        if (!cancelled) setBranchRooms([]);
+        if (cancelled) return;
+        const cached = readCachedRooms(branch);
+        if (cached.length > 0) {
+          setBranchRooms(cached);
+        } else if (roomsRef.current.some((r) => r.name)) {
+          setBranchRooms(roomsRef.current.filter((r) => r.name));
+        } else {
+          setBranchRooms([]);
+        }
       })
       .finally(() => {
         if (!cancelled) setRoomsLoading(false);
@@ -106,17 +200,26 @@ export default function CaptainTables() {
     setTablesError(null);
     try {
       const fetchedTables = await getTables(roomName);
-      setTables(sortTablesByMergeGroups(fetchedTables));
+      const sorted = sortTablesByMergeGroups(fetchedTables);
+      saveCachedTables(roomName, sorted);
+      setTables(sorted);
     } catch (err) {
-      console.error(err);
-      setTablesError('Failed to load tables');
-      setTables([]);
+      const cached = readCachedTables(roomName);
+      if (cached) {
+        setTables(sortTablesByMergeGroups(cached));
+        setTablesError(null);
+      } else {
+        console.error(err);
+        setTablesError('Failed to load tables');
+        setTables([]);
+      }
     } finally {
       setTablesLoading(false);
     }
   }, []);
 
   const loadActiveOrders = useCallback(async (branchName: string) => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const orders = await getActiveTableOrders(branchName);
       setActiveOrders(orders);
@@ -127,17 +230,31 @@ export default function CaptainTables() {
     } catch (err) {
       // Non-fatal: table grid still renders with occupied/free state from
       // the bulk table list, just without waiter/total annotations.
-      console.error('Failed to load active table orders', err);
+      const isOfflineErr =
+        (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+        Boolean((err as { ury_network_failure?: boolean })?.ury_network_failure);
+      if (!isOfflineErr) {
+        console.error('Failed to load active table orders', err);
+      }
     }
   }, []);
 
   const loadBookings = useCallback(async (branchName: string) => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setBookings(new Map());
+      return;
+    }
     try {
       setBookings(await getUpcomingBookings(branchName));
     } catch (err) {
       // Advisory only: a booking read must never prevent seating.
       setBookings(new Map());
-      console.error('Failed to load table bookings', err);
+      const isOfflineErr =
+        (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+        Boolean((err as { ury_network_failure?: boolean })?.ury_network_failure);
+      if (!isOfflineErr) {
+        console.error('Failed to load table bookings', err);
+      }
     }
   }, []);
 
@@ -337,8 +454,26 @@ export default function CaptainTables() {
   return (
     <div className="flex min-h-screen flex-col bg-gray-50">
       <div className="sticky top-0 z-10 border-b border-border bg-white p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-bold text-gray-900">{t('captain.tables')}</h1>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-lg font-bold text-gray-900">{t('captain.tables')}</h1>
+            {isOffline && (
+              <span
+                data-testid="captain-offline-pill"
+                className="inline-flex items-center rounded-full bg-amber-100 border border-amber-300 px-2.5 py-0.5 text-xs font-medium text-amber-900"
+              >
+                {t('offline.waiter_offline_pill')}
+              </span>
+            )}
+            {queuedOfflineCount > 0 && (
+              <span
+                data-testid="captain-queued-badge"
+                className="inline-flex items-center rounded-full bg-amber-600 px-2.5 py-0.5 text-xs font-semibold text-white"
+              >
+                {t('offline.waiter_queued_badge', { count: queuedOfflineCount })}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={refresh}>
               {t('common.refresh')}

@@ -18,6 +18,7 @@ from ury.brand import coded_message
 from ury.ury.hooks.ury_cash_movement import (
 	LEAVES_DRAWER,
 	_drawer_accounts,
+	_is_fx_mode,
 	_mode_account,
 	build_movement_je_accounts,
 	line_amount_in_profile_currency,
@@ -463,9 +464,16 @@ def get_shift_cash_movement_totals(pos_opening_entry):
 	_check_profile_access(profile)
 
 	precision = frappe.get_precision("POS Closing Entry Detail", "expected_amount") or 2
+	till_curr = (
+		profile.get("currency")
+		or frappe.get_cached_value("Company", opening.company, "default_currency")
+		or ""
+	).strip().upper()
 	cash_modes_by_account = {}
 	for row in profile.get("payments") or []:
 		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") == "Cash":
+			if _is_fx_mode(row.mode_of_payment, till_curr):
+				continue
 			account = _mode_account(row.mode_of_payment, opening.company, required=False)
 			if account:
 				cash_modes_by_account.setdefault(account, []).append(row.mode_of_payment)

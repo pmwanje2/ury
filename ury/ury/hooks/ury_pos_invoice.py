@@ -49,6 +49,7 @@ def validate(doc, method):
     validate_customer(doc, method)
     validate_price_list(doc, method)
     validate_server_only_tender_received(doc, method)
+    validate_payment_references_and_fx(doc, method, require_mandatory=False)
     validate_server_only_override_fields(doc, method)
     validate_pos_discount(doc, method)
     set_commission_attribution(doc, method)
@@ -66,11 +67,49 @@ def before_submit(doc, method):
     calculate_and_set_times(doc, method)
     validate_invoice_print(doc, method)
     validate_confirmed_phone_payments(doc, method)
+    validate_payment_references_and_fx(doc, method, require_mandatory=True)
     validate_offline_tenders_before_submit(doc, method)
     validate_credit_and_room_charge_before_submit(doc, method)
     ro_reload_submit(doc, method)
     set_commission_attribution(doc, method)
     apply_disposable_items(doc, method)
+
+
+def validate_payment_references_and_fx(doc, method=None, require_mandatory=False):
+    """Enforce config-driven G25 payment reference rules, G22 FX rate & #147 override
+    integrity, and guarantee a 0-amount local Cash change row when foreign currency
+    tender creates local change.
+    """
+    from ury.ury_pos.fx import (
+        ensure_local_change_payment_row,
+        validate_invoice_fx_payments,
+        validate_payment_reference,
+    )
+
+    for row in doc.get("payments") or []:
+        mode = row.get("mode_of_payment")
+        if not mode:
+            continue
+        amt = flt(row.get("amount"))
+        fx_amt = flt(row.get("custom_tender_amount"))
+        ref_no = (row.get("reference_no") or "").strip()
+        if abs(amt) <= 0 and abs(fx_amt) <= 0:
+            continue
+        if require_mandatory or ref_no:
+            normalized = validate_payment_reference(
+                mode,
+                reference_no=row.get("reference_no"),
+                reference_date=row.get("reference_date"),
+            )
+            if normalized["reference_no"]:
+                row.reference_no = normalized["reference_no"]
+            if normalized["reference_date"]:
+                row.reference_date = normalized["reference_date"]
+
+    validate_invoice_fx_payments(doc)
+
+    if require_mandatory and flt(doc.get("change_amount")) > 0 and not doc.get("is_return"):
+        ensure_local_change_payment_row(doc)
 
 
 def on_trash(doc, method):

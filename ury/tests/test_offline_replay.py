@@ -309,3 +309,124 @@ class TestOfflineReplay(IntegrationTestCase):
         self.assertEqual(kot.order_status, "Ready For Prepare")
         self.assertTrue(any(str(call.args[0]).startswith("kot_update_")
                             for call in realtime_output.call_args_list))
+
+    def test_cross_waiter_employee_user_permission_merge_rounds_creates_kot(self):
+        """Hydrogen R3 P1 regression: two Employee-linked Captains (each restricted by
+        ERPNext Employee User Permission) colliding under Merge Rounds must merge the
+        round AND create the KOT without failing has_permission on Captain #1's invoice."""
+        from ury.ury.api.ury_kot_generate import kot_execute
+
+        frappe.set_user("Administrator")
+        suffix = frappe.generate_hash(length=6)
+        frappe.db.set_value(
+            "POS Profile",
+            self.pos.profile.name,
+            "custom_offline_collision_policy",
+            "Merge Rounds",
+        )
+        # Create second floor Captain in same Branch & POS Profile (non-billing waiter role)
+        captain2 = frappe.get_doc({
+            "doctype": "User",
+            "email": f"offline-cap2-{suffix}@example.com",
+            "first_name": "Offline Captain Two",
+            "send_welcome_email": 0,
+        }).insert()
+        captain2.add_roles("URY Captain")
+        self.pos.user.add_roles("URY Captain")
+
+        branch_doc = frappe.get_doc("Branch", self.pos.branch.name)
+        branch_doc.append("user", {"user": captain2.name})
+        branch_doc.save(ignore_permissions=True)
+
+        profile_doc = frappe.get_doc("POS Profile", self.pos.profile.name)
+        profile_doc.append("applicable_for_users", {"user": captain2.name})
+        profile_doc.save(ignore_permissions=True)
+
+        # Link distinct ERPNext Employee records (auto-creates Employee User Permissions)
+        for gender in ("Female", "Male"):
+            if not frappe.db.exists("Gender", gender):
+                frappe.get_doc({"doctype": "Gender", "gender": gender}).insert(ignore_permissions=True)
+        emp1 = frappe.get_doc({
+            "doctype": "Employee",
+            "first_name": "CapOne",
+            "gender": "Female",
+            "date_of_birth": "1990-01-01",
+            "date_of_joining": "2020-01-01",
+            "company": self.pos.profile.company,
+            "user_id": self.pos.user.name,
+            "create_user_permission": 1,
+        }).insert(ignore_permissions=True)
+        emp2 = frappe.get_doc({
+            "doctype": "Employee",
+            "first_name": "CapTwo",
+            "gender": "Male",
+            "date_of_birth": "1991-01-01",
+            "date_of_joining": "2020-01-01",
+            "company": self.pos.profile.company,
+            "user_id": captain2.name,
+            "create_user_permission": 1,
+        }).insert(ignore_permissions=True)
+
+        # Create a Dine In table on the branch/restaurant
+        table = frappe.get_doc({
+            "doctype": "URY Table",
+            "__newname": f"Offline-T-{suffix}",
+            "branch": self.pos.branch.name,
+            "restaurant": self.pos.restaurant.name,
+            "restaurant_room": self.pos.room.name,
+            "is_take_away": 0,
+        }).insert(ignore_permissions=True)
+
+        # Captain #1 opens table check (stamps custom_waiter_employee = emp1.name)
+        frappe.set_user(self.pos.user.name)
+        first = send_order(
+            self.pos,
+            client_order_id=str(uuid4()),
+            round_id="r1-cap1",
+            table=table.name,
+            order_type="Dine In",
+            no_of_pax=2,
+        )
+        if hasattr(first, "custom_waiter_employee"):
+            frappe.db.set_value("POS Invoice", first.name, "custom_waiter_employee", emp1.name)
+
+        # Captain #2 (with Employee User Permission for emp2 only) sends an offline order on same table
+        frappe.set_user(captain2.name)
+        self.assertFalse(
+            frappe.has_permission("POS Invoice", "write", doc=frappe.get_doc("POS Invoice", first.name)),
+            "Setup check: Captain #2 must lack direct write permission on Captain #1's Employee-scoped invoice",
+        )
+        # Direct whitelisted kot_execute by Captain #2 must still be rejected with PermissionError
+        item_row = {"item": self.pos.item.name, "item_name": "Offline Tea", "qty": 2}
+        with self.assertRaises(frappe.PermissionError):
+            frappe.call(
+                kot_execute,
+                invoice_id=first.name,
+                customer=self.pos.customer.name,
+                restaurant_table=table.name,
+                current_items=[item_row],
+                previous_items=[dict(item_row, qty=1)],
+            )
+        round2_id = f"r2-{suffix}"
+        merged = send_order(
+            self.pos,
+            items=[{"item": self.pos.item.name, "item_name": "Offline Tea", "qty": 1}],
+            cashier=self.pos.user.name,
+            owner=captain2.name,
+            waiter=captain2.name,
+            last_invoice=None,
+            table=table.name,
+            order_type="Dine In",
+            no_of_pax=2,
+            client_order_id=str(uuid4()),
+            round_id=round2_id,
+            captured_at=str(now_datetime() - timedelta(seconds=1)),
+            offline_printed=0,
+        )
+        frappe.set_user("Administrator")
+        self.assertEqual(merged.name, first.name)
+        reloaded = frappe.get_doc("POS Invoice", first.name)
+        self.assertEqual(sum(row.qty for row in reloaded.items), 2)
+        self.assertIn(round2_id, str(reloaded.get("ury_last_round_id") or ""))
+        self.assertEqual(frappe.db.count("URY KOT", {"invoice": first.name, "docstatus": 1}), 2)
+        self.assertNotEqual(emp1.name, emp2.name)
