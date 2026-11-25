@@ -16,7 +16,7 @@ def _ledger(invoice):
         return {}
     try:
         value = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return {}
     if not isinstance(value, dict):
         return {}
@@ -32,7 +32,55 @@ def round_ledger(invoice):
 
 def ticket_ownership(invoice):
     ledger = _ledger(invoice)
-    return ledger.get("ticket_ownership", {}) if isinstance(ledger.get("applied_rounds"), dict) else {}
+    owners = ledger.get("ticket_ownership")
+    return owners if isinstance(ledger.get("applied_rounds"), dict) and isinstance(owners, dict) else {}
+
+
+# The ticket expression is always a fixed SQL identifier supplied by the caller.
+WHOLE_COMPENSATION = """EXISTS (SELECT 1 FROM `tabURY KOT` c
+    WHERE c.docstatus = 1 AND c.type = 'Cancelled'
+      AND FIND_IN_SET({ticket}, REPLACE(c.original_kot, ', ', ',')))"""
+
+
+def ticket_owner_query(frappe, query, filters=None, *, invoices=None):
+    """Bind the ledger receipts as query data. No tenant-specific SQL objects are needed.
+
+    Unscoped reports read only ledgers containing transfers. A scoped lookup also
+    needs to suppress locally issued tickets that the requested checks handed away.
+    Only the final receiver has a boolean receipt; a forwarding string is not a receipt.
+    """
+    params = dict(filters or {})
+    read = "SELECT name, ury_applied_rounds FROM `tabPOS Invoice` WHERE ury_applied_rounds LIKE %(marker)s"
+    lookup = {"marker": '%"ticket_ownership"%'}
+    if invoices is not None:
+        read += " AND name IN %(checks)s"
+        lookup["checks"] = tuple(invoices)
+    receipts = {}
+    for row in frappe.db.sql(read, lookup, as_dict=True):
+        for ticket, binding in ticket_ownership(row).items():
+            if binding is True:
+                receipts[ticket] = row.name
+            elif invoices is not None and isinstance(binding, str):
+                receipts.setdefault(ticket, None)
+    params["kitchen_receipts"] = json.dumps(list(receipts.items()), separators=(",", ":"))
+    # JSON_TABLE sees only Python-encoded data, including for legacy/malformed ledgers.
+    relation = """(SELECT k.name AS ticket,
+            CASE WHEN r.ticket IS NULL THEN k.invoice ELSE r.invoice END AS invoice,
+            {cancelled} AS wholly_cancelled
+        FROM `tabURY KOT` k
+        LEFT JOIN JSON_TABLE(%(kitchen_receipts)s, '$[*]' COLUMNS(
+            ticket VARCHAR(140) PATH '$[0]', invoice VARCHAR(140) PATH '$[1]'
+        )) r ON r.ticket = k.name)""".format(cancelled=WHOLE_COMPENSATION.format(ticket="k.name"))
+    return query.replace("{ticket_owners}", relation), params
+
+
+def run_ticket_report(name, filters):
+    """Run a standard report with its native column, filter and read-only SQL handling."""
+    import frappe
+
+    report = frappe.get_doc("Report", name)
+    report.query, params = ticket_owner_query(frappe, report.query, filters)
+    return report.execute_query_report(params)
 
 
 def write_round_ledger(invoice, rounds, bindings, ownership=None):

@@ -1,4 +1,5 @@
 import frappe
+from ury.ury.api.kitchen_ticket_history import WHOLE_COMPENSATION
 
 from frappe.utils import add_to_date, get_datetime
 
@@ -115,8 +116,8 @@ def _rule_long_open_tickets(branch):
 	rows = frappe.db.sql(
 		f"""
 		SELECT k.`name`
-		FROM `tabURY KOT` k JOIN ury_kitchen_ticket_owner owner ON owner.ticket = k.name
-		WHERE owner.wholly_cancelled = 0 AND {conditions}
+		FROM `tabURY KOT` k
+		WHERE NOT {WHOLE_COMPENSATION.format(ticket="k.name")} AND {conditions}
 		""",
 		params,
 		as_dict=True,

@@ -7,7 +7,7 @@ import frappe
 from frappe import _
 from frappe.utils import get_datetime
 from ury.brand import coded_message
-from ury.ury.api.kitchen_ticket_history import current_ticket_owner, is_wholly_cancelled, owned_kots
+from ury.ury.api.kitchen_ticket_history import WHOLE_COMPENSATION, current_ticket_owner, is_wholly_cancelled, owned_kots
 from ury.ury_pos.api import getBranch
 
 
@@ -322,15 +322,19 @@ def recent_served_kots(branch=None, production=None):
         "table_takeaway", "order_no", "order_status", "creation", "production_time",
         "custom_guest_label",
     ]
+    from pypika.terms import LiteralValue
+
+    active = LiteralValue(WHOLE_COMPENSATION.format(ticket="`tabURY KOT`.name")) == 0
     ledgers = {}
     eligible = []
     windows = {}
     offset = 0
     while len(eligible) < 100:
-        rows = frappe.get_list(
+        query = frappe.get_list(
             "URY KOT", fields=fields, filters=filters, order_by="modified desc, name desc",
-            limit_start=offset, limit_page_length=100,
+            limit_start=offset, limit_page_length=100, run=False,
         )
+        rows = query.where(active).run(as_dict=True)
         for row in rows:
             try:
                 prod_mins = float(row.get("production_time"))

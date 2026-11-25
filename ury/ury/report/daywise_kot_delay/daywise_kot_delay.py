@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from ury.ury.api.kitchen_ticket_history import ticket_owner_query
 from frappe.utils import get_datetime,today
 
 def execute(filters=None):
@@ -12,7 +13,7 @@ def execute(filters=None):
   end_date = filters.get("to_date")
   alert_time = frappe.db.get_value("POS Profile",{"branch":branch},"custom_kot_warning_time")
   # alert_time = frappe.get_single('Alert Settings').kot_delay_time
-  kot_list = frappe.db.sql('''
+  query, params = ticket_owner_query(frappe,'''
     SELECT
       kot.name AS name,
       kot.restaurant_table AS restaurant_table,
@@ -48,7 +49,7 @@ def execute(filters=None):
         AND kot.order_status = 'Served'
         AND kot.branch = %(branch)s
     )
-    LEFT JOIN ury_kitchen_ticket_owner owner ON owner.ticket = kot.name
+    LEFT JOIN {ticket_owners} owner ON owner.ticket = kot.name
     LEFT JOIN `tabURY Report Settings` rs ON (
         rs.`branch` = %(branch)s
     )
@@ -60,7 +61,8 @@ def execute(filters=None):
     )
     ORDER BY
       minutes DESC;
-  ''',{"now": now,"alert_time":alert_time,"branch":branch,"today":today(),"start_date":start_date,"end_date":end_date}, as_dict=True)
+  ''',{"now": now,"alert_time":alert_time,"branch":branch,"today":today(),"start_date":start_date,"end_date":end_date})
+  kot_list = frappe.db.sql(query, params, as_dict=True)
   for kot in kot_list:
     tableOrTakeaway = kot['restaurant_table'] if kot['restaurant_table'] else frappe.db.get_value("POS Invoice", kot['invoice'], "order_type")
     row =[

@@ -823,24 +823,22 @@ def _void_sources(invoice):
 
 def _items_with_preparation(invoices, codes):
 	"""Conservatively withhold returns once any of this dish has been started."""
-	params = (*sorted(invoices), *codes)
-	invoice_markers = ", ".join(["%s"] * len(invoices))
-	markers = ", ".join(["%s"] * len(codes))
-	return {row[0] for row in frappe.db.sql(
-		f"""SELECT i.item
+	from ury.ury.api.kitchen_ticket_history import ticket_owner_query
+
+	query, params = ticket_owner_query(frappe, """SELECT i.item
 		FROM `tabURY KOT` k
-		JOIN ury_kitchen_ticket_owner owner ON owner.ticket = k.name
+		JOIN {ticket_owners} owner ON owner.ticket = k.name
 		INNER JOIN `tabURY KOT Items` i ON i.parent = k.name AND i.parenttype = 'URY KOT'
 		LEFT JOIN `tabURY KOT Item Execution` e ON e.kot_item = i.name
 		LEFT JOIN `tabURY KOT Execution` t ON t.kot = k.name
-		WHERE owner.invoice IN ({invoice_markers}) AND k.type IN ('New Order', 'Order Modified') AND k.docstatus = 1
-		AND i.item IN ({markers})
+		WHERE owner.invoice IN %(checks)s AND k.type IN ('New Order', 'Order Modified') AND k.docstatus = 1
+		AND i.item IN %(codes)s
 		AND (e.started_at IS NOT NULL OR e.ready_at IS NOT NULL OR e.served_at IS NOT NULL
 			OR (e.name IS NULL AND (t.started_at IS NOT NULL OR t.ready_at IS NOT NULL OR t.served_at IS NOT NULL))
 			OR k.order_status = 'Served')
 		FOR UPDATE""",
-		params,
-	)}
+		{"checks": tuple(invoices), "codes": tuple(codes)}, invoices=invoices)
+	return {row[0] for row in frappe.db.sql(query, params)}
 
 
 def apply_count_delta(branch, previous_items, accepted_items, *, invoice=None, prepared=None):

@@ -13,7 +13,6 @@ def before_uninstall():
         print("Failed To Remove Customizations.")
 
 def uninstall():
-	frappe.db.sql_ddl("DROP VIEW IF EXISTS ury_kitchen_ticket_owner")
 	try:
 		print("Removing customizations created by the Frappe URY app...")
 		remove_custom_fields()

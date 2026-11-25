@@ -6,7 +6,7 @@ import frappe
 
 from ury.tests.offline_pos_utils import make_made_to_order_item, make_offline_pos, send_order
 from ury.ury.api import self_ordering, ury_kot_validation
-from ury.ury.api.kitchen_ticket_history import ticket_ownership
+from ury.ury.api.kitchen_ticket_history import ticket_owner_query, ticket_ownership
 from ury.ury.api.ury_fulfilment_posting_service import _reservation_rows, _row_reservation_line_key
 from ury.ury.api.ury_kot_generate import kot_execute
 from ury.ury.api.ury_pos_invoice_qty_reduction import reduce_order_item_qty
@@ -74,8 +74,9 @@ class TestKitchenReleaseIntegrity(TestCase):
 
     @staticmethod
     def view_owners(ticket):
-        return frappe.db.sql("SELECT invoice FROM ury_kitchen_ticket_owner WHERE ticket = %s",
-                             (ticket,), pluck=True)
+        query, params = ticket_owner_query(frappe, "SELECT invoice FROM {ticket_owners} owner WHERE ticket = %(ticket)s",
+                                           {"ticket": ticket})
+        return frappe.db.sql(query, params, pluck=True)
 
     def assert_shared_split_anchored(self, invoice, move_qty):
         ticket, = self.tickets(invoice.name)
