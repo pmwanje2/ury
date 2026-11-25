@@ -155,6 +155,10 @@ export interface PosProfileFull {
   custom_tax_exempt_category?: string | null;
   custom_tips_payable_account?: string | null;
   efris_print_wait_seconds?: number;
+  custom_allow_fx_rate_override?: number;
+  custom_max_fx_variance_pct?: number;
+  custom_offline_peer_relay_url?: string;
+  custom_offline_collision_policy?: string;
   custom_drawer_pin?: number | string | null;
   custom_drawer_kick_hex?: string | null;
   custom_auto_kick_on_cash_tender?: number | boolean | null;

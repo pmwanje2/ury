@@ -15,7 +15,7 @@ import { getMenuCourses } from '../lib/menu-course-api';
 import { getCustomerGroups, getCustomerTerritories } from '../lib/customer-api';
 import { DEFAULT_ORDER_TYPE, OrderType } from '../data/order-types';
 import { getTableOrder, TableOrder } from '../lib/order-api';
-import { getPaymentModes } from '../lib/payment-api';
+import { getPaymentModes, getPaymentModeDetails, type PaymentModeConfig } from '../lib/payment-api';
 import { beginOpenTableRead, openTableReadCurrent, rememberOpenTableCheck, forgetOpenTableCheck } from '../offline/open-table-checks';
 import { offlineCaptureEnabled } from '../pwa/runtime-caching';
 import { bindOfflineUser, cachedOfflineProfile, syncOfflineCapture } from '../pwa/register-offline';
@@ -191,6 +191,7 @@ interface POSState {
   profileLoading: boolean;
   error: string | null;
   paymentModes: string[];
+  paymentModeDetails: Record<string, PaymentModeConfig>;
   orders: Order[];
   selectedAggregator: Aggregator | null;
   currency: string;
@@ -339,6 +340,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   profileLoading: false,
   error: null,
   paymentModes: ['Cash'],
+  paymentModeDetails: {},
   orders: [],
   posProfile: null,
   customerGroups: [],
@@ -558,9 +560,20 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   fetchPaymentModes: async () => {
     try {
       const owner = getSessionUser();
-      const modes = await getPaymentModes();
+      let details: PaymentModeConfig[] = [];
+      let modes: string[] = [];
+      try {
+        details = await getPaymentModeDetails();
+        modes = details.map((row) => row.mode_of_payment);
+      } catch {
+        modes = await getPaymentModes();
+      }
       if (owner !== getSessionUser()) return;
-      set({ paymentModes: modes });
+      const detailsMap: Record<string, PaymentModeConfig> = {};
+      for (const row of details) {
+        if (row?.mode_of_payment) detailsMap[row.mode_of_payment] = row;
+      }
+      set({ paymentModes: modes, paymentModeDetails: detailsMap });
     } catch (error) {
       console.error('Failed to fetch payment modes:', error);
     }

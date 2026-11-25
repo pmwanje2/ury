@@ -43,6 +43,31 @@ import {
   type ClosingPaymentSummary,
 } from '../lib/pos-closing-api';
 
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF', 'TZS', 'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
+]);
+const THREE_DECIMAL_CURRENCIES = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND']);
+
+export function currencyDecimalPlaces(code?: string | null): number {
+  const norm = (code || '').trim().toUpperCase();
+  if (!norm) return 2;
+  if (ZERO_DECIMAL_CURRENCIES.has(norm)) return 0;
+  if (THREE_DECIMAL_CURRENCIES.has(norm)) return 3;
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency: norm }).resolvedOptions()
+      .maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
+export function roundToCurrencyPrecision(amount: number, code?: string | null): number {
+  const digits = currencyDecimalPlaces(code);
+  const factor = Math.pow(10, digits);
+  const rounded = Math.round((amount + Math.sign(amount) * 1e-12) * factor) / factor;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
 interface POSClosingDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -238,9 +263,13 @@ function aggregateInvoices(
 ): {
   totals: AggregatedTotals;
   expectedByMode: Record<string, number>;
+  expectedForeignByMode: Record<string, number>;
+  fxCurrencyByMode: Record<string, string>;
 } {
   const totals: AggregatedTotals = { grandTotal: 0, netTotal: 0, totalQty: 0, onAccount: 0 };
   const expectedByMode: Record<string, number> = {};
+  const expectedForeignByMode: Record<string, number> = {};
+  const fxCurrencyByMode: Record<string, string> = {};
 
   invoices.forEach((invoice) => {
     totals.onAccount += Number(invoice.outstanding_amount) || 0;
@@ -269,6 +298,21 @@ function aggregateInvoices(
         }
         expectedByMode[payment.mode_of_payment] =
           (expectedByMode[payment.mode_of_payment] || 0) + amount;
+        if (payment.custom_tender_currency) {
+          fxCurrencyByMode[payment.mode_of_payment] = payment.custom_tender_currency;
+          expectedForeignByMode[payment.mode_of_payment] =
+            (expectedForeignByMode[payment.mode_of_payment] || 0) +
+            (Number(payment.custom_tender_amount) || 0);
+        }
+      });
+    } else {
+      (invoice.payments || []).forEach((payment) => {
+        if (payment.custom_tender_currency) {
+          fxCurrencyByMode[payment.mode_of_payment] = payment.custom_tender_currency;
+          expectedForeignByMode[payment.mode_of_payment] =
+            (expectedForeignByMode[payment.mode_of_payment] || 0) +
+            (Number(payment.custom_tender_amount) || 0);
+        }
       });
     }
   });
@@ -277,10 +321,16 @@ function aggregateInvoices(
     paymentsByMode.forEach((payment) => {
       expectedByMode[payment.mode_of_payment] =
         (expectedByMode[payment.mode_of_payment] || 0) + (Number(payment.amount) || 0);
+      if (payment.custom_tender_currency) {
+        fxCurrencyByMode[payment.mode_of_payment] = payment.custom_tender_currency;
+        expectedForeignByMode[payment.mode_of_payment] =
+          (expectedForeignByMode[payment.mode_of_payment] || 0) +
+          (Number(payment.custom_tender_amount) || 0);
+      }
     });
   }
 
-  return { totals, expectedByMode };
+  return { totals, expectedByMode, expectedForeignByMode, fxCurrencyByMode };
 }
 
 /**
@@ -292,7 +342,10 @@ function buildRows(
   openingBalances: OpeningBalanceDetail[],
   expectedByMode: Record<string, number>,
   blindCashCount = false,
-  profilePaymentModes: string[] = []
+  profilePaymentModes: string[] = [],
+  expectedForeignByMode: Record<string, number> = {},
+  fxCurrencyByMode: Record<string, string> = {},
+  tillCurrency?: string,
 ): { visible: ClosingPaymentSummary[]; hidden: ClosingPaymentSummary[] } {
   const rows = new Map<string, ClosingPaymentSummary>();
   const hidden = new Map<string, ClosingPaymentSummary>();
@@ -302,6 +355,21 @@ function buildRows(
         ...profilePaymentModes.map((mode) => ({ mode_of_payment: mode, opening_amount: 0 })),
       ]
     : openingBalances;
+
+  const enrichFx = (row: ClosingPaymentSummary): ClosingPaymentSummary => {
+    const curr = fxCurrencyByMode[row.mode_of_payment];
+    if (!curr || curr === tillCurrency) return row;
+    const expectedFx = expectedForeignByMode[row.mode_of_payment] || 0;
+    const rate = expectedFx > 0 && row.expected_amount > 0 ? row.expected_amount / expectedFx : undefined;
+    return {
+      ...row,
+      custom_tender_currency: curr,
+      custom_expected_foreign_amount: expectedFx,
+      custom_closing_foreign_amount: 0,
+      custom_foreign_difference: -expectedFx,
+      ...(rate ? { effective_exchange_rate: rate } : {}),
+    };
+  };
 
   rowBalances.forEach((detail) => {
     if (rows.has(detail.mode_of_payment)) return;
@@ -332,11 +400,14 @@ function buildRows(
     }
   });
 
-  return { visible: Array.from(rows.values()), hidden: Array.from(hidden.values()) };
+  return {
+    visible: Array.from(rows.values()).map(enrichFx),
+    hidden: Array.from(hidden.values()).map(enrichFx),
+  };
 }
 
 const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosingDialogProps) => {
-  const { posProfile, currency, paymentModes = NO_PAYMENT_MODES } = usePOSStore();
+  const { posProfile, currency, paymentModes = NO_PAYMENT_MODES, paymentModeDetails = {} } = usePOSStore();
   const tillCurrency = posProfile?.currency || currency;
   const { user } = useRootStore();
   const blindCashCount = isBlindCashCount(posProfile);
@@ -447,12 +518,22 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
       setPendingCashMovements(cashMovements.pending_count);
-      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(
+      const {
+        totals: aggregatedTotals,
+        expectedByMode,
+        expectedForeignByMode,
+        fxCurrencyByMode,
+      } = aggregateInvoices(
         invoices,
         payments,
         paymentModes,
         posProfile.payment_mode_accounts,
       );
+      Object.values(paymentModeDetails || {}).forEach((cfg) => {
+        if (cfg?.mode_of_payment && cfg.custom_tender_currency && cfg.custom_tender_currency !== tillCurrency) {
+          fxCurrencyByMode[cfg.mode_of_payment] = cfg.custom_tender_currency;
+        }
+      });
       Object.entries(cashMovements.by_mode).forEach(([mode, delta]) => {
         const movementAmount = Number(delta) || 0;
         if (movementAmount !== 0) {
@@ -465,6 +546,9 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         expectedByMode,
         blindCashCount,
         paymentModes,
+        expectedForeignByMode,
+        fxCurrencyByMode,
+        tillCurrency,
       );
       setRows(visible);
       setHiddenRows(hidden);
@@ -533,6 +617,38 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     });
   };
 
+  const handleForeignRowChange = (modeOfPayment: string, closingForeignAmount: number) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.mode_of_payment !== modeOfPayment) return row;
+        const expectedFx = Number(row.custom_expected_foreign_amount) || 0;
+        const fxDigits = currencyDecimalPlaces(row.custom_tender_currency);
+        const fxEps = 0.5 * Math.pow(10, -fxDigits);
+        const isZeroVariance = expectedFx > 0 && Math.abs(closingForeignAmount - expectedFx) <= fxEps;
+        const cfgRate = Number(paymentModeDetails?.[modeOfPayment]?.exchange_rate) || 0;
+        const shiftRate =
+          row.effective_exchange_rate ||
+          (expectedFx > 0 && row.expected_amount > 0 ? row.expected_amount / expectedFx : cfgRate || 1);
+        const baseClosing = isZeroVariance
+          ? row.expected_amount
+          : roundToCurrencyPrecision(closingForeignAmount * shiftRate, tillCurrency);
+        return {
+          ...row,
+          custom_closing_foreign_amount: closingForeignAmount,
+          custom_foreign_difference: isZeroVariance ? 0 : closingForeignAmount - expectedFx,
+          closing_amount: baseClosing,
+          difference: isZeroVariance ? 0 : roundToCurrencyPrecision(baseClosing - row.expected_amount, tillCurrency),
+        };
+      }),
+    );
+    setTouchedModes((prev) => {
+      if (prev.has(modeOfPayment)) return prev;
+      const next = new Set(prev);
+      next.add(modeOfPayment);
+      return next;
+    });
+  };
+
   const handleOpenChange = (next: boolean) => {
     if (isSubmitting) return;
     if (!next) {
@@ -573,30 +689,51 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     const modeMeta = posProfile?.payment_mode_meta ?? {};
     const hasMeta = Object.keys(modeMeta).length > 0;
     let maxAbsDiff = 0;
+    let hasFxSubUnitVariance = false;
     for (const row of rows) {
       const metaType = modeMeta[row.mode_of_payment]?.type;
+      const isFx = Boolean(row.custom_tender_currency && row.custom_tender_currency !== tillCurrency);
       const isCash = hasMeta
         ? metaType
           ? metaType === 'Cash'
           : /^cash$/i.test(row.mode_of_payment)
         : true;
-      if (!isCash) continue;
+      if (!isCash && !isFx) continue;
       const absDiff = Math.abs(row.closing_amount - row.expected_amount);
       if (absDiff > maxAbsDiff) maxAbsDiff = absDiff;
+      if (
+        isFx &&
+        effectiveTolerance <= 0 &&
+        Math.abs((Number(row.custom_closing_foreign_amount) || 0) - (Number(row.custom_expected_foreign_amount) || 0)) >
+          0.5 * Math.pow(10, -currencyDecimalPlaces(row.custom_tender_currency))
+      ) {
+        hasFxSubUnitVariance = true;
+      }
     }
     return {
-      exceeds: maxAbsDiff > effectiveTolerance + 1e-6,
+      exceeds: maxAbsDiff > effectiveTolerance + 1e-6 || hasFxSubUnitVariance,
       maxAbsDiff,
     };
-  }, [blindCashCount, effectiveTolerance, posProfile?.payment_mode_meta, rows]);
+  }, [blindCashCount, effectiveTolerance, posProfile?.payment_mode_meta, rows, tillCurrency]);
 
   const countedPaymentsPayload = useMemo(
     () =>
-      [...rows, ...hiddenRows].map((row) => ({
-        mode_of_payment: row.mode_of_payment,
-        closing_amount: row.closing_amount,
-      })),
-    [rows, hiddenRows],
+      [...rows, ...hiddenRows].map((row) => {
+        const isFx = Boolean(row.custom_tender_currency && row.custom_tender_currency !== tillCurrency);
+        return {
+          mode_of_payment: row.mode_of_payment,
+          closing_amount: row.closing_amount,
+          ...(isFx
+            ? {
+                custom_closing_foreign_amount: roundToCurrencyPrecision(
+                  Number(row.custom_closing_foreign_amount) || 0,
+                  row.custom_tender_currency,
+                ),
+              }
+            : {}),
+        };
+      }),
+    [rows, hiddenRows, tillCurrency],
   );
 
   const useControlledClose =
@@ -611,12 +748,20 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     const meta = posProfile?.payment_mode_meta;
     const hasMeta = Boolean(meta && Object.keys(meta).length > 0);
     const cashRows = hasMeta
-      ? rows.filter((row) => meta?.[row.mode_of_payment]?.type === 'Cash')
+      ? rows.filter(
+          (row) =>
+            meta?.[row.mode_of_payment]?.type === 'Cash' ||
+            Boolean(row.custom_tender_currency && row.custom_tender_currency !== tillCurrency),
+        )
       : rows;
     return cashRows.some(
-      (row) => Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001,
+      (row) =>
+        Math.abs(row.closing_amount - row.expected_amount) - overShortTolerance > 0.0001 ||
+        (Boolean(row.custom_tender_currency && row.custom_tender_currency !== tillCurrency) &&
+          overShortTolerance <= 0 &&
+          Math.abs((Number(row.custom_closing_foreign_amount) || 0) - (Number(row.custom_expected_foreign_amount) || 0)) > 0.00001),
     );
-  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance]);
+  }, [requireOverShortReason, blindCashCount, maskAmounts, rows, posProfile?.payment_mode_meta, overShortTolerance, tillCurrency]);
 
   // Closing may be submitted with blank or zero amount fields. Blank inputs
   // count as 0; rows that had activity but a zero close only show a warning.
@@ -819,6 +964,15 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       // Positive = overage, negative = shortage. Must match the display
       // convention in ClosingPaymentTable (Fix 1).
       difference: row.closing_amount - row.expected_amount,
+      ...(row.custom_tender_currency
+        ? {
+            custom_tender_currency: row.custom_tender_currency,
+            custom_expected_foreign_amount: row.custom_expected_foreign_amount ?? 0,
+            custom_closing_foreign_amount: row.custom_closing_foreign_amount ?? 0,
+            custom_foreign_difference:
+              (row.custom_closing_foreign_amount ?? 0) - (row.custom_expected_foreign_amount ?? 0),
+          }
+        : {}),
     }));
 
     // Fix 3: if a previous attempt already created the draft doc but the
@@ -1097,14 +1251,14 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         variant="xlarge"
         size="4xl"
         onClose={() => handleOpenChange(false)}
-        className="max-h-[90vh] overflow-y-auto"
+        className="flex flex-col max-h-[90vh] overflow-hidden"
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0 pb-3">
           <DialogTitle>{t('pos_closing.title')}</DialogTitle>
           <DialogDescription>{t('pos_closing.description')}</DialogDescription>
         </DialogHeader>
 
-        <div className="px-6 pb-4">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Spinner message={t('pos_closing.loading')} />
@@ -1152,7 +1306,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
               )}
 
               {!blindCashCount && (
-              <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
                 <div className="rounded-lg border border-border p-3">
                   <p className="text-xs text-gray-500">{t('pos_closing.on_account')}</p>
                   <p>{maskAmounts ? MASKED : formatCurrency(totals.onAccount, tillCurrency)}</p>
@@ -1186,6 +1340,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                   rows={rows}
                   touchedModes={touchedModes}
                   onChange={handleRowChange}
+                  onForeignChange={handleForeignRowChange}
                   hideExpected={maskAmounts}
                   blindCashCount={blindCashCount}
                 />
@@ -1376,10 +1531,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
         </div>
 
         {submitError && (
-          <p className="px-6 pb-2 text-sm font-medium text-red-600 break-words">{submitError}</p>
+          <p className="shrink-0 px-6 pb-2 text-sm font-medium text-red-600 break-words">{submitError}</p>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border bg-card px-4 sm:px-6 py-3 sm:py-4">
           <TillLogout />
           {!isSubCashier && openingEntry && (
             <Button

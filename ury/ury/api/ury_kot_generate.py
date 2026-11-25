@@ -134,6 +134,7 @@ def create_kot_doc(
     production,
     validation_dedup_key=None,
     offline_printed=0,
+    ignore_permissions=False,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number
@@ -205,7 +206,11 @@ def create_kot_doc(
                 "modifier_summary": _modifier_summary_for_kot_item(item),
             },
         )
-    kot_doc.insert()
+    if ignore_permissions:
+        kot_doc.flags.ignore_permissions = True
+        kot_doc.insert(ignore_permissions=True)
+    else:
+        kot_doc.insert()
     kot_doc.submit()
 
     # N4: additive, non-blocking Work Order creation for MADE_TO_ORDER
@@ -421,6 +426,7 @@ def process_items_for_kot(
     kot_naming_series,
     kot_type,
     offline_printed=0,
+    ignore_permissions=False,
 ):
     kot_items = create_order_items(items)
     pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
@@ -501,6 +507,7 @@ def process_items_for_kot(
             production_unit,
             validation_dedup_key=validation_dedup_key,
             offline_printed=offline_printed,
+            ignore_permissions=ignore_permissions,
         )
         created_kot_names.append(kot_name)
 
@@ -519,6 +526,7 @@ def process_items_for_cancel_kot(
     kot_type,
     invoiceItems,
     void_reason_code=None,
+    ignore_permissions=False,
 ):
 
     kot_items = create_order_items(items)
@@ -558,6 +566,7 @@ def process_items_for_cancel_kot(
             invoiceItems,
             production_unit,
             void_reason_code=void_reason_code,
+            ignore_permissions=ignore_permissions,
         )
         created_kot_names.append(kot_name)
 
@@ -577,6 +586,7 @@ def create_cancel_kot_doc(
     invoiceItems,
     production,
     void_reason_code=None,
+    ignore_permissions=False,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number  
@@ -718,7 +728,11 @@ def create_cancel_kot_doc(
             },
         )
 
-    kot_cancel_doc.insert()
+    if ignore_permissions:
+        kot_cancel_doc.flags.ignore_permissions = True
+        kot_cancel_doc.insert(ignore_permissions=True)
+    else:
+        kot_cancel_doc.insert()
     kot_cancel_doc.submit()
     return kot_cancel_doc.name
 
@@ -742,11 +756,12 @@ def kot_execute(
 
 
 def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None, previous_items=None,
-                 comments=None, offline_printed=0, *, desk=False, cancel_reason=None, void_reason_code=None):
+                 comments=None, offline_printed=0, *, desk=False, cancel_reason=None, void_reason_code=None,
+                 ignore_permissions=False):
     from frappe import _
 
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
-    if not frappe.has_permission("POS Invoice", "write", doc=pos_invoice):
+    if not ignore_permissions and not frappe.has_permission("POS Invoice", "write", doc=pos_invoice):
         frappe.throw(_("Not permitted to execute KOT for this invoice"), frappe.PermissionError)
     if cint(offline_printed) == 1:
         from ury.ury.doctype.ury_order.ury_order import require_offline_capture
@@ -876,6 +891,7 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
                 kot_naming_series,
                 "New Order",
                 offline_printed=offline_printed,
+                ignore_permissions=ignore_permissions,
             )
         )
     if total_cancel_items:
@@ -890,6 +906,7 @@ def _execute_kot(invoice_id, customer, restaurant_table=None, current_items=None
             "Partially cancelled",
             list(previous_lines.values()),
             void_reason_code=void_reason_code,
+            ignore_permissions=ignore_permissions,
         )
         created_kot_names.extend(created_cancel_kots)
     else:

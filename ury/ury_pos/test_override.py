@@ -62,6 +62,7 @@ EXPECTED_PRIVILEGES = {
     "offline_tender",
     "close_other_till",
     "reopen_till",
+    "fx_rate_override",
 }
 
 

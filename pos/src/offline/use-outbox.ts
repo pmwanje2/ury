@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { cashierOutbox } from './cashier';
-import { canCaptureOffline, OUTBOX_CHANGED, type OfflineEntry, type OfflineProfile, type OfflineUser } from './outbox';
+import { canCaptureOfflineOrder, OUTBOX_CHANGED, type OfflineEntry, type OfflineProfile, type OfflineUser } from './outbox';
 
 export function useOutbox(profile?: OfflineProfile | null, user?: OfflineUser | null, replay = false) {
   const queue = profile && user && profile.ury_offline_capture ? cashierOutbox(profile, user) : null;
@@ -11,7 +11,7 @@ export function useOutbox(profile?: OfflineProfile | null, user?: OfflineUser | 
       const rows = queue ? await queue.list() : [];
       if (!disposed) setState({ rows, replaying: !!queue?.replaying, offline: !queue?.sessionBlocked && (navigator.onLine === false || queue?.reachable === false) });
     };
-    const wake = () => { void refresh(); if (replay && navigator.onLine !== false && canCaptureOffline(profile, user)) void queue?.replay(); };
+    const wake = () => { void refresh(); if (replay && navigator.onLine !== false && canCaptureOfflineOrder(profile, user)) void queue?.replay(); };
     const update = () => { void refresh(); };
     if (!queue) return;
     window.addEventListener(OUTBOX_CHANGED, update); window.addEventListener('offline', update); window.addEventListener('online', wake);

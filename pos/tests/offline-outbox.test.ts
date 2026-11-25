@@ -200,16 +200,28 @@ test('a lost sync acknowledgement keeps the outage id until the queue is empty',
   expect(later.outage_id).not.toBe(row.outage_id);
 });
 
-test('offline opt-in and this profile billing role are both required (no admin or empty-role shortcut)', async () => {
-  for (const options of [{ profile: { ...profile, ury_offline_capture: 0 } }, { user: { ...user, roles: ['Waiter'] } },
-    { profile: { ...profile, role_allowed_for_billing: [] } }, { user: { name: 'Guest', roles: ['Cashier'] } }]) {
-    await expect((await outbox(options)).capture(data, 100)).rejects.toThrow(/offline|billing|cashier/i);
+test('offline opt-in and permitted staff role are required for capture; billing role is required for settlement', async () => {
+  for (const options of [
+    { profile: { ...profile, ury_offline_capture: 0 } },
+    { user: { name: 'Guest', roles: ['Cashier'] } },
+    { user: { ...user, roles: [] } },
+  ]) {
+    await expect((await outbox(options)).capture(data, 100)).rejects.toThrow(/offline|role|permitted/i);
   }
+  // G46: Waiters can capture offline orders, but cannot settle offline without billing role.
+  const waiterBox = await outbox({ user: { ...user, roles: ['Waiter'] } });
+  const row = await waiterBox.capture(data, 100);
+  await expect(waiterBox.settle(row.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 })).rejects.toThrow(/offline|billing|settle/i);
+  const noBillingBox = await outbox({ profile: { ...profile, role_allowed_for_billing: [] } });
+  const row2 = await noBillingBox.capture(data, 100);
+  await expect(noBillingBox.settle(row2.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 })).rejects.toThrow(/offline|billing|settle/i);
 });
 
-test('revoking the cached billing role prevents replay before any server mutation', async () => {
+test('revoking the cached billing role prevents settlement replay before any server mutation', async () => {
   const mutable = { ...profile, role_allowed_for_billing: [{ role: 'Cashier' }] };
-  const q = await outbox({ profile: mutable }); await q.capture(data, 100);
+  const q = await outbox({ profile: mutable });
+  const row = await q.capture(data, 100);
+  await q.settle(row.client_order_id, { kind: 'cash', mode_of_payment: 'Cash', amount: 100 });
   mutable.role_allowed_for_billing = [];
   await q.replay();
   expect(sends).toEqual([]);
@@ -242,7 +254,7 @@ test('manual MoMo requires a typed reference and retains it in the native order 
   await q.settle(row.client_order_id, { kind: 'mobile-money', mode_of_payment: 'Mobile Money', amount: 100, reference: 'MM-123' });
   await q.replay();
   expect(sends[0].data.comments).toContain('MM-123');
-  expect(sends[2].data.payments).toEqual([{ mode_of_payment: 'Mobile Money', amount: 100 }]);
+  expect(sends[2].data.payments).toEqual([{ mode_of_payment: 'Mobile Money', amount: 100, reference_no: 'MM-123' }]);
 });
 
 test.each(['card', 'pay-by-phone'])('offline %s tender is refused and never queued as settlement', async (kind) => {

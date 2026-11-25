@@ -165,7 +165,18 @@
     "room_over_limit": "Le montant dépasse le plafond d'imputation en chambre. L'approbation d'un responsable est requise.",
     "request_room_override": "Demander l'approbation du responsable",
     "override_approved_by": "Dérogation approuvée par {{approver}}",
-    "account_over_limit_notice": "Ce montant dépasse le crédit disponible du client. L'approbation d'un responsable est requise."
+    "account_over_limit_notice": "Ce montant dépasse le crédit disponible du client. L'approbation d'un responsable est requise.",
+    "reference_label_default": "Référence de paiement",
+    "reference_placeholder_default": "Saisir la référence de transaction ou le code d'autorisation",
+    "reference_required": "Saisissez une référence de paiement pour {{mode}}.",
+    "reference_invalid": "La référence de paiement pour {{mode}} ne respecte pas le format requis.",
+    "reference_date": "Date de référence",
+    "reference_date_required": "Sélectionnez une date de référence pour {{mode}}.",
+    "fx_rate_badge": "1 {{currency}} = {{rate}} {{home}}",
+    "fx_equivalent": "Équivalent local : {{amount}}",
+    "fx_stale_rate": "Le taux de change pour {{currency}} est expiré ou manquant. Mettez-le à jour avant d'encaisser.",
+    "fx_override_rate": "Taux dérogatoire responsable",
+    "fx_change_local": "Monnaie à rendre en {{currency}} : {{amount}}"
   },
   "discount": {
     "title": "Remise",
@@ -697,7 +708,9 @@
     "force_close_reason": "Motif de clôture forcée",
     "force_close_reason_placeholder": "ex. Clôture audit de nuit",
     "approve_force_close": "Approuver la clôture forcée",
-    "no_sale_summary": "Ouvertures sans vente : {{count}}"
+    "no_sale_summary": "Ouvertures sans vente : {{count}}",
+    "fx_native_count": "Compter en {{currency}}",
+    "fx_base_equivalent": "Équivalent de base : {{amount}}"
   },
   "checklist": {
     "pass": "PASS",
@@ -880,7 +893,10 @@
     "approve_and_replay": "Approuver et synchroniser",
     "approval_title": "Approuver le règlement hors ligne",
     "approval_summary": "Le règlement hors ligne {{mode}} de {{amount}} dépasse la limite de {{limit}}",
-    "approved_and_replayed": "Règlement hors ligne approuvé et synchronisé."
+    "approved_and_replayed": "Règlement hors ligne approuvé et synchronisé.",
+    "waiter_offline_pill": "Hors ligne · Commandes en file locale",
+    "waiter_queued_badge": "{{count}} en attente hors ligne",
+    "waiter_settle_blocked": "Le règlement hors ligne nécessite un accès caisse."
   },
   "bill_requests": {
     "choose_check": "Choisir une addition ouverte",

@@ -159,14 +159,36 @@ process.stdout.write(JSON.stringify(out));
         kot_schema = json.loads((ROOT / "ury/ury/doctype/ury_kot/ury_kot.json").read_text())
         naming_field = next(f for f in kot_schema["fields"] if f["fieldname"] == "naming_series")
         self.assertEqual(naming_field.get("default"), "KOT-")
+        # Pre-existing legacy internal codes outside POS-PR-6 (tracked separately).
+        legacy_underscore_codes = {
+            "URY_HOLD_DISABLED",
+            "URY_HOLD_OFFLINE",
+            "URY_LINE_KEY_CHANGED",
+            "URY_LINE_KEY_REUSED",
+            "URY_ALREADY_SENT",
+            "URY_HOLD_REQUIRES_FIRE",
+            "URY_HELD_NOT_FIRED",
+            "URY_SERVICE_REQUEST_OTHER_BRANCH",
+            "URY_SERVICE_REQUEST_ALREADY_RESOLVED",
+            "URY_SERVICE_REQUEST_STATUS_BACKWARD",
+            "URY_SERVICE_REQUEST_DELETE_REFUSED",
+            "URY_GUEST_RETRY",
+        }
         for py in sorted((ROOT / "ury").rglob("*.py")):
             if py.name.startswith("test_") or "/tests/" in py.as_posix():
                 continue
             text = py.read_text(encoding="utf-8")
             with self.subTest(file=str(py.relative_to(ROOT))):
                 self.assertNotRegex(text, r"\[URY-[A-Z0-9-]+")
+                # Catch unbracketed URY-* refusal codes in string literals (e.g. URY-FX-RATE-STALE, URY-PAY-REF-REQUIRED).
+                self.assertNotRegex(text, r"""['"][^'"\n]*\bURY-[A-Z0-9]+-[A-Z0-9-]+\b""")
                 self.assertNotRegex(text, r"""['"]URY-CREDIT-\d+['"]""")
                 self.assertNotRegex(text, r"""['"]KOT-URY-['"]""")
+                # Catch unbracketed URY_* refusal codes inside user-visible frappe.throw(...) messages.
+                for match in re.finditer(r"""frappe\.throw\([^\n)]*?['"](URY_[A-Z0-9_]+)(?::|['"])""", text):
+                    code = match.group(1)
+                    if code not in legacy_underscore_codes:
+                        self.fail(f"User-visible URY_ refusal code {code!r} in {py.relative_to(ROOT)}")
 
     def test_native_html_field_copy(self):
         for file in (ROOT / "ury").glob("*/doctype/*/*.json"):

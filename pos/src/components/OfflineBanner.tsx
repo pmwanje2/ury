@@ -6,7 +6,8 @@ import { useEffect, useState } from 'react';
 import { Button, showToast } from '@ury/ui';
 import { currencyFractionDigits, formatCurrency, parseFrappeError } from '@ury/core';
 import {
-  canCaptureOffline,
+  canCaptureOfflineOrder,
+  canSettleOffline,
   offlineTolerance,
   type OfflineEntry,
   type OfflineOutbox,
@@ -27,6 +28,7 @@ function PendingOrder({
   eligibleModes,
   offlineLimit,
   currencyCode,
+  canSettle,
   disabled,
 }: {
   row: OfflineEntry;
@@ -34,6 +36,7 @@ function PendingOrder({
   eligibleModes: OfflinePaymentModeConfig[];
   offlineLimit: number;
   currencyCode?: string;
+  canSettle: boolean;
   disabled: boolean;
 }) {
   const [busy, setBusy] = useState(false);
@@ -60,7 +63,6 @@ function PendingOrder({
       setBusy(false);
     }
   };
-
   return (
     <li className="border-t border-amber-300 py-2" data-client-order={row.client_order_id}>
       <span>
@@ -85,7 +87,7 @@ function PendingOrder({
               ({t('offline.pending_manager_pin')})
             </span>
           )}
-          {!row.bill_printed && (
+          {!row.bill_printed && canSettle && (
             <Button
               size="sm"
               className="ms-2"
@@ -96,7 +98,7 @@ function PendingOrder({
             </Button>
           )}
         </span>
-      ) : (
+      ) : canSettle ? (
         <div className="space-y-1.5 mt-1">
           {overLimit && (
             <p className="text-xs font-medium text-amber-900">
@@ -169,6 +171,8 @@ function PendingOrder({
             )}
           </div>
         </div>
+      ) : (
+        <p className="mt-1 text-xs text-amber-800">{t('offline.waiter_settle_blocked')}</p>
       )}
     </li>
   );
@@ -199,7 +203,9 @@ export default function OfflineBanner() {
   }, [posProfile]);
   const pending = rows.filter((row) => row.state === 'pending').length;
   const review = rows.filter((row) => row.state === 'review');
-  if (!rows.length && (!offline || !canCaptureOffline(posProfile, user))) return null;
+  const canCaptureOrder = canCaptureOfflineOrder(posProfile, user);
+  const canSettle = canSettleOffline(posProfile, user);
+  if (!rows.length && (!offline || !canCaptureOrder)) return null;
 
   const roomChargeSet = new Set(posProfile?.room_charge_modes || []);
   const eligibleModes = (posProfile?.offline_payment_modes || []).filter(
@@ -254,7 +260,8 @@ export default function OfflineBanner() {
                   eligibleModes={eligibleModes}
                   offlineLimit={offlineLimit}
                   currencyCode={currencyCode}
-                  disabled={replaying || queue.sessionBlocked || !canCaptureOffline(posProfile, user)}
+                  canSettle={canSettle}
+                  disabled={replaying || queue.sessionBlocked || !canCaptureOrder}
                 />
               ))}
           </ul>
@@ -268,7 +275,7 @@ export default function OfflineBanner() {
                 {row.client_order_id.slice(0, 8)} ·{' '}
                 {parseFrappeError({ _server_messages: row.reason }, row.reason || '')}
               </span>
-              {row.needs_approval && !offline && posProfile && (
+              {row.needs_approval && !offline && posProfile && canSettle && (
                 <Button
                   size="sm"
                   variant="outline"
