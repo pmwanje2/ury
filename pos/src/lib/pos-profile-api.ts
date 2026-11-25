@@ -177,6 +177,10 @@ export interface PosProfileFull {
   active_business_date?: string | null;
   shift_report_available?: boolean;
   shift_z_print_format_available?: boolean;
+  custom_allow_fx_rate_override?: number;
+  custom_max_fx_variance_pct?: number;
+  custom_offline_peer_relay_url?: string;
+  custom_offline_collision_policy?: string;
   custom_drawer_pin?: number | string | null;
   custom_drawer_kick_hex?: string | null;
   custom_auto_kick_on_cash_tender?: number | boolean | null;

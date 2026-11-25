@@ -324,7 +324,11 @@ export interface ControlledCloseTipDeclaration {
 export async function closeTillWithControls(payload: {
   pos_profile: string;
   pos_opening_entry: string;
-  counted_payments: Array<{ mode_of_payment: string; closing_amount: number }>;
+  counted_payments: Array<{
+    mode_of_payment: string;
+    closing_amount: number;
+    custom_closing_foreign_amount?: number;
+  }>;
   over_short_reason?: string;
   over_short_approval_token?: string;
   close_other_approval_token?: string;
@@ -371,7 +375,11 @@ export async function reopenTill(payload: {
 export async function forceCloseTill(payload: {
   pos_profile: string;
   pos_opening_entry: string;
-  counted_payments: Array<{ mode_of_payment: string; closing_amount: number }>;
+  counted_payments: Array<{
+    mode_of_payment: string;
+    closing_amount: number;
+    custom_closing_foreign_amount?: number;
+  }>;
   reason: string;
   discard_pending_movements?: boolean;
   approval_token?: string;

@@ -160,6 +160,7 @@ PRIVILEGES: dict[str, PrivilegeSpec] = {
     "offline_tender": PrivilegeSpec("Offline Tender Override", True, _MGR_ROLES, _MGR_ROLES),
     "close_other_till": PrivilegeSpec("Close Another Operator's Till", True, _MGR_ROLES, _MGR_ROLES),
     "reopen_till": PrivilegeSpec("Reopen Closed Till", True, _MGR_ROLES, _MGR_ROLES),
+    "fx_rate_override": PrivilegeSpec("Override Foreign Currency Rate", True, _MGR_ROLES, _MGR_ROLES),
 }
 
 

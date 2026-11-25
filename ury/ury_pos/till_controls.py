@@ -41,7 +41,9 @@ from ury.brand import coded_message
 from ury.ury.hooks.ury_cash_movement import (
 	LEAVES_DRAWER,
 	_drawer_accounts,
+	_is_fx_mode,
 	_mode_account,
+	_till_currency,
 	build_movement_je_accounts,
 	paid_out_threshold,
 	till_cash_movements,
@@ -486,11 +488,13 @@ def _is_blind_masked_for_user(profile, user: str | None = None) -> bool:
 def _compute_expected_drawer_cash(profile, opening) -> float:
 	"""Expected cash in this shift's drawer: opening float + submitted cash sales - change + submitted movements."""
 	currency = profile.get("currency") or frappe.db.get_value("Company", profile.company, "default_currency")
+	till_curr = _till_currency(profile, profile.company)
 	precision = currency_precision(currency)
 	cash_modes = [
 		row.mode_of_payment
 		for row in (profile.get("payments") or [])
 		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") == "Cash"
+		and not _is_fx_mode(row.mode_of_payment, till_curr)
 	]
 	cash_mode_set = set(cash_modes)
 	drawer_accounts = _drawer_accounts(profile, profile.company)
@@ -1120,6 +1124,14 @@ def _cash_variances_above_tolerance(doc, profile):
 		diff = flt(row.difference, precision)
 		if abs(diff) > tolerance + 1e-9:
 			exceeding.append((row.mode_of_payment, diff))
+			continue
+		tender_curr = (row.get("custom_tender_currency") or "").strip().upper()
+		home_curr = (currency or "").strip().upper()
+		if tolerance <= 0 and tender_curr and tender_curr != home_curr:
+			fx_prec = currency_precision(tender_curr)
+			fx_diff = flt(row.get("custom_foreign_difference"), fx_prec)
+			if abs(fx_diff) > 1e-9:
+				exceeding.append((row.mode_of_payment, diff if abs(diff) > 1e-9 else fx_diff))
 	return exceeding, tolerance, precision
 
 
@@ -1319,6 +1331,21 @@ def validate_closing_cancel(doc, method=None) -> None:
 	)
 
 
+def _mode_tender_currency(mode: str, home_currency: str | None) -> str | None:
+	"""Return the foreign tender currency code for ``mode`` when distinct from ``home_currency``."""
+	if not mode:
+		return None
+	try:
+		curr = frappe.db.get_value("Mode of Payment", mode, "custom_tender_currency")
+	except Exception:
+		curr = None
+	if not isinstance(curr, str) or not curr.strip():
+		return None
+	norm = curr.strip().upper()
+	home = (home_currency or "").strip().upper()
+	return norm if norm and norm != home else None
+
+
 def _parse_counted_payments(counted_payments: Any, currency: str | None) -> list[dict[str, Any]]:
 	if isinstance(counted_payments, str):
 		counted_payments = frappe.parse_json(counted_payments) or []
@@ -1355,7 +1382,45 @@ def _parse_counted_payments(counted_payments: Any, currency: str | None) -> list
 				)
 			)
 		amt = int(rounded) if precision == 0 else rounded
-		parsed.append({"mode_of_payment": mode, "closing_amount": amt})
+		entry: dict[str, Any] = {"mode_of_payment": mode, "closing_amount": amt}
+
+		raw_fx = row.get("custom_closing_foreign_amount")
+		if raw_fx is not None and raw_fx != "":
+			fx_curr = _mode_tender_currency(mode, currency)
+			if fx_curr:
+				if isinstance(raw_fx, bool):
+					frappe.throw(
+						coded_message("CLOSE-INVALID-COUNT", _("Counted foreign amount for {0} must be a number.").format(mode))
+					)
+				try:
+					fx_val = float(raw_fx)
+				except (TypeError, ValueError):
+					frappe.throw(
+						coded_message("CLOSE-INVALID-COUNT", _("Counted foreign amount for {0} must be a number.").format(mode))
+					)
+				if not math.isfinite(fx_val):
+					frappe.throw(
+						coded_message("CLOSE-INVALID-COUNT", _("Counted foreign amount for {0} must be finite.").format(mode))
+					)
+				if fx_val < 0:
+					frappe.throw(
+						coded_message(
+							"CLOSE-NEGATIVE-AMOUNT",
+							_("Counted closing amount for {0} cannot be negative.").format(mode),
+						)
+					)
+				fx_precision = currency_precision(fx_curr)
+				fx_rounded = flt(fx_val, fx_precision)
+				if abs(fx_val - fx_rounded) > 1e-6:
+					frappe.throw(
+						coded_message(
+							"CASH-PRECISION",
+							_("{0} amounts must match currency decimal precision ({1}).").format(fx_curr, fx_precision),
+						)
+					)
+				entry["custom_closing_foreign_amount"] = int(fx_rounded) if fx_precision == 0 else fx_rounded
+
+		parsed.append(entry)
 	return parsed
 
 
@@ -1457,16 +1522,18 @@ def get_till_close_preview(pos_profile: str, pos_opening_entry: str | None = Non
 		"POS Drawer Event", {"pos_opening_entry": opening.name, "event_type": "No Sale"}
 	)
 
+	till_curr = _till_currency(profile, profile.company)
 	payment_rows = []
 	for p in profile.get("payments") or []:
 		mode = p.mode_of_payment
 		is_cash = frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
+		is_local_cash = is_cash and not _is_fx_mode(mode, till_curr)
 		payment_rows.append(
 			{
 				"mode_of_payment": mode,
 				"is_cash": is_cash,
 				"opening_amount": opening_by_mode.get(mode, 0),
-				"expected_amount": None if blind else (expected_cash if is_cash else opening_by_mode.get(mode, 0)),
+				"expected_amount": None if blind else (expected_cash if is_local_cash else opening_by_mode.get(mode, 0)),
 			}
 		)
 
@@ -1587,10 +1654,13 @@ def close_till_with_controls(
 	closing.posting_date = end_dt.strftime("%Y-%m-%d")
 	closing.posting_time = end_dt.strftime("%H:%M:%S.%f")
 	for row in parsed_counts:
-		closing.append(
-			"payment_reconciliation",
-			{"mode_of_payment": row["mode_of_payment"], "closing_amount": row["closing_amount"]},
-		)
+		rec_row: dict[str, Any] = {
+			"mode_of_payment": row["mode_of_payment"],
+			"closing_amount": row["closing_amount"],
+		}
+		if "custom_closing_foreign_amount" in row:
+			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
+		closing.append("payment_reconciliation", rec_row)
 	for tip_row in _parse_tip_declarations(tip_declarations):
 		closing.append("custom_tip_declarations", tip_row)
 	closing.flags.ignore_permissions = True
@@ -1901,10 +1971,13 @@ def force_close_till(
 	closing.custom_force_closed = 1
 	closing.custom_force_close_reason = clean_reason
 	for row in parsed_counts:
-		closing.append(
-			"payment_reconciliation",
-			{"mode_of_payment": row["mode_of_payment"], "closing_amount": row["closing_amount"]},
-		)
+		rec_row: dict[str, Any] = {
+			"mode_of_payment": row["mode_of_payment"],
+			"closing_amount": row["closing_amount"],
+		}
+		if "custom_closing_foreign_amount" in row:
+			rec_row["custom_closing_foreign_amount"] = row["custom_closing_foreign_amount"]
+		closing.append("payment_reconciliation", rec_row)
 	for tip_row in _parse_tip_declarations(tip_declarations):
 		closing.append("custom_tip_declarations", tip_row)
 	closing.flags.ignore_permissions = True

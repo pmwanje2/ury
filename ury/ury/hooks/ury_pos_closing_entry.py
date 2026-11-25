@@ -144,14 +144,24 @@ def _set_expected_amounts(doc):
         till_modes_by_account.setdefault(account, []).append(payment_mode.mode_of_payment)
 
     rows_by_invoice = get_payment_rows_by_invoice(invoices) if invoices else {}
+    all_seen_modes = list(opening_by_mode.keys())
+    for inv_rows in rows_by_invoice.values():
+        for r in inv_rows:
+            if r.mode_of_payment not in all_seen_modes:
+                all_seen_modes.append(r.mode_of_payment)
+    home_currency = (profile.get("currency") or "").strip().upper()
+    early_fx_modes = _fx_tender_currencies_for_modes(all_seen_modes, home_currency)
+
     amounts_by_mode = {}
     fallback_changes = {}
     for invoice in invoices:
         rows = rows_by_invoice.get(("POS Invoice", invoice.name), [])
         change_amount = flt(invoice.get("change_amount"))
         if change_amount > 0 and not invoice.get("is_return"):
-            if row := get_change_payment_row(rows, invoice.account_for_change_amount):
-                row.amount = flt(row.amount) - change_amount
+            candidate = get_change_payment_row(rows, invoice.account_for_change_amount)
+            # Never deduct local home-currency change from a foreign-currency tender row.
+            if candidate and candidate.mode_of_payment not in early_fx_modes:
+                candidate.amount = flt(candidate.amount) - change_amount
             else:
                 modes = till_modes_by_account.get(invoice.account_for_change_amount, [])
                 if len(modes) != 1:
@@ -181,6 +191,7 @@ def _set_expected_amounts(doc):
         modes = [
             mode for mode in till_modes_by_account.get(account, [])
             if frappe.get_cached_value("Mode of Payment", mode, "type") == "Cash"
+            and mode not in early_fx_modes
         ]
         if not modes:
             continue
@@ -201,21 +212,78 @@ def _set_expected_amounts(doc):
     ]
     modes.extend(mode for mode in opening_by_mode if mode not in modes)
     modes.extend(mode for mode in expected_by_mode if mode not in modes)
+
+    home_currency = (profile.get("currency") or "").strip().upper()
+    fx_currency_by_mode = _fx_tender_currencies_for_modes(modes, home_currency)
+    fx_expected_by_mode = (
+        _fx_expected_foreign_by_mode(invoices, rows_by_invoice, fx_currency_by_mode)
+        if fx_currency_by_mode
+        else {}
+    )
+
     ordered_rows = []
     for mode in modes:
         client_row = client_rows.get(mode)
-        closing_amount = _currency_flt(client_row.closing_amount, precision) if client_row else 0
         expected_amount = _currency_flt(expected_by_mode.get(mode, 0), precision)
-        values = {
-            "mode_of_payment": mode,
-            "opening_amount": _currency_flt(opening_by_mode.get(mode, 0), precision),
-            "expected_amount": expected_amount,
-            "custom_closing_amount": (
-                _currency_flt(client_row.custom_closing_amount, precision) if client_row else 0
-            ),
-            "closing_amount": closing_amount,
-            "difference": _currency_flt(closing_amount - expected_amount, precision),
-        }
+        tender_curr = fx_currency_by_mode.get(mode)
+        if tender_curr:
+            from ury.ury_pos.fx import currency_precision, resolve_pos_exchange_rate
+
+            fx_prec = currency_precision(tender_curr)
+            base_prec = currency_precision(home_currency) if home_currency else precision
+            expected_fx = _currency_flt(fx_expected_by_mode.get(mode, 0), fx_prec)
+            has_client_fx = (
+                client_row is not None
+                and client_row.get("custom_closing_foreign_amount") is not None
+                and str(client_row.get("custom_closing_foreign_amount")).strip() != ""
+            )
+            closing_fx = _currency_flt(client_row.get("custom_closing_foreign_amount"), fx_prec) if has_client_fx else 0
+            foreign_diff = _currency_flt(closing_fx - expected_fx, fx_prec)
+            if expected_fx > 0 and expected_amount > 0:
+                if abs(foreign_diff) <= 1e-9:
+                    closing_amount = expected_amount
+                else:
+                    shift_rate = flt(expected_amount / expected_fx, 9)
+                    closing_amount = _currency_flt(closing_fx * shift_rate, base_prec)
+            elif closing_fx > 0:
+                try:
+                    rate_info = resolve_pos_exchange_rate(
+                        tender_curr,
+                        home_currency,
+                        posting_date=doc.get("posting_date"),
+                        company=doc.get("company"),
+                    )
+                    closing_amount = _currency_flt(closing_fx * rate_info["rate"], base_prec)
+                except Exception:
+                    closing_amount = _currency_flt(client_row.closing_amount, base_prec) if client_row else 0
+            else:
+                closing_amount = 0
+            values = {
+                "mode_of_payment": mode,
+                "opening_amount": _currency_flt(opening_by_mode.get(mode, 0), precision),
+                "expected_amount": expected_amount,
+                "custom_closing_amount": (
+                    _currency_flt(client_row.custom_closing_amount, precision) if client_row else 0
+                ),
+                "closing_amount": closing_amount,
+                "difference": _currency_flt(closing_amount - expected_amount, base_prec),
+                "custom_tender_currency": tender_curr,
+                "custom_expected_foreign_amount": expected_fx,
+                "custom_closing_foreign_amount": closing_fx,
+                "custom_foreign_difference": foreign_diff,
+            }
+        else:
+            closing_amount = _currency_flt(client_row.closing_amount, precision) if client_row else 0
+            values = {
+                "mode_of_payment": mode,
+                "opening_amount": _currency_flt(opening_by_mode.get(mode, 0), precision),
+                "expected_amount": expected_amount,
+                "custom_closing_amount": (
+                    _currency_flt(client_row.custom_closing_amount, precision) if client_row else 0
+                ),
+                "closing_amount": closing_amount,
+                "difference": _currency_flt(closing_amount - expected_amount, precision),
+            }
         if client_row:
             for field, value in values.items():
                 setattr(client_row, field, value)
@@ -226,6 +294,78 @@ def _set_expected_amounts(doc):
     doc.payment_reconciliation[:] = ordered_rows
     for position, row in enumerate(ordered_rows, start=1):
         row.idx = position
+
+
+def _fx_tender_currencies_for_modes(modes, home_currency):
+    if not modes:
+        return {}
+    try:
+        rows = frappe.db.sql(
+            """
+            SELECT name, custom_tender_currency
+            FROM `tabMode of Payment`
+            WHERE name IN %s
+              AND COALESCE(custom_tender_currency, '') != ''
+            """,
+            (tuple(modes),),
+            as_dict=True,
+        )
+    except Exception:
+        return {}
+    result = {}
+    for row in rows or []:
+        curr = (row.get("custom_tender_currency") or "").strip().upper()
+        if curr and curr != home_currency:
+            result[row["name"]] = curr
+    return result
+
+
+def _fx_expected_foreign_by_mode(invoices, rows_by_invoice, fx_currency_by_mode):
+    if not invoices or not fx_currency_by_mode:
+        return {}
+    fx_modes = tuple(fx_currency_by_mode.keys())
+    inv_names = tuple(inv.name for inv in invoices if inv.get("name"))
+    totals = {}
+    # Prefer direct DB sum of Sales Invoice Payment.custom_tender_amount so we
+    # never depend on ERPNext's get_payment_rows_by_invoice selecting custom fields.
+    try:
+        sql_rows = frappe.db.sql(
+            """
+            SELECT mode_of_payment, COALESCE(SUM(custom_tender_amount), 0) AS total_fx
+            FROM `tabSales Invoice Payment`
+            WHERE parenttype = 'POS Invoice'
+              AND parent IN %s
+              AND mode_of_payment IN %s
+            GROUP BY mode_of_payment
+            """,
+            (inv_names, fx_modes),
+            as_dict=True,
+        )
+        if sql_rows:
+            for row in sql_rows:
+                totals[row["mode_of_payment"]] = flt(row.get("total_fx"))
+            return totals
+    except Exception:
+        pass
+    for invoice in invoices:
+        for row in rows_by_invoice.get(("POS Invoice", invoice.name), []):
+            if row.mode_of_payment in fx_currency_by_mode:
+                totals[row.mode_of_payment] = totals.get(row.mode_of_payment, 0.0) + flt(
+                    row.get("custom_tender_amount")
+                )
+    return totals
+
+
+def post_fx_vault_sweep_journal_entry(doc, method=None):
+    from ury.ury_pos.fx import post_fx_vault_sweep_journal_entry as _post_sweep
+
+    return _post_sweep(doc, method)
+
+
+def cancel_fx_vault_sweep_journal_entry(doc, method=None):
+    from ury.ury_pos.fx import cancel_fx_vault_sweep_journal_entry as _cancel_sweep
+
+    return _cancel_sweep(doc, method)
 
 
 def _currency_flt(value, precision):

@@ -194,7 +194,18 @@
     "room_over_limit": "يتجاوز المبلغ حد رسوم الغرفة. يلزم اعتماد المدير.",
     "request_room_override": "طلب اعتماد المدير",
     "override_approved_by": "تم اعتماد التجاوز بواسطة {{approver}}",
-    "account_over_limit_notice": "يتجاوز هذا المبلغ الرصيد الائتماني المتاح للعميل. يلزم اعتماد المدير."
+    "account_over_limit_notice": "يتجاوز هذا المبلغ الرصيد الائتماني المتاح للعميل. يلزم اعتماد المدير.",
+    "reference_label_default": "مرجع الدفع",
+    "reference_placeholder_default": "أدخل مرجع المعاملة أو رمز التفويض",
+    "reference_required": "أدخل مرجع الدفع لـ {{mode}}.",
+    "reference_invalid": "مرجع الدفع لـ {{mode}} لا يطابق التنسيق المطلوب.",
+    "reference_date": "تاريخ المرجع",
+    "reference_date_required": "اختر تاريخ المرجع لـ {{mode}}.",
+    "fx_rate_badge": "1 {{currency}} = {{rate}} {{home}}",
+    "fx_equivalent": "المعادل المحلي: {{amount}}",
+    "fx_stale_rate": "سعر الصرف لـ {{currency}} منتهي الصلاحية أو غير متوفر. حدّث السعر قبل إتمام الدفع.",
+    "fx_override_rate": "تجاوز سعر الصرف بموافقة المدير",
+    "fx_change_local": "الباقي المستحق بعملة {{currency}}: {{amount}}"
   },
   "discount": {
     "title": "الخصم",
@@ -331,7 +342,9 @@
     "tip_remarks": "ملاحظات",
     "tip_remarks_placeholder": "ملاحظة اختيارية",
     "declared_cash_tips_for": "الإكراميات النقدية المصرَّح بها لـ {{name}}",
-    "tip_declaration_required": "أدخل الإكراميات النقدية المصرَّح بها (أدخل 0 إذا لم توجد) لكل نادل قبل إغلاق الوردية."
+    "tip_declaration_required": "أدخل الإكراميات النقدية المصرَّح بها (أدخل 0 إذا لم توجد) لكل نادل قبل إغلاق الوردية.",
+    "fx_native_count": "الجرد بعملة {{currency}}",
+    "fx_base_equivalent": "المعادل الأساسي: {{amount}}"
   },
   "checklist": {
     "title_opening": "قائمة التحقق عند الفتح",
@@ -1085,7 +1098,10 @@
     "approve_and_replay": "اعتماد ومزامنة",
     "approval_title": "اعتماد الدفع دون اتصال",
     "approval_summary": "دفع {{mode}} دون اتصال بمبلغ {{amount}} يتجاوز الحد {{limit}}",
-    "approved_and_replayed": "تم اعتماد الدفع دون اتصال ومزامنته."
+    "approved_and_replayed": "تم اعتماد الدفع دون اتصال ومزامنته.",
+    "waiter_offline_pill": "غير متصل · الطلبات محفوظة محلياً",
+    "waiter_queued_badge": "{{count}} بانتظار المزامنة",
+    "waiter_settle_blocked": "التحصيل دون اتصال يتطلب صلاحية أمين الصندوق."
   },
   "bill_requests": {
     "choose_check": "Choose an open check",

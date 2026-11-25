@@ -10,6 +10,12 @@ const READ_METHODS = new Set([
   "/api/method/ury.ury_pos.api.getPosProfile",
   "/api/method/ury.ury_pos.api.getPosProfileFull",
   "/api/method/ury.ury_pos.api.getModeOfPayment",
+  "/api/method/ury.ury_pos.api.getBranch",
+  "/api/method/ury.ury_pos.api.getTable",
+  "/api/method/ury.ury_pos.api.getTablesForBranch",
+  "/api/method/ury.ury_pos.api.getRoom",
+  "/api/method/ury.ury_pos.api.getBranchRoom",
+  "/api/method/ury.ury_pos.api.get_captain_context",
 ]);
 const TABLE_LIST = "/api/method/frappe.client.get_list";
 const TABLE_RESOURCE = "/api/resource/URY Table";

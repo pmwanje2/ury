@@ -107,13 +107,15 @@ class TestR3LiveGetModeOfPaymentColdBoot(unittest.TestCase):
         fake_frappe.get_doc.assert_not_called()
 
     def test_get_mode_of_payment_returns_modes_when_profile_resolved(self):
-        """Once an outlet is selected, `getModeOfPayment()` returns its payment modes with offline metadata."""
+        """Once an outlet is selected, `getModeOfPayment()` returns its payment modes with offline and FX/ref metadata."""
         fake_frappe = MagicMock()
         fake_frappe.get_doc.return_value = SimpleNamespace(
+            company="Test Co",
+            currency="UGX",
             payments=[
                 Row(mode_of_payment="Cash"),
                 Row(mode_of_payment="Card"),
-            ]
+            ],
         )
         api = _load_api_module(fake_frappe)
 
@@ -130,7 +132,24 @@ class TestR3LiveGetModeOfPaymentColdBoot(unittest.TestCase):
                         }
                         for row in profile.payments
                     ],
-                )
+                ),
+                "ury.ury_pos.fx": _stub(
+                    "ury.ury_pos.fx",
+                    currency_precision=lambda code: 0 if code == "UGX" else 2,
+                    get_mode_payment_config=lambda mode, company=None: {
+                        "type": "Cash" if mode == "Cash" else "Bank",
+                        "custom_reference_mode": "Hidden",
+                        "custom_reference_label": "",
+                        "custom_reference_placeholder": "",
+                        "custom_reference_pattern": "",
+                        "custom_reference_date_required": 0,
+                        "custom_tender_currency": "",
+                        "custom_fx_rate_type": "Buying",
+                        "default_account": f"{mode} - TC",
+                        "custom_fx_vault_account": None,
+                    },
+                    resolve_pos_exchange_rate=MagicMock(),
+                ),
             },
         ):
             with patch.object(
@@ -140,13 +159,13 @@ class TestR3LiveGetModeOfPaymentColdBoot(unittest.TestCase):
             ):
                 result = api.getModeOfPayment()
 
-        self.assertEqual(
-            result,
-            [
-                {"mode_of_payment": "Cash", "opening_amount": 0.0, "allow_offline": True, "requires_reference": False},
-                {"mode_of_payment": "Card", "opening_amount": 0.0, "allow_offline": False, "requires_reference": False},
-            ],
-        )
+        self.assertEqual([r["mode_of_payment"] for r in result], ["Cash", "Card"])
+        self.assertEqual(result[0]["allow_offline"], True)
+        self.assertEqual(result[0]["requires_reference"], False)
+        self.assertEqual(result[0]["type"], "Cash")
+        self.assertEqual(result[1]["allow_offline"], False)
+        self.assertEqual(result[1]["requires_reference"], False)
+        self.assertEqual(result[1]["type"], "Bank")
 
 
 if __name__ == "__main__":
