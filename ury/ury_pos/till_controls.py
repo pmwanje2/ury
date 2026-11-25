@@ -1427,21 +1427,32 @@ def _new_counted_closing(profile, opening, counts, period_end_date):
 
 
 def _signed_cash_variances(closing, profile):
-	"""Return every cash variance in its tender currency, including rows within tolerance."""
+	"""Include both tender and company currency for FX cash rows, even within tolerance."""
 	currency = (profile.get("currency") or frappe.db.get_value(
 		"Company", profile.company, "default_currency"
 	) or "").strip().upper()
+	precision = currency_precision(currency)
+	company_quote = None
 	variances = []
 	for row in closing.get("payment_reconciliation") or []:
 		if frappe.get_cached_value("Mode of Payment", row.mode_of_payment, "type") != "Cash":
 			continue
+		difference = flt(row.get("difference"), precision)
 		tender_currency = (row.get("custom_tender_currency") or "").strip().upper()
 		foreign_variance = row.get("custom_foreign_difference")
 		if tender_currency and tender_currency != currency and foreign_variance not in (None, ""):
-			variance_currency, difference = tender_currency, foreign_variance
+			if company_quote is None:
+				company_quote = profile_approval_currency(profile, frappe, posting_date=closing.get("posting_date"))
+			company_amount = company_approval_amount(profile, difference, frappe, currency_and_rate=company_quote)
+			variances.append((
+				row.mode_of_payment,
+				tender_currency,
+				flt(foreign_variance, currency_precision(tender_currency)),
+				company_quote[0],
+				math.copysign(company_amount, difference),
+			))
 		else:
-			variance_currency, difference = currency, row.get("difference")
-		variances.append((row.mode_of_payment, variance_currency, flt(difference, currency_precision(variance_currency))))
+			variances.append((row.mode_of_payment, currency, difference))
 	return tuple(sorted(variances))
 
 

@@ -115,8 +115,9 @@ PIN_AUTH_DOCTYPE = "POS Override PIN"
 PIN_AUTH_FIELDNAME = "pin_hash"
 
 AGENT_ROLES = frozenset({"Kamra Agent", "AI Agent", "HUF Agent"})
-SECRET_FORM_KEYS = ("pin", "password", "current_password", "new_pin", "confirm_pin")
-FORBIDDEN_CLAIM_KEYS = frozenset({"pin", "password", "pin_hash", "custom_override_pin_hash"})
+# Frappe masks "secret" keys in Error Log metadata before request hooks run.
+SECRET_FORM_KEYS = ("pin_secret", "pin", "password", "current_password", "new_pin", "confirm_pin")
+FORBIDDEN_CLAIM_KEYS = frozenset({"pin_secret", "pin", "password", "pin_hash", "custom_override_pin_hash"})
 
 _MGR_ROLES = ("URY Manager", "URY Admin", "Accounts Manager")
 _FLOOR_AND_MGR = ("URY Captain", "URY Cashier", "URY Manager", "URY Admin", "Accounts Manager")
@@ -583,7 +584,10 @@ def _read_pin_form() -> _PinInput:
     form = getattr(frappe, "form_dict", None)
     if not isinstance(form, dict):
         return _PinInput(None)
-    credentials = _PinInput(form.get("pin"), form.get("password", form.get("current_password")))
+    credentials = _PinInput(
+        form.get("pin_secret", form.get("pin")),
+        form.get("password", form.get("current_password")),
+    )
     _scrub_form_secrets()
     return credentials
 
@@ -637,6 +641,8 @@ def _protect_pin_endpoint(*credential_positions):
                         setattr(credentials, name, args[position])
                     if name in kwargs:
                         setattr(credentials, name, kwargs.pop(name))
+                if "pin_secret" in kwargs:
+                    credentials.pin = kwargs.pop("pin_secret")
                 args = tuple(value for position, value in enumerate(args) if position not in positional_indices)
                 return endpoint(*args, credentials=credentials, **kwargs)
             except Exception as error:

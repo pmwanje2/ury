@@ -188,7 +188,7 @@ export async function authoriseOverride(params: {
     pos_profile: params.posProfile,
     privilege: params.privilege,
     approver: params.approver,
-    pin: params.pin,
+    pin_secret: params.pin,
     reference_doctype: params.referenceDoctype,
     reference_name: params.referenceName,
     claim: params.claim,
@@ -204,7 +204,7 @@ export async function getMyPinStatus(): Promise<MyPinStatus> {
 export async function setMyPin(password: string, pin: string): Promise<{ ok: boolean; has_pin: boolean }> {
   const res = await call.post<{ message: { ok: boolean; has_pin: boolean } }>('ury.ury_pos.override.set_my_pin', {
     password,
-    pin,
+    pin_secret: pin,
   });
   return res.message;
 }
