@@ -2093,6 +2093,23 @@ def _discard_added_check(source, destination, company, split_consolidation, rese
     source.db_set("cancel_reason", _("Added to check {0}").format(destination.name))
 
 
+def _consolidated_check_is_complimentary(checks):
+    """A full-check comp can be recorded on the header or on individual lines."""
+    has_comp = False
+    for check in checks:
+        header_comp = cint(check.get("custom_is_complimentary"))
+        if header_comp:
+            has_comp = True
+            if flt(check.get("additional_discount_percentage")) == 100:
+                continue
+        for row in check.items:
+            if cint(row.get("custom_is_complimentary")):
+                has_comp = True
+            elif not cint(row.get("is_disposable")) and flt(row.get("qty")) > 0 and flt(row.get("rate")) > 0:
+                return False
+    return has_comp
+
+
 def consolidate_checks(destination, sources):
     """Add Check (Oracle Simphony Add/Transfer Check): move every line, bill-level discount
     and movable received tender of the source checks onto the destination check, so the guest
@@ -2117,6 +2134,7 @@ def consolidate_checks(destination, sources):
     split_consolidation = dependants is not None
     destination_before = _reservation_lines(destination.items)
 
+    merged_comp = _consolidated_check_is_complimentary([destination, *sources])
     merge_rate_prec = currency_precision(destination)
     verified_priv_child_rates = {}
     merged_items = {line_keys[row.name]: row for row in destination.items} if split_consolidation else {}
@@ -2218,11 +2236,13 @@ def consolidate_checks(destination, sources):
         destination.room_number = carried_room
 
     destination.invoice_printed = 0
-    if destination.get("pos_profile"):
-        _sync_service_charge(destination)
-    destination.calculate_taxes_and_totals()
-    destination.set_paid_amount()
-    destination.set_outstanding_amount()
+    destination.custom_is_complimentary = cint(merged_comp)
+    with with_currency_precision(destination):
+        if destination.get("pos_profile"):
+            _sync_service_charge(destination)
+        destination.calculate_taxes_and_totals()
+        destination.set_paid_amount()
+        destination.set_outstanding_amount()
     prev_tender_flag = getattr(frappe.flags, "ury_server_tender_received", False)
     prev_disc_flag = getattr(frappe.flags, "ury_server_discount_write", False)
     prev_merge_flag = getattr(frappe.flags, "in_bill_merge_sync", False)
@@ -2245,10 +2265,11 @@ def consolidate_checks(destination, sources):
     if verified_priv_child_rates and getattr(destination, "flags", None) is not None:
         destination.flags.ury_verified_privileged_child_rates = verified_priv_child_rates
     try:
-        if swap_for_inherited_approval:
-            destination.save(ignore_permissions=True)
-        else:
-            destination.save()
+        with with_currency_precision(destination):
+            if swap_for_inherited_approval:
+                destination.save(ignore_permissions=True)
+            else:
+                destination.save()
     finally:
         if getattr(destination, "flags", None) is not None:
             destination.flags.ury_verified_privileged_child_rates = prev_verified_child_rates

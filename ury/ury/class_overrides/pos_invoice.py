@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from html import escape
 
 import frappe
@@ -314,6 +315,7 @@ class CustomPOSInvoice(POSInvoice):
 		from ury.ury.hooks.ury_pos_tender import calculate_taxes_and_totals_excluding_tip
 		from ury.ury_pos.pricing_actions import calculate_taxes_and_totals_for_service_charge
 
+		from ury.ury_pos.discount import with_currency_precision
 		from ury.ury_pos.split_balances import _repricing_split_discount, get_saved_split_balance, restore_split_balance
 
 		base_calculate = super().calculate_taxes_and_totals
@@ -322,11 +324,13 @@ class CustomPOSInvoice(POSInvoice):
 			from ury.ury_pos.scoped_split_taxes import calculate_scoped_split_taxes
 
 			base_calculate = lambda: calculate_scoped_split_taxes(self)
-		result = calculate_taxes_and_totals_for_service_charge(
-			self,
-			lambda: calculate_taxes_and_totals_excluding_tip(self, base_calculate),
-		)
-		restore_split_balance(self, snapshot)
+		# Repricing and later saves must use the same minor unit as the split.
+		with with_currency_precision(self) if snapshot else nullcontext():
+			result = calculate_taxes_and_totals_for_service_charge(
+				self,
+				lambda: calculate_taxes_and_totals_excluding_tip(self, base_calculate),
+			)
+			restore_split_balance(self, snapshot)
 		return result
 
 	def before_print(self, settings=None):

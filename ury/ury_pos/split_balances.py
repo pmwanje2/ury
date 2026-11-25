@@ -111,7 +111,7 @@ def _tax_detail_allocations(
         ]
         txn_weights = [base * _decimal(detail.get("rate")) / 100
                        for base, detail in zip(bases, details, strict=True)]
-        if not sum(txn_weights):
+        if not any(txn_weights) or (not sum(txn_weights) and _decimal(txn_tax)):
             txn_weights = _fixed_tax_weights(item_names, source_rows, txn_tax)
     elif charge_type == "Actual":
         if fixed_fees is None:
@@ -125,7 +125,7 @@ def _tax_detail_allocations(
     elif charge_type == "On Net Total" or not any(weights):
         txn_weights = [_net(source_rows[name]) * _decimal(detail.get("rate")) / 100
                        for name, detail in zip(item_names, details, strict=True)]
-    has_transaction_weights = bool(sum(txn_weights))
+    has_transaction_weights = bool(sum(txn_weights)) or (not _decimal(txn_tax) and any(txn_weights))
     if has_transaction_weights:
         weights = txn_weights
 
@@ -136,9 +136,14 @@ def _tax_detail_allocations(
     allocations = []
     for index, (name, detail, weight) in enumerate(zip(item_names, details, weights, strict=True)):
         running_weight += weight
-        units = int((total_units * running_weight / total_weight).to_integral_value(
-            rounding=ROUND_HALF_UP,
-        )) if total_weight else 0
+        if total_weight:
+            units = int((total_units * running_weight / total_weight).to_integral_value(rounding=ROUND_HALF_UP))
+        elif has_transaction_weights and not total_units:
+            # Opposite signed components can be individually payable even
+            # when their sum is zero. Round cumulative transaction amounts.
+            units = sign * _units(running_weight, currency_places)
+        else:
+            units = 0
         taxable = bases[index] if bases is not None else _decimal(detail.get("taxable_amount")) / exchange_rate
         allocations.append({
             "item": name,
@@ -255,7 +260,7 @@ def _allocated_tax_details(saved, taxes, source_rows):
         index for index, tax in enumerate(saved["taxes"]) if tax.get("custom_pos_charge_kind") != "Charged Tip"
     ]
     current_taxes = [
-        tax.name for tax in taxes if tax.get("custom_pos_charge_kind") != "Charged Tip"
+        id(tax) for tax in taxes if tax.get("custom_pos_charge_kind") != "Charged Tip"
     ]
     if len(prior_taxes) != len(current_taxes):
         return {}
@@ -335,7 +340,7 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
             predecessor = tax.get("previous_charge")
         parent = index if predecessor is None else predecessor
         running = prior_rows[parent]["total"] if parent else net_amounts
-        details = saved_details.get(tax.get("name"))
+        details = saved_details.get(id(tax))
         if details is None:
             prior = prior_rows.get(cint(tax.get("row_id")), {})
             basis = prior.get(_PREVIOUS_TAX.get(tax.get("charge_type")))
@@ -364,6 +369,13 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
             if _matching_tax_account(tax, prior_tax):
                 rule = prior_rule or rule
                 rates = prior_tax.get("item_rates", rates)
+        if rule.get("charge_type") in _ITEM_RATE_CHARGES and check.get("name"):
+            # A split inherits the rounding boundary of the original charge.
+            # Independent repricing establishes a new boundary on this check.
+            if repricing:
+                rule["rounding_source"] = frappe.generate_hash(length=16)
+            else:
+                rule["rounding_source"] = prior_tax.get("rounding_source") or f"{check.name}/{index + 1}"
         if predecessor is not None:
             rule["previous_charge"] = predecessor
         if rates is not None:
@@ -610,6 +622,7 @@ def _consolidation_keys(checks, snapshots):
         "custom_modifier_prefix", "custom_modifier_group", "custom_modifier_option",
         "custom_modifiers_json", "custom_bundle_overrides_json", "custom_inherit_parent_routing",
         "custom_hide_unpriced_on_receipt", "custom_seat_no", "custom_course", "comment",
+        "ury_held", "fire_at", "fire_confirmation_pending",
     )
     for doc, snapshot in zip(checks, snapshots, strict=True):
         taxes = snapshot["taxes"] if snapshot else doc.get("taxes") or ()
@@ -626,6 +639,12 @@ def _consolidation_keys(checks, snapshots):
             "account_head", "description", "cost_center", "custom_pos_charge_kind", "add_deduct_tax",
             "previous_charge", *_TAX_PRICING_FIELDS,
         )) for tax in taxes)
+        rules = _saved_tax_pricing_rules(doc, snapshot) if snapshot else taxes
+        rounding_sources = tuple(
+            tax.get("rounding_source") or f"{doc.name}/{index + 1}"
+            for index, (tax, rule) in enumerate(zip(taxes, rules, strict=True))
+            if rule.get("charge_type") in _ITEM_RATE_CHARGES
+        )
         for row in doc.items:
             origin = row.get("custom_origin_invoice_item") or row.name
             unit = row.get("item_code"), _decimal(row.get("conversion_factor"))
@@ -642,7 +661,7 @@ def _consolidation_keys(checks, snapshots):
                 for child in children.get(row.get("reservation_line_key") or row.name, ())
             )
             signature = (origin, pricing[row.name], parent_pricing.get(row.get("custom_parent_line_key")),
-                         modifiers, chain, scope)
+                         modifiers, chain, scope, rounding_sources)
             representative = representatives.setdefault(signature, row.name)
             # Existing destination rows already have independent allocations.
             keys[row.name] = row.name if doc is checks[0] else representative
@@ -693,6 +712,8 @@ def combine_split_balances(checks, currency_places, base_places):
         for index, (tax, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
             labels = {key: val for key, val in tax.items() if key not in TAX_AMOUNTS and key != "item_rates"}
             labels.update(rule)
+            if rule.get("charge_type") in _ITEM_RATE_CHARGES:
+                labels.setdefault("rounding_source", f"{doc.name}/{index + 1}")
             # The preceding row identifies the complete ordered prefix, even
             # for an Actual fee that a later cumulative charge references.
             predecessor = tax.get("previous_charge", index)
