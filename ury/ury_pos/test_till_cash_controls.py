@@ -200,7 +200,7 @@ class FakeOverride:
             matched.append(rule)
         return matched
 
-    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
+    def consume(self, token, privilege, pos_profile, reference_name, claim, *, approval_amount=None, reference_doctype="POS Invoice"):
         if not token or token not in self.tokens or token in self.consumed or self.tokens[token]["expired"]:
             raise Refused("This manager approval is missing or has expired. [POS-AUTH-EXPIRED]")
         rec = self.tokens[token]

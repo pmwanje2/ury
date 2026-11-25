@@ -384,6 +384,16 @@ class TestOverShortToleranceAndBlindClose(LoadedSlice2):
         over_short = [je for je in self.store.journal_entries.values() if je.get("custom_pos_closing_entry") == closing.name]
         self.assertEqual(len(over_short), 1)
 
+    def test_over_short_approval_prices_persisted_opening_and_payments_without_a_write(self):
+        profile = self.frappe.get_doc("POS Profile", "Main Till")
+        counts = [{"mode_of_payment": "Cash", "closing_amount": 135000}]
+        amount = self.tc.over_short_approval_amount(
+            profile, "OPEN-MAIN-1", counts, period_end_date="2026-11-24 10:00:00",
+        )
+        self.assertEqual(amount, 15000)
+        self.assertFalse(self.cs.closings)
+        self.assertEqual(self.store.openings["OPEN-MAIN-1"]["status"], "Open")
+
     def test_variance_above_tolerance_requires_manager_pin_and_reason_and_stamps_audit(self):
         # Expected = 150,000; counted = 135,000 (diff = -15,000 > tolerance 5,000)
         self.store.current_user = "cashier@example.com"

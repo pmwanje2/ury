@@ -1191,6 +1191,126 @@ class TestOverrideContract(unittest.TestCase):
         self.assertEqual(self.store.committed_logs[-1].outcome, "PIN Reset")
         self.assertEqual(self.store.committed_logs[-1].approver, target)
 
+    def test_staff_pin_endpoints_require_manager_assignment_to_the_target_outlet(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        provider = MagicMock(return_value={"has_pin": True})
+        self.install_external_pin_hooks(provider)
+        self.frappe.has_permission.return_value = True
+
+        for action in (
+            lambda: api.list_pin_users("Pool Till"),
+            lambda: api.clear_user_pin("other_outlet@example.test", "Pool Till"),
+        ):
+            with self.subTest(action=action):
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, action)
+        provider.assert_not_called()
+
+        for administrator in ("sysmgr@example.test", "Administrator"):
+            with self.subTest(administrator=administrator):
+                self.frappe.session.user = administrator
+                self.assertEqual([row["user"] for row in api.list_pin_users("Pool Till")], [
+                    "other_outlet@example.test",
+                ])
+                self.assertTrue(api.clear_user_pin("other_outlet@example.test", "Pool Till")["ok"])
+
+    def test_pin_dispatcher_errors_are_sanitized_and_never_snapshotted(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        test_pin = "4829"
+        self.frappe.form_dict = {"pin": test_pin, "password": "secret-pass-1"}
+        self.frappe.get_hooks.side_effect = RuntimeError("Unavailable provider registry handling " + test_pin)
+
+        def dispatch(**kwargs):
+            newargs = kwargs.copy()
+            return api.set_my_pin(**newargs)
+
+        try:
+            dispatch(password="secret-pass-1", pin=test_pin)
+        except Exception as caught:
+            self.assertIsInstance(caught, Invalid)
+            self.assertIn("POS-AUTH-UNAVAILABLE", str(caught))
+            self.assertNotIn(test_pin, str(caught))
+            self.assertIsNone(caught.__context__)
+            self.assertTrue(getattr(caught, "skip_error_log", False))
+            self.assertEqual(self.frappe.form_dict, {})
+        else:
+            self.fail("The unexpected provider error should refuse PIN enrollment.")
+        self.frappe.logger.return_value.error.assert_called_once()
+        self.assertNotIn(test_pin, repr(self.frappe.logger.return_value.error.call_args))
+        self.assertNotIn("Unavailable provider registry", repr(self.frappe.logger.return_value.error.call_args))
+
+    def test_expected_pin_error_preserves_type_and_disables_developer_snapshot(self):
+        api = self.api()
+        self.frappe.session.user = "manager@example.test"
+        expected = Denied("Staff profile access was denied.")
+        with patch.object(api, "_get_profile", side_effect=expected):
+            with self.assertRaises(Denied) as caught:
+                api.authorise("Main Till", "void_sent_item", "manager2@example.test", "4829",
+                              "POS Invoice", "POS-INV-100", {})
+        self.assertIs(caught.exception, expected)
+        self.assertTrue(getattr(caught.exception, "skip_error_log", False))
+        self.frappe.logger.return_value.error.assert_not_called()
+
+    def test_till_variance_passed_to_provider_without_a_claim_amount(self):
+        api = self.api()
+        reference = "OPEN-MAIN-1"
+        counts = [{"mode_of_payment": "Cash", "closing_amount": 135}]
+        claim = {
+            "action": "over_short_close", "pos_profile": "Main Till",
+            "pos_opening_entry": reference, "counted_payments": counts,
+            "reason": "Other: Recount confirmed shortage",
+        }
+        self.install_external_pin_hooks()
+        verifier = self.hooks["__attr__:custom_app.pin.verify"]
+        verifier.return_value = {"ok": True}
+        get_value = self.frappe.db.get_value.side_effect
+        self.frappe.db.get_value.side_effect = (
+            lambda doctype, *args, **kwargs: "UGX" if doctype == "Company"
+            else get_value(doctype, *args, **kwargs)
+        )
+        till_controls = ModuleType("ury.ury_pos.till_controls")
+        till_controls.over_short_approval_amount = MagicMock(return_value=15000.0)
+        with patch.dict(sys.modules, {"ury.ury_pos.till_controls": till_controls}):
+            issued = api.authorise("Main Till", "over_short_close", "manager@example.test", "1357",
+                                   "POS Opening Entry", reference, claim)
+
+        till_controls.over_short_approval_amount.assert_called_once()
+        verifier.assert_called_once_with(
+            "manager@example.test", "1357", "Main Till", amount=15000, currency="UGX",
+            action="over_short_close", privilege="over_short_close",
+            reference_doctype="POS Opening Entry", reference_name=reference,
+            requester="cashier@example.test",
+        )
+        self.refused("POS-AUTH-CHANGED", Invalid, lambda: api.consume(
+            issued["token"], "over_short_close", "Main Till", reference, claim,
+            reference_doctype="POS Opening Entry", approval_amount=20000,
+        ))
+        self.assertEqual(api.consume(
+            issued["token"], "over_short_close", "Main Till", reference, claim,
+            reference_doctype="POS Opening Entry", approval_amount=15000,
+        ).approver, "manager@example.test")
+
+    def test_consume_rejects_a_token_approved_for_a_different_document_type(self):
+        api = self.api()
+        manager = "manager@example.test"
+        self.enroll(manager, "1357")
+        claim = {"amount": 50, "reason": "Guest changed mind"}
+        reference = "POS-INV-100"
+        issued = api.authorise("Main Till", "void_sent_item", manager, "1357",
+                               "POS Profile", reference, claim)
+
+        self.refused("POS-AUTH-CHANGED", Invalid, lambda: api.consume(
+            issued["token"], "void_sent_item", "Main Till", reference, claim,
+        ))
+        self.assertEqual(self.store.consumed_hashes, set())
+        issued = api.authorise("Main Till", "void_sent_item", manager, "1357",
+                               "POS Invoice", reference, claim)
+        self.assertEqual(api.consume(
+            issued["token"], "void_sent_item", "Main Till", reference, claim,
+            reference_doctype="POS Invoice",
+        ).approver, manager)
+
     def test_external_pin_list_reads_status_only_for_outlet_members(self):
         api = self.api()
         self.frappe.session.user = "manager@example.test"
