@@ -25,6 +25,7 @@ import { currencyPrecisionFor } from '../lib/discount-api';
 import {
   getShiftTipDeclarationRows,
   type ShiftTipDeclarationRow,
+  type ShiftJobSummaryRow,
 } from '../lib/tips-declaration-api';
 import {
   closeTillWithControls,
@@ -435,6 +436,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pendingCashMovements, setPendingCashMovements] = useState(0);
   const [overShortReason, setOverShortReason] = useState('');
+  const [jobSummary, setJobSummary] = useState<ShiftJobSummaryRow[]>([]);
   const [tipRows, setTipRows] = useState<ShiftTipDeclarationRow[]>([]);
   const [touchedTipUsers, setTouchedTipUsers] = useState<Set<string>>(new Set());
   const [requireTipDeclaration, setRequireTipDeclaration] = useState(false);
@@ -530,6 +532,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       const payments = Array.isArray(invoiceResult) ? undefined : invoiceResult?.payments;
       setInvoiceCount(invoices.length);
       setPendingCashMovements(cashMovements.pending_count);
+      setJobSummary(tipDeclarationData?.job_summary ?? []);
       if (tipDeclarationData && Array.isArray(tipDeclarationData.rows)) {
         setTipRows(tipDeclarationData.rows);
         setRequireTipDeclaration(
@@ -1466,6 +1469,30 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
                 <p className="py-8 text-center text-sm text-gray-500">
                   {t('pos_closing.no_invoices')}
                 </p>
+              )}
+
+              {jobSummary.length > 0 && (
+                <div className="mt-5 overflow-x-auto rounded-lg border border-border p-4">
+                  <h3 className="mb-2 text-sm font-semibold">{t('pos_closing.job_summary')}</h3>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr>
+                        <th className="text-start">{t('timeclock.job_code')}</th>
+                        <th className="text-end">{t('pos_closing.labor_minutes')}</th>
+                        <th className="text-end">{t('pos_closing.tip_charged')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobSummary.map((row) => (
+                        <tr key={row.job_code ?? ''} className="border-t border-border">
+                          <td className="py-2">{row.job_code ?? t('pos_closing.job_code_unassigned')}</td>
+                          <td className="text-end tabular-nums">{row.labor_minutes}</td>
+                          <td className="text-end tabular-nums">{maskAmounts ? '—' : formatCurrency(row.charged_tips, tillCurrency)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
 
               {hasRows && tipRows.length > 0 && (

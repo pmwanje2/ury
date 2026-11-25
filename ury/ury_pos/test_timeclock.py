@@ -147,7 +147,7 @@ def _build_frappe_for_timeclock(store: FakeTimeclockStore, user="waiter@example.
             return any(c.employee == filt.get("employee") for c in store.checkins)
         return False
 
-    def _get_value(dt, filt, fieldname=None, as_dict=False, order_by=None):
+    def _get_value(dt, filt, fieldname=None, as_dict=False, order_by=None, for_update=False):
         if dt == "User":
             if fieldname == "enabled":
                 return 1

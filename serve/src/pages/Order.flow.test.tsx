@@ -2,6 +2,8 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
+import { QzSigningRefusedError } from '@ury/core'
+import { initI18n } from '../i18n'
 
 let tableParam = 'T-101'
 
@@ -319,7 +321,7 @@ vi.mock('../components/CaptainActionsMenu', () => ({
   }) => (
     <>
       {props.showPrintBill ? (
-        <button type="button" onClick={() => void props.onPrintBill?.()}>
+        <button type="button" disabled={props.isPrintingBill} onClick={() => void props.onPrintBill?.()}>
           Print Bill
         </button>
       ) : null}
@@ -840,6 +842,27 @@ describe('Order page flow', () => {
     expect(contextState.refreshContext).toHaveBeenCalled()
     expect(contextState.refetchContext).not.toHaveBeenCalled()
     expect(contextState.isContextLoading).toBe(false)
+  })
+
+  it('shows the signing refusal and re-enables Print Bill', async () => {
+    const user = userEvent.setup()
+    await initI18n('en')
+    resetFixtures({ existingOrder: true, withCart: true, printBill: true })
+    let refuse: (error: Error) => void = () => undefined
+    printOrder.mockReturnValue(new Promise((_, reject) => { refuse = reject }))
+    render(<OrderPage />)
+
+    const button = screen.getByRole('button', { name: 'Print Bill' })
+    await user.click(button)
+    expect(button).toBeDisabled()
+    refuse(new QzSigningRefusedError())
+
+    await waitFor(() => expect(button).toBeEnabled())
+    expect(showToastError).toHaveBeenCalledWith(
+      'Printer signing was refused. Check your printing permissions and try again.'
+    )
+    expect(contextState.refreshContext).not.toHaveBeenCalled()
+    expect(showToastSuccess).not.toHaveBeenCalled()
   })
 
   it('opens Split with silent refresh and keeps the dialog mounted', async () => {

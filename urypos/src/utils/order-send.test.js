@@ -38,7 +38,7 @@ const hooks = registerHooks({
       } else if (specifier.includes("frappeSdk")) {
         source = "export default { db: () => ({}), call: () => ({}) };";
       } else if (specifier.includes("PrintWithQz")) {
-        source = "export const printWithQz = () => {}; export const loadQzPrinter = () => {}; export const disconnectQzPrinter = () => {};";
+        source = "export const printWithQz = (...args) => globalThis.orderTest.printWithQz?.(...args); export const loadQzPrinter = () => {}; export const disconnectQzPrinter = () => {};";
       } else if (specifier.endsWith(".vue")) {
         source = "export default { render: () => null };";
       } else if (specifier.includes("stores/") || /^\.\/[A-Z]|^\.\/recentOrder/.test(specifier)) {
@@ -107,6 +107,24 @@ function fixture(cashier = false) {
 async function renderCart() {
   return renderToString(Vue.createSSRApp(Cart));
 }
+
+test("a refused print stops the busy state without marking the bill printed", async () => {
+  const { state, events } = fixture();
+  state.print_type = "qz";
+  state.call.get = async () => ({ message: { html: "<p>receipt</p>" } });
+  let refuse;
+  globalThis.orderTest.printWithQz = () => new Promise((_, reject) => { refuse = reject; });
+
+  const printing = state.printFunction();
+  await Promise.resolve();
+  assert.equal(state.isPrinting, true);
+  refuse(new Error("Printer signing was refused."));
+  await printing;
+
+  assert.equal(state.isPrinting, false);
+  assert.deepEqual(events.alerts, ["Printer signing was refused."]);
+  assert.deepEqual(events.posts, []);
+});
 
 test("new orders offer Send to Kitchen", async () => {
   fixture();

@@ -1,3 +1,4 @@
+import { normalizeCovers } from '@ury/core/covers';
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { ownedSessionKey, getSessionUser, isLinkDown, storage, siteCurrencyCode, currencyDisplaySymbol } from '@ury/core';
@@ -957,7 +958,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
   setSelectedAggregator: (aggregator) => set({ selectedAggregator: aggregator }),
   setOrderComment: (comment: string) => set({ orderComment: comment }),
   setGuestLabel: (label: string) => set({ guestLabel: label }),
-  setNoOfPax: (pax: number) => set({ noOfPax: pax }),
+  setNoOfPax: (pax: number) => set({ noOfPax: normalizeCovers(pax) }),
   setShowVoluntaryClosing: (show: boolean) => set({ showVoluntaryClosing: show }),
 
   processPayment: async (paymentMode: string, amount: number) => {
@@ -1149,7 +1150,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
             comment: item.comment || '',
             ury_held: Number(item.ury_held || 0),
           })),
-          noOfPax: order.no_of_pax || 1,
+          noOfPax: normalizeCovers(order.no_of_pax),
           lastModifiedTime: order.modified || null,
           orderComment: order.custom_comments || '',
           guestLabel: order.custom_guest_label || '',
@@ -1176,7 +1177,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
               }),
           isUpdatingOrder: false,
           orderId: order?.name || null,
-          noOfPax: order?.no_of_pax || 1,
+          noOfPax: normalizeCovers(order?.no_of_pax),
           lastModifiedTime: order?.modified || null,
           orderComment: order?.custom_comments || '',
           guestLabel: order?.custom_guest_label || '',

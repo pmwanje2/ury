@@ -1,3 +1,4 @@
+import { coversLimit } from '@ury/core/covers'
 import { apiErrorMessage } from '../lib/api-error'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -13,7 +14,8 @@ import {
   cn,
   showToast,
 } from '@ury/ui'
-import { formatCurrency } from '@ury/core'
+import { formatCurrency, QzSigningRefusedError } from '@ury/core'
+import { t } from '../i18n'
 import { useServeStore } from '../store/serve-store'
 import { useRootStore, type RootState } from '../store/root-store'
 import {
@@ -487,7 +489,7 @@ export default function OrderPage() {
               variant="outline"
               size="icon"
               className="h-9 w-9 rounded-full"
-              disabled={isInteractionDisabled}
+              disabled={isInteractionDisabled || noOfPax >= coversLimit(posProfile, selectedOrderType)}
               aria-label="Increase pax"
             >
               +
@@ -705,7 +707,9 @@ export default function OrderPage() {
                   )
                 }
               } catch (e) {
-                showToast.error(e instanceof Error ? e.message : 'Print failed')
+                showToast.error(e instanceof QzSigningRefusedError
+                  ? t('errors.printer_signing_refused')
+                  : e instanceof Error ? e.message : 'Print failed')
               } finally {
                 setIsPrintingBill(false)
               }

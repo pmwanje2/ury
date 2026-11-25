@@ -265,7 +265,7 @@ This guide takes you step-by-step through setting up URY on top of ERPNext
 
 - QZ Printer
 	-  Add your certificate file is at `ury/public/files/cert.pem`.
-	- Update the `pos/privateKey.js` for v2 and `urypos/privateKey.js` for v1.
+	- Configure `qz_private_key` in the site configuration and allow printer roles in POS Print Settings. Place the public certificate at `/assets/ury/files/cert.pem`.
 - Network Printer
 	- Set up CUPS (Common Unix Printing System) for network printing.
 	- In Network Printer Settings, add your printers and note their and enter the corresponding printer in the URY Room for invoice printing from POS.

@@ -34,11 +34,12 @@ export const RoomPage: React.FC = () => {
   const [originalRoomDisplayName, setOriginalRoomDisplayName] = useState<string>('');
 
   // Branch options
+  const [areaTypes, setAreaTypes] = useState<{ name: string; sort_order?: number }[]>([]);
   const [branches, setBranches] = useState<{ name: string }[]>([]);
 
   const [newRoom, setNewRoom] = useState({
     room_name: '',
-    room_type: 'AC',
+    room_type: '',
     branch: '',
     kot_printing: false,
     print_format: '',
@@ -79,6 +80,13 @@ export const RoomPage: React.FC = () => {
   };
 
   useEffect(() => {
+    void dashboardService.getModuleRecords<{ name: string; sort_order?: number }>('Dining Area Type', 'all')
+      .then((records) => setAreaTypes([...(records ?? [])].sort((left, right) =>
+        (left.sort_order ?? 0) - (right.sort_order ?? 0) || left.name.localeCompare(right.name))))
+      .catch(() => setAreaTypes([]));
+  }, []);
+
+  useEffect(() => {
     fetchBranches();
     fetchNetworkPrinters();
     fetchRooms();
@@ -89,7 +97,7 @@ export const RoomPage: React.FC = () => {
     setOriginalRoomDisplayName('');
     setNewRoom({
       room_name: '',
-      room_type: 'AC',
+      room_type: areaTypes[0]?.name ?? '',
       branch: activeBranchId !== 'all' ? activeBranchId : '',
       kot_printing: false,
       print_format: '',
@@ -110,7 +118,7 @@ export const RoomPage: React.FC = () => {
     setOriginalRoomDisplayName(displayName);
     setNewRoom({
       room_name: displayName,
-      room_type: room.room_type || 'AC',
+      room_type: room.room_type || '',
       branch: room.branch || '',
       kot_printing: room.kot_printing === 1,
       print_format: room.print_format || '',
@@ -144,7 +152,7 @@ export const RoomPage: React.FC = () => {
         // whitespace differences in the branch field or other formatting edge cases.
         const original = {
           room_name: originalRoomDisplayName || '',
-          room_type: editingRoom.room_type || 'AC',
+          room_type: editingRoom.room_type || '',
           branch: editingRoom.branch || '',
           kot_printing: editingRoom.kot_printing === 1 ? 1 : 0,
           print_format: editingRoom.print_format || '',
@@ -152,7 +160,7 @@ export const RoomPage: React.FC = () => {
         };
         const current = {
           room_name: newRoom.room_name || '',
-          room_type: newRoom.room_type || 'AC',
+          room_type: newRoom.room_type || '',
           branch: newRoom.branch || '',
           kot_printing: newRoom.kot_printing ? 1 : 0,
           print_format: newRoom.print_format || '',
@@ -261,7 +269,7 @@ export const RoomPage: React.FC = () => {
                 render: (room) => (
                   <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary text-[10px]">
                     <Layers className="w-3 h-3 me-1" />
-                    {room.room_type === 'NON-AC' ? __('Non-AC') : (room.room_type || 'General')}
+                    {room.room_type || __('General')}
                   </Badge>
                 ),
               },
@@ -300,16 +308,16 @@ export const RoomPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block font-semibold text-gray-700 mb-1">{__('Room Type')}</label>
-            <SearchableSelect
+            <label htmlFor="room_type" className="block font-semibold text-gray-700 mb-1">{__('Room Type')}</label>
+            <select
               id="room_type"
+              className="w-full rounded-md border border-input bg-background px-3 py-2"
               value={newRoom.room_type}
-              onChange={(_, value) => setNewRoom({ ...newRoom, room_type: value })}
-              options={[
-                { value: 'AC', label: 'AC' },
-                { value: 'NON-AC', label: __('Non-AC') },
-              ]}
-            />
+              onChange={(event) => setNewRoom({ ...newRoom, room_type: event.target.value })}
+            >
+              <option value="">{__('Select a room type')}</option>
+              {areaTypes.map(({ name }) => <option key={name} value={name}>{name}</option>)}
+            </select>
           </div>
 
           {/* Branch field */}

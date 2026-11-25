@@ -183,9 +183,9 @@ def get_custom_fields():
 				},
 				{
 					"fieldname": "no_of_pax",
-					"fieldtype": "Data",
+					"fieldtype": "Int",
 					"label": "Pax",
-					"length": 64,
+					"default": "1",
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,
 					"translatable": 0
@@ -493,8 +493,7 @@ def get_custom_fields():
 				},
 				{
 					"fieldname": "no_of_pax",
-					"fieldtype": "Data",
-					"length": 64,
+					"fieldtype": "Int",
 					"label": "Pax",
 					"insert_after": "column_break_rwbwf",
 					"read_only": 0,

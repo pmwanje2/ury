@@ -1,0 +1,21 @@
+{
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "job_code"
+ ],
+ "fields": [
+  {
+   "fieldname": "job_code",
+   "fieldtype": "Link",
+   "options": "Designation",
+   "label": "Job Code",
+   "reqd": 1,
+   "in_list_view": 1
+  }
+ ],
+ "module": "URY",
+ "name": "POS Job Code Option",
+ "permissions": [],
+ "istable": 1
+}

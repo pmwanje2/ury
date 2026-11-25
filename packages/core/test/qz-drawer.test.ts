@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import * as qzModule from '../src/print/qz';
+
+const post = vi.hoisted(() => vi.fn());
+vi.mock('../src/frappe/client', () => ({ call: { post } }));
 
 afterEach(() => {
   Reflect.deleteProperty(window, 'qz');
@@ -34,8 +36,7 @@ describe('QZ cash drawer ESC/POS kick', () => {
     ) => Promise<{ status: string; hex: string }>;
     expect(typeof kickDrawerQz).toBe('function');
 
-    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-    qzModule.initPrinting({ signKey: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() });
+    post.mockResolvedValue({ message: 'site-signature' });
     vi.spyOn(axios, 'get').mockResolvedValue({ data: 'cert' });
 
     const bridge = {
@@ -59,5 +60,8 @@ describe('QZ cash drawer ESC/POS kick', () => {
     const resDefault = await kickDrawerQz('localhost');
     expect(resDefault.hex).toBe('1b700019fa');
     expect(bridge.configs.create).toHaveBeenCalledWith('Default Thermal');
+    const signature = bridge.security.setSignaturePromise.mock.calls[0][0];
+    await expect(new Promise(signature('drawer pulse'))).resolves.toBe('site-signature');
+    expect(post).toHaveBeenCalledWith('ury.ury.api.ury_print.signature_promise', { toSign: 'drawer pulse' });
   });
 });

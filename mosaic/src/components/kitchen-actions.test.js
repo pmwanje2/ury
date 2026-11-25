@@ -297,39 +297,32 @@ test("elapsed time drives the LATE cue and delay notification on the site clock"
   }]);
 });
 
-test("recent served query is native and constrained to the branch and production unit", async () => {
+test("recent served tickets use the server's station scope and per-ticket window", async () => {
   const { state, call } = kitchen();
   state.branch = "Branch A";
-  state.serverTimeOffset = new Date("2026-10-01T00:05:00").getTime() - Date.now();
   const gets = [];
   call.get = async (method, args) => {
     gets.push({ method, args });
-    return { message: [
-      { name: "RECENT", order_status: "Served", creation: "2026-09-30 23:40:00", production_time: "15" },
-      { name: "EXPIRED", order_status: "Served", creation: "2026-09-30 23:00:00", production_time: "15" },
-    ] };
+    return { message: { server_time: "2026-10-01 00:05:00", recall_window_minutes: 5, kots: [
+      { name: "RECENT", order_status: "Served", creation: "2026-09-30 23:40:00", production_time: "15", recall_window_minutes: 12 },
+      { name: "EXPIRED", order_status: "Served", creation: "2026-09-30 23:00:00", production_time: "15", recall_window_minutes: 40 },
+    ] } };
   };
-  assert.equal(typeof state.fetchRecentServed, "function", "Mosaic has no native served-ticket list for recall");
   await state.fetchRecentServed();
-  assert.equal(gets[0].method, "frappe.client.get_list");
-  assert.equal(gets[0].args.doctype, "URY KOT");
-  assert.equal(gets[0].args.filters.branch, "Branch A");
-  assert.equal(gets[0].args.filters.production, "Kitchen");
-  assert.equal(gets[0].args.filters.order_status, "Served");
-  assert.equal(gets[0].args.filters.docstatus, 1);
+  assert.deepEqual(gets, [{
+    method: "ury.ury.api.ury_kot_display.recent_served_kots",
+    args: { branch: "Branch A", production: "Kitchen" },
+  }]);
   assert.deepEqual(state.recentServed.map(k => k.name), ["RECENT"]);
 });
 
-test("an all-branch admin board omits the branch filter from the recent-served query", async () => {
-  const query = helpers.recentServedQuery(null, "Kitchen", new Date("2026-10-01T00:05:00"));
-  assert.equal("branch" in query.filters, false, "A null board branch must not become a branch = null filter");
-  assert.equal(query.filters.production, "Kitchen");
+test("an all-branch admin board leaves the branch scope to the server", async () => {
   const { state, call } = kitchen();
   state.branch = null;
   const gets = [];
-  call.get = async (method, args) => { gets.push({ method, args }); return { message: [] }; };
+  call.get = async (method, args) => { gets.push({ method, args }); return { message: { kots: [] } }; };
   await state.fetchRecentServed();
-  assert.equal("branch" in gets[0].args.filters, false);
+  assert.deepEqual(gets[0].args, { production: "Kitchen" });
 });
 
 test("an all-branch admin board offers the recent-served recall list", async () => {
@@ -419,12 +412,6 @@ test("the rendered card shows LATE, an Undo control, and a visible failure banne
   html = await renderToString(Vue.createSSRApp({ data: () => state, computed: component.computed, render }).use(i18n));
   assert.match(html, /Serving…/);
   assert.doesNotMatch(html, />Undo</);
-});
-
-test("the native recent-served query uses a site-local cutoff across midnight", () => {
-  const query = helpers.recentServedQuery("Branch A", "Kitchen", new Date("2026-10-01T00:05:00"));
-  assert.deepEqual(query.filters.modified, [">=", "2026-09-30 23:50:00"]);
-  assert.deepEqual(query.filters.type, ["not in", ["Cancelled", "Partially cancelled"]]);
 });
 
 test("leaving a station detaches both listeners without disturbing shared subscribers", async () => {

@@ -11,7 +11,6 @@ from ury.ury.api.ury_print import (
 	print_pos_page,
 	qz_certificate,
 	signature_promise,
-	QZ_SIGNING_ROLES,
 	_get_qz_private_key,
 	_mark_invoice_printed,
 )
@@ -24,7 +23,21 @@ def _ordinary_invoice():
 	return invoice
 
 
-class TestNetworkPrinting(FrappeTestCase):
+class BillPrintTestCase(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		# Routing and print bookkeeping tests supply their own invoice lookups.
+		# Leave first-print and reprint authorization to the floor-action suite.
+		self.enterContext(patch(
+			"ury.ury_pos.floor_actions.authorize_and_count_bill_print",
+			return_value={"is_reprint": False, "print_number": 1},
+		))
+		self.enterContext(patch("ury.ury.api.ury_print.frappe.utils.now_datetime",
+								return_value="2026-11-03 10:15:00"))
+		self.enterContext(patch("ury.ury.api.ury_fulfilment_posting_service.trigger_manufacture_on_bill_print"))
+
+
+class TestNetworkPrinting(BillPrintTestCase):
 	@patch("ury.ury.api.ury_print.validate_print_permission")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
 	def test_network_printing_success(
@@ -92,7 +105,7 @@ class TestNetworkPrinting(FrappeTestCase):
 		self.assertIsInstance(result, str)
 
 
-class TestSelectNetworkPrinter(FrappeTestCase):
+class TestSelectNetworkPrinter(BillPrintTestCase):
 	@patch("ury.ury.api.ury_print.network_printing")
 	@patch("ury.ury.api.ury_print.frappe.get_all")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -107,21 +120,21 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 
 		mock_db_get_value.side_effect = [
 			"T-01",  # table from invoice
-			"Room-1",  # room from table
 			"Standard",  # print_format from POS Profile
+			"Room-1",  # room from table
 		]
 
-		mock_get_all.return_value = [
-			frappe._dict({"printer": "Room Printer 1"}),
-			frappe._dict({"printer": "Room Printer 2"}),
-		]
+		mock_get_all.return_value = ["Room Printer 1", "Room Printer 2"]
 
 		mock_network_printing.return_value = "Success"
 
 		result = select_network_printer("POS-1", "INV-001")
 
 		self.assertEqual(result, "Success")
-		self.assertEqual(mock_network_printing.call_count, 2)
+		self.assertEqual(
+			[call.args[2] for call in mock_network_printing.call_args_list],
+			["Room Printer 1", "Room Printer 2"],
+		)
 
 	@patch("ury.ury.api.ury_print.network_printing")
 	@patch("ury.ury.api.ury_print.frappe.get_all")
@@ -135,7 +148,7 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 		mock_invoice.restaurant_table = "T-01"
 		mock_get_doc.return_value = mock_invoice
 
-		mock_db_get_value.side_effect = ["T-01", "Room-1", "Standard"]
+		mock_db_get_value.side_effect = ["T-01", "Standard", "Room-1"]
 		mock_get_all.return_value = []
 
 		result = select_network_printer("POS-1", "INV-001")
@@ -155,11 +168,8 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 		mock_invoice.restaurant_table = None
 		mock_get_doc.return_value = mock_invoice
 
-		mock_db_get_value.return_value = "Standard"
-
-		mock_get_all.return_value = [
-			frappe._dict({"printer": "POS Printer 1"}),
-		]
+		mock_db_get_value.side_effect = [None, "Standard"]
+		mock_get_all.return_value = ["POS Printer 1"]
 
 		mock_network_printing.return_value = "Success"
 
@@ -182,7 +192,7 @@ class TestSelectNetworkPrinter(FrappeTestCase):
 			select_network_printer("POS-1", "INV-001")
 
 
-class TestQzPrintUpdate(FrappeTestCase):
+class TestQzPrintUpdate(BillPrintTestCase):
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
 	@patch("ury.ury.api.ury_print.frappe.get_doc")
@@ -237,7 +247,7 @@ class TestQzPrintUpdate(FrappeTestCase):
 		mock_db_set_value.assert_not_called()
 
 
-class TestPrintPosPage(FrappeTestCase):
+class TestPrintPosPage(BillPrintTestCase):
 	@patch("ury.ury.api.ury_print._free_tables_if_no_open_invoices")
 	@patch("ury.ury.api.ury_print.frappe.db.set_value")
 	@patch("ury.ury.api.ury_print.frappe.db.get_value")
@@ -362,6 +372,11 @@ class TestQzCertificate(FrappeTestCase):
 
 
 class TestSignaturePromise(FrappeTestCase):
+	def setUp(self):
+		super().setUp()
+		self.print_settings = frappe._dict(qz_signing_roles="  Receipt Operator  \n")
+		self.enterContext(patch("ury.ury.api.ury_print.frappe.get_single", return_value=self.print_settings))
+
 	@patch("ury.ury.api.ury_print.frappe.get_roles")
 	@patch("ury.ury.api.ury_print._get_qz_private_key")
 	def test_signature_promise_success(self, mock_get_key, mock_get_roles):
@@ -380,7 +395,7 @@ class TestSignaturePromise(FrappeTestCase):
 		)
 
 		mock_get_key.return_value = pem
-		mock_get_roles.return_value = ["Administrator", "URY Admin"]
+		mock_get_roles.return_value = ["Receipt Operator"]
 
 		with patch("frappe.session") as mock_session:
 			mock_session.user = "admin_user"
@@ -401,17 +416,25 @@ class TestSignaturePromise(FrappeTestCase):
 	@patch("ury.ury.api.ury_print.frappe.get_roles")
 	def test_signature_promise_insufficient_roles(self, mock_get_roles):
 		"""Test signature_promise denies users without signing roles."""
-		mock_get_roles.return_value = ["User"]
+		mock_get_roles.return_value = ["System Manager", "URY Cashier"]
 
 		with patch("frappe.session") as mock_session:
 			mock_session.user = "normal_user"
 			with self.assertRaises(frappe.PermissionError):
 				signature_promise("test_payload")
 
+	@patch("ury.ury.api.ury_print.frappe.get_roles", return_value=["Receipt Operator"])
+	@patch("ury.ury.api.ury_print._get_qz_private_key")
+	def test_signature_promise_empty_allowlist_revokes_signing(self, mock_get_key, _mock_get_roles):
+		self.print_settings.qz_signing_roles = ""
+		with self.assertRaises(frappe.PermissionError):
+			signature_promise("test_payload")
+		mock_get_key.assert_not_called()
+
 	@patch("ury.ury.api.ury_print.frappe.get_roles")
 	def test_signature_promise_missing_payload(self, mock_get_roles):
 		"""Test signature_promise throws when payload is missing."""
-		mock_get_roles.return_value = ["Administrator"]
+		mock_get_roles.return_value = ["Receipt Operator"]
 
 		with patch("frappe.session") as mock_session:
 			mock_session.user = "admin_user"
@@ -448,13 +471,13 @@ class TestGetQzPrivateKey(FrappeTestCase):
 
 
 class TestQzSigningRoles(FrappeTestCase):
-	def test_qz_signing_roles_contains_expected_roles(self):
-		"""Test that QZ_SIGNING_ROLES contains expected administrator roles."""
-		self.assertIn("Administrator", QZ_SIGNING_ROLES)
-		self.assertIn("System Manager", QZ_SIGNING_ROLES)
-		self.assertIn("URY Admin", QZ_SIGNING_ROLES)
-		self.assertIn("URY Manager", QZ_SIGNING_ROLES)
-		self.assertIn("URY Cashier", QZ_SIGNING_ROLES)
+	def test_seeded_print_settings_include_the_existing_signing_roles(self):
+		settings = frappe.get_single("POS Print Settings")
+		self.assertTrue(settings.qz_signing_roles_initialized)
+		self.assertCountEqual(settings.qz_signing_roles.splitlines(), [
+			"Administrator", "System Manager", "URY Admin", "URY Manager",
+			"URY Cashier", "Restaurant Kitchen",
+		])
 
 
 class TestMarkInvoicePrinted(FrappeTestCase):

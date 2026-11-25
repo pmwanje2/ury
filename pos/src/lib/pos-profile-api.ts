@@ -1,3 +1,4 @@
+import type { CoversProfile } from '@ury/core/covers';
 import { DOCTYPES } from '../data/doctypes';
 import { call, db } from '@ury/core';
 import type { DefaultCustomerEntry } from '@ury/core/default-customer';
@@ -120,7 +121,7 @@ interface RolePermission {
 }
 
 // Full POS Profile response
-export interface PosProfileFull {
+export interface PosProfileFull extends CoversProfile {
   ury_enable_hold_fire?: number;
   name: string;
   owner: string;
