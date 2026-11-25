@@ -634,6 +634,66 @@ class TestPrintFormatsModifiersAndOpt79Suppression(unittest.TestCase):
 		self.assertIn("mod-row", html)
 		self.assertIn("Extra", html)
 
+	def test_waiter_order_slip_deduplicates_identical_modifier_summary_and_item_name(self):
+		class SlipRow(SimpleNamespace):
+			def get(self, key, default=None):
+				return getattr(self, key, default)
+
+			def get_formatted(self, fieldname, *args, **kwargs):
+				return str(getattr(self, fieldname, ""))
+
+		kot_doc = SlipRow(
+			invoice="POS-INV-809",
+			restaurant_table="T-5",
+			custom_guest_label=None,
+			customer_name="Walk-in",
+			order_no="809",
+			waiter="Alice",
+			date="2026-11-25",
+			time="10:00:00",
+			kot_items=[
+				SlipRow(
+					display_mode="single_qty",
+					cancelled_qty=0,
+					quantity=1,
+					item="ONION-RINGS",
+					item_name="Onion Rings",
+					comments="Burger Side",
+					is_modifier=1,
+					modifier_summary="Onion Rings",
+				),
+				SlipRow(
+					display_mode="old_new",
+					cancelled_qty=1,
+					old_qty=2,
+					new_qty=1,
+					quantity=2,
+					item="MANGO-JUICE",
+					item_name="Mango Juice",
+					comments="Burger Drink",
+					is_modifier=1,
+					modifier_summary="Mango Juice",
+				),
+				SlipRow(
+					display_mode="single_qty",
+					cancelled_qty=0,
+					quantity=1,
+					item="EXTRA-CHEESE",
+					item_name="Aged Cheddar",
+					comments="",
+					is_modifier=1,
+					modifier_summary="Extra",
+				),
+			],
+		)
+
+		html = self._render("ury_waiter_order_slip", kot_doc)
+		self.assertIn("+ Onion Rings", html)
+		self.assertNotIn("Onion Rings Onion Rings", html)
+		self.assertIn("+ Mango Juice", html)
+		self.assertNotIn("Mango Juice Mango Juice", html)
+		self.assertIn("+ Extra Aged Cheddar", html)
+
 
 if __name__ == "__main__":
 	unittest.main()

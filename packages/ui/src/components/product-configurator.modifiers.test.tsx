@@ -153,4 +153,53 @@ describe('ProductConfigurator modifier & combo groups', () => {
     expect(screen.getByText(/Complete required selections/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to Order' })).toBeDisabled();
   });
+
+  it('deduplicates Regular prefix chip when allowedPrefixes already includes Regular', () => {
+    render(
+      <ProductConfigurator
+        open
+        onOpenChange={vi.fn()}
+        itemName="Ribeye Steak"
+        itemCode="RIBEYE"
+        quantity="1"
+        onQuantityChange={vi.fn()}
+        onIncrement={vi.fn()}
+        onDecrement={vi.fn()}
+        comments=""
+        onCommentsChange={vi.fn()}
+        variants={[]}
+        onSelectVariant={vi.fn()}
+        addons={[]}
+        selectedAddonIds={[]}
+        onToggleAddon={vi.fn()}
+        totalLabel="UGX 45,000"
+        onSubmit={vi.fn()}
+        labels={BASE_LABELS}
+        modifierGroups={[
+          {
+            name: 'Steak Extras',
+            displayTitle: 'Steak Extras',
+            groupType: 'Condiment',
+            required: false,
+            minSelections: 0,
+            maxSelections: 2,
+            allowPrefixes: true,
+            allowedPrefixes: ['Regular', 'Extra', 'No', 'Light', 'On Side'],
+            activePrefix: null,
+            selectedCount: 0,
+            options: [],
+          },
+        ]}
+        onSelectModifierPrefix={vi.fn()}
+        onToggleModifierOption={vi.fn()}
+      />
+    );
+
+    const regularButtons = screen.getAllByRole('button', { name: 'Regular' });
+    expect(regularButtons).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Extra' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'No' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Light' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'On Side' })).toBeInTheDocument();
+  });
 });
