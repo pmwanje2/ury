@@ -49,7 +49,83 @@ def serve_kot(name, time=None):
     if kot_doc.type in ("Cancelled", "Partially cancelled"):
         frappe.throw(_("KOT has been cancelled and cannot be served"), frappe.ValidationError)
 
+    branch = getattr(kot_doc, "branch", None)
+    if isinstance(branch, str) and branch and not is_kitchen_admin() and getBranch() != branch:
+        frappe.throw(_("You cannot bump orders from another outlet."), frappe.PermissionError)
+
+    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None))
+    if invoice:
+        if invoice.branch != branch:
+            frappe.throw(_("You cannot bump orders from another outlet."), frappe.PermissionError)
+        if frappe.db.get_value("URY KOT", name, "order_status", for_update=True) != "Ready For Prepare":
+            return
     record_kot_served(name, kot_doc.creation, kot_doc)
+    if invoice:
+        _advance_course(invoice, [name])
+
+
+def _lock_course_fire_order(invoice, profile):
+    if not isinstance(invoice, str) or not invoice or not isinstance(profile, str) or not profile:
+        return None
+    if not _cint(frappe.db.get_value("POS Profile", profile, "auto_fire_next_course_on_bump")):
+        return None
+
+    return frappe.get_doc("POS Invoice", invoice, for_update=True)
+
+
+def _advance_course(invoice, bumped):
+    from ury.ury.doctype.ury_order.ury_order import _fire_next_held_course
+
+    savepoint = "advance_kitchen_course"
+    discard_release_effects = _capture_course_release_effects()
+    frappe.db.savepoint(savepoint)
+    try:
+        _fire_next_held_course(invoice, bumped)
+    except Exception:
+        traceback = frappe.get_traceback()
+        # Keep the completed bump and discard writes and queued notifications
+        # from the failed release. The outer request still owns the commit.
+        frappe.db.rollback(save_point=savepoint)
+        discard_release_effects()
+        frappe.log_error(title="Automatic kitchen course release failed", message=traceback)
+    frappe.db.release_savepoint(savepoint)
+
+
+def _capture_course_release_effects():
+    try:
+        from frappe.desk.form.linked_with import capture_pending_side_effects, discard_side_effects_since
+    except ImportError:
+        # Older v16 benches do not export Frappe's savepoint side-effect helpers.
+        queues = {
+            hook: getattr(frappe.db, hook)._functions
+            for hook in ("before_commit", "after_commit", "before_rollback", "after_rollback")
+        }
+        counts = {hook: len(queue) for hook, queue in queues.items()}
+        logs = {
+            key: list(getattr(frappe.local, key) or []) if hasattr(frappe.local, key) else None
+            for key in ("message_log", "_realtime_log", "_webhook_queue")
+        }
+        currently_saving = list(frappe.flags.currently_saving or [])
+
+        def discard():
+            frappe.flags.currently_saving = currently_saving
+            for hook, queue in queues.items():
+                callbacks = []
+                while len(queue) > counts[hook]:
+                    callbacks.append(queue.pop())
+                if hook.endswith("_rollback"):
+                    for callback in reversed(callbacks):
+                        callback()
+            for key, saved in logs.items():
+                if saved is not None:
+                    setattr(frappe.local, key, saved)
+                elif hasattr(frappe.local, key):
+                    delattr(frappe.local, key)
+
+        return discard
+
+    snapshot = capture_pending_side_effects()
+    return lambda: discard_side_effects_since(snapshot)
 
 
 def record_kot_served(name, creation_time, kot_doc=None):
@@ -137,6 +213,12 @@ def recall_kot(name):
             coded_message("KOT-RECALL-OTHER-BRANCH", _("You do not have permission to modify KOTs from other branches.")),
             frappe.PermissionError,
         )
+
+    locked_order = _lock_course_fire_order(
+        getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None)
+    )
+    if locked_order:
+        kot_doc = frappe.get_doc("URY KOT", name, for_update=True)
 
     if kot_doc.order_status != "Served":
         frappe.throw(coded_message("KOT-RECALL-NOT-SERVED", _("Only Served KOTs can be recalled.")), frappe.ValidationError)
@@ -289,23 +371,40 @@ def _ensure_ready_before_serve(kot_name):
 
 
 # Function to mark it as verified in a cancel type KOT.
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def confirm_cancel_kot(name):
     manager_roles = {"URY Manager", "URY Admin", "System Manager"}
     if not manager_roles.intersection(frappe.get_roles()) and frappe.session.user != "Administrator":
         frappe.throw(
-            "Only a manager can confirm a cancelled KOT.",
+            _("Only a manager can confirm a cancelled KOT."),
             frappe.PermissionError,
         )
 
+    if not name or not frappe.db.exists("URY KOT", name):
+        frappe.throw(_("Kitchen ticket {0} was not found.").format(name), frappe.DoesNotExistError)
+
+    message_log = getattr(frappe.local, "message_log", None)
+    message_count = len(message_log) if message_log is not None else 0
+    # Frappe's msgprint raises missing-document errors even when muted. Scope
+    # suppression to the lookup so its internal DocType never reaches clients.
+    previous_mute = getattr(frappe.flags, "mute_messages", False)
+    frappe.flags.mute_messages = True
     try:
         kot_doc = frappe.get_doc("URY KOT", name)
     except frappe.DoesNotExistError:
-        frappe.throw(f"Restaurant KOT {name} not found.", frappe.DoesNotExistError)
+        # Preserve earlier messages if a document hook wrote directly to the log.
+        if message_log is not None:
+            del message_log[message_count:]
+        kot_doc = None
+    finally:
+        frappe.flags.mute_messages = previous_mute
+
+    if kot_doc is None:
+        frappe.throw(_("Kitchen ticket {0} was not found.").format(name), frappe.DoesNotExistError)
 
     if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
         frappe.throw(
-            "You do not have permission to modify this KOT.",
+            _("You do not have permission to modify this KOT."),
             frappe.PermissionError,
         )
 
@@ -319,12 +418,18 @@ def confirm_cancel_kot(name):
 
     if session_branch and kot_doc.branch != session_branch:
         frappe.throw(
-            "You do not have permission to modify KOTs from other branches.",
+            _("You do not have permission to modify KOTs from other branches."),
             frappe.PermissionError,
         )
 
+    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None))
+    if invoice and frappe.db.get_value("URY KOT", name, "verified", for_update=True):
+        return
     frappe.db.set_value("URY KOT", name, "verified", 1)
     frappe.db.set_value("URY KOT", name, "verified_by", frappe.session.user)
+    if invoice and invoice.branch == kot_doc.branch and kot_doc.type in ("Cancelled", "Partially cancelled"):
+        originals = (kot_doc.get("original_kot") or "").split(",")
+        _advance_course(invoice, [original.strip() for original in originals if original.strip()])
 
 
 @frappe.whitelist(methods=["POST"])
@@ -428,8 +533,8 @@ def set_check_priority(invoice, is_rush=None, is_vip=None, reason=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def expo_bump_order(invoice, production_unit=None):
-    """Serve all active non-cancelled KOTs for an invoice from the Expo screen."""
+def expo_bump_order(invoice, production_unit=None, tickets=None):
+    """Serve the active tickets displayed for an invoice on Expo."""
     if frappe.request and frappe.request.method != "POST":
         frappe.throw(
             coded_message("KOT-EXPO-POST-ONLY", _("POST requests only")),
@@ -464,11 +569,31 @@ def expo_bump_order(invoice, production_unit=None):
                 frappe.PermissionError,
             )
 
+    # The board supplies the ticket names it displayed. Retries then cannot
+    # accidentally bump the new course created by the original request.
+    if tickets is None:
+        frappe.throw(_("Select the displayed kitchen tickets to bump."))
+    if isinstance(tickets, str):
+        try:
+            tickets = json.loads(tickets)
+        except ValueError:
+            frappe.throw(_("Invalid kitchen ticket selection."))
+    if not isinstance(tickets, list) or any(not isinstance(name, str) or not name.strip() for name in tickets):
+        frappe.throw(_("Invalid kitchen ticket selection."))
+    if tickets == []:
+        return {"invoice": invoice, "served_kots": []}
+
+    profile = frappe.db.get_value("POS Invoice", invoice, "pos_profile")
+    locked_invoice = _lock_course_fire_order(invoice, profile)
+    if locked_invoice and session_branch and locked_invoice.branch != session_branch:
+        frappe.throw(_("You cannot bump orders from another outlet."), frappe.PermissionError)
+
     filters = {
         "invoice": invoice,
         "docstatus": 1,
         "order_status": "Ready For Prepare",
         "type": ["not in", ["Cancelled", "Partially cancelled"]],
+        "name": ["in", tickets],
     }
 
     kots = frappe.get_all("URY KOT", filters=filters, fields=["name", "branch"])
@@ -499,10 +624,91 @@ def expo_bump_order(invoice, production_unit=None):
 
     served = []
     for kot_name, kot_doc in kot_docs:
+        if locked_invoice and frappe.db.get_value(
+            "URY KOT", kot_name, "order_status", for_update=True
+        ) != "Ready For Prepare":
+            continue
         record_kot_served(kot_name, kot_doc.creation, kot_doc)
         served.append(kot_name)
 
+    if locked_invoice and served:
+        _advance_course(locked_invoice, served)
+
     return {"invoice": invoice, "served_kots": served}
+
+
+def _expo_held_branch(production_unit, permission):
+    if not production_unit or not _is_expo_unit(production_unit):
+        frappe.throw(_("Select an expo station."), frappe.PermissionError)
+    station = frappe.get_doc("URY Production Unit", production_unit)
+    branch = station.get("branch")
+    if (not branch or not frappe.has_permission("URY Production Unit", "read", doc=station)
+            or not frappe.has_permission("URY KOT", permission)
+            or (not is_kitchen_admin() and getBranch() != branch)):
+        frappe.throw(_("You do not have access to held items at this outlet."), frappe.PermissionError)
+    return branch
+
+
+@frappe.whitelist(methods=["GET"])
+def list_held_kitchen_items(production_unit):
+    """Only expo can see scheduled and confirmation-ready lines for its outlet."""
+    branch = _expo_held_branch(production_unit, "read")
+    rows = frappe.db.sql(
+        """
+        SELECT invoice.name AS invoice, invoice.restaurant_table, invoice.custom_ury_order_number AS order_no,
+               item.name AS line, item.item_name, item.qty, item.custom_course AS course,
+               item.fire_at, item.fire_confirmation_pending
+        FROM `tabPOS Invoice Item` item
+        JOIN `tabPOS Invoice` invoice ON invoice.name = item.parent
+        JOIN `tabPOS Profile` profile ON profile.name = invoice.pos_profile
+        WHERE invoice.branch = %s AND invoice.docstatus = 0
+          AND profile.branch = invoice.branch AND profile.ury_enable_hold_fire = 1
+          AND item.ury_held = 1 AND item.qty > 0 AND IFNULL(item.custom_parent_line_key, '') = ''
+          AND (item.fire_at IS NOT NULL OR (
+              item.fire_confirmation_pending = 1 AND profile.auto_fire_next_course_on_bump = 1
+              AND profile.require_course_fire_confirmation = 1
+          ))
+        ORDER BY item.fire_at, invoice.name, item.idx
+        """,
+        (branch,),
+        as_dict=True,
+    )
+    now = get_datetime()
+    for row in rows:
+        row["seconds_until_fire"] = (
+            max(0, int((get_datetime(row["fire_at"]) - now).total_seconds()))
+            if row["fire_at"] else None
+        )
+    return rows
+
+
+@frappe.whitelist(methods=["POST"])
+def fire_held_kitchen_items(production_unit, invoice, line):
+    """Expo may override a timer or confirm a course marked ready by KDS."""
+    branch = _expo_held_branch(production_unit, "write")
+    from ury.ury.doctype.ury_order.ury_order import _release_held_rows, _selected_held_rows
+
+    order = frappe.get_doc("POS Invoice", invoice, for_update=True)
+    profile = frappe.get_doc("POS Profile", order.pos_profile)
+    if (order.branch != branch or profile.get("branch") != branch
+            or not _cint(profile.get("ury_enable_hold_fire")) or order.docstatus != 0):
+        frappe.throw(_("You do not have access to held items on this check."), frappe.PermissionError)
+    held = _selected_held_rows(order, line, None)
+    if not held:
+        return
+    selected = next((row for row in held if row.name == line and not row.get("custom_parent_line_key")), None)
+    if not selected:
+        frappe.throw(_("Select a held kitchen line."))
+    if not selected.get("fire_at"):
+        if not (_cint(selected.get("fire_confirmation_pending"))
+                and _cint(profile.get("auto_fire_next_course_on_bump"))
+                and _cint(profile.get("require_course_fire_confirmation"))):
+            frappe.throw(_("This course is not awaiting confirmation."), frappe.PermissionError)
+        held = [
+            row for row in _selected_held_rows(order, None, selected.get("custom_course"))
+            if _cint(row.get("fire_confirmation_pending")) and not row.get("fire_at")
+        ]
+    _release_held_rows(order, held, kitchen_authority=True)
 
 
 @frappe.whitelist(methods=["POST"])
@@ -921,27 +1127,85 @@ def build_dashboard_summary(kot_list):
     return list(summary.values())
 
 
-def _get_cancel_confirmed_original_kots(branch):
-    """Names of KOTs that a verified cancel-KOT references via `original_kot`."""
+def _get_cancel_confirmed_original_kots(branch, *, invoices=None):
+    closed, _ = _get_kot_cancellation_state(branch, invoices=invoices)
+    return closed
+
+
+def _get_kot_cancellation_state(branch, *, invoice=None, invoices=None):
+    """Return fully cancelled originals and originals awaiting confirmation."""
     filters = {
         "type": ["in", ["Cancelled", "Partially cancelled"]],
-        "verified": 1,
         "docstatus": 1,
     }
     if branch:
         filters["branch"] = branch
+    if invoices is not None:
+        if not invoices:
+            return set(), set()
+        filters["invoice"] = ["in", sorted(invoices)]
 
-    cancel_rows = frappe.get_all(
-        "URY KOT",
-        fields=["original_kot"],
-        filters=filters,
-    )
-    original_names = set()
+    fields = ["name", "type", "original_kot", "verified"]
+    order_by = "creation asc, name asc"
+    if invoice:
+        # Course advancement already holds the order lock, including for
+        # confirmations. Read the current state after acquiring that lock.
+        cancel_rows = frappe.db.get_values(
+            "URY KOT", {**filters, "invoice": invoice}, fields, as_dict=True,
+            for_update=True, order_by=order_by,
+        )
+    else:
+        cancel_rows = frappe.get_all("URY KOT", fields=fields, filters=filters, order_by=order_by)
+
+    fully_cancelled = set()
+    pending = set()
+    partials = []
     for row in cancel_rows:
-        if not row.get("original_kot"):
-            continue
-        original_names.update(name.strip() for name in row.get("original_kot").split(",") if name.strip())
-    return original_names
+        originals = {name.strip() for name in (row.get("original_kot") or "").split(",") if name.strip()}
+        verified = _cint(row.get("verified", 1))
+        if not verified:
+            pending.update(originals)
+        if row.get("type") == "Partially cancelled":
+            if originals:
+                partials.append((row["name"], originals))
+        elif verified:
+            fully_cancelled.update(originals)
+
+    # Replay claims in creation order. Earlier unverified claims must reserve
+    # their units so a later confirmed cancellation cannot use them again.
+    if partials:
+        fully_cancelled.update(_fully_consumed_kots(partials, for_update=bool(invoice)))
+    return fully_cancelled - pending, pending
+
+
+def _fully_consumed_kots(partials, *, for_update):
+    from ury.ury.api.ury_kot_generate import consume_kot_releases
+
+    originals = set().union(*(names for _, names in partials))
+    rows = frappe.db.get_values(
+        "URY KOT Items", {"parent": ["in", sorted(originals | {name for name, _ in partials})]},
+        ["parent", "item", "quantity", "cancelled_qty", "comments", "reservation_line_key", "course", "seat_no"],
+        order_by="creation asc, parent asc, idx asc", as_dict=True, for_update=for_update,
+    )
+    releases = []
+    cancel_items = {}
+    for row in rows:
+        if row["parent"] in originals:
+            releases.append([row["parent"], row, _flt(row.get("quantity"))])
+        else:
+            cancel_items.setdefault(row["parent"], []).append(row)
+
+    for ticket, referenced in partials:
+        for row in cancel_items.get(ticket, []):
+            consume_kot_releases(
+                releases, row["item"], row.get("reservation_line_key"), row.get("comments"),
+                _flt(row.get("cancelled_qty")), referenced, course=row.get("course"), seat=int(row.get("seat_no") or 0),
+            )
+
+    precision = frappe.get_precision("URY KOT Items", "quantity")
+    return {name for name, _, _ in releases} - {
+        name for name, _, quantity in releases if round(quantity, precision) > 0
+    }
 
 
 KOT_DISPLAY_WINDOW_HOURS = 3  # default when the POS Profile sets no window
@@ -1105,11 +1369,13 @@ def kot_list(production_unit=None):
 
     kotList = frappe.get_list(
         "URY KOT",
-        fields=["name"],
+        fields=["name", "invoice"],
         filters=filters,
         order_by="creation desc",
     )
-    cancelled_original_kots = _get_cancel_confirmed_original_kots(branch)
+    cancelled_original_kots = _get_cancel_confirmed_original_kots(
+        branch, invoices={kot.get("invoice") for kot in kotList if kot.get("invoice")},
+    )
     production_filters = {}
     KOT = []
     for kot in kotList:

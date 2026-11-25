@@ -123,6 +123,8 @@ interface RolePermission {
 // Full POS Profile response
 export interface PosProfileFull extends CoversProfile {
   ury_enable_hold_fire?: number;
+  default_fire_delay_minutes?: number;
+  fire_time_zone?: string;
   name: string;
   owner: string;
   creation: string;

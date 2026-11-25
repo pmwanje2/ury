@@ -560,6 +560,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         order.customer,
         order.modified,
         (order.items || []).map((item: any) => ({
+          invoice_item_name: item.name,
           item_code: item.item_code,
           item_name: item.item_name,
           reservation_line_key: item.reservation_line_key || '',
@@ -598,6 +599,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         courseOverride: item.custom_course || undefined,
         invoiceItemName: item.name,
         ury_held: item.ury_held || 0,
+        fireAt: item.fire_at,
+        fireConfirmationPending: !!item.fire_confirmation_pending,
         comment: item.comment || '',
         description: item.description || '',
         special_dish: 0 as 0 | 1,

@@ -182,7 +182,13 @@ test.each(['network', ...gatewayStatuses] as const)(
   async (outage) => {
     mode = outage === 'network' ? 'network' : 'gateway';
     if (outage !== 'network') gatewayStatus = outage;
-    await openRoot('/pos/', (text) => text.includes('Access Denied') || (window.location.pathname === '/pos/register' && text.includes('1 pending')));
+    // The banner can hydrate while the register route is still loading.
+    await openRoot('/pos/', (text) => text.includes('Access Denied') || (
+      window.location.pathname === '/pos/register'
+      && text.includes('1 pending')
+      && !!container.querySelector('[data-testid="order-panel"]')
+      && !!container.querySelector('[data-testid="settle-cash"]')
+    ));
     expect(hits, hits.join('\n')).toEqual(expect.arrayContaining([expect.stringContaining('get_logged_user')]));
     const text = container.textContent || '';
     expect(text, text).not.toContain('Access Denied');

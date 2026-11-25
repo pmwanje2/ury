@@ -162,7 +162,6 @@ process.stdout.write(JSON.stringify(out));
         # Pre-existing legacy internal codes outside POS-PR-6 (tracked separately).
         legacy_underscore_codes = {
             "URY_HOLD_DISABLED",
-            "URY_HOLD_OFFLINE",
             "URY_LINE_KEY_CHANGED",
             "URY_LINE_KEY_REUSED",
             "URY_ALREADY_SENT",
