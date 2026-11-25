@@ -2060,6 +2060,17 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
                         custom_is_complimentary=0,
                     ),
                     Row(
+                        name="ROW-UPCHARGE",
+                        item_code="KH-COMBO-SIDE-18",
+                        qty=1,
+                        custom_line_role="Combo Upcharge",
+                        custom_parent_line_key="ROW-1",
+                        custom_is_modifier=1,
+                        price_list_rate=2000.0,
+                        base_price_list_rate=2000.0,
+                        rate=2000.0,
+                    ),
+                    Row(
                         name="ROW-OV",
                         item_code="KH-CHICKEN-18",
                         qty=1,
@@ -2118,6 +2129,17 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
                         custom_is_complimentary=0,
                     ),
                     Row(
+                        name="ROW-UPCHARGE",
+                        item_code="KH-COMBO-SIDE-18",
+                        qty=1,
+                        custom_line_role="Combo Upcharge",
+                        custom_parent_line_key="ROW-1",
+                        custom_is_modifier=1,
+                        price_list_rate=2000.0,
+                        base_price_list_rate=2000.0,
+                        rate=2000.0,
+                    ),
+                    Row(
                         name="ROW-OV",
                         item_code="KH-CHICKEN-18",
                         qty=1,
@@ -2161,7 +2183,9 @@ class TestDirectRestPosInvoiceOrderTypeTaxHardening(unittest.TestCase):
             # Standard item repriced to Delivery UGX (22,000), AND #152 manager-overridden item preserved (12,500)!
             self.assertEqual(inv.selling_price_list, "Delivery UGX")
             self.assertEqual(inv["items"][0].rate, 22000.0)
-            self.assertEqual(inv["items"][1].rate, 12500.0)
+            upcharge = inv["items"][1]
+            self.assertEqual((upcharge.rate, upcharge.price_list_rate, upcharge.base_price_list_rate), (2000.0,) * 3)
+            self.assertEqual(inv["items"][2].rate, 12500.0)
             # Server repricing flags must be cleaned up after save() so direct REST tampering remains blocked
             self.assertFalse(getattr(inv.flags, "ury_privileged_action_verified", False))
             self.assertFalse(getattr(inv.flags, "ury_server_order_type_change", False))
