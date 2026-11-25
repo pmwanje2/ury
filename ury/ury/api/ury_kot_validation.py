@@ -46,7 +46,10 @@ def process_invoice(invoice):
     pos_profile = frappe.get_doc("POS Profile", posInvoice.pos_profile)
     kot_naming_series = pos_profile.get("custom_kot_naming_series") or pos_profile.get("kot_naming_series")
     # A scheduler tick may have opened its transaction before Fire committed.
-    if not frappe.db.get_value("URY KOT", {"invoice": posInvoice.name}, "name", for_update=True):
+    from ury.ury.api.kitchen_ticket_history import owned_ticket_filters
+
+    if not any(frappe.db.get_value("URY KOT", scope, "name", for_update=True)
+               for scope in owned_ticket_filters(posInvoice)):
         # Fetch production units for the branch
         productions = get_productions_for_branch(posInvoice.branch)
 

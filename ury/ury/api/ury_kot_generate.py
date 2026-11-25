@@ -8,7 +8,7 @@ from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
 from ury.ury.api.kitchen_ticket_history import (
-    bound_item, matches_release, outstanding_releases, round_ledger, submitted_tickets, take_releases,
+    bound_item, matches_release, outstanding_releases, round_ledger, submitted_tickets, take_releases, ticket_ownership,
 )
 from ury.brand import coded_message
 
@@ -582,7 +582,7 @@ def process_items_for_cancel_kot(
         else None
     )
     # Expand modifiers and combo components, then debit the actual issuing stations.
-    tickets = submitted_tickets(frappe, invoice_id)
+    tickets = submitted_tickets(frappe, pos_invoice)
     production_items_map = _route_items_with_modifiers_and_combos(
         kot_items, pos_profile, pos_invoice, history_only=bool(tickets), pos_profile_id=pos_profile_id, room=room,
     )
@@ -739,12 +739,20 @@ def create_cancel_kot_doc(
     if pos_invoice.order_type == "Aggregators":
         is_aggregator = 1
     if original_kot is None:
-        history = frappe.db.get_list(
-            "URY KOT", filters={"invoice": invoice_id, "production": production, "docstatus": 1,
-                                "type": ("in", ("New Order", "Order Modified", "Duplicate", "Cancelled", "Partially cancelled"))},
-            fields=["name"], order_by="creation asc, name asc", limit_page_length=0,
-        )
-        releases = outstanding_releases(frappe.get_doc("URY KOT", entry.name) for entry in history)
+        if ticket_ownership(pos_invoice):
+            history = [ticket for ticket in submitted_tickets(frappe, pos_invoice) if ticket.production == production]
+        else:
+            names = frappe.db.get_list(
+                "URY KOT", filters={"invoice": invoice_id, "production": production, "docstatus": 1,
+                                    "type": ("in", ("New Order", "Order Modified", "Duplicate",
+                                                    "Cancelled", "Partially cancelled"))},
+                fields=["name"], order_by="creation asc, name asc", limit_page_length=0,
+            )
+            history = (frappe.get_doc("URY KOT", entry.name) for entry in names)
+        releases = outstanding_releases(history)
+        bindings = round_ledger(pos_invoice)[1]
+        for release in releases:
+            release[1] = bound_item(release[1], bindings.get(release[0], {}))
         original_kots = []
         for row in cancel_items:
             original_kots.extend(consume_kot_releases(

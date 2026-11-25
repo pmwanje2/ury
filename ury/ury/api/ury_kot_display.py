@@ -53,7 +53,7 @@ def serve_kot(name, time=None):
     if isinstance(branch, str) and branch and not is_kitchen_admin() and getBranch() != branch:
         frappe.throw(_("You cannot bump orders from another outlet."), frappe.PermissionError)
 
-    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None))
+    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None), ticket=name)
     if invoice:
         if invoice.branch != branch:
             frappe.throw(_("You cannot bump orders from another outlet."), frappe.PermissionError)
@@ -64,12 +64,16 @@ def serve_kot(name, time=None):
         _advance_course(invoice, [name])
 
 
-def _lock_course_fire_order(invoice, profile):
+def _lock_course_fire_order(invoice, profile, *, ticket=None):
     if not isinstance(invoice, str) or not invoice or not isinstance(profile, str) or not profile:
         return None
     if not _cint(frappe.db.get_value("POS Profile", profile, "auto_fire_next_course_on_bump")):
         return None
 
+    if ticket:
+        from ury.ury.api.kitchen_ticket_history import current_ticket_owner
+
+        return current_ticket_owner(frappe, ticket, invoice, for_update=True)
     return frappe.get_doc("POS Invoice", invoice, for_update=True)
 
 
@@ -215,7 +219,7 @@ def recall_kot(name):
         )
 
     locked_order = _lock_course_fire_order(
-        getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None)
+        getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None), ticket=name
     )
     if locked_order:
         kot_doc = frappe.get_doc("URY KOT", name, for_update=True)
@@ -422,7 +426,7 @@ def confirm_cancel_kot(name):
             frappe.PermissionError,
         )
 
-    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None))
+    invoice = _lock_course_fire_order(getattr(kot_doc, "invoice", None), getattr(kot_doc, "pos_profile", None), ticket=name)
     if invoice and frappe.db.get_value("URY KOT", name, "verified", for_update=True):
         return
     frappe.db.set_value("URY KOT", name, "verified", 1)
@@ -1127,12 +1131,12 @@ def build_dashboard_summary(kot_list):
     return list(summary.values())
 
 
-def _get_cancel_confirmed_original_kots(branch, *, invoices=None):
-    closed, _ = _get_kot_cancellation_state(branch, invoices=invoices)
+def _get_cancel_confirmed_original_kots(branch, *, invoices=None, originals=None):
+    closed, _ = _get_kot_cancellation_state(branch, invoices=invoices, originals=originals)
     return closed
 
 
-def _get_kot_cancellation_state(branch, *, invoice=None, invoices=None):
+def _get_kot_cancellation_state(branch, *, invoice=None, invoices=None, originals=None):
     """Return fully cancelled originals and originals awaiting confirmation."""
     filters = {
         "type": ["in", ["Cancelled", "Partially cancelled"]],
@@ -1150,10 +1154,18 @@ def _get_kot_cancellation_state(branch, *, invoice=None, invoices=None):
     if invoice:
         # Course advancement already holds the order lock, including for
         # confirmations. Read the current state after acquiring that lock.
-        cancel_rows = frappe.db.get_values(
-            "URY KOT", {**filters, "invoice": invoice}, fields, as_dict=True,
-            for_update=True, order_by=order_by,
-        )
+        from ury.ury.api.kitchen_ticket_history import owned_ticket_filters
+
+        scopes = list(owned_ticket_filters(invoice))
+        cancel_rows = [row for scope in scopes
+                       for row in frappe.db.get_values("URY KOT", dict(filters, **scope), fields + ["creation"],
+                                                      as_dict=True, for_update=True, order_by=order_by)]
+        if len(scopes) > 1:
+            cancel_rows.sort(key=lambda row: (row["creation"], row["name"]))
+    elif originals and invoices:
+        # A transferred release keeps its original invoice. Its cancellation is issued by the new check.
+        scope = {"invoice": filters.pop("invoice"), "original_kot": ["in", sorted(originals)]}
+        cancel_rows = frappe.get_all("URY KOT", fields=fields, filters=filters, or_filters=scope, order_by=order_by)
     else:
         cancel_rows = frappe.get_all("URY KOT", fields=fields, filters=filters, order_by=order_by)
 
@@ -1375,6 +1387,7 @@ def kot_list(production_unit=None):
     )
     cancelled_original_kots = _get_cancel_confirmed_original_kots(
         branch, invoices={kot.get("invoice") for kot in kotList if kot.get("invoice")},
+        originals={kot.get("name") for kot in kotList if kot.get("name")},
     )
     production_filters = {}
     KOT = []

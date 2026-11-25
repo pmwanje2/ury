@@ -2,31 +2,93 @@
 
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 
 CANCELLATIONS = ("Cancelled", "Partially cancelled")
 TICKET_TYPES = ("New Order", "Order Modified", "Duplicate", *CANCELLATIONS)
 
 
-def round_ledger(invoice):
+def _ledger(invoice):
     """Read legacy round digests or the extended ledger with immutable ticket bindings."""
     raw = getattr(invoice, "ury_applied_rounds", None)
     if not isinstance(raw, str) or not raw:
-        return {}, {}
+        return {}
     try:
         value = json.loads(raw)
     except ValueError:
-        return {}, {}
+        return {}
     if not isinstance(value, dict):
-        return {}, {}
+        return {}
+    return value
+
+
+def round_ledger(invoice):
+    value = _ledger(invoice)
     if isinstance(value.get("applied_rounds"), dict):
         return value["applied_rounds"], value.get("issued_items", {})
     return value, {}
 
 
-def write_round_ledger(invoice, rounds, bindings):
-    data = {"applied_rounds": rounds, "issued_items": bindings} if bindings else rounds
+def ticket_ownership(invoice):
+    ledger = _ledger(invoice)
+    return ledger.get("ticket_ownership", {}) if isinstance(ledger.get("applied_rounds"), dict) else {}
+
+
+def write_round_ledger(invoice, rounds, bindings, ownership=None):
+    if ownership is None:
+        ownership = ticket_ownership(invoice)
+    data = {"applied_rounds": rounds, "issued_items": bindings} if bindings or ownership else rounds
+    if ownership:
+        data["ticket_ownership"] = ownership
     invoice.ury_applied_rounds = json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+def record_ticket_transfer(invoice, tickets, owner):
+    """True marks tickets received here. A check name forwards released tickets to their next owner."""
+    if tickets:
+        ownership = ticket_ownership(invoice)
+        ownership.update(dict.fromkeys(tickets, owner))
+        write_round_ledger(invoice, *round_ledger(invoice), ownership)
+        if getattr(invoice, "flags", None) is not None:
+            invoice.flags.ury_issued_bindings = _SERVER_BINDINGS
+
+
+def invoice_ticket_ledger(frappe, name):
+    rows = frappe.db.get_values("POS Invoice", name, ["ury_applied_rounds"], as_dict=True)
+    return SimpleNamespace(name=name, ury_applied_rounds=rows[0].get("ury_applied_rounds") if rows else None)
+
+
+def current_ticket_owner(frappe, ticket, issuer, *, for_update=False):
+    """Follow the audited transfers starting at the permanent issuing invoice."""
+    def load(name):
+        if for_update:
+            return frappe.get_doc("POS Invoice", name, for_update=True)
+        return invoice_ticket_ledger(frappe, name)
+
+    invoice = load(issuer)
+    visited = {issuer}
+    while isinstance(owner := ticket_ownership(invoice).get(ticket), str):
+        if owner in visited:
+            from frappe import _
+            from ury.brand import coded_message
+
+            frappe.throw(coded_message("KOT-OWNERSHIP", _("Cannot identify the original kitchen ticket for this line.")))
+        visited.add(owner)
+        invoice = load(owner)
+    return invoice
+
+
+def owned_ticket_filters(invoice):
+    """Disjoint indexed queries for locally issued tickets and tickets received by transfer."""
+    ownership = ticket_ownership(invoice)
+    local = {"invoice": invoice.name}
+    if ownership:
+        local["name"] = ("not in", list(ownership))
+    yield local
+    received = [ticket for ticket, owner in ownership.items() if owner is True]
+    if received:
+        yield {"name": ("in", received)}
 
 
 _SERVER_BINDINGS = object()
@@ -45,13 +107,15 @@ def protect_issued_bindings(invoice):
     previous = getattr(invoice, "_doc_before_save", None)
     rounds, requested = round_ledger(invoice)
     _, saved = round_ledger(previous)
-    if requested != saved:
-        write_round_ledger(invoice, rounds, saved)
+    if requested != saved or ticket_ownership(invoice) != ticket_ownership(previous):
+        write_round_ledger(invoice, rounds, saved, ticket_ownership(previous))
 
 
 def bound_item(row, ticket_bindings):
     changes = ticket_bindings.get(row.get("name"))
-    return dict(row, **changes) if changes else row
+    if not changes:
+        return row
+    return dict(row if isinstance(row, dict) else row.as_dict(), **changes)
 
 
 def original_tickets(value):
@@ -73,6 +137,19 @@ def legacy_line_matches(ticket_line, invoice_line):
         ticket_line, invoice_line.item_code, None, invoice_line.get("comment"),
         invoice_line.get("custom_course"), int(invoice_line.get("custom_seat_no") or 0),
     )
+
+
+def issued_line_candidates(ticket_line, candidates):
+    """Canonical references are explicit. Historical positions may also be literal raw keys."""
+    from ury.ury.api.ury_order_reservation_service import _line_key
+
+    key = ticket_line.get("reservation_line_key")
+    if key and key.startswith("ref:"):
+        canonical = [row for row in candidates if _line_key(row.item_code, row, 1) == key]
+        if canonical:
+            return canonical
+    return [row for row in candidates if (key and key == (row.get("reservation_line_key") or row.name))
+            or (not row.get("reservation_line_key") and legacy_line_matches(ticket_line, row))]
 
 
 def take_releases(releases, item, key, note, qty, originals=None, *, course=None, seat=0):
@@ -97,11 +174,15 @@ def take_releases(releases, item, key, note, qty, originals=None, *, course=None
 def submitted_tickets(frappe, invoice):
     # The invoice is already authorized and locked. Include every issuing outlet,
     # and take current reads of both parent and child rows before moving ownership.
-    tickets = frappe.db.get_values(
-        "URY KOT", {"invoice": invoice, "docstatus": 1, "type": ("in", TICKET_TYPES)},
-        ["name", "type", "original_kot", "production", "pos_profile", "release_group"],
-        order_by="creation asc, name asc", as_dict=True, for_update=True,
-    )
+    tickets = []
+    for filters in owned_ticket_filters(invoice):
+        tickets.extend(frappe.db.get_values(
+            "URY KOT", dict(filters, docstatus=1, type=("in", TICKET_TYPES)),
+            ["name", "creation", "type", "original_kot", "production", "pos_profile", "release_group"],
+            order_by="creation asc, name asc", as_dict=True, for_update=True,
+        ))
+    if ticket_ownership(invoice):
+        tickets.sort(key=lambda row: (row.creation, row.name))
     by_name = {ticket.name: ticket for ticket in tickets}
     if by_name:
         for ticket in tickets:
@@ -148,10 +229,14 @@ def outstanding_releases(tickets):
 
 def split_ticket_families(frappe, invoice, bindings):
     """Yield indivisible release/cancellation histories and their outstanding lines."""
-    headers = frappe.get_all(
-        "URY KOT", filters={"invoice": invoice, "docstatus": 1},
-        fields=["name", "type", "original_kot"], order_by="creation asc, name asc",
-    )
+    headers = []
+    for filters in owned_ticket_filters(invoice):
+        headers.extend(frappe.get_all(
+            "URY KOT", filters=dict(filters, docstatus=1),
+            fields=["name", "creation", "type", "original_kot"], order_by="creation asc, name asc",
+        ))
+    if ticket_ownership(invoice):
+        headers.sort(key=lambda row: (row.creation, row.name))
     tickets = [getattr(header, "name", header) for header in headers]
     cancellations = {row.name: row for row in headers if getattr(row, "type", None) in CANCELLATIONS}
     rows_by_ticket = {}

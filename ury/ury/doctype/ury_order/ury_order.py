@@ -811,20 +811,20 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
 
     candidates = {}
     retained = set()
-    from ury.ury.api.kitchen_ticket_history import legacy_line_matches, round_ledger, split_ticket_families
+    from ury.ury.api.kitchen_ticket_history import issued_line_candidates, round_ledger, split_ticket_families
 
-    for family, rows, ambiguous in split_ticket_families(frappe, source.name, round_ledger(source)[1]):
+    for family, rows, ambiguous in split_ticket_families(frappe, source, round_ledger(source)[1]):
         line_qty = defaultdict(Decimal)
         possible_lines, issued_lines = set(), set()
         whole = bool(rows) and not ambiguous
         for row, outstanding in rows:
-            matches = [
-                item for item in by_key.get(row.get("reservation_line_key"), {}).values()
-                if not row.get("item") or item.item_code == row.get("item")
-            ]
-            if not matches and (row.get("reservation_line_key") or "").startswith(("ctx:", "pos:")):
-                matches = [item for item in by_item[row.get("item")] if not item.get("reservation_line_key")
-                           and not cint(item.get("ury_held")) and legacy_line_matches(row, item)]
+            if not row.get("reservation_line_key"):
+                matches = []
+            elif row.get("item"):
+                matches = issued_line_candidates(row, [item for item in by_item[row.get("item")]
+                                                        if not cint(item.get("ury_held"))])
+            else:
+                matches = list(by_key.get(row.get("reservation_line_key"), {}).values())
             if len(matches) != 1:
                 possible = matches or by_item.get(row.get("item"), ())
                 if reservations_enabled and (row.get("item") in moving_dishes
@@ -1008,45 +1008,20 @@ def split_bill(
     if not move_map:
         frappe.throw(_("Select at least one item to move."))
 
-    # Atomic parent-child modifier integrity during split:
-    # 1. Splitting a child modifier without its parent is refused.
-    # 2. Moving a parent automatically moves its linked child modifiers proportionally.
-    parent_by_key = {}
-    children_by_parent_key = defaultdict(list)
-    for item in source.items:
-        if cint(item.get("custom_is_modifier")) == 1 and item.get("custom_parent_line_key"):
-            children_by_parent_key[item.get("custom_parent_line_key")].append(item)
-        else:
-            key = item.get("reservation_line_key") or item.name
-            if key:
-                parent_by_key[key] = item
+    from ury.ury.api.modifier_tree import modifier_edges
 
-    for item in source.items:
-        if move_map.get(item.name, 0) > 0 and cint(item.get("custom_is_modifier")) == 1:
-            pkey = item.get("custom_parent_line_key")
-            parent_row = parent_by_key.get(pkey) if pkey else None
-            if not parent_row or move_map.get(parent_row.name, 0) <= 0:
-                frappe.throw(
-                    coded_message(
-                        "MODIFIER-SPLIT-WITH-PARENT",
-                        _("Modifiers must be split together with their parent item."),
-                    ),
-                    frappe.ValidationError,
-                )
-
-    for pkey, child_rows in children_by_parent_key.items():
-        parent_row = parent_by_key.get(pkey)
-        if not parent_row:
-            continue
-        parent_move = move_map.get(parent_row.name, 0)
-        if parent_move <= 0 or flt(parent_row.qty) <= 0:
-            continue
-        ratio = min(1.0, flt(parent_move) / flt(parent_row.qty))
-        for child in child_rows:
-            if child.name not in move_map:
-                child_move = flt(child.qty) if ratio >= 1.0 else round(flt(child.qty) * ratio, 6)
-                if child_move > 0:
-                    move_map[child.name] = min(flt(child.qty), child_move)
+    roots = [row for row in source.items if not row.get("custom_parent_line_key")]
+    moved_children = set()
+    for parent, child in modifier_edges(source.items, roots):
+        parent_move = move_map.get(parent.name, 0)
+        if parent_move > 0 and flt(parent.qty) > 0:
+            ratio = min(1.0, parent_move / flt(parent.qty))
+            move_map[child.name] = round(flt(child.qty) * ratio, 6)
+            moved_children.add(child.name)
+    if any(move_map.get(row.name) and cint(row.get("custom_is_modifier")) and row.name not in moved_children
+           for row in source.items):
+        frappe.throw(coded_message("MODIFIER-SPLIT-WITH-PARENT",
+                                   _("Modifiers must be split together with their parent item.")), frappe.ValidationError)
 
     total_moving_qty = 0.0
     total_remaining_qty = 0.0
@@ -1147,7 +1122,9 @@ def _apply_check_split(
         if source.get(field) is not None:
             new_invoice.set(field, source.get(field))
 
-    from ury.ury.api.kitchen_ticket_history import round_ledger, set_issued_bindings
+    from ury.ury.api.kitchen_ticket_history import record_ticket_transfer, round_ledger, set_issued_bindings
+
+    record_ticket_transfer(new_invoice, movable_kots, True)
 
     bindings = round_ledger(source)[1]
     moved_bindings = {ticket: bindings[ticket] for ticket in movable_kots if ticket in bindings}
@@ -1569,6 +1546,7 @@ def _apply_check_split(
         )
         if source_received:
             frappe.flags.ury_server_tender_received = True
+        record_ticket_transfer(source, movable_kots, new_invoice.name)
         swap_source_save = bool(
             swap_for_inherited_approval and getattr(source.flags, "discount_approval", None) is not None
         )
@@ -1633,8 +1611,6 @@ def _apply_check_split(
                 actor=frappe.session.user,
             )
 
-        for ticket in movable_kots:
-            frappe.db.set_value("URY KOT", ticket, "invoice", new_invoice.name, update_modified=False)
     finally:
         precision_context.close()
         frappe.flags.ury_server_tender_received = prev_tender_flag
@@ -1729,13 +1705,11 @@ def _split_decimal(value):
 def _plan_split_checks(source, splits, mode, split_count):
     rows = source.get("items") or []
     roots = [item for item in rows if not item.get("custom_parent_line_key")]
-    parent_names = {item.get("reservation_line_key") or item.name: item.name for item in roots}
-    children = defaultdict(list)
-    for item in rows:
-        if key := item.get("custom_parent_line_key"):
-            if key not in parent_names:
-                frappe.throw(_("A linked item has no parent on this check."))
-            children[parent_names[key]].append(item)
+    from ury.ury.api.modifier_tree import modifier_edges
+
+    edges = list(modifier_edges(rows, roots))
+    if len(roots) + len(edges) != len(rows):
+        frappe.throw(_("A linked item has no parent on this check."))
     quantities = {item.name: Decimal(str(item.qty)) for item in roots}
     if mode == "even":
         count = _split_decimal(split_count)
@@ -1779,15 +1753,18 @@ def _plan_split_checks(source, splits, mode, split_count):
             if qty <= 0 or allocated[name] + qty > quantities[name]:
                 frappe.throw(_("Split quantities exceed the available quantity or precision."))
             allocated[name] += qty
-            for child in children[name]:
-                child_qty = Decimal(str(child.qty))
-                piece = (child_qty * qty / quantities[name]).quantize(_SHARE_UNIT, rounding=ROUND_DOWN)
-                if allocated[name] == quantities[name]:
-                    piece = child_qty - allocated[child.name]
-                if piece <= 0:
-                    frappe.throw(_("A linked item cannot be split at this quantity."))
-                plan[child.name] = piece
-                allocated[child.name] += piece
+        for parent, child in edges:
+            if parent.name not in plan:
+                continue
+            child_qty = Decimal(str(child.qty))
+            parent_qty = Decimal(str(parent.qty))
+            piece = (child_qty * plan[parent.name] / parent_qty).quantize(_SHARE_UNIT, rounding=ROUND_DOWN)
+            if allocated[parent.name] == parent_qty:
+                piece = child_qty - allocated[child.name]
+            if piece <= 0:
+                frappe.throw(_("A linked item cannot be split at this quantity."))
+            plan[child.name] = piece
+            allocated[child.name] += piece
     if not any(qty > allocated[name] for name, qty in quantities.items()):
         frappe.throw(_("At least one item must remain on the original bill."))
 
@@ -2074,8 +2051,6 @@ def _reassign_merged_kitchen_anchors(destination, sources, dependants):
 
 
 def _discard_added_check(source, destination, company, split_consolidation, reservations_enabled):
-    for ticket in frappe.get_all("URY KOT", filters={"invoice": source.name}, pluck="name"):
-        frappe.db.set_value("URY KOT", ticket, "invoice", destination.name, update_modified=False)
 
     if split_consolidation and reservations_enabled:
         # Ownership follows the issued ticket, including quantities reserved
@@ -2109,17 +2084,13 @@ def _ambiguous_issued_lines():
 
 
 def _issued_merge_claims(check, tickets, interested):
-    from ury.ury.api.kitchen_ticket_history import legacy_line_matches
+    from ury.ury.api.kitchen_ticket_history import issued_line_candidates
 
     claims = defaultdict(list)
     sent = [row for row in check.items if not cint(row.get("ury_held"))]
     for ticket in tickets:
         for line in ticket.kot_items:
-            key = line.get("reservation_line_key")
-            matches = [row for row in sent if row.item_code == line.item and
-                       key in (row.get("reservation_line_key") or row.name, _line_key(row.item_code, row, 1))]
-            if not matches:
-                matches = [row for row in sent if not row.get("reservation_line_key") and legacy_line_matches(line, row)]
+            matches = issued_line_candidates(line, [row for row in sent if row.item_code == line.item])
             if len(matches) > 1 and any(row.name in interested for row in matches):
                 _ambiguous_issued_lines()
             if len(matches) == 1:
@@ -2143,7 +2114,7 @@ def _bind_issued_merge_keys(checks, reservations_enabled):
     for check in checks:
         bindings.update(round_ledger(check)[1])
         if any(row.name in interested for row in check.items):
-            histories[check.name] = [ticket for ticket in submitted_tickets(frappe, check.name)
+            histories[check.name] = [ticket for ticket in submitted_tickets(frappe, check)
                                      if ticket.type not in CANCELLATIONS]
             for ticket in histories[check.name]:
                 for line in ticket.kot_items:
@@ -2246,8 +2217,7 @@ def _merged_kitchen_keys(checks, line_keys):
                 key = representatives[representative]
                 if key != old:
                     updates[row.name] = {"reservation_line_key": key}
-            if not row.get("custom_parent_line_key"):
-                parents[old].append((row.get("fire_at"), key))
+            parents[old].append((row.get("fire_at"), key))
         for row in check.items:
             parent = row.get("custom_parent_line_key")
             if parent and parent in parents:
@@ -2439,6 +2409,17 @@ def consolidate_checks(destination, sources):
 
     if carried_room and not destination.get("room_number"):
         destination.room_number = carried_room
+
+    from ury.ury.api.kitchen_ticket_history import owned_ticket_filters, record_ticket_transfer
+
+    for source in sources:
+        transferred = [name for scope in owned_ticket_filters(source)
+                       for name in frappe.get_all("URY KOT", filters=scope, pluck="name")]
+        if transferred:
+            record_ticket_transfer(destination, transferred, True)
+            record_ticket_transfer(source, transferred, destination.name)
+            frappe.db.set_value("POS Invoice", source.name, "ury_applied_rounds", source.ury_applied_rounds,
+                                update_modified=False)
 
     destination.invoice_printed = 0
     destination.custom_is_complimentary = cint(merged_comp)
@@ -4235,17 +4216,26 @@ def _fire_next_held_course(invoice, bumped_tickets):
         return
     from ury.ury.api.ury_kot_display import _get_kot_cancellation_state
 
+    from ury.ury.api.kitchen_ticket_history import owned_ticket_filters, ticket_ownership
+
+    ticket_condition, scope_value = "kot.invoice = %s", invoice.name
+    if ticket_ownership(invoice):
+        owned = [row[0] for scope in owned_ticket_filters(invoice)
+                 for row in frappe.db.get_values("URY KOT", scope, "name", for_update=True)]
+        if not owned:
+            return
+        ticket_condition, scope_value = "kot.name IN %s", tuple(owned)
     tickets = frappe.db.sql(
-        """
+        f"""
         SELECT kot.name, kot.order_status, item.course,
                (kot.docstatus = 1 AND item.quantity > IFNULL(item.cancelled_qty, 0)) AS has_remaining_qty
         FROM `tabURY KOT` kot
         JOIN `tabURY KOT Items` item ON item.parent = kot.name
-        WHERE kot.invoice = %s AND kot.docstatus IN (1, 2)
+        WHERE {ticket_condition} AND kot.docstatus IN (1, 2)
           AND IFNULL(kot.type, '') NOT IN ('Cancelled', 'Partially cancelled')
         FOR UPDATE
         """,
-        (invoice.name,),
+        (scope_value,),
         as_dict=True,
     )
     course_items = [
@@ -4268,7 +4258,7 @@ def _fire_next_held_course(invoice, bumped_tickets):
     earlier = [row for row in tickets if 0 < ranked.get(row["course"], 0) < ranked[course]]
     if not any(row["name"] in bumped_tickets for row in earlier):
         return
-    cancelled, pending = _get_kot_cancellation_state(invoice.branch, invoice=invoice.name)
+    cancelled, pending = _get_kot_cancellation_state(invoice.branch, invoice=invoice)
     if any(
         row["name"] in pending
         or (row["order_status"] != "Served" and row["name"] not in cancelled and row.get("has_remaining_qty", True))
@@ -7805,16 +7795,12 @@ def cancel_kot(invoice_id, reason=None, void_reason_code=None):
     )
 
     # Set the KOTs associated with the invoice as canceled
-    kot_list = frappe.db.get_list(
-        "URY KOT",
-        filters={
-            "invoice": invoice_id,
-            "type": ("in", ("New Order", "Order Modified")),
-            "docstatus": 1,
-        },
-        fields=("*"),
-    )
+    from ury.ury.api.kitchen_ticket_history import owned_ticket_filters
 
+    kot_list = [row for scope in owned_ticket_filters(pos_invoice)
+                for row in frappe.db.get_list("URY KOT", filters=dict(
+                    scope, type=("in", ("New Order", "Order Modified")), docstatus=1,
+                ), fields=["name"], limit_page_length=0)]
     for item in kot_list:
         kot_doc = frappe.get_doc("URY KOT", item.name)
         kot_doc.docstatus = 2
