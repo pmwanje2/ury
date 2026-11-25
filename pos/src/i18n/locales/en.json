@@ -1,5 +1,6 @@
 {
   "hold_fire": {
+    "action": "hold and fire",
     "title": "Kitchen hold and fire",
     "held": "Held",
     "hold": "Hold for kitchen",

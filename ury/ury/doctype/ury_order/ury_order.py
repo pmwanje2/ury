@@ -3597,7 +3597,7 @@ def _fire_next_held_course(invoice, bumped_tickets):
     ]
     if not held or not bumped_tickets:
         return
-    from ury.ury.api.ury_kot_display import _get_cancel_confirmed_original_kots
+    from ury.ury.api.ury_kot_display import _get_kot_cancellation_state
 
     tickets = frappe.db.sql(
         """
@@ -3632,9 +3632,12 @@ def _fire_next_held_course(invoice, bumped_tickets):
     earlier = [row for row in tickets if 0 < ranked.get(row["course"], 0) < ranked[course]]
     if not any(row["name"] in bumped_tickets for row in earlier):
         return
-    cancelled = _get_cancel_confirmed_original_kots(invoice.branch, invoice=invoice.name)
-    if any(row["order_status"] != "Served" and row["name"] not in cancelled
-           and row.get("has_remaining_qty", True) for row in earlier):
+    cancelled, pending = _get_kot_cancellation_state(invoice.branch, invoice=invoice.name)
+    if any(
+        row["name"] in pending
+        or (row["order_status"] != "Served" and row["name"] not in cancelled and row.get("has_remaining_qty", True))
+        for row in earlier
+    ):
         return
 
     # A sent earlier course with no ticket history cannot be considered

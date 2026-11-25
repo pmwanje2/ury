@@ -79,7 +79,7 @@ class TestGetCancelConfirmedOriginalKots(FrappeTestCase):
         self.assertEqual(result, {"KOT-001", "KOT-002", "KOT-003"})
         filters = mock_get_all.call_args.kwargs["filters"]
         self.assertEqual(filters["branch"], "Branch A")
-        self.assertEqual(filters["verified"], 1)
+        self.assertNotIn("verified", filters)
         self.assertEqual(filters["type"], ["in", ["Cancelled", "Partially cancelled"]])
 
     @patch("ury.ury.api.ury_kot_display.frappe.get_all")
@@ -92,6 +92,12 @@ class TestGetCancelConfirmedOriginalKots(FrappeTestCase):
 
 
 class TestURYKOTDisplaySEC06(FrappeTestCase):
+    def setUp(self):
+        super().setUp()
+        exists = patch("ury.ury.api.ury_kot_display.frappe.db.exists", return_value=True)
+        exists.start()
+        self.addCleanup(exists.stop)
+
 
     @patch("ury.ury.api.ury_kot_display.frappe.db.set_value")
     @patch("ury.ury.api.ury_kot_display.getBranch")

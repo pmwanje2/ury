@@ -1,5 +1,6 @@
 {
   "hold_fire": {
+    "action": "la retención y el envío a cocina",
     "title": "Retención y envío a cocina",
     "held": "En espera",
     "hold": "Dejar en espera para cocina",

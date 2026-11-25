@@ -375,9 +375,21 @@ def confirm_cancel_kot(name):
             frappe.PermissionError,
         )
 
+    if not name or not frappe.db.exists("URY KOT", name):
+        frappe.throw(_("Kitchen ticket {0} was not found.").format(name), frappe.DoesNotExistError)
+
+    message_log = getattr(frappe.local, "message_log", None)
+    message_count = len(message_log) if message_log is not None else 0
     try:
         kot_doc = frappe.get_doc("URY KOT", name)
     except frappe.DoesNotExistError:
+        # A deletion between the two reads can queue Frappe's default DocType
+        # message. Keep earlier messages and emit only our localized error.
+        if message_log is not None:
+            del message_log[message_count:]
+        kot_doc = None
+
+    if kot_doc is None:
         frappe.throw(_("Kitchen ticket {0} was not found.").format(name), frappe.DoesNotExistError)
 
     if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
@@ -1105,21 +1117,29 @@ def build_dashboard_summary(kot_list):
     return list(summary.values())
 
 
-def _get_cancel_confirmed_original_kots(branch, *, invoice=None, candidates=None):
-    """Return originals with no quantity left after confirmed cancellations."""
+def _get_cancel_confirmed_original_kots(branch, *, invoices=None):
+    closed, _ = _get_kot_cancellation_state(branch, invoices=invoices)
+    return closed
+
+
+def _get_kot_cancellation_state(branch, *, invoice=None, invoices=None):
+    """Return fully cancelled originals and originals awaiting confirmation."""
     filters = {
         "type": ["in", ["Cancelled", "Partially cancelled"]],
-        "verified": 1,
         "docstatus": 1,
     }
     if branch:
         filters["branch"] = branch
+    if invoices is not None:
+        if not invoices:
+            return set(), set()
+        filters["invoice"] = ["in", sorted(invoices)]
 
-    fields = ["name", "type", "original_kot"]
+    fields = ["name", "type", "original_kot", "verified"]
     order_by = "creation asc, name asc"
     if invoice:
-        # Course advancement already holds the order lock. Read the current
-        # cancel records so a waiter on that lock cannot use an old snapshot.
+        # Course advancement already holds the order lock, including for
+        # confirmations. Read the current state after acquiring that lock.
         cancel_rows = frappe.db.get_values(
             "URY KOT", {**filters, "invoice": invoice}, fields, as_dict=True,
             for_update=True, order_by=order_by,
@@ -1128,18 +1148,24 @@ def _get_cancel_confirmed_original_kots(branch, *, invoice=None, candidates=None
         cancel_rows = frappe.get_all("URY KOT", fields=fields, filters=filters, order_by=order_by)
 
     fully_cancelled = set()
+    pending = set()
     partials = []
     for row in cancel_rows:
         originals = {name.strip() for name in (row.get("original_kot") or "").split(",") if name.strip()}
+        verified = _cint(row.get("verified", 1))
+        if not verified:
+            pending.update(originals)
         if row.get("type") == "Partially cancelled":
-            if originals and (candidates is None or originals & candidates):
+            if originals:
                 partials.append((row["name"], originals))
-        else:
+        elif verified:
             fully_cancelled.update(originals)
 
+    # Replay claims in creation order. Earlier unverified claims must reserve
+    # their units so a later confirmed cancellation cannot use them again.
     if partials:
         fully_cancelled.update(_fully_consumed_kots(partials, for_update=bool(invoice)))
-    return fully_cancelled
+    return fully_cancelled - pending, pending
 
 
 def _fully_consumed_kots(partials, *, for_update):
@@ -1333,11 +1359,13 @@ def kot_list(production_unit=None):
 
     kotList = frappe.get_list(
         "URY KOT",
-        fields=["name"],
+        fields=["name", "invoice"],
         filters=filters,
         order_by="creation desc",
     )
-    cancelled_original_kots = _get_cancel_confirmed_original_kots(branch, candidates={kot.name for kot in kotList})
+    cancelled_original_kots = _get_cancel_confirmed_original_kots(
+        branch, invoices={kot.get("invoice") for kot in kotList if kot.get("invoice")},
+    )
     production_filters = {}
     KOT = []
     for kot in kotList:

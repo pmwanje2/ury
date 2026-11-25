@@ -1,5 +1,7 @@
 import { assertOfflineActionAllowed } from '../offline/cashier';
 import { call } from '@ury/core';
+import { t } from '../i18n';
+import { gatewayStatusOf } from '../offline/gateway';
 
 export interface POSInvoiceItem {
   ury_held?: number;
@@ -156,9 +158,25 @@ export interface SyncOrderRequest {
 export type SavedInvoice = POSInvoice & import('./invoice-api').POSInvoice;
 export type SyncOrderResponse = SavedInvoice | { status: 'Failure' };
 
+async function postHeldOrder<T>(method: string, params: object) {
+  const action = t('hold_fire.action');
+  await assertOfflineActionAllowed(action);
+  try {
+    return await call.post<{ message: T }>(method, params);
+  } catch (failure) {
+    const httpStatus = gatewayStatusOf(failure);
+    if (!httpStatus) throw failure;
+    throw Object.assign(new Error(t('offline.refused', { action })), { httpStatus, cause: failure });
+  }
+}
+
 export const syncOrder = async (data: SyncOrderRequest) => {
-  await assertOfflineActionAllowed(data.items?.some(item => item.ury_held) ? 'hold/fire' : 'online-order rounds');
-  return call.post('ury.ury.doctype.ury_order.ury_order.sync_order', data) as Promise<{ message: SyncOrderResponse }>;
+  const method = 'ury.ury.doctype.ury_order.ury_order.sync_order';
+  if (data.items?.some(item => item.ury_held)) {
+    return postHeldOrder<SyncOrderResponse>(method, data);
+  }
+  await assertOfflineActionAllowed('online-order rounds');
+  return call.post<{ message: SyncOrderResponse }>(method, data);
 };
 
 export interface HeldSelection {
@@ -167,14 +185,16 @@ export interface HeldSelection {
   last_modified_time?: string;
 }
 
-export async function fireItems(invoice: string, selection: HeldSelection) {
-  await assertOfflineActionAllowed('hold/fire');
-  return call.post('ury.ury.doctype.ury_order.ury_order.fire_items', { invoice, ...selection }) as Promise<{ message: POSInvoice }>;
+export function fireItems(invoice: string, selection: HeldSelection) {
+  return postHeldOrder<POSInvoice>(
+    'ury.ury.doctype.ury_order.ury_order.fire_items', { invoice, ...selection },
+  );
 }
 
-export async function scheduleItems(invoice: string, selection: HeldSelection & { delay_minutes: number }) {
-  await assertOfflineActionAllowed('hold/fire');
-  return call.post('ury.ury.doctype.ury_order.ury_order.schedule_held_items', { invoice, ...selection }) as Promise<{ message: POSInvoice }>;
+export function scheduleItems(invoice: string, selection: HeldSelection & { delay_minutes: number }) {
+  return postHeldOrder<POSInvoice>(
+    'ury.ury.doctype.ury_order.ury_order.schedule_held_items', { invoice, ...selection },
+  );
 }
 
 export interface SplitBillItemMove {
