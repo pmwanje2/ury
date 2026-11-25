@@ -314,10 +314,14 @@ class CustomPOSInvoice(POSInvoice):
 		from ury.ury.hooks.ury_pos_tender import calculate_taxes_and_totals_excluding_tip
 		from ury.ury_pos.pricing_actions import calculate_taxes_and_totals_for_service_charge
 
-		from ury.ury_pos.split_balances import get_saved_split_balance, restore_split_balance
+		from ury.ury_pos.split_balances import _repricing_split_discount, get_saved_split_balance, restore_split_balance
 
 		base_calculate = super().calculate_taxes_and_totals
 		snapshot = get_saved_split_balance(self)
+		if _repricing_split_discount(self) and self.flags.ury_split_tax_scopes:
+			from ury.ury_pos.scoped_split_taxes import calculate_scoped_split_taxes
+
+			base_calculate = lambda: calculate_scoped_split_taxes(self)
 		result = calculate_taxes_and_totals_for_service_charge(
 			self,
 			lambda: calculate_taxes_and_totals_excluding_tip(self, base_calculate),

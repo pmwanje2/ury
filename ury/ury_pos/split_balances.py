@@ -226,6 +226,9 @@ def _partition_tax(tax, index, details, ratios, fallback, currency_places, base_
             if details and key in right and _units(tax.get(key), places) == total:
                 moved_units = sign * sum(_units(detail.get(detail_key), places) for detail in child_details)
                 left[key], right[key] = _amount(total - moved_units, places), _amount(moved_units, places)
+    # Keep an explicit empty scope when the last taxable item moves away.
+    if rule.get("charge_type") == "On Net Total" and details and "item_rates" not in rule:
+        rule["item_rates"] = {detail["item"]: detail["rate"] for detail in details}
     source["taxes"].append({**labels, **rule, **left})
     child["taxes"].append({**labels, **rule, **right})
 
@@ -334,10 +337,17 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
             )
         prior_rows[index + 1] = {"amount": unrounded or None, "total": running}
         rule = _tax_pricing_rule(tax)
+        rates = (check.flags.ury_split_tax_scopes or {}).get(id(tax)) if repricing else None
         if tax.get("custom_pos_charge_kind") != "Charged Tip":
             prior_tax, prior_rule = next(saved_rules, ({}, {}))
             if _matching_tax_account(tax, prior_tax):
                 rule = prior_rule or rule
+                rates = prior_tax.get("item_rates", rates)
+        if rates is not None:
+            rule["item_rates"] = {
+                name: rates[origin] for name, row in rows_by_name.items()
+                if (origin := row.get("custom_origin_invoice_item") or name) in rates
+            }
         _partition_tax(tax, index, details, ratios_by_name, field_ratios, currency_places, base_places,
                        source, child, rule)
 
@@ -394,17 +404,19 @@ def allocate_split_balances(check, move_map, currency_places, base_places):
 
 def set_split_balance(doc, snapshot, row_names):
     """Register allocations for a document that was produced by the split server."""
+    origins = {key: row.get("custom_origin_invoice_item") or row.name
+               for row, key in zip(doc.items, row_names, strict=True)}
     snapshot["items"] = {
-        row.get("custom_origin_invoice_item") or row.name: dict(snapshot["items"][key],
+        origins[key]: dict(snapshot["items"][key],
             qty=row.qty, item_code=row.get("item_code"), conversion_factor=row.get("conversion_factor"))
         for row, key in zip(doc.items, row_names, strict=True)
         if key in snapshot["items"]
     }
+    for tax in snapshot["taxes"]:
+        if "item_rates" in tax:
+            tax["item_rates"] = {origins[key]: rate for key, rate in tax["item_rates"].items() if key in origins}
     snapshot["details"] = [
-        dict(detail, item=row.get("custom_origin_invoice_item") or row.name)
-        for detail in snapshot["details"]
-        for row, key in zip(doc.items, row_names, strict=True)
-        if key == detail["item"]
+        dict(detail, item=origins[detail["item"]]) for detail in snapshot["details"] if detail["item"] in origins
     ]
     if "custom_charged_tip" in snapshot["header"]:
         doc.custom_charged_tip = snapshot["header"]["custom_charged_tip"]
@@ -443,18 +455,24 @@ def _restore_tax_pricing(check, snapshot):
         return
     live = list(check.get("taxes") or ())
     tax_rows = []
+    scopes = {}
+    detail_rates = _item_rates_by_tax(snapshot)
     rules = _saved_tax_pricing_rules(check, snapshot)
     for index, (saved, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
         if saved.get("custom_pos_charge_kind") == "Charged Tip":
             continue
         native = live[index] if index < len(live) else None
         values = native.as_dict() if native and _matching_tax_account(native, saved) else {}
+        rates = saved.get("item_rates", detail_rates.get(index))
+        if rule.get("charge_type") == "On Net Total" and rates is not None:
+            scopes[len(tax_rows)] = rates
         tax_rows.append({
             **values, **saved,
             "charge_type": "Actual", "row_id": None, "included_in_print_rate": 0, "dont_recompute_tax": 0,
             **rule,
         })
     check.set("taxes", tax_rows + [row for row in live if row.get("custom_pos_charge_kind") == "Charged Tip"])
+    check.flags.ury_split_tax_scopes = {id(check.taxes[index]): rates for index, rates in scopes.items()}
     # The restored rows have new object identities. Native pricing rebuilds the per-item details.
     check._item_wise_tax_details = []
 
@@ -479,6 +497,14 @@ def reprice_split_discount(checks, *, precisions=None):
     finally:
         for doc, _ in active:
             doc.flags.ury_split_discount_reprice = None
+            doc.flags.ury_split_tax_scopes = None
+
+
+def _item_rates_by_tax(snapshot):
+    rates = {}
+    for detail in snapshot["details"]:
+        rates.setdefault(detail["tax"], {})[detail["item"]] = detail["rate"]
+    return rates
 
 
 def combine_split_balances(checks, currency_places, base_places):
@@ -516,9 +542,12 @@ def combine_split_balances(checks, currency_places, base_places):
             add_amounts(combined["items"].setdefault(origins[row.name], {}), values, LINE_AMOUNTS)
         add_amounts(combined["header"], snapshot["header"], HEADER_AMOUNTS)
 
+        detail_rates = _item_rates_by_tax(snapshot)
         tax_indexes = {}
-        for index, tax in enumerate(snapshot["taxes"]):
-            labels = {key: val for key, val in tax.items() if key not in TAX_AMOUNTS}
+        rules = _saved_tax_pricing_rules(doc, snapshot)
+        for index, (tax, rule) in enumerate(zip(snapshot["taxes"], rules, strict=True)):
+            labels = {key: val for key, val in tax.items() if key not in TAX_AMOUNTS and key != "item_rates"}
+            labels.update(rule)
             previous_index = cint(labels.get("row_id")) - 1
             if labels.get("charge_type") in _PREVIOUS_TAX and previous_index in tax_indexes:
                 labels["row_id"] = tax_indexes[previous_index] + 1
@@ -527,7 +556,17 @@ def combine_split_balances(checks, currency_places, base_places):
                 taxes_by_account[identity] = len(combined["taxes"])
                 combined["taxes"].append(labels)
             target_index = tax_indexes[index] = taxes_by_account[identity]
-            add_amounts(combined["taxes"][target_index], tax, TAX_AMOUNTS)
+            target = combined["taxes"][target_index]
+            add_amounts(target, tax, TAX_AMOUNTS)
+            if rule.get("charge_type") == "On Net Total":
+                rates = tax.get("item_rates", detail_rates.get(index))
+                if rates is None:
+                    # Older snapshots without a breakup still belong to their original check.
+                    rates = dict.fromkeys(snapshot["items"], rule["rate"])
+                target.setdefault("item_rates", {}).update({
+                    key if has_saved else origins[key]: rate for key, rate in rates.items()
+                    if key in snapshot["items"]
+                })
         for detail in snapshot["details"]:
             key = detail["item"] if has_saved else origins[detail["item"]]
             index = tax_indexes[detail["tax"]]
