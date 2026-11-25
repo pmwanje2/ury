@@ -1,12 +1,15 @@
 import json
 from decimal import Decimal
 from collections import defaultdict
+from uuid import uuid4
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_datetime
 
-from ury.ury.api.kitchen_ticket_history import matches_release, outstanding_releases, submitted_tickets, take_releases
+from ury.ury.api.kitchen_ticket_history import (
+    bound_item, matches_release, outstanding_releases, round_ledger, submitted_tickets, take_releases,
+)
 from ury.brand import coded_message
 
 from ury.ury.api.ury_bundle_resolver import parse_bundle_overrides
@@ -160,6 +163,7 @@ def create_kot_doc(
     validation_dedup_key=None,
     offline_printed=0,
     ignore_permissions=False,
+    release_group=None,
 ):
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
     order_number = pos_invoice.custom_ury_order_number
@@ -177,6 +181,7 @@ def create_kot_doc(
             "pos_profile": pos_profile_id,
             "comments": comments,
             "type": kot_type,
+            "release_group": release_group,
             "naming_series": kot_naming_series,
             "production": production,
             "aggregator_id":pos_invoice.custom_aggregator_id,
@@ -507,7 +512,8 @@ def process_items_for_kot(
     if production_items_map and not kot_naming_series:
         frappe.throw(_("Configure a kitchen ticket naming series for this outlet."))
 
-    # Create one KOT per production unit
+    # All station copies of this kitchen send represent the same logical quantity.
+    release_group = uuid4().hex
     for production_unit, production_items in production_items_map.items():
         filters = {"invoice": invoice_id, "docstatus": 1, "production": production_unit}
         # Held release owns the invoice lock and must also read current KOTs
@@ -539,6 +545,7 @@ def process_items_for_kot(
             kot_naming_series,
             production_unit,
             validation_dedup_key=validation_dedup_key,
+            release_group=release_group,
             offline_printed=offline_printed,
             ignore_permissions=ignore_permissions,
         )
@@ -580,7 +587,8 @@ def process_items_for_cancel_kot(
         kot_items, pos_profile, pos_invoice, history_only=bool(tickets), pos_profile_id=pos_profile_id, room=room,
     )
     if tickets:
-        batches = _issued_cancel_batches(tickets, production_items_map.get(None, []), invoiceItems)
+        batches = _issued_cancel_batches(tickets, production_items_map.get(None, []), invoiceItems,
+                                        round_ledger(pos_invoice)[1])
     else:
         # Imported checks may predate recorded KOT history.
         batches = {(station, pos_profile_id, None): rows for station, rows in production_items_map.items()}
@@ -605,10 +613,76 @@ def process_items_for_cancel_kot(
     return created_kot_names
 
 
-def _issued_cancel_batches(tickets, items, invoice_items):
-    """Route each debit to its original station, profile and ticket."""
+def _release_debits(matches, tickets, qty, line_qty):
+    """Debit a send once and notify every receiving station. Keep original row keys for KDS."""
+    groups = {}
+    previous_profile = legacy_group = None
+    for release in matches:
+        ticket = tickets[release[0]]
+        group = ticket.get("release_group")
+        if group:
+            legacy_group = None
+        else:
+            # Old tickets lack a send id. Across a profile change the sends are
+            # necessarily distinct. Within a run, infer copies only if qty proves it.
+            if legacy_group is None or previous_profile != ticket.pos_profile:
+                legacy_group = ticket.name
+            group = legacy_group
+        previous_profile = ticket.pos_profile
+        stations = groups.setdefault((bool(ticket.get("release_group")), group), {})
+        stations.setdefault(ticket.production, []).append(release)
+
+    plans = []
+    minimum = maximum = 0
+    for (recorded, _), stations in groups.items():
+        totals = [sum(r[2] for r in station) for station in stations.values()]
+        low, high = max(totals), sum(totals)
+        if recorded:
+            if min(totals) != low:
+                frappe.throw(_("Cannot determine which issued kitchen units to cancel."))
+            high = low
+        minimum += low
+        maximum += high
+        plans.append((stations, low, high, min(totals) == low))
+
+    def debit(rows, demand):
+        for release in reversed(rows):
+            amount = min(demand, release[2])
+            if amount:
+                release[2] -= amount
+                demand -= amount
+                yield release, amount
+            if not demand:
+                break
+
+    if minimum != maximum and line_qty not in (minimum, maximum):
+        if qty == line_qty and maximum >= qty >= minimum:
+            yield from debit(matches, maximum)
+            return
+        frappe.throw(_("Cannot determine which issued kitchen units to cancel."))
+    for stations, low, high, equal_copies in reversed(plans):
+        if low != high and line_qty == maximum:
+            # Single-station rounds recorded before send ids existed.
+            rounds = {id(r) for station in stations.values() for r in station}
+            demand = min(high, qty)
+            yield from debit([r for r in matches if id(r) in rounds], demand)
+        else:
+            demand = min(low, qty)
+            if not equal_copies and demand < low:
+                frappe.throw(_("Cannot determine which issued kitchen units to cancel."))
+            for station in stations.values():
+                yield from debit(station, demand)
+        qty -= demand
+        if not qty:
+            return
+    frappe.throw(_("Cancellation exceeds the outstanding issued kitchen quantity."))
+
+
+def _issued_cancel_batches(tickets, items, invoice_items, bindings=None):
+    """Route each debit to its original station, profile and immutable issued item."""
     releases = outstanding_releases(tickets)
     by_name = {ticket.name: ticket for ticket in tickets}
+    bindings = bindings or {}
     quantities = {row.get("reservation_line_key"): Decimal(str(row["qty"])) for row in invoice_items}
     batches = defaultdict(list)
     for row in items:
@@ -621,31 +695,17 @@ def _issued_cancel_batches(tickets, items, invoice_items):
             parent = row.get("custom_parent_line_key")
             line_qty = next((Decimal(str(item["qty"])) * Decimal(str(row.get("combo_unit_qty") or 1))
                              for item in invoice_items if _extract_raw_line_key(item) == parent), qty)
-        stations = defaultdict(list)
-        for release in releases:
-            if matches_release(release[1], *args, **placement) and release[2] > 0:
-                stations[by_name[release[0]].production].append(release)
-        if not stations:
-            if any(matches_release(release[1], *args, **placement) for release in releases):
-                frappe.throw(_("Cancellation exceeds the outstanding issued kitchen quantity."))
+        matched = [r for r in releases if matches_release(
+            bound_item(r[1], bindings.get(r[0], {})), *args, **placement
+        )]
+        if not matched:
             continue  # Billing-only and unrouted items have no kitchen release to cancel.
-        totals = [sum(r[2] for r in station) for station in stations.values()]
-        if len(stations) == 1 or all(total == line_qty for total in totals):
-            # Multiple stations can each have received a copy of the same release.
-            groups = [(station, qty) for station in stations.values()]
-        elif sum(totals) == line_qty:
-            groups = [(releases, qty)]  # Distinct rounds routed to different stations.
-        elif qty == line_qty and max(totals) <= line_qty:
-            groups = [(station, total) for station, total in zip(stations.values(), totals, strict=True)]
-        else:
-            frappe.throw(_("Cannot determine which issued kitchen units to cancel."))
-        for group, demand in groups:
-            taken = take_releases(group, *args, demand, **placement)
-            if sum(amount for _, amount in taken) != demand:
-                frappe.throw(_("Cancellation exceeds the outstanding issued kitchen quantity."))
-            for name, amount in taken:
-                ticket = by_name[name]
-                batches[ticket.production, ticket.pos_profile, name].append(dict(row, qty=-float(amount)))
+        for (name, issued, _), amount in _release_debits([r for r in matched if r[2] > 0], by_name, qty, line_qty):
+            ticket = by_name[name]
+            batches[ticket.production, ticket.pos_profile, name].append(dict(
+                row, qty=-float(amount), issued_key=issued.get("reservation_line_key"),
+                issued_parent=issued.get("parent_line_key"),
+            ))
     return batches
 
 
@@ -783,8 +843,8 @@ def create_cancel_kot_doc(
                 "quantity": matched_item["qty"],
                 "comments": cancelItem["comments"],
                 "course": course,
-                "reservation_line_key": cancel_line_key,
-                "parent_line_key": cancelItem.get("custom_parent_line_key") or None,
+                "reservation_line_key": cancelItem.get("issued_key", cancel_line_key),
+                "parent_line_key": cancelItem.get("issued_parent", cancelItem.get("custom_parent_line_key")) or None,
                 "seat_no": cint(cancelItem.get("custom_seat_no")),
                 "is_modifier": cint(cancelItem.get("custom_is_modifier")),
                 "modifier_summary": _modifier_summary_for_kot_item(cancelItem),

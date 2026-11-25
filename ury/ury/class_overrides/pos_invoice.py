@@ -68,6 +68,9 @@ _COPY_RENDER_MARKER = object()
 
 class CustomPOSInvoice(POSInvoice):
 	def validate(self):
+		from ury.ury.api.kitchen_ticket_history import protect_issued_bindings
+
+		protect_issued_bindings(self)
 		# G41 coexistence with sales-time-pricing@1:
 		# `Sales Time Pricing - POS Invoice` (Before Validate Server Script) runs AFTER
 		# `ury_pos_invoice.before_validate` and overwrites `custom_transaction_local_time` /

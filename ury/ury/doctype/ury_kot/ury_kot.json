@@ -40,7 +40,8 @@
   "table_takeaway",
   "user",
   "amended_from",
-  "validation_dedup_key"
+  "validation_dedup_key",
+  "release_group"
  ],
  "fields": [
   {
@@ -265,12 +266,21 @@
    "no_copy": 1,
    "read_only": 1,
    "unique": 1
+  },
+  {
+   "fieldname": "release_group",
+   "fieldtype": "Data",
+   "label": "Kitchen Release Group",
+   "length": 32,
+   "read_only": 1,
+   "hidden": 1,
+   "no_copy": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-10-21 12:00:00.000000",
+ "modified": "2026-11-25 21:30:00.000000",
  "modified_by": "Administrator",
  "module": "URY",
  "name": "URY KOT",

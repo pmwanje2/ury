@@ -1,10 +1,57 @@
 """Replay submitted kitchen quantities in issue order, preserving ticket ownership."""
 
+import json
 from decimal import Decimal
 
 
 CANCELLATIONS = ("Cancelled", "Partially cancelled")
 TICKET_TYPES = ("New Order", "Order Modified", "Duplicate", *CANCELLATIONS)
+
+
+def round_ledger(invoice):
+    """Read legacy round digests or the extended ledger with immutable ticket bindings."""
+    raw = getattr(invoice, "ury_applied_rounds", None)
+    if not isinstance(raw, str) or not raw:
+        return {}, {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return {}, {}
+    if not isinstance(value, dict):
+        return {}, {}
+    if isinstance(value.get("applied_rounds"), dict):
+        return value["applied_rounds"], value.get("issued_items", {})
+    return value, {}
+
+
+def write_round_ledger(invoice, rounds, bindings):
+    data = {"applied_rounds": rounds, "issued_items": bindings} if bindings else rounds
+    invoice.ury_applied_rounds = json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+_SERVER_BINDINGS = object()
+
+
+def set_issued_bindings(invoice, bindings):
+    rounds, _ = round_ledger(invoice)
+    write_round_ledger(invoice, rounds, bindings)
+    invoice.flags.ury_issued_bindings = _SERVER_BINDINGS
+
+
+def protect_issued_bindings(invoice):
+    """Only the locked merge and split paths can assign issued items to billing lines."""
+    if getattr(invoice.flags, "ury_issued_bindings", None) is _SERVER_BINDINGS:
+        return
+    previous = getattr(invoice, "_doc_before_save", None)
+    rounds, requested = round_ledger(invoice)
+    _, saved = round_ledger(previous)
+    if requested != saved:
+        write_round_ledger(invoice, rounds, saved)
+
+
+def bound_item(row, ticket_bindings):
+    changes = ticket_bindings.get(row.get("name"))
+    return dict(row, **changes) if changes else row
 
 
 def original_tickets(value):
@@ -52,7 +99,7 @@ def submitted_tickets(frappe, invoice):
     # and take current reads of both parent and child rows before moving ownership.
     tickets = frappe.db.get_values(
         "URY KOT", {"invoice": invoice, "docstatus": 1, "type": ("in", TICKET_TYPES)},
-        ["name", "type", "original_kot", "production", "pos_profile"],
+        ["name", "type", "original_kot", "production", "pos_profile", "release_group"],
         order_by="creation asc, name asc", as_dict=True, for_update=True,
     )
     by_name = {ticket.name: ticket for ticket in tickets}
@@ -99,7 +146,7 @@ def outstanding_releases(tickets):
     return releases
 
 
-def split_ticket_families(frappe, invoice):
+def split_ticket_families(frappe, invoice, bindings):
     """Yield indivisible release/cancellation histories and their outstanding lines."""
     headers = frappe.get_all(
         "URY KOT", filters={"invoice": invoice, "docstatus": 1},
@@ -113,7 +160,7 @@ def split_ticket_families(frappe, invoice):
     uncertain = set()
     for name in tickets:
         rows = frappe.get_all("URY KOT Items", filters={"parent": name, "parenttype": "URY KOT"},
-                              fields=["reservation_line_key", "item", "quantity", "cancelled_qty",
+                              fields=["name", "reservation_line_key", "item", "quantity", "cancelled_qty",
                                       "comments", "course", "seat_no"], order_by="idx")
         rows_by_ticket[name] = rows
         if name not in cancellations:
@@ -149,5 +196,5 @@ def split_ticket_families(frappe, invoice):
                 elif id(row) in remaining:
                     qty = remaining[id(row)]
                     if qty or not row.get("quantity"):
-                        rows.append((row, qty))
+                        rows.append((bound_item(row, bindings.get(ticket, {})), qty))
         yield tuple(family), rows, ambiguous

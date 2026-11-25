@@ -811,9 +811,9 @@ def _split_kots_to_move(source, move_map, reservations_enabled, *, anchored=None
 
     candidates = {}
     retained = set()
-    from ury.ury.api.kitchen_ticket_history import legacy_line_matches, split_ticket_families
+    from ury.ury.api.kitchen_ticket_history import legacy_line_matches, round_ledger, split_ticket_families
 
-    for family, rows, ambiguous in split_ticket_families(frappe, source.name):
+    for family, rows, ambiguous in split_ticket_families(frappe, source.name, round_ledger(source)[1]):
         line_qty = defaultdict(Decimal)
         possible_lines, issued_lines = set(), set()
         whole = bool(rows) and not ambiguous
@@ -1146,6 +1146,14 @@ def _apply_check_split(
     for field in header_fields:
         if source.get(field) is not None:
             new_invoice.set(field, source.get(field))
+
+    from ury.ury.api.kitchen_ticket_history import round_ledger, set_issued_bindings
+
+    bindings = round_ledger(source)[1]
+    moved_bindings = {ticket: bindings[ticket] for ticket in movable_kots if ticket in bindings}
+    if moved_bindings:
+        set_issued_bindings(new_invoice, moved_bindings)
+        set_issued_bindings(source, {k: v for k, v in bindings.items() if k not in moved_bindings})
 
     split_group = source.get("custom_split_group") or frappe.generate_hash(length=10)
     source.custom_split_group = split_group
@@ -2111,7 +2119,7 @@ def _issued_merge_claims(check, tickets, interested):
             matches = [row for row in sent if row.item_code == line.item and
                        key in (row.get("reservation_line_key") or row.name, _line_key(row.item_code, row, 1))]
             if not matches:
-                matches = [row for row in sent if legacy_line_matches(line, row)]
+                matches = [row for row in sent if not row.get("reservation_line_key") and legacy_line_matches(line, row)]
             if len(matches) > 1 and any(row.name in interested for row in matches):
                 _ambiguous_issued_lines()
             if len(matches) == 1:
@@ -2121,33 +2129,39 @@ def _issued_merge_claims(check, tickets, interested):
 
 def _bind_issued_merge_keys(checks, reservations_enabled):
     """Resolve invoice-local identities while each ticket still belongs to its issuing check."""
-    from ury.ury.api.kitchen_ticket_history import CANCELLATIONS, submitted_tickets
+    from ury.ury.api.kitchen_ticket_history import CANCELLATIONS, round_ledger, set_issued_bindings, submitted_tickets
 
     groups = defaultdict(list)
     for check in checks:
         for row in check.items:
             if not cint(row.get("ury_held")):
-                groups[row.item_code, row.get("reservation_line_key") or None].append((check, row))
+                groups[row.get("reservation_line_key") or None].append((check, row))
 
-    interested = {row.name for (_, raw), entries in groups.items() if not raw or len(entries) > 1
+    interested = {row.name for raw, entries in groups.items() if not raw or len(entries) > 1
                   for _, row in entries}
-    histories, claims = {}, {}
+    histories, claims, bindings = {}, {}, {}
     for check in checks:
+        bindings.update(round_ledger(check)[1])
         if any(row.name in interested for row in check.items):
-            histories[check.name] = submitted_tickets(frappe, check.name)
+            histories[check.name] = [ticket for ticket in submitted_tickets(frappe, check.name)
+                                     if ticket.type not in CANCELLATIONS]
+            for ticket in histories[check.name]:
+                for line in ticket.kot_items:
+                    line.update(bindings.get(ticket.name, {}).get(line.name, {}))
             claims.update(_issued_merge_claims(check, histories[check.name], interested))
 
     updates = defaultdict(dict)
-    ticket_changes = defaultdict(dict)
     check_names = {check.name for check in checks}
-    for (code, raw), entries in groups.items():
-        if not any(row.name in interested and row.name in claims for _, row in entries):
+    for raw, entries in groups.items():
+        if not any(row.name in interested for _, row in entries):
+            continue
+        if not raw and not any(row.name in claims for _, row in entries):
             continue
         # Shares of a single release keep one identity, even for an originally
         # unkeyed line. Two origin checks with their own releases never share one.
         issuers = defaultdict(list)
         for check, row in entries:
-            if any(ticket.type not in CANCELLATIONS for ticket, _ in claims.get(row.name, ())):
+            if claims.get(row.name):
                 issuers[row.get("custom_origin_invoice_item") or row.name].append(check.name)
         keys = {}
         for check, row in entries:
@@ -2155,7 +2169,9 @@ def _bind_issued_merge_keys(checks, reservations_enabled):
             owners = issuers[origin]
             if not raw and not owners:
                 continue
-            if check.name in owners:
+            if not owners:
+                owner = row.get("custom_kitchen_anchor")
+            elif check.name in owners:
                 owner = check.name
             elif len(owners) == 1:
                 owner = owners[0]
@@ -2163,14 +2179,14 @@ def _bind_issued_merge_keys(checks, reservations_enabled):
                 owner = row.get("custom_kitchen_anchor") or check.name
                 if owners and owner not in owners:
                     _ambiguous_issued_lines()
-            component = (origin, owner)
+            component = (row.item_code, origin, owner)
             if component not in keys:
                 keys[component] = raw if raw and not keys else frappe.generate_hash(length=20)
             new = keys[component]
-            issued_key = f"ref:{code}:{new}"
-            for _, line in claims.get(row.name, ()):
+            issued_key = f"ref:{row.item_code}:{new}"
+            for ticket, line in claims.get(row.name, ()):
                 if line.get("reservation_line_key") != issued_key:
-                    ticket_changes[line.name]["reservation_line_key"] = issued_key
+                    bindings.setdefault(ticket.name, {}).setdefault(line.name, {})["reservation_line_key"] = issued_key
             if new == raw:
                 continue
             if row.get("custom_kitchen_anchor") and row.custom_kitchen_anchor not in check_names:
@@ -2185,10 +2201,11 @@ def _bind_issued_merge_keys(checks, reservations_enabled):
             for ticket in histories[check.name]:
                 for child in ticket.kot_items:
                     if child.get("parent_line_key") == old:
-                        ticket_changes[child.name]["parent_line_key"] = new
+                        record = bindings.setdefault(ticket.name, {}).setdefault(child.name, {})
+                        record["parent_line_key"] = new
                         key = child.get("reservation_line_key") or ""
                         if key.startswith(old + "::combo::"):
-                            ticket_changes[child.name]["reservation_line_key"] = new + key[len(old):]
+                            record["reservation_line_key"] = new + key[len(old):]
 
     if updates:
         external = {line.custom_origin_invoice_item for line in _shared_kitchen_dependants(sorted(check_names))}
@@ -2205,8 +2222,8 @@ def _bind_issued_merge_keys(checks, reservations_enabled):
             for row in check.items:
                 if row.name in changes:
                     row.update(changes[row.name])
-    for line, changes in ticket_changes.items():
-        frappe.db.set_value("URY KOT Items", line, changes, update_modified=False)
+    if bindings:
+        set_issued_bindings(checks[0], bindings)
 
 
 def _merged_kitchen_keys(checks, line_keys):
@@ -3880,19 +3897,13 @@ def _round_digest(items):
     return hashlib.sha256(json.dumps(lines).encode()).hexdigest()
 
 
-def _applied_rounds(invoice):
-    try:
-        rounds = json.loads(invoice.get("ury_applied_rounds") or "{}")
-    except ValueError:
-        return {}
-    return rounds if isinstance(rounds, dict) else {}
-
-
 def _record_round(invoice, round_id, digest=None):
+    from ury.ury.api.kitchen_ticket_history import round_ledger, write_round_ledger
+
     invoice.ury_last_round_id = round_id
-    rounds = _applied_rounds(invoice)
+    rounds, bindings = round_ledger(invoice)
     rounds.setdefault(str(round_id), digest)
-    invoice.ury_applied_rounds = json.dumps(rounds, sort_keys=True)
+    write_round_ledger(invoice, rounds, bindings)
 
 
 def _is_applied_round(invoice, round_id, digest=None):
@@ -3900,7 +3911,9 @@ def _is_applied_round(invoice, round_id, digest=None):
     if round_id is None:
         return False
     round_id = str(round_id)
-    rounds = _applied_rounds(invoice)
+    from ury.ury.api.kitchen_ticket_history import round_ledger
+
+    rounds, _ = round_ledger(invoice)
     if round_id in rounds:
         if digest and rounds[round_id] and rounds[round_id] != digest:
             _offline_refusal("URY_ROUND_PAYLOAD_MISMATCH", _("This round was already saved with different items."))
@@ -4344,6 +4357,49 @@ def sync_order(
         role.role in user_role for role in posprofile.role_allowed_for_billing
     )
 
+    # Authorize the requested table before reading any seating or reservation policy.
+    elevated_user = _has_role(user_role, posprofile.transfer_role_permissions)
+    if table:
+        table_branch, table_room = frappe.db.get_value(
+            "URY Table", table, ["branch", "restaurant_room"]
+        ) or (None, None)
+
+        if not table_branch:
+            frappe.throw(_("Table not found."), frappe.PermissionError)
+
+        try:
+            requesting_user_branch = getBranch()
+        except frappe.ValidationError:
+            if frappe.session.user == "Administrator" or "System Manager" in user_role:
+                requesting_user_branch = None
+            else:
+                raise
+
+        if requesting_user_branch and table_branch != requesting_user_branch:
+            frappe.throw(
+                _("Not permitted to take orders for a table outside your active branch."),
+                frappe.PermissionError,
+            )
+
+        if table_room and not (elevated_user or billing_user):
+            try:
+                assigned_rooms = {row.get("name") for row in getRoom()}
+            except frappe.ValidationError:
+                if frappe.session.user == "Administrator" or "System Manager" in user_role:
+                    assigned_rooms = None
+                else:
+                    raise
+
+            # getRoom() returns room=None for a branch-level assignment —
+            # that means access to every room in the branch, not "assigned
+            # to a room named None" (found via live E2E test: this exact
+            # throw wrongly blocked a real branch-assigned Captain).
+            if assigned_rooms is not None and None not in assigned_rooms and table_room not in assigned_rooms:
+                frappe.throw(
+                    _("Not permitted to take orders for a table outside your assigned room."),
+                    frappe.PermissionError,
+                )
+
     # Check if the last invoice was already billed
     if (
         last_invoice
@@ -4424,7 +4480,7 @@ def sync_order(
     if table and not invoice and not client_invoice and not invoice_doc:
         from ury.ury.api.table_lifecycle import assert_table_seatable
 
-        assert_table_seatable(table, posprofile.get("branch"))
+        assert_table_seatable(table, table_branch)
     invoice = invoice_doc or client_invoice or get_order_invoice(table, invoice, order_type)
     if invoice.name and invoice.pos_profile and invoice.pos_profile != pos_profile:
         frappe.throw(
@@ -4453,7 +4509,6 @@ def sync_order(
     # and block modification of an already-billed/printed invoice unless the
     # acting user holds billing access. Only applies once an order actually
     # exists — a brand-new invoice has no owner or billed state to protect.
-    elevated_user = _has_role(user_role, posprofile.transfer_role_permissions)
     is_super_user = frappe.session.user == "Administrator" or "System Manager" in user_role
     picked_up_with_pin = False
     if invoice.name and not collision_merge:
@@ -4504,18 +4559,7 @@ def sync_order(
                 frappe.PermissionError,
             )
 
-    # role_restricted_for_table_order enforcement + requested-table
-    # branch/room validation. Applies to both new and existing orders since
-    # `table` reflects the table currently being requested, not just the
-    # invoice's already-persisted restaurant_table.
     if table:
-        table_branch, table_room = frappe.db.get_value(
-            "URY Table", table, ["branch", "restaurant_room"]
-        ) or (None, None)
-
-        if not table_branch:
-            frappe.throw(_("Table not found."), frappe.PermissionError)
-
         # Enforce server-side reservation lock check ONLY for NEW table orders or table changes
         is_new_order = not bool(getattr(invoice, "name", None)) or (
             getattr(invoice, "restaurant_table", None) and invoice.restaurant_table != table
@@ -4534,39 +4578,6 @@ def sync_order(
                         formatted_res_time = str(res_time_raw)
                 frappe.throw(
                     _("Table {0} is reserved for {1}. Please choose another table.").format(table, formatted_res_time)
-                )
-
-        try:
-            requesting_user_branch = getBranch()
-        except frappe.ValidationError:
-            if frappe.session.user == "Administrator" or "System Manager" in user_role:
-                requesting_user_branch = None
-            else:
-                raise
-
-        if requesting_user_branch and table_branch != requesting_user_branch:
-            frappe.throw(
-                _("Not permitted to take orders for a table outside your active branch."),
-                frappe.PermissionError,
-            )
-
-        if table_room and not (elevated_user or billing_user):
-            try:
-                assigned_rooms = {row.get("name") for row in getRoom()}
-            except frappe.ValidationError:
-                if frappe.session.user == "Administrator" or "System Manager" in user_role:
-                    assigned_rooms = None
-                else:
-                    raise
-
-            # getRoom() returns room=None for a branch-level assignment —
-            # that means access to every room in the branch, not "assigned
-            # to a room named None" (found via live E2E test: this exact
-            # throw wrongly blocked a real branch-assigned Captain).
-            if assigned_rooms is not None and None not in assigned_rooms and table_room not in assigned_rooms:
-                frappe.throw(
-                    _("Not permitted to take orders for a table outside your assigned room."),
-                    frappe.PermissionError,
                 )
 
     if not append and last_invoice and last_modified_time:
