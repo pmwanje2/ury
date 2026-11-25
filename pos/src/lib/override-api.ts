@@ -12,6 +12,7 @@ export type AuthRefusalCode =
   | 'POS-AUTH-REASON'
   | 'POS-AUTH-EXPIRED'
   | 'POS-AUTH-CHANGED'
+  | 'POS-AUTH-REFRESH'
   | 'POS-AUTH-UNAVAILABLE';
 
 export interface OverrideApprover {
@@ -75,6 +76,7 @@ const REFUSAL_CODES: readonly AuthRefusalCode[] = [
   'POS-AUTH-REASON',
   'POS-AUTH-EXPIRED',
   'POS-AUTH-CHANGED',
+  'POS-AUTH-REFRESH',
   'POS-AUTH-UNAVAILABLE',
 ];
 
@@ -117,6 +119,8 @@ export function overrideErrorMessage(error: unknown, fallbackKey = 'manager_appr
       return t('manager_approval.error_changed');
     case 'POS-AUTH-REQUIRED':
       return t('manager_approval.error_required');
+    case 'POS-AUTH-REFRESH':
+      return t('manager_approval.error_refresh');
     case 'POS-AUTH-UNAVAILABLE':
       return t('manager_approval.error_unavailable');
     default:

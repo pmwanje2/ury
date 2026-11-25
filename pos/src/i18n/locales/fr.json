@@ -1051,6 +1051,7 @@
     "error_expired": "Cette approbation a expiré ou a déjà été utilisée. Demandez une nouvelle approbation.",
     "error_changed": "L'addition ou les montants ont changé après l'approbation. Demandez une nouvelle approbation.",
     "error_required": "Un responsable doit approuver cette action.",
+    "error_refresh": "Actualisez la caisse et réessayez.",
     "error_unavailable": "Le service de code PIN d’approbation est indisponible. Réessayez plus tard.",
     "error_generic": "L'approbation n'a pas pu être effectuée. Réessayez.",
     "pin_entered_count": "{{count}} chiffres saisis",
