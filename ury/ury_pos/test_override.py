@@ -372,7 +372,7 @@ class TestOverrideContract(unittest.TestCase):
         self.audit = MagicMock()
         self.frappe.utils = SimpleNamespace(
             cint=lambda v: int(v or 0),
-            flt=lambda v: float(v or 0),
+            flt=lambda v, precision=None: round(float(v or 0), precision) if precision is not None else float(v or 0),
             get_fullname=lambda u: self.store.users.get(u, Doc()).get("full_name") or u,
             now_datetime=lambda: self.clock,
             get_datetime=lambda v=None: self.clock if v is None else v,
@@ -1607,6 +1607,155 @@ class TestOverrideContract(unittest.TestCase):
             "void_sent_item", "Main Till", "POS-INV-100", claim, token=issued["token"],
         )
         self.assertEqual(approved.approver, "manager@example.test")
+
+
+    def prepare_foreign_approval(self, privilege):
+        api = self.api()
+        self.enroll("manager@example.test", "2468")
+        original_get_value = self.frappe.db.get_value
+
+        def get_value(doctype, *args, **kwargs):
+            if doctype == "Company":
+                return "UGX"
+            return original_get_value(doctype, *args, **kwargs)
+
+        self.frappe.db.get_value = get_value
+        profile = self.store.profiles["Main Till"]
+        profile["currency"] = "USD"
+        invoice = self.store.invoices["POS-INV-100"]
+        invoice.update(currency="USD", conversion_rate=3700, net_total=1000, total=1000, grand_total=1000)
+        invoice["items"] = [Doc(name="ROW-1", item_code="FISH", qty=5, rate=200, amount=1000, price_list_rate=200)]
+        original_get_doc = self.frappe.get_doc
+        self.frappe.get_doc = lambda dt, name=None, **kw: (
+            invoice if dt == "POS Invoice" and name == "POS-INV-100" else original_get_doc(dt, name, **kw)
+        )
+        for rule in self.store.privilege_rules:
+            if rule.privilege == privilege and rule.role == "URY Manager":
+                rule.update(max_percent=100, max_amount=100000, requires_reason=0)
+        return api
+
+    def assert_capped_claim(self, privilege, claim, name="POS-INV-100", doctype="POS Invoice"):
+        api = self.prepare_foreign_approval(privilege)
+        claim.setdefault("reason", "Other: Guest request")
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", privilege, "manager@example.test", "2468", doctype, name, claim,
+        ))
+
+    def test_percentage_check_discount_issuance_is_capped(self):
+        self.assert_capped_claim("discount", {"percent": 5, "amount": None, "lines": []})
+
+    def test_percentage_line_discount_issuance_is_capped(self):
+        self.assert_capped_claim("discount", {"lines": [{"row": "ROW-1", "percent": 5, "amount": None}]})
+
+    def test_sent_reduction_issuance_is_capped_without_top_level_amount(self):
+        self.assert_capped_claim("reduce_sent_qty", {
+            "item_row_name": "ROW-1", "previous_qty": 5, "new_qty": 4, "delta": -1,
+        })
+
+    def test_sent_void_issuance_is_capped_without_top_level_amount(self):
+        self.assert_capped_claim("void_sent_item", {
+            "items": [{"item_code": "FISH", "from_qty": 5, "to_qty": 0}],
+        })
+
+    def test_new_open_item_issuance_is_capped_using_profile_fx(self):
+        import sys
+        from types import ModuleType
+
+        setup_utils = ModuleType("erpnext.setup.utils")
+        setup_utils.get_exchange_rate = lambda source, target, date, args=None: 3700
+        with patch.dict(sys.modules, {setup_utils.__name__: setup_utils}):
+            self.assert_capped_claim("open_item", {"rate": 25, "qty": 2, "amount": 50}, name="NEW")
+
+    def test_on_account_issuance_caps_company_currency_proposed_charge(self):
+        self.assert_capped_claim("on_account_over_limit", {"proposed": 185000, "currency": "UGX", "limit": 100000})
+
+    def test_room_charge_issuance_converts_foreign_claim_amount(self):
+        self.assert_capped_claim("room_charge_over_limit", {"amount": 50, "currency": "USD"})
+
+    def test_offline_tender_issuance_converts_foreign_claim_amount(self):
+        self.assert_capped_claim("offline_tender", {"amount": 50, "limit": 100000, "modes": ["Cash"]})
+
+    def test_require_converts_document_claim_when_amount_is_omitted(self):
+        api = self.prepare_foreign_approval("price_override")
+        self.frappe.session.user = "manager@example.test"
+        with self.assertRaisesRegex(Denied, "POS-AUTH-REQUIRED"):
+            api.require("price_override", "Main Till", "POS-INV-100", {"amount": 50, "percent": 10, "reason": "Other: Guest request"})
+
+
+    def test_service_charge_change_tokens_price_zero_and_nonzero_overrides(self):
+        from ury.ury_pos.test_pricing_privileged_actions import FakeDoc
+
+        api = self.prepare_foreign_approval("service_charge_waive")
+        invoice = FakeDoc(self.store.invoices["POS-INV-100"])
+        invoice["taxes"] = [Doc(custom_pos_charge_kind="Service Charge", tax_amount=50)]
+        original_get_doc = self.frappe.get_doc
+        self.frappe.get_doc = lambda dt, name=None, **kw: (
+            invoice if (dt, name) == ("POS Invoice", "POS-INV-100") else original_get_doc(dt, name, **kw)
+        )
+        for rate, amount in ((0, None), (None, 0), (5, None)):
+            with self.subTest(rate=rate, amount=amount):
+                claim = {"sc_action": "change", "new_rate": rate, "new_amount": amount, "reason": "Other: Guest request"}
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+                    "Main Till", "service_charge_waive", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+                ))
+
+    def test_top_approver_cannot_mint_over_cap_discount_or_comp(self):
+        for privilege, percent in (("discount", 5), ("complimentary", 100)):
+            with self.subTest(privilege=privilege):
+                api = self.prepare_foreign_approval(privilege)
+                self.store.approval_limits["Hotel Co"] = Doc(
+                    discount_limits_by_role="URY Manager: 100",
+                    discount_approver_role="URY Manager",
+                )
+                claim = {"amount": 50, "percent": percent, "reason": "Other: Guest request"}
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+                    "Main Till", privilege, "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+                ))
+
+    def test_top_approver_cannot_consume_discount_or_comp_after_cap_changes(self):
+        api = self.prepare_foreign_approval("discount")
+        self.store.approval_limits["Hotel Co"] = Doc(
+            discount_limits_by_role="URY Manager: 100",
+            discount_approver_role="URY Manager",
+        )
+        for privilege, percent in (("discount", 5), ("complimentary", 100)):
+            with self.subTest(privilege=privilege):
+                rule = next(r for r in self.store.privilege_rules if r.privilege == privilege and r.role == "URY Manager")
+                rule.update(max_percent=100, max_amount=200000)
+                claim = {"amount": 50, "percent": percent, "reason": "Other: Guest request"}
+                issued = api.authorise(
+                    "Main Till", privilege, "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+                )
+                rule.update(max_amount=100000)
+                self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.consume(
+                    issued["token"], privilege, "Main Till", "POS-INV-100", claim, approval_amount=185000,
+                ))
+
+
+    def test_service_charge_token_uses_post_redistribution_charge(self):
+        from ury.ury_pos.test_pricing_privileged_actions import FlatGrandTotalDiscountInvoice
+
+        api = self.prepare_foreign_approval("service_charge_waive")
+        profile = self.store.profiles["Main Till"]
+        profile.update(custom_service_charge_account="Service Charge - HC", custom_service_charge_rate=5)
+        saved_invoice = self.store.invoices["POS-INV-100"]
+        doc = FlatGrandTotalDiscountInvoice(saved_invoice)
+        doc.update(taxes=[], apply_discount_on="Grand Total", discount_amount=500)
+        doc.calculate_taxes_and_totals()
+        original_get_doc = self.frappe.get_doc
+        self.frappe.get_doc = lambda dt, name=None, **kw: (
+            doc if (dt, name) == ("POS Invoice", "POS-INV-100") else original_get_doc(dt, name, **kw)
+        )
+        for rule in self.store.privilege_rules:
+            if rule.privilege == "service_charge_waive" and rule.role == "URY Manager":
+                rule.max_amount = 195000
+
+        claim = {"sc_action": "change", "new_rate": 10, "reason": "Other: Guest request"}
+        self.refused("POS-AUTH-NOT-ELIGIBLE", Denied, lambda: api.authorise(
+            "Main Till", "service_charge_waive", "manager@example.test", "2468", "POS Invoice", "POS-INV-100", claim,
+        ))
+        self.assertEqual(doc.net_total, 500)
+        self.assertEqual(doc.taxes, [])
 
 
 if __name__ == "__main__":

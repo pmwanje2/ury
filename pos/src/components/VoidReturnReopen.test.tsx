@@ -134,7 +134,9 @@ describe('VoidItemDialog (sent item void & waste)', () => {
       const body = (payload || {}) as Record<string, unknown>;
       if (method === 'ury.ury.api.ury_pos_invoice_qty_reduction.reduce_order_item_qty') {
         if (!body.approval_token) {
-          throw new Error('A manager must approve this action. [POS-AUTH-REQUIRED]');
+          throw Object.assign(new Error('A manager must approve this action. [POS-AUTH-REQUIRED]'), {
+            pos_auth_challenge: { amount: 49000 },
+          });
         }
         return {
           message: {

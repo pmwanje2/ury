@@ -701,6 +701,7 @@ class TestR3MergedBillFxOvertender(unittest.TestCase):
         room_charge_stub.enforce_room_charge_settlement = lambda *a, **kw: None
 
         ury_pos_pkg = ModuleType("ury.ury_pos")
+        ury_pos_pkg.__path__ = [str(APP / "ury_pos")]
         ury_pos_pkg.offline_tenders = offline_tenders_stub
         ury_pos_pkg.room_charge = room_charge_stub
 

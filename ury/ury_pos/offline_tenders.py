@@ -184,7 +184,13 @@ def enforce_offline_tender_replay(
 
     limit = offline_tender_limit(profile)
     prec = currency_precision(_field(invoice, "currency") or _field(profile, "currency"))
-    if limit > 0 and flt(total_offline, prec) > flt(limit, prec):
+    if limit <= 0:
+        return None
+    from ury.ury_pos.approval_currency import company_approval_amount, invoice_approval_currency
+
+    approval_currency = invoice_approval_currency(invoice, f)
+    approval_amount = company_approval_amount(invoice, total_offline, f, currency_and_rate=approval_currency)
+    if approval_amount > limit:
         # Already verified in-process during this make_invoice -> submit flow?
         if getattr(getattr(invoice, "flags", None), "pos_verified_offline_override", False):
             return {
@@ -196,7 +202,7 @@ def enforce_offline_tender_replay(
                 _(
                     "Offline tender ({0}) exceeds this till's offline limit ({1}). "
                     "Manager approval is required. [POS-OFFLINE-OVER-LIMIT] [POS-AUTH-REQUIRED]"
-                ).format(round(flt(total_offline), prec), round(flt(limit), prec)),
+                ).format(approval_amount, limit),
                 f.PermissionError,
             )
         if not consume_token:
@@ -216,6 +222,7 @@ def enforce_offline_tender_replay(
             profile.name,
             invoice.name,
             claim,
+            approval_amount=approval_amount,
         )
         approver = consumed.get("approver") if isinstance(consumed, dict) else getattr(consumed, "approver", None)
         approved_reason = (

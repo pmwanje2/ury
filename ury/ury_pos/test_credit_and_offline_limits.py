@@ -858,6 +858,24 @@ class TestOfflineTenderReplayServerGate(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "POS-OFFLINE-TENDER-DISABLED"):
                 ury_pos_invoice.validate_offline_tenders_before_submit(doc)
 
+    def test_foreign_offline_tender_exceeds_company_currency_limit(self):
+        self.profile.currency = self.invoice.currency = "USD"
+        self.invoice.conversion_rate = 3700
+        self.profile.custom_offline_tender_limit = 100000
+        get_value = self.f.db.get_value.side_effect
+        self.f.db.get_value.side_effect = (
+            lambda dt, *args, **kw: "UGX"
+            if dt == "Company" and args[-1] == "default_currency"
+            else get_value(dt, *args, **kw)
+        )
+        from ury.ury_pos.offline_tenders import enforce_offline_tender_replay
+
+        with self.assertRaisesRegex(PermissionError, "POS-OFFLINE-OVER-LIMIT"):
+            enforce_offline_tender_replay(
+                self.invoice, self.profile, [{"mode_of_payment": "Cash", "amount": 50}],
+                offline_replay=1, _frappe=self.f,
+            )
+
     def test_three_decimal_kwd_offline_limit_enforces_fils_and_preserves_claim_precision(self):
         self.profile.currency = "KWD"
         self.invoice.currency = "KWD"

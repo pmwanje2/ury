@@ -241,11 +241,13 @@ function OwnerOrders({ owner }: { owner: string | null }) {
     order: POSInvoice;
     item: (typeof selectedOrderItems)[number];
     newQty: number;
-    amount: number;
+    displayAmount: number;
+    approvalAmount?: number;
     claim: Record<string, unknown>;
   } | null>(null);
   const [pendingCancelApproval, setPendingCancelApproval] = React.useState<{
     order: POSInvoice;
+    amount?: number;
     reason: string;
     note: string;
     isWaste: number;
@@ -500,6 +502,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
         const normalized = normalizeCancelReasonForClaim(reason, '', activeReasons);
         setPendingCancelApproval({
           order,
+          amount: extractAuthChallenge(err)?.amount ?? undefined,
           reason: normalized.code,
           note: normalized.note,
           isWaste: normalized.isWaste,
@@ -670,7 +673,8 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           order,
           item,
           newQty,
-          amount,
+          displayAmount: amount,
+          approvalAmount: extractAuthChallenge(err)?.amount ?? undefined,
           claim: {
             action: 'reduce_order_item_qty',
             item_row_name: item.name,
@@ -1794,7 +1798,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
             }),
             t('manager_approval.amount_line', {
               amount: formatCurrency(
-                pendingVoidApproval.amount,
+                pendingVoidApproval.displayAmount,
                 pendingVoidApproval.order.currency || profileCurrency,
               ),
             }),
@@ -1802,7 +1806,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingVoidApproval.order.name }}
           claim={pendingVoidApproval.claim}
-          amount={pendingVoidApproval.amount}
+          amount={pendingVoidApproval.approvalAmount}
           onApproved={(res) => void handleVoidApprovalGranted(res)}
           onCancel={() => setPendingVoidApproval(null)}
         />
@@ -1822,7 +1826,7 @@ function OwnerOrders({ owner }: { owner: string | null }) {
           ]}
           reference={{ doctype: 'POS Invoice', name: pendingCancelApproval.order.name }}
           claim={pendingCancelApproval.claim}
-          amount={pendingCancelApproval.order.grand_total}
+          amount={pendingCancelApproval.amount}
           requireReason={false}
           onApproved={(res) => void handleCancelApprovalGranted(res)}
           onCancel={() => setPendingCancelApproval(null)}

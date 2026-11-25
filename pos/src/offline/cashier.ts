@@ -5,8 +5,8 @@ import {
   OfflineOutbox,
   canCaptureOfflineOrder,
   canSettleOffline,
-  offlineTolerance,
   openTableRow,
+  exceedsOfflineTenderLimit,
   resolveOfflineModeConfig,
   withEmptyOutbox,
   purgeEmptyOutbox,
@@ -114,8 +114,7 @@ export function resolveOfflineTender(
   const cfg = resolveOfflineModeConfig(profile, modeOfPayment);
   if (!cfg) return null;
   if (cfg.requires_reference && !reference?.trim()) return null;
-  const limit = Number(profile.offline_tender_limit || 0);
-  if (limit > 0 && amount > limit + offlineTolerance(profile.currency)) return null;
+  if (exceedsOfflineTenderLimit(profile, amount)) return null;
   if (cfg.type === 'Cash') return 'cash';
   return cfg.requires_reference ? 'mobile-money' : 'offline';
 }

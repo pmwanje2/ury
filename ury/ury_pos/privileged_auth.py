@@ -38,6 +38,8 @@ except ImportError:  # pragma: no cover - partial frappe.utils stubs in site-les
             num = 0.0
         return round(num, int(precision)) if precision is not None else num
 
+from ury.ury_pos.auth_challenge import attach_auth_challenge
+
 DEFAULT_MANAGER_ROLES = frozenset({"URY Manager", "URY Admin"})
 
 
@@ -474,31 +476,6 @@ def _check_privilege_group(
     return False
 
 
-def _attach_auth_challenge(
-    *,
-    privilege: str,
-    pos_profile: str | None,
-    reference_doctype: str,
-    reference_name: str,
-    claim: dict[str, Any],
-    amount: float | None = None,
-    percent: float | None = None,
-) -> None:
-    """Attach the exact server-computed claim to frappe.local.response for ManagerApproval parity."""
-    local = getattr(frappe, "local", None)
-    resp = getattr(local, "response", None) if local is not None else None
-    if isinstance(resp, dict):
-        resp["pos_auth_challenge"] = {
-            "privilege": privilege,
-            "pos_profile": pos_profile or "",
-            "reference_doctype": reference_doctype,
-            "reference_name": reference_name,
-            "claim": claim,
-            "amount": amount,
-            "percent": percent,
-        }
-
-
 def authorize_or_perform(
     *,
     privilege: str,
@@ -527,6 +504,7 @@ def authorize_or_perform(
     """
     assert_not_offline_replay()
     challenge_kwargs = {
+        "framework": frappe,
         "privilege": privilege,
         "pos_profile": pos_profile,
         "reference_doctype": reference_doctype,
@@ -545,7 +523,7 @@ def authorize_or_perform(
         )
     except Exception:
         if not token:
-            _attach_auth_challenge(**challenge_kwargs)
+            attach_auth_challenge(**challenge_kwargs)
         raise
 
     user = getattr(getattr(frappe, "session", None), "user", None)
@@ -557,6 +535,7 @@ def authorize_or_perform(
 
     # Path 1: Manager approval token supplied -> consume atomically through B2a.
     if token:
+        limit_kwargs = {"approval_amount": amount} if amount is not None else {}
         if override is None:
             frappe.throw(
                 _code(
@@ -567,7 +546,7 @@ def authorize_or_perform(
             )
         raw_reason = (reason or "").strip()
         try:
-            consumed = override.consume(token, privilege, pos_profile, reference_name, claim)
+            consumed = override.consume(token, privilege, pos_profile, reference_name, claim, **limit_kwargs)
         except Exception as err:
             # B2a's ManagerApproval.tsx appends `reason = resolvedReasonText` to finalClaim
             # whenever its built-in reason picker is shown. Because override.consume rejects
@@ -580,6 +559,7 @@ def authorize_or_perform(
                     pos_profile,
                     reference_name,
                     {**claim, "reason": raw_reason},
+                    **limit_kwargs,
                 )
             else:
                 raise
@@ -593,7 +573,7 @@ def authorize_or_perform(
     # Path 2: Actions that ALWAYS require a second person (e.g. full comp, zeroing a priced item)
     # or explicitly escalated conditions (e.g. price below cost, over-HALO, re-split cap).
     if always_second_person or force_pin:
-        _attach_auth_challenge(**challenge_kwargs)
+        attach_auth_challenge(**challenge_kwargs)
         frappe.throw(
             _code("POS-AUTH-REQUIRED", auth_denied_msg),
             frappe.PermissionError,
@@ -603,7 +583,7 @@ def authorize_or_perform(
     # Never fall back to Path 4 when a single privilege's rule row is absent.
     if is_company_policy_active(resolved_company):
         if override is None:
-            _attach_auth_challenge(**challenge_kwargs)
+            attach_auth_challenge(**challenge_kwargs)
             frappe.throw(
                 _code("POS-AUTH-REQUIRED", auth_denied_msg),
                 frappe.PermissionError,
@@ -611,7 +591,7 @@ def authorize_or_perform(
         if required_privilege_group > 0 and not _check_privilege_group(
             resolved_company, pos_profile, privilege, user, required_privilege_group
         ):
-            _attach_auth_challenge(**challenge_kwargs)
+            attach_auth_challenge(**challenge_kwargs)
             frappe.throw(
                 _code("POS-AUTH-REQUIRED", auth_denied_msg),
                 frappe.PermissionError,
@@ -627,7 +607,7 @@ def authorize_or_perform(
                 amount=amount,
             )
         except frappe.PermissionError:
-            _attach_auth_challenge(**challenge_kwargs)
+            attach_auth_challenge(**challenge_kwargs)
             if deny_message:
                 frappe.throw(
                     _code("POS-AUTH-REQUIRED", auth_denied_msg),
@@ -658,7 +638,7 @@ def authorize_or_perform(
         else _fallback_allows(user, fallback_roles)
     )
     if not allowed:
-        _attach_auth_challenge(**challenge_kwargs)
+        attach_auth_challenge(**challenge_kwargs)
         frappe.throw(
             _code("POS-AUTH-REQUIRED", auth_denied_msg),
             frappe.PermissionError,

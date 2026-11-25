@@ -18,6 +18,7 @@ import {
   type ReopenClosedCheckResponse,
   type ReturnableCheckResponse,
 } from '../lib/void-return-api';
+import { extractAuthChallenge } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 
 export interface ReopenAdjustBillSummary {
@@ -68,6 +69,7 @@ export default function ReopenAdjustCheckDialog({
     privilege: 'adjust_closed_check' | 'reopen_check';
     claim: Record<string, unknown>;
     amount: number;
+    approvalAmount?: number;
   } | null>(null);
 
   const [hydratedCheck, setHydratedCheck] = useState<ReturnableCheckResponse | null>(null);
@@ -208,6 +210,7 @@ export default function ReopenAdjustCheckDialog({
           setPendingApproval({
             privilege: 'adjust_closed_check',
             amount: adjustedTotal,
+            approvalAmount: extractAuthChallenge(err)?.amount ?? undefined,
             claim: {
               original_invoice: bill.name,
               payments: [{ mode_of_payment: selectedTender, amount: adjustedTotal }],
@@ -221,6 +224,7 @@ export default function ReopenAdjustCheckDialog({
           setPendingApproval({
             privilege: 'reopen_check',
             amount: checkTotal,
+            approvalAmount: extractAuthChallenge(err)?.amount ?? undefined,
             claim: {
               original_invoice: bill.name,
               grand_total: checkTotal,
@@ -455,7 +459,7 @@ export default function ReopenAdjustCheckDialog({
           ]}
           reference={{ doctype: 'POS Invoice', name: bill.name }}
           claim={pendingApproval.claim}
-          amount={pendingApproval.amount}
+          amount={pendingApproval.approvalAmount}
           requireReason={false}
           onApproved={handleApproved}
           onCancel={() => setPendingApproval(null)}

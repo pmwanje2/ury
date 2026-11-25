@@ -52,7 +52,7 @@ export default function TipAdjustDialog({
   const [error, setError] = useState<string | null>(null);
   const [pendingApproval, setPendingApproval] = useState<{
     claim: Record<string, unknown>;
-    amount: number;
+    amount?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -109,7 +109,7 @@ export default function TipAdjustDialog({
       if (!approval?.token && isAuthRequiredError(err)) {
         const challenge = extractAuthChallenge(err);
         setPendingApproval({
-          amount: typeof challenge?.amount === 'number' ? challenge.amount : Math.abs(parsedTip - currentTip),
+          amount: challenge?.amount ?? undefined,
           claim: challenge?.claim ?? {
             action: 'tip_adjust',
             invoice: invoiceName,

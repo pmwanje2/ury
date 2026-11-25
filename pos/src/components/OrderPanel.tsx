@@ -20,6 +20,7 @@ import { syncOrder, type SavedInvoice, type SyncOrderRequest } from '../lib/orde
 import { formatPreviewTaxLabel } from '../lib/tax-preview-label';
 import { useOrderPreview } from '../lib/use-order-preview';
 import { isAuthRequiredError, overrideErrorMessage } from '../lib/override-api';
+import { extractAuthChallenge } from '../lib/privileged-actions-api';
 import ManagerApproval, { type ManagerApprovalResult } from './ManagerApproval';
 import { useRootStore } from '../store/root-store';
 import type { RootState } from '../store/root-store';
@@ -89,7 +90,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
   const [pendingSyncVoidApproval, setPendingSyncVoidApproval] = useState<{
     privilege: 'void_sent_item' | 'guest_count_change' | 'order_type_change' | 'pickup_other_check';
     orderData: SyncOrderRequest;
-    amount: number;
+    amount?: number;
     linesCount: number;
     claim: Record<string, unknown>;
     summaryLines: string[];
@@ -367,7 +368,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
           setPendingSyncVoidApproval({
             privilege: 'void_sent_item',
             orderData,
-            amount: voidInfo.amount,
+            amount: extractAuthChallenge(error)?.amount ?? undefined,
             linesCount: voidInfo.linesCount,
             claim: voidInfo.claim,
             summaryLines: [
@@ -438,7 +439,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
         setPendingSyncVoidApproval({
           privilege: 'void_sent_item',
           orderData,
-          amount: voidInfo.amount,
+          amount: extractAuthChallenge(error)?.amount ?? undefined,
           linesCount: voidInfo.linesCount,
           claim: voidInfo.claim,
           summaryLines: [
@@ -1103,7 +1104,7 @@ const OrderPanel = ({ onCashierCheck, availabilityMap: availabilityByItem = EMPT
           summaryLines={pendingSyncVoidApproval.summaryLines}
           reference={{ doctype: 'POS Invoice', name: orderId }}
           claim={pendingSyncVoidApproval.claim}
-          amount={pendingSyncVoidApproval.amount || undefined}
+          amount={pendingSyncVoidApproval.amount}
           onApproved={(res) => void handleSyncVoidApproved(res)}
           onCancel={() => setPendingSyncVoidApproval(null)}
         />

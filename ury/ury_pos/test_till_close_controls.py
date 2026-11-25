@@ -1263,6 +1263,7 @@ class TestCloseOtherReopenForceAndConcurrency(LoadedSlice2):
         self.assertNotIn("90000", msg.replace(",", ""))
         # Force-close token MUST still be preserved for retry with URY Admin!
         self.assertNotIn("tok-fc-blind-1", self.override.consumed)
+        self.assertNotIn("tok-os-capped-mgr", self.override.consumed)
 
         # Retry with URY Admin (unlimited) over_short_close token + SAME fc token succeeds!
         self.override.mint(

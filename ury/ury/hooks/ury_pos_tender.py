@@ -117,7 +117,7 @@ def _enforce_tender_sanity_and_halo(doc):
 			frappe.session.user,
 			profile,
 			"over_halo_tender",
-			amount=max(r["amount"] for r in exceeded),
+			amount=max(r["approval_amount"] for r in exceeded),
 			allow_cashier_default=False,
 		):
 			return

@@ -187,6 +187,23 @@ class FakeDoc(FakeDict):
             self._db_sets.append((field, value))
 
 
+
+class FlatGrandTotalDiscountInvoice(FakeDoc):
+    """Mirror native redistribution for one item and a net-total service charge."""
+
+    def calculate_taxes_and_totals(self):
+        gross_items = sum(row["qty"] * row["rate"] for row in self["items"])
+        charges = [row for row in self["taxes"] if row.get("custom_pos_charge_kind") == "Service Charge"]
+        rate = sum(float(row.get("rate") or 0) for row in charges) / 100
+        discount_basis = gross_items * (1 + rate)
+        discount = self["discount_amount"]
+        self["net_total"] = round(gross_items - discount * gross_items / discount_basis, 2)
+        for row in charges:
+            row["tax_amount"] = round(gross_items * float(row["rate"]) / 100, 2)
+            row["tax_amount_after_discount_amount"] = round(self["net_total"] * float(row["rate"]) / 100, 2)
+        self["grand_total"] = self["rounded_total"] = round(discount_basis - discount, 2)
+
+
 class FakeFrappeHarness:
     """Self-contained fake Frappe runtime for site-less unit and adversarial tests."""
 
@@ -559,7 +576,7 @@ def _make_override_stub(harness: FakeFrappeHarness):
             return True
         return False
 
-    def consume(token, privilege, pos_profile, reference_name, claim):
+    def consume(token, privilege, pos_profile, reference_name, claim, *, approval_amount=None):
         if not token or token in harness.consumed_tokens or token not in harness.tokens:
             raise FakeValidationError("Approval expired or already used [POS-AUTH-EXPIRED]")
         rec = harness.tokens[token]
@@ -867,15 +884,13 @@ class TestPricingPrivilegedActions(unittest.TestCase):
 
     def _import_pricing_actions(self):
         ury_brand = types.ModuleType("ury.brand")
-        ury_brand.coded_message = lambda code, msg: f"[{code}] {msg}"
+        ury_brand.coded_message = lambda code, msg: f"[{code if code.startswith('POS-') else 'POS-' + code}] {msg}"
         ury_api = types.ModuleType("ury.ury_pos.api")
         ury_api.getBranch = lambda: self.h.branch_by_user.get(self.h.frappe.session.user, "Main Branch")
         extra = {
             "frappe": self.h.frappe,
             "frappe.utils": self.h.frappe.utils,
-            "ury": types.ModuleType("ury"),
             "ury.brand": ury_brand,
-            "ury.ury_pos": types.ModuleType("ury.ury_pos"),
             "ury.ury_pos.api": ury_api,
             "ury.ury_pos.override": self.override_stub,
         }
