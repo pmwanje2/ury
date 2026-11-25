@@ -1,21 +1,67 @@
-// Load QZ Tray libs strictly in order. On Frappe v16 frappe.require() with an
-// array fetches in parallel and returns a Promise, so sign-message.js could run
-// before qz-tray.js defined `qz` ("qz is not defined" on every desk page).
-(function loadQzLibs() {
-    const libs = [
-        '/assets/ury/js/qz-tray.js',
-        '/assets/ury/js/jsrsasign-all-min.js',
-        '/assets/ury/js/sign-message.js'
-    ];
-    const next = (i) => {
-        if (i >= libs.length) return Promise.resolve();
-        return new Promise((resolve) => {
-            const r = frappe.require(libs[i], resolve);
-            if (r && typeof r.then === 'function') r.then(resolve, resolve);
-        }).then(() => next(i + 1));
-    };
-    next(0);
-})();
+// Load the Desk bridge before configuring its signer.
+const deskQzReady = new Promise(resolve => {
+    const loading = frappe.require('/assets/ury/js/qz-tray.js', resolve);
+    if (loading && typeof loading.then === 'function') loading.then(resolve, resolve);
+});
+
+async function printDeskQzInvoice(invoice, profile, safePrintFormat, configuredLetterHead) {
+    let signing;
+    let printed = false;
+    try {
+        signing = await import('/assets/ury/js/qz-signing.js');
+        await deskQzReady;
+        const { message } = await frappe.call({
+            method: "frappe.www.printview.get_html_and_style",
+            args: {
+                doc: "POS Invoice",
+                name: invoice,
+                print_format: safePrintFormat,
+                no_letterhead: configuredLetterHead ? 0 : 1,
+                letterhead: configuredLetterHead || "No Letterhead",
+                _lang: 'en',
+            },
+        });
+        if (!message?.html) throw new Error("Invoice print content is unavailable");
+
+        await signing.runSignedQz(qz, (method, args) => frappe.call({ method, args, silent: true }), async () => {
+            if (!qz.websocket.isActive()) {
+                const { message: certificate } = await frappe.call({
+                    method: "ury.ury.api.ury_print.qz_certificate",
+                });
+                if (certificate) {
+                    qz.security.setCertificatePromise((resolve, reject) => {
+                        if (certificate.includes("-----BEGIN CERTIFICATE-----")) {
+                            resolve(certificate);
+                            return;
+                        }
+                        const path = certificate.split("/").map(encodeURIComponent).join("/");
+                        fetch("/private/" + path, { cache: 'no-store' })
+                            .then(response => {
+                                if (!response.ok) throw new Error("Printer certificate is unavailable");
+                                return response.text();
+                            })
+                            .then(resolve, reject);
+                    }, { rejectOnFailure: true });
+                }
+                await qz.websocket.connect({ host: profile.qz_host });
+            }
+            const printer = await qz.printers.getDefault();
+            await qz.print(qz.configs.create(printer), [{ type: 'html', format: 'plain', data: message.html }]);
+        });
+        printed = true;
+        await updateMergedInvoicePrint(invoice);
+    } catch (error) {
+        let message = __("Could not print the invoice. Check the printer and try again.");
+        if (printed) {
+            message = __("The invoice printed, but its status could not be updated. Check the receipt before retrying.");
+        } else if (signing && error instanceof signing.QzSigningRefusedError) {
+            message = __("Printer signing was refused. Check your printing permissions and try again.");
+        }
+        frappe.msgprint({ title: __("Printing Failed"), message, indicator: 'red' });
+    } finally {
+        frappe.dom.unfreeze();
+    }
+}
 
 async function updateMergedInvoicePrint(invoice) {
 
@@ -77,8 +123,8 @@ frappe.ui.form.on('POS Invoice', {
     },
 
     print: function (frm) {
-        let invoice = frm.doc.name
-        frappe.db.get_doc('POS Invoice', invoice).then(pos_invoice => {
+        const invoice = frm.doc.name;
+        return frappe.db.get_doc('POS Invoice', invoice).then(pos_invoice => {
             if (pos_invoice.invoice_printed == 1) {
                 frappe.throw({
                     title: __("Invoice Already Billed"),
@@ -86,104 +132,13 @@ frappe.ui.form.on('POS Invoice', {
                     indicator: 'red'
                 });
             }
-            frappe.dom.freeze(__('Printing Invoice'));
-            frappe.db.get_doc('POS Profile', frm.doc.pos_profile).then(profile => {
+            return frappe.db.get_doc('POS Profile', frm.doc.pos_profile).then(profile => {
                 const safePrintFormat = resolveSafePosPrintFormat(profile.print_format);
                 const configuredLetterHead = (profile.letter_head || '').trim();
 
+                frappe.dom.freeze(__('Printing Invoice'));
                 if (profile.qz_print == 1) {
-                    // To fetch qz_key from site config
-                    frappe.call({
-                        method: "ury.ury.api.ury_print.qz_certificate",
-                        callback: function (response) {
-                            if (response.message) {
-                                var qzKey = response.message;
-                                qz.security.setCertificatePromise(function (resolve, reject) {
-                                    //Preferred method - from server
-                                    fetch("/private/" + qzKey, { cache: 'no-store', headers: { 'Content-Type': 'text/plain' } })
-                                        .then(function (data) { data.ok ? resolve(data.text()) : reject(data.text()); });
-                                });
-
-                            }
-                        }
-                    });
-
-                    frappe.call({
-                        method: "frappe.www.printview.get_html_and_style",
-                        args: {
-                            doc: "POS Invoice",
-                            name: invoice,
-                            print_format: safePrintFormat,
-                            no_letterhead: configuredLetterHead ? 0 : 1,
-                            letterhead: configuredLetterHead || "No Letterhead",
-                            _lang: 'en',
-                        },
-                        callback: function (r) {
-
-                            if (qz.websocket.isActive()) {
-                                // Use the existing connection to print
-                                printWithQZTray();
-                            } else {
-                                // Establish a new connection and then print
-                                qz.websocket.connect({ host: profile.qz_host })
-                                    .then(() => {
-                                        // test();
-                                        printWithQZTray();
-                                    })
-                                    .catch((error) => {
-                                        // Handle connection error
-                                        console.error("Error connecting to QZ Tray:", error);
-                                        frappe.dom.unfreeze();
-                                        frappe.throw({
-                                            message: __("Printing Failed: Error connecting to QZ Tray")
-                                        });
-                                    });
-                            }
-                            function printWithQZTray() {
-                                qz.printers.getDefault()
-                                    .then((printer) => {
-                                        var htmlcontent = r.message.html;
-                                        var data = [{
-                                            type: 'html',
-                                            format: 'plain',
-                                            data: htmlcontent
-                                        }];
-
-                                        var config = qz.configs.create(printer);
-                                        qz.print(config, data)
-                                            .then(function () {
-                                                frappe.call({
-                                                    method: `ury.ury.api.ury_print.qz_print_update`,
-                                                    args: {
-                                                        invoice: invoice
-                                                    },
-                                                    callback: function (r) {
-                                                    }
-                                                });
-                                                updateMergedInvoicePrint(invoice);
-                                                frappe.dom.unfreeze();
-                                                frappe.show_alert({ message: __('Invoice Printed'), indicator: 'green' });
-                                            })
-                                            .catch(function (error) {
-                                                // Handle printing error
-                                                console.error("Error printing with QZ Tray:", error);
-                                                frappe.dom.unfreeze();
-                                                frappe.throw({
-                                                    message: __("Printing Failed: Error printing with QZ Tray")
-                                                });
-                                            });
-                                    })
-                                    .catch(function (error) {
-                                        // Handle printer lookup error
-                                        console.error("Error looking up printer:", error);
-                                        frappe.dom.unfreeze();
-                                        frappe.throw({
-                                            message: __("Printing Failed: Error looking up printer")
-                                        });
-                                    });
-                            }
-                        },
-                    });
+                    return printDeskQzInvoice(invoice, profile, safePrintFormat, configuredLetterHead);
                 }
                 else if (profile.printer_settings.some(e => e.bill == 1)) {
                     profile.printer_settings.forEach(print => {
